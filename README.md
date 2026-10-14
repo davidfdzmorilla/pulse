@@ -92,14 +92,18 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
     modos: Clásico (mientras se mantiene la nota), One-shot (entera) y Loop. Arrastra un archivo de audio al
     dispositivo o usa «Cargar…».
   - **Kick Designer**: sintetizador de bombos. Cuerpo senoidal afinado a una nota (o a la nota tocada con
-    «Key»), con envolvente de tono (cantidad, tiempo, curva), envolvente de amplitud (ataque, hold, decay,
-    curva), armónicos, click sintetizado o a partir de una muestra, y distorsión Soft, Hard o Fold. El visor
-    dibuja la forma de onda y la curva de tono; trae presets (House Punch, Techno Rumble, Hard Kick, Long 808,
-    Trance Thud).
+    «Key»), envolvente de tono (cantidad, tiempo), envolvente de amplitud (ataque, hold, decay), armónicos,
+    click sintetizado o a partir de una muestra, y distorsión Soft, Hard o Fold. Las dos envolventes se
+    **dibujan a mano** en el editor (pestañas Tono y Amp, sobre la forma de onda): arrastra los puntos, doble
+    clic para añadir o borrar, arrastra el círculo de un tramo para curvarlo, clic derecho para restablecer.
+    Los knobs P. Curve y D. Curve añaden tensión encima del dibujo. 18 presets de fábrica por estilos.
   - **Drum Rack**: 16 pads (C1–D#2, el pad 1 abajo a la izquierda), cada uno con su muestra, afinación,
     longitud, nivel, panorama y grupo de choke. Clic en un pad para escucharlo y editarlo; arrastra una o
     varias muestras sobre los pads. Al elegirlo en una pista vacía arranca con el **Kit básico** (los sonidos
     de la Drum Machine, guardados como WAV en `~/Library/Application Support/Pulse/Kits`).
+- **Presets**: cada instrumento tiene un menú «Presets» en su barra de título con los de fábrica (de momento,
+  los del Kick Designer) y los tuyos: escribe un nombre y «Guardar». Se guardan con sus muestras (click, pads)
+  en `~/Library/Application Support/Pulse/Presets/<instrumento>/`, uno por archivo JSON.
 - **Trocear loops**: en un clip de audio, «Trocear → A Drum Rack» corta la región del clip en golpes (por
   transitorios o cada 1/16, 1/8 o 1/4) y crea una pista con un Drum Rack, un pad por golpe, y un clip MIDI en
   el mismo sitio que los toca en orden: al cambiar el tempo el groove lo sigue sin estirar el audio, y se

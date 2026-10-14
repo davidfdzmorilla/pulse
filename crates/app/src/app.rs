@@ -813,6 +813,34 @@ impl PulseApp {
         }
     }
 
+    /// Loads a preset's settings (and samples, for instruments that play them).
+    pub fn apply_preset(&mut self, track: usize, preset: crate::presets::Preset) {
+        self.set_instrument(track, preset.instrument);
+        if preset.instrument.uses_samples() {
+            self.project.tracks[track].samples = preset.samples;
+            self.sync_samples(track);
+        }
+        self.status = Some(format!("Preset: {}", preset.name));
+    }
+
+    /// Saves the track's instrument as a user preset named `name`.
+    pub fn save_preset(&mut self, track: usize, name: String) {
+        let t = &self.project.tracks[track];
+        let samples = if t.instrument.uses_samples() { t.samples.clone() } else { Vec::new() };
+        let preset = crate::presets::Preset { name, instrument: t.instrument, samples };
+        self.status = Some(match crate::presets::save(&crate::presets::user_root(), &preset) {
+            Ok(_) => format!("Preset guardado: {}", preset.name),
+            Err(error) => error,
+        });
+    }
+
+    pub fn delete_preset(&mut self, preset: &crate::presets::Preset) {
+        self.status = Some(match crate::presets::delete(&crate::presets::user_root(), preset) {
+            Ok(()) => format!("Preset borrado: {}", preset.name),
+            Err(error) => error,
+        });
+    }
+
     /// A new folder for the slices of `name`, next to the kits.
     fn slices_dir(name: &str) -> PathBuf {
         let base = crate::kits::kits_dir().with_file_name("Slices");

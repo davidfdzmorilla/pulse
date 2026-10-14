@@ -260,6 +260,116 @@ pub struct KickParams {
     pub click_length: f32,
     pub drive: f32,
     pub gain: f32,
+    /// Hand-drawn pitch sweep over `pitch_time`, scaled by `pitch_amount`.
+    #[serde(default = "Shape::falling")]
+    pub pitch_shape: Shape,
+    /// Hand-drawn level over the decay, after attack and hold.
+    #[serde(default = "Shape::falling")]
+    pub amp_shape: Shape,
+}
+
+pub const SHAPE_POINTS: usize = 8;
+
+/// A breakpoint of a [`Shape`]. `bend` curves the segment that ends here:
+/// positive changes fast at first, negative slowly at first.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ShapePoint {
+    pub time: f32,
+    pub value: f32,
+    pub bend: f32,
+}
+
+/// A hand-drawn envelope: up to [`SHAPE_POINTS`] breakpoints over time 0..1,
+/// values 0..1. The first point is at time 0 and the last at time 1.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Shape {
+    pub points: [ShapePoint; SHAPE_POINTS],
+    pub count: u8,
+}
+
+impl Shape {
+    /// A straight line from 1 down to 0.
+    pub fn falling() -> Self {
+        Self::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.0, 0.0)])
+    }
+
+    /// Builds a shape from (time, value, bend) points, sorted and clamped.
+    pub fn from_points(points: &[(f32, f32, f32)]) -> Self {
+        let mut shape = Shape { points: [ShapePoint { time: 1.0, value: 0.0, bend: 0.0 }; SHAPE_POINTS], count: 0 };
+        for &(time, value, bend) in points.iter().take(SHAPE_POINTS) {
+            shape.points[shape.count as usize] = ShapePoint { time: time.clamp(0.0, 1.0), value: value.clamp(0.0, 1.0), bend: bend.clamp(-1.0, 1.0) };
+            shape.count += 1;
+        }
+        shape.points[..shape.count as usize].sort_by(|a, b| a.time.total_cmp(&b.time));
+        shape.fix_ends();
+        shape
+    }
+
+    pub fn points(&self) -> &[ShapePoint] {
+        &self.points[..(self.count as usize).clamp(2, SHAPE_POINTS)]
+    }
+
+    fn fix_ends(&mut self) {
+        if self.count < 2 {
+            *self = Self::falling();
+            return;
+        }
+        self.points[0].time = 0.0;
+        self.points[self.count as usize - 1].time = 1.0;
+    }
+
+    /// Eases `u` (0..1) along a segment with `bend`.
+    pub fn ease(u: f32, bend: f32) -> f32 {
+        let u = u.clamp(0.0, 1.0);
+        let power = 1.0 + bend.abs() * 5.0;
+        if bend >= 0.0 { 1.0 - (1.0 - u).powf(power) } else { u.powf(power) }
+    }
+
+    pub fn value_at(&self, time: f32) -> f32 {
+        let points = self.points();
+        let time = time.clamp(0.0, 1.0);
+        let next = points.iter().position(|p| p.time > time).unwrap_or(points.len() - 1).max(1);
+        let (a, b) = (points[next - 1], points[next]);
+        let span = b.time - a.time;
+        let u = if span > 0.0 { (time - a.time) / span } else { 1.0 };
+        a.value + (b.value - a.value) * Self::ease(u, b.bend)
+    }
+
+    /// Adds a point; returns its index, or None when the shape is full.
+    pub fn insert(&mut self, time: f32, value: f32) -> Option<usize> {
+        if self.count as usize >= SHAPE_POINTS || time <= 0.0 || time >= 1.0 {
+            return None;
+        }
+        let count = self.count as usize;
+        let index = self.points[..count].iter().position(|p| p.time > time)?;
+        self.points.copy_within(index..count, index + 1);
+        self.points[index] = ShapePoint { time, value: value.clamp(0.0, 1.0), bend: 0.0 };
+        self.count += 1;
+        Some(index)
+    }
+
+    /// Removes an inner point (the ends stay).
+    pub fn remove(&mut self, index: usize) {
+        let count = self.count as usize;
+        if index == 0 || index + 1 >= count {
+            return;
+        }
+        self.points.copy_within(index + 1..count, index);
+        self.count -= 1;
+    }
+
+    /// Moves a point, keeping it between its neighbours; the ends only move up and down.
+    pub fn move_point(&mut self, index: usize, time: f32, value: f32) {
+        let count = self.count as usize;
+        if index >= count {
+            return;
+        }
+        self.points[index].value = value.clamp(0.0, 1.0);
+        if index > 0 && index + 1 < count {
+            let (lo, hi) = (self.points[index - 1].time, self.points[index + 1].time);
+            self.points[index].time = time.clamp(lo + 0.001, (hi - 0.001).max(lo + 0.001));
+        }
+    }
 }
 
 impl Default for KickParams {
@@ -281,26 +391,29 @@ impl Default for KickParams {
             click_length: 6.0,
             drive: 0.2,
             gain: 0.8,
+            pitch_shape: Shape::falling(),
+            amp_shape: Shape::falling(),
         }
     }
 }
 
 impl KickParams {
-    /// Factory presets: (name, settings).
-    pub fn presets() -> [(&'static str, KickParams); 6] {
+    /// Factory presets: (name, settings), grouped by style.
+    pub fn presets() -> Vec<(&'static str, KickParams)> {
         let base = KickParams::default();
-        [
+        let shape = Shape::from_points;
+        vec![
             ("Init", base),
+            ("House · Punch", KickParams { tune: 33.0, pitch_amount: 36.0, pitch_time: 45.0, hold: 40.0, decay: 220.0, click: 0.5, click_tone: 4000.0, drive: 0.25, ..base }),
+            ("House · Deep", KickParams { tune: 31.0, pitch_amount: 30.0, pitch_time: 55.0, pitch_curve: 0.5, hold: 60.0, decay: 320.0, decay_curve: 0.3, click: 0.2, click_tone: 1800.0, drive: 0.1, ..base }),
+            ("Tech House · Tight", KickParams { tune: 34.0, pitch_amount: 40.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 25.0, decay: 160.0, decay_curve: 0.5, click: 0.55, click_tone: 5000.0, click_length: 4.0, drive: 0.35, ..base }),
+            ("Techno · Rumble", KickParams { tune: 29.0, pitch_amount: 44.0, pitch_time: 70.0, hold: 90.0, decay: 650.0, decay_curve: 0.6, harmonics: 0.15, drive: 0.55, ..base }),
             (
-                "House Punch",
-                KickParams { tune: 33.0, pitch_amount: 36.0, pitch_time: 45.0, hold: 40.0, decay: 220.0, click: 0.5, click_tone: 4000.0, drive: 0.25, ..base },
+                "Techno · Industrial",
+                KickParams { tune: 30.0, pitch_amount: 50.0, pitch_time: 60.0, hold: 70.0, decay: 420.0, harmonics: 0.25, click: 0.6, click_tone: 7000.0, drive: 0.6, drive_mode: KickDrive::Fold, gain: 0.6, ..base },
             ),
             (
-                "Techno Rumble",
-                KickParams { tune: 29.0, pitch_amount: 44.0, pitch_time: 70.0, hold: 90.0, decay: 650.0, decay_curve: 0.6, harmonics: 0.15, drive: 0.55, ..base },
-            ),
-            (
-                "Hard Kick",
+                "Hard · Kick",
                 KickParams {
                     tune: 34.0,
                     pitch_amount: 52.0,
@@ -318,13 +431,71 @@ impl KickParams {
                 },
             ),
             (
-                "Long 808",
-                KickParams { tune: 28.0, pitch_amount: 24.0, pitch_time: 40.0, hold: 200.0, decay: 1600.0, decay_curve: 0.3, click: 0.15, drive: 0.1, key_follow: true, ..base },
+                // A fast "tok" then a pitch plateau that bends down slowly: the long, tonal tail.
+                "Hard · Hardstyle Tail",
+                KickParams {
+                    tune: 36.0,
+                    pitch_amount: 48.0,
+                    pitch_time: 300.0,
+                    pitch_curve: 0.0,
+                    pitch_shape: shape(&[(0.0, 1.0, 0.0), (0.06, 0.25, 0.8), (0.7, 0.12, 0.0), (1.0, 0.0, -0.5)]),
+                    hold: 150.0,
+                    decay: 350.0,
+                    decay_curve: 0.2,
+                    harmonics: 0.4,
+                    click: 0.6,
+                    click_tone: 5500.0,
+                    drive: 0.75,
+                    drive_mode: KickDrive::Fold,
+                    gain: 0.55,
+                    ..base
+                },
             ),
             (
-                "Trance Thud",
-                KickParams { tune: 32.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 30.0, decay: 180.0, decay_curve: 0.6, click: 0.6, click_tone: 2500.0, drive: 0.35, ..base },
+                "Hard · Gabber",
+                KickParams { tune: 38.0, pitch_amount: 40.0, pitch_time: 25.0, pitch_curve: 0.8, hold: 90.0, decay: 250.0, harmonics: 0.5, click: 0.8, click_tone: 8000.0, drive: 1.0, drive_mode: KickDrive::Hard, gain: 0.5, ..base },
             ),
+            ("Trance · Thud", KickParams { tune: 32.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 30.0, decay: 180.0, decay_curve: 0.6, click: 0.6, click_tone: 2500.0, drive: 0.35, ..base }),
+            ("Psytrance · Click", KickParams { tune: 34.0, pitch_amount: 56.0, pitch_time: 20.0, pitch_curve: 0.85, hold: 15.0, decay: 140.0, decay_curve: 0.7, click: 0.8, click_tone: 6500.0, click_length: 3.0, drive: 0.3, gain: 0.6, ..base }),
+            ("Drum & Bass · Punch", KickParams { tune: 38.0, pitch_amount: 36.0, pitch_time: 25.0, pitch_curve: 0.7, hold: 20.0, decay: 180.0, decay_curve: 0.5, harmonics: 0.1, click: 0.7, click_tone: 4500.0, drive: 0.45, gain: 0.7, ..base }),
+            ("808 · Long", KickParams { tune: 28.0, pitch_amount: 24.0, pitch_time: 40.0, hold: 200.0, decay: 1600.0, decay_curve: 0.3, click: 0.15, drive: 0.1, key_follow: true, ..base }),
+            (
+                // After the hit the pitch keeps gliding down an octave and a half.
+                "808 · Glide",
+                KickParams {
+                    tune: 28.0,
+                    pitch_amount: 30.0,
+                    pitch_time: 700.0,
+                    pitch_curve: 0.0,
+                    pitch_shape: shape(&[(0.0, 1.0, 0.0), (0.04, 0.6, 0.8), (1.0, 0.0, -0.3)]),
+                    hold: 300.0,
+                    decay: 1200.0,
+                    decay_curve: 0.3,
+                    click: 0.1,
+                    drive: 0.25,
+                    key_follow: true,
+                    ..base
+                },
+            ),
+            ("Trap · Boom", KickParams { tune: 26.0, pitch_amount: 28.0, pitch_time: 50.0, hold: 250.0, decay: 1100.0, decay_curve: 0.2, harmonics: 0.1, click: 0.3, click_tone: 2000.0, drive: 0.5, ..base }),
+            ("Lo-Fi · Thump", KickParams { tune: 30.0, pitch_amount: 26.0, pitch_time: 50.0, pitch_curve: 0.4, hold: 40.0, decay: 260.0, harmonics: 0.35, click: 0.35, click_tone: 900.0, click_length: 12.0, drive: 0.4, ..base }),
+            (
+                // The level dips and comes back: two punches from one note.
+                "FX · Double Punch",
+                KickParams {
+                    tune: 33.0,
+                    pitch_amount: 40.0,
+                    pitch_time: 50.0,
+                    amp_shape: shape(&[(0.0, 1.0, 0.0), (0.18, 0.05, 0.6), (0.24, 0.9, -0.2), (1.0, 0.0, 0.5)]),
+                    hold: 20.0,
+                    decay: 380.0,
+                    decay_curve: 0.0,
+                    click: 0.5,
+                    drive: 0.3,
+                    ..base
+                },
+            ),
+            ("FX · Zap", KickParams { tune: 33.0, pitch_amount: 72.0, pitch_time: 120.0, pitch_curve: 0.9, hold: 30.0, decay: 200.0, decay_curve: 0.5, click: 0.2, click_tone: 9000.0, drive: 0.2, ..base }),
         ]
     }
 }
@@ -1492,5 +1663,42 @@ mod tests {
         let mid = info.denormalize(0.5);
         assert!((info.normalize(mid) - 0.5).abs() < 1e-5);
         assert!((mid - (50.0f32 * 1000.0).sqrt()).abs() < 0.1);
+    }
+
+    #[test]
+    fn shapes_interpolate_bend_and_edit() {
+        let mut shape = Shape::falling();
+        assert_eq!(shape.value_at(0.0), 1.0);
+        assert!((shape.value_at(0.25) - 0.75).abs() < 1e-6);
+        assert_eq!(shape.value_at(1.0), 0.0);
+
+        let index = shape.insert(0.5, 0.8).unwrap();
+        assert_eq!((index, shape.count), (1, 3));
+        assert!((shape.value_at(0.5) - 0.8).abs() < 1e-6);
+        shape.points[2].bend = 1.0;
+        assert!(shape.value_at(0.6) < 0.5, "a positive bend drops fast: {}", shape.value_at(0.6));
+
+        shape.move_point(1, 2.0, 0.3);
+        assert!(shape.points[1].time < 1.0, "inner points stay between their neighbours");
+        shape.move_point(0, 0.5, 0.9);
+        assert_eq!(shape.points[0].time, 0.0, "the first point stays at the start");
+        shape.remove(0);
+        assert_eq!(shape.count, 3, "ends cannot be removed");
+        shape.remove(1);
+        assert_eq!(shape.count, 2);
+        for _ in 0..10 {
+            shape.insert(0.5, 0.5);
+        }
+        assert_eq!(shape.count as usize, SHAPE_POINTS);
+    }
+
+    #[test]
+    fn kick_projects_saved_before_shapes_load_with_straight_lines() {
+        let json = serde_json::to_string(&KickParams::default()).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&json).unwrap();
+        value.as_object_mut().unwrap().remove("pitch_shape");
+        value.as_object_mut().unwrap().remove("amp_shape");
+        let loaded: KickParams = serde_json::from_value(value).unwrap();
+        assert_eq!(loaded, KickParams::default());
     }
 }

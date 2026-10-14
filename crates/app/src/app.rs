@@ -185,6 +185,8 @@ pub struct PulseApp {
     /// Track whose wavetable synth editor window is open.
     pub wave_window: Option<usize>,
     pub table_editor: Option<crate::table_editor::TableEditor>,
+    /// Track whose polychrome synth editor window is open.
+    pub poly_window: Option<usize>,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
@@ -257,6 +259,7 @@ impl PulseApp {
             kick_window: None,
             wave_window: None,
             table_editor: None,
+            poly_window: None,
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -771,12 +774,12 @@ impl PulseApp {
             let sample_rate = self.audio.sample_rate();
             self.audio.send(Command::set_instrument(track, kind, sample_rate));
         }
-        if let InstrumentKind::Wavetable(after) = kind {
+        if let Some(after) = kind.wave() {
             self.sync_tables(track);
             // The oscillators' files are sent as samples once their kind plays them.
-            let kinds_changed = match previous {
-                InstrumentKind::Wavetable(before) => before.osc.map(|o| o.kind) != after.osc.map(|o| o.kind),
-                _ => true,
+            let kinds_changed = match previous.wave() {
+                Some(before) => before.osc.map(|o| o.kind) != after.osc.map(|o| o.kind),
+                None => true,
             };
             if kinds_changed {
                 self.sync_samples(track);
@@ -813,17 +816,19 @@ impl PulseApp {
             self.show_sample_errors();
             return;
         }
-        let InstrumentKind::Wavetable(mut params) = self.project.tracks[track].instrument else { return };
+        let kind = self.project.tracks[track].instrument;
+        let Some(mut params) = kind.wave().copied() else { return };
         params.osc[osc].table = engine::model::WAVE_USER_TABLE;
         self.project.tracks[track].set_sample(osc, Some(path));
-        self.set_instrument(track, InstrumentKind::Wavetable(params));
+        self.set_instrument(track, kind.with_wave(params));
         self.status = Some(format!("Wavetable: {} ({} frames)", table.name, table.frames()));
     }
 
     /// Routes `source` to parameter `dest` in the first free matrix slot (50 %).
     pub fn add_modulation(&mut self, track: usize, source: engine::model::ModSource, dest: usize) {
         use engine::model::{ModSlot, WAVE_PARAMS};
-        let InstrumentKind::Wavetable(mut params) = self.project.tracks[track].instrument else { return };
+        let kind = self.project.tracks[track].instrument;
+        let Some(mut params) = kind.wave().copied() else { return };
         let name = WAVE_PARAMS.get(dest).map_or("?", |p| p.name);
         if params.matrix.iter().any(|s| s.source == source && s.dest as usize == dest) {
             self.status = Some(format!("{} ya modula {name}", source.label()));
@@ -834,7 +839,7 @@ impl PulseApp {
             return;
         };
         params.matrix[slot] = ModSlot { source, dest: dest as u8, amount: 0.5, bipolar: false };
-        self.set_instrument(track, InstrumentKind::Wavetable(params));
+        self.set_instrument(track, kind.with_wave(params));
         self.status = Some(format!("{} → {name} (50 %) · clic derecho en el knob para ajustar", source.label()));
     }
 
@@ -1653,6 +1658,7 @@ impl eframe::App for PulseApp {
         });
         crate::kick_ui::window(self, &ctx);
         crate::wave_ui::window(self, &ctx);
+        crate::poly_ui::window(self, &ctx);
         crate::table_editor::window(self, &ctx);
 
         let interacting = ctx.input(|i| i.pointer.any_down());

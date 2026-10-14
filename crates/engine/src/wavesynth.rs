@@ -8,7 +8,7 @@
 use crate::effects::{EffectProcessor, ProcessContext};
 use crate::instruments::{saw, square, svf_g, Gate, Svf};
 use crate::model::{
-    wave_is_target, ArpMode, KickWave, LfoMode, ModSource, OscKind, OscWarp, ParamInfo, WaveEnv, WaveFilter, WaveParams,
+    wave_is_target, ArpMode, SEQ_STEPS, WAVE_BALANCE, WAVE_FILTER2, WAVE_OSC_EXTRA, WAVE_RANDOM_RATE, KickWave, LfoMode, ModSource, OscKind, OscWarp, ParamInfo, WaveEnv, WaveFilter, WaveParams,
     WAVE_GRAIN, WAVE_PARAMS, WAVE_SLOTS,
 };
 use crate::sample::Sample;
@@ -20,6 +20,10 @@ const VOICES: usize = 16;
 /// Every parameter of the synth, modulated or not.
 const PARAMS: usize = WAVE_PARAMS.len();
 const GRAINS: usize = 24;
+/// Size of the single-cycle table a harmonic oscillator rebuilds as it plays.
+const HARMONIC_TABLE: usize = 256;
+/// The harmonic table is rebuilt every this many control blocks.
+const HARMONIC_EVERY: u32 = 4;
 /// Sample and granular oscillators play their file at its own pitch on C3.
 const SAMPLE_ROOT_HZ: f32 = 261.625_58;
 const UNISON: usize = 16;
@@ -270,6 +274,16 @@ struct Voice {
     grains: [[Grain; GRAINS]; 2],
     /// Samples until the next grain starts.
     grain_wait: [f32; 2],
+    /// Analog drift per unison voice: current and target offset, in cents.
+    drift: [[(f32, f32); UNISON]; 2],
+    /// Harmonic oscillators: the cycle being played and blocks until it is rebuilt.
+    harmonic: [[f32; HARMONIC_TABLE]; 2],
+    harmonic_wait: u32,
+    /// Random sources: held value, smoothed value and phase towards the next value.
+    hold: f32,
+    smooth: f32,
+    random_phase: f32,
+    filter2: [FilterState; 2],
 }
 
 impl Voice {
@@ -293,6 +307,13 @@ impl Voice {
             positions: [[-1.0; UNISON]; 2],
             grains: [[Grain::IDLE; GRAINS]; 2],
             grain_wait: [0.0; 2],
+            drift: [[(0.0, 0.0); UNISON]; 2],
+            harmonic: [[0.0; HARMONIC_TABLE]; 2],
+            harmonic_wait: 0,
+            hold: 0.5,
+            smooth: 0.5,
+            random_phase: 0.0,
+            filter2: [FilterState::new(), FilterState::new()],
         }
     }
 
@@ -326,6 +347,65 @@ struct OscBlock {
     width: f32,
     pan: f32,
     grain_scale: f32,
+}
+
+/// Fills `table` with one cycle of `partials` harmonics: slope `tilt`, odd/even
+/// balance `parity`, and a formant peak at `formant` (0..1 along the partials)
+/// raised by `gain`. Harmonics above `max_harmonic` are left out (no aliasing).
+#[allow(clippy::too_many_arguments)]
+fn build_harmonic(table: &mut [f32; HARMONIC_TABLE], sine: &[f32], partials: f32, tilt: f32, parity: f32, formant: f32, gain: f32, max_harmonic: usize) {
+    let count = (partials.round() as usize).clamp(1, 64).min(max_harmonic.max(1)).min(HARMONIC_TABLE / 2 - 1);
+    let centre = 1.0 + formant.clamp(0.0, 1.0) * (partials.max(1.0) - 1.0);
+    table.fill(0.0);
+    for n in 1..=count {
+        let mut amplitude = (n as f32).powf(-1.0 + tilt.clamp(-1.0, 1.0));
+        if n > 1 {
+            amplitude *= if n % 2 == 1 { 1.0 - parity.max(0.0) } else { 1.0 + parity.min(0.0) };
+        }
+        amplitude *= 1.0 + gain * 4.0 * (-((n as f32 - centre) / 1.5).powi(2)).exp();
+        if amplitude <= 1e-5 {
+            continue;
+        }
+        for (i, value) in table.iter_mut().enumerate() {
+            *value += amplitude * sine[(n * i) % HARMONIC_TABLE];
+        }
+    }
+    let peak = table.iter().fold(0f32, |m, v| m.max(v.abs()));
+    if peak > 1e-6 {
+        for value in table.iter_mut() {
+            *value /= peak;
+        }
+    }
+}
+
+/// One cycle of an analog or harmonic oscillator at its current settings, for displays.
+pub fn preview_cycle(osc: &crate::model::WaveOsc, points: usize) -> Vec<f32> {
+    match osc.kind {
+        OscKind::Harmonic => {
+            let sine: Vec<f32> = (0..HARMONIC_TABLE).map(|i| (i as f32 / HARMONIC_TABLE as f32 * TAU).sin()).collect();
+            let mut table = [0f32; HARMONIC_TABLE];
+            build_harmonic(&mut table, &sine, osc.partials, osc.tilt, osc.parity, osc.position, osc.warp_amount, 64);
+            (0..points).map(|i| table[i * HARMONIC_TABLE / points]).collect()
+        }
+        _ => {
+            let morph = osc.position.clamp(0.0, 1.0) * 3.0;
+            let width = 0.5 - osc.warp_amount.clamp(0.0, 1.0) * 0.45;
+            (0..points)
+                .map(|i| {
+                    let ph = i as f32 / points as f32;
+                    let sine = (ph * TAU).sin();
+                    let triangle = 1.0 - 4.0 * (((ph + 0.25) % 1.0) - 0.5).abs();
+                    let saw_wave = 2.0 * ((ph + 0.5) % 1.0) - 1.0;
+                    let pulse = if ph < width { 1.0 } else { -1.0 };
+                    match morph {
+                        m if m < 1.0 => sine + (triangle - sine) * m,
+                        m if m < 2.0 => triangle + (saw_wave - triangle) * (m - 1.0),
+                        m => saw_wave + (pulse - saw_wave) * (m - 2.0),
+                    }
+                })
+                .collect()
+        }
+    }
 }
 
 fn warp_phase(warp: OscWarp, amount: f32, phase: f32) -> f32 {
@@ -362,6 +442,24 @@ pub struct WaveSynth {
     fx: Vec<Option<(EffectProcessor, bool)>>,
     scratch: [[f32; CONTROL]; 2],
     arp: Arp,
+    seq: Seq,
+    /// One sine cycle, for building harmonic tables without calling sin().
+    sine: Vec<f32>,
+    /// The voice the last note started on (for sequencer slides).
+    last_voice: usize,
+}
+
+/// Step sequencer state.
+struct Seq {
+    /// Keys held, latest last; the sequence follows the latest.
+    keys: [(u8, f32); 16],
+    count: usize,
+    step: usize,
+    wait: f64,
+    /// The current step's modulation value.
+    value: f32,
+    /// The previous step slid into this one.
+    sliding: bool,
 }
 
 /// Arpeggiator state: the keys held and where the pattern is.
@@ -391,6 +489,9 @@ impl WaveSynth {
             fx,
             scratch: [[0.0; CONTROL]; 2],
             arp: Arp { keys: [(0, 0.0); 16], count: 0, step: 0, wait: 0.0 },
+            seq: Seq { keys: [(0, 0.0); 16], count: 0, step: 0, wait: 0.0, value: 0.0, sliding: false },
+            sine: (0..HARMONIC_TABLE).map(|i| (i as f32 / HARMONIC_TABLE as f32 * TAU).sin()).collect(),
+            last_voice: 0,
         }
     }
 
@@ -451,6 +552,7 @@ impl WaveSynth {
             }
             voice.sub_phase = 0.0;
             voice.positions = [[-1.0; UNISON]; 2];
+            voice.harmonic_wait = 0;
             voice.grains = [[Grain::IDLE; GRAINS]; 2];
             voice.grain_wait = [0.0; 2];
             for (l, phase) in voice.lfo_phase.iter_mut().enumerate() {
@@ -461,6 +563,8 @@ impl WaveSynth {
             if !was_active {
                 voice.filter[0].clear();
                 voice.filter[1].clear();
+                voice.filter2[0].clear();
+                voice.filter2[1].clear();
                 voice.last = [0.0; 2];
             }
             for env in &mut voice.envs {
@@ -469,9 +573,23 @@ impl WaveSynth {
         }
         voice.active = true;
         self.last_note = Some(pitch as f32);
+        self.last_voice = index;
     }
 
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
+        if self.params.seq.on {
+            let seq = &mut self.seq;
+            if seq.count < seq.keys.len() {
+                seq.keys[seq.count] = (pitch, velocity);
+                seq.count += 1;
+                if seq.count == 1 {
+                    seq.step = 0;
+                    seq.wait = 0.0;
+                    seq.sliding = false;
+                }
+            }
+            return;
+        }
         if self.params.arp.on {
             let arp = &mut self.arp;
             if arp.count < arp.keys.len() && !arp.keys[..arp.count].iter().any(|k| k.0 == pitch) {
@@ -489,6 +607,17 @@ impl WaveSynth {
     }
 
     pub fn note_off(&mut self, pitch: u8) {
+        if self.params.seq.on {
+            let seq = &mut self.seq;
+            if let Some(at) = seq.keys[..seq.count].iter().position(|k| k.0 == pitch) {
+                seq.keys.copy_within(at + 1..seq.count, at);
+                seq.count -= 1;
+            }
+            if seq.count == 0 {
+                self.release_all();
+            }
+            return;
+        }
         if self.params.arp.on {
             let arp = &mut self.arp;
             if let Some(at) = arp.keys[..arp.count].iter().position(|k| k.0 == pitch) {
@@ -500,9 +629,54 @@ impl WaveSynth {
         self.play_off(pitch);
     }
 
+    fn release_all(&mut self) {
+        for v in &mut self.voices {
+            v.gate.held = false;
+            for env in &mut v.envs {
+                env.release();
+            }
+        }
+    }
+
+    /// Plays the next step of the sequencer if one is due in the next `frames` samples.
+    fn seq_tick(&mut self, frames: usize) {
+        if !self.params.seq.on || self.seq.count == 0 {
+            return;
+        }
+        self.seq.wait -= frames as f64;
+        if self.seq.wait > 0.0 {
+            return;
+        }
+        let seq = self.params.seq;
+        let step_frames = seq.rate_beats.max(0.03125) as f64 * 60.0 / self.tempo.max(1.0) * self.sample_rate as f64;
+        self.seq.wait += step_frames;
+        let length = (seq.length as usize).clamp(1, SEQ_STEPS);
+        let step = seq.steps[self.seq.step % length];
+        self.seq.step += 1;
+        self.seq.value = step.value;
+        let roll = self.random();
+        let sliding = self.seq.sliding;
+        self.seq.sliding = false;
+        if !step.on || roll >= step.probability {
+            return;
+        }
+        let (key, key_velocity) = self.seq.keys[self.seq.count - 1];
+        let pitch = (key as f32 + step.pitch.round()).clamp(0.0, 127.0) as u8;
+        // A slide holds the note into the next step, which then glides instead of restarting.
+        let gate = if step.slide { step_frames * 1.02 } else { step_frames * step.gate.clamp(0.05, 1.0) as f64 };
+        let velocity = (key_velocity * step.velocity * 1.25).clamp(0.0, 1.0);
+        let voice = self.last_voice;
+        if sliding && self.voices[voice].active {
+            self.start_voice(voice, pitch, velocity, gate.max(1.0) as u32, false);
+        } else {
+            self.play_on(pitch, velocity, gate.max(1.0) as u32);
+        }
+        self.seq.sliding = step.slide;
+    }
+
     /// Starts the next note of the arpeggio if a step is due in the next `frames` samples.
     fn arp_tick(&mut self, frames: usize) {
-        if !self.params.arp.on || self.arp.count == 0 {
+        if !self.params.arp.on || self.params.seq.on || self.arp.count == 0 {
             return;
         }
         self.arp.wait -= frames as f64;
@@ -590,6 +764,7 @@ impl WaveSynth {
     pub fn all_notes_off(&mut self) {
         self.held_count = 0;
         self.arp.count = 0;
+        self.seq.count = 0;
         for v in &mut self.voices {
             v.gate.held = false;
             for env in &mut v.envs {
@@ -598,9 +773,27 @@ impl WaveSynth {
         }
     }
 
-    /// Value of a modulation source for a voice, 0..1.
+    /// Every modulation source for a voice, 0..1, indexed by `ModSource as usize`.
+    fn sources(&self, voice: &Voice, lfos: &[f32; 4], macros: &[f32]) -> [f32; ModSource::ALL.len()] {
+        let mut values = [0f32; ModSource::ALL.len()];
+        for source in ModSource::ALL {
+            values[source as usize] = self.source(voice, source, lfos, macros);
+        }
+        for (i, combo) in self.params.combos.iter().enumerate() {
+            let value = |s: ModSource| if matches!(s, ModSource::Combo1 | ModSource::Combo2) { 0.0 } else { values[s as usize] };
+            let combined = combo.op.apply(value(combo.a), value(combo.b));
+            values[[ModSource::Combo1, ModSource::Combo2][i] as usize] = combined;
+        }
+        values
+    }
+
+    /// Value of a modulation source for a voice, 0..1 (combinations come from [`Self::sources`]).
     fn source(&self, voice: &Voice, source: ModSource, lfos: &[f32; 4], macros: &[f32]) -> f32 {
         match source {
+            ModSource::SampleHold => voice.hold,
+            ModSource::Smooth => voice.smooth,
+            ModSource::Combo1 | ModSource::Combo2 => 0.0,
+            ModSource::Sequencer => self.seq.value,
             ModSource::None => 0.0,
             ModSource::Env1 => voice.envs[0].level,
             ModSource::Env2 => voice.envs[1].level,
@@ -631,6 +824,7 @@ impl WaveSynth {
         while offset < left.len() {
             let n = (left.len() - offset).min(CONTROL);
             self.arp_tick(n);
+            self.seq_tick(n);
             let mut scratch = self.scratch;
             scratch[0][..n].fill(0.0);
             scratch[1][..n].fill(0.0);
@@ -689,15 +883,24 @@ impl WaveSynth {
                 *value = lfo.shape.value_at(phase) * fade;
                 voice.lfo_phase[l] += rate * block;
             }
+            // Random sources: a new target at the random rate; Smooth glides to it.
+            let rate = base[WAVE_RANDOM_RATE].max(0.01);
+            voice.random_phase += rate * block;
+            if voice.random_phase >= 1.0 {
+                voice.random_phase -= voice.random_phase.floor();
+                voice.hold = voice.random();
+            }
+            voice.smooth += (voice.hold - voice.smooth) * (1.0 - (-block * rate * 4.0).exp());
         }
         let macros = &base[MACROS..MACROS + 4];
+        let values = self.sources(&self.voices[v], &lfos, macros);
         let mut m = *base;
         for (s, slot) in p.matrix.iter().enumerate() {
             let dest = slot.dest as usize;
             if slot.source == ModSource::None || !wave_is_target(dest) {
                 continue;
             }
-            let mut value = self.source(&self.voices[v], slot.source, &lfos, macros);
+            let mut value = values[slot.source as usize];
             if slot.bipolar {
                 value = value * 2.0 - 1.0;
             }
@@ -725,6 +928,7 @@ impl WaveSynth {
             let ready = match osc.kind {
                 OscKind::Wavetable | OscKind::Spectral => tables.get(o).is_some_and(|t| t.frames() > 0),
                 OscKind::Sample | OscKind::Granular => samples.get(o).is_some_and(|s| s.frames() > 0),
+                OscKind::Analog | OscKind::Harmonic => true,
             };
             if !osc.on || !ready {
                 continue;
@@ -737,9 +941,19 @@ impl WaveSynth {
             let mut incs = [0f32; UNISON];
             let mut gains = [(0f32, 0f32); UNISON];
             let mut norm = 0.0;
+            let drift_cents = m[WAVE_OSC_EXTRA + o * 4] * 15.0;
             for u in 0..count {
                 let s = if count == 1 { 0.0 } else { u as f32 / (count - 1) as f32 * 2.0 - 1.0 };
-                incs[u] = f * 2f32.powf(s * spread_cents / 1200.0) / sr;
+                // Analog drift: each voice wanders slowly towards a new random offset.
+                let mut drift = 0.0;
+                if osc.kind == OscKind::Analog && drift_cents > 0.0 {
+                    let (current, target) = voice.drift[o][u];
+                    let current = current + (target - current) * (1.0 - (-block * 2.0).exp());
+                    let target = if (current - target).abs() < 0.05 { voice.random() * 2.0 - 1.0 } else { target };
+                    voice.drift[o][u] = (current, target);
+                    drift = current * drift_cents;
+                }
+                incs[u] = f * 2f32.powf((s * spread_cents + drift) / 1200.0) / sr;
                 let centre = 1.0 - s.abs();
                 let g = if count == 1 { 1.0 } else { centre * (1.0 - blend) + (1.0 - centre) * blend + 0.05 };
                 norm += g * g;
@@ -753,6 +967,11 @@ impl WaveSynth {
                 g.1 *= scale;
             }
             let top = f * 2f32.powf(spread_cents / 1200.0);
+            if osc.kind == OscKind::Harmonic && voice.harmonic_wait == 0 {
+                let x = WAVE_OSC_EXTRA + o * 4;
+                let max_harmonic = ((sr * 0.5) / top.max(1.0)) as usize;
+                build_harmonic(&mut voice.harmonic[o], &self.sine, m[x + 1], m[x + 2], m[x + 3], at(0), at(12), max_harmonic);
+            }
             let (mut rates, mut start, mut grain_frames, mut grain_every, mut grain_scale) = ([0f64; UNISON], 0.0, 1, 1.0, 1.0);
             if let Some(sample) = samples.get(o).filter(|_| osc.kind.uses_sample()) {
                 let native = if sample.sample_rate > 0.0 { sample.sample_rate } else { sr };
@@ -793,6 +1012,11 @@ impl WaveSynth {
         let cutoff = m[FILTER] * 2f32.powf((voice.note - 60.0) / 12.0 * m[FILTER + 4]);
         let coefs = p.filter.on.then(|| FilterCoefs::new(p.filter.mode, cutoff, m[FILTER + 1], m[FILTER + 2], m[FILTER + 3], sr));
         let routes = p.filter.routes;
+        let cutoff2 = m[WAVE_FILTER2] * 2f32.powf((voice.note - 60.0) / 12.0 * m[WAVE_FILTER2 + 4]);
+        let coefs2 = p.filter2.on.then(|| FilterCoefs::new(p.filter2.mode, cutoff2, m[WAVE_FILTER2 + 1], m[WAVE_FILTER2 + 2], m[WAVE_FILTER2 + 3], sr));
+        let balance = m[WAVE_BALANCE].clamp(0.0, 1.0);
+        let parallel = p.filter_parallel && coefs.is_some() && coefs2.is_some();
+        voice.harmonic_wait = if voice.harmonic_wait == 0 { HARMONIC_EVERY } else { voice.harmonic_wait - 1 };
         let sub_inc = freq * 2f32.powf(m[SUB].round()) / sr;
         let sub_angle = (m[SUB + 2].clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
         let sub_gain = (sub_angle.cos() * m[SUB + 1] * std::f32::consts::SQRT_2, sub_angle.sin() * m[SUB + 1] * std::f32::consts::SQRT_2);
@@ -877,6 +1101,47 @@ impl WaveSynth {
                             mono += (a + b) * 0.5 * env;
                         }
                     }
+                    OscKind::Analog => {
+                        let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * block.amount * 0.5 } else { 0.0 };
+                        let morph = block.position.clamp(0.0, 1.0) * 3.0;
+                        let width = 0.5 - block.amount.clamp(0.0, 1.0) * 0.45;
+                        for u in 0..block.count {
+                            let phase = voice.phases[o][u];
+                            let inc = block.incs[u];
+                            let ph = (phase + fm).rem_euclid(1.0);
+                            let sine = (ph * TAU).sin();
+                            let triangle = 1.0 - 4.0 * (((ph + 0.25) % 1.0) - 0.5).abs();
+                            let saw_wave = saw((ph + 0.5) % 1.0, inc);
+                            // A pulse of any width from two band-limited saws.
+                            let pulse = (saw(ph, inc) - saw((ph + width) % 1.0, inc)) * 0.5 / (1.0 - width.min(1.0 - width));
+                            let value = match morph {
+                                m if m < 1.0 => sine + (triangle - sine) * m,
+                                m if m < 2.0 => triangle + (saw_wave - triangle) * (m - 1.0),
+                                m => saw_wave + (pulse - saw_wave) * (m - 2.0),
+                            };
+                            let next = phase + inc;
+                            voice.phases[o][u] = next - next.floor();
+                            l += value * block.gains[u].0;
+                            r += value * block.gains[u].1;
+                            mono += value;
+                        }
+                    }
+                    OscKind::Harmonic => {
+                        let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * block.amount * 0.5 } else { 0.0 };
+                        let table = &voice.harmonic[o];
+                        for u in 0..block.count {
+                            let phase = voice.phases[o][u];
+                            let x = (phase + fm).rem_euclid(1.0) * HARMONIC_TABLE as f32;
+                            let i = x as usize % HARMONIC_TABLE;
+                            let a = table[i];
+                            let value = a + (table[(i + 1) % HARMONIC_TABLE] - a) * (x - x.floor());
+                            let next = phase + block.incs[u];
+                            voice.phases[o][u] = next - next.floor();
+                            l += value * block.gains[u].0;
+                            r += value * block.gains[u].1;
+                            mono += value;
+                        }
+                    }
                     OscKind::Wavetable | OscKind::Spectral => {
                 let table = &tables[o];
                 let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * block.amount * 0.5 } else { 0.0 };
@@ -937,9 +1202,21 @@ impl WaveSynth {
                     dry_r += s * noise_gain.1;
                 }
             }
-            if let Some(c) = &coefs {
-                wet_l = c.process(&mut voice.filter[0], wet_l);
-                wet_r = c.process(&mut voice.filter[1], wet_r);
+            if parallel {
+                let (c1, c2) = (coefs.as_ref().unwrap(), coefs2.as_ref().unwrap());
+                let (a_l, a_r) = (c1.process(&mut voice.filter[0], wet_l), c1.process(&mut voice.filter[1], wet_r));
+                let (b_l, b_r) = (c2.process(&mut voice.filter2[0], wet_l), c2.process(&mut voice.filter2[1], wet_r));
+                wet_l = a_l + (b_l - a_l) * balance;
+                wet_r = a_r + (b_r - a_r) * balance;
+            } else {
+                if let Some(c) = &coefs {
+                    wet_l = c.process(&mut voice.filter[0], wet_l);
+                    wet_r = c.process(&mut voice.filter[1], wet_r);
+                }
+                if let Some(c) = &coefs2 {
+                    wet_l = c.process(&mut voice.filter2[0], wet_l);
+                    wet_r = c.process(&mut voice.filter2[1], wet_r);
+                }
             }
             let gain = amp * voice.velocity * master;
             *out_l += (wet_l + dry_l) * gain;
@@ -1292,6 +1569,200 @@ mod phase2_tests {
         synth.note_off(57);
         let (l, _) = render(&mut synth, &[], 48_000);
         assert!(rms(&l[24_000..]) < 1e-4, "nothing plays once the keys are up");
+    }
+}
+
+#[cfg(test)]
+mod polychrome_tests {
+    use super::*;
+    use crate::dsp::fft;
+    use crate::model::{Combo, ComboOp, ModSlot, SeqStep, WaveFilterParams};
+    use crate::synth::HELD;
+    use crate::wavetable::builtin;
+
+    const SR: f32 = 48_000.0;
+
+    fn render(synth: &mut WaveSynth, frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let tables = vec![Arc::new(builtin(0)), Arc::new(builtin(0))];
+        let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            synth.render(&[], &tables, a, b);
+        }
+        (l, r)
+    }
+
+    fn frequency(signal: &[f32]) -> f32 {
+        signal.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f32 * SR / signal.len() as f32
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    /// Magnitudes of harmonics 1..=n of `f0` in `signal` (8192 samples).
+    fn harmonics(signal: &[f32], f0: f32, n: usize) -> Vec<f32> {
+        let window = |i: usize| 0.5 - 0.5 * (TAU * i as f32 / 8192.0).cos();
+        let (mut re, mut im) = (signal[..8192].iter().enumerate().map(|(i, v)| v * window(i)).collect::<Vec<_>>(), vec![0.0; 8192]);
+        fft(&mut re, &mut im);
+        (1..=n)
+            .map(|h| {
+                let bin = (h as f32 * f0 * 8192.0 / SR).round() as usize;
+                (bin.saturating_sub(2)..=bin + 2).map(|k| re[k].hypot(im[k])).fold(0.0, f32::max)
+            })
+            .collect()
+    }
+
+    fn engine(kind: OscKind) -> WaveParams {
+        let mut p = WaveParams::default();
+        p.osc[0].kind = kind;
+        p.osc[0].random_phase = 0.0;
+        p
+    }
+
+    fn play(p: WaveParams, note: u8, frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let mut synth = WaveSynth::new(p, SR);
+        synth.note_on(note, 1.0, HELD);
+        render(&mut synth, frames)
+    }
+
+    #[test]
+    fn the_analog_engine_morphs_its_wave_and_pulse_width() {
+        let mut p = engine(OscKind::Analog);
+        p.osc[0].position = 2.0 / 3.0;
+        let (saw, _) = play(p, 57, 16_384);
+        assert!((frequency(&saw[4800..]) - 220.0).abs() < 2.0);
+        let h = harmonics(&saw[4800..], 220.0, 4);
+        assert!((h[1] / h[0] - 0.5).abs() < 0.08, "a saw's 2nd harmonic is half: {:?}", h);
+
+        p.osc[0].position = 1.0;
+        let (square, _) = play(p, 57, 16_384);
+        let h = harmonics(&square[4800..], 220.0, 3);
+        assert!(h[1] / h[0] < 0.05, "a 50 % pulse has no even harmonics: {:?}", h);
+        p.osc[0].warp_amount = 0.8;
+        let (narrow, _) = play(p, 57, 16_384);
+        let h = harmonics(&narrow[4800..], 220.0, 3);
+        assert!(h[1] / h[0] > 0.3, "a narrow pulse does: {:?}", h);
+    }
+
+    #[test]
+    fn analog_drift_wanders_a_little() {
+        let mut p = engine(OscKind::Analog);
+        p.osc[0].drift = 1.0;
+        let (l, _) = play(p, 69, 96_000);
+        let f = frequency(&l[48_000..]);
+        assert!((f - 440.0).abs() < 440.0 * 0.01, "within 15 cents: {f}");
+        assert!(l.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn the_harmonic_engine_shapes_its_partials() {
+        let mut p = engine(OscKind::Harmonic);
+        p.osc[0].partials = 1.0;
+        let (sine, _) = play(p, 57, 16_384);
+        let h = harmonics(&sine[4800..], 220.0, 4);
+        assert!(h[1] < h[0] * 0.01 && h[2] < h[0] * 0.01, "one partial is a sine: {:?}", h);
+
+        p.osc[0].partials = 16.0;
+        p.osc[0].parity = -1.0;
+        let (odd, _) = play(p, 57, 16_384);
+        let h = harmonics(&odd[4800..], 220.0, 4);
+        assert!(h[1] < h[0] * 0.02 && h[2] > h[0] * 0.2, "odd only: {:?}", h);
+
+        p.osc[0].parity = 0.0;
+        p.osc[0].tilt = -1.0;
+        let (dark, _) = play(p, 57, 16_384);
+        p.osc[0].tilt = 1.0;
+        let (bright, _) = play(p, 57, 16_384);
+        let ratio = |x: &[f32]| { let h = harmonics(&x[4800..], 220.0, 8); h[7] / h[0] };
+        assert!(ratio(&bright) > ratio(&dark) * 10.0, "tilt brightens");
+
+        // A high note keeps only the partials below Nyquist.
+        let (high, _) = play(p, 105, 16_384);
+        assert!(high.iter().all(|s| s.is_finite()) && rms(&high) > 0.05);
+    }
+
+    #[test]
+    fn two_filters_in_series_or_parallel() {
+        let mut p = engine(OscKind::Analog);
+        p.osc[0].position = 2.0 / 3.0;
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 300.0, ..p.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Hp24, cutoff: 3000.0, ..p.filter2 };
+        let (series, _) = play(p, 45, 24_000);
+        assert!(rms(&series[4800..]) < 0.01, "low-pass then high-pass leaves almost nothing");
+        p.filter_parallel = true;
+        p.filter_balance = 0.0;
+        let (only_low, _) = play(p, 45, 24_000);
+        p.filter_balance = 1.0;
+        let (only_high, _) = play(p, 45, 24_000);
+        assert!(rms(&only_low[4800..]) > 0.05 && rms(&only_high[4800..]) > 0.005);
+        let highs = |x: &[f32]| rms(&x.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>());
+        assert!(highs(&only_high[4800..]) / rms(&only_high[4800..]) > highs(&only_low[4800..]) / rms(&only_low[4800..]) * 3.0);
+    }
+
+    #[test]
+    fn random_sources_and_combinations_modulate() {
+        let mut p = engine(OscKind::Analog);
+        p.random_rate = 10.0;
+        p.matrix[0] = ModSlot { source: ModSource::SampleHold, dest: 4, amount: -1.0, bipolar: false };
+        let (l, _) = play(p, 60, 48_000);
+        let levels: Vec<f32> = l.chunks(4800).map(rms).collect();
+        let spread = levels.iter().fold(0f32, |m, v| m.max(*v)) - levels.iter().fold(1f32, |m, v| m.min(*v));
+        assert!(spread > 0.05, "S&H changes the level every 0.1 s: {levels:?}");
+
+        // Velocity × macro 1 at 0: the combination is 0 and the level stays.
+        let mut p = engine(OscKind::Analog);
+        p.combos[0] = Combo { a: ModSource::Velocity, b: ModSource::Macro1, op: ComboOp::Multiply };
+        p.matrix[0] = ModSlot { source: ModSource::Combo1, dest: 4, amount: -1.0, bipolar: false };
+        let quiet_macro = rms(&play(p, 60, 9600).0[2400..]);
+        p.macros[0] = 1.0;
+        let full_macro = rms(&play(p, 60, 9600).0[2400..]);
+        assert!(quiet_macro > 0.1 && full_macro < 0.01, "{quiet_macro} {full_macro}");
+    }
+
+    #[test]
+    fn the_sequencer_plays_its_steps_on_the_held_key() {
+        let mut p = engine(OscKind::Analog);
+        p.env[0].release = 0.005;
+        p.seq.on = true;
+        p.seq.length = 4;
+        p.seq.rate_beats = 0.5;
+        p.seq.steps[0] = SeqStep { pitch: 0.0, ..SeqStep::default() };
+        p.seq.steps[1] = SeqStep { pitch: 12.0, ..SeqStep::default() };
+        p.seq.steps[2] = SeqStep { on: false, ..SeqStep::default() };
+        p.seq.steps[3] = SeqStep { pitch: 7.0, probability: 0.0, ..SeqStep::default() };
+        let mut synth = WaveSynth::new(p, SR);
+        synth.set_tempo(120.0);
+        synth.note_on(57, 1.0, HELD);
+        let (l, _) = render(&mut synth, 96_000);
+        let step = 12_000;
+        let window = |k: usize| &l[k * step + 600..k * step + 5400];
+        assert!((frequency(window(0)) - 220.0).abs() < 4.0);
+        assert!((frequency(window(1)) - 440.0).abs() < 6.0, "{}", frequency(window(1)));
+        assert!(rms(window(2)) < 1e-3, "a rest");
+        assert!(rms(window(3)) < 1e-3, "probability 0 never plays");
+        assert!((frequency(window(4)) - 220.0).abs() < 4.0, "it loops");
+        synth.note_off(57);
+        let (l, _) = render(&mut synth, 24_000);
+        assert!(rms(&l[12_000..]) < 1e-4, "stops with the key");
+    }
+
+    #[test]
+    fn sequencer_slides_glide_and_its_lane_modulates() {
+        let mut p = engine(OscKind::Analog);
+        p.glide = 80.0;
+        p.seq.on = true;
+        p.seq.length = 2;
+        p.seq.rate_beats = 1.0;
+        p.seq.steps[0] = SeqStep { slide: true, value: 0.0, ..SeqStep::default() };
+        p.seq.steps[1] = SeqStep { pitch: 12.0, value: 1.0, ..SeqStep::default() };
+        p.matrix[0] = ModSlot { source: ModSource::Sequencer, dest: 4, amount: -1.0, bipolar: false };
+        let mut synth = WaveSynth::new(p, SR);
+        synth.set_tempo(120.0);
+        synth.note_on(57, 1.0, HELD);
+        let (l, _) = render(&mut synth, 48_000);
+        assert_eq!(synth.voices.iter().filter(|v| v.active).count(), 1, "the slide reused the voice");
+        assert!(rms(&l[2400..20_000]) > 0.05, "step 1: lane 0, full level");
+        assert!(rms(&l[30_000..44_000]) < 0.01, "step 2: lane 1 turns the level down");
     }
 }
 

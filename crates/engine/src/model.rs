@@ -210,6 +210,9 @@ pub enum InstrumentKind {
     Kick(KickParams),
     /// Wavetable synthesizer; user tables are the track's samples 0 (A) and 1 (B).
     Wavetable(WaveParams),
+    /// The same engine laid out around its analog, harmonic and sample engines,
+    /// two filters and the step sequencer.
+    Polychrome(WaveParams),
 }
 
 /// How the kick designer distorts its body.
@@ -1402,13 +1405,14 @@ const DRUM_PARAMS: [ParamInfo; 24] = {
 
 impl InstrumentKind {
     /// Every instrument, in browser order.
-    pub fn catalog() -> [InstrumentKind; 9] {
+    pub fn catalog() -> [InstrumentKind; 10] {
         [
             InstrumentKind::Synth(SynthParams::default()),
             InstrumentKind::SuperSaw(SuperSawParams::default()),
             InstrumentKind::Acid(AcidParams::default()),
             InstrumentKind::Fm(FmParams::default()),
             InstrumentKind::Wavetable(WaveParams::default()),
+            InstrumentKind::Polychrome(WaveParams::polychrome()),
             InstrumentKind::Sampler(SamplerParams::default()),
             InstrumentKind::Kick(KickParams::default()),
             InstrumentKind::DrumMachine(DrumParams::default()),
@@ -1427,6 +1431,7 @@ impl InstrumentKind {
             InstrumentKind::DrumRack(_) => "Drum Rack",
             InstrumentKind::Kick(_) => "Kick Designer",
             InstrumentKind::Wavetable(_) => "Wavetable Synth",
+            InstrumentKind::Polychrome(_) => "Polychrome Synth",
         }
     }
 
@@ -1441,7 +1446,7 @@ impl InstrumentKind {
             return true;
         }
         match (self, other) {
-            (InstrumentKind::Wavetable(a), InstrumentKind::Wavetable(b)) => {
+            (InstrumentKind::Wavetable(a), InstrumentKind::Wavetable(b)) | (InstrumentKind::Polychrome(a), InstrumentKind::Polychrome(b)) => {
                 let layout = |p: &WaveParams| p.fx.map(|d| d.map(|d| std::mem::discriminant(&d.effect)));
                 layout(a) != layout(b)
             }
@@ -1449,9 +1454,25 @@ impl InstrumentKind {
         }
     }
 
+    /// The settings of either synth built on the wavetable engine.
+    pub fn wave(&self) -> Option<&WaveParams> {
+        match self {
+            InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) => Some(p),
+            _ => None,
+        }
+    }
+
+    /// The same kind of engine synth with other settings.
+    pub fn with_wave(&self, params: WaveParams) -> InstrumentKind {
+        match self {
+            InstrumentKind::Polychrome(_) => InstrumentKind::Polychrome(params),
+            _ => InstrumentKind::Wavetable(params),
+        }
+    }
+
     /// True for instruments that play the track's samples.
     pub fn uses_samples(&self) -> bool {
-        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_) | InstrumentKind::Wavetable(_))
+        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_) | InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_))
     }
 
     /// Replaces the parameterless first drum kit with the drum machine.
@@ -1473,7 +1494,7 @@ impl InstrumentKind {
             InstrumentKind::Sampler(_) => &SAMPLER_PARAMS,
             InstrumentKind::DrumRack(_) => &RACK_PARAMS,
             InstrumentKind::Kick(_) => &KICK_PARAMS,
-            InstrumentKind::Wavetable(_) => &WAVE_PARAMS,
+            InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_) => &WAVE_PARAMS,
         }
     }
 
@@ -1537,7 +1558,7 @@ impl InstrumentKind {
                 9 => &mut p.gain,
                 _ => return None,
             },
-            InstrumentKind::Wavetable(p) => return p.param_mut(index),
+            InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) => return p.param_mut(index),
             InstrumentKind::Kick(p) => match index {
                 0 => &mut p.tune,
                 1 => &mut p.pitch_amount,
@@ -1778,6 +1799,12 @@ pub const WAVE_MOD_TARGETS: usize = 66;
 /// Grain parameters of oscillator A (B's follow), after the slot amounts.
 pub const WAVE_GRAIN: usize = WAVE_MOD_TARGETS + WAVE_SLOTS;
 pub const WAVE_ARP_GATE: usize = WAVE_GRAIN + 8;
+/// Analog drift and harmonic settings of oscillator A (B's follow).
+pub const WAVE_OSC_EXTRA: usize = WAVE_ARP_GATE + 1;
+/// Filter 2 cutoff, resonance, drive, mix and key tracking, then the filter balance.
+pub const WAVE_FILTER2: usize = WAVE_OSC_EXTRA + 8;
+pub const WAVE_BALANCE: usize = WAVE_FILTER2 + 5;
+pub const WAVE_RANDOM_RATE: usize = WAVE_BALANCE + 1;
 /// Effects in the synth's own rack.
 pub const WAVE_FX: usize = 6;
 
@@ -1798,10 +1825,16 @@ pub enum OscKind {
     Granular,
     /// The sample's spectrum turned into a wavetable (Position: time in the sample).
     Spectral,
+    /// Virtual analog: Position morphs sine → triangle → saw → square, Amount is
+    /// the pulse width, Drift the slow pitch wander of analog circuits.
+    Analog,
+    /// Additive: a series of partials shaped by count, tilt and odd/even balance,
+    /// with a formant peak at Position (gain: Amount).
+    Harmonic,
 }
 
 impl OscKind {
-    pub const ALL: [OscKind; 4] = [Self::Wavetable, Self::Sample, Self::Granular, Self::Spectral];
+    pub const ALL: [OscKind; 6] = [Self::Wavetable, Self::Analog, Self::Harmonic, Self::Sample, Self::Granular, Self::Spectral];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -1809,6 +1842,8 @@ impl OscKind {
             Self::Sample => "Sample",
             Self::Granular => "Granular",
             Self::Spectral => "Spectral",
+            Self::Analog => "Analog",
+            Self::Harmonic => "Harmonic",
         }
     }
 
@@ -1982,10 +2017,18 @@ pub enum ModSource {
     Macro2,
     Macro3,
     Macro4,
+    /// A new random value at the random rate, held in between (sample and hold).
+    SampleHold,
+    /// A random value gliding smoothly to the next one.
+    Smooth,
+    Combo1,
+    Combo2,
+    /// The current step's value in the sequencer.
+    Sequencer,
 }
 
 impl ModSource {
-    pub const ALL: [ModSource; 15] = [
+    pub const ALL: [ModSource; 20] = [
         Self::None,
         Self::Env1,
         Self::Env2,
@@ -2001,6 +2044,11 @@ impl ModSource {
         Self::Macro2,
         Self::Macro3,
         Self::Macro4,
+        Self::SampleHold,
+        Self::Smooth,
+        Self::Combo1,
+        Self::Combo2,
+        Self::Sequencer,
     ];
 
     pub fn label(self) -> &'static str {
@@ -2020,6 +2068,11 @@ impl ModSource {
             Self::Macro2 => "Macro 2",
             Self::Macro3 => "Macro 3",
             Self::Macro4 => "Macro 4",
+            Self::SampleHold => "S&H",
+            Self::Smooth => "Smooth Rnd",
+            Self::Combo1 => "Combo 1",
+            Self::Combo2 => "Combo 2",
+            Self::Sequencer => "Seq Mod",
         }
     }
 }
@@ -2044,6 +2097,18 @@ pub struct WaveOsc {
     /// Granular: random pitch per grain, in semitones.
     #[serde(default)]
     pub grain_pitch: f32,
+    /// Analog: slow random pitch wander, 0..1 (up to ±15 cents).
+    #[serde(default)]
+    pub drift: f32,
+    /// Harmonic: number of partials, 1..64.
+    #[serde(default = "default_partials")]
+    pub partials: f32,
+    /// Harmonic: spectral slope, -1 (dark) .. 1 (bright); 0 is a saw's 1/n.
+    #[serde(default)]
+    pub tilt: f32,
+    /// Harmonic: -1 odd partials only .. 1 even partials only.
+    #[serde(default)]
+    pub parity: f32,
     /// Index into the built-in tables, or [`WAVE_USER_TABLE`].
     pub table: u8,
     pub warp: OscWarp,
@@ -2076,6 +2141,10 @@ fn default_density() -> f32 {
     30.0
 }
 
+fn default_partials() -> f32 {
+    32.0
+}
+
 impl Default for WaveOsc {
     fn default() -> Self {
         Self {
@@ -2086,6 +2155,10 @@ impl Default for WaveOsc {
             density: default_density(),
             spray: 0.0,
             grain_pitch: 0.0,
+            drift: 0.0,
+            partials: default_partials(),
+            tilt: 0.0,
+            parity: 0.0,
             table: 0,
             warp: OscWarp::Off,
             position: 0.0,
@@ -2173,6 +2246,97 @@ impl ModSlot {
     pub const EMPTY: ModSlot = ModSlot { source: ModSource::None, dest: WAVE_NO_TARGET, amount: 0.0, bipolar: false };
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ComboOp {
+    #[default]
+    Multiply,
+    Add,
+    Min,
+    Max,
+    Average,
+}
+
+impl ComboOp {
+    pub const ALL: [ComboOp; 5] = [Self::Multiply, Self::Add, Self::Min, Self::Max, Self::Average];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Multiply => "×",
+            Self::Add => "+",
+            Self::Min => "Min",
+            Self::Max => "Max",
+            Self::Average => "Media",
+        }
+    }
+
+    pub fn apply(self, a: f32, b: f32) -> f32 {
+        match self {
+            Self::Multiply => a * b,
+            Self::Add => (a + b).min(1.0),
+            Self::Min => a.min(b),
+            Self::Max => a.max(b),
+            Self::Average => (a + b) * 0.5,
+        }
+    }
+}
+
+/// Combines two modulation sources into a new one.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Combo {
+    pub a: ModSource,
+    pub b: ModSource,
+    pub op: ComboOp,
+}
+
+pub const SEQ_STEPS: usize = 16;
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SeqStep {
+    /// Off steps are rests.
+    pub on: bool,
+    /// Semitones from the held key.
+    pub pitch: f32,
+    pub velocity: f32,
+    /// Note length, as a fraction of a step.
+    pub gate: f32,
+    /// Glides into the next step without a new attack.
+    pub slide: bool,
+    /// Chance the step plays, 0..1.
+    pub probability: f32,
+    /// The step's value on the sequencer's modulation lane, 0..1.
+    pub value: f32,
+}
+
+impl Default for SeqStep {
+    fn default() -> Self {
+        Self { on: true, pitch: 0.0, velocity: 0.8, gate: 0.5, slide: false, probability: 1.0, value: 0.0 }
+    }
+}
+
+/// Step sequencer: while a key is held, plays its steps transposed to that key.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SeqParams {
+    pub on: bool,
+    pub steps: [SeqStep; SEQ_STEPS],
+    /// Steps in the loop, 1..16.
+    pub length: u8,
+    pub rate_beats: f32,
+}
+
+impl Default for SeqParams {
+    fn default() -> Self {
+        Self { on: false, steps: [SeqStep::default(); SEQ_STEPS], length: 16, rate_beats: 0.25 }
+    }
+}
+
+fn default_filter2() -> WaveFilterParams {
+    WaveFilterParams { on: false, mode: WaveFilter::Hp12, routes: [true; 4], cutoff: 120.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0 }
+}
+
+fn default_random_rate() -> f32 {
+    4.0
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WaveParams {
     pub osc: [WaveOsc; WAVE_OSCS],
@@ -2198,6 +2362,25 @@ pub struct WaveParams {
     /// Length of each arpeggiated note, as a fraction of a step.
     #[serde(default = "default_arp_gate")]
     pub arp_gate: f32,
+    /// Second filter; its `routes` are unused (it takes what goes through filter 1).
+    #[serde(default = "default_filter2")]
+    pub filter2: WaveFilterParams,
+    /// Filters side by side (mixed by `filter_balance`) instead of one after the other.
+    #[serde(default)]
+    pub filter_parallel: bool,
+    #[serde(default = "half")]
+    pub filter_balance: f32,
+    /// Rate of the random sources, in Hz.
+    #[serde(default = "default_random_rate")]
+    pub random_rate: f32,
+    #[serde(default)]
+    pub combos: [Combo; 2],
+    #[serde(default)]
+    pub seq: SeqParams,
+}
+
+fn half() -> f32 {
+    0.5
 }
 
 fn default_arp_gate() -> f32 {
@@ -2226,11 +2409,243 @@ impl Default for WaveParams {
             fx: [None; WAVE_FX],
             arp: ArpParams::default(),
             arp_gate: default_arp_gate(),
+            filter2: default_filter2(),
+            filter_parallel: false,
+            filter_balance: 0.5,
+            random_rate: default_random_rate(),
+            combos: [Combo::default(); 2],
+            seq: SeqParams::default(),
         }
     }
 }
 
 impl WaveParams {
+    /// Starting point of the polychrome synth: an analog engine through a ladder filter.
+    pub fn polychrome() -> WaveParams {
+        let mut p = WaveParams::default();
+        p.osc[0].kind = OscKind::Analog;
+        p.osc[0].position = 2.0 / 3.0;
+        p.osc[0].drift = 0.2;
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 6000.0, resonance: 0.15, ..p.filter };
+        p
+    }
+
+    /// Factory presets of the polychrome synth.
+    pub fn polychrome_presets() -> Vec<(&'static str, WaveParams)> {
+        let init = WaveParams::polychrome();
+        let saw = 2.0 / 3.0;
+        let slot = |source, dest: usize, amount| ModSlot { source, dest: dest as u8, amount, bipolar: false };
+        let env = |attack, decay, sustain, release| WaveEnv { attack, hold: 0.0, decay, sustain, release };
+        let fx = |effect: Effect| Some(Device::new(effect));
+        let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
+        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let chorus = fx(Effect::Chorus(ChorusParams::default()));
+        let analog = |position: f32| WaveOsc { kind: OscKind::Analog, position, random_phase: 1.0, ..WaveOsc::default() };
+        let harmonic = |partials: f32, tilt: f32, parity: f32| WaveOsc { kind: OscKind::Harmonic, partials, tilt, parity, random_phase: 0.0, ..WaveOsc::default() };
+        let steps = |pattern: &[(f32, bool, f32, bool)]| {
+            let mut steps = [SeqStep::default(); SEQ_STEPS];
+            for (i, &(pitch, on, velocity, slide)) in pattern.iter().enumerate().take(SEQ_STEPS) {
+                steps[i] = SeqStep { on, pitch, velocity, slide, gate: 0.55, probability: 1.0, value: velocity };
+            }
+            steps
+        };
+        let triangle = Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]);
+        let mut list = vec![("Init", init)];
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 4.0, detune: 0.2, drift: 0.4, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, octave: -1.0, level: 0.4, drift: 0.3, warp_amount: 0.3, ..analog(1.0) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 1800.0, resonance: 0.2, ..init.filter };
+        p.env[0] = env(0.6, 1.0, 0.9, 1.2);
+        p.lfo[0] = WaveLfo { rate: 0.2, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.2);
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.8, 0.3);
+        p.gain = 0.45;
+        list.push(("Analog · Warm Pad", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.12, drift: 0.3, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, unison: 2.0, detune: 0.15, fine: 7.0, level: 0.5, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 500.0, resonance: 0.15, ..init.filter };
+        p.env[0] = env(0.03, 0.3, 0.8, 0.2);
+        p.env[1] = env(0.06, 0.4, 0.3, 0.2);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.5);
+        p.fx[0] = reverb(0.5, 0.15);
+        p.gain = 0.5;
+        list.push(("Analog · Brass", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { drift: 0.8, unison: 2.0, detune: 0.08, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 4000.0, resonance: 0.2, ..init.filter };
+        p.mono = true;
+        p.legato = true;
+        p.glide = 50.0;
+        p.lfo[0] = WaveLfo { rate: 5.5, rise: 0.4, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 3, 0.04);
+        p.fx[0] = delay(0.75, 0.2);
+        p.gain = 0.85;
+        list.push(("Analog · Drift Lead", p));
+
+        let mut p = init;
+        p.osc[0] = harmonic(24.0, 0.3, 0.4);
+        p.filter.on = false;
+        p.env[0] = env(0.002, 1.5, 0.0, 0.8);
+        p.env[1] = env(0.002, 0.6, 0.0, 0.4);
+        p.osc[0].warp_amount = 0.5;
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.6);
+        p.fx[0] = reverb(0.7, 0.25);
+        p.gain = 0.6;
+        list.push(("Harmonic · Glass Keys", p));
+
+        let mut p = init;
+        p.osc[0] = harmonic(16.0, 0.5, -0.3);
+        p.filter.on = false;
+        p.env[0] = env(0.004, 0.2, 1.0, 0.05);
+        p.fx[0] = chorus;
+        p.gain = 0.55;
+        list.push(("Harmonic · Drawbar Organ", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 4.0, detune: 0.18, warp_amount: 0.8, position: 0.2, ..harmonic(40.0, -0.2, 0.0) };
+        p.filter.on = false;
+        p.lfo[0] = WaveLfo { rate: 0.15, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.35);
+        p.env[0] = env(0.5, 1.0, 1.0, 1.5);
+        p.fx[0] = reverb(0.85, 0.35);
+        p.gain = 0.3;
+        list.push(("Harmonic · Choir", p));
+
+        let mut p = init;
+        p.osc[0] = analog(saw);
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 350.0, resonance: 0.75, drive: 0.4, ..init.filter };
+        p.env[0] = env(0.002, 0.3, 0.7, 0.05);
+        p.env[1] = env(0.001, 0.2, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.35);
+        p.matrix[1] = slot(ModSource::Sequencer, 32, 0.35);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.seq = SeqParams {
+            on: true,
+            length: 16,
+            rate_beats: 0.25,
+            steps: steps(&[
+                (0.0, true, 0.9, false),
+                (0.0, true, 0.5, false),
+                (12.0, true, 0.6, true),
+                (0.0, true, 0.5, false),
+                (3.0, true, 0.9, false),
+                (0.0, false, 0.5, false),
+                (7.0, true, 0.6, true),
+                (12.0, true, 0.5, false),
+                (0.0, true, 0.9, false),
+                (0.0, true, 0.5, false),
+                (10.0, true, 0.6, false),
+                (0.0, false, 0.5, false),
+                (5.0, true, 0.9, false),
+                (0.0, true, 0.5, true),
+                (12.0, true, 0.6, false),
+                (7.0, true, 0.5, false),
+            ]),
+        };
+        p.fx[0] = delay(0.75, 0.15);
+        p.gain = 0.55;
+        list.push(("Seq · Acid Line", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 3.0, detune: 0.2, warp_amount: 0.2, ..analog(1.0) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 2000.0, resonance: 0.3, ..init.filter };
+        p.env[0] = env(0.002, 0.15, 0.0, 0.1);
+        let mut stab = steps(&[(0.0, true, 0.9, false), (0.0, false, 0.5, false), (0.0, true, 0.6, false), (0.0, false, 0.5, false)].repeat(4));
+        for (i, step) in stab.iter_mut().enumerate() {
+            if i % 4 == 2 {
+                step.probability = 0.5;
+            }
+            if i == 14 {
+                step.pitch = 5.0;
+                step.on = true;
+            }
+        }
+        p.seq = SeqParams { on: true, length: 16, rate_beats: 0.25, steps: stab };
+        p.fx[0] = delay(0.75, 0.25);
+        p.fx[1] = reverb(0.6, 0.2);
+        p.gain = 0.95;
+        list.push(("Seq · Techno Stab", p));
+
+        let mut p = init;
+        p.osc[0] = harmonic(20.0, 0.1, 0.2);
+        p.filter.on = false;
+        p.env[0] = env(0.002, 0.35, 0.0, 0.25);
+        p.seq = SeqParams {
+            on: true,
+            length: 8,
+            rate_beats: 0.5,
+            steps: steps(&[
+                (0.0, true, 0.8, false),
+                (3.0, true, 0.6, false),
+                (7.0, true, 0.7, false),
+                (10.0, true, 0.6, false),
+                (12.0, true, 0.8, false),
+                (10.0, true, 0.6, false),
+                (7.0, true, 0.7, false),
+                (5.0, true, 0.6, false),
+            ]),
+        };
+        p.fx[0] = delay(0.75, 0.3);
+        p.fx[1] = reverb(0.7, 0.25);
+        p.gain = 1.0;
+        list.push(("Seq · Melodic Pluck", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { drift: 0.15, ..analog(0.15) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 800.0, ..init.filter };
+        p.mono = true;
+        p.glide = 25.0;
+        p.env[0] = env(0.003, 1.0, 1.0, 0.08);
+        p.gain = 0.9;
+        list.push(("Bass · Analog Sub", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { kind: OscKind::Wavetable, table: 3, unison: 3.0, detune: 0.2, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 1200.0, resonance: 0.3, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Bp12, cutoff: 900.0, resonance: 0.5, ..p.filter2 };
+        p.filter_parallel = true;
+        p.random_rate = 1.5;
+        p.matrix[0] = slot(ModSource::Smooth, 32, 0.35);
+        p.matrix[1] = slot(ModSource::Smooth, 0, 0.6);
+        p.matrix[2] = slot(ModSource::SampleHold, 99, 0.3);
+        p.env[0] = env(0.8, 1.0, 1.0, 1.8);
+        p.fx[0] = reverb(0.9, 0.35);
+        p.gain = 0.55;
+        list.push(("Pad · Random Motion", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 3.0, detune: 0.15, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Formant, cutoff: 300.0, resonance: 0.5, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 900.0, resonance: 0.3, ..p.filter2 };
+        p.filter_parallel = true;
+        p.lfo[0] = WaveLfo { shape: triangle, sync_beats: 4.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 104, 1.0);
+        p.lfo[1] = WaveLfo { shape: triangle, sync_beats: 8.0, ..init.lfo[1] };
+        p.matrix[1] = slot(ModSource::Lfo2, 32, 0.4);
+        p.gain = 0.3;
+        list.push(("Dual Filter · Vowel Sweep", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.1, ..analog(1.0) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 300.0, resonance: 0.4, ..init.filter };
+        p.lfo[0] = WaveLfo { shape: triangle, sync_beats: 0.25, mode: LfoMode::Retrig, ..init.lfo[0] };
+        p.env[1] = env(0.5, 2.0, 0.0, 0.5);
+        p.combos[0] = Combo { a: ModSource::Lfo1, b: ModSource::Env2, op: ComboOp::Multiply };
+        p.matrix[0] = slot(ModSource::Combo1, 32, 0.7);
+        p.env[0] = env(0.01, 2.5, 0.0, 0.3);
+        p.fx[0] = delay(0.5, 0.2);
+        p.gain = 0.45;
+        list.push(("FX · Combo Pulse", p));
+        list
+    }
+
     /// Factory presets: (name, settings), grouped by use.
     pub fn presets() -> Vec<(&'static str, WaveParams)> {
         let init = WaveParams::default();
@@ -2503,12 +2918,27 @@ impl WaveParams {
                 88 => &mut p.osc[1].spray,
                 89 => &mut p.osc[1].grain_pitch,
                 90 => &mut p.arp_gate,
+                91 => &mut p.osc[0].drift,
+                92 => &mut p.osc[0].partials,
+                93 => &mut p.osc[0].tilt,
+                94 => &mut p.osc[0].parity,
+                95 => &mut p.osc[1].drift,
+                96 => &mut p.osc[1].partials,
+                97 => &mut p.osc[1].tilt,
+                98 => &mut p.osc[1].parity,
+                99 => &mut p.filter2.cutoff,
+                100 => &mut p.filter2.resonance,
+                101 => &mut p.filter2.drive,
+                102 => &mut p.filter2.mix,
+                103 => &mut p.filter2.key_track,
+                104 => &mut p.filter_balance,
+                105 => &mut p.random_rate,
             _ => return None,
         })
     }
 }
 
-pub const WAVE_PARAMS: [ParamInfo; 91] = [
+pub const WAVE_PARAMS: [ParamInfo; 106] = [
     ParamInfo::linear("A Pos", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("A Oct", -4.0, 4.0, 0.0, Count),
     ParamInfo::linear("A Semi", -12.0, 12.0, 0.0, Semitones),
@@ -2600,6 +3030,21 @@ pub const WAVE_PARAMS: [ParamInfo; 91] = [
     ParamInfo::linear("B Spray", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("B G.Pitch", 0.0, 24.0, 0.0, Semitones),
     ParamInfo::linear("Arp Gate", 0.05, 1.0, 0.5, Percent),
+    ParamInfo::linear("A Drift", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("A Partials", 1.0, 64.0, 32.0, Count),
+    ParamInfo::linear("A Tilt", -1.0, 1.0, 0.0, Plain),
+    ParamInfo::linear("A Parity", -1.0, 1.0, 0.0, Plain),
+    ParamInfo::linear("B Drift", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("B Partials", 1.0, 64.0, 32.0, Count),
+    ParamInfo::linear("B Tilt", -1.0, 1.0, 0.0, Plain),
+    ParamInfo::linear("B Parity", -1.0, 1.0, 0.0, Plain),
+    ParamInfo::log("F2 Cutoff", 20.0, 20000.0, 120.0, Hertz),
+    ParamInfo::linear("F2 Res", 0.0, 1.0, 0.1, Percent),
+    ParamInfo::linear("F2 Drive", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("F2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("F2 Key", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("F Balance", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::log("Rnd Rate", 0.1, 40.0, 4.0, Hertz),
 ];
 
 #[cfg(test)]

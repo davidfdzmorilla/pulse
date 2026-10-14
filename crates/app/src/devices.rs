@@ -50,6 +50,9 @@ pub(crate) enum Action {
     SliceFile,
     OpenKickWindow,
     OpenWaveWindow,
+    OpenPolyWindow,
+    /// New settings for the track's wavetable-engine synth (either kind).
+    Wave(engine::model::WaveParams),
     /// Opens a file dialog for the sample of oscillator `n`.
     LoadOscSample(usize),
     /// Routes a modulation source to a wavetable synth parameter.
@@ -218,6 +221,17 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             Action::OpenKickWindow => {
                 if let Target::Track(t) = target {
                     app.kick_window = Some(t);
+                }
+            }
+            Action::OpenPolyWindow => {
+                if let Target::Track(t) = target {
+                    app.poly_window = Some(t);
+                }
+            }
+            Action::Wave(params) => {
+                if let Target::Track(t) = target {
+                    let kind = app.project.tracks[t].instrument.with_wave(params);
+                    app.set_instrument(t, kind);
                 }
             }
             Action::OpenWaveWindow => {
@@ -510,11 +524,12 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             });
             actions.extend(body_actions);
         }
-        InstrumentKind::Wavetable(base) => {
+        InstrumentKind::Wavetable(base) | InstrumentKind::Polychrome(base) => {
+            let poly = matches!(kind, InstrumentKind::Polychrome(_));
             let header = |ui: &mut egui::Ui| {
                 preset_menu(app, ui, t, &mut head);
-                if ui.small_button("Editor ⤢").on_hover_text("Abre el editor completo: osciladores, filtro, envolventes, LFOs y matriz").clicked() {
-                    head.push(Action::OpenWaveWindow);
+                if ui.small_button("Editor ⤢").on_hover_text("Abre el editor completo").clicked() {
+                    head.push(if poly { Action::OpenPolyWindow } else { Action::OpenWaveWindow });
                 }
             };
             let mut body_actions = Vec::new();

@@ -104,7 +104,7 @@ pub fn instrument_samples(track: &Track, samples: &mut SampleCache) -> Box<Vec<A
 
 /// The table oscillator `osc` of a wavetable synth track reads.
 pub fn table_for(track: &Track, osc: usize, samples: &mut SampleCache) -> Arc<Wavetable> {
-    let InstrumentKind::Wavetable(params) = track.instrument else { return samples.builtin_table(0) };
+    let Some(params) = track.instrument.wave().copied() else { return samples.builtin_table(0) };
     let o = &params.osc[osc.min(1)];
     match (o.kind, track.sample(osc)) {
         (engine::model::OscKind::Spectral, Some(path)) => samples.spectral_table(path),
@@ -115,7 +115,7 @@ pub fn table_for(track: &Track, osc: usize, samples: &mut SampleCache) -> Arc<Wa
 
 /// The table oscillator `osc` reads, if it is already loaded (for drawing).
 pub fn cached_table_for(track: &Track, osc: usize, samples: &SampleCache) -> Option<Arc<Wavetable>> {
-    let InstrumentKind::Wavetable(params) = track.instrument else { return None };
+    let params = track.instrument.wave().copied()?;
     let o = &params.osc[osc.min(1)];
     match (o.kind, track.sample(osc)) {
         (engine::model::OscKind::Spectral, Some(path)) => samples.cached_table(&format!("spectral:{path}")),
@@ -127,7 +127,7 @@ pub fn cached_table_for(track: &Track, osc: usize, samples: &SampleCache) -> Opt
 /// Both oscillators' tables for a wavetable synth (nothing for other instruments).
 pub fn instrument_tables(track: &Track, samples: &mut SampleCache) -> Box<Vec<Arc<Wavetable>>> {
     match track.instrument {
-        InstrumentKind::Wavetable(_) => Box::new((0..2).map(|osc| table_for(track, osc, samples)).collect()),
+        InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_) => Box::new((0..2).map(|osc| table_for(track, osc, samples)).collect()),
         _ => Box::default(),
     }
 }

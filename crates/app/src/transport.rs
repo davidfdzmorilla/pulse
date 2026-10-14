@@ -155,6 +155,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     app.open();
                     ui.close();
                 }
+                if ui.button("Importar set de Live (.als)…   ⌘I").clicked() {
+                    app.import_live_set();
+                    ui.close();
+                }
+                ui.separator();
                 if ui.button("Guardar   ⌘S").clicked() {
                     app.save();
                     ui.close();

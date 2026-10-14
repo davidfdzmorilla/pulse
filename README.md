@@ -23,6 +23,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 | ⌘S / ⇧⌘S / ⌘O / ⌘N | Guardar / guardar como / abrir / nuevo |
 | ⌘D | Duplicar el clip seleccionado |
 | ⌘T | Nueva pista MIDI |
+| ⌘I | Importar un set de Ableton Live (`.als`) |
 | Supr | Borrar el clip seleccionado |
 
 - **Session**: ▶ de un clip lo lanza (cuantizado), clic lo abre en el editor, doble clic en un slot vacío crea
@@ -32,6 +33,10 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   Lanzar clips de sesión anula el Arrangement de esa pista hasta pulsar **▶ Arrangement**.
 - **Mezclador**: envíos A/B, panorama, fader en dB con medidor, activador (silencio) y solo.
   Dos retornos (Reverb y Delay) y el Master, todos con su cadena de efectos.
+- **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI
+  (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus notas.
+  Los dispositivos de Live no se pueden leer: las pistas con Drum Rack reciben el Drum Kit y el resto Pulse Synth.
+  Las pistas de audio y los grupos se omiten (se indica en la barra de estado).
 - **Dispositivos**: Pulse Synth o Drum Kit más efectos (EQ Three, Compressor, Saturator, Auto Filter,
   Delay, Reverb) desde el navegador. Knobs: arrastrar arriba/abajo, Shift para ajuste fino, doble clic para
   el valor por defecto.
@@ -43,8 +48,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 
 ## Hoja de ruta
 
-1. Importar sets `.als` de Ableton Live.
-2. Pistas de audio, samples y warping.
-3. Automatización de parámetros.
-4. Entrada MIDI y grabación de notas (y de la sesión en el Arrangement).
-5. Plugins VST3 / CLAP.
+1. Pistas de audio, samples y warping (también para importar las pistas de audio de Live).
+2. Automatización de parámetros.
+3. Entrada MIDI y grabación de notas (y de la sesión en el Arrangement).
+4. Plugins VST3 / CLAP.

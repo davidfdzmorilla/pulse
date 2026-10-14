@@ -1,10 +1,11 @@
 use crate::history::History;
 use crate::project::{Mixer, Project, Track, PALETTE};
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::Path;
 use crate::capture::{write_wav, InputCapture};
 use crate::input::{ComputerKeyboard, MidiInputs};
 use crate::recording::{Finished, Recorder};
+use crate::sync::{self, SampleCache};
 use crate::{arrangement, browser, detail, piano_roll, session, theme, transport};
 use eframe::egui;
 use engine::model::{
@@ -12,7 +13,7 @@ use engine::model::{
     PAN_PARAM, SEND_PARAM, VOLUME_PARAM,
 };
 use engine::{
-    build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, LiveInput, PlacedClip, PlayClip,
+    build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, LiveInput,
     RecordedNote, Sample, SharedState,
     Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES,
 };
@@ -166,13 +167,14 @@ pub struct PulseApp {
     pub piano_roll: piano_roll::State,
     pub arrangement: arrangement::State,
     pub show_browser: bool,
-    /// Decoded audio files by path; failed loads are cached as empty samples.
-    samples: HashMap<String, Arc<Sample>>,
+    /// Decoded audio files by path.
+    pub(crate) samples: SampleCache,
     pub midi: MidiInputs,
     pub keyboard: ComputerKeyboard,
     pub recorder: Recorder,
     /// Audio input, opened when an audio track is armed.
     pub capture: Option<InputCapture>,
+    pub export: crate::export::Dialog,
     /// Automated parameters the user moved by hand; their automation is
     /// suspended until "Back to Arrangement", as in Live.
     pub overridden: HashSet<(Target, Param)>,
@@ -206,12 +208,13 @@ impl PulseApp {
             piano_roll: Default::default(),
             arrangement: Default::default(),
             show_browser: true,
-            samples: HashMap::new(),
+            samples: SampleCache::default(),
             midi: MidiInputs::default(),
             keyboard: ComputerKeyboard::default(),
             recorder: Recorder::default(),
             capture: None,
             overridden: HashSet::new(),
+            export: Default::default(),
             input_track: None,
             file: None,
             status: None,
@@ -239,91 +242,32 @@ impl PulseApp {
 
     /// Pushes the whole project to the engine (after loading or undo).
     pub fn sync_all(&mut self) {
-        let p = &self.project;
-        let commands = [
-            Command::SetTempo(p.tempo),
-            Command::SetMetronome(p.metronome),
-            Command::SetQuantize(p.quantize),
-            Command::SetLoop {
-                enabled: p.loop_enabled,
-                start: p.loop_start,
-                end: p.loop_end,
-            },
-        ];
+        let sample_rate = self.audio.sample_rate();
+        let commands = sync::project_commands(&self.project, &mut self.samples, sample_rate, &self.overridden);
         for command in commands {
             self.audio.send(command);
         }
-        for t in 0..MAX_TRACKS {
-            let track = self
-                .project
-                .tracks
-                .get(t)
-                .cloned()
-                .unwrap_or_else(|| Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default())));
-            let arrangement = self.placed_clips(&track);
-            let mut commands = vec![
-                Command::SetInstrument { track: t, kind: track.instrument },
-                Command::SetSolo { track: t, solo: track.solo },
-                Command::SetArm { track: t, armed: track.armed },
-                Command::ReplaceChain {
-                    target: Target::Track(t),
-                    chain: build_chain(&track.devices, self.audio.sample_rate()),
-                },
-                Command::SetArrangement { track: t, clips: arrangement },
-            ];
-            for (send, &amount) in track.sends.iter().enumerate() {
-                commands.push(Command::SetSend { track: t, send, amount });
-            }
-            for slot in 0..NUM_SCENES {
-                let clip = track.clips[slot].as_ref().map(|c| Box::new(self.play_clip(c)));
-                commands.push(Command::SetClip { track: t, slot, clip });
-            }
-            let mixer = track.mixer.clone();
-            for command in commands {
-                self.audio.send(command);
-            }
-            self.send_mixer(Target::Track(t), &mixer);
+        self.show_sample_errors();
+    }
+
+    fn show_sample_errors(&mut self) {
+        if let Some(error) = self.samples.errors.pop() {
+            self.status = Some(error);
+            self.samples.errors.clear();
         }
-        for r in 0..NUM_RETURNS {
-            self.sync_chain(Target::Return(r));
-            self.sync_mixer(Target::Return(r));
-        }
-        self.sync_chain(Target::Master);
-        self.sync_mixer(Target::Master);
-        for t in 0..MAX_TRACKS {
-            if t < self.project.tracks.len() {
-                self.sync_automation(Target::Track(t));
-            } else {
-                let lanes = Box::default();
-                self.audio.send(Command::SetAutomation { target: Target::Track(t), lanes });
-            }
-        }
-        for r in 0..NUM_RETURNS {
-            self.sync_automation(Target::Return(r));
-        }
-        self.sync_automation(Target::Master);
     }
 
     /// Sends a channel's lanes that have points and are not overridden.
     pub fn sync_automation(&mut self, target: Target) {
-        let lanes: Vec<AutomationLane> = self
-            .automation(target)
-            .iter()
-            .filter(|lane| !lane.points.is_empty() && !self.overridden.contains(&(target, lane.param)))
-            .cloned()
-            .collect();
-        self.audio.send(Command::SetAutomation { target, lanes: Box::new(lanes) });
-    }
-
-    fn send_mixer(&mut self, target: Target, mixer: &Mixer) {
-        self.audio.send(Command::SetGain { target, gain: mixer.gain });
-        self.audio.send(Command::SetPan { target, pan: mixer.pan });
-        self.audio.send(Command::SetMute { target, mute: !mixer.active });
+        let lanes = sync::active_lanes(self.automation(target), target, &self.overridden);
+        self.audio.send(Command::SetAutomation { target, lanes });
     }
 
     pub fn sync_mixer(&mut self, target: Target) {
         let mixer = self.mixer(target).clone();
-        self.send_mixer(target, &mixer);
+        self.audio.send(Command::SetGain { target, gain: mixer.gain });
+        self.audio.send(Command::SetPan { target, pan: mixer.pan });
+        self.audio.send(Command::SetMute { target, mute: !mixer.active });
     }
 
     pub fn sync_chain(&mut self, target: Target) {
@@ -333,60 +277,29 @@ impl PulseApp {
 
     pub fn sync_clip(&mut self, track: usize, slot: usize) {
         let clip = self.project.tracks[track].clips[slot].clone();
-        let clip = clip.map(|c| Box::new(self.play_clip(&c)));
+        let clip = clip.map(|c| Box::new(sync::play_clip(&c, &mut self.samples)));
         self.audio.send(Command::SetClip { track, slot, clip });
+        self.show_sample_errors();
     }
 
     pub fn sync_arrangement(&mut self, track: usize) {
-        let t = self.project.tracks[track].clone();
-        let clips = self.placed_clips(&t);
+        let clips = sync::placed_clips(&self.project.tracks[track], &mut self.samples);
         self.audio.send(Command::SetArrangement { track, clips });
+        self.show_sample_errors();
     }
 
     // ----- Samples ----------------------------------------------------------------
 
     /// Returns the decoded file, loading it on first use.
     pub fn sample(&mut self, path: &str) -> Arc<Sample> {
-        if let Some(sample) = self.samples.get(path) {
-            return sample.clone();
-        }
-        let sample = match Sample::load(Path::new(path)) {
-            Ok(sample) => Arc::new(sample),
-            Err(error) => {
-                self.status = Some(format!("No se pudo cargar la muestra: {error}"));
-                Arc::new(Sample::default())
-            }
-        };
-        self.samples.insert(path.to_string(), sample.clone());
+        let sample = self.samples.get(path);
+        self.show_sample_errors();
         sample
     }
 
     /// The decoded file if it is already loaded (for drawing).
     pub fn loaded_sample(&self, path: &str) -> Option<&Arc<Sample>> {
-        self.samples.get(path)
-    }
-
-    fn play_clip(&mut self, clip: &Clip) -> PlayClip {
-        match clip {
-            Clip::Midi(midi) => PlayClip::Midi(midi.clone()),
-            Clip::Audio(audio) => {
-                let sample = self.sample(&audio.sample);
-                PlayClip::Audio(audio.clone(), sample)
-            }
-        }
-    }
-
-    fn placed_clips(&mut self, track: &Track) -> Box<Vec<PlacedClip>> {
-        let placed = track
-            .arrangement
-            .iter()
-            .map(|a| PlacedClip {
-                start: a.start,
-                length: a.length,
-                clip: self.play_clip(&a.clip),
-            })
-            .collect();
-        Box::new(placed)
+        self.samples.loaded(path)
     }
 
     /// Builds a clip for a file, guessing whether it is a tempo-synced loop or a one-shot.
@@ -1277,12 +1190,16 @@ impl PulseApp {
                 cmd && !shift && i.key_pressed(egui::Key::T),
                 cmd && shift && i.key_pressed(egui::Key::T),
                 cmd && i.key_pressed(egui::Key::I),
+                cmd && shift && i.key_pressed(egui::Key::R),
                 !cmd && i.key_pressed(egui::Key::M),
                 i.key_pressed(egui::Key::F9),
             ]
         });
-        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, keyboard, record] =
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record] =
             input;
+        if export {
+            self.export.open = true;
+        }
         if keyboard {
             self.toggle_keyboard();
         }
@@ -1416,6 +1333,7 @@ impl eframe::App for PulseApp {
         let interacting = ctx.input(|i| i.pointer.any_down());
         self.history.commit(&self.project, interacting);
         self.update_title(&ctx);
+        crate::export::window(self, &ctx);
         self.debug_screenshot(&ctx);
         // Meters and playheads animate continuously.
         ctx.request_repaint();

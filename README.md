@@ -26,6 +26,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 | ⌘I | Importar un set de Ableton Live (`.als`) |
 | M | Teclado del ordenador como teclado MIDI |
 | F9 | Grabar en el Arrangement |
+| ⇧⌘R | Exportar audio |
 | Supr | Borrar el clip seleccionado |
 
 - **Session**: ▶ de un clip lo lanza (cuantizado), clic lo abre en el editor, doble clic en un slot vacío crea
@@ -57,6 +58,10 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   un punto rojo y se mueven solos al reproducir. Si mueves uno a mano, su automatización queda anulada (punto
   hueco) hasta que pulses **▶ Arrangement**, como en Live. El volumen y el panorama se suavizan dentro de
   cada bloque de audio para que los cambios no suenen a escalones.
+- **Exportar**: Archivo → Exportar audio (⇧⌘R). Renderiza el Arrangement completo o la región del loop a WAV
+  de 16 (con dither), 24 o 32 bits, a 44.1 o 48 kHz, incluida la cola de reverbs y delays. Puede normalizar la
+  mezcla a un pico dado, o exportar una pista por archivo (stems, cada una en solo con sus envíos). Avisa si la
+  mezcla satura. Desde la terminal: `pulse --render salida.wav [proyecto.pulse]` (sin proyecto, la demo).
 - **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI y
   de audio (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus
   notas o sus muestras y ajustes de warp. Las muestras se buscan por ruta y, si el set viene de otro

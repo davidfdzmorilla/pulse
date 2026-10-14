@@ -186,6 +186,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     app.import_live_set();
                     ui.close();
                 }
+                if ui.button("Exportar audio…   ⇧⌘R").clicked() {
+                    app.export.open = true;
+                    ui.close();
+                }
                 ui.separator();
                 if ui.button("Guardar   ⌘S").clicked() {
                     app.save();

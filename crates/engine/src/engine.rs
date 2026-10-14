@@ -194,6 +194,9 @@ pub enum Command {
         target: Target,
         lanes: Box<Vec<AutomationLane>>,
     },
+    /// Whether the master output is clipped to ±1 (on for speakers; off when
+    /// rendering to a file so peaks can be measured and normalized).
+    SetOutputLimit(bool),
     /// Arming routes live notes to a track and makes it record.
     SetArm {
         track: usize,
@@ -723,6 +726,7 @@ pub struct Engine {
     click_buffer: Vec<f32>,
     input_track: Option<usize>,
     arrangement_record: bool,
+    limit_output: bool,
 }
 
 impl Engine {
@@ -757,6 +761,7 @@ impl Engine {
             click_buffer: vec![0.0; MAX_BLOCK],
             input_track: None,
             arrangement_record: false,
+            limit_output: true,
         };
         (engine, shared)
     }
@@ -954,6 +959,7 @@ impl Engine {
                 std::mem::swap(&mut c.automation, &mut lanes);
                 self.discard(Garbage::Automation(lanes));
             }
+            Command::SetOutputLimit(on) => self.limit_output = on,
             Command::SetArm { track, armed } => {
                 let end = self.position;
                 if let Some(t) = self.tracks.get_mut(track) {
@@ -1157,8 +1163,9 @@ impl Engine {
             let r = master.right[i] * (r0 + (gr - r0) * t) + click[i];
             peak = peak.max(l.abs()).max(r.abs());
             // Safety limit only; the meter shows the real level.
-            master.left[i] = l.clamp(-1.0, 1.0);
-            master.right[i] = r.clamp(-1.0, 1.0);
+            let (l, r) = if self.limit_output { (l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0)) } else { (l, r) };
+            master.left[i] = l;
+            master.right[i] = r;
         }
         self.shared.master.publish(peak);
     }

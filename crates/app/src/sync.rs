@@ -87,6 +87,7 @@ pub fn project_commands(
         Command::SetMetronome(project.metronome),
         Command::SetQuantize(project.quantize),
         Command::SetLoop { enabled: project.loop_enabled, start: project.loop_start, end: project.loop_end },
+        Command::SetSwing { amount: project.swing, grid: project.swing_grid },
     ];
     let empty = Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default()));
     for t in 0..MAX_TRACKS {

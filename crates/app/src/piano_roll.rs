@@ -21,10 +21,19 @@ const RULER_H: f32 = 16.0;
 const VELOCITY_H: f32 = 54.0;
 const EDGE_GRAB: f32 = 5.0;
 
-const GRIDS: [(f64, &str); 4] = [(1.0, "1/4"), (0.5, "1/8"), (0.25, "1/16"), (0.125, "1/32")];
-const NOTE_LENGTHS: [(f64, &str); 6] = [
-    (0.125, "1/32"),
+const GRIDS: [(f64, &str); 6] = [
+    (1.0, "1/4"),
+    (0.5, "1/8"),
+    (1.0 / 3.0, "1/8T"),
     (0.25, "1/16"),
+    (1.0 / 6.0, "1/16T"),
+    (0.125, "1/32"),
+];
+const NOTE_LENGTHS: [(f64, &str); 8] = [
+    (0.125, "1/32"),
+    (1.0 / 6.0, "1/16T"),
+    (0.25, "1/16"),
+    (1.0 / 3.0, "1/8T"),
     (0.5, "1/8"),
     (1.0, "1/4"),
     (2.0, "1/2"),
@@ -230,7 +239,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let steps = (clip.length / state.grid).ceil() as usize;
         for step in 0..=steps {
             let beat = step as f64 * state.grid;
-            let gray = if beat % 4.0 == 0.0 { 95 } else if beat % 1.0 == 0.0 { 66 } else { 50 };
+            // Triplet steps are not exact in floating point, so compare with a tolerance.
+            let on = |unit: f64| ((beat / unit) - (beat / unit).round()).abs() < 1e-6;
+            let gray = if on(4.0) { 95 } else if on(1.0) { 66 } else { 50 };
             let x = x_of(beat);
             painter.line_segment([pos2(x, grid.top()), pos2(x, grid.bottom())], Stroke::new(1.0, Color32::from_gray(gray)));
         }

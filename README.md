@@ -54,6 +54,10 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   o, si no hay ninguna, a la pista seleccionada. Para grabar en Session, arma la pista y pulsa el ● de un slot
   vacío: la toma empieza en el siguiente compás y, al volver a pulsarlo, se cierra redondeada a compases y
   sigue sonando en bucle. Para grabar en el Arrangement pulsa ● en el transporte (F9) con pistas armadas.
+- **Groove**: en el transporte, **Rec Q** ajusta a la rejilla elegida (1/4 a 1/32, también tresillos) el
+  inicio de las notas MIDI al terminar cada toma, sobre la rejilla de la canción. **Swing** retrasa al
+  reproducir los contratiempos de 1/8 o 1/16 (100 % = shuffle de tresillo) en todos los clips MIDI, sin
+  cambiar las notas; también se aplica al exportar. El piano roll admite rejilla y notas de tresillo.
 - **Grabar audio**: arma una pista de audio (●); la primera vez macOS pide permiso para usar el micrófono
   (concédeselo a la Terminal si ejecutas Pulse desde ella). Su medidor pasa a mostrar el nivel de entrada.
   Graba igual que MIDI: ● en un slot vacío o ● del transporte. Las tomas se guardan como WAV en `Recordings/`
@@ -85,7 +89,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 
 ## Hoja de ruta
 
-1. Envolventes de automatización dentro de los clips de sesión; curvas entre puntos; cuantización al grabar.
+1. Envolventes de automatización dentro de los clips de sesión; curvas entre puntos; grooves por clip.
 2. Monitorización y compensación de latencia al grabar audio; grabar la sesión en el Arrangement;
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.

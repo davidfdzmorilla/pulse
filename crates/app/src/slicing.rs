@@ -35,40 +35,7 @@ const FRAME: usize = 1024;
 /// Hits closer than this are treated as one.
 const MIN_GAP_SECONDS: f32 = 0.06;
 
-/// In-place radix-2 FFT of `re`/`im` (length a power of two).
-pub(crate) fn fft(re: &mut [f32], im: &mut [f32]) {
-    let n = re.len();
-    let mut j = 0;
-    for i in 1..n {
-        let mut bit = n >> 1;
-        while j & bit != 0 {
-            j ^= bit;
-            bit >>= 1;
-        }
-        j |= bit;
-        if i < j {
-            re.swap(i, j);
-            im.swap(i, j);
-        }
-    }
-    let mut len = 2;
-    while len <= n {
-        let angle = -std::f32::consts::TAU / len as f32;
-        for start in (0..n).step_by(len) {
-            for k in 0..len / 2 {
-                let (w_re, w_im) = ((angle * k as f32).cos(), (angle * k as f32).sin());
-                let (a, b) = (start + k, start + k + len / 2);
-                let t_re = re[b] * w_re - im[b] * w_im;
-                let t_im = re[b] * w_im + im[b] * w_re;
-                re[b] = re[a] - t_re;
-                im[b] = im[a] - t_im;
-                re[a] += t_re;
-                im[a] += t_im;
-            }
-        }
-        len <<= 1;
-    }
-}
+pub(crate) use engine::fft;
 
 /// Log-spaced analysis bands, as FFT bin ranges.
 const BANDS: usize = 24;

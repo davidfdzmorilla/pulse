@@ -17,10 +17,12 @@ mod project;
 mod recording;
 mod sample_editor;
 mod session;
+mod shape_edit;
 mod slicing;
 mod sync;
 mod theme;
 mod transport;
+mod wave_ui;
 mod widgets;
 
 fn main() -> eframe::Result {

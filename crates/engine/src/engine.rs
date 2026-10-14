@@ -12,6 +12,8 @@ use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
 use crate::kick::KickSynth;
 use crate::sampler::{DrumRack, Sampler};
+use crate::wavesynth::WaveSynth;
+use crate::wavetable::Wavetable;
 use crate::synth::{Click, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -115,6 +117,14 @@ pub enum Garbage {
     Arrangement(Box<Vec<PlacedClip>>),
     Automation(Box<Vec<AutomationLane>>),
     Samples(Box<Vec<Arc<Sample>>>),
+    Wavetables(Box<Vec<Arc<Wavetable>>>),
+    Instrument(Box<PreparedInstrument>),
+}
+
+/// An instrument built off the audio thread, ready to replace a track's one.
+pub struct PreparedInstrument {
+    kind: InstrumentKind,
+    built: Option<Instrument>,
 }
 
 pub enum Command {
@@ -149,9 +159,15 @@ pub enum Command {
         track: usize,
         clips: Box<Vec<PlacedClip>>,
     },
+    /// Use [`Command::set_instrument`]: it builds the instrument on the calling thread.
     SetInstrument {
         track: usize,
-        kind: InstrumentKind,
+        instrument: Box<PreparedInstrument>,
+    },
+    /// The wavetables of a track's wavetable synth, by oscillator.
+    SetWavetables {
+        track: usize,
+        tables: Box<Vec<Arc<Wavetable>>>,
     },
     /// The samples a track's sampler or drum rack plays, by slot (pad).
     SetSamples {
@@ -333,6 +349,19 @@ enum Queued {
     Stop,
 }
 
+impl Command {
+    /// Sets a track's instrument. A new kind of instrument is built here, so the
+    /// audio thread only swaps it in; the same kind just takes the new settings.
+    pub fn set_instrument(track: usize, kind: InstrumentKind, sample_rate: f32) -> Command {
+        Command::SetInstrument { track, instrument: Box::new(PreparedInstrument { kind, built: Some(Instrument::new(kind, sample_rate)) }) }
+    }
+
+    /// Changes the settings of the instrument already on a track (same kind).
+    pub fn update_instrument(track: usize, kind: InstrumentKind) -> Command {
+        Command::SetInstrument { track, instrument: Box::new(PreparedInstrument { kind, built: None }) }
+    }
+}
+
 enum Instrument {
     Synth(PolySynth),
     Drums(DrumMachine),
@@ -342,6 +371,7 @@ enum Instrument {
     Sampler(Sampler),
     Rack(DrumRack),
     Kick(KickSynth),
+    Wavetable(Box<WaveSynth>),
 }
 
 impl Instrument {
@@ -355,6 +385,7 @@ impl Instrument {
             InstrumentKind::Sampler(p) => Self::Sampler(Sampler::new(p, sample_rate)),
             InstrumentKind::DrumRack(p) => Self::Rack(DrumRack::new(p, sample_rate)),
             InstrumentKind::Kick(p) => Self::Kick(KickSynth::new(p, sample_rate)),
+            InstrumentKind::Wavetable(p) => Self::Wavetable(Box::new(WaveSynth::new(p, sample_rate))),
             InstrumentKind::Drums => unreachable!("upgraded above"),
         }
     }
@@ -369,6 +400,7 @@ impl Instrument {
             Self::Sampler(s) => InstrumentKind::Sampler(s.params()),
             Self::Rack(r) => InstrumentKind::DrumRack(r.params()),
             Self::Kick(k) => InstrumentKind::Kick(k.params()),
+            Self::Wavetable(w) => InstrumentKind::Wavetable(w.params()),
         }
     }
 
@@ -383,6 +415,7 @@ impl Instrument {
             (Self::Sampler(s), InstrumentKind::Sampler(p)) => s.set_params(p),
             (Self::Rack(r), InstrumentKind::DrumRack(p)) => r.set_params(p),
             (Self::Kick(k), InstrumentKind::Kick(p)) => k.set_params(p),
+            (Self::Wavetable(w), InstrumentKind::Wavetable(p)) => w.set_params(p),
             _ => return false,
         }
         true
@@ -390,8 +423,10 @@ impl Instrument {
 
     /// Instruments with tempo-synced settings follow the transport.
     fn set_tempo(&mut self, tempo: f64) {
-        if let Self::Kick(k) = self {
-            k.set_tempo(tempo);
+        match self {
+            Self::Kick(k) => k.set_tempo(tempo),
+            Self::Wavetable(w) => w.set_tempo(tempo),
+            _ => {}
         }
     }
 
@@ -411,6 +446,7 @@ impl Instrument {
             Self::Sampler(s) => s.note_on(samples, pitch, velocity, gate_samples),
             Self::Rack(r) => r.note_on(samples, pitch, velocity),
             Self::Kick(k) => k.note_on(pitch, velocity),
+            Self::Wavetable(w) => w.note_on(pitch, velocity, gate_samples),
         }
     }
 
@@ -423,6 +459,7 @@ impl Instrument {
             Self::Fm(f) => f.note_off(pitch),
             Self::Sampler(s) => s.note_off(pitch),
             Self::Rack(_) | Self::Kick(_) => {}
+            Self::Wavetable(w) => w.note_off(pitch),
         }
     }
 
@@ -436,11 +473,12 @@ impl Instrument {
             Self::Sampler(s) => s.all_notes_off(),
             Self::Rack(_) => {}
             Self::Kick(k) => k.all_notes_off(),
+            Self::Wavetable(w) => w.all_notes_off(),
         }
     }
 
     /// Adds the instrument's output to `left`/`right`.
-    fn render(&mut self, samples: &[Arc<Sample>], left: &mut [f32], right: &mut [f32]) {
+    fn render(&mut self, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
         match self {
             Self::Synth(s) => {
                 // Mono synth: render once and copy.
@@ -454,6 +492,7 @@ impl Instrument {
             Self::Sampler(s) => s.render(samples, left, right),
             Self::Rack(r) => r.render(samples, left, right),
             Self::Kick(k) => k.render(samples, left, right),
+            Self::Wavetable(w) => w.render(tables, left, right),
         }
     }
 }
@@ -717,6 +756,8 @@ struct Track {
     instrument: Instrument,
     /// What the sampler or drum rack plays.
     samples: Box<Vec<Arc<Sample>>>,
+    /// What the wavetable synth's oscillators read.
+    tables: Box<Vec<Arc<Wavetable>>>,
     solo: bool,
     sends: [f32; NUM_RETURNS],
     arrangement: Box<Vec<PlacedClip>>,
@@ -755,6 +796,7 @@ impl Track {
             queued: Queued::Nothing,
             instrument: Instrument::new(InstrumentKind::Synth(Default::default()), sample_rate),
             samples: Box::default(),
+            tables: Box::default(),
             solo: false,
             sends: [0.0; NUM_RETURNS],
             arrangement: Box::default(),
@@ -1005,12 +1047,24 @@ impl Engine {
                 }
                 self.discard(Garbage::Arrangement(clips));
             }
-            Command::SetInstrument { track, kind } => {
+            Command::SetInstrument { track, mut instrument } => {
                 let Some(t) = self.tracks.get_mut(track) else { return };
                 // Keep sounding voices when only parameters change.
-                if !t.instrument.update(kind) {
-                    t.instrument = Instrument::new(kind, self.sample_rate);
+                if !t.instrument.update(instrument.kind) {
+                    let built = match instrument.built.take() {
+                        Some(built) => built,
+                        // Only reached if a caller skipped `set_instrument`.
+                        None => Instrument::new(instrument.kind, self.sample_rate),
+                    };
+                    // The old instrument leaves in the box, to be freed off this thread.
+                    instrument.built = Some(std::mem::replace(&mut t.instrument, built));
                 }
+                self.discard(Garbage::Instrument(instrument));
+            }
+            Command::SetWavetables { track, mut tables } => {
+                let Some(t) = self.tracks.get_mut(track) else { return };
+                std::mem::swap(&mut t.tables, &mut tables);
+                self.discard(Garbage::Wavetables(tables));
             }
             Command::SetSamples { track, mut samples } => {
                 let Some(t) = self.tracks.get_mut(track) else { return };
@@ -1231,7 +1285,7 @@ impl Engine {
             for &(frame, _, event) in &track.events {
                 let frame = frame.min(n - 1);
                 if frame > cursor {
-                    track.instrument.render(&track.samples, &mut left[cursor..frame], &mut right[cursor..frame]);
+                    track.instrument.render(&track.samples, &track.tables, &mut left[cursor..frame], &mut right[cursor..frame]);
                     cursor = frame;
                 }
                 match event {
@@ -1240,7 +1294,7 @@ impl Engine {
                     Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(&track.samples, pitch, velocity, gate),
                 }
             }
-            track.instrument.render(&track.samples, &mut left[cursor..], &mut right[cursor..]);
+            track.instrument.render(&track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
             track.events.clear();
 
             let channel = &mut track.channel;
@@ -1546,7 +1600,7 @@ mod tests {
     #[test]
     fn drums_and_clip_loop_keep_playing() {
         let mut h = Harness::new();
-        h.send(Command::SetInstrument { track: 0, kind: InstrumentKind::Drums });
+        h.send(Command::set_instrument(0, InstrumentKind::Drums, 48_000.0));
         let mut clip = MidiClip::new("beat", 1.0, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: 0.25, pitch: 36, velocity: 1.0 });
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
@@ -1740,7 +1794,7 @@ mod tests {
         let onset = |amount: f32| {
             let mut h = Harness::new();
             let params = SynthParams { waveform: crate::model::Waveform::Sine, attack: 0.0005, release: 0.002, ..Default::default() };
-            h.send(Command::SetInstrument { track: 0, kind: InstrumentKind::Synth(params) });
+            h.send(Command::update_instrument(0, InstrumentKind::Synth(params)));
             h.send(Command::SetSwing { amount, grid: 0.25 });
             let mut clip = MidiClip::new("blips", 4.0, [0, 0, 0]);
             for start in [0.0, 0.25] {

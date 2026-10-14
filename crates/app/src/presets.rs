@@ -21,6 +21,10 @@ pub fn factory(kind: &InstrumentKind) -> Vec<Preset> {
             .into_iter()
             .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Kick(params), samples: Vec::new() })
             .collect(),
+        InstrumentKind::Wavetable(_) => engine::model::WaveParams::presets()
+            .into_iter()
+            .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Wavetable(params), samples: Vec::new() })
+            .collect(),
         _ => Vec::new(),
     }
 }

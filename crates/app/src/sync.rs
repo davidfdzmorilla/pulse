@@ -104,6 +104,13 @@ pub fn instrument_samples(track: &Track, samples: &mut SampleCache) -> Box<Vec<A
 
 /// The table oscillator `osc` of a wavetable synth track reads.
 pub fn table_for(track: &Track, osc: usize, samples: &mut SampleCache) -> Arc<Wavetable> {
+    if let InstrumentKind::Modular(params) = track.instrument {
+        let g = &params.gens[osc.min(engine::model::MOD_GENS - 1)];
+        return match track.sample(osc) {
+            Some(path) if g.table == engine::model::WAVE_USER_TABLE => samples.table(path),
+            _ => samples.builtin_table(g.table as usize),
+        };
+    }
     let Some(params) = track.instrument.wave().copied() else { return samples.builtin_table(0) };
     let o = &params.osc[osc.min(1)];
     match (o.kind, track.sample(osc)) {
@@ -115,6 +122,13 @@ pub fn table_for(track: &Track, osc: usize, samples: &mut SampleCache) -> Arc<Wa
 
 /// The table oscillator `osc` reads, if it is already loaded (for drawing).
 pub fn cached_table_for(track: &Track, osc: usize, samples: &SampleCache) -> Option<Arc<Wavetable>> {
+    if let InstrumentKind::Modular(params) = track.instrument {
+        let g = &params.gens[osc.min(engine::model::MOD_GENS - 1)];
+        return match track.sample(osc) {
+            Some(path) if g.table == engine::model::WAVE_USER_TABLE => samples.cached_table(path),
+            _ => samples.cached_table(&format!("builtin:{}", (g.table as usize).min(engine::wavetable::BUILTIN.len() - 1))),
+        };
+    }
     let params = track.instrument.wave().copied()?;
     let o = &params.osc[osc.min(1)];
     match (o.kind, track.sample(osc)) {
@@ -128,6 +142,7 @@ pub fn cached_table_for(track: &Track, osc: usize, samples: &SampleCache) -> Opt
 pub fn instrument_tables(track: &Track, samples: &mut SampleCache) -> Box<Vec<Arc<Wavetable>>> {
     match track.instrument {
         InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_) => Box::new((0..2).map(|osc| table_for(track, osc, samples)).collect()),
+        InstrumentKind::Modular(_) => Box::new((0..engine::model::MOD_GENS).map(|g| table_for(track, g, samples)).collect()),
         _ => Box::default(),
     }
 }

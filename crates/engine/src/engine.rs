@@ -12,6 +12,7 @@ use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
 use crate::kick::KickSynth;
 use crate::sampler::{DrumRack, Sampler};
+use crate::modsynth::ModSynth;
 use crate::wavesynth::WaveSynth;
 use crate::wavetable::Wavetable;
 use crate::synth::{Click, PolySynth, HELD};
@@ -373,6 +374,7 @@ enum Instrument {
     Kick(KickSynth),
     /// The wavetable engine; true when it is the polychrome synth.
     Wavetable(Box<WaveSynth>, bool),
+    Modular(Box<ModSynth>),
 }
 
 impl Instrument {
@@ -388,6 +390,7 @@ impl Instrument {
             InstrumentKind::Kick(p) => Self::Kick(KickSynth::new(p, sample_rate)),
             InstrumentKind::Wavetable(p) => Self::Wavetable(Box::new(WaveSynth::new(p, sample_rate)), false),
             InstrumentKind::Polychrome(p) => Self::Wavetable(Box::new(WaveSynth::new(p, sample_rate)), true),
+            InstrumentKind::Modular(p) => Self::Modular(Box::new(ModSynth::new(p, sample_rate))),
             InstrumentKind::Drums => unreachable!("upgraded above"),
         }
     }
@@ -404,6 +407,7 @@ impl Instrument {
             Self::Kick(k) => InstrumentKind::Kick(k.params()),
             Self::Wavetable(w, false) => InstrumentKind::Wavetable(w.params()),
             Self::Wavetable(w, true) => InstrumentKind::Polychrome(w.params()),
+            Self::Modular(m) => InstrumentKind::Modular(m.params()),
         }
     }
 
@@ -419,6 +423,7 @@ impl Instrument {
             (Self::Rack(r), InstrumentKind::DrumRack(p)) => r.set_params(p),
             (Self::Kick(k), InstrumentKind::Kick(p)) => k.set_params(p),
             (Self::Wavetable(w, false), InstrumentKind::Wavetable(p)) | (Self::Wavetable(w, true), InstrumentKind::Polychrome(p)) => w.set_params(p),
+            (Self::Modular(m), InstrumentKind::Modular(p)) => m.set_params(p),
             _ => return false,
         }
         true
@@ -429,6 +434,7 @@ impl Instrument {
         match self {
             Self::Kick(k) => k.set_tempo(tempo),
             Self::Wavetable(w, _) => w.set_tempo(tempo),
+            Self::Modular(m) => m.set_tempo(tempo),
             _ => {}
         }
     }
@@ -450,6 +456,7 @@ impl Instrument {
             Self::Rack(r) => r.note_on(samples, pitch, velocity),
             Self::Kick(k) => k.note_on(pitch, velocity),
             Self::Wavetable(w, _) => w.note_on(pitch, velocity, gate_samples),
+            Self::Modular(m) => m.note_on(pitch, velocity, gate_samples),
         }
     }
 
@@ -463,6 +470,7 @@ impl Instrument {
             Self::Sampler(s) => s.note_off(pitch),
             Self::Rack(_) | Self::Kick(_) => {}
             Self::Wavetable(w, _) => w.note_off(pitch),
+            Self::Modular(m) => m.note_off(pitch),
         }
     }
 
@@ -477,6 +485,7 @@ impl Instrument {
             Self::Rack(_) => {}
             Self::Kick(k) => k.all_notes_off(),
             Self::Wavetable(w, _) => w.all_notes_off(),
+            Self::Modular(m) => m.all_notes_off(),
         }
     }
 
@@ -496,6 +505,7 @@ impl Instrument {
             Self::Rack(r) => r.render(samples, left, right),
             Self::Kick(k) => k.render(samples, left, right),
             Self::Wavetable(w, _) => w.render(samples, tables, left, right),
+            Self::Modular(m) => m.render(samples, tables, left, right),
         }
     }
 }

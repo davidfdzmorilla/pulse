@@ -10,6 +10,7 @@ mod history;
 mod input;
 mod kick_ui;
 mod kits;
+mod modular_ui;
 mod note_edit;
 mod piano_roll;
 mod poly_ui;

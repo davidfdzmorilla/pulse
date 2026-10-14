@@ -21,15 +21,15 @@ const VOICES: usize = 16;
 const PARAMS: usize = WAVE_PARAMS.len();
 const GRAINS: usize = 24;
 /// Size of the single-cycle table a harmonic oscillator rebuilds as it plays.
-const HARMONIC_TABLE: usize = 256;
+pub(crate) const HARMONIC_TABLE: usize = 256;
 /// The harmonic table is rebuilt every this many control blocks.
 const HARMONIC_EVERY: u32 = 4;
 /// Sample and granular oscillators play their file at its own pitch on C3.
-const SAMPLE_ROOT_HZ: f32 = 261.625_58;
+pub(crate) const SAMPLE_ROOT_HZ: f32 = 261.625_58;
 const UNISON: usize = 16;
 /// Modulation is evaluated every `CONTROL` samples.
 const CONTROL: usize = 32;
-const COMB: usize = 2048;
+pub(crate) const COMB: usize = 2048;
 /// Indices into the parameter table (see `WAVE_PARAMS`).
 const OSC_PARAMS: usize = 13;
 const SUB: usize = 26;
@@ -40,12 +40,12 @@ const MACROS: usize = 60;
 const GLIDE: usize = 64;
 const MASTER: usize = 65;
 
-fn note_freq(note: f32) -> f32 {
+pub(crate) fn note_freq(note: f32) -> f32 {
     440.0 * 2f32.powf((note - 69.0) / 12.0)
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Stage {
+pub(crate) enum Stage {
     Idle,
     Attack,
     Hold,
@@ -57,28 +57,28 @@ enum Stage {
 /// Attack is linear; decay and release are exponential, reaching their target in
 /// about the set time.
 #[derive(Clone, Copy)]
-struct Env {
-    stage: Stage,
-    level: f32,
+pub(crate) struct Env {
+    pub(crate) stage: Stage,
+    pub(crate) level: f32,
     held_for: f32,
 }
 
 impl Env {
-    const IDLE: Env = Env { stage: Stage::Idle, level: 0.0, held_for: 0.0 };
+    pub(crate) const IDLE: Env = Env { stage: Stage::Idle, level: 0.0, held_for: 0.0 };
 
     /// Starts again from the current level, so retriggers do not click.
-    fn trigger(&mut self) {
+    pub(crate) fn trigger(&mut self) {
         self.stage = Stage::Attack;
         self.held_for = 0.0;
     }
 
-    fn release(&mut self) {
+    pub(crate) fn release(&mut self) {
         if self.stage != Stage::Idle {
             self.stage = Stage::Release;
         }
     }
 
-    fn tick(&mut self, p: &WaveEnv, dt: f32) -> f32 {
+    pub(crate) fn tick(&mut self, p: &WaveEnv, dt: f32) -> f32 {
         let towards = |level: f32, target: f32, time: f32| target + (level - target) * (-dt * 5.0 / time.max(1e-4)).exp();
         match self.stage {
             Stage::Idle => {}
@@ -116,29 +116,41 @@ impl Env {
 
 /// Filter memory for one channel of one voice.
 #[derive(Clone)]
-struct FilterState {
+pub(crate) struct FilterState {
     svf: [Svf; 2],
     ladder: [f32; 4],
-    comb: Box<[f32; COMB]>,
+    /// Only allocated where a comb filter can play (see [`FilterState::without_comb`]).
+    comb: Option<Box<[f32; COMB]>>,
     comb_pos: usize,
     formant: [Svf; 3],
 }
 
 impl FilterState {
-    fn new() -> Self {
-        Self { svf: [Svf::default(); 2], ladder: [0.0; 4], comb: Box::new([0.0; COMB]), comb_pos: 0, formant: [Svf::default(); 3] }
+    pub(crate) fn new() -> Self {
+        Self { svf: [Svf::default(); 2], ladder: [0.0; 4], comb: Some(Box::new([0.0; COMB])), comb_pos: 0, formant: [Svf::default(); 3] }
     }
 
-    fn clear(&mut self) {
+    /// A filter whose comb mode passes the signal through (saves the delay line).
+    pub(crate) fn without_comb() -> Self {
+        Self { comb: None, ..Self::new_empty() }
+    }
+
+    fn new_empty() -> Self {
+        Self { svf: [Svf::default(); 2], ladder: [0.0; 4], comb: None, comb_pos: 0, formant: [Svf::default(); 3] }
+    }
+
+    pub(crate) fn clear(&mut self) {
         self.svf = [Svf::default(); 2];
         self.ladder = [0.0; 4];
-        self.comb.fill(0.0);
+        if let Some(comb) = &mut self.comb {
+            comb.fill(0.0);
+        }
         self.formant = [Svf::default(); 3];
     }
 }
 
 /// Filter settings for a control block.
-struct FilterCoefs {
+pub(crate) struct FilterCoefs {
     mode: WaveFilter,
     g: f32,
     k: f32,
@@ -155,7 +167,7 @@ struct FilterCoefs {
 const VOWELS: [[f32; 3]; 5] = [[800.0, 1150.0, 2900.0], [400.0, 1600.0, 2700.0], [300.0, 2300.0, 3000.0], [450.0, 800.0, 2830.0], [325.0, 700.0, 2530.0]];
 
 impl FilterCoefs {
-    fn new(mode: WaveFilter, cutoff: f32, resonance: f32, drive: f32, mix: f32, sr: f32) -> Self {
+    pub(crate) fn new(mode: WaveFilter, cutoff: f32, resonance: f32, drive: f32, mix: f32, sr: f32) -> Self {
         let cutoff = cutoff.clamp(20.0, sr * 0.45);
         let resonance = resonance.clamp(0.0, 1.0);
         // Vowel position from the cutoff's place on a log scale.
@@ -182,7 +194,7 @@ impl FilterCoefs {
         }
     }
 
-    fn process(&self, s: &mut FilterState, x: f32) -> f32 {
+    pub(crate) fn process(&self, s: &mut FilterState, x: f32) -> f32 {
         let input = if self.drive > 0.0 {
             let g = 1.0 + self.drive * 8.0;
             (x * g).tanh() / g.tanh()
@@ -216,13 +228,16 @@ impl FilterCoefs {
                 // Make up for the level the feedback takes away.
                 s.ladder[3] * (1.0 + self.ladder_feedback * 0.4)
             }
-            WaveFilter::Comb => {
-                let read = (s.comb_pos + COMB - self.comb_delay) % COMB;
-                let y = input + self.comb_feedback * s.comb[read];
-                s.comb[s.comb_pos] = y.clamp(-4.0, 4.0);
-                s.comb_pos = (s.comb_pos + 1) % COMB;
-                y * (1.0 - self.comb_feedback * 0.5)
-            }
+            WaveFilter::Comb => match &mut s.comb {
+                Some(comb) => {
+                    let read = (s.comb_pos + COMB - self.comb_delay) % COMB;
+                    let y = input + self.comb_feedback * comb[read];
+                    comb[s.comb_pos] = y.clamp(-4.0, 4.0);
+                    s.comb_pos = (s.comb_pos + 1) % COMB;
+                    y * (1.0 - self.comb_feedback * 0.5)
+                }
+                None => input,
+            },
             WaveFilter::Formant => {
                 let mut y = 0.0;
                 for (state, &(g, level)) in s.formant.iter_mut().zip(&self.formants) {
@@ -353,7 +368,7 @@ struct OscBlock {
 /// balance `parity`, and a formant peak at `formant` (0..1 along the partials)
 /// raised by `gain`. Harmonics above `max_harmonic` are left out (no aliasing).
 #[allow(clippy::too_many_arguments)]
-fn build_harmonic(table: &mut [f32; HARMONIC_TABLE], sine: &[f32], partials: f32, tilt: f32, parity: f32, formant: f32, gain: f32, max_harmonic: usize) {
+pub(crate) fn build_harmonic(table: &mut [f32; HARMONIC_TABLE], sine: &[f32], partials: f32, tilt: f32, parity: f32, formant: f32, gain: f32, max_harmonic: usize) {
     let count = (partials.round() as usize).clamp(1, 64).min(max_harmonic.max(1)).min(HARMONIC_TABLE / 2 - 1);
     let centre = 1.0 + formant.clamp(0.0, 1.0) * (partials.max(1.0) - 1.0);
     table.fill(0.0);

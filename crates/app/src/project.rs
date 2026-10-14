@@ -135,10 +135,23 @@ pub struct Project {
     pub loop_enabled: bool,
     pub loop_start: f64,
     pub loop_end: f64,
+    /// Swing applied to MIDI notes on playback, 0..1 (1 = triplet shuffle).
+    #[serde(default)]
+    pub swing: f32,
+    /// Grid the swing acts on, in beats (0.5 = eighths, 0.25 = sixteenths).
+    #[serde(default = "default_swing_grid")]
+    pub swing_grid: f64,
+    /// Grid recorded MIDI note starts snap to, if any.
+    #[serde(default)]
+    pub record_quantize: Option<f64>,
     pub tracks: Vec<Track>,
     pub returns: Vec<ReturnTrack>,
     pub master: MasterTrack,
     pub scene_names: Vec<String>,
+}
+
+fn default_swing_grid() -> f64 {
+    0.25
 }
 
 impl Project {
@@ -150,6 +163,9 @@ impl Project {
             loop_enabled: false,
             loop_start: 0.0,
             loop_end: 16.0,
+            swing: 0.0,
+            swing_grid: default_swing_grid(),
+            record_quantize: None,
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

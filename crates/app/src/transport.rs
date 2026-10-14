@@ -121,6 +121,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         readout(ui, &format!("{} c.", (app.project.loop_end - app.project.loop_start) / 4.0), 54.0);
 
         ui.add_space(12.0);
+        groove(app, ui);
+
+        ui.add_space(12.0);
         let needed = app.back_to_arrangement_needed();
         if widgets::flat_button(ui, "▶ Arrangement", needed, vec2(104.0, 22.0))
             .on_hover_text("Volver al Arrangement: las pistas dejan los clips de sesión y la automatización que hayas\nmovido a mano vuelve a funcionar")
@@ -208,6 +211,51 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// Record quantization and playback swing.
+fn groove(app: &mut PulseApp, ui: &mut egui::Ui) {
+    const RECORD_GRIDS: [(Option<f64>, &str); 7] = [
+        (None, "Rec Q: Off"),
+        (Some(1.0), "Rec Q: 1/4"),
+        (Some(0.5), "Rec Q: 1/8"),
+        (Some(1.0 / 3.0), "Rec Q: 1/8T"),
+        (Some(0.25), "Rec Q: 1/16"),
+        (Some(1.0 / 6.0), "Rec Q: 1/16T"),
+        (Some(0.125), "Rec Q: 1/32"),
+    ];
+    let current = RECORD_GRIDS
+        .iter()
+        .find(|(g, _)| *g == app.project.record_quantize)
+        .map_or("Rec Q", |(_, l)| *l);
+    egui::ComboBox::from_id_salt("record_quantize")
+        .selected_text(current)
+        .width(92.0)
+        .show_ui(ui, |ui| {
+            for (grid, text) in RECORD_GRIDS {
+                ui.selectable_value(&mut app.project.record_quantize, grid, text);
+            }
+        })
+        .response
+        .on_hover_text("Cuantización al grabar: ajusta el inicio de las notas grabadas a esta rejilla");
+
+    let mut percent = app.project.swing * 100.0;
+    let swing = ui
+        .add_sized([62.0, 22.0], egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5).prefix("Swing ").suffix("%").fixed_decimals(0))
+        .on_hover_text("Swing al reproducir: retrasa los contratiempos. 100 % = shuffle de tresillo. No cambia las notas.");
+    let mut grid = app.project.swing_grid;
+    egui::ComboBox::from_id_salt("swing_grid")
+        .selected_text(if grid == 0.5 { "1/8" } else { "1/16" })
+        .width(48.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(&mut grid, 0.5, "1/8");
+            ui.selectable_value(&mut grid, 0.25, "1/16");
+        });
+    if swing.changed() || grid != app.project.swing_grid {
+        app.project.swing = percent / 100.0;
+        app.project.swing_grid = grid;
+        app.audio.send(Command::SetSwing { amount: app.project.swing, grid });
+    }
 }
 
 pub fn status_bar(app: &mut PulseApp, ui: &mut egui::Ui) {

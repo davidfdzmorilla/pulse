@@ -951,6 +951,20 @@ impl PulseApp {
         self.audio.send(Command::Play);
     }
 
+    /// Snaps recorded note starts to the record quantization grid, if one is set.
+    /// The grid is the song's, so a take that began off the beat still lands on it.
+    fn quantize_take(&self, notes: Vec<engine::model::Note>, start: f64, length: f64) -> Vec<engine::model::Note> {
+        let Some(grid) = self.project.record_quantize else { return notes };
+        let mut absolute: Vec<_> = notes.into_iter().map(|n| engine::model::Note { start: n.start + start, ..n }).collect();
+        let all: Vec<usize> = (0..absolute.len()).collect();
+        crate::note_edit::quantize(&mut absolute, &all, grid, 1.0, false, start + length);
+        absolute
+            .into_iter()
+            .map(|n| engine::model::Note { start: (n.start - start).max(0.0), ..n })
+            .filter(|n| n.start < length)
+            .collect()
+    }
+
     /// Live input follows the selected track when no track is armed.
     fn update_input_track(&mut self) {
         let desired = match self.selected_target {
@@ -984,12 +998,15 @@ impl PulseApp {
                         continue;
                     }
                     let count = notes.len();
+                    let notes = self.quantize_take(notes, start, length);
+                    let t = &self.project.tracks[track];
                     let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color };
                     self.set_clip(track, slot, Some(Clip::Midi(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
                     self.status = Some(format!("Grabadas {count} notas en {}", self.project.tracks[track].name));
                 }
                 Finished::Arrangement { track, start, length, notes } => {
+                    let notes = self.quantize_take(notes, start, length);
                     let Some(t) = self.project.tracks.get_mut(track) else { continue };
                     let count = notes.len();
                     let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color };

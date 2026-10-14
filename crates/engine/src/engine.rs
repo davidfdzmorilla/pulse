@@ -194,6 +194,11 @@ pub enum Command {
         target: Target,
         lanes: Box<Vec<AutomationLane>>,
     },
+    /// Delays notes on the off-beats of `grid` beats (0.5 = eighths, 0.25 = sixteenths).
+    SetSwing {
+        amount: f32,
+        grid: f64,
+    },
     /// Whether the master output is clipped to ±1 (on for speakers; off when
     /// rendering to a file so peaks can be measured and normalized).
     SetOutputLimit(bool),
@@ -395,6 +400,8 @@ struct Timing {
     segment_end: usize,
     beats_per_sample: f64,
     frames: usize,
+    /// Swing grid (beats) and amount applied to MIDI notes.
+    swing: (f64, f32),
 }
 
 impl Timing {
@@ -404,8 +411,23 @@ impl Timing {
     }
 }
 
+/// Delay for a note starting at `start` (clip beats): notes exactly on the off-beats
+/// of `grid` (its 2nd, 4th… steps) move later. At amount 1 the delay is a third of a
+/// grid step, which turns straight eighths/sixteenths into a triplet shuffle.
+pub fn swing_offset(start: f64, grid: f64, amount: f32) -> f64 {
+    if amount <= 0.0 || grid <= 0.0 {
+        return 0.0;
+    }
+    let step = start / grid;
+    let nearest = step.round();
+    if (step - nearest).abs() > 1e-6 || (nearest as i64).rem_euclid(2) == 0 {
+        return 0.0;
+    }
+    grid * amount as f64 / 3.0
+}
+
 /// Schedules note-ons of `clip` (looping, local time 0 at `origin`) that start in
-/// `[from, to)`. Notes are cut short at `limit`.
+/// `[from, to)`, with swing applied. Notes are cut short at `limit`.
 fn schedule_notes(
     clip: &MidiClip,
     origin: f64,
@@ -425,7 +447,8 @@ fn schedule_notes(
     for lap in first_lap..=last_lap {
         let lap_start = lap as f64 * clip.length;
         for note in clip.notes.iter().filter(|n| n.start < clip.length) {
-            let t = lap_start + note.start;
+            let (grid, amount) = timing.swing;
+            let t = lap_start + note.start + swing_offset(note.start, grid, amount);
             if t < local_from || t >= local_to {
                 continue;
             }
@@ -727,6 +750,7 @@ pub struct Engine {
     input_track: Option<usize>,
     arrangement_record: bool,
     limit_output: bool,
+    swing: (f64, f32),
 }
 
 impl Engine {
@@ -762,6 +786,7 @@ impl Engine {
             input_track: None,
             arrangement_record: false,
             limit_output: true,
+            swing: (0.25, 0.0),
         };
         (engine, shared)
     }
@@ -960,6 +985,7 @@ impl Engine {
                 self.discard(Garbage::Automation(lanes));
             }
             Command::SetOutputLimit(on) => self.limit_output = on,
+            Command::SetSwing { amount, grid } => self.swing = (grid.max(1.0 / 64.0), amount.clamp(0.0, 1.0)),
             Command::SetArm { track, armed } => {
                 let end = self.position;
                 if let Some(t) = self.tracks.get_mut(track) {
@@ -1211,6 +1237,7 @@ impl Engine {
                 segment_end: frame + frames,
                 beats_per_sample,
                 frames: n,
+                swing: self.swing,
             };
             self.sequence_segment(start, end, &timing);
             frame += frames;
@@ -1596,6 +1623,43 @@ mod tests {
         assert_eq!(h.engine.tracks[0].channel.automation.len(), 3);
         let Effect::AutoFilter(p) = h.engine.tracks[0].channel.chain[0].processor.effect() else { panic!() };
         assert_eq!(p.cutoff, 100.0, "device parameters follow their lane");
+    }
+
+    #[test]
+    fn swing_delays_only_off_beat_notes() {
+        assert_eq!(swing_offset(0.0, 0.25, 1.0), 0.0);
+        assert!((swing_offset(0.25, 0.25, 1.0) - 0.25 / 3.0).abs() < 1e-12);
+        assert_eq!(swing_offset(0.5, 0.25, 1.0), 0.0);
+        assert!((swing_offset(0.75, 0.25, 0.5) - 0.25 / 6.0).abs() < 1e-12);
+        assert_eq!(swing_offset(0.3, 0.25, 1.0), 0.0, "notes off the grid are left alone");
+        assert_eq!(swing_offset(0.25, 0.25, 0.0), 0.0);
+    }
+
+    #[test]
+    fn swing_moves_the_off_beat_note_when_playing() {
+        use crate::model::SynthParams;
+        // Two short sine blips on the first two sixteenths; find when the second starts.
+        let onset = |amount: f32| {
+            let mut h = Harness::new();
+            let params = SynthParams { waveform: crate::model::Waveform::Sine, attack: 0.0005, release: 0.002, ..Default::default() };
+            h.send(Command::SetInstrument { track: 0, kind: InstrumentKind::Synth(params) });
+            h.send(Command::SetSwing { amount, grid: 0.25 });
+            let mut clip = MidiClip::new("blips", 4.0, [0, 0, 0]);
+            for start in [0.0, 0.25] {
+                clip.notes.push(Note { start, length: 0.05, pitch: 72, velocity: 1.0 });
+            }
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            let audio = left_channel(&h.run_beats(1.0));
+            // Skip the first blip (0.05 beats = 1200 frames, plus its release).
+            let from = 3000;
+            from + audio[from..].iter().position(|s| s.abs() > 0.001).expect("second note")
+        };
+        let straight = onset(0.0);
+        let swung = onset(1.0);
+        // A sixteenth at 120 BPM is 6000 frames; full swing delays it by a third: 2000 frames.
+        assert!((straight as i64 - 6000).abs() < 64, "straight onset at {straight}");
+        assert!((swung as i64 - 8000).abs() < 64, "swung onset at {swung}");
     }
 
     #[test]

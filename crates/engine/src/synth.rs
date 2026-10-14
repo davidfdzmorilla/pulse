@@ -52,9 +52,15 @@ enum Stage {
     Release,
 }
 
+/// Gate length meaning "hold until note-off", for notes played live.
+pub const HELD: u32 = 0;
+
 #[derive(Clone, Copy)]
 struct Voice {
     stage: Stage,
+    pitch: u8,
+    /// Sounding until a note-off arrives instead of for a fixed gate.
+    held: bool,
     velocity: f32,
     phase: f32,
     phase_inc: f32,
@@ -68,6 +74,8 @@ struct Voice {
 impl Voice {
     const IDLE: Voice = Voice {
         stage: Stage::Idle,
+        pitch: 0,
+        held: false,
         velocity: 0.0,
         phase: 0.0,
         phase_inc: 0.0,
@@ -79,6 +87,7 @@ impl Voice {
     };
 
     fn release(&mut self, params: &SynthParams, sr: f32) {
+        self.held = false;
         if self.stage != Stage::Idle && self.stage != Stage::Release {
             self.stage = Stage::Release;
             self.release_step = self.level / (params.release.max(0.001) * sr);
@@ -107,7 +116,8 @@ impl PolySynth {
         self.params = params;
     }
 
-    /// Starts a note that releases on its own after `gate_samples`.
+    /// Starts a note that releases on its own after `gate_samples`, or on
+    /// [`Self::note_off`] when the gate is [`HELD`].
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate_samples: u32) {
         self.note_counter += 1;
         // Prefer an idle voice, then the oldest releasing one, then the oldest overall.
@@ -135,16 +145,27 @@ impl PolySynth {
         let retrigger = v.stage != Stage::Idle;
         *v = Voice {
             stage: Stage::Attack,
+            pitch,
+            held: gate_samples == HELD,
             velocity,
             phase: 0.0,
             phase_inc: midi_to_freq(pitch) / self.sample_rate,
             // Start from the current level on a stolen voice to avoid clicks.
             level: if retrigger { v.level } else { 0.0 },
             release_step: 0.0,
-            gate_remaining: gate_samples.max(1),
+            gate_remaining: gate_samples,
             age: self.note_counter,
             filter: if retrigger { v.filter } else { Svf::default() },
         };
+    }
+
+    /// Releases held voices playing `pitch`.
+    pub fn note_off(&mut self, pitch: u8) {
+        let (params, sr) = (self.params, self.sample_rate);
+        for v in self.voices.iter_mut().filter(|v| v.held && v.pitch == pitch) {
+            v.held = false;
+            v.release(&params, sr);
+        }
     }
 
     pub fn all_notes_off(&mut self) {
@@ -166,7 +187,7 @@ impl PolySynth {
 
         for v in self.voices.iter_mut().filter(|v| v.stage != Stage::Idle) {
             for sample in out.iter_mut() {
-                if v.gate_remaining > 0 {
+                if !v.held && v.gate_remaining > 0 {
                     v.gate_remaining -= 1;
                     if v.gate_remaining == 0 {
                         v.release(&p, sr);

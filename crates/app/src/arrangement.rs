@@ -178,6 +178,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let x = x_at(position);
             painter.line_segment([pos2(x, rect.top() + LOOP_H), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::WHITE));
             widgets::play_triangle(&painter, pos2(x, rect.top() + LOOP_H + RULER_H - 6.0), 8.0, Color32::WHITE);
+            // Region being recorded on armed tracks.
+            if let Some(take) = &app.recorder.arrangement {
+                for t in (0..tracks).filter(|&t| app.project.tracks[t].armed && !app.project.tracks[t].is_audio()) {
+                    let lane = lane_rect(t);
+                    let region = Rect::from_min_max(pos2(x_at(take.start), lane.top()), pos2(x.max(x_at(take.start)), lane.bottom()));
+                    painter.rect_filled(region, 2.0, Color32::from_rgba_unmultiplied(240, 82, 70, 60));
+                }
+            }
             for t in (0..tracks).filter(|&t| !following(t)) {
                 // Tracks playing session clips are dimmed, as their arrangement is overridden.
                 painter.rect_filled(lane_rect(t), 0.0, Color32::from_black_alpha(110));
@@ -289,7 +297,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
         app.selected_target = Target::Track(t);
     }
 
-    let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(80.0, 18.0));
+    let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(110.0, 18.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.spacing_mut().item_spacing.x = 2.0;
     if widgets::toggle(&mut child, active, &(t + 1).to_string(), ACCENT, vec2(24.0, 16.0)).clicked() {
@@ -299,6 +307,13 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
     if widgets::toggle(&mut child, solo, "S", SOLO, vec2(24.0, 16.0)).clicked() {
         app.project.tracks[t].solo = !solo;
         app.audio.send(Command::SetSolo { track: t, solo: !solo });
+    }
+    let armed = app.project.tracks[t].armed;
+    if widgets::toggle(&mut child, armed, "●", theme::METER_RED, vec2(24.0, 16.0))
+        .on_hover_text("Armar para grabar")
+        .clicked()
+    {
+        app.toggle_arm(t);
     }
 }
 

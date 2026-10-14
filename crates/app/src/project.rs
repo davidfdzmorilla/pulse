@@ -59,6 +59,9 @@ pub struct Track {
     pub instrument: InstrumentKind,
     pub mixer: Mixer,
     pub solo: bool,
+    /// Armed tracks receive live input and record.
+    #[serde(default)]
+    pub armed: bool,
     pub sends: [f32; NUM_RETURNS],
     pub devices: Vec<Device>,
     pub clips: [Option<Clip>; NUM_SCENES],
@@ -74,6 +77,7 @@ impl Track {
             instrument,
             mixer: Mixer::default(),
             solo: false,
+            armed: false,
             sends: [0.0; NUM_RETURNS],
             devices: Vec::new(),
             clips: Default::default(),

@@ -30,6 +30,8 @@ enum Action {
     LaunchScene(usize),
     StopAll,
     AddTrack,
+    Record(usize, usize),
+    StopRecording(usize),
     DeleteTrack(usize),
     DuplicateTrack(usize),
 }
@@ -38,6 +40,10 @@ struct TrackPlayState {
     playing: i32,
     queued: i32,
     clip_position: f64,
+    recording: i32,
+    queued_record: bool,
+    /// Beats recorded so far in the current take.
+    recorded_beats: f64,
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
@@ -50,11 +56,24 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
             for t in 0..app.project.tracks.len() {
                 let play = state.as_ref().map_or(
-                    TrackPlayState { playing: NONE, queued: NONE, clip_position: 0.0 },
-                    |s| TrackPlayState {
-                        playing: s.tracks[t].playing.load(Ordering::Relaxed),
-                        queued: s.tracks[t].queued.load(Ordering::Relaxed),
-                        clip_position: s.tracks[t].clip_position(),
+                    TrackPlayState {
+                        playing: NONE,
+                        queued: NONE,
+                        clip_position: 0.0,
+                        recording: NONE,
+                        queued_record: false,
+                        recorded_beats: 0.0,
+                    },
+                    |s| {
+                        let status = &s.tracks[t];
+                        TrackPlayState {
+                            playing: status.playing.load(Ordering::Relaxed),
+                            queued: status.queued.load(Ordering::Relaxed),
+                            clip_position: status.clip_position(),
+                            recording: status.recording.load(Ordering::Relaxed),
+                            queued_record: status.queued_record.load(Ordering::Relaxed),
+                            recorded_beats: (s.position() - status.record_start()).max(0.0),
+                        }
                     },
                 );
                 ui.vertical(|ui| {
@@ -200,7 +219,10 @@ fn clip_slot(
     let selected = app.selected_clip == Some(ClipRef::Session { track: t, slot });
     let on_launch = response.hover_pos().is_some_and(|p| launch.contains(p));
     let is_playing = play.playing == slot as i32;
-    let is_queued = play.queued == slot as i32;
+    let record_queued = play.queued_record && play.queued == slot as i32;
+    let is_queued = play.queued == slot as i32 && !record_queued;
+    let is_recording = play.recording == slot as i32;
+    let armed = app.project.tracks[t].armed;
 
     match clip {
         Some(clip) => {
@@ -230,6 +252,24 @@ fn clip_slot(
                 painter.rect_filled(bar, 0.0, theme::shade(theme::text_on(color), 0.9));
             }
         }
+        None if is_recording => {
+            painter.rect_filled(rect, 2.0, theme::shade(theme::METER_RED, 0.75));
+            painter.circle_filled(launch.center(), 5.0, Color32::WHITE);
+            let bar = (play.recorded_beats / 4.0).floor() as i64 + 1;
+            painter.text(
+                pos2(launch.right() + 2.0, rect.center().y),
+                Align2::LEFT_CENTER,
+                format!("Grabando · compás {bar}"),
+                theme::small(),
+                Color32::WHITE,
+            );
+        }
+        None if armed => {
+            painter.rect_filled(rect, 2.0, if response.hovered() { SLOT_HOVER } else { SLOT });
+            let lit = (record_queued && blink) || on_launch;
+            let color = if lit { theme::METER_RED } else { theme::shade(theme::METER_RED, 0.55) };
+            painter.circle_filled(launch.center(), 4.5, color);
+        }
         None => {
             painter.rect_filled(rect, 2.0, if response.hovered() { SLOT_HOVER } else { SLOT });
             let stop = Rect::from_center_size(launch.center(), vec2(6.0, 6.0));
@@ -241,10 +281,14 @@ fn clip_slot(
     }
 
     let clicked_launch = response.interact_pointer_pos().is_some_and(|p| launch.contains(p));
-    if response.double_clicked() && clip.is_none() {
+    if (is_recording || record_queued) && response.clicked() {
+        actions.push(Action::StopRecording(t));
+    } else if response.double_clicked() && clip.is_none() {
         actions.push(Action::Create(t, slot));
     } else if response.clicked() {
-        if clicked_launch {
+        if clicked_launch && clip.is_none() && armed {
+            actions.push(Action::Record(t, slot));
+        } else if clicked_launch {
             actions.push(Action::Launch(t, slot));
         } else if clip.is_some() {
             actions.push(Action::Select(ClipRef::Session { track: t, slot }));
@@ -255,6 +299,7 @@ fn clip_slot(
 
     let hint = match (clip.is_some(), app.project.tracks[t].is_audio()) {
         (true, _) => "▶ lanza · clic: editar · clic derecho: más opciones",
+        (false, false) if armed => "● graba un clip nuevo · doble clic: clip MIDI vacío",
         (false, false) => "Doble clic: nuevo clip MIDI",
         (false, true) => "Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)",
     };
@@ -327,6 +372,7 @@ fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut 
 fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
     let peak = app.meters.of(target);
     let mut commands = Vec::new();
+    let mut arm = None;
 
     // Sends.
     match target {
@@ -393,7 +439,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
             return;
         }
         let active = app.mixer(target).active;
-        let width = if matches!(target, Target::Track(_)) { (COL_W - 2.0) / 2.0 } else { COL_W };
+        let width = if matches!(target, Target::Track(_)) { (COL_W - 4.0) / 3.0 } else { COL_W };
         if widgets::toggle(ui, active, &label, ACCENT, vec2(width, 18.0))
             .on_hover_text("Activador de pista (silenciar)")
             .clicked()
@@ -408,11 +454,21 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
                 app.project.tracks[t].solo = !solo;
                 commands.push(Command::SetSolo { track: t, solo: !solo });
             }
+            let armed = app.project.tracks[t].armed;
+            if widgets::toggle(ui, armed, "●", theme::METER_RED, vec2(width, 18.0))
+                .on_hover_text("Armar para grabar: recibe la entrada MIDI y graba")
+                .clicked()
+            {
+                arm = Some(t);
+            }
         }
     });
 
     for command in commands {
         app.audio.send(command);
+    }
+    if let Some(t) = arm {
+        app.toggle_arm(t);
     }
 }
 
@@ -453,6 +509,8 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::StopAll => app.audio.send(Command::StopAllClips),
         Action::AddTrack => app.add_track(),
         Action::DeleteTrack(t) => app.delete_track(t),
+        Action::Record(t, slot) => app.record_slot(t, slot),
+        Action::StopRecording(t) => app.stop_session_recording(t),
         Action::DuplicateTrack(t) => app.duplicate_track(t),
     }
 }

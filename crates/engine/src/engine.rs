@@ -9,7 +9,7 @@
 use crate::effects::{EffectProcessor, ProcessContext};
 use crate::model::{db_to_gain, AudioClip, Device, InstrumentKind, MidiClip, WarpMode};
 use crate::sample::Sample;
-use crate::synth::{Click, DrumKit, PolySynth};
+use crate::synth::{Click, DrumKit, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -83,6 +83,23 @@ impl PlacedClip {
     fn end(&self) -> f64 {
         self.start + self.length
     }
+}
+
+/// A note played live (MIDI keyboard or computer keyboard). Velocity 0 is a note-off.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct LiveNote {
+    pub pitch: u8,
+    pub velocity: f32,
+}
+
+/// A note captured while recording, in transport beats. Sent to the UI on note-off.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecordedNote {
+    pub track: usize,
+    pub pitch: u8,
+    pub velocity: f32,
+    pub start: f64,
+    pub length: f64,
 }
 
 /// Things the audio thread no longer needs; the UI thread drops them.
@@ -171,6 +188,22 @@ pub enum Command {
         target: Target,
         chain: Box<Vec<ChainSlot>>,
     },
+    /// Arming routes live notes to a track and makes it record.
+    SetArm {
+        track: usize,
+        armed: bool,
+    },
+    /// Track that plays live notes when no track is armed (the selected one).
+    SetInputTrack(Option<usize>),
+    /// Starts recording a new clip into an empty slot at the next quantization boundary.
+    RecordClip {
+        track: usize,
+        slot: usize,
+    },
+    /// Ends a session recording; the slot keeps looping once the UI sends its clip.
+    StopRecording(usize),
+    /// Records armed tracks onto the arrangement while the transport runs.
+    SetArrangementRecord(bool),
     /// Audition a note on a track, e.g. while editing in the piano roll.
     PreviewNote {
         track: usize,
@@ -210,6 +243,11 @@ impl Peak {
 pub struct TrackStatus {
     pub playing: AtomicI32,
     pub queued: AtomicI32,
+    /// Whether `queued` is a recording waiting to start rather than a launch.
+    pub queued_record: AtomicBool,
+    /// Slot being recorded into, or [`NONE`].
+    pub recording: AtomicI32,
+    record_start: AtomicF64,
     pub follows_arrangement: AtomicBool,
     clip_position: AtomicF64,
     pub peak: Peak,
@@ -220,11 +258,17 @@ impl TrackStatus {
     pub fn clip_position(&self) -> f64 {
         self.clip_position.load()
     }
+
+    /// Transport beat where the current session recording started.
+    pub fn record_start(&self) -> f64 {
+        self.record_start.load()
+    }
 }
 
 /// State the audio thread publishes for the UI.
 pub struct SharedState {
     pub playing: AtomicBool,
+    pub arrangement_recording: AtomicBool,
     position: AtomicF64,
     pub tracks: [TrackStatus; MAX_TRACKS],
     pub returns: [Peak; NUM_RETURNS],
@@ -235,10 +279,14 @@ impl SharedState {
     fn new() -> Self {
         Self {
             playing: AtomicBool::new(false),
+            arrangement_recording: AtomicBool::new(false),
             position: AtomicF64::default(),
             tracks: std::array::from_fn(|_| TrackStatus {
                 playing: AtomicI32::new(NONE),
                 queued: AtomicI32::new(NONE),
+                queued_record: AtomicBool::new(false),
+                recording: AtomicI32::new(NONE),
+                record_start: AtomicF64::default(),
                 follows_arrangement: AtomicBool::new(true),
                 clip_position: AtomicF64::default(),
                 peak: Peak::default(),
@@ -258,6 +306,7 @@ impl SharedState {
 enum Queued {
     Nothing,
     Slot(usize),
+    Record(usize),
     Stop,
 }
 
@@ -281,6 +330,12 @@ impl Instrument {
         }
     }
 
+    fn note_off(&mut self, pitch: u8) {
+        if let Self::Synth(s) = self {
+            s.note_off(pitch);
+        }
+    }
+
     fn all_notes_off(&mut self) {
         if let Self::Synth(s) = self {
             s.all_notes_off();
@@ -299,6 +354,7 @@ impl Instrument {
 enum Event {
     AllNotesOff,
     NoteOn { pitch: u8, velocity: f32, gate: u32 },
+    NoteOff { pitch: u8 },
 }
 
 /// (frame offset, sort rank, event). Pre-allocated; never grows on the audio thread.
@@ -308,7 +364,8 @@ fn push_event(events: &mut EventQueue, frame: usize, event: Event) {
     if events.len() < MAX_EVENTS {
         let rank = match event {
             Event::AllNotesOff => 0,
-            Event::NoteOn { .. } => 1,
+            Event::NoteOff { .. } => 1,
+            Event::NoteOn { .. } => 2,
         };
         events.push((frame, rank, event));
     }
@@ -498,6 +555,22 @@ struct Track {
     audio_left: Vec<f32>,
     audio_right: Vec<f32>,
     events: EventQueue,
+    armed: bool,
+    /// Session slot being recorded into.
+    recording: Option<usize>,
+    record_start: f64,
+    /// Live notes being captured: (start beat, velocity) per pitch.
+    held: [Option<(f64, f32)>; 128],
+}
+
+/// Sends the notes still held on a track to the UI, ending them at `end`.
+fn flush_held(track: &mut Track, index: usize, end: f64, recorded: &mut Producer<RecordedNote>) {
+    for (pitch, held) in track.held.iter_mut().enumerate() {
+        if let Some((start, velocity)) = held.take() {
+            let length = (end - start).max(0.05);
+            let _ = recorded.push(RecordedNote { track: index, pitch: pitch as u8, velocity, start, length });
+        }
+    }
 }
 
 impl Track {
@@ -517,6 +590,10 @@ impl Track {
             audio_left: vec![0.0; MAX_BLOCK],
             audio_right: vec![0.0; MAX_BLOCK],
             events: Vec::with_capacity(MAX_EVENTS),
+            armed: false,
+            recording: None,
+            record_start: 0.0,
+            held: [None; 128],
         }
     }
 
@@ -570,6 +647,8 @@ impl Track {
 
 pub struct Engine {
     commands: Consumer<Command>,
+    live: Consumer<LiveNote>,
+    recorded: Producer<RecordedNote>,
     garbage: Producer<Garbage>,
     shared: Arc<SharedState>,
     sample_rate: f32,
@@ -587,17 +666,23 @@ pub struct Engine {
     metronome: bool,
     click: Click,
     click_buffer: Vec<f32>,
+    input_track: Option<usize>,
+    arrangement_record: bool,
 }
 
 impl Engine {
     pub fn new(
         sample_rate: f32,
         commands: Consumer<Command>,
+        live: Consumer<LiveNote>,
+        recorded: Producer<RecordedNote>,
         garbage: Producer<Garbage>,
     ) -> (Self, Arc<SharedState>) {
         let shared = Arc::new(SharedState::new());
         let engine = Self {
             commands,
+            live,
+            recorded,
             garbage,
             shared: shared.clone(),
             sample_rate,
@@ -615,6 +700,8 @@ impl Engine {
             metronome: false,
             click: Click::new(sample_rate),
             click_buffer: vec![0.0; MAX_BLOCK],
+            input_track: None,
+            arrangement_record: false,
         };
         (engine, shared)
     }
@@ -644,11 +731,15 @@ impl Engine {
         match command {
             Command::Play => self.start_transport(),
             Command::Stop => {
-                self.playing = false;
-                self.position = self.start_marker;
-                for track in &mut self.tracks {
+                let end = self.position;
+                for (index, track) in self.tracks.iter_mut().enumerate() {
+                    flush_held(track, index, end, &mut self.recorded);
+                    track.recording = None;
                     track.stop_session_clip();
                 }
+                self.arrangement_record = false;
+                self.playing = false;
+                self.position = self.start_marker;
             }
             Command::SetPosition(beat) => {
                 self.start_marker = beat.max(0.0);
@@ -803,6 +894,46 @@ impl Engine {
                 std::mem::swap(&mut c.chain, &mut chain);
                 self.discard(Garbage::Chain(chain));
             }
+            Command::SetArm { track, armed } => {
+                let end = self.position;
+                if let Some(t) = self.tracks.get_mut(track) {
+                    t.armed = armed;
+                    if !armed && t.recording.is_none() {
+                        flush_held(t, track, end, &mut self.recorded);
+                    }
+                }
+            }
+            Command::SetInputTrack(track) => self.input_track = track,
+            Command::RecordClip { track, slot } => {
+                if let Some(t) = self.tracks.get_mut(track) {
+                    if slot < NUM_SCENES && t.slots[slot].is_none() {
+                        t.queued = Queued::Record(slot);
+                        self.start_transport();
+                    }
+                }
+            }
+            Command::StopRecording(track) => {
+                let end = self.position;
+                if let Some(t) = self.tracks.get_mut(track) {
+                    if let Some(slot) = t.recording.take() {
+                        flush_held(t, track, end, &mut self.recorded);
+                        // Keep looping from where the take began once its clip arrives.
+                        t.playing = Some(slot);
+                        t.launch_beat = t.record_start;
+                    }
+                }
+            }
+            Command::SetArrangementRecord(on) => {
+                if !on {
+                    let end = self.position;
+                    for (index, t) in self.tracks.iter_mut().enumerate() {
+                        if t.recording.is_none() {
+                            flush_held(t, index, end, &mut self.recorded);
+                        }
+                    }
+                }
+                self.arrangement_record = on;
+            }
             Command::PreviewNote {
                 track,
                 pitch,
@@ -816,6 +947,35 @@ impl Engine {
         }
     }
 
+    /// Plays a live note on the armed tracks (or the input track if none is armed)
+    /// and captures it on tracks that are recording.
+    fn handle_live(&mut self, note: LiveNote) {
+        let any_armed = self.tracks.iter().any(|t| t.armed);
+        let input = self.input_track;
+        let beat = self.position;
+        let arrangement_record = self.playing && self.arrangement_record;
+        let pitch = note.pitch.min(127);
+        for (index, track) in self.tracks.iter_mut().enumerate() {
+            let routed = if any_armed { track.armed } else { input == Some(index) };
+            if !routed {
+                continue;
+            }
+            if note.velocity > 0.0 {
+                push_event(&mut track.events, 0, Event::NoteOn { pitch, velocity: note.velocity, gate: HELD });
+                let capturing = self.playing && (track.recording.is_some() || (arrangement_record && track.armed));
+                if capturing {
+                    track.held[pitch as usize] = Some((beat, note.velocity));
+                }
+            } else {
+                push_event(&mut track.events, 0, Event::NoteOff { pitch });
+                if let Some((start, velocity)) = track.held[pitch as usize].take() {
+                    let length = (beat - start).max(0.05);
+                    let _ = self.recorded.push(RecordedNote { track: index, pitch, velocity, start, length });
+                }
+            }
+        }
+    }
+
     /// Renders interleaved frames into `out`.
     pub fn process(&mut self, out: &mut [f32], channels: usize) {
         for t in &mut self.tracks {
@@ -823,6 +983,9 @@ impl Engine {
         }
         while let Ok(command) = self.commands.pop() {
             self.handle(command);
+        }
+        while let Ok(note) = self.live.pop() {
+            self.handle_live(note);
         }
 
         let frames = out.len() / channels;
@@ -882,6 +1045,7 @@ impl Engine {
                 }
                 match event {
                     Event::AllNotesOff => track.instrument.all_notes_off(),
+                    Event::NoteOff { pitch } => track.instrument.note_off(pitch),
                     Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(pitch, velocity, gate),
                 }
             }
@@ -1000,7 +1164,7 @@ impl Engine {
         let segment = (timing.segment_frame, timing.segment_end);
         let bps = timing.beats_per_sample;
         let tempo = self.tempo;
-        for track in &mut self.tracks {
+        for (index, track) in self.tracks.iter_mut().enumerate() {
             if track.queued == Queued::Nothing || boundary >= end {
                 track.collect_notes(start, end, timing);
                 track.render_audio(segment, start, bps, tempo);
@@ -1009,12 +1173,21 @@ impl Engine {
             track.collect_notes(start, boundary, timing);
             let switch = (segment.0 + ((boundary - start) / bps).ceil() as usize).clamp(segment.0, segment.1);
             track.render_audio((segment.0, switch), start, bps, tempo);
+            // Any switch on a track ends the take it was recording.
+            if track.recording.take().is_some() {
+                flush_held(track, index, boundary, &mut self.recorded);
+            }
             match track.queued {
                 Queued::Nothing => {}
                 Queued::Stop => track.playing = None,
                 Queued::Slot(slot) => {
                     track.playing = Some(slot);
                     track.launch_beat = boundary;
+                }
+                Queued::Record(slot) => {
+                    track.playing = None;
+                    track.recording = Some(slot);
+                    track.record_start = boundary;
                 }
             }
             // Session activity on a track overrides its arrangement until "Back to Arrangement".
@@ -1037,13 +1210,17 @@ impl Engine {
     fn publish(&self) {
         let s = &self.shared;
         s.playing.store(self.playing, Ordering::Relaxed);
+        s.arrangement_recording.store(self.arrangement_record, Ordering::Relaxed);
         s.position.store(self.position);
         for (track, status) in self.tracks.iter().zip(&s.tracks) {
             let queued = match track.queued {
                 Queued::Nothing => NONE,
                 Queued::Stop => QUEUED_STOP,
-                Queued::Slot(slot) => slot as i32,
+                Queued::Slot(slot) | Queued::Record(slot) => slot as i32,
             };
+            status.queued_record.store(matches!(track.queued, Queued::Record(_)), Ordering::Relaxed);
+            status.recording.store(track.recording.map_or(NONE, |r| r as i32), Ordering::Relaxed);
+            status.record_start.store(track.record_start);
             status.playing.store(track.playing.map_or(NONE, |p| p as i32), Ordering::Relaxed);
             status.queued.store(queued, Ordering::Relaxed);
             status.follows_arrangement.store(track.follows_arrangement, Ordering::Relaxed);
@@ -1067,6 +1244,8 @@ mod tests {
     struct Harness {
         engine: Engine,
         commands: Producer<Command>,
+        live: Producer<LiveNote>,
+        recorded: Consumer<RecordedNote>,
         shared: Arc<SharedState>,
         _garbage: Consumer<Garbage>,
     }
@@ -1074,13 +1253,23 @@ mod tests {
     impl Harness {
         fn new() -> Self {
             let (commands, rx) = RingBuffer::new(64);
+            let (live, live_rx) = RingBuffer::new(64);
+            let (recorded_tx, recorded) = RingBuffer::new(64);
             let (gtx, grx) = RingBuffer::new(64);
-            let (engine, shared) = Engine::new(SR, rx, gtx);
-            Self { engine, commands, shared, _garbage: grx }
+            let (engine, shared) = Engine::new(SR, rx, live_rx, recorded_tx, gtx);
+            Self { engine, commands, live, recorded, shared, _garbage: grx }
         }
 
         fn send(&mut self, c: Command) {
             assert!(self.commands.push(c).is_ok());
+        }
+
+        fn play_note(&mut self, pitch: u8, velocity: f32) {
+            assert!(self.live.push(LiveNote { pitch, velocity }).is_ok());
+        }
+
+        fn recorded(&mut self) -> Vec<RecordedNote> {
+            std::iter::from_fn(|| self.recorded.pop().ok()).collect()
         }
 
         /// Renders `beats` worth of stereo audio at 120 BPM and returns it.
@@ -1210,6 +1399,81 @@ mod tests {
 
     fn left_channel(audio: &[f32]) -> Vec<f32> {
         audio.chunks(2).map(|f| f[0]).collect()
+    }
+
+    #[test]
+    fn live_notes_play_the_input_track_and_stop_on_note_off() {
+        let mut h = Harness::new();
+        h.send(Command::SetInputTrack(Some(2)));
+        h.play_note(60, 0.9);
+        h.run_beats(0.5);
+        assert!(h.shared.tracks[2].peak.take() > 0.0, "the input track should sound");
+        assert_eq!(h.shared.tracks[0].peak.take(), 0.0);
+        h.play_note(60, 0.0);
+        h.run_beats(1.0); // release tail
+        h.shared.tracks[2].peak.take();
+        h.run_beats(0.5);
+        assert_eq!(h.shared.tracks[2].peak.take(), 0.0, "note-off should silence the held note");
+    }
+
+    #[test]
+    fn armed_tracks_take_live_input_over_the_input_track() {
+        let mut h = Harness::new();
+        h.send(Command::SetInputTrack(Some(0)));
+        h.send(Command::SetArm { track: 1, armed: true });
+        h.play_note(64, 1.0);
+        h.run_beats(0.5);
+        assert!(h.shared.tracks[1].peak.take() > 0.0);
+        assert_eq!(h.shared.tracks[0].peak.take(), 0.0);
+    }
+
+    #[test]
+    fn session_recording_starts_quantized_and_captures_notes() {
+        let mut h = Harness::new();
+        h.send(Command::SetArm { track: 0, armed: true });
+        h.send(Command::SetClip { track: 1, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::LaunchClip { track: 1, slot: 0 });
+        h.run_beats(1.0);
+        h.send(Command::RecordClip { track: 0, slot: 0 });
+        h.run_beats(1.0); // beat 2: still waiting for the bar
+        assert!(h.shared.tracks[0].queued_record.load(Ordering::Relaxed));
+        h.play_note(60, 1.0); // before the take starts: not captured
+        h.run_beats(0.1);
+        h.play_note(60, 0.0);
+        h.run_beats(2.5); // past beat 4: recording
+        assert_eq!(h.shared.tracks[0].recording.load(Ordering::Relaxed), 0);
+        assert_eq!(h.shared.tracks[0].record_start(), 4.0);
+        h.play_note(62, 0.8);
+        h.run_beats(1.0);
+        h.play_note(62, 0.0);
+        h.run_beats(0.1);
+        let notes = h.recorded();
+        assert_eq!(notes.len(), 1, "only the note played during the take is recorded");
+        assert_eq!(notes[0].pitch, 62);
+        assert!(notes[0].start >= 4.0 && (notes[0].length - 1.0).abs() < 0.05);
+
+        h.send(Command::StopRecording(0));
+        h.run_beats(0.1);
+        assert_eq!(h.shared.tracks[0].recording.load(Ordering::Relaxed), NONE);
+        assert_eq!(h.playing(0), 0, "the recorded slot keeps playing");
+    }
+
+    #[test]
+    fn arrangement_recording_captures_armed_tracks_and_flushes_on_stop() {
+        let mut h = Harness::new();
+        h.send(Command::SetArm { track: 3, armed: true });
+        h.send(Command::SetArrangementRecord(true));
+        h.send(Command::Play);
+        h.run_beats(1.0);
+        h.play_note(48, 0.7);
+        h.run_beats(1.0);
+        h.send(Command::Stop); // the held note is closed at the stop position
+        h.run_beats(0.1);
+        let notes = h.recorded();
+        assert_eq!(notes.len(), 1);
+        assert_eq!((notes[0].track, notes[0].pitch), (3, 48));
+        assert!((notes[0].start - 1.0).abs() < 0.05 && (notes[0].length - 1.0).abs() < 0.05);
+        assert!(!h.shared.arrangement_recording.load(Ordering::Relaxed));
     }
 
     #[test]

@@ -24,6 +24,8 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 | ⌘D | Duplicar el clip seleccionado |
 | ⌘T / ⇧⌘T | Nueva pista MIDI / de audio |
 | ⌘I | Importar un set de Ableton Live (`.als`) |
+| M | Teclado del ordenador como teclado MIDI |
+| F9 | Grabar en el Arrangement |
 | Supr | Borrar el clip seleccionado |
 
 - **Session**: ▶ de un clip lo lanza (cuantizado), clic lo abre en el editor, doble clic en un slot vacío crea
@@ -38,6 +40,12 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   duración (compases enteros) y se sincronizan al tempo; los sonidos cortos quedan sin warp. En el editor de
   muestra eliges el modo de warp (Off, Re-Pitch, Stretch), el BPM original, el inicio (clic en la forma de
   onda), la longitud, la ganancia y la transposición (en Stretch).
+- **Tocar y grabar MIDI**: los teclados MIDI conectados se detectan al arrancar (botón MIDI para volver a
+  buscar). Con **M** el teclado del ordenador toca notas: A S D F G H J K L son las teclas blancas desde C,
+  W E T Y U O P las negras, Z/X cambian de octava y C/V la velocidad. Las notas van a las pistas armadas (●)
+  o, si no hay ninguna, a la pista seleccionada. Para grabar en Session, arma la pista y pulsa el ● de un slot
+  vacío: la toma empieza en el siguiente compás y, al volver a pulsarlo, se cierra redondeada a compases y
+  sigue sonando en bucle. Para grabar en el Arrangement pulsa ● en el transporte (F9) con pistas armadas.
 - **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI y
   de audio (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus
   notas o sus muestras y ajustes de warp. Las muestras se buscan por ruta y, si el set viene de otro
@@ -55,6 +63,6 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 ## Hoja de ruta
 
 1. Automatización de parámetros.
-2. Entrada MIDI y grabación de notas (y de la sesión en el Arrangement); grabación de audio.
+2. Grabación de audio; grabar la sesión en el Arrangement; cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
 4. Plugins VST3 / CLAP.

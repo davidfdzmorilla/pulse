@@ -7,7 +7,8 @@
 //! handed back to the UI thread as [`Garbage`] to be freed there.
 
 use crate::effects::{EffectProcessor, ProcessContext};
-use crate::model::{ArrangementClip, Device, InstrumentKind, MidiClip};
+use crate::model::{db_to_gain, AudioClip, Device, InstrumentKind, MidiClip, WarpMode};
+use crate::sample::Sample;
 use crate::synth::{Click, DrumKit, PolySynth};
 use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -56,14 +57,42 @@ pub fn build_chain(devices: &[Device], sample_rate: f32) -> Box<Vec<ChainSlot>> 
     Box::new(chain)
 }
 
+/// A clip ready to play: MIDI notes, or an audio clip with its decoded file.
+pub enum PlayClip {
+    Midi(MidiClip),
+    Audio(AudioClip, Arc<Sample>),
+}
+
+impl PlayClip {
+    pub fn length(&self) -> f64 {
+        match self {
+            PlayClip::Midi(c) => c.length,
+            PlayClip::Audio(c, _) => c.length,
+        }
+    }
+}
+
+/// An arrangement clip ready to play; its content loops over `length` beats.
+pub struct PlacedClip {
+    pub start: f64,
+    pub length: f64,
+    pub clip: PlayClip,
+}
+
+impl PlacedClip {
+    fn end(&self) -> f64 {
+        self.start + self.length
+    }
+}
+
 /// Things the audio thread no longer needs; the UI thread drops them.
 /// The fields are only held so they are freed off the audio thread.
 #[allow(dead_code)]
 pub enum Garbage {
-    Clip(Box<MidiClip>),
+    Clip(Box<PlayClip>),
     Device(ChainSlot),
     Chain(Box<Vec<ChainSlot>>),
-    Arrangement(Box<Vec<ArrangementClip>>),
+    Arrangement(Box<Vec<PlacedClip>>),
 }
 
 pub enum Command {
@@ -83,7 +112,7 @@ pub enum Command {
     SetClip {
         track: usize,
         slot: usize,
-        clip: Option<Box<MidiClip>>,
+        clip: Option<Box<PlayClip>>,
     },
     LaunchClip {
         track: usize,
@@ -96,7 +125,7 @@ pub enum Command {
     BackToArrangement,
     SetArrangement {
         track: usize,
-        clips: Box<Vec<ArrangementClip>>,
+        clips: Box<Vec<PlacedClip>>,
     },
     SetInstrument {
         track: usize,
@@ -290,6 +319,8 @@ fn push_event(events: &mut EventQueue, frame: usize, event: Event) {
 struct Timing {
     segment_beat: f64,
     segment_frame: usize,
+    /// First frame after the segment.
+    segment_end: usize,
     beats_per_sample: f64,
     frames: usize,
 }
@@ -345,6 +376,76 @@ fn schedule_notes(
     }
 }
 
+/// Length of the fades applied at clip edges and loop points, in seconds.
+const EDGE_FADE: f64 = 0.003;
+/// Grain length of the Stretch warp mode, in seconds.
+const GRAIN: f64 = 0.06;
+
+/// Adds an audio clip (looping, local time 0 at `origin`, silent from `limit`) to
+/// `left`/`right` over frames `[from, to)`; `beat` is the transport position at `from`.
+#[allow(clippy::too_many_arguments)]
+fn render_audio_clip(
+    clip: &AudioClip,
+    sample: &Sample,
+    origin: f64,
+    limit: f64,
+    (from, to): (usize, usize),
+    beat: f64,
+    beats_per_sample: f64,
+    tempo: f64,
+    left: &mut [f32],
+    right: &mut [f32],
+) {
+    if sample.frames() == 0 || clip.length <= 0.0 {
+        return;
+    }
+    // Beats inside the clip map to file time at this reference tempo.
+    let reference_bpm = match clip.warp {
+        WarpMode::Off => tempo,
+        WarpMode::Repitch | WarpMode::Stretch => clip.original_bpm.max(1.0),
+    };
+    let rate = sample.sample_rate as f64;
+    let gain = db_to_gain(clip.gain_db);
+    let fade = EDGE_FADE * tempo / 60.0;
+    let pitch = 2f64.powf(clip.transpose as f64 / 12.0);
+    let hop = GRAIN / 2.0;
+
+    for k in from..to {
+        let b = beat + (k - from) as f64 * beats_per_sample;
+        if b < origin || b >= limit {
+            continue;
+        }
+        let local = (b - origin).rem_euclid(clip.length);
+        let remaining = (clip.length - local).min(limit - b);
+        let envelope = ((local / fade).min(1.0) * (remaining / fade).min(1.0)) as f32;
+        let (l, r) = match clip.warp {
+            WarpMode::Off | WarpMode::Repitch => {
+                let seconds = clip.offset + local * 60.0 / reference_bpm;
+                sample.read(seconds * rate)
+            }
+            WarpMode::Stretch => {
+                // Two overlapping Hann-windowed grains read the file at its own speed
+                // (times the transposition) from positions that follow the tempo.
+                let t = local * 60.0 / tempo;
+                let newest = (t / hop).floor();
+                let (mut l, mut r) = (0.0, 0.0);
+                for grain in [newest, newest - 1.0] {
+                    let grain_start = grain * hop;
+                    let phase = (t - grain_start) / GRAIN;
+                    let window = (0.5 - 0.5 * (std::f64::consts::TAU * phase).cos()) as f32;
+                    let source = clip.offset + grain_start * tempo / reference_bpm + (t - grain_start) * pitch;
+                    let (gl, gr) = sample.read(source * rate);
+                    l += gl * window;
+                    r += gr * window;
+                }
+                (l, r)
+            }
+        };
+        left[k] += l * gain * envelope;
+        right[k] += r * gain * envelope;
+    }
+}
+
 struct Channel {
     chain: Vec<ChainSlot>,
     gain: f32,
@@ -383,16 +484,19 @@ impl Channel {
 
 struct Track {
     channel: Channel,
-    slots: [Option<Box<MidiClip>>; NUM_SCENES],
+    slots: [Option<Box<PlayClip>>; NUM_SCENES],
     playing: Option<usize>,
     launch_beat: f64,
     queued: Queued,
     instrument: Instrument,
     solo: bool,
     sends: [f32; NUM_RETURNS],
-    arrangement: Box<Vec<ArrangementClip>>,
+    arrangement: Box<Vec<PlacedClip>>,
     follows_arrangement: bool,
     buffer: Vec<f32>,
+    /// Audio clip output for the current block, mixed after the instrument.
+    audio_left: Vec<f32>,
+    audio_right: Vec<f32>,
     events: EventQueue,
 }
 
@@ -410,19 +514,48 @@ impl Track {
             arrangement: Box::default(),
             follows_arrangement: true,
             buffer: vec![0.0; MAX_BLOCK],
+            audio_left: vec![0.0; MAX_BLOCK],
+            audio_right: vec![0.0; MAX_BLOCK],
             events: Vec::with_capacity(MAX_EVENTS),
         }
     }
 
     /// Queues the note-ons that start in the beat range `[from, to)`.
     fn collect_notes(&mut self, from: f64, to: f64, timing: &Timing) {
-        if let Some(clip) = self.playing.and_then(|slot| self.slots[slot].as_ref()) {
-            schedule_notes(clip, self.launch_beat, from, to, f64::INFINITY, timing, &mut self.events);
-        } else if self.playing.is_none() && self.follows_arrangement {
+        if let Some(slot) = self.playing {
+            if let Some(PlayClip::Midi(clip)) = self.slots[slot].as_deref() {
+                schedule_notes(clip, self.launch_beat, from, to, f64::INFINITY, timing, &mut self.events);
+            }
+        } else if self.follows_arrangement {
             for placed in self.arrangement.iter() {
+                let PlayClip::Midi(clip) = &placed.clip else { continue };
                 let (start, end) = (from.max(placed.start), to.min(placed.end()));
                 if start < end {
-                    schedule_notes(&placed.clip, placed.start, start, end, placed.end(), timing, &mut self.events);
+                    schedule_notes(clip, placed.start, start, end, placed.end(), timing, &mut self.events);
+                }
+            }
+        }
+    }
+
+    /// Renders the audio clips sounding during frames `[from, to)`, where `beat`
+    /// is the transport position at `from`.
+    fn render_audio(&mut self, (from, to): (usize, usize), beat: f64, beats_per_sample: f64, tempo: f64) {
+        if to <= from {
+            return;
+        }
+        let (left, right) = (&mut self.audio_left, &mut self.audio_right);
+        if let Some(slot) = self.playing {
+            if let Some(PlayClip::Audio(clip, sample)) = self.slots[slot].as_deref() {
+                let frames = (from, to);
+                render_audio_clip(clip, sample, self.launch_beat, f64::INFINITY, frames, beat, beats_per_sample, tempo, left, right);
+            }
+        } else if self.follows_arrangement {
+            let end = beat + (to - from) as f64 * beats_per_sample;
+            for placed in self.arrangement.iter() {
+                let PlayClip::Audio(clip, sample) = &placed.clip else { continue };
+                if placed.start < end && placed.end() > beat {
+                    let frames = (from, to);
+                    render_audio_clip(clip, sample, placed.start, placed.end(), frames, beat, beats_per_sample, tempo, left, right);
                 }
             }
         }
@@ -722,6 +855,10 @@ impl Engine {
             beat: self.position,
             beats_per_sample: if self.playing { beats_per_sample } else { 0.0 },
         };
+        for track in &mut self.tracks {
+            track.audio_left[..n].fill(0.0);
+            track.audio_right[..n].fill(0.0);
+        }
         if self.playing {
             self.sequence(n, beats_per_sample);
         }
@@ -752,8 +889,10 @@ impl Engine {
             track.events.clear();
 
             let channel = &mut track.channel;
-            channel.left[..n].copy_from_slice(buffer);
-            channel.right[..n].copy_from_slice(buffer);
+            for i in 0..n {
+                channel.left[i] = buffer[i] + track.audio_left[i];
+                channel.right[i] = buffer[i] + track.audio_right[i];
+            }
             channel.run_chain(n, &ctx);
 
             let audible = !channel.mute && (!any_solo || track.solo);
@@ -826,6 +965,7 @@ impl Engine {
             let timing = Timing {
                 segment_beat: start,
                 segment_frame: frame,
+                segment_end: frame + frames,
                 beats_per_sample,
                 frames: n,
             };
@@ -857,12 +997,18 @@ impl Engine {
             ((start - 1e-9) / self.quantize).ceil() * self.quantize
         };
 
+        let segment = (timing.segment_frame, timing.segment_end);
+        let bps = timing.beats_per_sample;
+        let tempo = self.tempo;
         for track in &mut self.tracks {
             if track.queued == Queued::Nothing || boundary >= end {
                 track.collect_notes(start, end, timing);
+                track.render_audio(segment, start, bps, tempo);
                 continue;
             }
             track.collect_notes(start, boundary, timing);
+            let switch = (segment.0 + ((boundary - start) / bps).ceil() as usize).clamp(segment.0, segment.1);
+            track.render_audio((segment.0, switch), start, bps, tempo);
             match track.queued {
                 Queued::Nothing => {}
                 Queued::Stop => track.playing = None,
@@ -876,6 +1022,8 @@ impl Engine {
             track.queued = Queued::Nothing;
             push_event(&mut track.events, timing.frame(boundary), Event::AllNotesOff);
             track.collect_notes(boundary, end, timing);
+            let switch_beat = start + (switch - segment.0) as f64 * bps;
+            track.render_audio((switch, segment.1), switch_beat, bps, tempo);
         }
 
         if self.metronome {
@@ -900,7 +1048,7 @@ impl Engine {
             status.queued.store(queued, Ordering::Relaxed);
             status.follows_arrangement.store(track.follows_arrangement, Ordering::Relaxed);
             let clip_position = match track.playing.and_then(|p| track.slots[p].as_ref()) {
-                Some(clip) if clip.length > 0.0 => (self.position - track.launch_beat).rem_euclid(clip.length),
+                Some(clip) if clip.length() > 0.0 => (self.position - track.launch_beat).rem_euclid(clip.length()),
                 _ => 0.0,
             };
             status.clip_position.store(clip_position);
@@ -911,7 +1059,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Device, Effect, InstrumentKind, MidiClip, Note};
+    use crate::model::{AudioClip, Device, Effect, InstrumentKind, MidiClip, Note, WarpMode};
     use rtrb::RingBuffer;
 
     const SR: f32 = 48_000.0;
@@ -950,10 +1098,10 @@ mod tests {
         }
     }
 
-    fn one_note_clip() -> Box<MidiClip> {
+    fn one_note_clip() -> Box<PlayClip> {
         let mut clip = MidiClip::new("test", 4.0, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0 });
-        Box::new(clip)
+        Box::new(PlayClip::Midi(clip))
     }
 
     fn energy(samples: &[f32]) -> f32 {
@@ -1007,7 +1155,7 @@ mod tests {
         h.send(Command::SetInstrument { track: 0, kind: InstrumentKind::Drums });
         let mut clip = MidiClip::new("beat", 1.0, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: 0.25, pitch: 36, velocity: 1.0 });
-        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(clip)) });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
         h.send(Command::LaunchClip { track: 0, slot: 0 });
         h.run_beats(8.0);
         let late = h.run_beats(1.0);
@@ -1029,10 +1177,81 @@ mod tests {
         assert!(energy(&tail) < 1e-6);
     }
 
-    fn arrangement_with_note_at(beat: f64) -> Box<Vec<ArrangementClip>> {
+    fn arrangement_with_note_at(beat: f64) -> Box<Vec<PlacedClip>> {
         let mut clip = MidiClip::new("arr", 4.0, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0 });
-        Box::new(vec![ArrangementClip { start: beat, length: 4.0, clip }])
+        Box::new(vec![PlacedClip { start: beat, length: 4.0, clip: PlayClip::Midi(clip) }])
+    }
+
+    /// One second of a 440 Hz sine at 48 kHz: two beats at 120 BPM.
+    fn sine_sample() -> Arc<Sample> {
+        let left: Vec<f32> = (0..48_000).map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin() * 0.5).collect();
+        Arc::new(Sample::from_channels(left.clone(), left, 48_000.0))
+    }
+
+    fn audio_clip(warp: WarpMode) -> AudioClip {
+        AudioClip {
+            name: "sine".into(),
+            color: [0, 0, 0],
+            sample: "sine.wav".into(),
+            length: 2.0,
+            offset: 0.0,
+            warp,
+            original_bpm: 120.0,
+            gain_db: 0.0,
+            transpose: 0.0,
+        }
+    }
+
+    /// Counts upward zero crossings: a pitch estimate over a known duration.
+    fn crossings(samples: &[f32]) -> usize {
+        samples.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count()
+    }
+
+    fn left_channel(audio: &[f32]) -> Vec<f32> {
+        audio.chunks(2).map(|f| f[0]).collect()
+    }
+
+    #[test]
+    fn audio_clips_play_in_every_warp_mode() {
+        for warp in WarpMode::ALL {
+            let mut h = Harness::new();
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(audio_clip(warp), sine_sample()))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            let audio = h.run_beats(4.0);
+            assert!(audio.iter().all(|s| s.is_finite()));
+            assert!(energy(&audio) > 100.0, "{warp:?} should be audible");
+        }
+    }
+
+    #[test]
+    fn repitch_follows_tempo_and_stretch_keeps_pitch() {
+        let pitch_at_double_tempo = |warp| {
+            let mut h = Harness::new();
+            h.send(Command::SetTempo(240.0));
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(audio_clip(warp), sine_sample()))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            // At 240 BPM, run_beats(1.0) renders 0.5 s of audio; skip the first moments.
+            h.run_beats(0.2);
+            let audio = left_channel(&h.run_beats(1.0));
+            crossings(&audio) as f64 / 0.5
+        };
+        let repitch = pitch_at_double_tempo(WarpMode::Repitch);
+        let stretch = pitch_at_double_tempo(WarpMode::Stretch);
+        assert!((repitch - 880.0).abs() < 20.0, "Re-Pitch at double tempo should sound an octave up, got {repitch} Hz");
+        assert!((stretch - 440.0).abs() < 20.0, "Stretch should keep 440 Hz, got {stretch} Hz");
+    }
+
+    #[test]
+    fn arrangement_audio_clips_stop_at_their_end() {
+        let mut h = Harness::new();
+        let placed = PlacedClip { start: 0.0, length: 1.0, clip: PlayClip::Audio(audio_clip(WarpMode::Repitch), sine_sample()) };
+        h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![placed]) });
+        h.send(Command::Play);
+        let during = h.run_beats(1.0);
+        let after = h.run_beats(1.0);
+        assert!(energy(&during) > 100.0);
+        assert!(energy(&after) < 1e-6);
     }
 
     #[test]

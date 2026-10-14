@@ -43,7 +43,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
         heading(ui, "INSTRUMENTOS");
         let track = match target {
-            Target::Track(t) => Some(t),
+            Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
             _ => None,
         };
         let hint = if track.is_some() {
@@ -71,9 +71,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         }
 
+        heading(ui, "MUESTRAS");
+        if item(ui, "♪", "Añadir muestra…", "Elige archivos de audio (WAV, AIFF, FLAC, MP3…). También puedes arrastrarlos a la ventana") {
+            app.choose_samples(crate::app::Placement::Auto);
+        }
+
         heading(ui, "PISTAS");
         if item(ui, "+", "Nueva pista MIDI", "⌘T") {
             app.add_track();
+        }
+        if item(ui, "+", "Nueva pista de audio", "⇧⌘T") {
+            app.add_audio_track();
         }
     });
 }

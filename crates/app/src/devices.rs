@@ -105,7 +105,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     egui::ScrollArea::horizontal().auto_shrink(false).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            if let Target::Track(t) = target {
+            if let Some(t) = match target {
+                Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
+                _ => None,
+            } {
                 let instrument = &mut app.project.tracks[t].instrument;
                 let (changed, pad) = instrument_device(ui, instrument);
                 instrument_changed = changed;

@@ -1,11 +1,11 @@
 //! Session view: clip slots, scene launchers in the master column, and the mixer.
 
-use crate::app::{ClipRef, PulseApp};
+use crate::app::{ClipRef, Placement, PulseApp};
 use crate::project::PALETTE;
 use crate::theme::{self, ACCENT, PLAY, SLOT, SLOT_HOVER, SOLO, TEXT, TEXT_DIM};
 use crate::widgets::{self, Knob};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense};
-use engine::model::MidiClip;
+use engine::model::{Clip, MidiClip};
 use engine::{Command, Target, NONE, NUM_RETURNS, NUM_SCENES, QUEUED_STOP};
 use std::sync::atomic::Ordering;
 
@@ -204,7 +204,7 @@ fn clip_slot(
 
     match clip {
         Some(clip) => {
-            let color = theme::rgb(clip.color);
+            let color = theme::rgb(clip.color());
             painter.rect_filled(rect, 2.0, if response.hovered() { color } else { theme::shade(color, 0.88) });
             let icon = if is_playing || (is_queued && blink) {
                 PLAY
@@ -220,12 +220,12 @@ fn clip_slot(
             painter.text(
                 pos2(launch.right() + 2.0, rect.center().y),
                 Align2::LEFT_CENTER,
-                &clip.name,
+                clip.name(),
                 theme::small(),
                 theme::text_on(color),
             );
-            if is_playing && clip.length > 0.0 {
-                let progress = (play.clip_position / clip.length) as f32;
+            if is_playing && clip.length() > 0.0 {
+                let progress = (play.clip_position / clip.length()) as f32;
                 let bar = Rect::from_min_size(pos2(rect.left(), rect.bottom() - 2.0), vec2(rect.width() * progress, 2.0));
                 painter.rect_filled(bar, 0.0, theme::shade(theme::text_on(color), 0.9));
             }
@@ -253,14 +253,14 @@ fn clip_slot(
         }
     }
 
-    let hint = if clip.is_some() {
-        "▶ lanza · clic: editar · clic derecho: más opciones"
-    } else {
-        "Doble clic: nuevo clip MIDI"
+    let hint = match (clip.is_some(), app.project.tracks[t].is_audio()) {
+        (true, _) => "▶ lanza · clic: editar · clic derecho: más opciones",
+        (false, false) => "Doble clic: nuevo clip MIDI",
+        (false, true) => "Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)",
     };
     let response = response.on_hover_text(hint);
     if let Some(clip) = clip {
-        let mut color = clip.color;
+        let mut color = clip.color();
         response.context_menu(|ui| {
             if ui.button("Lanzar").clicked() {
                 actions.push(Action::Launch(t, slot));
@@ -428,9 +428,13 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::Select(clip) => app.select_clip(clip),
         Action::SelectTarget(target) => app.selected_target = target,
         Action::Create(t, slot) => {
-            let color = app.project.tracks[t].color;
-            app.set_clip(t, slot, Some(MidiClip::new("MIDI", 4.0, color)));
-            app.select_clip(ClipRef::Session { track: t, slot });
+            if app.project.tracks[t].is_audio() {
+                app.choose_samples(Placement::Session { track: t, slot });
+            } else {
+                let color = app.project.tracks[t].color;
+                app.set_clip(t, slot, Some(Clip::Midi(MidiClip::new("MIDI", 4.0, color))));
+                app.select_clip(ClipRef::Session { track: t, slot });
+            }
         }
         Action::Delete(t, slot) => app.set_clip(t, slot, None),
         Action::Duplicate(t, slot) => {
@@ -440,7 +444,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::ToArrangement(t, slot) => app.copy_to_arrangement(t, slot),
         Action::SetClipColor(t, slot, color) => {
             if let Some(clip) = app.project.tracks[t].clips[slot].as_mut() {
-                clip.color = color;
+                *clip.color_mut() = color;
                 app.sync_clip(t, slot);
             }
         }

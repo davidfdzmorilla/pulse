@@ -478,7 +478,7 @@ struct Arp {
 
 impl WaveSynth {
     pub fn new(params: WaveParams, sample_rate: f32) -> Self {
-        let voices = (0..VOICES).map(|i| Voice::new(0x9E37_79B9 ^ (i as u32 * 0x85EB_CA6B))).collect();
+        let voices = (0..VOICES).map(|i| Voice::new(0x9E37_79B9 ^ (i as u32).wrapping_mul(0x85EB_CA6B))).collect();
         let fx = params.fx.iter().map(|slot| slot.map(|d| (EffectProcessor::new(&d.effect, sample_rate), d.enabled))).collect();
         Self {
             params,

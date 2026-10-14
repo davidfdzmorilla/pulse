@@ -12,9 +12,10 @@ use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Color32, Stroke};
 use engine::model::{
     module_slot, slot, AudioMod, AudioParam, CurveInput, Device, Effect, InstrumentKind, LfoMode, ModTarget, ModularParams, ModuleKind,
-    Modulator, ModulatorKind, Param, ParamInfo, Unit, ANALOG_WAVES, DISTORTION_TYPES, FILTER_TYPES, MODULAR_PARAMS, MOD_AUDIO_AMOUNT, MOD_GLIDE,
-    MOD_LANES, MOD_LANE_FX, MOD_LANE_GAIN, MOD_MACRO_PARAMS, MOD_MASTER, MOD_MODULATORS, MOD_MODULES, MOD_NO_LANE, MOD_NO_MODULE, MOD_SLOTS,
-    WAVE_USER_TABLE,
+    Modulator, ModulatorKind, Param, ParamInfo, UnisonMode, Unit, ANALOG_WAVES, CHORDS, CHORD_PICKS, CURVE_LOOPS, DISTORTION_TYPES, FILTER_TYPES,
+    GRAIN_SPAWN, GRAIN_SYNC, MODULAR_PARAMS, MOD_AUDIO_AMOUNT, MOD_GLIDE, MOD_LANES, MOD_LANE_FX, MOD_LANE_GAIN, MOD_MACRO_PARAMS, MOD_MASTER,
+    MOD_MODULATORS, MOD_MODULES, MOD_MODULE_SLOTS, MOD_NO_LANE, MOD_NO_MODULE, MOD_UNISON, MOD_UNISON_VOICES, NOISE_SEEDS, NOISE_TYPES,
+    NONLINEAR_MODES, NONLINEAR_TYPES, SAMPLE_LOOPS, WAVE_USER_TABLE,
 };
 use engine::wavetable::BUILTIN;
 use engine::Target;
@@ -58,8 +59,8 @@ fn modulator_color(kind: ModulatorKind) -> Color32 {
 fn module_color(kind: ModuleKind) -> Color32 {
     match kind {
         k if k.is_generator() => Color32::from_rgb(110, 170, 255),
-        ModuleKind::Distortion | ModuleKind::Filter => ACCENT,
-        ModuleKind::Output => theme::PLAY,
+        ModuleKind::Distortion | ModuleKind::Filter | ModuleKind::NonlinearFilter => ACCENT,
+        k if k.is_output() => theme::PLAY,
         _ => Color32::from_gray(150),
     }
 }
@@ -169,6 +170,72 @@ fn choice_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, v
     });
 }
 
+/// Settings that only matter in some modes stay out of the way in the others.
+fn slot_shown(module: &engine::model::Module, s: usize) -> bool {
+    match module.kind {
+        ModuleKind::Granular => match s {
+            slot::RATE => module.choice[0] == 0,
+            slot::SYNC => module.choice[0] == 1,
+            slot::DENSITY => module.choice[0] == 2,
+            slot::CHORD_RANGE => module.choice[1] != 0,
+            _ => true,
+        },
+        ModuleKind::Noise => s != slot::SLOPE || module.choice[0] == 0,
+        ModuleKind::Sample => !matches!(s, slot::LOOP_START | slot::LOOP_LENGTH | slot::XFADE) || module.sample_loop() != 0,
+        ModuleKind::CurveOutput => !matches!(s, slot::CURVE_START | slot::CURVE_END) || module.choice[1] != 0,
+        _ => true,
+    }
+}
+
+/// The synced grain rate, picked from note lengths.
+fn sync_choice(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, module: &engine::model::Module, actions: &mut Vec<Action>) {
+    let Some(info) = module_slot(module.kind, slot::SYNC) else { return };
+    let id = Param::Instrument(ModularParams::module_param(i, slot::SYNC));
+    let current = (info.denormalize(app.display_value(Target::Track(t), id)).round() as usize).min(GRAIN_SYNC.len() - 1);
+    let mut chosen = current;
+    ui.vertical(|ui| {
+        ui.label(egui::RichText::new("Sync").size(10.0).color(TEXT_DIM));
+        egui::ComboBox::from_id_salt(("mm_grain_sync", t, i)).selected_text(GRAIN_SYNC[current].1).width(52.0).show_ui(ui, |ui| {
+            for (k, (_, name)) in GRAIN_SYNC.iter().enumerate() {
+                ui.selectable_value(&mut chosen, k, *name);
+            }
+        });
+    });
+    if chosen != current {
+        actions.push(Action::Param(id, info.normalize(chosen as f32)));
+    }
+}
+
+/// The global unison: the whole stack once per unison voice.
+fn unison_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, actions: &mut Vec<Action>) {
+    let mut unison = p.unison;
+    ui.label(egui::RichText::new("UNÍSONO").color(TEXT_DIM).size(10.0).strong());
+    egui::ComboBox::from_id_salt(("modular_unison_voices", t)).selected_text(format!("{} voces", unison.voices)).width(66.0).show_ui(ui, |ui| {
+        for v in 1..=MOD_UNISON_VOICES as u8 {
+            ui.selectable_value(&mut unison.voices, v, format!("{v} voces"));
+        }
+    });
+    egui::ComboBox::from_id_salt(("modular_unison_mode", t)).selected_text(unison.mode.label()).width(110.0).show_ui(ui, |ui| {
+        for mode in UnisonMode::ALL {
+            ui.selectable_value(&mut unison.mode, mode, mode.label());
+        }
+    });
+    if unison.mode == UnisonMode::Chords {
+        let chords: Vec<&str> = CHORDS.iter().map(|c| c.0).collect();
+        choice_combo(ui, ("modular_unison_chord", t), &mut unison.chord, &chords, 96.0);
+    }
+    if unison != p.unison {
+        set(actions, ModularParams { unison, ..p });
+    }
+    ui.add_enabled_ui(p.unison.voices > 1, |ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        knob(app, ui, t, MOD_UNISON, "Detune", None, 22.0, actions);
+        knob(app, ui, t, MOD_UNISON + 1, "Spread", None, 22.0, actions);
+        knob(app, ui, t, MOD_UNISON + 2, "Blend", None, 22.0, actions);
+        knob(app, ui, t, MOD_UNISON + 3, p.unison.mode.bias_label(), None, 22.0, actions);
+    });
+}
+
 fn stack_buttons(ui: &mut egui::Ui, t: usize, i: usize, actions: &mut Vec<Action>) {
     if ui.small_button("▲").on_hover_text("Subir").clicked() {
         actions.push(Action::StackEdit(StackEdit::Move(i, true)));
@@ -228,19 +295,60 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                     ui.checkbox(&mut next.flag, "Invertir");
                 }
                 ModuleKind::Sample => {
-                    ui.checkbox(&mut next.flag, "Loop");
+                    // The first layout kept the loop in `flag`; the mode replaces it.
+                    let mut mode = module.sample_loop();
+                    choice_combo(ui, ("mm_loop", t, i), &mut mode, &SAMPLE_LOOPS, 78.0);
+                    if mode != module.sample_loop() {
+                        next.choice[0] = mode;
+                        next.flag = false;
+                    }
                 }
-                ModuleKind::Output => {
+                ModuleKind::Granular => {
+                    choice_combo(ui, ("mm_spawn", t, i), &mut next.choice[0], &GRAIN_SPAWN, 78.0);
+                    let chords: Vec<&str> = CHORDS.iter().map(|c| c.0).collect();
+                    choice_combo(ui, ("mm_chord", t, i), &mut next.choice[1], &chords, 96.0);
+                    if module.choice[1] != 0 {
+                        choice_combo(ui, ("mm_pick", t, i), &mut next.table, &CHORD_PICKS, 66.0);
+                    }
+                    ui.checkbox(&mut next.flag, "Warm").on_hover_text("Warm Start: todos los granos empiezan ya al tocar la nota");
+                    ui.checkbox(&mut next.alt, "Align").on_hover_text("Alinea los granos con la fase de la fundamental (necesita una raíz correcta)");
+                }
+                ModuleKind::Noise => {
+                    choice_combo(ui, ("mm_noise", t, i), &mut next.choice[0], &NOISE_TYPES, 72.0);
+                    choice_combo(ui, ("mm_seed", t, i), &mut next.choice[1], &NOISE_SEEDS, 66.0);
+                }
+                ModuleKind::NonlinearFilter => {
+                    choice_combo(ui, ("mm_nl", t, i), &mut next.choice[0], &NONLINEAR_TYPES, 84.0);
+                    choice_combo(ui, ("mm_nl_mode", t, i), &mut next.choice[1], &NONLINEAR_MODES, 60.0);
+                }
+                ModuleKind::Output | ModuleKind::CurveOutput => {
                     ui.checkbox(&mut next.flag, "Out").on_hover_text("Apagado: no suena, solo sirve como fuente de modulación");
                     choice_combo(ui, ("mm_send", t, i), &mut next.choice[0], &["→ Carril 1", "→ Carril 2", "→ Carril 3", "→ Master"], 84.0);
+                    if module.kind == ModuleKind::CurveOutput {
+                        choice_combo(ui, ("mm_curve_loop", t, i), &mut next.choice[1], &CURVE_LOOPS, 78.0);
+                    }
                 }
                 _ => {}
             }
-            if matches!(module.kind, ModuleKind::Wavetable | ModuleKind::Sample) && ui.small_button("Cargar…").clicked() {
+            if (module.kind == ModuleKind::Wavetable || module.kind.uses_sample()) && ui.small_button("Cargar…").clicked() {
                 actions.push(Action::LoadGenFile(i));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| stack_buttons(ui, t, i, actions));
         });
+        if module.kind == ModuleKind::CurveOutput {
+            let edited = ui.scope(|ui| crate::shape_edit::edit(ui, egui::Id::new(("modular_curve_out", t, i)), vec2(300.0, 60.0), module.curve, None));
+            if let Some(curve) = edited.inner {
+                next.curve = curve;
+            }
+            // The loop points, when the mode loops.
+            if module.choice[1] != 0 {
+                let rect = edited.response.rect;
+                for s in [slot::CURVE_START, slot::CURVE_END] {
+                    let x = rect.left() + rect.width() * module.get(s);
+                    ui.painter().vline(x, rect.y_range(), Stroke::new(1.0, theme::PLAY));
+                }
+            }
+        }
         if next != module {
             let mut params = p;
             params.modules[i] = next;
@@ -259,16 +367,21 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                         slot::SEMI => Some(AudioParam::Pitch),
                         _ => None,
                     }
-                } else if matches!(module.kind, ModuleKind::Mix | ModuleKind::Aux | ModuleKind::Output) && s == slot::LEVEL {
+                } else if (matches!(module.kind, ModuleKind::Mix | ModuleKind::Aux) || module.kind.is_output()) && s == slot::LEVEL {
                     Some(AudioParam::Level)
                 } else {
                     None
                 }
             };
-            for s in 0..MOD_SLOTS {
-                if module_slot(module.kind, s).is_some() {
-                    slot_knob(app, ui, t, i, s, audio_for(s), &p, actions);
+            for s in 0..MOD_MODULE_SLOTS {
+                if module_slot(module.kind, s).is_none() || !slot_shown(&module, s) {
+                    continue;
                 }
+                if module.kind == ModuleKind::Granular && s == slot::SYNC {
+                    sync_choice(app, ui, t, i, &module, actions);
+                    continue;
+                }
+                slot_knob(app, ui, t, i, s, audio_for(s), &p, actions);
             }
             if module.kind == ModuleKind::Aux {
                 let (rect, response) = ui.allocate_exact_size(vec2(90.0, 50.0), egui::Sense::hover());
@@ -521,6 +634,9 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             if ui.button("▶").on_hover_text("Escuchar").clicked() {
                 actions.push(Action::Preview(60));
             }
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.separator();
+            unison_panel(app, ui, t, p, &mut actions);
         });
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("MACROS").color(TEXT_DIM).size(10.0).strong());
@@ -615,6 +731,47 @@ mod tests {
         }
     }
 
+    #[test]
+    fn every_module_kind_and_mode_draws() {
+        let mut p = ModularParams::default();
+        p.modules = [Module::EMPTY; MOD_MODULES];
+        let mut at = 0;
+        let mut add = |m: Module| {
+            p.modules[at] = m;
+            at += 1;
+        };
+        add(Module::new(ModuleKind::Group));
+        for kind in ModuleKind::ALL.into_iter().filter(|&k| k != ModuleKind::Group) {
+            add(Module::new(kind));
+        }
+        for spawn in 0..3 {
+            let mut g = Module::new(ModuleKind::Granular);
+            g.choice = [spawn, 4];
+            add(g);
+        }
+        for mode in 0..5 {
+            let mut s = Module::new(ModuleKind::Sample);
+            s.choice[0] = mode;
+            add(s);
+        }
+        let mut curve = Module::new(ModuleKind::CurveOutput);
+        curve.choice[1] = 3;
+        add(curve);
+        p.unison.voices = 4;
+        p.unison.mode = UnisonMode::Chords;
+        let mut app = app_with(p);
+        app.modular_window = Some(0);
+        let ctx = egui::Context::default();
+        for n in 0..3 {
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1400.0, 1000.0))), time: Some(n as f64 * 0.05), ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| window(&mut app, &ui.ctx().clone()));
+        }
+        assert_eq!(params(&app), p, "drawing changes nothing");
+        // Settings for other modes stay hidden.
+        let granular = Module::new(ModuleKind::Granular);
+        assert!(slot_shown(&granular, slot::RATE) && !slot_shown(&granular, slot::DENSITY) && !slot_shown(&granular, slot::CHORD_RANGE));
+    }
+
     /// Drags `payload` from a label onto the slot knob, headless.
     fn drag_onto_knob<P: Clone + Send + Sync + 'static>(app: &mut PulseApp, payload: P, module: usize, s: usize) -> Vec<Action> {
         let ctx = egui::Context::default();
@@ -699,6 +856,135 @@ mod tests {
     #[ignore = "diagnostic: writes every modular preset to $PULSE_OUT"]
     fn modular_presets_to_wav() {
         render_presets(Some(std::env::var("PULSE_OUT").unwrap()));
+    }
+
+    /// Renders one modular patch for `seconds`, with `file` loaded into module 1.
+    fn render_patch(p: ModularParams, file: &std::path::Path, notes: &[u8], seconds: f32) -> (Vec<f32>, Vec<f32>) {
+        use engine::OfflineRenderer;
+        let mut project = crate::project::Project::empty();
+        let mut track = crate::project::Track::new("Granular", [200, 100, 50], InstrumentKind::Modular(p));
+        track.set_sample(1, Some(file.to_string_lossy().into_owned()));
+        let mut clip = engine::model::MidiClip::new("MIDI", 8.0, [200, 100, 50]);
+        for &pitch in notes {
+            clip.notes.push(engine::model::Note { start: 0.0, length: seconds as f64 * 2.0 - 1.0, pitch, velocity: 0.9 });
+        }
+        track.clips[0] = Some(engine::model::Clip::Midi(clip));
+        project.tracks = vec![track];
+        let mut samples = crate::sync::SampleCache::default();
+        let mut renderer = OfflineRenderer::new(48_000.0);
+        for command in crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default()) {
+            renderer.send(command);
+        }
+        renderer.send(engine::Command::LaunchClip { track: 0, slot: 0 });
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        renderer.render((seconds * 48_000.0) as usize, &mut l, &mut r);
+        renderer.send(engine::Command::StopAllClips);
+        let (mut tail_l, mut tail_r) = (Vec::new(), Vec::new());
+        renderer.render(24_000, &mut tail_l, &mut tail_r);
+        l.extend(tail_l);
+        r.extend(tail_r);
+        (l, r)
+    }
+
+    /// A source to granulate: two seconds of a vowel-like chord that brightens.
+    fn write_source(path: &std::path::Path) {
+        let sr = 48_000.0;
+        let data: Vec<f32> = (0..96_000)
+            .map(|i| {
+                let t = i as f32 / sr;
+                let bright = 1.0 + 6.0 * t / 2.0;
+                [220.0f32, 277.2, 329.6]
+                    .iter()
+                    .map(|f| (1..8).map(|h| (std::f32::consts::TAU * f * h as f32 * t).sin() / (h as f32).powf(2.5 - bright * 0.2)).sum::<f32>())
+                    .sum::<f32>()
+                    * 0.15
+            })
+            .collect();
+        crate::capture::write_wav(path, &data, &data, sr).unwrap();
+    }
+
+    /// Granular variations of the same source, as heard through the whole app.
+    fn granular_patches() -> Vec<(&'static str, ModularParams)> {
+        let mut base = ModularParams::default();
+        let mut g = Module::new(ModuleKind::Granular);
+        g.set(slot::ROOT, 57.0);
+        g.set(slot::POSITION, 0.4);
+        base.modules[1] = g;
+        let mut out = base.modules[2];
+        out.set(slot::ATTACK, 0.2);
+        out.set(slot::RELEASE, 1.0);
+        base.modules[2] = out;
+        base.gain = 1.0;
+        let with = |f: &dyn Fn(&mut Module)| {
+            let mut p = base;
+            f(&mut p.modules[1]);
+            p
+        };
+        vec![
+            ("Plain", base),
+            (
+                "Cloud",
+                with(&|g| {
+                    g.flag = true;
+                    g.set(slot::LENGTH, 250.0);
+                    g.set(slot::RATE, 40.0);
+                    for (s, v) in [(slot::RANDOM_POSITION, 0.6), (slot::RANDOM_PITCH, 0.15), (slot::RANDOM_PAN, 1.0), (slot::RANDOM_TIMING, 0.8), (slot::RANDOM_LEVEL, 0.5)] {
+                        g.set(s, v);
+                    }
+                }),
+            ),
+            (
+                "Chord arpeggio",
+                with(&|g| {
+                    g.choice = [1, 4];
+                    g.table = 2;
+                    g.set(slot::SYNC, 5.0);
+                    g.set(slot::LENGTH, 140.0);
+                    g.set(slot::CHORD_RANGE, 2.0);
+                }),
+            ),
+            (
+                "Reverse density",
+                with(&|g| {
+                    g.choice[0] = 2;
+                    g.set(slot::DENSITY, 8.0);
+                    g.set(slot::LENGTH, 400.0);
+                    g.set(slot::RANDOM_REVERSE, 1.0);
+                    g.set(slot::RANDOM_POSITION, 0.3);
+                }),
+            ),
+        ]
+    }
+
+    #[test]
+    fn a_granular_module_plays_its_file_through_a_project() {
+        let dir = std::env::temp_dir().join(format!("pulse-granular-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let file = dir.join("source.wav");
+        write_source(&file);
+        for (name, patch) in granular_patches() {
+            let (l, r) = render_patch(patch, &file, &[57], 1.5);
+            let rms = (l.iter().map(|s| s * s).sum::<f32>() / l.len() as f32).sqrt();
+            let peak = l.iter().chain(&r).fold(0f32, |m, s| m.max(s.abs()));
+            assert!(rms > 0.01 && peak < 1.0, "{name}: rms {rms}, peak {peak}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    #[ignore = "diagnostic: writes the granular variations to $PULSE_OUT"]
+    fn granular_demo_to_wav() {
+        let out = std::path::PathBuf::from(std::env::var("PULSE_OUT").unwrap());
+        let file = out.with_file_name("granular-source.wav");
+        write_source(&file);
+        let (mut all_l, mut all_r) = (Vec::new(), Vec::new());
+        for (name, patch) in granular_patches() {
+            let (l, r) = render_patch(patch, &file, &[57, 64], 3.0);
+            println!("{name}");
+            all_l.extend(l);
+            all_r.extend(r);
+        }
+        crate::capture::write_wav(&out, &all_l, &all_r, 48_000.0).unwrap();
     }
 
     fn render_presets(out: Option<String>) {

@@ -165,6 +165,72 @@ fn resample(frame: &[f32], size: usize) -> Vec<f32> {
         .collect()
 }
 
+/// The fundamental of `data` by autocorrelation, if it has a clear pitch (30–2000 Hz).
+fn detect_pitch(data: &[f32], sample_rate: f32) -> Option<f32> {
+    let n = data.len().min(8192);
+    let start = (data.len() - n) / 2;
+    let x = &data[start..start + n];
+    let energy: f32 = x.iter().map(|s| s * s).sum();
+    if energy < 1e-6 {
+        return None;
+    }
+    let (min_lag, max_lag) = ((sample_rate / 2000.0) as usize, ((sample_rate / 30.0) as usize).min(n / 2));
+    let correlation = |lag: usize| x[..n - lag].iter().zip(&x[lag..]).map(|(a, b)| a * b).sum::<f32>() / energy;
+    // The first strong peak, so octave errors pick the true period.
+    let values: Vec<f32> = (min_lag..max_lag).map(correlation).collect();
+    let best = values.iter().copied().fold(0.0, f32::max);
+    if best < 0.5 {
+        return None;
+    }
+    let index = (1..values.len().saturating_sub(1)).find(|&i| values[i] >= best * 0.9 && values[i] >= values[i - 1] && values[i] >= values[i + 1])?;
+    // Parabolic interpolation for a fractional period.
+    let (a, b, c) = (values[index - 1], values[index], values[index + 1]);
+    let shift = 0.5 * (a - c) / (a - 2.0 * b + c).min(-1e-9);
+    Some(sample_rate / (min_lag as f32 + index as f32 + shift))
+}
+
+/// Turns any audio into a wavetable by its spectrum: frames step through the
+/// file, and each becomes one cycle holding that moment's harmonics. Pitched
+/// sounds are resynthesised on their detected harmonic series; unpitched ones
+/// map the spectrum straight onto the harmonics.
+pub fn spectral(name: impl Into<String>, data: &[f32], sample_rate: f32) -> Wavetable {
+    const WINDOW: usize = 4096;
+    const FRAMES: usize = 64;
+    if data.is_empty() {
+        return builtin(0);
+    }
+    let pitch = detect_pitch(data, sample_rate);
+    let hann: Vec<f32> = (0..WINDOW).map(|i| 0.5 - 0.5 * (TAU * i as f32 / WINDOW as f32).cos()).collect();
+    let span = data.len().saturating_sub(WINDOW);
+    let frames: Vec<Vec<f32>> = (0..FRAMES)
+        .map(|f| {
+            let start = span * f / (FRAMES - 1);
+            let (mut re, mut im) = (vec![0.0; WINDOW], vec![0.0; WINDOW]);
+            for i in 0..WINDOW {
+                re[i] = data.get(start + i).copied().unwrap_or(0.0) * hann[i];
+            }
+            fft(&mut re, &mut im);
+            let magnitude = |bin: f32| {
+                let k = bin.floor() as usize;
+                let t = bin - bin.floor();
+                let at = |k: usize| if k < WINDOW / 2 { re[k].hypot(im[k]) } else { 0.0 };
+                at(k) + (at(k + 1) - at(k)) * t
+            };
+            (0..=512)
+                .map(|h| match (h, pitch) {
+                    (0, _) => 0.0,
+                    (h, Some(f0)) => {
+                        let bin = h as f32 * f0 * WINDOW as f32 / sample_rate;
+                        if bin < (WINDOW / 2 - 1) as f32 { magnitude(bin) } else { 0.0 }
+                    }
+                    (h, None) => magnitude(h as f32),
+                })
+                .collect()
+        })
+        .collect();
+    Wavetable::from_harmonics(name, &frames)
+}
+
 /// Frame size declared in a wavetable WAV's `clm ` chunk ("<!>2048 …"), if any.
 pub fn declared_frame_size(wav: &[u8]) -> Option<usize> {
     if wav.len() < 12 || &wav[0..4] != b"RIFF" || &wav[8..12] != b"WAVE" {
@@ -395,5 +461,34 @@ mod tests {
         let data: Vec<f32> = (0..4096).map(|i| if i < 2048 { (i as f32 / 2048.0 * TAU).sin() } else { 0.5 }).collect();
         assert_eq!(Wavetable::from_samples("two", &data, 2048).frames(), 2);
         assert_eq!(Wavetable::from_samples("one cycle", &data[..600], 2048).frames(), 1);
+    }
+
+    #[test]
+    fn spectral_tables_follow_the_sound_over_time() {
+        let sr = 48_000.0;
+        // Half a second of sine, then half a second of square, at 220 Hz.
+        let data: Vec<f32> = (0..48_000)
+            .map(|i| {
+                let s = (i as f32 * 220.0 * TAU / sr).sin();
+                if i < 24_000 { s } else { s.signum() * 0.8 }
+            })
+            .collect();
+        assert!((detect_pitch(&data, sr).unwrap() - 220.0).abs() < 1.0);
+        let table = spectral("test", &data, sr);
+        assert_eq!(table.frames(), 64);
+        // The first frame is a pure sine: it matches sin() closely.
+        let sine_error: f32 = (0..64).map(|i| {
+            let p = i as f32 / 64.0;
+            (table.read(0, 0.0, p).abs() - (p * TAU).sin().abs()).abs()
+        }).sum::<f32>() / 64.0;
+        assert!(sine_error < 0.05, "{sine_error}");
+        // The last is square-like: flat near the middle of each half.
+        let (a, b) = (table.read(0, 1.0, 0.2).abs(), table.read(0, 1.0, 0.3).abs());
+        assert!(a > 0.6 && (a - b).abs() < 0.2, "{a} {b}");
+        // Noise has no pitch and still makes a table.
+        let mut seed = 7u32;
+        let noise: Vec<f32> = (0..20_000).map(|_| { seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5; seed as f32 / u32::MAX as f32 - 0.5 }).collect();
+        assert!(detect_pitch(&noise, sr).is_none());
+        assert_eq!(spectral("noise", &noise, sr).frames(), 64);
     }
 }

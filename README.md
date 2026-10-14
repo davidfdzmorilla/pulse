@@ -102,8 +102,19 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
     - 3 envolventes (la 1 es el volumen), 4 LFOs con forma **dibujada a mano**, Free/Retrig/Env y
       sincronía al tempo, y **matriz de modulación** de 16 filas (fuentes: envolventes, LFOs, velocidad,
       nota, aleatorio y 4 macros; destino: cualquier parámetro).
-    - Poly, Mono o Legato con glide. 15 presets de fábrica (leads, bajos Reese/Growl/Wobble, plucks, pads,
-      teclados, riser).
+    - Cada oscilador puede ser **Wavetable**, **Sample** (la muestra, cromática desde C3, con loop),
+      **Granular** (nube de granos: tamaño, densidad, spray, pitch aleatorio, anchura) o **Spectral**
+      (cualquier audio convertido en wavetable por su espectro; Pos recorre el tiempo de la muestra).
+    - **Modulación arrastrando**: arrastra una fuente («✥ LFO 1», de la tira FUENTES o de su panel) a
+      cualquier knob; el knob muestra anillos de color con lo que lo mueve y, con clic derecho, ajustas o
+      quitas cada modulación.
+    - **Arpegiador** (Up, Down, Up/Down, Random, Played; 1/32 a 1/2 con tresillos; 1-4 octavas; gate).
+    - **Rack de efectos interno** (página FX, hasta 6 efectos de Pulse) que se guarda con el preset.
+    - **Editor de wavetables**: dibuja fotogramas clave con el ratón (o parte de la tabla actual), con
+      formas base, normalizar, suavizar, invertir y espejo; la tabla hace morph entre ellos y se guarda como
+      WAV de wavetable estándar (frames de 2048 con chunk `clm `), que también abren otros sintes.
+    - Poly, Mono o Legato con glide. 16 presets de fábrica (leads, bajos Reese/Growl/Wobble, plucks, arpegio,
+      pads, teclados, riser), varios con sus efectos.
   - **Kick Designer**: sintetizador de bombos con editor completo («Editor ⤢» en el dispositivo):
     - Capas: **cuerpo** (seno, triángulo, cuadrada o sierra, fase inicial, armónicos), **sub** senoidal limpio
       que sigue al cuerpo en fase, y **click** (12 sintetizados: Noise, Snap, Tick, Square, Zap, Metal, Thump,
@@ -143,6 +154,6 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
 4. Multisamples (zonas por tecla y velocidad) en el Sampler; marcadores de troceado editables a mano.
-5. Wavetable Synth, fase 2: modulación arrastrando la fuente al knob, osciladores de muestra/granular/
-   espectral, rack de efectos interno, editor de wavetables y arpegiador.
+5. Wavetable Synth: multisample, segundo filtro, efectos modulables desde la matriz, lectura de presets de
+   otros sintes.
 6. Plugins VST3 / CLAP.

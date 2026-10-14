@@ -7,8 +7,8 @@ use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::{
-    InstrumentKind, KickWave, LfoMode, ModSlot, ModSource, OscWarp, Param, WaveEnv, WaveFilter, WaveParams, WAVE_MOD_TARGETS, WAVE_NO_TARGET,
-    WAVE_PARAMS, WAVE_SLOTS, WAVE_USER_TABLE,
+    wave_is_target, ArpMode, Device, Effect, InstrumentKind, KickWave, LfoMode, ModSlot, ModSource, OscKind, OscWarp, Param, WaveEnv, WaveFilter,
+    WaveParams, WAVE_ARP_GATE, WAVE_FX, WAVE_GRAIN, WAVE_MOD_TARGETS, WAVE_NO_TARGET, WAVE_PARAMS, WAVE_SLOTS, WAVE_USER_TABLE,
 };
 use engine::wavetable::{Wavetable, BUILTIN, PREVIEW_POINTS};
 use engine::Target;
@@ -26,12 +26,74 @@ const GLIDE: usize = 64;
 const MASTER: usize = 65;
 const AMOUNTS: usize = WAVE_MOD_TARGETS;
 
-/// Knob for parameter `i`, with automation shown like everywhere else.
+/// Colour of a modulation source, for its badge and the rings it draws.
+fn source_color(source: ModSource) -> Color32 {
+    match source {
+        ModSource::Env1 | ModSource::Env2 | ModSource::Env3 => Color32::from_rgb(110, 200, 255),
+        ModSource::Lfo1 | ModSource::Lfo2 | ModSource::Lfo3 | ModSource::Lfo4 => Color32::from_rgb(120, 230, 140),
+        ModSource::Macro1 | ModSource::Macro2 | ModSource::Macro3 | ModSource::Macro4 => Color32::from_rgb(240, 140, 220),
+        _ => Color32::from_rgb(240, 210, 110),
+    }
+}
+
+/// A modulation source that can be dragged onto any knob.
+fn source_badge(ui: &mut egui::Ui, source: ModSource) {
+    let id = egui::Id::new(("mod_source", source.label()));
+    ui.dnd_drag_source(id, source, |ui| {
+        let text = egui::RichText::new(format!("✥ {}", source.label())).size(10.5).color(Color32::BLACK).background_color(source_color(source));
+        ui.label(text);
+    })
+    .response
+    .on_hover_text("Arrástralo a un knob para modularlo");
+}
+
+/// Knob for parameter `i`, with automation shown like everywhere else. It shows
+/// the modulation it receives as rings, accepts dragged sources and lists its
+/// modulations on right-click.
 fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, diameter: f32, actions: &mut Vec<Action>) {
     let Some(info) = WAVE_PARAMS.get(i) else { return };
     let (target, id) = (Target::Track(t), Param::Instrument(i));
-    if let Some(v) = widgets::param_knob(ui, info, app.display_value(target, id), label, diameter, app.automation_state(target, id)) {
+    let value = app.display_value(target, id);
+    let (changed, response) = widgets::param_knob_response(ui, info, value, label, diameter, app.automation_state(target, id));
+    if let Some(v) = changed {
         actions.push(Action::Param(id, v));
+    }
+    let InstrumentKind::Wavetable(base) = app.project.tracks[t].instrument else { return };
+    if !wave_is_target(i) {
+        return;
+    }
+    let mods: Vec<(usize, ModSlot)> = base.matrix.iter().copied().enumerate().filter(|(_, s)| s.source != ModSource::None && s.dest as usize == i).collect();
+    let n = info.normalize(value);
+    for (k, (_, slot)) in mods.iter().enumerate() {
+        let (from, to) = if slot.bipolar { (n - slot.amount, n + slot.amount) } else { (n, n + slot.amount) };
+        let rect = response.rect.expand(k as f32 * 2.5);
+        widgets::modulation_ring(ui.painter(), rect, diameter + k as f32 * 5.0, from, to, source_color(slot.source));
+    }
+    if let Some(source) = response.dnd_hover_payload::<ModSource>() {
+        ui.painter().rect_stroke(response.rect, 3.0, Stroke::new(1.5, source_color(*source)), egui::StrokeKind::Inside);
+    }
+    if let Some(source) = response.dnd_release_payload::<ModSource>() {
+        actions.push(Action::AddModulation(*source, i));
+    }
+    if !mods.is_empty() {
+        response.context_menu(|ui| {
+            ui.label(egui::RichText::new(format!("Modulaciones de {}", info.name)).color(TEXT_DIM).size(10.5));
+            for (s, slot) in &mods {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(slot.source.label()).color(source_color(slot.source)));
+                    let id = Param::Instrument(AMOUNTS + s);
+                    let mut amount = app.display_value(target, id) * 100.0;
+                    if ui.add(egui::Slider::new(&mut amount, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
+                        actions.push(Action::Param(id, amount / 100.0));
+                    }
+                    if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+                        let mut p = base;
+                        p.matrix[*s] = ModSlot::EMPTY;
+                        set(actions, p);
+                    }
+                });
+            }
+        });
     }
 }
 
@@ -90,7 +152,40 @@ fn table_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, base: WaveP
         if ui.button("Cargar wavetable…").on_hover_text("WAV con frames de 2048 muestras (u otro tamaño indicado en el archivo) o un solo ciclo").clicked() {
             actions.push(Action::LoadWavetable(o));
         }
+        if ui.button("Editor de wavetables…").on_hover_text("Dibuja fotogramas clave; la tabla pasa de uno a otro").clicked() {
+            actions.push(Action::OpenTableEditor(o));
+        }
     });
+}
+
+/// The oscillator's sample with the read position (and the grain spray around it).
+fn sample_view(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, shown: &WaveParams, size: egui::Vec2) {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, theme::BG);
+    let track = &app.project.tracks[t];
+    let Some(sample) = track.sample(o).and_then(|p| app.loaded_sample(p)) else {
+        painter.text(rect.center(), Align2::CENTER_CENTER, "Carga una muestra", theme::small(), TEXT_DIM);
+        return;
+    };
+    let osc = &shown.osc[o];
+    let x_of = |p: f32| rect.left() + p.clamp(0.0, 1.0) * rect.width();
+    if osc.kind == OscKind::Granular && osc.spray > 0.0 {
+        let spray = Rect::from_min_max(pos2(x_of(osc.position - osc.spray / 2.0), rect.top()), pos2(x_of(osc.position + osc.spray / 2.0), rect.bottom()));
+        painter.rect_filled(spray, 0.0, theme::shade(ACCENT, 0.25));
+    }
+    let peaks = &sample.peaks;
+    let columns = rect.width() as usize;
+    for x in 0..columns {
+        let from = x * peaks.len() / columns.max(1);
+        let to = ((x + 1) * peaks.len() / columns.max(1)).max(from + 1).min(peaks.len());
+        let (lo, hi) = peaks[from.min(peaks.len().saturating_sub(1))..to].iter().fold((0f32, 0f32), |(a, b), &(l, h)| (a.min(l), b.max(h)));
+        let px = rect.left() + x as f32 + 0.5;
+        painter.line_segment([pos2(px, rect.center().y - hi * rect.height() * 0.45), pos2(px, rect.center().y - lo * rect.height() * 0.45)], Stroke::new(1.0, Color32::from_gray(150)));
+    }
+    let x = x_of(osc.position);
+    painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, ACCENT));
+    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, track.sample_name(o).unwrap_or_default(), theme::small(), theme::TEXT);
 }
 
 fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, base: WaveParams, shown: &WaveParams, actions: &mut Vec<Action>) {
@@ -103,10 +198,35 @@ fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, base: WavePa
                 p.osc[o].on = on;
                 set(actions, p);
             }
-            table_menu(app, ui, t, o, base, actions);
+            let mut kind = osc.kind;
+            egui::ComboBox::from_id_salt(("wave_kind", t, o)).selected_text(kind.label()).width(84.0).show_ui(ui, |ui| {
+                for k in OscKind::ALL {
+                    ui.selectable_value(&mut kind, k, k.label()).on_hover_text(match k {
+                        OscKind::Wavetable => "Lee una wavetable; Pos la recorre",
+                        OscKind::Sample => "Toca la muestra cromáticamente desde C3; Pos es el inicio",
+                        OscKind::Granular => "Nube de granos de la muestra; Pos es de dónde se toman",
+                        OscKind::Spectral => "Convierte la muestra en wavetable por su espectro; Pos recorre el tiempo",
+                    });
+                }
+            });
+            if kind != osc.kind {
+                let mut p = base;
+                p.osc[o].kind = kind;
+                set(actions, p);
+            }
+            if osc.kind == OscKind::Wavetable {
+                table_menu(app, ui, t, o, base, actions);
+            } else if ui.small_button("Cargar muestra…").clicked() {
+                actions.push(Action::LoadOscSample(o));
+            }
         });
-        let table = app.cached_wavetable(t, o);
-        table_view(ui, table.as_ref(), shown.osc[o].position, vec2(326.0, 96.0));
+        match osc.kind {
+            OscKind::Wavetable | OscKind::Spectral => {
+                let table = app.cached_wavetable(t, o);
+                table_view(ui, table.as_ref(), shown.osc[o].position, vec2(326.0, 96.0));
+            }
+            OscKind::Sample | OscKind::Granular => sample_view(app, ui, t, o, shown, vec2(326.0, 96.0)),
+        }
         let k = |i: usize| o * OSC_PARAMS + i;
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
@@ -116,28 +236,48 @@ fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, base: WavePa
         });
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            for (i, label) in [(6, "Unison"), (7, "Detune"), (8, "Blend"), (9, "Width"), (10, "Phase"), (11, "Rand")] {
-                knob(app, ui, t, k(i), label, 28.0, actions);
+            if osc.kind == OscKind::Granular {
+                let g = WAVE_GRAIN + o * 4;
+                for (i, label) in [(g, "Grain"), (g + 1, "Density"), (g + 2, "Spray"), (g + 3, "G.Pitch"), (k(9), "Width")] {
+                    knob(app, ui, t, i, label, 28.0, actions);
+                }
+            } else {
+                for (i, label) in [(6, "Unison"), (7, "Detune"), (8, "Blend"), (9, "Width"), (10, "Phase"), (11, "Rand")] {
+                    knob(app, ui, t, k(i), label, 28.0, actions);
+                }
             }
         });
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Warp").color(TEXT_DIM).size(10.5));
-            let mut warp = osc.warp;
-            egui::ComboBox::from_id_salt(("wave_warp", t, o)).selected_text(warp.label()).width(80.0).show_ui(ui, |ui| {
-                for w in OscWarp::ALL {
-                    ui.selectable_value(&mut warp, w, w.label()).on_hover_text(match w {
-                        OscWarp::Fm => "El otro oscilador modula la frecuencia de este",
-                        OscWarp::Sync => "Reinicia el ciclo más rápido de lo que suena",
-                        _ => "",
-                    });
+        ui.horizontal(|ui| match osc.kind {
+            OscKind::Wavetable | OscKind::Spectral => {
+                ui.label(egui::RichText::new("Warp").color(TEXT_DIM).size(10.5));
+                let mut warp = osc.warp;
+                egui::ComboBox::from_id_salt(("wave_warp", t, o)).selected_text(warp.label()).width(80.0).show_ui(ui, |ui| {
+                    for w in OscWarp::ALL {
+                        ui.selectable_value(&mut warp, w, w.label()).on_hover_text(match w {
+                            OscWarp::Fm => "El otro oscilador modula la frecuencia de este",
+                            OscWarp::Sync => "Reinicia el ciclo más rápido de lo que suena",
+                            _ => "",
+                        });
+                    }
+                });
+                if warp != osc.warp {
+                    let mut p = base;
+                    p.osc[o].warp = warp;
+                    set(actions, p);
                 }
-            });
-            if warp != osc.warp {
-                let mut p = base;
-                p.osc[o].warp = warp;
-                set(actions, p);
+                knob(app, ui, t, k(12), "Amount", 24.0, actions);
             }
-            knob(app, ui, t, k(12), "Amount", 24.0, actions);
+            OscKind::Sample => {
+                let mut looping = osc.sample_loop;
+                if ui.checkbox(&mut looping, "Loop").on_hover_text("Repite desde Pos al llegar al final").changed() {
+                    let mut p = base;
+                    p.osc[o].sample_loop = looping;
+                    set(actions, p);
+                }
+            }
+            OscKind::Granular => {
+                ui.label(egui::RichText::new("Granos con ventana Hann; Spray esparce el punto de lectura").color(TEXT_DIM).size(10.5));
+            }
         });
     });
 }
@@ -371,6 +511,7 @@ fn osc_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, shown
     ui.horizontal_top(|ui| {
         panel(ui, 330.0, |ui| {
             let e = tabs(ui, ui.id().with(("wave_env_tab", t)), &["ENV 1 · Amp", "ENV 2", "ENV 3"]);
+            source_badge(ui, [ModSource::Env1, ModSource::Env2, ModSource::Env3][e]);
             env_view(ui, &shown.env[e], vec2(316.0, 70.0));
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
@@ -381,6 +522,7 @@ fn osc_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, shown
         });
         panel(ui, 420.0, |ui| {
             let l = tabs(ui, ui.id().with(("wave_lfo_tab", t)), &["LFO 1", "LFO 2", "LFO 3", "LFO 4"]);
+            source_badge(ui, [ModSource::Lfo1, ModSource::Lfo2, ModSource::Lfo3, ModSource::Lfo4][l]);
             ui.horizontal_top(|ui| {
                 let id = ui.id().with(("wave_lfo_shape", t, l));
                 if let Some(shape) = crate::shape_edit::edit(ui, id, vec2(260.0, 100.0), base.lfo[l].shape, None) {
@@ -420,25 +562,112 @@ fn osc_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, shown
             });
         });
         panel(ui, 270.0, |ui| {
-            ui.label(egui::RichText::new("ASIGNAR MODULACIÓN").color(TEXT_DIM).size(10.0).strong());
-            ui.label(egui::RichText::new("Elige la fuente y el destino en la página MATRIX, o usa un atajo:").size(10.5).color(TEXT_DIM));
-            for (label, source, dest) in [
-                ("LFO 1 → Cutoff", ModSource::Lfo1, FILTER),
-                ("LFO 1 → Pos A", ModSource::Lfo1, 0),
-                ("Env 2 → Cutoff", ModSource::Env2, FILTER),
-                ("Env 2 → Pitch A", ModSource::Env2, 2),
-                ("Macro 1 → Pos A", ModSource::Macro1, 0),
-                ("Velocity → Cutoff", ModSource::Velocity, FILTER),
-            ] {
-                if ui.small_button(label).clicked() {
-                    if let Some(slot) = base.matrix.iter().position(|s| s.source == ModSource::None) {
-                        let mut p = base;
-                        p.matrix[slot] = ModSlot { source, dest: dest as u8, amount: 0.5, bipolar: false };
+            let arp = base.arp;
+            let mut next = arp;
+            ui.horizontal(|ui| {
+                ui.checkbox(&mut next.on, egui::RichText::new("ARPEGIADOR").strong());
+            });
+            ui.horizontal(|ui| {
+                egui::ComboBox::from_id_salt(("wave_arp_mode", t)).selected_text(next.mode.label()).width(80.0).show_ui(ui, |ui| {
+                    for m in ArpMode::ALL {
+                        ui.selectable_value(&mut next.mode, m, m.label());
+                    }
+                });
+                let rate_label = |b: f32| match b {
+                    b if b == 0.125 => "1/32",
+                    b if b == 0.25 => "1/16",
+                    b if b == 1.0 / 6.0 => "1/16 T",
+                    b if b == 0.5 => "1/8",
+                    b if b == 1.0 / 3.0 => "1/8 T",
+                    b if b == 1.0 => "1/4",
+                    _ => "1/2",
+                };
+                egui::ComboBox::from_id_salt(("wave_arp_rate", t)).selected_text(rate_label(next.rate_beats)).width(64.0).show_ui(ui, |ui| {
+                    for b in [0.125, 1.0 / 6.0, 0.25, 1.0 / 3.0, 0.5, 1.0, 2.0] {
+                        ui.selectable_value(&mut next.rate_beats, b, rate_label(b));
+                    }
+                });
+            });
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Octavas").color(TEXT_DIM).size(10.5));
+                for o in 1..=4u8 {
+                    ui.selectable_value(&mut next.octaves, o, o.to_string());
+                }
+                ui.spacing_mut().item_spacing.x = 0.0;
+                knob(app, ui, t, WAVE_ARP_GATE, "Gate", 26.0, actions);
+            });
+            if next != arp {
+                set(actions, WaveParams { arp: next, ..base });
+            }
+        });
+    });
+}
+
+fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Action>) {
+    ui.label(egui::RichText::new("Efectos del propio sinte, en orden; se guardan con el preset.").color(TEXT_DIM).size(10.5));
+    ui.horizontal_wrapped(|ui| {
+        for slot in 0..WAVE_FX {
+            match base.fx[slot] {
+                Some(device) => {
+                    let mut edited = device;
+                    let mut remove = false;
+                    let mut swap: Option<usize> = None;
+                    egui::Frame::new().fill(theme::SURFACE).corner_radius(3.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+                        ui.set_width(devices::effect_width(&device.effect).max(170.0));
+                        ui.vertical(|ui| {
+                            ui.horizontal(|ui| {
+                                ui.checkbox(&mut edited.enabled, egui::RichText::new(device.effect.label()).strong());
+                                if slot > 0 && ui.small_button("◀").clicked() {
+                                    swap = Some(slot - 1);
+                                }
+                                if slot + 1 < WAVE_FX && base.fx[slot + 1].is_some() && ui.small_button("▶").clicked() {
+                                    swap = Some(slot + 1);
+                                }
+                                remove = ui.small_button("✕").clicked();
+                            });
+                            ui.horizontal(|ui| {
+                                devices::discrete_controls(ui, &mut edited.effect, 100 + slot);
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                for (i, info) in device.effect.params().iter().enumerate() {
+                                    if let Some(v) = widgets::param_knob(ui, info, device.effect.get(i), info.name, 26.0, None) {
+                                        edited.effect.set(i, v);
+                                    }
+                                }
+                            });
+                        });
+                    });
+                    let mut p = base;
+                    if remove {
+                        p.fx[slot] = None;
+                        // Keep the rack packed from the left.
+                        let kept: Vec<Option<Device>> = p.fx.iter().copied().filter(Option::is_some).collect();
+                        p.fx = [None; WAVE_FX];
+                        for (i, d) in kept.into_iter().enumerate() {
+                            p.fx[i] = d;
+                        }
+                        set(actions, p);
+                    } else if let Some(other) = swap {
+                        p.fx.swap(slot, other);
+                        set(actions, p);
+                    } else if edited != device {
+                        p.fx[slot] = Some(edited);
                         set(actions, p);
                     }
                 }
+                None => {
+                    egui::ComboBox::from_id_salt(("wave_fx_add", t, slot)).selected_text("+ Añadir efecto").width(130.0).show_ui(ui, |ui| {
+                        for effect in Effect::catalog() {
+                            if ui.selectable_label(false, effect.label()).clicked() {
+                                let mut p = base;
+                                p.fx[slot] = Some(Device::new(effect));
+                                set(actions, p);
+                            }
+                        }
+                    });
+                    break;
+                }
             }
-        });
+        }
     });
 }
 
@@ -463,10 +692,10 @@ fn matrix_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, ac
                 actions.push(Action::Param(id, amount / 100.0));
             }
             let mut dest = slot.dest;
-            let dest_name = WAVE_PARAMS.get(dest as usize).filter(|_| (dest as usize) < WAVE_MOD_TARGETS).map_or("—", |p| p.name);
+            let dest_name = WAVE_PARAMS.get(dest as usize).filter(|_| wave_is_target(dest as usize)).map_or("—", |p| p.name);
             egui::ComboBox::from_id_salt(("wave_dst", t, s)).selected_text(dest_name).width(120.0).height(320.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut dest, WAVE_NO_TARGET, "—");
-                for (i, info) in WAVE_PARAMS.iter().enumerate().take(WAVE_MOD_TARGETS) {
+                for (i, info) in WAVE_PARAMS.iter().enumerate().filter(|(i, _)| wave_is_target(*i)) {
                     ui.selectable_value(&mut dest, i as u8, info.name);
                 }
             });
@@ -563,11 +792,18 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     actions.push(Action::Preview(60));
                 }
             });
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("FUENTES").color(TEXT_DIM).size(10.0).strong());
+                for source in ModSource::ALL.into_iter().skip(1) {
+                    source_badge(ui, source);
+                }
+            });
             ui.separator();
-            let page = tabs(ui, ui.id().with(("wave_page", t)), &["OSC", "MATRIX"]);
+            let page = tabs(ui, ui.id().with(("wave_page", t)), &["OSC", "FX", "MATRIX"]);
             ui.add_space(4.0);
             match page {
                 0 => osc_page(app, ui, t, base, &shown, &mut actions),
+                1 => fx_page(ui, t, base, &mut actions),
                 _ => matrix_page(app, ui, t, base, &mut actions),
             }
         });
@@ -580,6 +816,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::model::{Device, Effect};
 
     #[test]
     fn filter_curves_have_the_right_shape() {
@@ -695,6 +932,80 @@ mod tests {
         assert_eq!(table.frames(), 4, "{:?}", cache.errors);
         assert!((table.read(0, 0.0, 0.25) - 1.0).abs() < 0.05, "first frame is a sine");
         assert!(table.read(0, 1.0, 0.1) > 0.8, "last frame is square");
+    }
+
+    #[test]
+    fn dragging_a_source_onto_a_knob_adds_a_modulation() {
+        use eframe::egui::{Event, PointerButton, Pos2, RawInput};
+        let mut app = app_with(InstrumentKind::Wavetable(WaveParams::default()));
+        let ctx = egui::Context::default();
+        let (mut badge, mut knob_rect) = (Rect::NOTHING, Rect::NOTHING);
+        let mut actions = Vec::new();
+        let press = |pos: Pos2, pressed: bool| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+        let run = |events: Vec<Event>, n: usize, app: &mut PulseApp, actions: &mut Vec<Action>, badge: &mut Rect, knob_rect: &mut Rect| {
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(600.0, 400.0))), events, time: Some(n as f64 * 0.05), ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| {
+                let top = ui.cursor().min;
+                source_badge(ui, ModSource::Lfo1);
+                *badge = Rect::from_min_max(top, pos2(top.x + 50.0, ui.cursor().min.y));
+                ui.add_space(30.0);
+                let at = ui.cursor().min;
+                knob(app, ui, 0, FILTER, "Cutoff", 30.0, actions);
+                *knob_rect = Rect::from_min_size(at, vec2(46.0, 58.0));
+            });
+        };
+        run(vec![], 0, &mut app, &mut actions, &mut badge, &mut knob_rect);
+        let (from, to) = (badge.left_center() + vec2(12.0, 0.0), knob_rect.center());
+        let mut frames = vec![vec![Event::PointerMoved(from)], vec![press(from, true)]];
+        for step in 1..=8 {
+            frames.push(vec![Event::PointerMoved(from + (to - from) * step as f32 / 8.0)]);
+        }
+        frames.push(vec![press(to, false)]);
+        frames.push(vec![]);
+        for (n, events) in frames.into_iter().enumerate() {
+            run(events, n + 1, &mut app, &mut actions, &mut badge, &mut knob_rect);
+        }
+        assert!(
+            actions.iter().any(|a| matches!(a, Action::AddModulation(ModSource::Lfo1, d) if *d == FILTER)),
+            "dropping LFO 1 on Cutoff routes it ({} actions)",
+            actions.len()
+        );
+        devices::apply(&mut app, Target::Track(0), actions);
+        let InstrumentKind::Wavetable(p) = app.project.tracks[0].instrument else { unreachable!() };
+        assert_eq!((p.matrix[0].source, p.matrix[0].dest as usize, p.matrix[0].amount), (ModSource::Lfo1, FILTER, 0.5));
+    }
+
+    #[test]
+    fn the_phase_2_pages_and_the_table_editor_draw() {
+        let mut p = WaveParams::presets()[1].1;
+        p.fx[0] = Some(Device::new(Effect::catalog()[2]));
+        p.fx[1] = Some(Device::new(Effect::catalog()[3]));
+        p.osc[0].kind = OscKind::Granular;
+        p.osc[1].kind = OscKind::Spectral;
+        p.osc[1].on = true;
+        p.arp.on = true;
+        let mut app = app_with(InstrumentKind::Wavetable(p));
+        frames(&mut app, |app, ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let mut actions = Vec::new();
+                fx_page(ui, 0, p, &mut actions);
+                osc_page(app, ui, 0, p, &p, &mut actions);
+                assert!(actions.is_empty(), "drawing changes nothing");
+            });
+        });
+        crate::table_editor::open(&mut app, 0, 0);
+        assert!(app.table_editor.as_ref().is_some_and(|e| !e.keys.is_empty()));
+        frames(&mut app, |app, ui| crate::table_editor::window(app, &ui.ctx().clone()));
+        assert!(app.table_editor.is_some());
+    }
+
+    #[test]
+    fn an_effects_layout_change_rebuilds_the_synth_and_keeps_playing() {
+        let mut app = app_with(InstrumentKind::Wavetable(WaveParams::default()));
+        let InstrumentKind::Wavetable(mut p) = app.project.tracks[0].instrument else { unreachable!() };
+        p.fx[0] = Some(Device::new(Effect::catalog()[3]));
+        app.set_instrument(0, InstrumentKind::Wavetable(p));
+        assert_eq!(app.project.tracks[0].instrument, InstrumentKind::Wavetable(p));
     }
 
     #[test]

@@ -492,7 +492,7 @@ impl Instrument {
             Self::Sampler(s) => s.render(samples, left, right),
             Self::Rack(r) => r.render(samples, left, right),
             Self::Kick(k) => k.render(samples, left, right),
-            Self::Wavetable(w) => w.render(tables, left, right),
+            Self::Wavetable(w) => w.render(samples, tables, left, right),
         }
     }
 }

@@ -5,15 +5,23 @@
 //! The synth is built on the UI thread (it owns per-voice comb-filter buffers)
 //! and handed to the audio thread ready to play; rendering never allocates.
 
+use crate::effects::{EffectProcessor, ProcessContext};
 use crate::instruments::{saw, square, svf_g, Gate, Svf};
 use crate::model::{
-    KickWave, LfoMode, ModSource, OscWarp, ParamInfo, WaveEnv, WaveFilter, WaveParams, WAVE_MOD_TARGETS, WAVE_PARAMS, WAVE_SLOTS,
+    wave_is_target, ArpMode, KickWave, LfoMode, ModSource, OscKind, OscWarp, ParamInfo, WaveEnv, WaveFilter, WaveParams,
+    WAVE_GRAIN, WAVE_PARAMS, WAVE_SLOTS,
 };
+use crate::sample::Sample;
 use crate::wavetable::Wavetable;
 use std::f32::consts::TAU;
 use std::sync::Arc;
 
 const VOICES: usize = 16;
+/// Every parameter of the synth, modulated or not.
+const PARAMS: usize = WAVE_PARAMS.len();
+const GRAINS: usize = 24;
+/// Sample and granular oscillators play their file at its own pitch on C3.
+const SAMPLE_ROOT_HZ: f32 = 261.625_58;
 const UNISON: usize = 16;
 /// Modulation is evaluated every `CONTROL` samples.
 const CONTROL: usize = 32;
@@ -223,6 +231,20 @@ impl FilterCoefs {
     }
 }
 
+#[derive(Clone, Copy)]
+struct Grain {
+    active: bool,
+    position: f64,
+    rate: f64,
+    age: u32,
+    length: u32,
+    gain: (f32, f32),
+}
+
+impl Grain {
+    const IDLE: Grain = Grain { active: false, position: 0.0, rate: 1.0, age: 0, length: 1, gain: (0.0, 0.0) };
+}
+
 #[derive(Clone)]
 struct Voice {
     active: bool,
@@ -243,6 +265,11 @@ struct Voice {
     filter: [FilterState; 2],
     /// Last output of each oscillator, for FM between them.
     last: [f32; 2],
+    /// Sample oscillators: read positions per unison voice (negative: not started).
+    positions: [[f64; UNISON]; 2],
+    grains: [[Grain; GRAINS]; 2],
+    /// Samples until the next grain starts.
+    grain_wait: [f32; 2],
 }
 
 impl Voice {
@@ -263,12 +290,23 @@ impl Voice {
             noise_lp: 0.0,
             filter: [FilterState::new(), FilterState::new()],
             last: [0.0; 2],
+            positions: [[-1.0; UNISON]; 2],
+            grains: [[Grain::IDLE; GRAINS]; 2],
+            grain_wait: [0.0; 2],
         }
+    }
+
+    fn random(&mut self) -> f32 {
+        self.noise_seed ^= self.noise_seed << 13;
+        self.noise_seed ^= self.noise_seed >> 17;
+        self.noise_seed ^= self.noise_seed << 5;
+        self.noise_seed as f32 / u32::MAX as f32
     }
 }
 
 /// Per-block settings of one oscillator.
 struct OscBlock {
+    kind: OscKind,
     count: usize,
     incs: [f32; UNISON],
     gains: [(f32, f32); UNISON],
@@ -276,6 +314,18 @@ struct OscBlock {
     position: f32,
     warp: OscWarp,
     amount: f32,
+    /// Sample playback: rate per unison voice relative to the file, and the loop start.
+    rates: [f64; UNISON],
+    start: f64,
+    looping: bool,
+    /// Granular settings.
+    grain_frames: u32,
+    grain_every: f32,
+    spray: f32,
+    grain_pitch: f32,
+    width: f32,
+    pan: f32,
+    grain_scale: f32,
 }
 
 fn warp_phase(warp: OscWarp, amount: f32, phase: f32) -> f32 {
@@ -308,20 +358,59 @@ pub struct WaveSynth {
     held_count: usize,
     last_note: Option<f32>,
     seed: u32,
+    /// The synth's effects rack, built with the synth (allocation happens here).
+    fx: Vec<Option<(EffectProcessor, bool)>>,
+    scratch: [[f32; CONTROL]; 2],
+    arp: Arp,
+}
+
+/// Arpeggiator state: the keys held and where the pattern is.
+struct Arp {
+    keys: [(u8, f32); 16],
+    count: usize,
+    step: usize,
+    /// Samples until the next step.
+    wait: f64,
 }
 
 impl WaveSynth {
     pub fn new(params: WaveParams, sample_rate: f32) -> Self {
         let voices = (0..VOICES).map(|i| Voice::new(0x9E37_79B9 ^ (i as u32 * 0x85EB_CA6B))).collect();
-        Self { params, sample_rate, tempo: 120.0, voices, counter: 0, clock: 0.0, held: [0; 16], held_count: 0, last_note: None, seed: 0x1357_9BDF }
+        let fx = params.fx.iter().map(|slot| slot.map(|d| (EffectProcessor::new(&d.effect, sample_rate), d.enabled))).collect();
+        Self {
+            params,
+            sample_rate,
+            tempo: 120.0,
+            voices,
+            counter: 0,
+            clock: 0.0,
+            held: [0; 16],
+            held_count: 0,
+            last_note: None,
+            seed: 0x1357_9BDF,
+            fx,
+            scratch: [[0.0; CONTROL]; 2],
+            arp: Arp { keys: [(0, 0.0); 16], count: 0, step: 0, wait: 0.0 },
+        }
     }
 
     pub fn params(&self) -> WaveParams {
         self.params
     }
 
+    /// New settings; the effects keep their state when only their settings change
+    /// (a different set of effects needs a new synth, see `InstrumentKind::needs_rebuild`).
     pub fn set_params(&mut self, params: WaveParams) {
+        if !params.arp.on && self.params.arp.on {
+            self.arp.count = 0;
+        }
         self.params = params;
+        for (slot, device) in self.fx.iter_mut().zip(params.fx.iter()) {
+            if let (Some((processor, enabled)), Some(device)) = (slot.as_mut(), device) {
+                processor.set_params(&device.effect);
+                *enabled = device.enabled;
+            }
+        }
     }
 
     pub fn set_tempo(&mut self, tempo: f64) {
@@ -361,6 +450,9 @@ impl WaveSynth {
                 }
             }
             voice.sub_phase = 0.0;
+            voice.positions = [[-1.0; UNISON]; 2];
+            voice.grains = [[Grain::IDLE; GRAINS]; 2];
+            voice.grain_wait = [0.0; 2];
             for (l, phase) in voice.lfo_phase.iter_mut().enumerate() {
                 if p.lfo[l].mode != LfoMode::Free {
                     *phase = 0.0;
@@ -380,6 +472,73 @@ impl WaveSynth {
     }
 
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
+        if self.params.arp.on {
+            let arp = &mut self.arp;
+            if arp.count < arp.keys.len() && !arp.keys[..arp.count].iter().any(|k| k.0 == pitch) {
+                arp.keys[arp.count] = (pitch, velocity);
+                arp.count += 1;
+                if arp.count == 1 {
+                    // The first key starts the pattern right away.
+                    arp.step = 0;
+                    arp.wait = 0.0;
+                }
+            }
+            return;
+        }
+        self.play_on(pitch, velocity, gate);
+    }
+
+    pub fn note_off(&mut self, pitch: u8) {
+        if self.params.arp.on {
+            let arp = &mut self.arp;
+            if let Some(at) = arp.keys[..arp.count].iter().position(|k| k.0 == pitch) {
+                arp.keys.copy_within(at + 1..arp.count, at);
+                arp.count -= 1;
+            }
+            return;
+        }
+        self.play_off(pitch);
+    }
+
+    /// Starts the next note of the arpeggio if a step is due in the next `frames` samples.
+    fn arp_tick(&mut self, frames: usize) {
+        if !self.params.arp.on || self.arp.count == 0 {
+            return;
+        }
+        self.arp.wait -= frames as f64;
+        if self.arp.wait > 0.0 {
+            return;
+        }
+        let step_frames = self.params.arp.rate_beats.max(0.03125) as f64 * 60.0 / self.tempo.max(1.0) * self.sample_rate as f64;
+        self.arp.wait += step_frames;
+        let mut sorted = [(0u8, 0f32); 16];
+        let count = self.arp.count;
+        sorted[..count].copy_from_slice(&self.arp.keys[..count]);
+        if self.params.arp.mode != ArpMode::Played {
+            sorted[..count].sort_by_key(|k| k.0);
+        }
+        let octaves = self.params.arp.octaves.clamp(1, 4) as usize;
+        let len = count * octaves;
+        let step = self.arp.step;
+        let index = match self.params.arp.mode {
+            ArpMode::Up | ArpMode::Played => step % len,
+            ArpMode::Down => len - 1 - step % len,
+            ArpMode::UpDown if len > 1 => {
+                let period = 2 * len - 2;
+                let at = step % period;
+                if at < len { at } else { period - at }
+            }
+            ArpMode::UpDown => 0,
+            ArpMode::Random => ((self.random() * len as f32) as usize).min(len - 1),
+        };
+        self.arp.step += 1;
+        let (pitch, velocity) = sorted[index % count];
+        let pitch = (pitch as usize + 12 * (index / count)).min(127) as u8;
+        let gate = (step_frames * self.params.arp_gate.clamp(0.05, 1.0) as f64).max(1.0) as u32;
+        self.play_on(pitch, velocity, gate);
+    }
+
+    fn play_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
         if self.params.mono {
             let legato = self.params.legato && self.voices[0].active && self.voices[0].gate.held && self.held_count > 0;
             if self.held_count < self.held.len() {
@@ -395,7 +554,7 @@ impl WaveSynth {
         self.start_voice(index, pitch, velocity, gate, true);
     }
 
-    pub fn note_off(&mut self, pitch: u8) {
+    fn play_off(&mut self, pitch: u8) {
         if self.params.mono {
             if let Some(at) = self.held[..self.held_count].iter().position(|&n| n == pitch) {
                 self.held.copy_within(at + 1..self.held_count, at);
@@ -430,6 +589,7 @@ impl WaveSynth {
 
     pub fn all_notes_off(&mut self) {
         self.held_count = 0;
+        self.arp.count = 0;
         for v in &mut self.voices {
             v.gate.held = false;
             for env in &mut v.envs {
@@ -459,27 +619,54 @@ impl WaveSynth {
         }
     }
 
-    pub fn render(&mut self, tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
-        let mut base = [0f32; WAVE_MOD_TARGETS];
+    pub fn render(&mut self, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
+        let mut base = [0f32; PARAMS];
         let mut params = self.params;
         for (i, value) in base.iter_mut().enumerate() {
             *value = params.param_mut(i).map_or(0.0, |v| *v);
         }
         let amounts: [f32; WAVE_SLOTS] = std::array::from_fn(|s| self.params.matrix[s].amount);
+        let has_fx = self.fx.iter().any(|slot| matches!(slot, Some((_, true))));
         let mut offset = 0;
         while offset < left.len() {
             let n = (left.len() - offset).min(CONTROL);
-            for v in 0..VOICES {
-                if self.voices[v].active {
-                    self.render_voice(v, tables, &base, &amounts, &mut left[offset..offset + n], &mut right[offset..offset + n]);
+            self.arp_tick(n);
+            let mut scratch = self.scratch;
+            scratch[0][..n].fill(0.0);
+            scratch[1][..n].fill(0.0);
+            {
+                let [l, r] = &mut scratch;
+                for v in 0..VOICES {
+                    if self.voices[v].active {
+                        self.render_voice(v, samples, tables, &base, &amounts, &mut l[..n], &mut r[..n]);
+                    }
                 }
             }
+            if has_fx {
+                let tempo = self.tempo;
+                let ctx = ProcessContext {
+                    sample_rate: self.sample_rate,
+                    tempo,
+                    beat: self.clock * tempo / 60.0,
+                    beats_per_sample: tempo / 60.0 / self.sample_rate as f64,
+                };
+                let [l, r] = &mut scratch;
+                for (processor, _) in self.fx.iter_mut().flatten().filter(|(_, enabled)| *enabled) {
+                    processor.process(&mut l[..n], &mut r[..n], &ctx);
+                }
+            }
+            for i in 0..n {
+                left[offset + i] += scratch[0][i];
+                right[offset + i] += scratch[1][i];
+            }
+            self.scratch = scratch;
             self.clock += n as f64 / self.sample_rate as f64;
             offset += n;
         }
     }
 
-    fn render_voice(&mut self, v: usize, tables: &[Arc<Wavetable>], base: &[f32; WAVE_MOD_TARGETS], amounts: &[f32; WAVE_SLOTS], left: &mut [f32], right: &mut [f32]) {
+    #[allow(clippy::too_many_arguments)]
+    fn render_voice(&mut self, v: usize, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], base: &[f32; PARAMS], amounts: &[f32; WAVE_SLOTS], left: &mut [f32], right: &mut [f32]) {
         let p = self.params;
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
@@ -507,7 +694,7 @@ impl WaveSynth {
         let mut m = *base;
         for (s, slot) in p.matrix.iter().enumerate() {
             let dest = slot.dest as usize;
-            if slot.source == ModSource::None || dest >= WAVE_MOD_TARGETS {
+            if slot.source == ModSource::None || !wave_is_target(dest) {
                 continue;
             }
             let mut value = self.source(&self.voices[v], slot.source, &lfos, macros);
@@ -535,7 +722,11 @@ impl WaveSynth {
         let mut oscs: [Option<OscBlock>; 2] = [None, None];
         for (o, slot) in oscs.iter_mut().enumerate() {
             let osc = &p.osc[o];
-            if !osc.on || !tables.get(o).is_some_and(|t| t.frames() > 0) {
+            let ready = match osc.kind {
+                OscKind::Wavetable | OscKind::Spectral => tables.get(o).is_some_and(|t| t.frames() > 0),
+                OscKind::Sample | OscKind::Granular => samples.get(o).is_some_and(|s| s.frames() > 0),
+            };
+            if !osc.on || !ready {
                 continue;
             }
             let at = |i: usize| m[o * OSC_PARAMS + i];
@@ -562,7 +753,41 @@ impl WaveSynth {
                 g.1 *= scale;
             }
             let top = f * 2f32.powf(spread_cents / 1200.0);
-            *slot = Some(OscBlock { count, incs, gains, level: Wavetable::level_for(top, sr), position: at(0), warp: osc.warp, amount: at(12) });
+            let (mut rates, mut start, mut grain_frames, mut grain_every, mut grain_scale) = ([0f64; UNISON], 0.0, 1, 1.0, 1.0);
+            if let Some(sample) = samples.get(o).filter(|_| osc.kind.uses_sample()) {
+                let native = if sample.sample_rate > 0.0 { sample.sample_rate } else { sr };
+                for u in 0..count {
+                    rates[u] = (incs[u] * sr / SAMPLE_ROOT_HZ * native / sr) as f64;
+                }
+                start = at(0).clamp(0.0, 0.999) as f64 * sample.frames() as f64;
+                let g = WAVE_GRAIN + o * 4;
+                let (size_ms, density) = (m[g], m[g + 1].max(0.5));
+                grain_frames = ((size_ms * sr / 1000.0) as u32).max(16);
+                grain_every = sr / density;
+                // Overlapping grains add up; keep the level about the same at any density.
+                grain_scale = 1.0 / (density * size_ms / 1000.0).max(1.0).sqrt();
+            }
+            let g = WAVE_GRAIN + o * 4;
+            *slot = Some(OscBlock {
+                kind: osc.kind,
+                count: if osc.kind == OscKind::Granular { 1 } else { count },
+                incs,
+                gains,
+                level: Wavetable::level_for(top, sr),
+                position: at(0),
+                warp: osc.warp,
+                amount: at(12),
+                rates,
+                start,
+                looping: osc.sample_loop,
+                grain_frames,
+                grain_every,
+                spray: m[g + 2],
+                grain_pitch: m[g + 3],
+                width,
+                pan: at(5),
+                grain_scale: grain_scale * at(4),
+            });
         }
 
         let cutoff = m[FILTER] * 2f32.powf((voice.note - 60.0) / 12.0 * m[FILTER + 4]);
@@ -593,9 +818,68 @@ impl WaveSynth {
             let (mut wet_l, mut wet_r, mut dry_l, mut dry_r) = (0.0, 0.0, 0.0, 0.0);
             for o in 0..2 {
                 let Some(block) = &oscs[o] else { continue };
+                let (mut l, mut r, mut mono) = (0.0, 0.0, 0.0);
+                match block.kind {
+                    OscKind::Sample => {
+                        let sample = &samples[o];
+                        let frames = sample.frames() as f64;
+                        for u in 0..block.count {
+                            let position = &mut voice.positions[o][u];
+                            if *position < 0.0 {
+                                *position = block.start;
+                            }
+                            if *position >= frames {
+                                if !block.looping || frames - block.start < 2.0 {
+                                    continue;
+                                }
+                                *position = block.start + (*position - frames) % (frames - block.start);
+                            }
+                            let (a, b) = sample.read(*position);
+                            *position += block.rates[u];
+                            l += a * block.gains[u].0;
+                            r += b * block.gains[u].1;
+                            mono += (a + b) * 0.5;
+                        }
+                    }
+                    OscKind::Granular => {
+                        let sample = &samples[o];
+                        let frames = sample.frames() as f64;
+                        voice.grain_wait[o] -= 1.0;
+                        if voice.grain_wait[o] <= 0.0 {
+                            voice.grain_wait[o] += block.grain_every;
+                            if let Some(free) = voice.grains[o].iter().position(|g| !g.active) {
+                                let (r1, r2, r3) = (voice.random(), voice.random(), voice.random());
+                                let place = (block.position + block.spray * (r1 - 0.5)).clamp(0.0, 0.999) as f64;
+                                let pan = ((r2 * 2.0 - 1.0) * block.width + block.pan).clamp(-1.0, 1.0);
+                                let angle = (pan + 1.0) * std::f32::consts::FRAC_PI_4;
+                                let detune = 2f64.powf((block.grain_pitch * (r3 * 2.0 - 1.0)) as f64 / 12.0);
+                                voice.grains[o][free] = Grain {
+                                    active: true,
+                                    position: place * frames,
+                                    rate: block.rates[0] * detune,
+                                    age: 0,
+                                    length: block.grain_frames,
+                                    gain: (angle.cos() * block.grain_scale * std::f32::consts::SQRT_2, angle.sin() * block.grain_scale * std::f32::consts::SQRT_2),
+                                };
+                            }
+                        }
+                        for grain in voice.grains[o].iter_mut().filter(|g| g.active) {
+                            // Hann window over the grain.
+                            let env = 0.5 - 0.5 * (TAU * grain.age as f32 / grain.length as f32).cos();
+                            let (a, b) = sample.read(grain.position);
+                            grain.position += grain.rate;
+                            grain.age += 1;
+                            if grain.age >= grain.length || grain.position >= frames {
+                                grain.active = false;
+                            }
+                            l += a * env * grain.gain.0;
+                            r += b * env * grain.gain.1;
+                            mono += (a + b) * 0.5 * env;
+                        }
+                    }
+                    OscKind::Wavetable | OscKind::Spectral => {
                 let table = &tables[o];
                 let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * block.amount * 0.5 } else { 0.0 };
-                let (mut l, mut r, mut mono) = (0.0, 0.0, 0.0);
                 for u in 0..block.count {
                     let phase = voice.phases[o][u];
                     let read = warp_phase(block.warp, block.amount, (phase + fm).rem_euclid(1.0));
@@ -609,6 +893,8 @@ impl WaveSynth {
                     l += s * block.gains[u].0;
                     r += s * block.gains[u].1;
                     mono += s;
+                }
+                    }
                 }
                 voice.last[o] = mono / block.count as f32;
                 if routes[o] {
@@ -684,7 +970,7 @@ mod tests {
         let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
         let t = tables();
         for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
-            synth.render(&t, a, b);
+            synth.render(&[], &t, a, b);
         }
         (l, r)
     }
@@ -712,11 +998,11 @@ mod tests {
         synth.note_on(69, 1.0, HELD);
         let t = tables();
         let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
-        synth.render(&t, &mut l, &mut r);
+        synth.render(&[], &t, &mut l, &mut r);
         assert!((frequency(&l[4800..]) - 440.0).abs() < 2.0, "{}", frequency(&l[4800..]));
         synth.note_off(69);
         let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
-        synth.render(&t, &mut l, &mut r);
+        synth.render(&[], &t, &mut l, &mut r);
         assert!(rms(&l[19_200..]) < 1e-4, "released");
         assert!(!synth.voices.iter().any(|v| v.active));
     }
@@ -802,7 +1088,7 @@ mod tests {
         synth.note_on(60, 1.0, HELD);
         let t = tables();
         let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
-        synth.render(&t, &mut l, &mut r);
+        synth.render(&[], &t, &mut l, &mut r);
         // One beat is 0.5 s: the level dips to silence at 0.25 s and 0.75 s.
         let window = |at: f32| rms(&l[(at * SR) as usize - 600..(at * SR) as usize + 600]);
         assert!(window(0.25) < window(0.5) * 0.2 && window(0.75) < window(0.5) * 0.2);
@@ -819,11 +1105,11 @@ mod tests {
         let t = tables();
         synth.note_on(57, 1.0, HELD);
         let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
-        synth.render(&t, &mut l, &mut r);
+        synth.render(&[], &t, &mut l, &mut r);
         let level_before = synth.voices[0].envs[0].level;
         synth.note_on(69, 1.0, HELD);
         let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
-        synth.render(&t, &mut l, &mut r);
+        synth.render(&[], &t, &mut l, &mut r);
         assert!(synth.voices[0].envs[0].level >= level_before, "the envelope kept going");
         assert!((frequency(&l[2400..4800]) - 440.0).abs() > 30.0, "still gliding at first");
         assert!((frequency(&l[24_000..]) - 440.0).abs() < 3.0, "arrived");
@@ -832,7 +1118,7 @@ mod tests {
         synth.note_off(69);
         l.fill(0.0);
         r.fill(0.0);
-        synth.render(&t, &mut l, &mut r);
+        synth.render(&[], &t, &mut l, &mut r);
         assert!((frequency(&l[24_000..]) - 220.0).abs() < 3.0);
     }
 
@@ -871,8 +1157,141 @@ mod tests {
         synth.note_on(60, 1.0, 4800);
         let t = tables();
         let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
-        synth.render(&t, &mut l, &mut r);
+        synth.render(&[], &t, &mut l, &mut r);
         assert!(rms(&l[..4800]) > 0.05 && rms(&l[19_200..]) < 1e-4);
+    }
+}
+
+#[cfg(test)]
+mod phase2_tests {
+    use super::*;
+    use crate::model::{ArpParams, Device, Effect, InstrumentKind, UtilityParams};
+    use crate::synth::HELD;
+    use crate::wavetable::builtin;
+
+    const SR: f32 = 48_000.0;
+
+    fn tone(freq: f32, seconds: f32) -> Arc<Sample> {
+        let data: Vec<f32> = (0..(seconds * SR) as usize).map(|i| (i as f32 * freq * TAU / SR).sin() * 0.5).collect();
+        Arc::new(Sample::from_channels(data.clone(), data, SR))
+    }
+
+    fn render(synth: &mut WaveSynth, samples: &[Arc<Sample>], frames: usize) -> (Vec<f32>, Vec<f32>) {
+        let tables = vec![Arc::new(builtin(0)), Arc::new(builtin(0))];
+        let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            synth.render(samples, &tables, a, b);
+        }
+        (l, r)
+    }
+
+    fn frequency(signal: &[f32]) -> f32 {
+        signal.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f32 * SR / signal.len() as f32
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    fn sample_patch(kind: OscKind) -> WaveParams {
+        let mut p = WaveParams::default();
+        p.osc[0].kind = kind;
+        p.osc[0].random_phase = 0.0;
+        p
+    }
+
+    #[test]
+    fn the_sample_oscillator_plays_its_file_chromatically_from_c3() {
+        let samples = [tone(440.0, 2.0)];
+        for (note, expected) in [(60, 440.0), (72, 880.0), (48, 220.0)] {
+            let mut synth = WaveSynth::new(sample_patch(OscKind::Sample), SR);
+            synth.note_on(note, 1.0, HELD);
+            let (l, _) = render(&mut synth, &samples, 24_000);
+            assert!((frequency(&l[2400..]) - expected).abs() < 3.0, "note {note}: {}", frequency(&l[2400..]));
+        }
+    }
+
+    #[test]
+    fn a_sample_plays_once_or_loops() {
+        let samples = [tone(440.0, 0.1)];
+        let mut once = sample_patch(OscKind::Sample);
+        once.osc[0].sample_loop = false;
+        let mut synth = WaveSynth::new(once, SR);
+        synth.note_on(60, 1.0, HELD);
+        let (l, _) = render(&mut synth, &samples, 24_000);
+        assert!(rms(&l[..4000]) > 0.05 && rms(&l[6000..]) < 1e-4, "stops after 0.1 s");
+        let mut synth = WaveSynth::new(sample_patch(OscKind::Sample), SR);
+        synth.note_on(60, 1.0, HELD);
+        let (l, _) = render(&mut synth, &samples, 24_000);
+        assert!(rms(&l[12_000..]) > 0.05, "loops");
+    }
+
+    #[test]
+    fn granular_clouds_sound_at_the_note_pitch_and_spread() {
+        let samples = [tone(440.0, 2.0)];
+        let mut p = sample_patch(OscKind::Granular);
+        p.osc[0].density = 40.0;
+        p.osc[0].grain_size = 100.0;
+        p.osc[0].width = 1.0;
+        let mut synth = WaveSynth::new(p, SR);
+        synth.note_on(60, 1.0, HELD);
+        let (l, r) = render(&mut synth, &samples, 48_000);
+        assert!(rms(&l[4800..]) > 0.03, "grains play: {}", rms(&l[4800..]));
+        assert!((frequency(&l[4800..]) - 440.0).abs() < 40.0, "{}", frequency(&l[4800..]));
+        let side = rms(&l.iter().zip(&r).map(|(a, b)| a - b).collect::<Vec<_>>());
+        assert!(side > 0.005, "random pans make it wide");
+        assert!(l.iter().all(|s| s.is_finite()));
+    }
+
+    #[test]
+    fn the_effects_rack_processes_the_synth() {
+        let mut p = WaveParams::default();
+        p.fx[0] = Some(Device::new(Effect::Utility(UtilityParams { gain_db: -12.0, ..Default::default() })));
+        let mut dry = WaveSynth::new(WaveParams::default(), SR);
+        let mut wet = WaveSynth::new(p, SR);
+        dry.note_on(60, 1.0, HELD);
+        wet.note_on(60, 1.0, HELD);
+        let ratio = rms(&render(&mut wet, &[], 9600).0) / rms(&render(&mut dry, &[], 9600).0);
+        assert!((ratio - 0.251).abs() < 0.02, "-12 dB: {ratio}");
+
+        // Turning the effect off bypasses it without rebuilding.
+        let mut off = p;
+        off.fx[0] = off.fx[0].map(|d| Device { enabled: false, ..d });
+        wet.set_params(off);
+        let ratio = rms(&render(&mut wet, &[], 9600).0) / rms(&render(&mut dry, &[], 9600).0);
+        assert!((ratio - 1.0).abs() < 0.05, "{ratio}");
+
+        let with_fx = InstrumentKind::Wavetable(p);
+        assert!(InstrumentKind::Wavetable(WaveParams::default()).needs_rebuild(&with_fx), "adding an effect rebuilds");
+        assert!(!with_fx.needs_rebuild(&InstrumentKind::Wavetable(off)), "toggling it does not");
+    }
+
+    #[test]
+    fn the_arpeggiator_plays_held_notes_in_time() {
+        let mut p = WaveParams::default();
+        p.osc[0].random_phase = 0.0;
+        p.arp = ArpParams { on: true, mode: ArpMode::Up, rate_beats: 0.5, octaves: 2 };
+        p.arp_gate = 0.5;
+        p.env[0].release = 0.005;
+        let mut synth = WaveSynth::new(p, SR);
+        synth.set_tempo(120.0);
+        // Pressed out of order; Up sorts them.
+        synth.note_on(64, 1.0, HELD);
+        synth.note_on(57, 1.0, HELD);
+        let (l, _) = render(&mut synth, &[], 96_000);
+        // Steps every 0.25 s: 57, 64, 69, 76, then again.
+        let step = 12_000;
+        let expected = [57, 64, 69, 76, 57];
+        for (k, &note) in expected.iter().enumerate() {
+            let window = &l[k * step + 600..k * step + 5400];
+            let f = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+            assert!((frequency(window) / f - 1.0).abs() < 0.05, "step {k}: {} Hz, wanted {f}", frequency(window));
+            assert!(rms(&l[k * step + 7200..k * step + 11_500]) < 0.02, "gate closes half way through step {k}");
+        }
+        synth.note_off(64);
+        synth.note_off(57);
+        let (l, _) = render(&mut synth, &[], 48_000);
+        assert!(rms(&l[24_000..]) < 1e-4, "nothing plays once the keys are up");
     }
 }
 
@@ -892,7 +1311,7 @@ mod preset_tests {
             }
             let (mut l, mut r) = (vec![0.0; 96_000], vec![0.0; 96_000]);
             for (a, b) in l.chunks_mut(512).zip(r.chunks_mut(512)) {
-                synth.render(&tables, a, b);
+                synth.render(&[], &tables, a, b);
             }
             let peak = l.iter().chain(&r).fold(0f32, |m, s| m.max(s.abs()));
             let rms = (l.iter().map(|s| s * s).sum::<f32>() / l.len() as f32).sqrt();
@@ -925,7 +1344,7 @@ mod bench {
         let (mut l, mut r) = (vec![0.0; 512], vec![0.0; 512]);
         let start = std::time::Instant::now();
         for _ in 0..(48_000 / 512) {
-            synth.render(&tables, &mut l, &mut r);
+            synth.render(&[], &tables, &mut l, &mut r);
         }
         let seconds = start.elapsed().as_secs_f64();
         println!("1 s de audio en {:.1} ms ({:.0} % de tiempo real)", seconds * 1000.0, seconds * 100.0);

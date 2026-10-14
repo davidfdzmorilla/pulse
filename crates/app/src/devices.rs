@@ -50,6 +50,12 @@ pub(crate) enum Action {
     SliceFile,
     OpenKickWindow,
     OpenWaveWindow,
+    /// Opens a file dialog for the sample of oscillator `n`.
+    LoadOscSample(usize),
+    /// Routes a modulation source to a wavetable synth parameter.
+    AddModulation(engine::model::ModSource, usize),
+    /// Opens the wavetable editor for oscillator `n`.
+    OpenTableEditor(usize),
     /// Opens a file dialog for the wavetable of oscillator `n`.
     LoadWavetable(usize),
     ExportKick,
@@ -219,6 +225,21 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
                     app.wave_window = Some(t);
                 }
             }
+            Action::LoadOscSample(osc) => {
+                if let Target::Track(t) = target {
+                    app.choose_osc_sample(t, osc);
+                }
+            }
+            Action::AddModulation(source, dest) => {
+                if let Target::Track(t) = target {
+                    app.add_modulation(t, source, dest);
+                }
+            }
+            Action::OpenTableEditor(osc) => {
+                if let Target::Track(t) = target {
+                    crate::table_editor::open(app, t, osc);
+                }
+            }
             Action::LoadWavetable(osc) => {
                 if let Target::Track(t) = target {
                     app.choose_wavetable(t, osc);
@@ -233,7 +254,7 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
     }
 }
 
-fn effect_width(effect: &Effect) -> f32 {
+pub(crate) fn effect_width(effect: &Effect) -> f32 {
     // Knobs are 46 px wide plus spacing; option columns (combos, radios) take about 96 px.
     let (knobs, columns) = match effect {
         Effect::Eq3(_) => (5, 0),
@@ -264,7 +285,7 @@ fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) {
 }
 
 /// Settings that are choices rather than knobs: time divisions, modes, switches.
-fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize) {
+pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize) {
     match effect {
         Effect::Delay(p) => {
             ui.vertical(|ui| {

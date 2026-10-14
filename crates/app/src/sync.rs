@@ -56,9 +56,30 @@ impl SampleCache {
         table
     }
 
+    /// Drops a file from the cache, so it is read again (after it was overwritten).
+    pub fn forget(&mut self, path: &str) {
+        self.samples.remove(path);
+        self.tables.remove(path);
+        self.tables.remove(&format!("spectral:{path}"));
+    }
+
     /// A wavetable already in the cache (built-in key or file path).
     pub fn cached_table(&self, key: &str) -> Option<Arc<Wavetable>> {
         self.tables.get(key).cloned()
+    }
+
+    /// A file turned into a wavetable by its spectrum (the spectral oscillator).
+    pub fn spectral_table(&mut self, path: &str) -> Arc<Wavetable> {
+        let key = format!("spectral:{path}");
+        if let Some(table) = self.tables.get(&key) {
+            return table.clone();
+        }
+        let sample = self.get(path);
+        let mono: Vec<f32> = sample.left.iter().zip(&sample.right).map(|(l, r)| (l + r) * 0.5).collect();
+        let name = Path::new(path).file_stem().map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned());
+        let table = Arc::new(engine::wavetable::spectral(name, &mono, sample.sample_rate.max(1.0)));
+        self.tables.insert(key, table.clone());
+        table
     }
 
     pub fn loaded(&self, path: &str) -> Option<&Arc<Sample>> {
@@ -84,20 +105,22 @@ pub fn instrument_samples(track: &Track, samples: &mut SampleCache) -> Box<Vec<A
 /// The table oscillator `osc` of a wavetable synth track reads.
 pub fn table_for(track: &Track, osc: usize, samples: &mut SampleCache) -> Arc<Wavetable> {
     let InstrumentKind::Wavetable(params) = track.instrument else { return samples.builtin_table(0) };
-    let index = params.osc[osc.min(1)].table;
-    match track.sample(osc) {
-        Some(path) if index == engine::model::WAVE_USER_TABLE => samples.table(path),
-        _ => samples.builtin_table(index as usize),
+    let o = &params.osc[osc.min(1)];
+    match (o.kind, track.sample(osc)) {
+        (engine::model::OscKind::Spectral, Some(path)) => samples.spectral_table(path),
+        (engine::model::OscKind::Wavetable, Some(path)) if o.table == engine::model::WAVE_USER_TABLE => samples.table(path),
+        _ => samples.builtin_table(o.table as usize),
     }
 }
 
 /// The table oscillator `osc` reads, if it is already loaded (for drawing).
 pub fn cached_table_for(track: &Track, osc: usize, samples: &SampleCache) -> Option<Arc<Wavetable>> {
     let InstrumentKind::Wavetable(params) = track.instrument else { return None };
-    let index = params.osc[osc.min(1)].table;
-    match track.sample(osc) {
-        Some(path) if index == engine::model::WAVE_USER_TABLE => samples.cached_table(path),
-        _ => samples.cached_table(&format!("builtin:{}", (index as usize).min(engine::wavetable::BUILTIN.len() - 1))),
+    let o = &params.osc[osc.min(1)];
+    match (o.kind, track.sample(osc)) {
+        (engine::model::OscKind::Spectral, Some(path)) => samples.cached_table(&format!("spectral:{path}")),
+        (engine::model::OscKind::Wavetable, Some(path)) if o.table == engine::model::WAVE_USER_TABLE => samples.cached_table(path),
+        _ => samples.cached_table(&format!("builtin:{}", (o.table as usize).min(engine::wavetable::BUILTIN.len() - 1))),
     }
 }
 

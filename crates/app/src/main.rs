@@ -20,6 +20,7 @@ mod session;
 mod shape_edit;
 mod slicing;
 mod sync;
+mod table_editor;
 mod theme;
 mod transport;
 mod wave_ui;

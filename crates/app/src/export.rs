@@ -636,4 +636,48 @@ mod playback {
         std::fs::remove_dir_all(&dir).ok();
         assert!(peak > 0.2 && peak < 1.5, "the sampler should sound: {peak}");
     }
+
+    #[test]
+    fn a_sliced_loop_replays_like_the_original() {
+        // Four hits of different loudness, one per beat at 120 BPM.
+        let rate = 48_000.0;
+        let mut audio = vec![0.0f32; 96_000];
+        for (k, amp) in [0.9f32, 0.3, 0.6, 0.15].into_iter().enumerate() {
+            for i in 0..12_000 {
+                let t = i as f32 / rate;
+                audio[k * 24_000 + i] += amp * (t * 180.0 * std::f32::consts::TAU).sin() * (-t / 0.04).exp();
+            }
+        }
+        let sample = engine::Sample::from_channels(audio.clone(), audio.clone(), rate);
+        let dir = std::env::temp_dir().join(format!("pulse-slice-play-{}", std::process::id()));
+        let mode = crate::slicing::SliceMode::Transients;
+        let (sliced, _) = crate::slicing::slice(&sample, (0.0, 2.0), 120.0, mode, "Loop", &dir, PALETTE[1]).unwrap();
+        assert_eq!(sliced.clip.notes.len(), 4);
+
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut track = Track::new("Slices", PALETTE[1], InstrumentKind::DrumRack(sliced.params));
+        track.samples = sliced.files;
+        track.clips[0] = Some(Clip::Midi(sliced.clip));
+        project.tracks = vec![track];
+        let mut renderer = OfflineRenderer::new(rate);
+        for command in sync::project_commands(&project, &mut SampleCache::default(), rate, &HashSet::new()) {
+            renderer.send(command);
+        }
+        renderer.send(Command::LaunchClip { track: 0, slot: 0 });
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        renderer.render(96_000, &mut l, &mut r);
+        std::fs::remove_dir_all(&dir).ok();
+
+        // Each beat keeps its hit's loudness. The first hit is left out: the channel
+        // gain ramps up from silence when playback starts.
+        let peak = |x: &[f32]| x.iter().fold(0f32, |m, s| m.max(s.abs()));
+        let original: Vec<f32> = audio.chunks(24_000).map(peak).collect();
+        let replayed: Vec<f32> = l.chunks(24_000).map(peak).collect();
+        assert!(replayed[0] > 0.1);
+        for k in 1..4 {
+            let (a, b) = (original[k] / original[2], replayed[k] / replayed[2]);
+            assert!((a - b).abs() < 0.03, "beat {k}: original {a:.2}, sliced {b:.2}");
+        }
+    }
 }

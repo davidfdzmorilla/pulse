@@ -95,6 +95,12 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
     longitud, nivel, panorama y grupo de choke. Clic en un pad para escucharlo y editarlo; arrastra una o
     varias muestras sobre los pads. Al elegirlo en una pista vacía arranca con el **Kit básico** (los sonidos
     de la Drum Machine, guardados como WAV en `~/Library/Application Support/Pulse/Kits`).
+- **Trocear loops**: en un clip de audio, «Trocear → A Drum Rack» corta la región del clip en golpes (por
+  transitorios o cada 1/16, 1/8 o 1/4) y crea una pista con un Drum Rack, un pad por golpe, y un clip MIDI en
+  el mismo sitio que los toca en orden: al cambiar el tempo el groove lo sigue sin estirar el audio, y se
+  pueden reordenar, quitar o repetir golpes en el piano roll. El Drum Rack también tiene «Trocear archivo…».
+  Los trozos se guardan en `~/Library/Application Support/Pulse/Slices`. Un golpe mucho más flojo que la cola
+  del anterior (un hat justo detrás de una caja larga) puede no detectarse: entonces, usa la rejilla.
   - Efectos: EQ Three, Compressor, **Limiter**, Saturator, **Bitcrusher**, Auto Filter, **Ducker** (bombeo
     sincronizado al tempo), **Chorus**, **Phaser**, Delay, Reverb y **Utility** (ganancia y anchura estéreo).
   Knobs: arrastrar arriba/abajo, Shift para ajuste fino, doble clic para el valor por defecto.
@@ -107,5 +113,5 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 2. Monitorización y compensación de latencia al grabar audio; grabar la sesión en el Arrangement;
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
-4. Trocear un loop en pads del Drum Rack; multisamples (zonas por tecla y velocidad) en el Sampler.
+4. Multisamples (zonas por tecla y velocidad) en el Sampler; marcadores de troceado editables a mano.
 5. Plugins VST3 / CLAP.

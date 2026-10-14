@@ -15,6 +15,7 @@ mod project;
 mod recording;
 mod sample_editor;
 mod session;
+mod slicing;
 mod sync;
 mod theme;
 mod transport;

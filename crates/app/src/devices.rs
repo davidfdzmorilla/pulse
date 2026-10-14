@@ -42,6 +42,7 @@ enum Action {
     ClearSample(usize),
     SelectPad(usize),
     BasicKit,
+    SliceFile,
 }
 
 /// Draws a device frame with a title bar and returns the body's UI result.
@@ -175,6 +176,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             Action::BasicKit => {
                 if let Target::Track(t) = target {
                     app.load_basic_kit(t);
+                }
+            }
+            Action::SliceFile => {
+                if let Target::Track(t) = target {
+                    app.slice_file_into(t);
                 }
             }
         }
@@ -384,6 +390,9 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             let header = |ui: &mut egui::Ui| {
                 if ui.small_button("Kit básico").on_hover_text("Carga sonidos de la Drum Machine en los pads").clicked() {
                     actions.push(Action::BasicKit);
+                }
+                if ui.small_button("Trocear archivo…").on_hover_text("Corta un loop en golpes, uno por pad, y crea el clip que lo toca").clicked() {
+                    actions.push(Action::SliceFile);
                 }
             };
             let mut body_actions = Vec::new();

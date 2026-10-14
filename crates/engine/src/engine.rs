@@ -7,7 +7,7 @@
 //! handed back to the UI thread as [`Garbage`] to be freed there.
 
 use crate::effects::{EffectProcessor, ProcessContext};
-use crate::model::{db_to_gain, AudioClip, Device, InstrumentKind, MidiClip, WarpMode};
+use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, InstrumentKind, MidiClip, Param, WarpMode};
 use crate::sample::Sample;
 use crate::synth::{Click, DrumKit, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
@@ -27,7 +27,7 @@ pub const QUEUED_STOP: i32 = -2;
 pub const NONE: i32 = -1;
 
 /// A mixer channel: a track, a return track or the master.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Target {
     Track(usize),
     Return(usize),
@@ -110,6 +110,7 @@ pub enum Garbage {
     Device(ChainSlot),
     Chain(Box<Vec<ChainSlot>>),
     Arrangement(Box<Vec<PlacedClip>>),
+    Automation(Box<Vec<AutomationLane>>),
 }
 
 pub enum Command {
@@ -187,6 +188,11 @@ pub enum Command {
     ReplaceChain {
         target: Target,
         chain: Box<Vec<ChainSlot>>,
+    },
+    /// Replaces a channel's active automation lanes (the UI leaves out overridden ones).
+    SetAutomation {
+        target: Target,
+        lanes: Box<Vec<AutomationLane>>,
     },
     /// Arming routes live notes to a track and makes it record.
     SetArm {
@@ -339,6 +345,12 @@ impl Instrument {
     fn all_notes_off(&mut self) {
         if let Self::Synth(s) = self {
             s.all_notes_off();
+        }
+    }
+
+    fn set_param(&mut self, index: usize, value: f32) {
+        if let Self::Synth(s) = self {
+            s.set_param(index, value);
         }
     }
 
@@ -510,6 +522,10 @@ struct Channel {
     mute: bool,
     left: Vec<f32>,
     right: Vec<f32>,
+    automation: Box<Vec<AutomationLane>>,
+    /// Pan/fader gains reached at the end of the last block, ramped from to avoid zipper
+    /// noise. Starts silent so a channel fades in instead of popping.
+    last_gains: (f32, f32),
 }
 
 impl Channel {
@@ -521,7 +537,46 @@ impl Channel {
             mute: false,
             left: vec![0.0; MAX_BLOCK],
             right: vec![0.0; MAX_BLOCK],
+            automation: Box::default(),
+            last_gains: (0.0, 0.0),
         }
+    }
+
+    /// Applies automation for the mixer and device parameters at `beat`.
+    /// Returns values of parameters the channel does not own itself (sends, instrument).
+    fn automate(&mut self, beat: f64, mut other: impl FnMut(Param, f32)) {
+        for lane in self.automation.iter() {
+            let Some(value) = lane.value_at(beat) else { continue };
+            match lane.param {
+                Param::Volume => self.gain = value.max(0.0),
+                Param::Pan => self.pan = value.clamp(-1.0, 1.0),
+                Param::Device { device, param } => {
+                    if let Some(slot) = self.chain.get_mut(device) {
+                        slot.processor.set_param(param, value);
+                    }
+                }
+                param @ (Param::Send(_) | Param::Instrument(_)) => other(param, value),
+            }
+        }
+    }
+
+    /// Mixes this channel into `left`/`right` with its pan and `gain`, ramping from
+    /// the previous block's gains. Returns the output peak.
+    fn mix_into(&mut self, n: usize, gain: f32, left: &mut [f32], right: &mut [f32]) -> f32 {
+        let (gl, gr) = self.pan_gains(gain);
+        let (l0, r0) = self.last_gains;
+        self.last_gains = (gl, gr);
+        let step = 1.0 / n as f32;
+        let mut peak = 0f32;
+        for i in 0..n {
+            let t = (i + 1) as f32 * step;
+            let out_l = self.left[i] * (l0 + (gl - l0) * t);
+            let out_r = self.right[i] * (r0 + (gr - r0) * t);
+            peak = peak.max(out_l.abs()).max(out_r.abs());
+            left[i] += out_l;
+            right[i] += out_r;
+        }
+        peak
     }
 
     fn run_chain(&mut self, n: usize, ctx: &ProcessContext) {
@@ -894,6 +949,11 @@ impl Engine {
                 std::mem::swap(&mut c.chain, &mut chain);
                 self.discard(Garbage::Chain(chain));
             }
+            Command::SetAutomation { target, mut lanes } => {
+                let Some(c) = self.channel(target) else { return };
+                std::mem::swap(&mut c.automation, &mut lanes);
+                self.discard(Garbage::Automation(lanes));
+            }
             Command::SetArm { track, armed } => {
                 let end = self.position;
                 if let Some(t) = self.tracks.get_mut(track) {
@@ -1023,6 +1083,7 @@ impl Engine {
             track.audio_right[..n].fill(0.0);
         }
         if self.playing {
+            self.apply_automation();
             self.sequence(n, beats_per_sample);
         }
 
@@ -1061,54 +1122,65 @@ impl Engine {
 
             let audible = !channel.mute && (!any_solo || track.solo);
             let gain = if audible { channel.gain } else { 0.0 };
-            let (gl, gr) = channel.pan_gains(gain);
-            let mut peak = 0f32;
-            for i in 0..n {
-                let (l, r) = (channel.left[i], channel.right[i]);
-                let (out_l, out_r) = (l * gl, r * gr);
-                peak = peak.max(out_l.abs()).max(out_r.abs());
-                self.master.left[i] += out_l;
-                self.master.right[i] += out_r;
-                // Post-fader sends, taken before panning.
-                for (ret, &amount) in self.returns.iter_mut().zip(&track.sends) {
-                    if amount > 0.0 {
-                        ret.left[i] += l * gain * amount;
-                        ret.right[i] += r * gain * amount;
+            // Post-fader sends, taken before panning.
+            for (ret, &amount) in self.returns.iter_mut().zip(&track.sends) {
+                if amount > 0.0 {
+                    for i in 0..n {
+                        ret.left[i] += channel.left[i] * gain * amount;
+                        ret.right[i] += channel.right[i] * gain * amount;
                     }
                 }
             }
+            let peak = channel.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
             self.shared.tracks[index].peak.publish(peak);
         }
 
         for (index, ret) in self.returns.iter_mut().enumerate() {
             ret.run_chain(n, &ctx);
-            let (gl, gr) = ret.pan_gains(if ret.mute { 0.0 } else { ret.gain });
-            let mut peak = 0f32;
-            for i in 0..n {
-                let (l, r) = (ret.left[i] * gl, ret.right[i] * gr);
-                peak = peak.max(l.abs()).max(r.abs());
-                self.master.left[i] += l;
-                self.master.right[i] += r;
-            }
+            let gain = if ret.mute { 0.0 } else { ret.gain };
+            let peak = ret.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
             self.shared.returns[index].publish(peak);
         }
 
         let master = &mut self.master;
         master.run_chain(n, &ctx);
         let (gl, gr) = master.pan_gains(master.gain);
+        let (l0, r0) = master.last_gains;
+        master.last_gains = (gl, gr);
         let click = &mut self.click_buffer[..n];
         click.fill(0.0);
         self.click.render(click);
         let mut peak = 0f32;
         for i in 0..n {
-            let l = master.left[i] * gl + click[i];
-            let r = master.right[i] * gr + click[i];
+            let t = (i + 1) as f32 / n as f32;
+            let l = master.left[i] * (l0 + (gl - l0) * t) + click[i];
+            let r = master.right[i] * (r0 + (gr - r0) * t) + click[i];
             peak = peak.max(l.abs()).max(r.abs());
             // Safety limit only; the meter shows the real level.
             master.left[i] = l.clamp(-1.0, 1.0);
             master.right[i] = r.clamp(-1.0, 1.0);
         }
         self.shared.master.publish(peak);
+    }
+
+    /// Sets automated parameters to their values at the current position.
+    fn apply_automation(&mut self) {
+        let beat = self.position;
+        for track in &mut self.tracks {
+            let (sends, instrument) = (&mut track.sends, &mut track.instrument);
+            track.channel.automate(beat, |param, value| match param {
+                Param::Send(i) => {
+                    if let Some(send) = sends.get_mut(i) {
+                        *send = value.clamp(0.0, 1.0);
+                    }
+                }
+                Param::Instrument(i) => instrument.set_param(i, value),
+                _ => {}
+            });
+        }
+        for channel in self.returns.iter_mut().chain([&mut self.master]) {
+            channel.automate(beat, |_, _| {});
+        }
     }
 
     /// Advances the transport over `n` frames, wrapping at the loop end.
@@ -1237,6 +1309,7 @@ impl Engine {
 mod tests {
     use super::*;
     use crate::model::{AudioClip, Device, Effect, InstrumentKind, MidiClip, Note, WarpMode};
+    use crate::model::AutomationLane;
     use rtrb::RingBuffer;
 
     const SR: f32 = 48_000.0;
@@ -1474,6 +1547,48 @@ mod tests {
         assert_eq!((notes[0].track, notes[0].pitch), (3, 48));
         assert!((notes[0].start - 1.0).abs() < 0.05 && (notes[0].length - 1.0).abs() < 0.05);
         assert!(!h.shared.arrangement_recording.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn automation_drives_mixer_and_device_parameters() {
+        use crate::model::{AutomationPoint, Param};
+        let mut h = Harness::new();
+        // Volume fades from silence to full over the first bar; a send opens at beat 2.
+        let lanes = vec![
+            AutomationLane {
+                param: Param::Volume,
+                points: vec![AutomationPoint { beat: 0.0, value: 0.0 }, AutomationPoint { beat: 4.0, value: 1.0 }],
+            },
+            AutomationLane {
+                param: Param::Send(0),
+                points: vec![AutomationPoint { beat: 1.99, value: 0.0 }, AutomationPoint { beat: 2.0, value: 1.0 }],
+            },
+            AutomationLane {
+                param: Param::Device { device: 0, param: 0 },
+                points: vec![AutomationPoint { beat: 0.0, value: 100.0 }],
+            },
+        ];
+        h.send(Command::InsertDevice {
+            target: Target::Track(0),
+            index: 0,
+            slot: ChainSlot::new(&Device::new(Effect::AutoFilter(Default::default())), SR),
+        });
+        h.send(Command::SetAutomation { target: Target::Track(0), lanes: Box::new(lanes) });
+        let mut clip = MidiClip::new("drone", 4.0, [0, 0, 0]);
+        clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0 });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+
+        let early = energy(&h.run_beats(0.25));
+        h.run_beats(1.5);
+        assert_eq!(h.shared.returns[0].take(), 0.0, "the send is still closed");
+        let late = energy(&h.run_beats(0.5));
+        assert!(late > early * 10.0, "the fade-in should raise the level ({early} -> {late})");
+        h.run_beats(0.5);
+        assert!(h.shared.returns[0].take() > 0.0, "the send opened at beat 2");
+        assert_eq!(h.engine.tracks[0].channel.automation.len(), 3);
+        let Effect::AutoFilter(p) = h.engine.tracks[0].channel.chain[0].processor.effect() else { panic!() };
+        assert_eq!(p.cutoff, 100.0, "device parameters follow their lane");
     }
 
     #[test]

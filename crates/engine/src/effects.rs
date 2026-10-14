@@ -382,6 +382,25 @@ impl EffectProcessor {
         true
     }
 
+    /// Current parameters as a model value.
+    pub(crate) fn effect(&self) -> Effect {
+        match self {
+            Self::Eq3(fx) => Effect::Eq3(fx.params),
+            Self::Compressor(fx) => Effect::Compressor(fx.params),
+            Self::Delay(fx) => Effect::Delay(fx.params),
+            Self::Reverb(fx) => Effect::Reverb(fx.params),
+            Self::Saturator(fx) => Effect::Saturator(fx.params),
+            Self::AutoFilter(fx) => Effect::AutoFilter(fx.params),
+        }
+    }
+
+    /// Sets one continuous parameter (see [`Effect::params`]); used by automation.
+    pub fn set_param(&mut self, index: usize, value: f32) {
+        let mut effect = self.effect();
+        effect.set(index, value);
+        self.set_params(&effect);
+    }
+
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], ctx: &ProcessContext) {
         match self {
             Self::Eq3(fx) => fx.process(l, r, ctx.sample_rate),

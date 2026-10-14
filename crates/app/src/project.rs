@@ -1,8 +1,8 @@
 //! The UI-side project model. It is the source of truth; the engine receives copies.
 
 use engine::model::{
-    drum_note::*, ArrangementClip, AutoFilterParams, Clip, CompressorParams, DelayParams, Device, Effect,
-    Eq3Params, InstrumentKind, MidiClip, Note, ReverbParams, SynthParams, Waveform,
+    drum_note::*, ArrangementClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, CompressorParams, DelayParams, Device, Effect,
+    Eq3Params, InstrumentKind, MidiClip, Note, Param, ReverbParams, SynthParams, Waveform,
 };
 use engine::{NUM_RETURNS, NUM_SCENES};
 use serde::{Deserialize, Serialize};
@@ -66,6 +66,8 @@ pub struct Track {
     pub devices: Vec<Device>,
     pub clips: [Option<Clip>; NUM_SCENES],
     pub arrangement: Vec<ArrangementClip>,
+    #[serde(default)]
+    pub automation: Vec<AutomationLane>,
 }
 
 impl Track {
@@ -82,6 +84,7 @@ impl Track {
             devices: Vec::new(),
             clips: Default::default(),
             arrangement: Vec::new(),
+            automation: Vec::new(),
         }
     }
 
@@ -112,12 +115,16 @@ pub struct ReturnTrack {
     pub color: [u8; 3],
     pub mixer: Mixer,
     pub devices: Vec<Device>,
+    #[serde(default)]
+    pub automation: Vec<AutomationLane>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct MasterTrack {
     pub mixer: Mixer,
     pub devices: Vec<Device>,
+    #[serde(default)]
+    pub automation: Vec<AutomationLane>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -159,6 +166,7 @@ impl Project {
                     ..Default::default()
                 },
                 devices: Vec::new(),
+                automation: Vec::new(),
             },
             scene_names: (1..=NUM_SCENES).map(|i| i.to_string()).collect(),
         }
@@ -311,6 +319,16 @@ impl Project {
         keys.arrangement = vec![place(&keys, 0, 0.0, 32.0)];
         lead.arrangement = vec![place(&lead, 1, 16.0, 16.0)];
 
+        // The chords' filter opens over the eight bars of the arrangement.
+        keys.automation.push(AutomationLane {
+            param: Param::Device { device: 0, param: 0 },
+            points: vec![
+                AutomationPoint { beat: 0.0, value: 300.0 },
+                AutomationPoint { beat: 28.0, value: 6000.0 },
+                AutomationPoint { beat: 32.0, value: 1200.0 },
+            ],
+        });
+
         let mut project = Self::empty();
         project.tracks = vec![drums, bass, keys, lead];
         project.loop_end = 32.0;
@@ -335,6 +353,7 @@ fn default_returns() -> Vec<ReturnTrack> {
                 mix: 1.0,
                 ..Default::default()
             }))],
+            automation: Vec::new(),
         },
         ReturnTrack {
             name: "B Delay".into(),
@@ -344,6 +363,7 @@ fn default_returns() -> Vec<ReturnTrack> {
                 mix: 1.0,
                 ..Default::default()
             }))],
+            automation: Vec::new(),
         },
     ]
 }

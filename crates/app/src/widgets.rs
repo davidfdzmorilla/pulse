@@ -301,3 +301,66 @@ pub fn play_triangle(painter: &egui::Painter, center: egui::Pos2, size: f32, fil
         Stroke::NONE,
     ));
 }
+
+/// Formats a parameter value for display according to its unit.
+pub fn format_param(info: &engine::model::ParamInfo, value: f32) -> String {
+    use engine::model::Unit;
+    match info.unit {
+        Unit::Decibels if info.name == "Volumen" => {
+            let db = 20.0 * value.max(1e-6).log10();
+            if db <= -69.0 { "-inf dB".into() } else { format!("{db:.1} dB") }
+        }
+        Unit::Decibels if info.min <= -40.0 && value <= -39.9 => "-inf dB".into(),
+        Unit::Decibels => format!("{value:+.1} dB"),
+        Unit::Hertz if value >= 1000.0 => format!("{:.2} kHz", value / 1000.0),
+        Unit::Hertz => format!("{value:.0} Hz"),
+        Unit::Percent => format!("{:.0} %", value * 100.0),
+        Unit::Seconds if value < 1.0 => format!("{:.0} ms", value * 1000.0),
+        Unit::Seconds => format!("{value:.2} s"),
+        Unit::Milliseconds => format!("{value:.1} ms"),
+        Unit::Ratio => format!("{value:.1}:1"),
+        Unit::Octaves => format!("{value:.1} oct"),
+        Unit::Pan => match (value * 50.0).round() as i32 {
+            0 => "C".into(),
+            n if n < 0 => format!("{}L", -n),
+            n => format!("{n}R"),
+        },
+    }
+}
+
+/// Marks an automated control: red while automation drives it, hollow when overridden.
+pub fn automation_dot(painter: &egui::Painter, at: egui::Pos2, overridden: Option<bool>) {
+    match overridden {
+        Some(false) => {
+            painter.circle_filled(at, 3.0, theme::METER_RED);
+        }
+        Some(true) => {
+            painter.circle_stroke(at, 3.0, Stroke::new(1.0, theme::METER_RED));
+        }
+        None => {}
+    }
+}
+
+/// Knob for a described parameter. Returns the new value when the user moves it.
+pub fn param_knob(
+    ui: &mut Ui,
+    info: &engine::model::ParamInfo,
+    value: f32,
+    label: &str,
+    diameter: f32,
+    automation: Option<bool>,
+) -> Option<f32> {
+    let mut v = value;
+    let mut knob = Knob::new(&mut v, info.min..=info.max, info.default, label)
+        .diameter(diameter)
+        .format(|x| format_param(info, x));
+    if info.log {
+        knob = knob.taper(Taper::Log);
+    }
+    if info.unit == engine::model::Unit::Pan {
+        knob = knob.bipolar();
+    }
+    let response = knob.show(ui);
+    automation_dot(ui.painter(), response.rect.right_top() + vec2(-4.0, 6.0), automation);
+    response.changed().then_some(v)
+}

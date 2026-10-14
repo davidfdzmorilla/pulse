@@ -206,6 +206,127 @@ pub enum InstrumentKind {
     Sampler(SamplerParams),
     /// Sixteen pads, each playing one of the track's samples.
     DrumRack(RackParams),
+    /// Kick drum synthesizer; an optional click sample is the track's first sample.
+    Kick(KickParams),
+}
+
+/// How the kick designer distorts its body.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KickDrive {
+    /// Smooth saturation (tanh).
+    Soft,
+    /// Hard clipping: squarer, louder.
+    Hard,
+    /// Wave folding: bright, metallic overtones.
+    Fold,
+}
+
+impl KickDrive {
+    pub const ALL: [KickDrive; 3] = [Self::Soft, Self::Hard, Self::Fold];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Soft => "Soft",
+            Self::Hard => "Hard",
+            Self::Fold => "Fold",
+        }
+    }
+}
+
+/// Kick drum synthesizer: a tuned sine body with pitch and amplitude envelopes,
+/// a click layer and distortion. Times are in milliseconds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct KickParams {
+    /// The played note sets the body's pitch instead of `tune`.
+    pub key_follow: bool,
+    pub drive_mode: KickDrive,
+    /// MIDI note the body settles on.
+    pub tune: f32,
+    /// Pitch at the start, in semitones above `tune`.
+    pub pitch_amount: f32,
+    pub pitch_time: f32,
+    /// 0 sweeps linearly, 1 drops fast and settles slowly.
+    pub pitch_curve: f32,
+    pub attack: f32,
+    pub hold: f32,
+    pub decay: f32,
+    /// 0 fades linearly, 1 drops fast with a long, quiet tail.
+    pub decay_curve: f32,
+    /// Shapes the sine towards a triangle-like wave with more overtones.
+    pub harmonics: f32,
+    pub click: f32,
+    /// Centre frequency of the synthesized click (ignored with a click sample).
+    pub click_tone: f32,
+    pub click_length: f32,
+    pub drive: f32,
+    pub gain: f32,
+}
+
+impl Default for KickParams {
+    fn default() -> Self {
+        Self {
+            key_follow: false,
+            drive_mode: KickDrive::Soft,
+            tune: 31.0,
+            pitch_amount: 40.0,
+            pitch_time: 60.0,
+            pitch_curve: 0.6,
+            attack: 0.5,
+            hold: 60.0,
+            decay: 300.0,
+            decay_curve: 0.4,
+            harmonics: 0.0,
+            click: 0.4,
+            click_tone: 3000.0,
+            click_length: 6.0,
+            drive: 0.2,
+            gain: 0.8,
+        }
+    }
+}
+
+impl KickParams {
+    /// Factory presets: (name, settings).
+    pub fn presets() -> [(&'static str, KickParams); 6] {
+        let base = KickParams::default();
+        [
+            ("Init", base),
+            (
+                "House Punch",
+                KickParams { tune: 33.0, pitch_amount: 36.0, pitch_time: 45.0, hold: 40.0, decay: 220.0, click: 0.5, click_tone: 4000.0, drive: 0.25, ..base },
+            ),
+            (
+                "Techno Rumble",
+                KickParams { tune: 29.0, pitch_amount: 44.0, pitch_time: 70.0, hold: 90.0, decay: 650.0, decay_curve: 0.6, harmonics: 0.15, drive: 0.55, ..base },
+            ),
+            (
+                "Hard Kick",
+                KickParams {
+                    tune: 34.0,
+                    pitch_amount: 52.0,
+                    pitch_time: 90.0,
+                    pitch_curve: 0.75,
+                    hold: 120.0,
+                    decay: 400.0,
+                    harmonics: 0.3,
+                    click: 0.7,
+                    click_tone: 6000.0,
+                    drive: 0.8,
+                    drive_mode: KickDrive::Hard,
+                    gain: 0.6,
+                    ..base
+                },
+            ),
+            (
+                "Long 808",
+                KickParams { tune: 28.0, pitch_amount: 24.0, pitch_time: 40.0, hold: 200.0, decay: 1600.0, decay_curve: 0.3, click: 0.15, drive: 0.1, key_follow: true, ..base },
+            ),
+            (
+                "Trance Thud",
+                KickParams { tune: 32.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 30.0, decay: 180.0, decay_curve: 0.6, click: 0.6, click_tone: 2500.0, drive: 0.35, ..base },
+            ),
+        ]
+    }
 }
 
 /// Parameters of the sampler. The sample itself lives on the track.
@@ -907,6 +1028,22 @@ const FM_PARAMS: [ParamInfo; 10] = [
     ParamInfo::log("Release", 0.005, 4.0, 0.6, Seconds),
     ParamInfo::linear("Volume", 0.0, 1.0, 0.45, Percent),
 ];
+const KICK_PARAMS: [ParamInfo; 14] = [
+    ParamInfo::linear("Tune", 16.0, 52.0, 31.0, Note),
+    ParamInfo::linear("Pitch", 0.0, 72.0, 40.0, Semitones),
+    ParamInfo::log("P. Time", 5.0, 500.0, 60.0, Milliseconds),
+    ParamInfo::linear("P. Curve", 0.0, 1.0, 0.6, Percent),
+    ParamInfo::log("Attack", 0.1, 20.0, 0.5, Milliseconds),
+    ParamInfo::linear("Hold", 0.0, 500.0, 60.0, Milliseconds),
+    ParamInfo::log("Decay", 10.0, 2000.0, 300.0, Milliseconds),
+    ParamInfo::linear("D. Curve", 0.0, 1.0, 0.4, Percent),
+    ParamInfo::linear("Harmonics", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Click", 0.0, 1.0, 0.4, Percent),
+    ParamInfo::log("Click Tone", 500.0, 12000.0, 3000.0, Hertz),
+    ParamInfo::log("Click Len", 1.0, 50.0, 6.0, Milliseconds),
+    ParamInfo::linear("Drive", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("Volume", 0.0, 1.0, 0.8, Percent),
+];
 const SAMPLER_PARAMS: [ParamInfo; 10] = [
     ParamInfo::linear("Root", 0.0, 127.0, 60.0, Note),
     ParamInfo::linear("Tune", -24.0, 24.0, 0.0, Semitones),
@@ -977,13 +1114,14 @@ const DRUM_PARAMS: [ParamInfo; 24] = {
 
 impl InstrumentKind {
     /// Every instrument, in browser order.
-    pub fn catalog() -> [InstrumentKind; 7] {
+    pub fn catalog() -> [InstrumentKind; 8] {
         [
             InstrumentKind::Synth(SynthParams::default()),
             InstrumentKind::SuperSaw(SuperSawParams::default()),
             InstrumentKind::Acid(AcidParams::default()),
             InstrumentKind::Fm(FmParams::default()),
             InstrumentKind::Sampler(SamplerParams::default()),
+            InstrumentKind::Kick(KickParams::default()),
             InstrumentKind::DrumMachine(DrumParams::default()),
             InstrumentKind::DrumRack(RackParams::default()),
         ]
@@ -998,6 +1136,7 @@ impl InstrumentKind {
             InstrumentKind::Fm(_) => "FM Synth",
             InstrumentKind::Sampler(_) => "Sampler",
             InstrumentKind::DrumRack(_) => "Drum Rack",
+            InstrumentKind::Kick(_) => "Kick Designer",
         }
     }
 
@@ -1007,7 +1146,7 @@ impl InstrumentKind {
 
     /// True for instruments that play the track's samples.
     pub fn uses_samples(&self) -> bool {
-        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_))
+        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_))
     }
 
     /// Replaces the parameterless first drum kit with the drum machine.
@@ -1028,6 +1167,7 @@ impl InstrumentKind {
             InstrumentKind::Fm(_) => &FM_PARAMS,
             InstrumentKind::Sampler(_) => &SAMPLER_PARAMS,
             InstrumentKind::DrumRack(_) => &RACK_PARAMS,
+            InstrumentKind::Kick(_) => &KICK_PARAMS,
         }
     }
 
@@ -1089,6 +1229,23 @@ impl InstrumentKind {
                 7 => &mut p.cutoff,
                 8 => &mut p.resonance,
                 9 => &mut p.gain,
+                _ => return None,
+            },
+            InstrumentKind::Kick(p) => match index {
+                0 => &mut p.tune,
+                1 => &mut p.pitch_amount,
+                2 => &mut p.pitch_time,
+                3 => &mut p.pitch_curve,
+                4 => &mut p.attack,
+                5 => &mut p.hold,
+                6 => &mut p.decay,
+                7 => &mut p.decay_curve,
+                8 => &mut p.harmonics,
+                9 => &mut p.click,
+                10 => &mut p.click_tone,
+                11 => &mut p.click_length,
+                12 => &mut p.drive,
+                13 => &mut p.gain,
                 _ => return None,
             },
             InstrumentKind::DrumRack(p) => match index % 4 {

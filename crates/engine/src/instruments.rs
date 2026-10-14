@@ -40,8 +40,8 @@ fn square(phase: f32, inc: f32) -> f32 {
 /// Topology-preserving-transform state variable filter returning (low, band, high).
 #[derive(Clone, Copy, Default)]
 pub(crate) struct Svf {
-    ic1: f32,
-    ic2: f32,
+    pub(crate) ic1: f32,
+    pub(crate) ic2: f32,
 }
 
 impl Svf {

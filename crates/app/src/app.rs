@@ -764,7 +764,7 @@ impl PulseApp {
     /// Loads files into consecutive sample slots of a sampler or drum rack, starting at `slot`.
     pub fn set_instrument_samples(&mut self, track: usize, slot: usize, paths: Vec<PathBuf>) {
         let slots = match self.project.tracks[track].instrument {
-            InstrumentKind::Sampler(_) => 1,
+            InstrumentKind::Sampler(_) | InstrumentKind::Kick(_) => 1,
             InstrumentKind::DrumRack(_) => RACK_PADS,
             _ => return,
         };

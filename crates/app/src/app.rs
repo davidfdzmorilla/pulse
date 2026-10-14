@@ -851,7 +851,7 @@ impl PulseApp {
             self.status = Some("Este modulador ya tiene 8 destinos".into());
             return;
         };
-        targets[free] = ModTarget { dest: dest as u16, depth: 0.5 };
+        targets[free] = ModTarget::new(dest, 0.5);
         self.set_instrument(track, InstrumentKind::Modular(params));
         self.status = Some(format!("→ {name} (50 %) · clic derecho en el knob para ajustar"));
     }

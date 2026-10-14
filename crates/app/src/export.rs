@@ -542,6 +542,21 @@ mod diagnostics {
             println!("{:8} pico {:6.1} dBFS  rms {:6.1} dBFS", track.name, db(peak(&l, &r)), db(rms));
         }
     }
+
+    #[test]
+    #[ignore = "diagnostic: writes every kick designer preset, one per second, to $PULSE_OUT"]
+    fn kick_presets_to_wav() {
+        let out = std::env::var("PULSE_OUT").unwrap();
+        let mut audio = Vec::new();
+        for (name, preset) in engine::model::KickParams::presets() {
+            let mut hit = engine::render_kick(preset, None, 48_000.0);
+            let peak = peak(&hit, &hit);
+            println!("{name:14} {:5.0} ms  pico {:6.1} dBFS", engine::kick_length_ms(&preset), db(peak));
+            hit.resize(96_000, 0.0);
+            audio.extend(hit);
+        }
+        crate::capture::write_wav(Path::new(&out), &audio, &audio, 48_000.0).unwrap();
+    }
 }
 
 #[cfg(test)]
@@ -678,6 +693,18 @@ mod playback {
         for k in 1..4 {
             let (a, b) = (original[k] / original[2], replayed[k] / replayed[2]);
             assert!((a - b).abs() < 0.03, "beat {k}: original {a:.2}, sliced {b:.2}");
+        }
+    }
+
+    #[test]
+    fn a_kick_designer_track_plays_every_preset() {
+        for (name, preset) in engine::model::KickParams::presets() {
+            let mut project = Project::empty();
+            let mut track = Track::new("Kick", PALETTE[1], InstrumentKind::Kick(preset));
+            track.clips[0] = Some(clip_with(&[60, 60, 60, 60]));
+            project.tracks = vec![track];
+            let peak = track_peak(&project, 0, 24_000);
+            assert!(peak > 0.1 && peak < 1.5, "{name}: peak {peak}");
         }
     }
 }

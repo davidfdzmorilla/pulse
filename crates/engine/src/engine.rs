@@ -10,6 +10,7 @@ use crate::effects::{EffectProcessor, ProcessContext};
 use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, InstrumentKind, MidiClip, Param, WarpMode};
 use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
+use crate::kick::KickSynth;
 use crate::sampler::{DrumRack, Sampler};
 use crate::synth::{Click, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
@@ -340,6 +341,7 @@ enum Instrument {
     Fm(FmSynth),
     Sampler(Sampler),
     Rack(DrumRack),
+    Kick(KickSynth),
 }
 
 impl Instrument {
@@ -352,6 +354,7 @@ impl Instrument {
             InstrumentKind::Fm(p) => Self::Fm(FmSynth::new(p, sample_rate)),
             InstrumentKind::Sampler(p) => Self::Sampler(Sampler::new(p, sample_rate)),
             InstrumentKind::DrumRack(p) => Self::Rack(DrumRack::new(p, sample_rate)),
+            InstrumentKind::Kick(p) => Self::Kick(KickSynth::new(p, sample_rate)),
             InstrumentKind::Drums => unreachable!("upgraded above"),
         }
     }
@@ -365,6 +368,7 @@ impl Instrument {
             Self::Fm(f) => InstrumentKind::Fm(f.params()),
             Self::Sampler(s) => InstrumentKind::Sampler(s.params()),
             Self::Rack(r) => InstrumentKind::DrumRack(r.params()),
+            Self::Kick(k) => InstrumentKind::Kick(k.params()),
         }
     }
 
@@ -378,6 +382,7 @@ impl Instrument {
             (Self::Fm(f), InstrumentKind::Fm(p)) => f.set_params(p),
             (Self::Sampler(s), InstrumentKind::Sampler(p)) => s.set_params(p),
             (Self::Rack(r), InstrumentKind::DrumRack(p)) => r.set_params(p),
+            (Self::Kick(k), InstrumentKind::Kick(p)) => k.set_params(p),
             _ => return false,
         }
         true
@@ -398,6 +403,7 @@ impl Instrument {
             Self::Fm(f) => f.note_on(pitch, velocity, gate_samples),
             Self::Sampler(s) => s.note_on(samples, pitch, velocity, gate_samples),
             Self::Rack(r) => r.note_on(samples, pitch, velocity),
+            Self::Kick(k) => k.note_on(pitch, velocity),
         }
     }
 
@@ -409,7 +415,7 @@ impl Instrument {
             Self::Acid(a) => a.note_off(pitch),
             Self::Fm(f) => f.note_off(pitch),
             Self::Sampler(s) => s.note_off(pitch),
-            Self::Rack(_) => {}
+            Self::Rack(_) | Self::Kick(_) => {}
         }
     }
 
@@ -422,6 +428,7 @@ impl Instrument {
             Self::Fm(f) => f.all_notes_off(),
             Self::Sampler(s) => s.all_notes_off(),
             Self::Rack(_) => {}
+            Self::Kick(k) => k.all_notes_off(),
         }
     }
 
@@ -439,6 +446,7 @@ impl Instrument {
             Self::Fm(f) => f.render(left, right),
             Self::Sampler(s) => s.render(samples, left, right),
             Self::Rack(r) => r.render(samples, left, right),
+            Self::Kick(k) => k.render(samples, left, right),
         }
     }
 }

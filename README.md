@@ -80,7 +80,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   sus muestras en los mismos pads, y los Simpler/Sampler al Sampler con su nota raíz. Los sintetizadores de
   Live no se pueden leer: esas pistas reciben Pulse Synth (o la Drum Machine si es un Drum Rack sin
   muestras). Los grupos se omiten.
-- **Dispositivos**: desde el navegador, siete instrumentos y doce efectos, todos automatizables:
+- **Dispositivos**: desde el navegador, ocho instrumentos y doce efectos, todos automatizables:
   - **Pulse Synth**: sintetizador sustractivo sencillo.
   - **Super Saw**: hasta 7 dientes de sierra desafinados y abiertos en estéreo (leads y pads de trance/EDM).
   - **Acid Bass**: bajo monofónico con filtro de 4 polos resonante, envolvente de filtro, acento (velocidad
@@ -91,6 +91,11 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   - **Sampler**: toca una muestra cromáticamente desde su nota raíz, con punto de inicio, ADSR, filtro y tres
     modos: Clásico (mientras se mantiene la nota), One-shot (entera) y Loop. Arrastra un archivo de audio al
     dispositivo o usa «Cargar…».
+  - **Kick Designer**: sintetizador de bombos. Cuerpo senoidal afinado a una nota (o a la nota tocada con
+    «Key»), con envolvente de tono (cantidad, tiempo, curva), envolvente de amplitud (ataque, hold, decay,
+    curva), armónicos, click sintetizado o a partir de una muestra, y distorsión Soft, Hard o Fold. El visor
+    dibuja la forma de onda y la curva de tono; trae presets (House Punch, Techno Rumble, Hard Kick, Long 808,
+    Trance Thud).
   - **Drum Rack**: 16 pads (C1–D#2, el pad 1 abajo a la izquierda), cada uno con su muestra, afinación,
     longitud, nivel, panorama y grupo de choke. Clic en un pad para escucharlo y editarlo; arrastra una o
     varias muestras sobre los pads. Al elegirlo en una pista vacía arranca con el **Kit básico** (los sonidos

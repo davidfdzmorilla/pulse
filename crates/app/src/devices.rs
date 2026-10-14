@@ -8,7 +8,8 @@ use crate::theme::{self, ACCENT, CONTROL, SURFACE, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::{
-    Device, Effect, FilterMode, InstrumentKind, Param, RackParams, SamplerParams, SynthParams, Waveform, RACK_FIRST_NOTE, RACK_PADS,
+    Device, Effect, FilterMode, InstrumentKind, KickDrive, KickParams, Param, RackParams, SamplerParams, SynthParams, Waveform, RACK_FIRST_NOTE,
+    RACK_PADS,
 };
 use engine::{Command, Target};
 
@@ -440,6 +441,56 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             });
             actions.extend(body_actions);
         }
+        InstrumentKind::Kick(base) => {
+            let header = |ui: &mut egui::Ui| {
+                egui::ComboBox::from_id_salt(("kick_preset", t)).selected_text("Presets").width(110.0).show_ui(ui, |ui| {
+                    for (name, preset) in KickParams::presets() {
+                        if ui.selectable_label(false, name).clicked() {
+                            actions.push(Action::Instrument(InstrumentKind::Kick(preset)));
+                        }
+                    }
+                });
+            };
+            let mut body_actions = Vec::new();
+            device_frame(ui, kind.label(), 680.0, None, header, |ui| {
+                // The display follows automation, like the knobs.
+                let mut shown = kind;
+                for i in 0..kind.params().len() {
+                    shown.set(i, app.display_value(target, Param::Instrument(i)));
+                }
+                let InstrumentKind::Kick(shown) = shown else { return };
+                ui.vertical(|ui| {
+                    kick_display(app, ui, t, &shown);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        let mut mode = base.drive_mode;
+                        for m in KickDrive::ALL {
+                            ui.selectable_value(&mut mode, m, m.label()).on_hover_text("Tipo de distorsión del cuerpo");
+                        }
+                        let mut follow = base.key_follow;
+                        ui.checkbox(&mut follow, "Key").on_hover_text("La nota tocada afina el cuerpo (dos octavas por debajo) en lugar de Tune");
+                        if mode != base.drive_mode || follow != base.key_follow {
+                            body_actions.push(Action::Instrument(InstrumentKind::Kick(KickParams { drive_mode: mode, key_follow: follow, ..base })));
+                        }
+                        if ui.small_button("▶").on_hover_text("Escuchar").clicked() {
+                            body_actions.push(Action::Preview(60));
+                        }
+                    });
+                    click_slot(app, ui, t, &mut body_actions, zones);
+                });
+                ui.vertical(|ui| {
+                    for row in [[0, 1, 2, 3, 8, 12, 13], [4, 5, 6, 7, 9, 10, 11]] {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            for i in row {
+                                knob(ui, &mut body_actions, i, kind.params()[i].name, 26.0);
+                            }
+                        });
+                    }
+                });
+            });
+            actions.extend(body_actions);
+        }
         InstrumentKind::SuperSaw(_) | InstrumentKind::Fm(_) => {
             let width = kind.params().len() as f32 * 52.0 + 24.0;
             device_frame(ui, kind.label(), width, None, |_| {}, |ui| {
@@ -550,4 +601,71 @@ fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, action
             actions.push(Action::Preview(note));
         }
     }
+}
+
+/// Waveform of one kick hit with its pitch envelope on top, cached until a setting changes.
+fn kick_display(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: &KickParams) {
+    let (rect, _) = ui.allocate_exact_size(vec2(240.0, 84.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 2.0, theme::BG);
+    let click = app.project.tracks[t].sample(0).and_then(|path| app.loaded_sample(path)).cloned();
+    let key = (*p, click.as_ref().map(|c| std::sync::Arc::as_ptr(c) as usize));
+    let id = ui.id().with(("kick_display", t));
+    type Cached = ((KickParams, Option<usize>), Vec<(f32, f32)>);
+    let cached: Option<Cached> = ui.ctx().memory(|m| m.data.get_temp(id));
+    let columns = rect.width() as usize;
+    let peaks = match cached {
+        Some((k, peaks)) if k == key => peaks,
+        _ => {
+            let hit = engine::render_kick(*p, click, 12_000.0);
+            let per = hit.len().div_ceil(columns).max(1);
+            let peaks: Vec<(f32, f32)> = hit.chunks(per).map(|c| c.iter().fold((0f32, 0f32), |(lo, hi), &s| (lo.min(s), hi.max(s)))).collect();
+            ui.ctx().memory_mut(|m| m.data.insert_temp(id, (key, peaks.clone())));
+            peaks
+        }
+    };
+    let (mid, half) = (rect.center().y, rect.height() * 0.42);
+    for (x, &(lo, hi)) in peaks.iter().enumerate() {
+        let px = rect.left() + x as f32 + 0.5;
+        painter.line_segment([pos2(px, mid - hi.clamp(-1.2, 1.2) * half), pos2(px, mid - lo.clamp(-1.2, 1.2) * half)], Stroke::new(1.0, theme::PLAY));
+    }
+    // Pitch envelope, from its start pitch down to the note.
+    let length = engine::kick_length_ms(p);
+    let points: Vec<_> = (0..=columns)
+        .map(|x| {
+            let ms = x as f32 / columns as f32 * length;
+            let offset = engine::kick_pitch_offset(p, ms) / 72.0;
+            pos2(rect.left() + x as f32, rect.bottom() - 4.0 - offset * (rect.height() - 8.0))
+        })
+        .collect();
+    painter.add(egui::Shape::line(points, Stroke::new(1.5, ACCENT)));
+    let hz = 440.0 * 2f32.powf((p.tune - 69.0) / 12.0);
+    let note = if p.key_follow { "Key".to_string() } else { format!("{} · {hz:.1} Hz", crate::project::note_name(p.tune.round() as u8)) };
+    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, note, theme::small(), theme::TEXT);
+    painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, format!("{length:.0} ms"), theme::small(), TEXT_DIM);
+}
+
+/// The kick's click source: synthesized, or a sample dropped or loaded here.
+fn click_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>, zones: &mut Zones) {
+    let track = &app.project.tracks[t];
+    ui.horizontal(|ui| {
+        let (rect, response) = ui.allocate_exact_size(vec2(170.0, 18.0), Sense::click());
+        zones.push((rect, t, 0));
+        let painter = ui.painter();
+        painter.rect_filled(rect, 2.0, theme::BG);
+        if files_hovering(ui) {
+            painter.rect_stroke(rect, 2.0, Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
+        }
+        let text = match track.sample_name(0) {
+            Some(name) => format!("Click: {name}"),
+            None => "Click: sintetizado".into(),
+        };
+        painter.text(rect.left_center() + vec2(4.0, 0.0), Align2::LEFT_CENTER, text, theme::small(), theme::TEXT);
+        if response.on_hover_text("Clic o arrastra una muestra para usarla como click").clicked() {
+            actions.push(Action::LoadSamples(0));
+        }
+        if track.sample(0).is_some() && ui.small_button("✕").on_hover_text("Volver al click sintetizado").clicked() {
+            actions.push(Action::ClearSample(0));
+        }
+    });
 }

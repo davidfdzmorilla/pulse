@@ -8,6 +8,7 @@ mod devices;
 mod export;
 mod history;
 mod input;
+mod kits;
 mod note_edit;
 mod piano_roll;
 mod project;

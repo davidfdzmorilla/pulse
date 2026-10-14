@@ -324,6 +324,7 @@ pub fn format_param(info: &engine::model::ParamInfo, value: f32) -> String {
         Unit::Times => format!("×{value:.2}"),
         Unit::Bits => format!("{value:.1} bits"),
         Unit::Count => format!("{}", value.round()),
+        Unit::Note => crate::project::note_name(value.round().clamp(0.0, 127.0) as u8),
         Unit::Plain => format!("{value:.2}"),
         Unit::Pan => match (value * 50.0).round() as i32 {
             0 => "C".into(),

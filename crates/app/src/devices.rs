@@ -7,7 +7,9 @@ use crate::app::PulseApp;
 use crate::theme::{self, ACCENT, CONTROL, SURFACE, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
-use engine::model::{Device, Effect, FilterMode, InstrumentKind, Param, SynthParams, Waveform};
+use engine::model::{
+    Device, Effect, FilterMode, InstrumentKind, Param, RackParams, SamplerParams, SynthParams, Waveform, RACK_FIRST_NOTE, RACK_PADS,
+};
 use engine::{Command, Target};
 
 const DEVICE_HEIGHT: f32 = 168.0;
@@ -35,6 +37,11 @@ enum Action {
     Param(Param, f32),
     Instrument(InstrumentKind),
     Preview(u8),
+    /// Opens a file dialog for sample slot `n`.
+    LoadSamples(usize),
+    ClearSample(usize),
+    SelectPad(usize),
+    BasicKit,
 }
 
 /// Draws a device frame with a title bar and returns the body's UI result.
@@ -74,13 +81,14 @@ fn device_frame<R>(
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let target = app.selected_target;
     let mut actions = Vec::new();
+    let mut zones = Vec::new();
 
     egui::ScrollArea::horizontal().auto_shrink(false).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             if let Target::Track(t) = target {
                 if !app.project.tracks[t].is_audio() {
-                    instrument_device(app, ui, t, &mut actions);
+                    instrument_device(app, ui, t, &mut actions, &mut zones);
                 }
             }
 
@@ -132,6 +140,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         });
     });
 
+    app.sample_drop_zones.extend(zones);
     for action in actions {
         match action {
             Action::Remove(i) => app.remove_device(target, i),
@@ -150,6 +159,22 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             Action::Preview(pitch) => {
                 if let Target::Track(track) = target {
                     app.audio.send(Command::PreviewNote { track, pitch, velocity: 0.9 });
+                }
+            }
+            Action::LoadSamples(slot) => {
+                if let Target::Track(t) = target {
+                    app.choose_instrument_samples(t, slot);
+                }
+            }
+            Action::ClearSample(slot) => {
+                if let Target::Track(t) = target {
+                    app.clear_instrument_sample(t, slot);
+                }
+            }
+            Action::SelectPad(pad) => app.selected_pad = pad,
+            Action::BasicKit => {
+                if let Target::Track(t) = target {
+                    app.load_basic_kit(t);
                 }
             }
         }
@@ -226,7 +251,9 @@ fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize) {
     }
 }
 
-fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) {
+type Zones = Vec<(Rect, usize, usize)>;
+
+fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>, zones: &mut Zones) {
     let target = Target::Track(t);
     let kind = app.project.tracks[t].instrument;
     // Knob for instrument parameter `i`, showing automation like every other control.
@@ -312,6 +339,98 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 }
             });
         }
+        InstrumentKind::Sampler(base) => {
+            device_frame(ui, kind.label(), 560.0, None, |_| {}, |ui| {
+                ui.vertical(|ui| {
+                    let rect = sample_slot(app, ui, t, 0, vec2(220.0, 78.0), zones);
+                    waveform(app, ui, t, 0, rect, app.display_value(target, Param::Instrument(2)));
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Cargar…").on_hover_text("También puedes arrastrar un archivo de audio aquí").clicked() {
+                            actions.push(Action::LoadSamples(0));
+                        }
+                        if app.project.tracks[t].sample(0).is_some() && ui.small_button("✕").on_hover_text("Quitar la muestra").clicked() {
+                            actions.push(Action::ClearSample(0));
+                        }
+                        if ui.small_button("▶").on_hover_text("Escuchar en la nota raíz").clicked() {
+                            actions.push(Action::Preview(base.root.round() as u8));
+                        }
+                    });
+                    let mut mode = (base.one_shot, base.looping);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.selectable_value(&mut mode, (false, false), "Clásico").on_hover_text("Suena mientras se mantiene la nota");
+                        ui.selectable_value(&mut mode, (true, false), "One-shot").on_hover_text("Suena entera, sin importar la duración de la nota");
+                        ui.selectable_value(&mut mode, (false, true), "Loop").on_hover_text("Repite desde Start mientras se mantiene la nota");
+                    });
+                    if mode != (base.one_shot, base.looping) {
+                        let (one_shot, looping) = mode;
+                        actions.push(Action::Instrument(InstrumentKind::Sampler(SamplerParams { one_shot, looping, ..base })));
+                    }
+                });
+                ui.vertical(|ui| {
+                    for row in [[0, 1, 2, 7, 8], [3, 4, 5, 6, 9]] {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            for i in row {
+                                knob(ui, actions, i, kind.params()[i].name, 26.0);
+                            }
+                        });
+                    }
+                });
+            });
+        }
+        InstrumentKind::DrumRack(base) => {
+            let pad = app.selected_pad.min(RACK_PADS - 1);
+            let header = |ui: &mut egui::Ui| {
+                if ui.small_button("Kit básico").on_hover_text("Carga sonidos de la Drum Machine en los pads").clicked() {
+                    actions.push(Action::BasicKit);
+                }
+            };
+            let mut body_actions = Vec::new();
+            device_frame(ui, kind.label(), 600.0, None, header, |ui| {
+                pad_grid(app, ui, t, pad, &mut body_actions, zones);
+                ui.add_space(6.0);
+                ui.vertical(|ui| {
+                    let track = &app.project.tracks[t];
+                    let note = RACK_FIRST_NOTE + pad as u8;
+                    let name = track.sample_name(pad).unwrap_or_else(|| "Vacío".into());
+                    ui.label(egui::RichText::new(format!("Pad {} · {}", pad + 1, crate::project::note_name(note))).color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(name).strong());
+                    ui.horizontal(|ui| {
+                        if ui.small_button("Cargar…").on_hover_text("Varios archivos llenan los pads siguientes").clicked() {
+                            body_actions.push(Action::LoadSamples(pad));
+                        }
+                        if track.sample(pad).is_some() && ui.small_button("✕").on_hover_text("Vaciar el pad").clicked() {
+                            body_actions.push(Action::ClearSample(pad));
+                        }
+                        let mut choke = base.choke[pad];
+                        let label = |g: u8| if g == 0 { "Sin choke".to_string() } else { format!("Choke {g}") };
+                        egui::ComboBox::from_id_salt(("choke", t))
+                            .selected_text(label(choke))
+                            .width(80.0)
+                            .show_ui(ui, |ui| {
+                                for g in 0..=4 {
+                                    ui.selectable_value(&mut choke, g, label(g));
+                                }
+                            })
+                            .response
+                            .on_hover_text("Los pads del mismo grupo se cortan entre sí (como el hi-hat abierto y cerrado)");
+                        if choke != base.choke[pad] {
+                            let mut params: RackParams = base;
+                            params.choke[pad] = choke;
+                            body_actions.push(Action::Instrument(InstrumentKind::DrumRack(params)));
+                        }
+                    });
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        for (k, label) in ["Tune", "Length", "Level", "Pan"].into_iter().enumerate() {
+                            knob(ui, &mut body_actions, pad * 4 + k, label, 28.0);
+                        }
+                    });
+                });
+            });
+            actions.extend(body_actions);
+        }
         InstrumentKind::SuperSaw(_) | InstrumentKind::Fm(_) => {
             let width = kind.params().len() as f32 * 52.0 + 24.0;
             device_frame(ui, kind.label(), width, None, |_| {}, |ui| {
@@ -340,4 +459,86 @@ fn envelope_preview(ui: &mut egui::Ui, p: &SynthParams) {
     ];
     painter.add(egui::Shape::line(points, Stroke::new(1.5, ACCENT)));
     painter.text(rect.right_top() + vec2(-4.0, 4.0), Align2::RIGHT_TOP, "ADSR", theme::small(), Color32::from_gray(110));
+}
+
+/// True while files are dragged over the window.
+fn files_hovering(ui: &egui::Ui) -> bool {
+    ui.ctx().input(|i| !i.raw.hovered_files.is_empty())
+}
+
+/// Allocates an area that accepts dropped samples for `slot` and returns it.
+fn sample_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, slot: usize, size: egui::Vec2, zones: &mut Zones) -> Rect {
+    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
+    zones.push((rect, t, slot));
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, theme::BG);
+    if files_hovering(ui) {
+        painter.rect_stroke(rect, 2.0, Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
+    }
+    if app.project.tracks[t].sample(slot).is_none() {
+        painter.text(rect.center(), Align2::CENTER_CENTER, "Arrastra una muestra aquí", theme::small(), TEXT_DIM);
+    }
+    rect
+}
+
+/// Draws the sample in `slot` with its start point.
+fn waveform(app: &PulseApp, ui: &egui::Ui, t: usize, slot: usize, rect: Rect, start: f32) {
+    let track = &app.project.tracks[t];
+    let Some(sample) = track.sample(slot).and_then(|p| app.loaded_sample(p)) else { return };
+    let painter = ui.painter_at(rect);
+    let peaks = &sample.peaks;
+    if !peaks.is_empty() {
+        let columns = rect.width() as usize;
+        let mid = rect.center().y;
+        let half = rect.height() * 0.42;
+        for x in 0..columns {
+            let from = x * peaks.len() / columns;
+            let to = ((x + 1) * peaks.len() / columns).max(from + 1).min(peaks.len());
+            let (lo, hi) = peaks[from..to].iter().fold((0f32, 0f32), |(a, b), &(lo, hi)| (a.min(lo), b.max(hi)));
+            let px = rect.left() + x as f32 + 0.5;
+            painter.line_segment([pos2(px, mid - hi * half), pos2(px, mid - lo * half)], Stroke::new(1.0, Color32::from_gray(170)));
+        }
+    }
+    let x = rect.left() + rect.width() * start;
+    painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, ACCENT));
+    let name = track.sample_name(slot).unwrap_or_default();
+    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, name, theme::small(), theme::TEXT);
+}
+
+/// The rack's sixteen pads, pad 1 at the bottom left as on hardware controllers.
+fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, actions: &mut Vec<Action>, zones: &mut Zones) {
+    const PAD: egui::Vec2 = vec2(70.0, 30.0);
+    let (area, _) = ui.allocate_exact_size(vec2(4.0 * (PAD.x + 3.0), 4.0 * (PAD.y + 3.0)), Sense::hover());
+    let track = &app.project.tracks[t];
+    let hovering = files_hovering(ui);
+    for pad in 0..RACK_PADS {
+        let (column, row) = (pad % 4, 3 - pad / 4);
+        let min = area.min + vec2(column as f32 * (PAD.x + 3.0), row as f32 * (PAD.y + 3.0));
+        let rect = Rect::from_min_size(min, PAD);
+        zones.push((rect, t, pad));
+        let response = ui.interact(rect, ui.id().with(("pad", pad)), Sense::click());
+        let name = track.sample_name(pad);
+        let fill = match (pad == selected, name.is_some(), response.hovered()) {
+            (true, ..) => theme::CONTROL_HOVER,
+            (_, true, true) => theme::SLOT_HOVER,
+            (_, true, false) => theme::CONTROL,
+            (_, false, _) => theme::SLOT,
+        };
+        let painter = ui.painter();
+        painter.rect_filled(rect, 3.0, fill);
+        if pad == selected || (hovering && response.contains_pointer()) {
+            painter.rect_stroke(rect, 3.0, Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
+        }
+        let note = RACK_FIRST_NOTE + pad as u8;
+        painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, crate::project::note_name(note), theme::small(), TEXT_DIM);
+        if let Some(name) = name {
+            let short: String = name.chars().take(11).collect();
+            painter.text(rect.left_bottom() + vec2(4.0, -3.0), Align2::LEFT_BOTTOM, short, theme::small(), theme::TEXT);
+        }
+        let response = response.on_hover_text(track.sample_name(pad).unwrap_or_else(|| "Pad vacío: arrastra una muestra".into()));
+        if response.clicked() {
+            actions.push(Action::SelectPad(pad));
+            actions.push(Action::Preview(note));
+        }
+    }
 }

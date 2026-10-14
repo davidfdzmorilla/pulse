@@ -2,13 +2,16 @@
 //!
 //! Brings in what Pulse can represent: tempo, loop, scene names, MIDI and audio
 //! tracks with their mixer settings, session clips and arrangement clips (notes,
-//! or samples with their warp settings). Live's devices are proprietary, so MIDI
-//! tracks get Pulse's default instrument (or the drum kit when the track holds a
-//! Drum Rack). Group tracks are skipped and counted in the report. The parser is
+//! or samples with their warp settings). Live's synths are proprietary, so MIDI
+//! tracks get Pulse's default instrument; the samples of Drum Racks and of
+//! Simpler/Sampler devices are loaded into Pulse's Drum Rack and Sampler (a Drum
+//! Rack without samples becomes the drum machine). Group tracks are skipped and counted in the report. The parser is
 //! lenient: anything missing falls back to a default instead of failing.
 
 use crate::project::{Mixer, Project, Track, PALETTE};
-use engine::model::{ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, SynthParams, WarpMode};
+use engine::model::{
+    rack_pad, ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, RackParams, SamplerParams, SynthParams, WarpMode, RACK_FIRST_NOTE,
+};
 use engine::{MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
 use roxmltree::{Document, Node};
 use std::io::Read;
@@ -242,10 +245,9 @@ fn track(node: Node, index: usize, ctx: &Context, report: &mut ImportReport) -> 
     let color = color(node, index * 5);
     let mut track = if audio {
         Track::new_audio(name, color)
-    } else if node.descendants().any(|n| n.has_tag_name("DrumGroupDevice")) {
-        Track::new(name, color, InstrumentKind::DrumMachine(Default::default()))
     } else {
-        Track::new(name, color, InstrumentKind::Synth(SynthParams::default()))
+        let (instrument, samples) = instrument(node, ctx, report);
+        Track { samples, ..Track::new(name, color, instrument) }
     };
     track.mixer = mixer(node);
     if let Some(sends) = path(node, &["DeviceChain", "Mixer", "Sends"]) {
@@ -295,6 +297,50 @@ fn track(node: Node, index: usize, ctx: &Context, report: &mut ImportReport) -> 
         }
     }
     track
+}
+
+/// The first sample zone inside a Simpler or Sampler.
+fn first_part<'a, 'i>(node: Node<'a, 'i>) -> Option<Node<'a, 'i>> {
+    node.descendants().find(|n| n.has_tag_name("MultiSamplePart") && child(*n, "SampleRef").is_some())
+}
+
+/// The instrument for a MIDI track and the files it plays, from Live's devices.
+fn instrument(track: Node, ctx: &Context, report: &mut ImportReport) -> (InstrumentKind, Vec<String>) {
+    let mut found = |part: Node| -> String {
+        let path = resolve_sample(part, ctx.base);
+        if !path.is_file() {
+            report.missing_samples += 1;
+        }
+        path.to_string_lossy().into_owned()
+    };
+    if let Some(rack) = track.descendants().find(|n| n.has_tag_name("DrumGroupDevice")) {
+        let mut samples = Vec::new();
+        let branches = rack.descendants().filter(|n| n.has_tag_name("DrumBranch"));
+        for (index, branch) in branches.enumerate() {
+            // Live stores the pad note mirrored: 128 - MIDI note.
+            let note = number(branch, &["BranchInfo", "ReceivingNote"]).map(|n| 128.0 - n);
+            let pad = match note {
+                Some(note) if (0.0..128.0).contains(&note) => rack_pad(note as u8),
+                _ => rack_pad(RACK_FIRST_NOTE + index as u8),
+            };
+            let (Some(pad), Some(part)) = (pad, first_part(branch)) else { continue };
+            if samples.len() <= pad {
+                samples.resize(pad + 1, String::new());
+            }
+            samples[pad] = found(part);
+        }
+        if samples.iter().any(|s| !s.is_empty()) {
+            return (InstrumentKind::DrumRack(RackParams::default()), samples);
+        }
+        return (InstrumentKind::DrumMachine(Default::default()), Vec::new());
+    }
+    let sampler = track.descendants().find(|n| n.has_tag_name("OriginalSimpler") || n.has_tag_name("MultiSampler"));
+    if let Some(part) = sampler.and_then(first_part) {
+        let root = number(part, &["RootKey"]).unwrap_or(60.0) as f32;
+        let params = SamplerParams { root: root.clamp(0.0, 127.0), ..SamplerParams::default() };
+        return (InstrumentKind::Sampler(params), vec![found(part)]);
+    }
+    (InstrumentKind::Synth(SynthParams::default()), Vec::new())
 }
 
 /// The clip's content window in clip time: (start, length).
@@ -733,5 +779,40 @@ mod tests {
         let Some(Clip::Audio(session)) = &project.tracks[0].clips[0] else { panic!("expected an audio clip") };
         assert!(session.sample.ends_with("Samples/Imported/break.wav"));
         assert_eq!(report.missing_samples, 0);
+    }
+
+    #[test]
+    fn drum_rack_and_simpler_samples_come_across() {
+        let set = r#"<Ableton><LiveSet><Tracks>
+          <MidiTrack><Name><EffectiveName Value="Kit"/></Name><DeviceChain><DeviceChain><Devices>
+            <DrumGroupDevice><Branches>
+              <DrumBranch><DeviceChain><MidiToAudioDeviceChain><Devices><OriginalSimpler><Player><MultiSampleMap><SampleParts>
+                <MultiSamplePart><RootKey Value="60"/><SampleRef><FileRef><Path Value="/nowhere/kick.wav"/></FileRef></SampleRef></MultiSamplePart>
+              </SampleParts></MultiSampleMap></Player></OriginalSimpler></Devices></MidiToAudioDeviceChain></DeviceChain>
+              <BranchInfo><ReceivingNote Value="92"/></BranchInfo></DrumBranch>
+              <DrumBranch><DeviceChain><MidiToAudioDeviceChain><Devices><OriginalSimpler><Player><MultiSampleMap><SampleParts>
+                <MultiSamplePart><SampleRef><FileRef><Path Value="/nowhere/snare.wav"/></FileRef></SampleRef></MultiSamplePart>
+              </SampleParts></MultiSampleMap></Player></OriginalSimpler></Devices></MidiToAudioDeviceChain></DeviceChain>
+              <BranchInfo><ReceivingNote Value="90"/></BranchInfo></DrumBranch>
+            </Branches></DrumGroupDevice>
+          </Devices></DeviceChain></DeviceChain></MidiTrack>
+          <MidiTrack><Name><EffectiveName Value="Keys"/></Name><DeviceChain><DeviceChain><Devices>
+            <OriginalSimpler><Player><MultiSampleMap><SampleParts>
+              <MultiSamplePart><RootKey Value="48"/><SampleRef><FileRef><Path Value="/nowhere/piano.wav"/></FileRef></SampleRef></MultiSamplePart>
+            </SampleParts></MultiSampleMap></Player></OriginalSimpler>
+          </Devices></DeviceChain></DeviceChain></MidiTrack>
+        </Tracks></LiveSet></Ableton>"#;
+        let (project, report) = parse(set).unwrap();
+        let kit = &project.tracks[0];
+        assert!(matches!(kit.instrument, InstrumentKind::DrumRack(_)));
+        // Notes 36 (kick) and 38 (snare) land on pads 1 and 3.
+        assert_eq!(kit.sample(0), Some("/nowhere/kick.wav"));
+        assert_eq!(kit.sample(1), None);
+        assert_eq!(kit.sample(2), Some("/nowhere/snare.wav"));
+        let keys = &project.tracks[1];
+        let InstrumentKind::Sampler(params) = keys.instrument else { panic!("expected a sampler") };
+        assert_eq!(params.root, 48.0);
+        assert_eq!(keys.sample(0), Some("/nowhere/piano.wav"));
+        assert_eq!(report.missing_samples, 3);
     }
 }

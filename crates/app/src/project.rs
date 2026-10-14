@@ -2,7 +2,7 @@
 
 use engine::model::{
     drum_note::*, AcidParams, ArrangementClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, FmParams, SuperSawParams, CompressorParams, DelayParams, Device, Effect,
-    InstrumentKind, MidiClip, Note, Param, ReverbParams, SynthParams,
+    InstrumentKind, MidiClip, Note, Param, ReverbParams, SynthParams, RACK_FIRST_NOTE, RACK_PADS,
 };
 use engine::{NUM_RETURNS, NUM_SCENES};
 use serde::{Deserialize, Serialize};
@@ -68,6 +68,10 @@ pub struct Track {
     pub arrangement: Vec<ArrangementClip>,
     #[serde(default)]
     pub automation: Vec<AutomationLane>,
+    /// Audio files played by the sampler (slot 0) or the drum rack (one per pad).
+    /// Empty strings are empty pads.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub samples: Vec<String>,
 }
 
 impl Track {
@@ -85,6 +89,7 @@ impl Track {
             clips: Default::default(),
             arrangement: Vec::new(),
             automation: Vec::new(),
+            samples: Vec::new(),
         }
     }
 
@@ -101,6 +106,41 @@ impl Track {
 
     pub fn is_drums(&self) -> bool {
         self.instrument.is_drums()
+    }
+
+    /// The file in sample slot `slot`, if any.
+    pub fn sample(&self, slot: usize) -> Option<&str> {
+        self.samples.get(slot).map(String::as_str).filter(|p| !p.is_empty())
+    }
+
+    pub fn set_sample(&mut self, slot: usize, path: Option<String>) {
+        if self.samples.len() <= slot {
+            self.samples.resize(slot + 1, String::new());
+        }
+        self.samples[slot] = path.unwrap_or_default();
+        while self.samples.last().is_some_and(String::is_empty) {
+            self.samples.pop();
+        }
+    }
+
+    /// Display name of sample slot `slot`: the file name without extension.
+    pub fn sample_name(&self, slot: usize) -> Option<String> {
+        let path = Path::new(self.sample(slot)?);
+        Some(path.file_stem().map_or_else(|| path.display().to_string(), |s| s.to_string_lossy().into_owned()))
+    }
+
+    /// Piano roll rows for drum instruments, top to bottom: (note, name).
+    pub fn drum_rows(&self) -> Vec<(u8, String)> {
+        match self.instrument {
+            InstrumentKind::DrumRack(_) => (0..RACK_PADS)
+                .rev()
+                .map(|pad| {
+                    let pitch = RACK_FIRST_NOTE + pad as u8;
+                    (pitch, self.sample_name(pad).unwrap_or_else(|| note_name(pitch)))
+                })
+                .collect(),
+            _ => engine::model::DRUM_VOICES.iter().rev().map(|&(pitch, name)| (pitch, name.to_string())).collect(),
+        }
     }
 
     /// Beat where the last arrangement clip ends.
@@ -414,9 +454,6 @@ pub fn is_black_key(pitch: u8) -> bool {
     matches!(pitch % 12, 1 | 3 | 6 | 8 | 10)
 }
 
-pub fn drum_name(pitch: u8) -> Option<&'static str> {
-    engine::model::DRUM_VOICES.iter().find(|(p, _)| *p == pitch).map(|(_, name)| *name)
-}
 
 #[cfg(test)]
 mod tests {
@@ -432,5 +469,23 @@ mod tests {
         let loaded = Project::load(&path).unwrap();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(project, loaded);
+    }
+
+    #[test]
+    fn sample_slots_round_trip_and_trim_empty_pads() {
+        let mut track = Track::new("Rack", PALETTE[0], InstrumentKind::DrumRack(Default::default()));
+        track.set_sample(2, Some("/a/snare.wav".into()));
+        assert_eq!(track.samples, vec!["", "", "/a/snare.wav"]);
+        assert_eq!(track.sample_name(2).as_deref(), Some("snare"));
+        let rows = track.drum_rows();
+        assert_eq!(rows.len(), RACK_PADS);
+        assert_eq!(rows[RACK_PADS - 3], (38, "snare".to_string()), "pads go up from the bottom row");
+        let json = serde_json::to_string(&track).unwrap();
+        assert_eq!(serde_json::from_str::<Track>(&json).unwrap(), track);
+        track.set_sample(2, None);
+        assert!(track.samples.is_empty());
+        // Tracks saved before samples existed still load.
+        let old = serde_json::to_string(&Track::new("Synth", PALETTE[0], InstrumentKind::Synth(Default::default()))).unwrap();
+        assert!(!old.contains("samples"));
     }
 }

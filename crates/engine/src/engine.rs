@@ -10,6 +10,7 @@ use crate::effects::{EffectProcessor, ProcessContext};
 use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, InstrumentKind, MidiClip, Param, WarpMode};
 use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
+use crate::sampler::{DrumRack, Sampler};
 use crate::synth::{Click, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -112,6 +113,7 @@ pub enum Garbage {
     Chain(Box<Vec<ChainSlot>>),
     Arrangement(Box<Vec<PlacedClip>>),
     Automation(Box<Vec<AutomationLane>>),
+    Samples(Box<Vec<Arc<Sample>>>),
 }
 
 pub enum Command {
@@ -149,6 +151,11 @@ pub enum Command {
     SetInstrument {
         track: usize,
         kind: InstrumentKind,
+    },
+    /// The samples a track's sampler or drum rack plays, by slot (pad).
+    SetSamples {
+        track: usize,
+        samples: Box<Vec<Arc<Sample>>>,
     },
     SetGain {
         target: Target,
@@ -331,6 +338,8 @@ enum Instrument {
     SuperSaw(SuperSaw),
     Acid(AcidBass),
     Fm(FmSynth),
+    Sampler(Sampler),
+    Rack(DrumRack),
 }
 
 impl Instrument {
@@ -341,6 +350,8 @@ impl Instrument {
             InstrumentKind::SuperSaw(p) => Self::SuperSaw(SuperSaw::new(p, sample_rate)),
             InstrumentKind::Acid(p) => Self::Acid(AcidBass::new(p, sample_rate)),
             InstrumentKind::Fm(p) => Self::Fm(FmSynth::new(p, sample_rate)),
+            InstrumentKind::Sampler(p) => Self::Sampler(Sampler::new(p, sample_rate)),
+            InstrumentKind::DrumRack(p) => Self::Rack(DrumRack::new(p, sample_rate)),
             InstrumentKind::Drums => unreachable!("upgraded above"),
         }
     }
@@ -352,6 +363,8 @@ impl Instrument {
             Self::SuperSaw(s) => InstrumentKind::SuperSaw(s.params()),
             Self::Acid(a) => InstrumentKind::Acid(a.params()),
             Self::Fm(f) => InstrumentKind::Fm(f.params()),
+            Self::Sampler(s) => InstrumentKind::Sampler(s.params()),
+            Self::Rack(r) => InstrumentKind::DrumRack(r.params()),
         }
     }
 
@@ -363,6 +376,8 @@ impl Instrument {
             (Self::SuperSaw(s), InstrumentKind::SuperSaw(p)) => s.set_params(p),
             (Self::Acid(a), InstrumentKind::Acid(p)) => a.set_params(p),
             (Self::Fm(f), InstrumentKind::Fm(p)) => f.set_params(p),
+            (Self::Sampler(s), InstrumentKind::Sampler(p)) => s.set_params(p),
+            (Self::Rack(r), InstrumentKind::DrumRack(p)) => r.set_params(p),
             _ => return false,
         }
         true
@@ -374,13 +389,15 @@ impl Instrument {
         self.update(kind);
     }
 
-    fn note_on(&mut self, pitch: u8, velocity: f32, gate_samples: u32) {
+    fn note_on(&mut self, samples: &[Arc<Sample>], pitch: u8, velocity: f32, gate_samples: u32) {
         match self {
             Self::Synth(s) => s.note_on(pitch, velocity, gate_samples),
             Self::Drums(d) => d.note_on(pitch, velocity),
             Self::SuperSaw(s) => s.note_on(pitch, velocity, gate_samples),
             Self::Acid(a) => a.note_on(pitch, velocity, gate_samples),
             Self::Fm(f) => f.note_on(pitch, velocity, gate_samples),
+            Self::Sampler(s) => s.note_on(samples, pitch, velocity, gate_samples),
+            Self::Rack(r) => r.note_on(samples, pitch, velocity),
         }
     }
 
@@ -391,6 +408,8 @@ impl Instrument {
             Self::SuperSaw(s) => s.note_off(pitch),
             Self::Acid(a) => a.note_off(pitch),
             Self::Fm(f) => f.note_off(pitch),
+            Self::Sampler(s) => s.note_off(pitch),
+            Self::Rack(_) => {}
         }
     }
 
@@ -401,11 +420,13 @@ impl Instrument {
             Self::SuperSaw(s) => s.all_notes_off(),
             Self::Acid(a) => a.all_notes_off(),
             Self::Fm(f) => f.all_notes_off(),
+            Self::Sampler(s) => s.all_notes_off(),
+            Self::Rack(_) => {}
         }
     }
 
     /// Adds the instrument's output to `left`/`right`.
-    fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+    fn render(&mut self, samples: &[Arc<Sample>], left: &mut [f32], right: &mut [f32]) {
         match self {
             Self::Synth(s) => {
                 // Mono synth: render once and copy.
@@ -416,6 +437,8 @@ impl Instrument {
             Self::SuperSaw(s) => s.render(left, right),
             Self::Acid(a) => a.render(left, right),
             Self::Fm(f) => f.render(left, right),
+            Self::Sampler(s) => s.render(samples, left, right),
+            Self::Rack(r) => r.render(samples, left, right),
         }
     }
 }
@@ -677,6 +700,8 @@ struct Track {
     launch_beat: f64,
     queued: Queued,
     instrument: Instrument,
+    /// What the sampler or drum rack plays.
+    samples: Box<Vec<Arc<Sample>>>,
     solo: bool,
     sends: [f32; NUM_RETURNS],
     arrangement: Box<Vec<PlacedClip>>,
@@ -714,6 +739,7 @@ impl Track {
             launch_beat: 0.0,
             queued: Queued::Nothing,
             instrument: Instrument::new(InstrumentKind::Synth(Default::default()), sample_rate),
+            samples: Box::default(),
             solo: false,
             sends: [0.0; NUM_RETURNS],
             arrangement: Box::default(),
@@ -971,6 +997,11 @@ impl Engine {
                     t.instrument = Instrument::new(kind, self.sample_rate);
                 }
             }
+            Command::SetSamples { track, mut samples } => {
+                let Some(t) = self.tracks.get_mut(track) else { return };
+                std::mem::swap(&mut t.samples, &mut samples);
+                self.discard(Garbage::Samples(samples));
+            }
             Command::SetGain { target, gain } => {
                 if let Some(c) = self.channel(target) {
                     c.gain = gain.max(0.0);
@@ -1184,16 +1215,16 @@ impl Engine {
             for &(frame, _, event) in &track.events {
                 let frame = frame.min(n - 1);
                 if frame > cursor {
-                    track.instrument.render(&mut left[cursor..frame], &mut right[cursor..frame]);
+                    track.instrument.render(&track.samples, &mut left[cursor..frame], &mut right[cursor..frame]);
                     cursor = frame;
                 }
                 match event {
                     Event::AllNotesOff => track.instrument.all_notes_off(),
                     Event::NoteOff { pitch } => track.instrument.note_off(pitch),
-                    Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(pitch, velocity, gate),
+                    Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(&track.samples, pitch, velocity, gate),
                 }
             }
-            track.instrument.render(&mut left[cursor..], &mut right[cursor..]);
+            track.instrument.render(&track.samples, &mut left[cursor..], &mut right[cursor..]);
             track.events.clear();
 
             let channel = &mut track.channel;

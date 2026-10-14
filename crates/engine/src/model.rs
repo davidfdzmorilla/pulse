@@ -202,6 +202,86 @@ pub enum InstrumentKind {
     SuperSaw(SuperSawParams),
     Acid(AcidParams),
     Fm(FmParams),
+    /// Plays one sample chromatically; the file is the track's first sample.
+    Sampler(SamplerParams),
+    /// Sixteen pads, each playing one of the track's samples.
+    DrumRack(RackParams),
+}
+
+/// Parameters of the sampler. The sample itself lives on the track.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SamplerParams {
+    /// Plays the whole sample regardless of note length.
+    pub one_shot: bool,
+    /// Loops from the start point while the note is held.
+    pub looping: bool,
+    /// MIDI note at which the sample plays at its original pitch.
+    pub root: f32,
+    pub tune: f32,
+    /// Start point as a fraction of the sample length.
+    pub start: f32,
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+    pub cutoff: f32,
+    pub resonance: f32,
+    pub gain: f32,
+}
+
+impl Default for SamplerParams {
+    fn default() -> Self {
+        Self {
+            one_shot: false,
+            looping: false,
+            root: 60.0,
+            tune: 0.0,
+            start: 0.0,
+            attack: 0.001,
+            decay: 1.0,
+            sustain: 1.0,
+            release: 0.1,
+            cutoff: 20000.0,
+            resonance: 0.0,
+            gain: 0.7,
+        }
+    }
+}
+
+pub const RACK_PADS: usize = 16;
+/// MIDI note of the first pad (C1, the General MIDI kick); pads go up chromatically.
+pub const RACK_FIRST_NOTE: u8 = 36;
+/// Pad lengths at the top of the range play the whole sample.
+pub const RACK_FULL_LENGTH: f32 = 10.0;
+
+/// Per-pad settings of the drum rack.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RackParams {
+    pub tune: [f32; RACK_PADS],
+    /// Seconds before the pad fades out; [`RACK_FULL_LENGTH`] plays the whole sample.
+    pub length: [f32; RACK_PADS],
+    pub level: [f32; RACK_PADS],
+    pub pan: [f32; RACK_PADS],
+    /// Pads sharing a non-zero group cut each other off (like open and closed hats).
+    pub choke: [u8; RACK_PADS],
+}
+
+impl Default for RackParams {
+    fn default() -> Self {
+        Self {
+            tune: [0.0; RACK_PADS],
+            length: [RACK_FULL_LENGTH; RACK_PADS],
+            level: [0.8; RACK_PADS],
+            pan: [0.0; RACK_PADS],
+            choke: [0; RACK_PADS],
+        }
+    }
+}
+
+/// The drum rack pad that `pitch` triggers.
+pub fn rack_pad(pitch: u8) -> Option<usize> {
+    let pad = pitch.checked_sub(RACK_FIRST_NOTE)? as usize;
+    (pad < RACK_PADS).then_some(pad)
 }
 
 pub mod drum_note {
@@ -678,6 +758,8 @@ pub enum Unit {
     Times,
     Bits,
     Count,
+    /// A MIDI note number, shown as "C3".
+    Note,
     Plain,
 }
 
@@ -825,6 +907,52 @@ const FM_PARAMS: [ParamInfo; 10] = [
     ParamInfo::log("Release", 0.005, 4.0, 0.6, Seconds),
     ParamInfo::linear("Volume", 0.0, 1.0, 0.45, Percent),
 ];
+const SAMPLER_PARAMS: [ParamInfo; 10] = [
+    ParamInfo::linear("Root", 0.0, 127.0, 60.0, Note),
+    ParamInfo::linear("Tune", -24.0, 24.0, 0.0, Semitones),
+    ParamInfo::linear("Start", 0.0, 0.99, 0.0, Percent),
+    ParamInfo::log("Attack", 0.001, 4.0, 0.001, Seconds),
+    ParamInfo::log("Decay", 0.005, 8.0, 1.0, Seconds),
+    ParamInfo::linear("Sustain", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::log("Release", 0.005, 8.0, 0.1, Seconds),
+    ParamInfo::log("Filter", 40.0, 20000.0, 20000.0, Hertz),
+    ParamInfo::linear("Res", 0.0, 0.95, 0.0, Percent),
+    ParamInfo::linear("Volume", 0.0, 1.0, 0.7, Percent),
+];
+/// Pad parameters, four per pad: "Pad 1 Tune", "Pad 1 Length", …
+const RACK_PARAMS: [ParamInfo; RACK_PADS * 4] = {
+    const NAMES: [[&str; 4]; RACK_PADS] = {
+        // Built by hand because `format!` is not const.
+        [
+            ["Pad 1 Tune", "Pad 1 Length", "Pad 1 Level", "Pad 1 Pan"],
+            ["Pad 2 Tune", "Pad 2 Length", "Pad 2 Level", "Pad 2 Pan"],
+            ["Pad 3 Tune", "Pad 3 Length", "Pad 3 Level", "Pad 3 Pan"],
+            ["Pad 4 Tune", "Pad 4 Length", "Pad 4 Level", "Pad 4 Pan"],
+            ["Pad 5 Tune", "Pad 5 Length", "Pad 5 Level", "Pad 5 Pan"],
+            ["Pad 6 Tune", "Pad 6 Length", "Pad 6 Level", "Pad 6 Pan"],
+            ["Pad 7 Tune", "Pad 7 Length", "Pad 7 Level", "Pad 7 Pan"],
+            ["Pad 8 Tune", "Pad 8 Length", "Pad 8 Level", "Pad 8 Pan"],
+            ["Pad 9 Tune", "Pad 9 Length", "Pad 9 Level", "Pad 9 Pan"],
+            ["Pad 10 Tune", "Pad 10 Length", "Pad 10 Level", "Pad 10 Pan"],
+            ["Pad 11 Tune", "Pad 11 Length", "Pad 11 Level", "Pad 11 Pan"],
+            ["Pad 12 Tune", "Pad 12 Length", "Pad 12 Level", "Pad 12 Pan"],
+            ["Pad 13 Tune", "Pad 13 Length", "Pad 13 Level", "Pad 13 Pan"],
+            ["Pad 14 Tune", "Pad 14 Length", "Pad 14 Level", "Pad 14 Pan"],
+            ["Pad 15 Tune", "Pad 15 Length", "Pad 15 Level", "Pad 15 Pan"],
+            ["Pad 16 Tune", "Pad 16 Length", "Pad 16 Level", "Pad 16 Pan"],
+        ]
+    };
+    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); RACK_PADS * 4];
+    let mut pad = 0;
+    while pad < RACK_PADS {
+        table[pad * 4] = ParamInfo::linear(NAMES[pad][0], -24.0, 24.0, 0.0, Semitones);
+        table[pad * 4 + 1] = ParamInfo::log(NAMES[pad][1], 0.02, RACK_FULL_LENGTH, RACK_FULL_LENGTH, Seconds);
+        table[pad * 4 + 2] = ParamInfo::linear(NAMES[pad][2], 0.0, 1.0, 0.8, Percent);
+        table[pad * 4 + 3] = ParamInfo::linear(NAMES[pad][3], -1.0, 1.0, 0.0, Pan);
+        pad += 1;
+    }
+    table
+};
 const DRUM_PARAMS: [ParamInfo; 24] = {
     let names = [
         ["Kick Tune", "Kick Decay", "Kick Level"],
@@ -849,13 +977,15 @@ const DRUM_PARAMS: [ParamInfo; 24] = {
 
 impl InstrumentKind {
     /// Every instrument, in browser order.
-    pub fn catalog() -> [InstrumentKind; 5] {
+    pub fn catalog() -> [InstrumentKind; 7] {
         [
             InstrumentKind::Synth(SynthParams::default()),
             InstrumentKind::SuperSaw(SuperSawParams::default()),
             InstrumentKind::Acid(AcidParams::default()),
             InstrumentKind::Fm(FmParams::default()),
+            InstrumentKind::Sampler(SamplerParams::default()),
             InstrumentKind::DrumMachine(DrumParams::default()),
+            InstrumentKind::DrumRack(RackParams::default()),
         ]
     }
 
@@ -866,11 +996,18 @@ impl InstrumentKind {
             InstrumentKind::SuperSaw(_) => "Super Saw",
             InstrumentKind::Acid(_) => "Acid Bass",
             InstrumentKind::Fm(_) => "FM Synth",
+            InstrumentKind::Sampler(_) => "Sampler",
+            InstrumentKind::DrumRack(_) => "Drum Rack",
         }
     }
 
     pub fn is_drums(&self) -> bool {
-        matches!(self, InstrumentKind::Drums | InstrumentKind::DrumMachine(_))
+        matches!(self, InstrumentKind::Drums | InstrumentKind::DrumMachine(_) | InstrumentKind::DrumRack(_))
+    }
+
+    /// True for instruments that play the track's samples.
+    pub fn uses_samples(&self) -> bool {
+        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_))
     }
 
     /// Replaces the parameterless first drum kit with the drum machine.
@@ -889,6 +1026,8 @@ impl InstrumentKind {
             InstrumentKind::SuperSaw(_) => &SUPERSAW_PARAMS,
             InstrumentKind::Acid(_) => &ACID_PARAMS,
             InstrumentKind::Fm(_) => &FM_PARAMS,
+            InstrumentKind::Sampler(_) => &SAMPLER_PARAMS,
+            InstrumentKind::DrumRack(_) => &RACK_PARAMS,
         }
     }
 
@@ -938,6 +1077,25 @@ impl InstrumentKind {
                 8 => &mut p.release,
                 9 => &mut p.gain,
                 _ => return None,
+            },
+            InstrumentKind::Sampler(p) => match index {
+                0 => &mut p.root,
+                1 => &mut p.tune,
+                2 => &mut p.start,
+                3 => &mut p.attack,
+                4 => &mut p.decay,
+                5 => &mut p.sustain,
+                6 => &mut p.release,
+                7 => &mut p.cutoff,
+                8 => &mut p.resonance,
+                9 => &mut p.gain,
+                _ => return None,
+            },
+            InstrumentKind::DrumRack(p) => match index % 4 {
+                0 => p.tune.get_mut(index / 4)?,
+                1 => p.length.get_mut(index / 4)?,
+                2 => p.level.get_mut(index / 4)?,
+                _ => p.pan.get_mut(index / 4)?,
             },
         })
     }

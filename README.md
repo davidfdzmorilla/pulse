@@ -76,9 +76,11 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 - **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI y
   de audio (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus
   notas o sus muestras y ajustes de warp. Las muestras se buscan por ruta y, si el set viene de otro
-  ordenador, por nombre dentro de la carpeta del set. Los dispositivos de Live no se pueden leer: las pistas
-  con Drum Rack reciben el Drum Kit y el resto Pulse Synth. Los grupos se omiten.
-- **Dispositivos**: desde el navegador, cinco instrumentos y doce efectos, todos automatizables:
+  ordenador, por nombre dentro de la carpeta del set. Los Drum Racks de Live pasan al Drum Rack de Pulse con
+  sus muestras en los mismos pads, y los Simpler/Sampler al Sampler con su nota raíz. Los sintetizadores de
+  Live no se pueden leer: esas pistas reciben Pulse Synth (o la Drum Machine si es un Drum Rack sin
+  muestras). Los grupos se omiten.
+- **Dispositivos**: desde el navegador, siete instrumentos y doce efectos, todos automatizables:
   - **Pulse Synth**: sintetizador sustractivo sencillo.
   - **Super Saw**: hasta 7 dientes de sierra desafinados y abiertos en estéreo (leads y pads de trance/EDM).
   - **Acid Bass**: bajo monofónico con filtro de 4 polos resonante, envolvente de filtro, acento (velocidad
@@ -86,6 +88,13 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   - **FM Synth**: dos operadores con realimentación (campanas, e-pianos, bajos metálicos).
   - **Drum Machine**: bombo, rimshot, caja, palmas, hats cerrado/abierto, tom y cencerro, cada uno con
     afinación, decay y nivel (mapa General MIDI; 47/48/50 tocan el tom más agudo).
+  - **Sampler**: toca una muestra cromáticamente desde su nota raíz, con punto de inicio, ADSR, filtro y tres
+    modos: Clásico (mientras se mantiene la nota), One-shot (entera) y Loop. Arrastra un archivo de audio al
+    dispositivo o usa «Cargar…».
+  - **Drum Rack**: 16 pads (C1–D#2, el pad 1 abajo a la izquierda), cada uno con su muestra, afinación,
+    longitud, nivel, panorama y grupo de choke. Clic en un pad para escucharlo y editarlo; arrastra una o
+    varias muestras sobre los pads. Al elegirlo en una pista vacía arranca con el **Kit básico** (los sonidos
+    de la Drum Machine, guardados como WAV en `~/Library/Application Support/Pulse/Kits`).
   - Efectos: EQ Three, Compressor, **Limiter**, Saturator, **Bitcrusher**, Auto Filter, **Ducker** (bombeo
     sincronizado al tempo), **Chorus**, **Phaser**, Delay, Reverb y **Utility** (ganancia y anchura estéreo).
   Knobs: arrastrar arriba/abajo, Shift para ajuste fino, doble clic para el valor por defecto.
@@ -98,5 +107,5 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 2. Monitorización y compensación de latencia al grabar audio; grabar la sesión en el Arrangement;
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
-4. Sampler (instrumento a partir de una muestra) y Drum Rack con muestras.
+4. Trocear un loop en pads del Drum Rack; multisamples (zonas por tecla y velocidad) en el Sampler.
 5. Plugins VST3 / CLAP.

@@ -581,4 +581,59 @@ mod playback {
         assert_eq!(playing, 0);
         assert!(track_peak > 0.01, "the new track should sound");
     }
+
+    /// Renders `project` for `frames` with clip 0 of `track` launched; returns the track's peak.
+    fn track_peak(project: &Project, track: usize, frames: usize) -> f32 {
+        let mut renderer = OfflineRenderer::new(48_000.0);
+        for command in sync::project_commands(project, &mut SampleCache::default(), 48_000.0, &HashSet::new()) {
+            renderer.send(command);
+        }
+        renderer.send(Command::LaunchClip { track, slot: 0 });
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        renderer.render(frames, &mut l, &mut r);
+        renderer.state.tracks[track].peak.take()
+    }
+
+    fn clip_with(pitches: &[u8]) -> Clip {
+        let mut clip = MidiClip::new("MIDI", 4.0, PALETTE[1]);
+        for (i, &pitch) in pitches.iter().enumerate() {
+            clip.notes.push(Note { start: i as f64 * 0.25, length: 0.25, pitch, velocity: 1.0 });
+        }
+        Clip::Midi(clip)
+    }
+
+    #[test]
+    fn a_drum_rack_with_the_basic_kit_plays_its_pads() {
+        let dir = std::env::temp_dir().join(format!("pulse-rack-{}", std::process::id()));
+        let (params, files) = crate::kits::basic_kit(&dir).unwrap();
+        let mut project = Project::empty();
+        let mut track = Track::new("Rack", PALETTE[1], InstrumentKind::DrumRack(params));
+        track.clips[0] = Some(clip_with(&[36, 38, 42]));
+        project.tracks = vec![track.clone()];
+        assert_eq!(track_peak(&project, 0, 24_000), 0.0, "no samples, no sound");
+
+        track.samples = files;
+        project.tracks = vec![track];
+        let peak = track_peak(&project, 0, 24_000);
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(peak > 0.1 && peak < 2.0, "kick, snare and hat should sound: {peak}");
+    }
+
+    #[test]
+    fn a_sampler_plays_a_file_chromatically() {
+        let dir = std::env::temp_dir().join(format!("pulse-sampler-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("tone.wav");
+        let tone: Vec<f32> = (0..44_100).map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / 44_100.0).sin() * 0.5).collect();
+        crate::capture::write_wav(&path, &tone, &tone, 44_100.0).unwrap();
+
+        let mut project = Project::empty();
+        let mut track = Track::new("Keys", PALETTE[1], InstrumentKind::Sampler(Default::default()));
+        track.clips[0] = Some(clip_with(&[60, 64, 67]));
+        track.set_sample(0, Some(path.to_string_lossy().into_owned()));
+        project.tracks = vec![track];
+        let peak = track_peak(&project, 0, 24_000);
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(peak > 0.2 && peak < 1.5, "the sampler should sound: {peak}");
+    }
 }

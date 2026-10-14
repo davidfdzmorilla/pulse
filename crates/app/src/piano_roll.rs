@@ -1,22 +1,29 @@
 //! MIDI note editor for the selected clip (session or arrangement).
 //!
-//! Click an empty cell to add a note (drag right to lengthen it), click a note
-//! to delete it, click a key to audition it.
+//! Select mode (default): click a note to select it (Shift adds), drag to move
+//! (Alt copies), drag its right edge to resize, drag on empty space to select
+//! with a rectangle, double-click to create or delete. Draw mode (B): click to add
+//! (drag to lengthen) or delete. The velocity lane below edits note velocities.
+//! Keys: arrows move/transpose, ⌘A/⌘C/⌘X/⌘V/⌘D, ⌘U quantizes, Delete removes.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::note_edit::{self, Selection, MIN_LENGTH};
 use crate::project::{drum_name, is_black_key, note_name};
-use crate::theme::{self, TEXT_DIM};
+use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
-use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke, StrokeKind};
-use engine::model::{drum_note, Clip, Note};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, Key, Rect, Sense, Stroke, StrokeKind};
+use engine::model::{drum_note, Clip, MidiClip, Note};
 use engine::Command;
 use std::sync::atomic::Ordering;
 
 const KEY_W: f32 = 64.0;
 const RULER_H: f32 = 16.0;
-const STEP: f64 = 0.25;
+const VELOCITY_H: f32 = 54.0;
+const EDGE_GRAB: f32 = 5.0;
 
-const NOTE_LENGTHS: [(f64, &str); 5] = [
+const GRIDS: [(f64, &str); 4] = [(1.0, "1/4"), (0.5, "1/8"), (0.25, "1/16"), (0.125, "1/32")];
+const NOTE_LENGTHS: [(f64, &str); 6] = [
+    (0.125, "1/32"),
     (0.25, "1/16"),
     (0.5, "1/8"),
     (1.0, "1/4"),
@@ -24,23 +31,59 @@ const NOTE_LENGTHS: [(f64, &str); 5] = [
     (4.0, "1 Compás"),
 ];
 
+#[derive(Clone)]
+enum Drag {
+    /// Draw mode: lengthening the note just added.
+    Draw { index: usize },
+    Move { origin: (f64, i32), snapshot: Vec<(usize, Note)>, copy: bool, last: (f64, i32) },
+    Resize { origin: f64, snapshot: Vec<(usize, Note)> },
+    Select { anchor: egui::Pos2, base: Selection },
+    Velocity { origin_y: f32, snapshot: Vec<(usize, Note)> },
+}
+
 pub struct State {
     note_length: f64,
+    grid: f64,
     zoom: f32,
-    /// Index of the note being lengthened by the current drag.
-    dragging: Option<usize>,
+    draw_mode: bool,
+    selection: Selection,
+    /// Clip the selection belongs to; switching clips clears it.
+    selection_clip: Option<ClipRef>,
+    drag: Option<Drag>,
+    /// Where ⌘V pastes, set by clicking empty space (like Live's insert marker).
+    insert_at: f64,
+    clipboard: Vec<Note>,
+    quantize_strength: f64,
+    quantize_ends: bool,
     /// Clip whose initial scroll position has already been applied.
     scrolled: Option<ClipRef>,
+    scroll_x: f32,
 }
 
 impl Default for State {
     fn default() -> Self {
         Self {
             note_length: 0.25,
+            grid: 0.25,
             zoom: 1.0,
-            dragging: None,
+            draw_mode: false,
+            selection: Selection::new(),
+            selection_clip: None,
+            drag: None,
+            insert_at: 0.0,
+            clipboard: Vec::new(),
+            quantize_strength: 1.0,
+            quantize_ends: false,
             scrolled: None,
+            scroll_x: 0.0,
         }
+    }
+}
+
+impl State {
+    /// Whether note-level shortcuts (Delete, ⌘D) should apply to notes rather than clips.
+    pub fn has_selection(&self) -> bool {
+        !self.selection.is_empty()
     }
 }
 
@@ -65,6 +108,19 @@ fn playhead(app: &PulseApp, clip_ref: ClipRef) -> Option<f64> {
     }
 }
 
+fn label(ui: &mut egui::Ui, text: &str) {
+    ui.label(egui::RichText::new(text).color(TEXT_DIM).size(10.5));
+}
+
+fn combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[(f64, &str)]) {
+    let current = options.iter().find(|(v, _)| v == value).map_or("?", |(_, l)| *l);
+    egui::ComboBox::from_id_salt(id).selected_text(current).width(70.0).show_ui(ui, |ui| {
+        for &(option, text) in options {
+            ui.selectable_value(value, option, text);
+        }
+    });
+}
+
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let Some(clip_ref) = app.selected_clip.filter(|&c| app.clip(c).is_some()) else {
         ui.centered_and_justified(|ui| {
@@ -82,60 +138,27 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         return;
     }
     let is_drums = app.project.tracks[t].is_drums();
+    let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     let state = &mut app.piano_roll;
+    if state.selection_clip != Some(clip_ref) {
+        state.selection.clear();
+        state.selection_clip = Some(clip_ref);
+        state.drag = None;
+        state.insert_at = 0.0;
+    }
     let clip = match clip_ref {
         ClipRef::Session { track, slot } => app.project.tracks[track].clips[slot].as_mut(),
         ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement.get_mut(index).map(|a| &mut a.clip),
     };
     let Some(Clip::Midi(clip)) = clip else { return };
-    let mut changed = false;
-    let mut preview = None;
+    let before = clip.clone();
+    let mut previews: Vec<u8> = Vec::new();
 
-    ui.horizontal(|ui| {
-        let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-        ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
-        ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(130.0));
-        ui.label(egui::RichText::new("Loop").color(TEXT_DIM).size(10.5));
-        let bars = clip.length / 4.0;
-        egui::ComboBox::from_id_salt("clip_length")
-            .selected_text(format!("{bars} comp."))
-            .width(74.0)
-            .show_ui(ui, |ui| {
-                for option in [1.0, 2.0, 4.0, 8.0, 16.0] {
-                    if ui.selectable_label(bars == option, format!("{option} comp.")).clicked() {
-                        clip.length = option * 4.0;
-                        changed = true;
-                    }
-                }
-            });
-        ui.label(egui::RichText::new("Nota").color(TEXT_DIM).size(10.5));
-        let current = NOTE_LENGTHS
-            .iter()
-            .find(|(v, _)| *v == state.note_length)
-            .map_or("?", |(_, l)| *l);
-        egui::ComboBox::from_id_salt("note_length")
-            .selected_text(current)
-            .width(74.0)
-            .show_ui(ui, |ui| {
-                for (value, label) in NOTE_LENGTHS {
-                    ui.selectable_value(&mut state.note_length, value, label);
-                }
-            });
-        if ui.button("×2").on_hover_text("Duplicar loop: dobla la longitud copiando las notas").clicked() {
-            let length = clip.length;
-            let copies: Vec<Note> = clip.notes.iter().map(|n| Note { start: n.start + length, ..n.clone() }).collect();
-            clip.notes.extend(copies);
-            clip.length *= 2.0;
-            changed = true;
-        }
-        if ui.button("Borrar notas").clicked() {
-            clip.notes.clear();
-            changed = true;
-        }
-        ui.label(egui::RichText::new("Zoom").color(TEXT_DIM).size(10.5));
-        ui.add(egui::Slider::new(&mut state.zoom, 0.5..=3.0).show_value(false));
-    });
-    ui.add_space(4.0);
+    toolbar(ui, state, clip);
+    if keys_enabled {
+        keyboard(ui, state, clip);
+    }
+    state.selection.retain(|&i| i < clip.notes.len());
 
     let pitches: Vec<u8> = if is_drums {
         vec![drum_note::OPEN_HAT, drum_note::CLOSED_HAT, drum_note::CLAP, drum_note::SNARE, drum_note::KICK]
@@ -143,12 +166,16 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         (24..=96).rev().collect()
     };
     let row_h = if is_drums { 24.0 } else { 13.0 };
-    let step_w = 18.0 * state.zoom;
-    let steps = (clip.length / STEP).ceil() as usize;
-    let grid_w = steps as f32 * step_w;
+    // Sixteenths are 18 px at zoom 1.
+    let beat_w = 72.0 * state.zoom;
+    let grid_w = clip.length as f32 * beat_w;
     let base = theme::rgb(clip.color);
 
-    let mut scroll = egui::ScrollArea::both().id_salt(("piano_roll", format!("{clip_ref:?}"))).auto_shrink(false);
+    let lane_height = (ui.available_height() - VELOCITY_H - 6.0).max(60.0);
+    let mut scroll = egui::ScrollArea::both()
+        .id_salt(("piano_roll", format!("{clip_ref:?}")))
+        .auto_shrink(false)
+        .max_height(lane_height);
     if !is_drums && state.scrolled != Some(clip_ref) {
         state.scrolled = Some(clip_ref);
         // Open around the clip's notes, or middle C, the first time it is shown.
@@ -156,132 +183,392 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let center = if clip.notes.is_empty() { 60.0 } else { center };
         scroll = scroll.vertical_scroll_offset((row_h * (96.0 - center) - 80.0).max(0.0));
     }
-    scroll.show(ui, |ui| {
+    let output = scroll.show(ui, |ui| {
         let size = vec2(KEY_W + grid_w, RULER_H + pitches.len() as f32 * row_h);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         let top = rect.top() + RULER_H;
         let grid = Rect::from_min_max(pos2(rect.left() + KEY_W, top), rect.max);
+        let x_of = |beat: f64| grid.left() + beat as f32 * beat_w;
+        let beat_of = |x: f32| ((x - grid.left()) / beat_w) as f64;
+        let row_of_y = |y: f32| ((y - top) / row_h).floor() as i32;
+        let row_of_pitch = |pitch: u8| pitches.iter().position(|&p| p == pitch);
+        let note_rect = |n: &Note| -> Option<Rect> {
+            let row = row_of_pitch(n.pitch)?;
+            Some(Rect::from_min_size(
+                pos2(x_of(n.start) + 1.0, top + row as f32 * row_h + 1.0),
+                vec2((n.length as f32 * beat_w - 2.0).max(3.0), row_h - 2.0),
+            ))
+        };
 
-        // Ruler.
+        // Ruler and insert marker.
         for bar in 0..=(clip.length / 4.0).ceil() as usize {
-            let x = grid.left() + (bar * 16) as f32 * step_w;
-            painter.text(pos2(x + 3.0, rect.top() + 2.0), Align2::LEFT_TOP, (bar + 1).to_string(), theme::small(), TEXT_DIM);
+            painter.text(pos2(x_of(bar as f64 * 4.0) + 3.0, rect.top() + 2.0), Align2::LEFT_TOP, (bar + 1).to_string(), theme::small(), TEXT_DIM);
         }
+        let insert_x = x_of(state.insert_at);
+        painter.line_segment([pos2(insert_x, rect.top()), pos2(insert_x, rect.top() + RULER_H)], Stroke::new(2.0, ACCENT));
 
         // Rows and keys.
         for (row, &pitch) in pitches.iter().enumerate() {
             let y = top + row as f32 * row_h;
-            let lane = Rect::from_min_size(pos2(grid.left(), y), vec2(grid_w, row_h));
             let dark = !is_drums && is_black_key(pitch);
-            painter.rect_filled(lane, 0.0, if dark { Color32::from_gray(36) } else { Color32::from_gray(44) });
+            painter.rect_filled(Rect::from_min_size(pos2(grid.left(), y), vec2(grid_w, row_h)), 0.0, if dark { Color32::from_gray(36) } else { Color32::from_gray(44) });
             let key = Rect::from_min_size(pos2(rect.left(), y), vec2(KEY_W - 2.0, row_h - 1.0));
             painter.rect_filled(key, 1.0, if dark { Color32::from_gray(30) } else { Color32::from_gray(205) });
-            let label = if is_drums {
+            let text = if is_drums {
                 drum_name(pitch).unwrap_or_default().to_string()
             } else if pitch % 12 == 0 {
                 note_name(pitch)
             } else {
                 String::new()
             };
-            painter.text(
-                pos2(key.left() + 4.0, key.center().y),
-                Align2::LEFT_CENTER,
-                label,
-                theme::small(),
-                if dark { Color32::from_gray(200) } else { Color32::from_gray(30) },
-            );
+            painter.text(pos2(key.left() + 4.0, key.center().y), Align2::LEFT_CENTER, text, theme::small(), if dark { Color32::from_gray(200) } else { Color32::from_gray(30) });
             painter.line_segment([pos2(grid.left(), y + row_h), pos2(grid.right(), y + row_h)], Stroke::new(1.0, Color32::from_gray(30)));
         }
 
-        // Beat and bar lines.
+        // Grid lines at the chosen resolution, stronger on beats and bars.
+        let steps = (clip.length / state.grid).ceil() as usize;
         for step in 0..=steps {
-            let x = grid.left() + step as f32 * step_w;
-            let gray = if step % 16 == 0 {
-                95
-            } else if step % 4 == 0 {
-                66
-            } else {
-                52
-            };
+            let beat = step as f64 * state.grid;
+            let gray = if beat % 4.0 == 0.0 { 95 } else if beat % 1.0 == 0.0 { 66 } else { 50 };
+            let x = x_of(beat);
             painter.line_segment([pos2(x, grid.top()), pos2(x, grid.bottom())], Stroke::new(1.0, Color32::from_gray(gray)));
         }
 
         // Notes.
-        for n in &clip.notes {
-            let Some(row) = pitches.iter().position(|&p| p == n.pitch) else { continue };
-            let x = grid.left() + (n.start / STEP) as f32 * step_w;
-            let w = ((n.length / STEP) as f32 * step_w).max(3.0);
-            let r = Rect::from_min_size(pos2(x + 1.0, top + row as f32 * row_h + 1.0), vec2(w - 2.0, row_h - 2.0));
-            painter.rect_filled(r, 2.0, theme::shade(base, 0.5 + 0.5 * n.velocity));
-            painter.rect_stroke(r, 2.0, Stroke::new(1.0, theme::shade(base, 0.35)), StrokeKind::Inside);
+        for (i, n) in clip.notes.iter().enumerate() {
+            let Some(r) = note_rect(n) else { continue };
+            let selected = state.selection.contains(&i);
+            let fill = theme::shade(base, if selected { 1.25 } else { 0.5 + 0.5 * n.velocity });
+            painter.rect_filled(r, 2.0, fill);
+            let outline = if selected { Stroke::new(1.5, Color32::WHITE) } else { Stroke::new(1.0, theme::shade(base, 0.35)) };
+            painter.rect_stroke(r, 2.0, outline, StrokeKind::Inside);
+        }
+
+        if let Some(Drag::Select { anchor, .. }) = &state.drag {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let band = Rect::from_two_pos(*anchor, pos);
+                painter.rect_filled(band, 0.0, Color32::from_rgba_unmultiplied(255, 255, 255, 18));
+                painter.rect_stroke(band, 0.0, Stroke::new(1.0, Color32::from_gray(200)), StrokeKind::Inside);
+            }
         }
 
         if let Some(position) = playhead {
-            let x = grid.left() + (position / STEP) as f32 * step_w;
+            let x = x_of(position);
             painter.line_segment([pos2(x, rect.top()), pos2(x, grid.bottom())], Stroke::new(1.5, Color32::WHITE));
             widgets::play_triangle(&painter, pos2(x, rect.top() + 8.0), 7.0, Color32::WHITE);
         }
+        painter.rect_stroke(grid, 0.0, Stroke::new(1.0, Color32::from_gray(70)), StrokeKind::Inside);
 
-        // Interaction.
-        let pressed = ui.input(|i| i.pointer.primary_pressed());
-        let released = ui.input(|i| i.pointer.primary_released());
-        if let Some(pos) = response.interact_pointer_pos().or_else(|| response.hover_pos()) {
-            let row = ((pos.y - top) / row_h).floor();
-            let pitch = (row >= 0.0).then(|| pitches.get(row as usize).copied()).flatten();
-            if pressed && response.hovered() {
-                if pos.x < grid.left() {
-                    preview = pitch;
-                } else if let Some(pitch) = pitch {
-                    let beat = ((pos.x - grid.left()) / step_w) as f64 * STEP;
-                    let hit = clip
-                        .notes
-                        .iter()
-                        .position(|n| n.pitch == pitch && beat >= n.start && beat < n.start + n.length);
-                    match hit {
-                        Some(index) => {
-                            clip.notes.remove(index);
-                        }
-                        None => {
-                            let start = (beat / STEP).floor() * STEP;
-                            if start < clip.length {
-                                clip.notes.push(Note {
-                                    start,
-                                    length: state.note_length.min(clip.length - start),
-                                    pitch,
-                                    velocity: 0.8,
-                                });
-                                state.dragging = Some(clip.notes.len() - 1);
-                                preview = Some(pitch);
+        // ----- Pointer -------------------------------------------------------------
+        let Some(pos) = response.interact_pointer_pos().or_else(|| response.hover_pos()) else { return };
+        let (pressed, released, modifiers) = ui.input(|i| (i.pointer.primary_pressed(), i.pointer.primary_released(), i.modifiers));
+        let beat = beat_of(pos.x).max(0.0);
+        let row = row_of_y(pos.y);
+        let pitch_here = (row >= 0).then(|| pitches.get(row as usize).copied()).flatten();
+        let hit = clip.notes.iter().enumerate().rev().find_map(|(i, n)| {
+            let r = note_rect(n)?;
+            r.contains(pos).then(|| (i, r.right() - pos.x <= EDGE_GRAB))
+        });
+        if state.drag.is_none() && matches!(hit, Some((_, true))) && !state.draw_mode {
+            ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+        }
+        let snapshot = |notes: &[Note], selection: &Selection| -> Vec<(usize, Note)> {
+            selection.iter().filter_map(|&i| notes.get(i).map(|n| (i, n.clone()))).collect()
+        };
+
+        if pressed && response.hovered() {
+            if pos.x < grid.left() {
+                previews.extend(pitch_here);
+            } else if pos.y >= top {
+                state.drag = match (state.draw_mode, hit) {
+                    (true, Some((i, _))) => {
+                        clip.notes.remove(i);
+                        state.selection.clear();
+                        None
+                    }
+                    (true, None) => pitch_here.and_then(|pitch| {
+                        let start = note_edit::snap_down(beat, state.grid);
+                        (start < clip.length).then(|| {
+                            clip.notes.push(Note { start, length: state.note_length.min(clip.length - start), pitch, velocity: 0.8 });
+                            previews.push(pitch);
+                            Drag::Draw { index: clip.notes.len() - 1 }
+                        })
+                    }),
+                    (false, Some((i, edge))) => {
+                        if modifiers.shift {
+                            if !state.selection.remove(&i) {
+                                state.selection.insert(i);
                             }
+                        } else if !state.selection.contains(&i) {
+                            state.selection = Selection::from([i]);
+                        }
+                        previews.push(clip.notes[i].pitch);
+                        let snap = snapshot(&clip.notes, &state.selection);
+                        if !state.selection.contains(&i) {
+                            None
+                        } else if edge {
+                            Some(Drag::Resize { origin: beat, snapshot: snap })
+                        } else {
+                            Some(Drag::Move { origin: (beat, row), snapshot: snap, copy: modifiers.alt, last: (0.0, 0) })
                         }
                     }
-                    changed = true;
+                    (false, None) => {
+                        if !modifiers.shift {
+                            state.selection.clear();
+                        }
+                        state.insert_at = note_edit::snap(beat, state.grid).min(clip.length);
+                        Some(Drag::Select { anchor: pos, base: state.selection.clone() })
+                    }
+                };
+            }
+        }
+
+        if response.double_clicked() && !state.draw_mode && pos.x >= grid.left() && pos.y >= top {
+            match hit {
+                Some((i, _)) => {
+                    clip.notes.remove(i);
+                    state.selection.clear();
                 }
-            } else if let Some(index) = state.dragging {
-                if response.dragged() {
-                    if let Some(n) = clip.notes.get_mut(index) {
-                        let beat = ((pos.x - grid.left()) / step_w) as f64 * STEP;
-                        let end = ((beat / STEP).ceil() * STEP).min(clip.length);
-                        let length = (end - n.start).max(STEP);
-                        if length != n.length {
-                            n.length = length;
-                            changed = true;
+                None => {
+                    if let Some(pitch) = pitch_here {
+                        let start = note_edit::snap_down(beat, state.grid);
+                        if start < clip.length {
+                            clip.notes.push(Note { start, length: state.note_length.min(clip.length - start), pitch, velocity: 0.8 });
+                            state.selection = Selection::from([clip.notes.len() - 1]);
+                            previews.push(pitch);
                         }
                     }
                 }
             }
+            state.drag = None;
+        }
+
+        if response.dragged() {
+            match &mut state.drag {
+                Some(Drag::Draw { index }) => {
+                    if let Some(n) = clip.notes.get_mut(*index) {
+                        let end = ((beat / state.grid).ceil() * state.grid).min(clip.length);
+                        n.length = (end - n.start).max(state.grid.min(clip.length - n.start));
+                    }
+                }
+                Some(Drag::Move { origin, snapshot, copy, last }) => {
+                    let originals: Vec<Note> = snapshot.iter().map(|(_, n)| n.clone()).collect();
+                    let earliest = originals.iter().map(|n| n.start).fold(f64::INFINITY, f64::min);
+                    let latest = originals.iter().map(|n| n.start).fold(f64::NEG_INFINITY, f64::max);
+                    let shift = note_edit::snap(beat - origin.0, state.grid).max(-earliest).min((clip.length - MIN_LENGTH - latest).max(0.0));
+                    let rows = row - origin.1;
+                    if (shift, rows) != *last {
+                        if *copy {
+                            // Alt-drag leaves the originals and moves fresh copies.
+                            let mut added = Selection::new();
+                            for n in &originals {
+                                clip.notes.push(n.clone());
+                                added.insert(clip.notes.len() - 1);
+                            }
+                            *snapshot = added.iter().copied().zip(originals.iter().cloned()).collect();
+                            state.selection = added;
+                            *copy = false;
+                        }
+                        let targets: Vec<usize> = snapshot.iter().map(|(i, _)| *i).collect();
+                        for (&i, original) in targets.iter().zip(&originals) {
+                            let Some(n) = clip.notes.get_mut(i) else { continue };
+                            n.start = original.start + shift;
+                            if let Some(r) = row_of_pitch(original.pitch) {
+                                let new_row = (r as i32 + rows).clamp(0, pitches.len() as i32 - 1) as usize;
+                                n.pitch = pitches[new_row];
+                            }
+                        }
+                        if rows != last.1 {
+                            if let Some(&i) = targets.first() {
+                                previews.extend(clip.notes.get(i).map(|n| n.pitch));
+                            }
+                        }
+                        *last = (shift, rows);
+                    }
+                }
+                Some(Drag::Resize { origin, snapshot }) => {
+                    let delta = note_edit::snap(beat - *origin, state.grid);
+                    for (i, original) in snapshot.iter() {
+                        if let Some(n) = clip.notes.get_mut(*i) {
+                            n.length = (original.length + delta).max(MIN_LENGTH.max(state.grid.min(original.length))).min(clip.length - n.start);
+                        }
+                    }
+                }
+                Some(Drag::Select { anchor, base }) => {
+                    let band = Rect::from_two_pos(*anchor, pos);
+                    let (low, high) = (row_of_y(band.top()).max(0) as usize, row_of_y(band.bottom()).max(0) as usize);
+                    let region = note_edit::in_region(&clip.notes, (beat_of(band.left()), beat_of(band.right())), |p| {
+                        row_of_pitch(p).is_some_and(|r| r >= low && r <= high)
+                    });
+                    state.selection = base.union(&region).copied().collect();
+                }
+                Some(Drag::Velocity { .. }) | None => {}
+            }
         }
         if released {
-            state.dragging = None;
+            state.drag = None;
         }
-        painter.rect_stroke(grid, 0.0, Stroke::new(1.0, Color32::from_gray(70)), StrokeKind::Inside);
     });
+    state.scroll_x = output.state.offset.x;
 
-    if let Some(pitch) = preview {
+    // ----- Velocity lane ---------------------------------------------------------------
+    let (lane, response) = ui.allocate_exact_size(vec2(ui.available_width(), VELOCITY_H), Sense::click_and_drag());
+    let painter = ui.painter_at(lane);
+    painter.rect_filled(lane, 2.0, theme::SLOT);
+    painter.text(lane.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, "Velocidad", theme::small(), TEXT_DIM);
+    let origin_x = lane.left() + KEY_W - state.scroll_x;
+    let bar_area = Rect::from_min_max(pos2(lane.left() + KEY_W, lane.top() + 4.0), lane.max - vec2(0.0, 3.0));
+    let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
+    for (i, n) in clip.notes.iter().enumerate() {
+        let x = x_of(n.start);
+        if x < bar_area.left() || x > bar_area.right() {
+            continue;
+        }
+        let y = bar_area.bottom() - bar_area.height() * n.velocity;
+        let color = if state.selection.contains(&i) { Color32::WHITE } else { theme::shade(base, 1.1) };
+        painter.line_segment([pos2(x + 1.0, bar_area.bottom()), pos2(x + 1.0, y)], Stroke::new(2.0, color));
+        painter.circle_filled(pos2(x + 1.0, y), 2.5, color);
+    }
+    if let Some(pos) = response.interact_pointer_pos() {
+        if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
+            // The note whose stem is nearest the pointer; selected notes win ties.
+            let nearest = clip
+                .notes
+                .iter()
+                .enumerate()
+                .map(|(i, n)| (i, (x_of(n.start) - pos.x).abs() - if state.selection.contains(&i) { 0.5 } else { 0.0 }))
+                .filter(|&(_, d)| d < 6.0)
+                .min_by(|a, b| a.1.total_cmp(&b.1))
+                .map(|(i, _)| i);
+            if let Some(i) = nearest {
+                if !state.selection.contains(&i) {
+                    state.selection = Selection::from([i]);
+                }
+                let snapshot = state.selection.iter().filter_map(|&j| clip.notes.get(j).map(|n| (j, n.clone()))).collect();
+                state.drag = Some(Drag::Velocity { origin_y: pos.y, snapshot });
+            }
+        }
+        if response.dragged() {
+            if let Some(Drag::Velocity { origin_y, snapshot }) = &state.drag {
+                let delta = (origin_y - pos.y) / bar_area.height();
+                for (i, original) in snapshot {
+                    if let Some(n) = clip.notes.get_mut(*i) {
+                        n.velocity = (original.velocity + delta).clamp(0.01, 1.0);
+                    }
+                }
+            }
+        }
+        if ui.input(|i| i.pointer.primary_released()) {
+            state.drag = None;
+        }
+    }
+    response.on_hover_text("Arrastra arriba o abajo para cambiar la velocidad de las notas seleccionadas");
+
+    let changed = *clip != before;
+    for pitch in previews {
         app.audio.send(Command::PreviewNote { track: t, pitch, velocity: 0.8 });
     }
     if changed {
         app.sync_clip_ref(clip_ref);
+    }
+}
+
+fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
+    ui.horizontal_wrapped(|ui| {
+        let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+        ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
+        ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(110.0));
+        label(ui, "Loop");
+        let bars = clip.length / 4.0;
+        egui::ComboBox::from_id_salt("clip_length").selected_text(format!("{bars} comp.")).width(70.0).show_ui(ui, |ui| {
+            for option in [1.0, 2.0, 4.0, 8.0, 16.0] {
+                if ui.selectable_label(bars == option, format!("{option} comp.")).clicked() {
+                    clip.length = option * 4.0;
+                }
+            }
+        });
+        label(ui, "Rejilla");
+        combo(ui, "grid", &mut state.grid, &GRIDS);
+        label(ui, "Nota");
+        combo(ui, "note_length", &mut state.note_length, &NOTE_LENGTHS);
+        if widgets::flat_button(ui, "✎ Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
+            state.draw_mode = !state.draw_mode;
+        }
+        ui.separator();
+        let targets = note_edit::targets(&clip.notes, &state.selection);
+        let scope = if state.selection.is_empty() { "todas las notas" } else { "las notas seleccionadas" };
+        if ui.button("Cuantizar").on_hover_text(format!("Cuantiza {scope} a la rejilla (⌘U)")).clicked() {
+            note_edit::quantize(&mut clip.notes, &targets, state.grid, state.quantize_strength, state.quantize_ends, clip.length);
+        }
+        let mut percent = state.quantize_strength * 100.0;
+        if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %")).on_hover_text("Intensidad de la cuantización").changed() {
+            state.quantize_strength = percent / 100.0;
+        }
+        ui.checkbox(&mut state.quantize_ends, "finales").on_hover_text("Cuantiza también el final de las notas");
+        ui.separator();
+        for (text, semitones) in [("-12", -12), ("-1", -1), ("+1", 1), ("+12", 12)] {
+            if ui.small_button(text).on_hover_text(format!("Transponer {scope} (↑↓, ⇧ octava)")).clicked() {
+                note_edit::transpose(&mut clip.notes, &targets, semitones);
+            }
+        }
+        if ui.small_button("×2").on_hover_text("Duplicar loop: dobla la longitud copiando las notas").clicked() {
+            let length = clip.length;
+            let copies: Vec<Note> = clip.notes.iter().map(|n| Note { start: n.start + length, ..n.clone() }).collect();
+            clip.notes.extend(copies);
+            clip.length *= 2.0;
+        }
+        label(ui, "Zoom");
+        ui.add(egui::Slider::new(&mut state.zoom, 0.5..=4.0).logarithmic(true).show_value(false));
+    });
+    ui.add_space(2.0);
+}
+
+fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
+    let events = ui.input(|i| i.events.clone());
+    for event in events {
+        let targets = note_edit::targets(&clip.notes, &state.selection);
+        let selected: Vec<usize> = state.selection.iter().copied().collect();
+        match event {
+            egui::Event::Copy if !selected.is_empty() => state.clipboard = note_edit::copy(&clip.notes, &selected),
+            egui::Event::Cut if !selected.is_empty() => {
+                state.clipboard = note_edit::copy(&clip.notes, &selected);
+                note_edit::delete(&mut clip.notes, &state.selection);
+                state.selection.clear();
+            }
+            egui::Event::Paste(_) if !state.clipboard.is_empty() => {
+                state.selection = note_edit::paste(&mut clip.notes, &state.clipboard, state.insert_at, clip.length);
+            }
+            egui::Event::Key { key, pressed: true, modifiers, .. } => {
+                let cmd = modifiers.command;
+                match key {
+                    Key::A if cmd => state.selection = (0..clip.notes.len()).collect(),
+                    Key::D if cmd && !selected.is_empty() => {
+                        state.selection = note_edit::duplicate(&mut clip.notes, &selected, clip.length);
+                    }
+                    Key::U if cmd => {
+                        note_edit::quantize(&mut clip.notes, &targets, state.grid, state.quantize_strength, state.quantize_ends, clip.length);
+                    }
+                    Key::B if !cmd => state.draw_mode = !state.draw_mode,
+                    Key::Escape => state.selection.clear(),
+                    Key::Delete | Key::Backspace if !selected.is_empty() => {
+                        note_edit::delete(&mut clip.notes, &state.selection);
+                        state.selection.clear();
+                    }
+                    Key::ArrowLeft | Key::ArrowRight if !selected.is_empty() => {
+                        let step = if modifiers.shift { 4.0 } else { state.grid };
+                        let sign = if key == Key::ArrowLeft { -1.0 } else { 1.0 };
+                        note_edit::shift(&mut clip.notes, &selected, sign * step, clip.length);
+                    }
+                    Key::ArrowUp | Key::ArrowDown if !selected.is_empty() => {
+                        let step = if modifiers.shift { 12 } else { 1 };
+                        let sign = if key == Key::ArrowUp { 1 } else { -1 };
+                        note_edit::transpose(&mut clip.notes, &selected, sign * step);
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
     }
 }

@@ -780,7 +780,7 @@ impl PulseApp {
         if let InstrumentKind::Modular(after) = kind {
             self.sync_tables(track);
             let kinds_changed = match previous {
-                InstrumentKind::Modular(before) => before.gens.map(|g| (g.kind, g.table)) != after.gens.map(|g| (g.kind, g.table)),
+                InstrumentKind::Modular(before) => before.modules.map(|g| (g.kind, g.table)) != after.modules.map(|g| (g.kind, g.table)),
                 _ => true,
             };
             if kinds_changed {
@@ -856,6 +856,67 @@ impl PulseApp {
         self.status = Some(format!("→ {name} (50 %) · clic derecho en el knob para ajustar"));
     }
 
+    /// Edits a modular synth's stack, moving the modules' files along with them.
+    pub fn edit_stack(&mut self, track: usize, edit: crate::modular_ui::StackEdit) {
+        use crate::modular_ui::StackEdit;
+        use engine::model::MOD_MODULES;
+        let InstrumentKind::Modular(mut params) = self.project.tracks[track].instrument else { return };
+        let mut files: Vec<String> = (0..MOD_MODULES).map(|i| self.project.tracks[track].sample(i).unwrap_or_default().to_string()).collect();
+        match edit {
+            StackEdit::Insert(after, kind) => {
+                let Some(at) = params.insert_module(after, engine::model::Module::new(kind)) else {
+                    self.status = Some(format!("La pila admite {MOD_MODULES} módulos"));
+                    return;
+                };
+                files.insert(at, String::new());
+                files.truncate(MOD_MODULES);
+            }
+            StackEdit::Duplicate(i) => {
+                let module = params.modules[i];
+                let Some(at) = params.insert_module(Some(i), module) else { return };
+                let file = files[i].clone();
+                files.insert(at, file);
+                files.truncate(MOD_MODULES);
+            }
+            StackEdit::Remove(i) => {
+                params.remove_module(i);
+                files.remove(i);
+                files.push(String::new());
+            }
+            StackEdit::Move(i, up) => {
+                let j = if up { i.checked_sub(1) } else { Some(i + 1).filter(|&j| j < MOD_MODULES && params.modules[j].kind != engine::model::ModuleKind::Empty) };
+                let Some(j) = j else { return };
+                params.swap_modules(i, j);
+                files.swap(i, j);
+            }
+        }
+        let t = &mut self.project.tracks[track];
+        t.samples.clear();
+        for (i, file) in files.into_iter().enumerate() {
+            if !file.is_empty() {
+                t.set_sample(i, Some(file));
+            }
+        }
+        self.set_instrument(track, InstrumentKind::Modular(params));
+        self.sync_samples(track);
+        self.sync_tables(track);
+    }
+
+    /// Connects module `source`'s audio to `param` of module `target`.
+    pub fn connect_audio(&mut self, track: usize, source: usize, target: usize, param: engine::model::AudioParam) {
+        let InstrumentKind::Modular(mut params) = self.project.tracks[track].instrument else { return };
+        if source == target {
+            return;
+        }
+        match params.connect_audio(source, target, param) {
+            Some(_) => {
+                self.status = Some(format!("Audio {} → {} {} (50 %)", source + 1, target + 1, param.label()));
+                self.set_instrument(track, InstrumentKind::Modular(params));
+            }
+            None => self.status = Some("No quedan conexiones de audio libres".into()),
+        }
+    }
+
     /// Loads the audio or wavetable file a modular generator plays.
     pub fn choose_gen_file(&mut self, track: usize, g: usize) {
         let Some(path) = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS).pick_file() else { return };
@@ -864,8 +925,8 @@ impl PulseApp {
             return;
         }
         let InstrumentKind::Modular(mut params) = self.project.tracks[track].instrument else { return };
-        if params.gens[g].kind == engine::model::GenKind::Wavetable {
-            params.gens[g].table = engine::model::WAVE_USER_TABLE;
+        if params.modules[g].kind == engine::model::ModuleKind::Wavetable {
+            params.modules[g].table = engine::model::WAVE_USER_TABLE;
         }
         self.project.tracks[track].set_sample(g, Some(path));
         self.set_instrument(track, InstrumentKind::Modular(params));

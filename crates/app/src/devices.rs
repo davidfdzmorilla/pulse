@@ -56,6 +56,9 @@ pub(crate) enum Action {
     LoadGenFile(usize),
     /// Connects modular modulator `.0` to parameter `.1`.
     ModularTarget(usize, usize),
+    StackEdit(crate::modular_ui::StackEdit),
+    /// Audio-rate connection: source module, target module, what it modulates.
+    AudioLink(usize, usize, engine::model::AudioParam),
     /// New settings for the track's wavetable-engine synth (either kind).
     Wave(engine::model::WaveParams),
     /// Opens a file dialog for the sample of oscillator `n`.
@@ -236,6 +239,16 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             Action::LoadGenFile(g) => {
                 if let Target::Track(t) = target {
                     app.choose_gen_file(t, g);
+                }
+            }
+            Action::StackEdit(edit) => {
+                if let Target::Track(t) = target {
+                    app.edit_stack(t, edit);
+                }
+            }
+            Action::AudioLink(source, module, param) => {
+                if let Target::Track(t) = target {
+                    app.connect_audio(t, source, module, param);
                 }
             }
             Action::ModularTarget(modulator, dest) => {

@@ -119,7 +119,6 @@ impl Env {
 pub(crate) struct FilterState {
     svf: [Svf; 2],
     ladder: [f32; 4],
-    /// Only allocated where a comb filter can play (see [`FilterState::without_comb`]).
     comb: Option<Box<[f32; COMB]>>,
     comb_pos: usize,
     formant: [Svf; 3],
@@ -128,15 +127,6 @@ pub(crate) struct FilterState {
 impl FilterState {
     pub(crate) fn new() -> Self {
         Self { svf: [Svf::default(); 2], ladder: [0.0; 4], comb: Some(Box::new([0.0; COMB])), comb_pos: 0, formant: [Svf::default(); 3] }
-    }
-
-    /// A filter whose comb mode passes the signal through (saves the delay line).
-    pub(crate) fn without_comb() -> Self {
-        Self { comb: None, ..Self::new_empty() }
-    }
-
-    fn new_empty() -> Self {
-        Self { svf: [Svf::default(); 2], ladder: [0.0; 4], comb: None, comb_pos: 0, formant: [Svf::default(); 3] }
     }
 
     pub(crate) fn clear(&mut self) {

@@ -320,6 +320,11 @@ pub fn format_param(info: &engine::model::ParamInfo, value: f32) -> String {
         Unit::Milliseconds => format!("{value:.1} ms"),
         Unit::Ratio => format!("{value:.1}:1"),
         Unit::Octaves => format!("{value:.1} oct"),
+        Unit::Semitones => format!("{value:+.1} st"),
+        Unit::Times => format!("×{value:.2}"),
+        Unit::Bits => format!("{value:.1} bits"),
+        Unit::Count => format!("{}", value.round()),
+        Unit::Plain => format!("{value:.2}"),
         Unit::Pan => match (value * 50.0).round() as i32 {
             0 => "C".into(),
             n if n < 0 => format!("{}L", -n),

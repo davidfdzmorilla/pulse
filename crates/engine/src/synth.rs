@@ -1,6 +1,6 @@
 //! Real-time safe sound generators. Nothing in here allocates.
 
-use crate::model::{drum_note, SynthParams, Waveform};
+use crate::model::{SynthParams, Waveform};
 use std::f32::consts::{PI, TAU};
 
 const MAX_VOICES: usize = 16;
@@ -112,12 +112,12 @@ impl PolySynth {
         }
     }
 
-    pub fn set_params(&mut self, params: SynthParams) {
-        self.params = params;
+    pub fn params(&self) -> SynthParams {
+        self.params
     }
 
-    pub fn set_param(&mut self, index: usize, value: f32) {
-        self.params.set(index, value);
+    pub fn set_params(&mut self, params: SynthParams) {
+        self.params = params;
     }
 
     /// Starts a note that releases on its own after `gate_samples`, or on
@@ -244,153 +244,6 @@ impl PolySynth {
                 let filtered = v.filter.lowpass(osc, g, k);
                 *sample += filtered * v.level * v.velocity * p.gain;
             }
-        }
-    }
-}
-
-/// Small xorshift noise source.
-#[derive(Clone, Copy)]
-struct Noise(u32);
-
-impl Noise {
-    fn next(&mut self) -> f32 {
-        let mut x = self.0;
-        x ^= x << 13;
-        x ^= x >> 17;
-        x ^= x << 5;
-        self.0 = x;
-        (x as f32 / u32::MAX as f32) * 2.0 - 1.0
-    }
-}
-
-#[derive(Clone, Copy, Default)]
-struct DrumVoice {
-    active: bool,
-    t: f32,
-    velocity: f32,
-    env: f32,
-    phase: f32,
-    hp_prev_in: f32,
-    hp_prev_out: f32,
-}
-
-impl DrumVoice {
-    fn trigger(&mut self, velocity: f32) {
-        *self = DrumVoice {
-            active: true,
-            velocity,
-            env: 1.0,
-            ..Default::default()
-        };
-    }
-
-    /// One-pole high-pass, used to thin out noise for snares and hats.
-    fn highpass(&mut self, x: f32, coef: f32) -> f32 {
-        let y = coef * (self.hp_prev_out + x - self.hp_prev_in);
-        self.hp_prev_in = x;
-        self.hp_prev_out = y;
-        y
-    }
-}
-
-/// Synthesized drum kit: kick, snare, clap, closed and open hat.
-pub struct DrumKit {
-    sample_rate: f32,
-    noise: Noise,
-    kick: DrumVoice,
-    snare: DrumVoice,
-    clap: DrumVoice,
-    closed_hat: DrumVoice,
-    open_hat: DrumVoice,
-}
-
-impl DrumKit {
-    pub fn new(sample_rate: f32) -> Self {
-        Self {
-            sample_rate,
-            noise: Noise(0x9E37_79B9),
-            kick: DrumVoice::default(),
-            snare: DrumVoice::default(),
-            clap: DrumVoice::default(),
-            closed_hat: DrumVoice::default(),
-            open_hat: DrumVoice::default(),
-        }
-    }
-
-    pub fn note_on(&mut self, pitch: u8, velocity: f32) {
-        match pitch {
-            drum_note::KICK | 35 => self.kick.trigger(velocity),
-            drum_note::SNARE | 40 => self.snare.trigger(velocity),
-            drum_note::CLAP => self.clap.trigger(velocity),
-            drum_note::CLOSED_HAT | 44 => {
-                // A closed hat chokes the open one, as on a real kit.
-                self.open_hat.active = false;
-                self.closed_hat.trigger(velocity);
-            }
-            drum_note::OPEN_HAT => self.open_hat.trigger(velocity),
-            _ => {}
-        }
-    }
-
-    pub fn render(&mut self, out: &mut [f32]) {
-        let sr = self.sample_rate;
-        let dt = 1.0 / sr;
-        let decay = |seconds: f32| (-1.0 / (seconds * sr)).exp();
-        let (kick_decay, snare_decay, clap_decay) = (decay(0.35), decay(0.18), decay(0.12));
-        let (closed_decay, open_decay) = (decay(0.04), decay(0.35));
-        let noise = &mut self.noise;
-
-        for sample in out.iter_mut() {
-            let mut s = 0.0;
-
-            let k = &mut self.kick;
-            if k.active {
-                let freq = 45.0 + 130.0 * (-k.t * 35.0).exp();
-                k.phase = (k.phase + freq * dt) % 1.0;
-                s += (k.phase * TAU).sin() * k.env * k.velocity * 0.9;
-                k.env *= kick_decay;
-                k.t += dt;
-                k.active = k.env > 1e-4;
-            }
-
-            let sn = &mut self.snare;
-            if sn.active {
-                sn.phase = (sn.phase + 185.0 * dt) % 1.0;
-                let tone = (sn.phase * TAU).sin() * (-sn.t * 25.0).exp() * 0.4;
-                let n = sn.highpass(noise.next(), 0.85) * sn.env * 0.5;
-                s += (tone + n) * sn.velocity;
-                sn.env *= snare_decay;
-                sn.t += dt;
-                sn.active = sn.env > 1e-4;
-            }
-
-            let c = &mut self.clap;
-            if c.active {
-                // Three quick bursts followed by a short tail.
-                let burst = if c.t < 0.03 {
-                    (1.0 - ((c.t * 100.0) % 1.0)).powi(2)
-                } else {
-                    1.0
-                };
-                s += c.highpass(noise.next(), 0.8) * c.env * burst * c.velocity * 0.5;
-                c.env *= clap_decay;
-                c.t += dt;
-                c.active = c.env > 1e-4;
-            }
-
-            for (hat, hat_decay) in [
-                (&mut self.closed_hat, closed_decay),
-                (&mut self.open_hat, open_decay),
-            ] {
-                if hat.active {
-                    s += hat.highpass(noise.next(), 0.6) * hat.env * hat.velocity * 0.3;
-                    hat.env *= hat_decay;
-                    hat.active = hat.env > 1e-4;
-                }
-            }
-
-            // -6 dB of headroom: kick and clap often land together.
-            *sample += s * 0.5;
         }
     }
 }

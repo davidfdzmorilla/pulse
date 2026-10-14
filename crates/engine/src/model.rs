@@ -195,16 +195,156 @@ impl Default for SynthParams {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum InstrumentKind {
     Synth(SynthParams),
-    /// Synthesized drum kit, General MIDI mapping (36 kick, 38 snare, 39 clap, 42/46 hats).
+    /// The first drum kit, without parameters. Loaded projects are upgraded to
+    /// [`InstrumentKind::DrumMachine`]; the engine plays it as one with defaults.
     Drums,
+    DrumMachine(DrumParams),
+    SuperSaw(SuperSawParams),
+    Acid(AcidParams),
+    Fm(FmParams),
 }
 
 pub mod drum_note {
     pub const KICK: u8 = 36;
+    pub const RIM: u8 = 37;
     pub const SNARE: u8 = 38;
     pub const CLAP: u8 = 39;
     pub const CLOSED_HAT: u8 = 42;
+    pub const LOW_TOM: u8 = 45;
     pub const OPEN_HAT: u8 = 46;
+    pub const COWBELL: u8 = 56;
+}
+
+/// The drum machine's sounds, in parameter order, with their General MIDI notes.
+pub const DRUM_VOICES: [(u8, &str); 8] = [
+    (drum_note::KICK, "Kick"),
+    (drum_note::RIM, "Rim"),
+    (drum_note::SNARE, "Snare"),
+    (drum_note::CLAP, "Clap"),
+    (drum_note::CLOSED_HAT, "Closed Hat"),
+    (drum_note::OPEN_HAT, "Open Hat"),
+    (drum_note::LOW_TOM, "Tom"),
+    (drum_note::COWBELL, "Cowbell"),
+];
+
+/// Per-sound tuning (semitones), decay (multiplier) and level of the drum machine.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DrumParams {
+    pub tune: [f32; 8],
+    pub decay: [f32; 8],
+    pub level: [f32; 8],
+}
+
+impl Default for DrumParams {
+    fn default() -> Self {
+        Self { tune: [0.0; 8], decay: [1.0; 8], level: [0.8; 8] }
+    }
+}
+
+/// Unison sawtooth polysynth.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SuperSawParams {
+    /// Saws per note, 1..7.
+    pub voices: f32,
+    /// Spread between the saws, 0..1 (up to ±50 cents).
+    pub detune: f32,
+    /// Stereo width of the saws, 0..1.
+    pub spread: f32,
+    pub cutoff: f32,
+    pub resonance: f32,
+    /// Filter envelope depth in octaves.
+    pub env_amount: f32,
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+    pub gain: f32,
+}
+
+impl Default for SuperSawParams {
+    fn default() -> Self {
+        Self {
+            voices: 7.0,
+            detune: 0.35,
+            spread: 0.8,
+            cutoff: 6000.0,
+            resonance: 0.1,
+            env_amount: 0.0,
+            attack: 0.01,
+            decay: 0.4,
+            sustain: 0.8,
+            release: 0.35,
+            gain: 0.35,
+        }
+    }
+}
+
+/// Monophonic acid bassline synth with a resonant 4-pole filter and slides.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AcidParams {
+    pub square: bool,
+    pub cutoff: f32,
+    pub resonance: f32,
+    /// Filter envelope depth, 0..1 (up to 4 octaves).
+    pub env_mod: f32,
+    /// Filter envelope decay in seconds.
+    pub decay: f32,
+    /// Extra punch for notes with velocity above 80%.
+    pub accent: f32,
+    /// Slide time in milliseconds between overlapping notes.
+    pub glide_ms: f32,
+    pub drive: f32,
+    pub gain: f32,
+}
+
+impl Default for AcidParams {
+    fn default() -> Self {
+        Self {
+            square: false,
+            cutoff: 400.0,
+            resonance: 0.75,
+            env_mod: 0.6,
+            decay: 0.3,
+            accent: 0.6,
+            glide_ms: 60.0,
+            drive: 0.3,
+            gain: 0.5,
+        }
+    }
+}
+
+/// Two-operator FM synth: a modulator with feedback driving a sine carrier.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct FmParams {
+    /// Modulator frequency as a multiple of the note's.
+    pub ratio: f32,
+    /// Modulation depth.
+    pub index: f32,
+    pub mod_decay: f32,
+    pub mod_sustain: f32,
+    pub feedback: f32,
+    pub attack: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+    pub gain: f32,
+}
+
+impl Default for FmParams {
+    fn default() -> Self {
+        Self {
+            ratio: 2.0,
+            index: 3.0,
+            mod_decay: 0.6,
+            mod_sustain: 0.2,
+            feedback: 0.0,
+            attack: 0.002,
+            decay: 1.2,
+            sustain: 0.0,
+            release: 0.6,
+            gain: 0.45,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -351,6 +491,91 @@ impl Default for AutoFilterParams {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChorusParams {
+    pub rate: f32,
+    pub depth: f32,
+    pub delay_ms: f32,
+    pub mix: f32,
+}
+
+impl Default for ChorusParams {
+    fn default() -> Self {
+        Self { rate: 0.6, depth: 0.5, delay_ms: 8.0, mix: 0.5 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct PhaserParams {
+    pub rate: f32,
+    pub depth: f32,
+    pub center: f32,
+    pub feedback: f32,
+    pub mix: f32,
+}
+
+impl Default for PhaserParams {
+    fn default() -> Self {
+        Self { rate: 0.4, depth: 0.7, center: 800.0, feedback: 0.5, mix: 0.5 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct BitcrusherParams {
+    pub bits: f32,
+    /// Holds each sample this many times (sample-rate reduction).
+    pub downsample: f32,
+    pub mix: f32,
+}
+
+impl Default for BitcrusherParams {
+    fn default() -> Self {
+        Self { bits: 8.0, downsample: 4.0, mix: 1.0 }
+    }
+}
+
+/// Tempo-synced volume ducking, the "sidechain pump" without a sidechain.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DuckerParams {
+    pub depth: f32,
+    /// Fraction of each period spent recovering, 0.05..1.
+    pub release: f32,
+    /// Ducking period in beats (1 = every quarter note).
+    pub rate_beats: f64,
+}
+
+impl Default for DuckerParams {
+    fn default() -> Self {
+        Self { depth: 0.7, release: 0.6, rate_beats: 1.0 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct LimiterParams {
+    pub gain_db: f32,
+    pub ceiling_db: f32,
+    pub release_ms: f32,
+}
+
+impl Default for LimiterParams {
+    fn default() -> Self {
+        Self { gain_db: 0.0, ceiling_db: -0.3, release_ms: 120.0 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct UtilityParams {
+    pub gain_db: f32,
+    /// 0 = mono, 1 = unchanged, 2 = extra wide.
+    pub width: f32,
+}
+
+impl Default for UtilityParams {
+    fn default() -> Self {
+        Self { gain_db: 0.0, width: 1.0 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Effect {
     Eq3(Eq3Params),
     Compressor(CompressorParams),
@@ -358,18 +583,30 @@ pub enum Effect {
     Reverb(ReverbParams),
     Saturator(SaturatorParams),
     AutoFilter(AutoFilterParams),
+    Chorus(ChorusParams),
+    Phaser(PhaserParams),
+    Bitcrusher(BitcrusherParams),
+    Ducker(DuckerParams),
+    Limiter(LimiterParams),
+    Utility(UtilityParams),
 }
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 6] {
+    pub fn catalog() -> [Effect; 12] {
         [
             Effect::Eq3(Default::default()),
             Effect::Compressor(Default::default()),
+            Effect::Limiter(Default::default()),
             Effect::Saturator(Default::default()),
+            Effect::Bitcrusher(Default::default()),
             Effect::AutoFilter(Default::default()),
+            Effect::Ducker(Default::default()),
+            Effect::Chorus(Default::default()),
+            Effect::Phaser(Default::default()),
             Effect::Delay(Default::default()),
             Effect::Reverb(Default::default()),
+            Effect::Utility(Default::default()),
         ]
     }
 
@@ -381,6 +618,12 @@ impl Effect {
             Effect::Reverb(_) => "Reverb",
             Effect::Saturator(_) => "Saturator",
             Effect::AutoFilter(_) => "Auto Filter",
+            Effect::Chorus(_) => "Chorus",
+            Effect::Phaser(_) => "Phaser",
+            Effect::Bitcrusher(_) => "Bitcrusher",
+            Effect::Ducker(_) => "Ducker",
+            Effect::Limiter(_) => "Limiter",
+            Effect::Utility(_) => "Utility",
         }
     }
 }
@@ -430,6 +673,12 @@ pub enum Unit {
     Ratio,
     Octaves,
     Pan,
+    Semitones,
+    /// A multiplier, shown as "×1.5".
+    Times,
+    Bits,
+    Count,
+    Plain,
 }
 
 /// Description of a continuous parameter: what knobs and automation lanes need to know.
@@ -510,6 +759,202 @@ const AUTO_FILTER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Res", 0.0, 0.95, 0.3, Percent),
     ParamInfo::linear("LFO Amount", 0.0, 4.0, 0.0, Octaves),
 ];
+const CHORUS_PARAMS: [ParamInfo; 4] = [
+    ParamInfo::log("Rate", 0.05, 5.0, 0.6, Hertz),
+    ParamInfo::linear("Depth", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::log("Delay", 2.0, 20.0, 8.0, Milliseconds),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 0.5, Percent),
+];
+const PHASER_PARAMS: [ParamInfo; 5] = [
+    ParamInfo::log("Rate", 0.05, 8.0, 0.4, Hertz),
+    ParamInfo::linear("Depth", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::log("Freq", 100.0, 4000.0, 800.0, Hertz),
+    ParamInfo::linear("Feedback", 0.0, 0.9, 0.5, Percent),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 0.5, Percent),
+];
+const BITCRUSHER_PARAMS: [ParamInfo; 3] = [
+    ParamInfo::linear("Bits", 2.0, 16.0, 8.0, Bits),
+    ParamInfo::log("Downsample", 1.0, 40.0, 4.0, Times),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
+];
+const DUCKER_PARAMS: [ParamInfo; 2] = [
+    ParamInfo::linear("Depth", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("Release", 0.05, 1.0, 0.6, Percent),
+];
+const LIMITER_PARAMS: [ParamInfo; 3] = [
+    ParamInfo::linear("Gain", 0.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Ceiling", -12.0, 0.0, -0.3, Decibels),
+    ParamInfo::log("Release", 10.0, 1000.0, 120.0, Milliseconds),
+];
+const UTILITY_PARAMS: [ParamInfo; 2] = [
+    ParamInfo::linear("Gain", -36.0, 12.0, 0.0, Decibels),
+    ParamInfo::linear("Width", 0.0, 2.0, 1.0, Percent),
+];
+const SUPERSAW_PARAMS: [ParamInfo; 11] = [
+    ParamInfo::linear("Voices", 1.0, 7.0, 7.0, Count),
+    ParamInfo::linear("Detune", 0.0, 1.0, 0.35, Percent),
+    ParamInfo::linear("Spread", 0.0, 1.0, 0.8, Percent),
+    ParamInfo::log("Filter", 40.0, 18000.0, 6000.0, Hertz),
+    ParamInfo::linear("Res", 0.0, 0.95, 0.1, Percent),
+    ParamInfo::linear("Env Amt", 0.0, 4.0, 0.0, Octaves),
+    ParamInfo::log("Attack", 0.001, 4.0, 0.01, Seconds),
+    ParamInfo::log("Decay", 0.005, 4.0, 0.4, Seconds),
+    ParamInfo::linear("Sustain", 0.0, 1.0, 0.8, Percent),
+    ParamInfo::log("Release", 0.005, 4.0, 0.35, Seconds),
+    ParamInfo::linear("Volume", 0.0, 1.0, 0.35, Percent),
+];
+const ACID_PARAMS: [ParamInfo; 8] = [
+    ParamInfo::log("Cutoff", 50.0, 5000.0, 400.0, Hertz),
+    ParamInfo::linear("Res", 0.0, 0.97, 0.75, Percent),
+    ParamInfo::linear("Env Mod", 0.0, 1.0, 0.6, Percent),
+    ParamInfo::log("Decay", 0.05, 2.0, 0.3, Seconds),
+    ParamInfo::linear("Accent", 0.0, 1.0, 0.6, Percent),
+    ParamInfo::log("Glide", 1.0, 500.0, 60.0, Milliseconds),
+    ParamInfo::linear("Drive", 0.0, 1.0, 0.3, Percent),
+    ParamInfo::linear("Volume", 0.0, 1.0, 0.5, Percent),
+];
+const FM_PARAMS: [ParamInfo; 10] = [
+    ParamInfo::log("Ratio", 0.25, 16.0, 2.0, Times),
+    ParamInfo::linear("Index", 0.0, 10.0, 3.0, Plain),
+    ParamInfo::log("Mod Decay", 0.01, 4.0, 0.6, Seconds),
+    ParamInfo::linear("Mod Sus", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("Feedback", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::log("Attack", 0.001, 4.0, 0.002, Seconds),
+    ParamInfo::log("Decay", 0.005, 8.0, 1.2, Seconds),
+    ParamInfo::linear("Sustain", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::log("Release", 0.005, 4.0, 0.6, Seconds),
+    ParamInfo::linear("Volume", 0.0, 1.0, 0.45, Percent),
+];
+const DRUM_PARAMS: [ParamInfo; 24] = {
+    let names = [
+        ["Kick Tune", "Kick Decay", "Kick Level"],
+        ["Rim Tune", "Rim Decay", "Rim Level"],
+        ["Snare Tune", "Snare Decay", "Snare Level"],
+        ["Clap Tune", "Clap Decay", "Clap Level"],
+        ["CH Tune", "CH Decay", "CH Level"],
+        ["OH Tune", "OH Decay", "OH Level"],
+        ["Tom Tune", "Tom Decay", "Tom Level"],
+        ["Bell Tune", "Bell Decay", "Bell Level"],
+    ];
+    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); 24];
+    let mut voice = 0;
+    while voice < 8 {
+        table[voice * 3] = ParamInfo::linear(names[voice][0], -12.0, 12.0, 0.0, Semitones);
+        table[voice * 3 + 1] = ParamInfo::log(names[voice][1], 0.25, 4.0, 1.0, Times);
+        table[voice * 3 + 2] = ParamInfo::linear(names[voice][2], 0.0, 1.0, 0.8, Percent);
+        voice += 1;
+    }
+    table
+};
+
+impl InstrumentKind {
+    /// Every instrument, in browser order.
+    pub fn catalog() -> [InstrumentKind; 5] {
+        [
+            InstrumentKind::Synth(SynthParams::default()),
+            InstrumentKind::SuperSaw(SuperSawParams::default()),
+            InstrumentKind::Acid(AcidParams::default()),
+            InstrumentKind::Fm(FmParams::default()),
+            InstrumentKind::DrumMachine(DrumParams::default()),
+        ]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            InstrumentKind::Synth(_) => "Pulse Synth",
+            InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => "Drum Machine",
+            InstrumentKind::SuperSaw(_) => "Super Saw",
+            InstrumentKind::Acid(_) => "Acid Bass",
+            InstrumentKind::Fm(_) => "FM Synth",
+        }
+    }
+
+    pub fn is_drums(&self) -> bool {
+        matches!(self, InstrumentKind::Drums | InstrumentKind::DrumMachine(_))
+    }
+
+    /// Replaces the parameterless first drum kit with the drum machine.
+    pub fn upgraded(self) -> Self {
+        match self {
+            InstrumentKind::Drums => InstrumentKind::DrumMachine(DrumParams::default()),
+            other => other,
+        }
+    }
+
+    pub fn params(&self) -> &'static [ParamInfo] {
+        match self {
+            InstrumentKind::Synth(_) => &SYNTH_PARAMS,
+            InstrumentKind::Drums => &[],
+            InstrumentKind::DrumMachine(_) => &DRUM_PARAMS,
+            InstrumentKind::SuperSaw(_) => &SUPERSAW_PARAMS,
+            InstrumentKind::Acid(_) => &ACID_PARAMS,
+            InstrumentKind::Fm(_) => &FM_PARAMS,
+        }
+    }
+
+    fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
+        Some(match self {
+            InstrumentKind::Synth(p) => return p.param_mut(index),
+            InstrumentKind::Drums => return None,
+            InstrumentKind::DrumMachine(p) => match index % 3 {
+                0 => p.tune.get_mut(index / 3)?,
+                1 => p.decay.get_mut(index / 3)?,
+                _ => p.level.get_mut(index / 3)?,
+            },
+            InstrumentKind::SuperSaw(p) => match index {
+                0 => &mut p.voices,
+                1 => &mut p.detune,
+                2 => &mut p.spread,
+                3 => &mut p.cutoff,
+                4 => &mut p.resonance,
+                5 => &mut p.env_amount,
+                6 => &mut p.attack,
+                7 => &mut p.decay,
+                8 => &mut p.sustain,
+                9 => &mut p.release,
+                10 => &mut p.gain,
+                _ => return None,
+            },
+            InstrumentKind::Acid(p) => match index {
+                0 => &mut p.cutoff,
+                1 => &mut p.resonance,
+                2 => &mut p.env_mod,
+                3 => &mut p.decay,
+                4 => &mut p.accent,
+                5 => &mut p.glide_ms,
+                6 => &mut p.drive,
+                7 => &mut p.gain,
+                _ => return None,
+            },
+            InstrumentKind::Fm(p) => match index {
+                0 => &mut p.ratio,
+                1 => &mut p.index,
+                2 => &mut p.mod_decay,
+                3 => &mut p.mod_sustain,
+                4 => &mut p.feedback,
+                5 => &mut p.attack,
+                6 => &mut p.decay,
+                7 => &mut p.sustain,
+                8 => &mut p.release,
+                9 => &mut p.gain,
+                _ => return None,
+            },
+        })
+    }
+
+    pub fn get(&self, index: usize) -> f32 {
+        let mut copy = *self;
+        copy.param_mut(index).map_or(0.0, |v| *v)
+    }
+
+    pub fn set(&mut self, index: usize, value: f32) {
+        let info = self.params().get(index).copied();
+        if let (Some(info), Some(slot)) = (info, self.param_mut(index)) {
+            *slot = value.clamp(info.min, info.max);
+        }
+    }
+}
+
 const SYNTH_PARAMS: [ParamInfo; 7] = [
     ParamInfo::log("Attack", 0.001, 4.0, 0.005, Seconds),
     ParamInfo::log("Decay", 0.005, 4.0, 0.2, Seconds),
@@ -530,6 +975,12 @@ impl Effect {
             Effect::Reverb(_) => &REVERB_PARAMS,
             Effect::Saturator(_) => &SATURATOR_PARAMS,
             Effect::AutoFilter(_) => &AUTO_FILTER_PARAMS,
+            Effect::Chorus(_) => &CHORUS_PARAMS,
+            Effect::Phaser(_) => &PHASER_PARAMS,
+            Effect::Bitcrusher(_) => &BITCRUSHER_PARAMS,
+            Effect::Ducker(_) => &DUCKER_PARAMS,
+            Effect::Limiter(_) => &LIMITER_PARAMS,
+            Effect::Utility(_) => &UTILITY_PARAMS,
         }
     }
 
@@ -558,6 +1009,25 @@ impl Effect {
             (Effect::AutoFilter(p), 0) => &mut p.cutoff,
             (Effect::AutoFilter(p), 1) => &mut p.resonance,
             (Effect::AutoFilter(p), 2) => &mut p.lfo_amount,
+            (Effect::Chorus(p), 0) => &mut p.rate,
+            (Effect::Chorus(p), 1) => &mut p.depth,
+            (Effect::Chorus(p), 2) => &mut p.delay_ms,
+            (Effect::Chorus(p), 3) => &mut p.mix,
+            (Effect::Phaser(p), 0) => &mut p.rate,
+            (Effect::Phaser(p), 1) => &mut p.depth,
+            (Effect::Phaser(p), 2) => &mut p.center,
+            (Effect::Phaser(p), 3) => &mut p.feedback,
+            (Effect::Phaser(p), 4) => &mut p.mix,
+            (Effect::Bitcrusher(p), 0) => &mut p.bits,
+            (Effect::Bitcrusher(p), 1) => &mut p.downsample,
+            (Effect::Bitcrusher(p), 2) => &mut p.mix,
+            (Effect::Ducker(p), 0) => &mut p.depth,
+            (Effect::Ducker(p), 1) => &mut p.release,
+            (Effect::Limiter(p), 0) => &mut p.gain_db,
+            (Effect::Limiter(p), 1) => &mut p.ceiling_db,
+            (Effect::Limiter(p), 2) => &mut p.release_ms,
+            (Effect::Utility(p), 0) => &mut p.gain_db,
+            (Effect::Utility(p), 1) => &mut p.width,
             _ => return None,
         })
     }
@@ -684,6 +1154,14 @@ mod tests {
                 assert_eq!(effect.get(i), info.max, "{} {}", effect.label(), info.name);
                 effect.set(i, info.max * 10.0 + 10.0);
                 assert_eq!(effect.get(i), info.max, "values are clamped to the range");
+            }
+        }
+        for mut kind in InstrumentKind::catalog() {
+            for (i, info) in kind.params().iter().enumerate() {
+                kind.set(i, info.max);
+                assert_eq!(kind.get(i), info.max, "{} {}", kind.label(), info.name);
+                kind.set(i, info.min);
+                assert_eq!(kind.get(i), info.min, "{} {}", kind.label(), info.name);
             }
         }
         let mut synth = SynthParams::default();

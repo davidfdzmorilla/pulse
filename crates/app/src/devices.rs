@@ -4,11 +4,10 @@
 //! knob shows and overrides automation the same way the mixer does.
 
 use crate::app::PulseApp;
-use crate::project::drum_name;
 use crate::theme::{self, ACCENT, CONTROL, SURFACE, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
-use engine::model::{drum_note, Device, Effect, FilterMode, InstrumentKind, Param, SynthParams, Waveform};
+use engine::model::{Device, Effect, FilterMode, InstrumentKind, Param, SynthParams, Waveform};
 use engine::{Command, Target};
 
 const DEVICE_HEIGHT: f32 = 168.0;
@@ -166,6 +165,12 @@ fn effect_width(effect: &Effect) -> f32 {
         Effect::Reverb(_) => (4, 0),
         Effect::Saturator(_) => (3, 0),
         Effect::AutoFilter(_) => (3, 2),
+        Effect::Chorus(_) => (4, 0),
+        Effect::Phaser(_) => (5, 0),
+        Effect::Bitcrusher(_) => (3, 0),
+        Effect::Ducker(_) => (2, 1),
+        Effect::Limiter(_) => (3, 0),
+        Effect::Utility(_) => (2, 0),
     };
     knobs as f32 * 52.0 + columns as f32 * 100.0 + 24.0
 }
@@ -203,15 +208,39 @@ fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize) {
                 beats_combo(ui, &format!("lfo{index}"), &mut p.lfo_beats, &[0.5, 1.0, 2.0, 4.0, 8.0, 16.0]);
             });
         }
-        Effect::Eq3(_) | Effect::Compressor(_) | Effect::Reverb(_) | Effect::Saturator(_) => {}
+        Effect::Ducker(p) => {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Ritmo").color(TEXT_DIM).size(10.5));
+                beats_combo(ui, &format!("ducker{index}"), &mut p.rate_beats, &[0.25, 0.5, 1.0, 2.0, 4.0]);
+            });
+        }
+        Effect::Eq3(_)
+        | Effect::Compressor(_)
+        | Effect::Reverb(_)
+        | Effect::Saturator(_)
+        | Effect::Chorus(_)
+        | Effect::Phaser(_)
+        | Effect::Bitcrusher(_)
+        | Effect::Limiter(_)
+        | Effect::Utility(_) => {}
     }
 }
 
 fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) {
     let target = Target::Track(t);
-    match app.project.tracks[t].instrument {
+    let kind = app.project.tracks[t].instrument;
+    // Knob for instrument parameter `i`, showing automation like every other control.
+    let knob = |ui: &mut egui::Ui, actions: &mut Vec<Action>, i: usize, label: &str, diameter: f32| {
+        let Some(info) = kind.params().get(i) else { return };
+        let id = Param::Instrument(i);
+        let value = app.display_value(target, id);
+        if let Some(v) = widgets::param_knob(ui, info, value, label, diameter, app.automation_state(target, id)) {
+            actions.push(Action::Param(id, v));
+        }
+    };
+    match kind {
         InstrumentKind::Synth(base) => {
-            device_frame(ui, "Pulse Synth", 470.0, None, |_| {}, |ui| {
+            device_frame(ui, kind.label(), 470.0, None, |_| {}, |ui| {
                 let mut waveform = base.waveform;
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Oscilador").color(TEXT_DIM).size(10.5));
@@ -227,45 +256,68 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 for i in 0..SynthParams::params().len() {
                     shown.set(i, app.display_value(target, Param::Instrument(i)));
                 }
-                let mut knob = |ui: &mut egui::Ui, i: usize| {
-                    let info = &SynthParams::params()[i];
-                    let id = Param::Instrument(i);
-                    let state = app.automation_state(target, id);
-                    if let Some(v) = widgets::param_knob(ui, info, shown.get(i), info.name, 30.0, state) {
-                        actions.push(Action::Param(id, v));
-                    }
-                };
                 ui.vertical(|ui| {
                     envelope_preview(ui, &shown);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
-                        for i in 0..4 {
-                            knob(ui, i);
+                        for (i, name) in ["Attack", "Decay", "Sustain", "Release"].into_iter().enumerate() {
+                            knob(ui, actions, i, name, 30.0);
                         }
                     });
                 });
                 ui.vertical(|ui| {
-                    knob(ui, 4);
-                    knob(ui, 5);
+                    knob(ui, actions, 4, "Filter", 30.0);
+                    knob(ui, actions, 5, "Res", 30.0);
                 });
-                knob(ui, 6);
+                knob(ui, actions, 6, "Volume", 30.0);
             });
         }
-        InstrumentKind::Drums => {
-            device_frame(ui, "Drum Kit", 330.0, None, |_| {}, |ui| {
-                egui::Grid::new("pads").spacing([4.0, 4.0]).show(ui, |ui| {
-                    let pads = [drum_note::KICK, drum_note::SNARE, drum_note::CLAP, drum_note::CLOSED_HAT, drum_note::OPEN_HAT];
-                    for (i, pitch) in pads.into_iter().enumerate() {
-                        let label = format!("{}\n{}", drum_name(pitch).unwrap_or(""), crate::project::note_name(pitch));
-                        let button = egui::Button::new(egui::RichText::new(label).size(10.5)).min_size(vec2(96.0, 54.0));
-                        if ui.add(button).on_hover_text("Clic para escuchar").clicked() {
-                            actions.push(Action::Preview(pitch));
-                        }
-                        if i % 3 == 2 {
+        InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => {
+            device_frame(ui, kind.label(), 600.0, None, |_| {}, |ui| {
+                egui::Grid::new("drum_machine").spacing([8.0, 2.0]).show(ui, |ui| {
+                    for (voice, (pitch, name)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
+                        ui.vertical(|ui| {
+                            let pad = egui::Button::new(egui::RichText::new(name).size(10.5)).min_size(vec2(136.0, 16.0));
+                            if ui.add(pad).on_hover_text(format!("{} · clic para escuchar", crate::project::note_name(pitch))).clicked() {
+                                actions.push(Action::Preview(pitch));
+                            }
+                            ui.horizontal(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                for (k, label) in ["Tune", "Decay", "Level"].into_iter().enumerate() {
+                                    knob(ui, actions, voice * 3 + k, label, 18.0);
+                                }
+                            });
+                        });
+                        if voice % 4 == 3 {
                             ui.end_row();
                         }
                     }
                 });
+            });
+        }
+        InstrumentKind::Acid(base) => {
+            let width = kind.params().len() as f32 * 52.0 + 110.0;
+            device_frame(ui, kind.label(), width, None, |_| {}, |ui| {
+                let mut square = base.square;
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new("Oscilador").color(TEXT_DIM).size(10.5));
+                    ui.selectable_value(&mut square, false, "Saw");
+                    ui.selectable_value(&mut square, true, "Square");
+                });
+                if square != base.square {
+                    actions.push(Action::Instrument(InstrumentKind::Acid(engine::model::AcidParams { square, ..base })));
+                }
+                for (i, info) in kind.params().iter().enumerate() {
+                    knob(ui, actions, i, info.name, 30.0);
+                }
+            });
+        }
+        InstrumentKind::SuperSaw(_) | InstrumentKind::Fm(_) => {
+            let width = kind.params().len() as f32 * 52.0 + 24.0;
+            device_frame(ui, kind.label(), width, None, |_| {}, |ui| {
+                for (i, info) in kind.params().iter().enumerate() {
+                    knob(ui, actions, i, info.name, 30.0);
+                }
             });
         }
     }

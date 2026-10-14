@@ -3,7 +3,7 @@
 use crate::app::PulseApp;
 use crate::theme::{self, ACCENT, TEXT, TEXT_DIM};
 use eframe::egui::{self, vec2, Align2, RichText, Sense};
-use engine::model::{Device, Effect, InstrumentKind, SynthParams};
+use engine::model::{Device, Effect, InstrumentKind};
 use engine::Target;
 
 fn heading(ui: &mut egui::Ui, text: &str) {
@@ -51,16 +51,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         } else {
             "Selecciona una pista MIDI para cambiar su instrumento"
         };
-        if item(ui, "♫", "Pulse Synth", hint) {
-            if let Some(t) = track {
-                app.set_instrument(t, InstrumentKind::Synth(SynthParams::default()));
-                app.detail = crate::app::Detail::Devices;
-            }
-        }
-        if item(ui, "◉", "Drum Kit", hint) {
-            if let Some(t) = track {
-                app.set_instrument(t, InstrumentKind::Drums);
-                app.detail = crate::app::Detail::Devices;
+        for kind in InstrumentKind::catalog() {
+            let icon = if kind.is_drums() { "◉" } else { "♫" };
+            if item(ui, icon, kind.label(), hint) {
+                if let Some(t) = track {
+                    app.set_instrument(t, kind);
+                    app.detail = crate::app::Detail::Devices;
+                }
             }
         }
 

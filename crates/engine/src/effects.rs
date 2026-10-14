@@ -2,8 +2,8 @@
 //! must run off the audio thread; `set_params` and `process` never allocate.
 
 use crate::model::{
-    db_to_gain, AutoFilterParams, CompressorParams, DelayParams, Effect, Eq3Params, FilterMode,
-    ReverbParams, SaturatorParams,
+    db_to_gain, AutoFilterParams, BitcrusherParams, ChorusParams, CompressorParams, DelayParams, DuckerParams, Effect,
+    Eq3Params, FilterMode, LimiterParams, PhaserParams, ReverbParams, SaturatorParams, UtilityParams,
 };
 use std::f32::consts::{PI, TAU};
 
@@ -336,6 +336,193 @@ impl AutoFilter {
     }
 }
 
+pub struct Chorus {
+    params: ChorusParams,
+    lines: [Vec<f32>; 2],
+    write: usize,
+    phase: f32,
+}
+
+impl Chorus {
+    fn new(params: ChorusParams, sr: f32) -> Self {
+        let len = (0.05 * sr) as usize + 4;
+        Self { params, lines: [vec![0.0; len], vec![0.0; len]], write: 0, phase: 0.0 }
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        let len = self.lines[0].len();
+        let base = (p.delay_ms * 0.001 * sr).clamp(1.0, len as f32 - 2.0);
+        let depth = p.depth * (base * 0.9).min(0.005 * sr);
+        let inc = p.rate / sr;
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            self.lines[0][self.write] = *a;
+            self.lines[1][self.write] = *b;
+            self.phase = (self.phase + inc) % 1.0;
+            // Left and right LFOs a quarter cycle apart give the stereo ensemble.
+            let mod_l = (self.phase * TAU).sin();
+            let mod_r = ((self.phase + 0.25) * TAU).sin();
+            let wet_l = Delay::read(&self.lines[0], self.write, base + depth * mod_l);
+            let wet_r = Delay::read(&self.lines[1], self.write, base + depth * mod_r);
+            self.write = (self.write + 1) % len;
+            *a += (wet_l - *a) * p.mix;
+            *b += (wet_r - *b) * p.mix;
+        }
+    }
+}
+
+const PHASER_STAGES: usize = 6;
+
+pub struct Phaser {
+    params: PhaserParams,
+    /// First-order allpass state (x1, y1) per channel and stage.
+    stages: [[(f32, f32); PHASER_STAGES]; 2],
+    feedback: [f32; 2],
+    phase: f32,
+}
+
+impl Phaser {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        let inc = p.rate / sr;
+        let mut coefs = [0f32; 2];
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            if i % 16 == 0 {
+                // The notches sweep up to two octaves either side of the center.
+                for (ch, coef) in coefs.iter_mut().enumerate() {
+                    let lfo = ((self.phase + ch as f32 * 0.25) * TAU).sin();
+                    let freq = (p.center * 2f32.powf(2.0 * p.depth * lfo)).clamp(20.0, sr * 0.45);
+                    let t = (PI * freq / sr).tan();
+                    *coef = (t - 1.0) / (t + 1.0);
+                }
+            }
+            self.phase = (self.phase + inc) % 1.0;
+            for (ch, sample) in [a, b].into_iter().enumerate() {
+                let mut x = *sample + self.feedback[ch] * p.feedback;
+                for (x1, y1) in self.stages[ch].iter_mut() {
+                    let y = coefs[ch] * x + *x1 - coefs[ch] * *y1;
+                    *x1 = x;
+                    *y1 = y;
+                    x = y;
+                }
+                self.feedback[ch] = x;
+                *sample += (x - *sample) * p.mix;
+            }
+        }
+    }
+}
+
+pub struct Bitcrusher {
+    params: BitcrusherParams,
+    counter: f32,
+    held: [f32; 2],
+}
+
+impl Bitcrusher {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let p = self.params;
+        let levels = 2f32.powf(p.bits.clamp(1.0, 24.0) - 1.0);
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            self.counter += 1.0;
+            if self.counter >= p.downsample.max(1.0) {
+                self.counter -= p.downsample.max(1.0);
+                self.held = [(*a * levels).round() / levels, (*b * levels).round() / levels];
+            }
+            *a += (self.held[0] - *a) * p.mix;
+            *b += (self.held[1] - *b) * p.mix;
+        }
+    }
+}
+
+pub struct Ducker {
+    params: DuckerParams,
+}
+
+impl Ducker {
+    /// Fraction of the period used to duck down, short enough to feel instant without clicking.
+    const ATTACK: f64 = 0.015;
+
+    fn gain(&self, phase: f64) -> f32 {
+        let p = self.params;
+        let duck = if phase < Self::ATTACK {
+            phase / Self::ATTACK
+        } else {
+            let t = ((phase - Self::ATTACK) / p.release.max(0.05) as f64).min(1.0);
+            1.0 - t * t * (3.0 - 2.0 * t)
+        };
+        1.0 - p.depth * duck as f32
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], ctx: &ProcessContext) {
+        // Synced to the transport: nothing to pump while stopped.
+        if ctx.beats_per_sample <= 0.0 {
+            return;
+        }
+        let period = self.params.rate_beats.max(0.0625);
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            let beat = ctx.beat + i as f64 * ctx.beats_per_sample;
+            let g = self.gain((beat / period).rem_euclid(1.0));
+            *a *= g;
+            *b *= g;
+        }
+    }
+}
+
+/// Lookahead peak limiter: the gain drops before a peak arrives, so the output never
+/// exceeds the ceiling. Adds 1.5 ms of latency to its channel.
+pub struct Limiter {
+    params: LimiterParams,
+    delay: [Vec<f32>; 2],
+    position: usize,
+    gain: f32,
+}
+
+impl Limiter {
+    fn new(params: LimiterParams, sr: f32) -> Self {
+        let lookahead = ((0.0015 * sr) as usize).max(1);
+        Self { params, delay: [vec![0.0; lookahead], vec![0.0; lookahead]], position: 0, gain: 1.0 }
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        let input = db_to_gain(p.gain_db);
+        let ceiling = db_to_gain(p.ceiling_db).max(1e-4);
+        let release = (-1.0 / (p.release_ms.max(1.0) * 0.001 * sr)).exp();
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let (out_l, out_r) = (self.delay[0][self.position], self.delay[1][self.position]);
+            self.delay[0][self.position] = *a * input;
+            self.delay[1][self.position] = *b * input;
+            self.position = (self.position + 1) % self.delay[0].len();
+            // The loudest sample still to come (or going out now) sets the gain.
+            let peak = self.delay[0]
+                .iter()
+                .chain(&self.delay[1])
+                .fold(out_l.abs().max(out_r.abs()), |m, s| m.max(s.abs()));
+            let target = if peak > ceiling { ceiling / peak } else { 1.0 };
+            self.gain = if target < self.gain { target } else { target + (self.gain - target) * release };
+            *a = (out_l * self.gain).clamp(-ceiling, ceiling);
+            *b = (out_r * self.gain).clamp(-ceiling, ceiling);
+        }
+    }
+}
+
+pub struct Utility {
+    params: UtilityParams,
+}
+
+impl Utility {
+    fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+        let gain = db_to_gain(self.params.gain_db);
+        let width = self.params.width.clamp(0.0, 2.0);
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let mid = (*a + *b) * 0.5;
+            let side = (*a - *b) * 0.5 * width;
+            *a = (mid + side) * gain;
+            *b = (mid - side) * gain;
+        }
+    }
+}
+
 pub enum EffectProcessor {
     Eq3(Eq3),
     Compressor(Compressor),
@@ -343,6 +530,12 @@ pub enum EffectProcessor {
     Reverb(Reverb),
     Saturator(Saturator),
     AutoFilter(AutoFilter),
+    Chorus(Chorus),
+    Phaser(Phaser),
+    Bitcrusher(Bitcrusher),
+    Ducker(Ducker),
+    Limiter(Limiter),
+    Utility(Utility),
 }
 
 impl EffectProcessor {
@@ -365,6 +558,17 @@ impl EffectProcessor {
                 params,
                 filters: Default::default(),
             }),
+            Effect::Chorus(params) => Self::Chorus(Chorus::new(params, sample_rate)),
+            Effect::Phaser(params) => Self::Phaser(Phaser {
+                params,
+                stages: [[(0.0, 0.0); PHASER_STAGES]; 2],
+                feedback: [0.0; 2],
+                phase: 0.0,
+            }),
+            Effect::Bitcrusher(params) => Self::Bitcrusher(Bitcrusher { params, counter: 0.0, held: [0.0; 2] }),
+            Effect::Ducker(params) => Self::Ducker(Ducker { params }),
+            Effect::Limiter(params) => Self::Limiter(Limiter::new(params, sample_rate)),
+            Effect::Utility(params) => Self::Utility(Utility { params }),
         }
     }
 
@@ -377,6 +581,12 @@ impl EffectProcessor {
             (Self::Reverb(fx), Effect::Reverb(p)) => fx.params = p,
             (Self::Saturator(fx), Effect::Saturator(p)) => fx.params = p,
             (Self::AutoFilter(fx), Effect::AutoFilter(p)) => fx.params = p,
+            (Self::Chorus(fx), Effect::Chorus(p)) => fx.params = p,
+            (Self::Phaser(fx), Effect::Phaser(p)) => fx.params = p,
+            (Self::Bitcrusher(fx), Effect::Bitcrusher(p)) => fx.params = p,
+            (Self::Ducker(fx), Effect::Ducker(p)) => fx.params = p,
+            (Self::Limiter(fx), Effect::Limiter(p)) => fx.params = p,
+            (Self::Utility(fx), Effect::Utility(p)) => fx.params = p,
             _ => return false,
         }
         true
@@ -391,6 +601,12 @@ impl EffectProcessor {
             Self::Reverb(fx) => Effect::Reverb(fx.params),
             Self::Saturator(fx) => Effect::Saturator(fx.params),
             Self::AutoFilter(fx) => Effect::AutoFilter(fx.params),
+            Self::Chorus(fx) => Effect::Chorus(fx.params),
+            Self::Phaser(fx) => Effect::Phaser(fx.params),
+            Self::Bitcrusher(fx) => Effect::Bitcrusher(fx.params),
+            Self::Ducker(fx) => Effect::Ducker(fx.params),
+            Self::Limiter(fx) => Effect::Limiter(fx.params),
+            Self::Utility(fx) => Effect::Utility(fx.params),
         }
     }
 
@@ -409,6 +625,12 @@ impl EffectProcessor {
             Self::Reverb(fx) => fx.process(l, r),
             Self::Saturator(fx) => fx.process(l, r),
             Self::AutoFilter(fx) => fx.process(l, r, ctx),
+            Self::Chorus(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::Phaser(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::Bitcrusher(fx) => fx.process(l, r),
+            Self::Ducker(fx) => fx.process(l, r, ctx),
+            Self::Limiter(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::Utility(fx) => fx.process(l, r),
         }
     }
 }
@@ -458,6 +680,46 @@ mod tests {
         fx.process(&mut l, &mut r, &ctx());
         let error: f32 = l.iter().zip(&input).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(error < 1e-3, "EQ Three at 0 dB should not change the signal ({error})");
+    }
+
+    #[test]
+    fn limiter_never_exceeds_its_ceiling() {
+        let params = crate::model::LimiterParams { gain_db: 12.0, ceiling_db: -1.0, release_ms: 50.0 };
+        let mut fx = EffectProcessor::new(&Effect::Limiter(params), 48_000.0);
+        let mut l: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.03).sin() * if i % 7000 < 50 { 1.0 } else { 0.4 }).collect();
+        let mut r = l.clone();
+        fx.process(&mut l, &mut r, &ctx());
+        let ceiling = 10f32.powf(-1.0 / 20.0);
+        let peak = l.iter().chain(&r).fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak <= ceiling + 1e-6, "peak {peak} over ceiling {ceiling}");
+        assert!(peak > ceiling * 0.9, "the +12 dB input should reach the ceiling");
+    }
+
+    #[test]
+    fn ducker_pumps_on_the_beat_and_recovers() {
+        let mut fx = EffectProcessor::new(&Effect::Ducker(Default::default()), 48_000.0);
+        // One beat at 120 BPM: half a second.
+        let mut l = vec![1.0f32; 24_000];
+        let mut r = l.clone();
+        fx.process(&mut l, &mut r, &ctx());
+        let depth = crate::model::DuckerParams::default().depth;
+        let lowest = l.iter().copied().fold(1.0, f32::min);
+        assert!((lowest - (1.0 - depth)).abs() < 0.02, "ducks to {lowest}");
+        assert!((l[23_999] - 1.0).abs() < 1e-3, "back to full level by the end of the beat");
+        // Stopped transport: untouched.
+        let stopped = ProcessContext { beats_per_sample: 0.0, ..ctx() };
+        let mut l = vec![1.0f32; 512];
+        let mut r = l.clone();
+        fx.process(&mut l, &mut r, &stopped);
+        assert!(l.iter().all(|&s| s == 1.0));
+    }
+
+    #[test]
+    fn utility_width_zero_is_mono() {
+        let mut fx = EffectProcessor::new(&Effect::Utility(crate::model::UtilityParams { gain_db: 0.0, width: 0.0 }), 48_000.0);
+        let (mut l, mut r) = (vec![1.0, 0.0], vec![0.0, 1.0]);
+        fx.process(&mut l, &mut r, &ctx());
+        assert_eq!((l, r), (vec![0.5, 0.5], vec![0.5, 0.5]));
     }
 
     #[test]

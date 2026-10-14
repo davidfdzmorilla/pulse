@@ -12,7 +12,7 @@ use crate::project::{drum_name, is_black_key, note_name};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Key, Rect, Sense, Stroke, StrokeKind};
-use engine::model::{drum_note, Clip, MidiClip, Note};
+use engine::model::{Clip, MidiClip, Note};
 use engine::Command;
 use std::sync::atomic::Ordering;
 
@@ -170,7 +170,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     state.selection.retain(|&i| i < clip.notes.len());
 
     let pitches: Vec<u8> = if is_drums {
-        vec![drum_note::OPEN_HAT, drum_note::CLOSED_HAT, drum_note::CLAP, drum_note::SNARE, drum_note::KICK]
+        // One row per drum machine sound, kick at the bottom.
+        engine::model::DRUM_VOICES.iter().rev().map(|(pitch, _)| *pitch).collect()
     } else {
         (24..=96).rev().collect()
     };

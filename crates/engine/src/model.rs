@@ -3068,7 +3068,9 @@ pub const MOD_SLOTS: usize = 16;
 pub const MOD_AUDIO: usize = 32;
 pub const MOD_LANES: usize = 3;
 pub const MOD_LANE_FX: usize = 4;
-pub const MOD_MODULATORS: usize = 16;
+pub const MOD_MODULATORS: usize = 32;
+/// Modulators whose first four settings have numbers in the first layout.
+pub const MOD_FIRST_MODULATORS: usize = 16;
 pub const MOD_TARGETS: usize = 8;
 pub const MOD_MACROS: usize = 8;
 pub const MOD_AUDIO_AMOUNT: usize = 512;
@@ -3085,6 +3087,13 @@ pub const MOD_MODULE_SLOTS: usize = MOD_SLOTS + MOD_EXTRA_SLOTS;
 /// Global unison: detune, spread, blend, bias (range, center or balance by mode).
 pub const MOD_UNISON: usize = MOD_EXTRA + MOD_MODULES * MOD_EXTRA_SLOTS;
 pub const MOD_UNISON_VOICES: usize = 8;
+/// Every modulator's eight settings (the first 16 modulators' first four also have
+/// their numbers from the first layout, at [`MOD_MODULATOR_PARAMS`]).
+pub const MOD_MODULATOR_SLOTS_AT: usize = MOD_UNISON + 4;
+pub const MOD_MODULATOR_SLOTS: usize = 8;
+pub const MOD_PARAM_COUNT: usize = MOD_MODULATOR_SLOTS_AT + MOD_MODULATORS * MOD_MODULATOR_SLOTS;
+/// `Modulator::source` and `trigger_source` when nothing is connected.
+pub const MOD_NO_MODULATOR: u8 = 255;
 /// `ModTarget::dest` of an unused target.
 pub const MOD_NO_TARGET: u16 = u16::MAX;
 /// `Lane::dest` (and an output's send) meaning the master bus.
@@ -3587,36 +3596,172 @@ impl Lane {
 pub enum ModulatorKind {
     #[default]
     Off,
-    /// A: attack, B: decay, C: sustain, D: release.
+    /// Delay, attack, hold, decay, sustain, release.
     Envelope,
-    /// A drawn cycle. A: rate (0.02..40 Hz) unless synced, B: phase offset.
+    /// A drawn cycle, free or synced.
     Lfo,
-    /// A: rate (0.1..40 Hz), B: smoothing (0: steps, 1: glides).
+    /// Scans one frame of a wavetable as its cycle.
+    LfoTable,
+    /// A drawn curve played over time, with loop points.
+    Timeline,
+    /// Random steps with jitter, smoothing and chaos.
     Random,
+    /// The level of an effect lane or the master.
+    AudioFollower,
+    /// The pitch of an effect lane or the master.
+    PitchTracker,
+    Note,
     /// Velocity, note or a random value per note, mapped through a drawn curve.
     Curve,
-    Note,
     Velocity,
+    /// 1 while the note is held.
+    NoteGate,
+    /// Channel or polyphonic aftertouch.
+    Pressure,
+    PitchWheel,
+    MidiCc,
     /// One of the eight macros.
     Macro,
+    /// Another modulator through a drawn curve.
+    Remap,
+    /// Another modulator, kept above a limit.
+    LowerLimit,
+    /// Another modulator, kept below a limit.
+    UpperLimit,
+    /// Another modulator, multiplied.
+    Scale,
+    /// Another modulator, sampled when the trigger rises.
+    SampleHold,
 }
 
 impl ModulatorKind {
-    pub const ALL: [ModulatorKind; 7] = [Self::Envelope, Self::Lfo, Self::Random, Self::Curve, Self::Note, Self::Velocity, Self::Macro];
+    pub const ALL: [ModulatorKind; 20] = [
+        Self::Envelope,
+        Self::Lfo,
+        Self::LfoTable,
+        Self::Timeline,
+        Self::Random,
+        Self::AudioFollower,
+        Self::PitchTracker,
+        Self::Note,
+        Self::Curve,
+        Self::Velocity,
+        Self::NoteGate,
+        Self::Pressure,
+        Self::PitchWheel,
+        Self::MidiCc,
+        Self::Macro,
+        Self::Remap,
+        Self::LowerLimit,
+        Self::UpperLimit,
+        Self::Scale,
+        Self::SampleHold,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "—",
             Self::Envelope => "Envelope",
             Self::Lfo => "LFO",
+            Self::LfoTable => "LFO Table",
+            Self::Timeline => "Curve",
             Self::Random => "Random",
-            Self::Curve => "Curve",
+            Self::AudioFollower => "Audio Follower",
+            Self::PitchTracker => "Pitch Tracker",
             Self::Note => "Note",
+            Self::Curve => "Note Curve",
             Self::Velocity => "Velocity",
+            Self::NoteGate => "Note Gate",
+            Self::Pressure => "Pressure",
+            Self::PitchWheel => "Pitch Wheel",
+            Self::MidiCc => "MIDI CC",
             Self::Macro => "Macro",
+            Self::Remap => "Remap",
+            Self::LowerLimit => "Lower Limit",
+            Self::UpperLimit => "Upper Limit",
+            Self::Scale => "Scale",
+            Self::SampleHold => "Sample & Hold",
+        }
+    }
+
+    /// Reads another modulator (its `source`).
+    pub fn takes_input(self) -> bool {
+        matches!(self, Self::Remap | Self::LowerLimit | Self::UpperLimit | Self::Scale | Self::SampleHold)
+    }
+
+    /// Can be (re)started by notes or by a trigger input.
+    pub fn triggered(self) -> bool {
+        matches!(self, Self::Envelope | Self::Lfo | Self::LfoTable | Self::Timeline | Self::Random | Self::SampleHold)
+    }
+
+    /// The same for every voice: computed once per block.
+    pub fn is_global(self) -> bool {
+        matches!(self, Self::AudioFollower | Self::PitchTracker | Self::PitchWheel | Self::MidiCc)
+    }
+}
+
+/// When notes restart a modulator.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TriggerMode {
+    /// Never with a trigger input connected; otherwise Legato in legato mode, Always elsewhere.
+    #[default]
+    Auto,
+    /// Free running.
+    Never,
+    /// Every note-on.
+    Always,
+    /// The first note of a legato phrase only.
+    Legato,
+}
+
+impl TriggerMode {
+    pub const ALL: [TriggerMode; 4] = [Self::Auto, Self::Never, Self::Always, Self::Legato];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Auto => "Auto",
+            Self::Never => "Never",
+            Self::Always => "Always",
+            Self::Legato => "Legato",
         }
     }
 }
+
+/// How a modulator's 0..1 value reaches its targets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OutputRange {
+    /// 0..1.
+    Unipolar,
+    /// -1..1.
+    Bipolar,
+    /// 1..0.
+    Inverted,
+}
+
+impl OutputRange {
+    pub const ALL: [OutputRange; 3] = [Self::Unipolar, Self::Bipolar, Self::Inverted];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unipolar => "Unipolar",
+            Self::Bipolar => "Bipolar",
+            Self::Inverted => "Inverted",
+        }
+    }
+
+    pub fn apply(self, value: f32) -> f32 {
+        match self {
+            Self::Unipolar => value,
+            Self::Bipolar => value * 2.0 - 1.0,
+            Self::Inverted => 1.0 - value,
+        }
+    }
+}
+
+/// Audio Follower and Pitch Tracker inputs.
+pub const MOD_LISTEN: [&str; 4] = ["Lane A", "Lane B", "Lane C", "Master"];
+/// Scale modulator multipliers.
+pub const SCALE_MULTIPLIERS: [f32; 5] = [0.01, 0.1, 1.0, 10.0, 100.0];
 
 /// What a curve modulator reads.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3639,27 +3784,136 @@ impl CurveInput {
     }
 }
 
+/// Modulator settings: each kind uses some of the eight 0..1 slots (see [`modulator_slot`]).
+pub mod mslot {
+    pub const RATE: usize = 0;
+    pub const PHASE: usize = 1;
+    pub const FRAME: usize = 2;
+    pub const SMOOTH_TABLE: usize = 3;
+    pub const ATTACK: usize = 0;
+    pub const DECAY: usize = 1;
+    pub const SUSTAIN: usize = 2;
+    pub const RELEASE: usize = 3;
+    pub const DELAY: usize = 4;
+    pub const HOLD: usize = 6;
+    pub const SMOOTH: usize = 1;
+    pub const JITTER: usize = 4;
+    pub const CHAOS: usize = 5;
+    pub const LENGTH: usize = 0;
+    pub const LOOP_START: usize = 1;
+    pub const LOOP_END: usize = 2;
+    pub const GAIN: usize = 0;
+    pub const FOLLOW_ATTACK: usize = 1;
+    pub const FOLLOW_RELEASE: usize = 2;
+    pub const LOW: usize = 0;
+    pub const HIGH: usize = 1;
+    pub const SENSITIVITY: usize = 2;
+    pub const LIMIT: usize = 0;
+    pub const FACTOR: usize = 0;
+    pub const THRESHOLD: usize = 0;
+    /// Output depth, for every kind.
+    pub const DEPTH: usize = 7;
+}
+
+/// What slot `index` of a `kind` modulator means, or None when it is unused.
+pub fn modulator_slot(kind: ModulatorKind, index: usize) -> Option<ParamInfo> {
+    use mslot::*;
+    use ModulatorKind as K;
+    if kind == K::Off {
+        return None;
+    }
+    if index == DEPTH {
+        return Some(ParamInfo::linear("Depth", 0.0, 1.0, 1.0, Percent));
+    }
+    let rate = ParamInfo::log("Rate", 0.02, 40.0, 1.0, Hertz);
+    match (kind, index) {
+        (K::Envelope, ATTACK) => Some(ParamInfo::log("Attack", 0.0005, 10.0, 0.01, Seconds)),
+        (K::Envelope, DECAY) => Some(ParamInfo::log("Decay", 0.001, 10.0, 0.1, Seconds)),
+        (K::Envelope, SUSTAIN) => Some(ParamInfo::linear("Sustain", 0.0, 1.0, 0.0, Percent)),
+        (K::Envelope, RELEASE) => Some(ParamInfo::log("Release", 0.001, 10.0, 0.1, Seconds)),
+        (K::Envelope, DELAY) => Some(ParamInfo::linear("Delay", 0.0, 4.0, 0.0, Seconds)),
+        (K::Envelope, HOLD) => Some(ParamInfo::linear("Hold", 0.0, 4.0, 0.0, Seconds)),
+        (K::Lfo | K::LfoTable, RATE) => Some(rate),
+        (K::Lfo | K::LfoTable, PHASE) => Some(ParamInfo::linear("Phase", 0.0, 1.0, 0.0, Percent)),
+        (K::LfoTable, FRAME) => Some(ParamInfo::linear("Frame", 0.0, 1.0, 0.0, Percent)),
+        (K::LfoTable, SMOOTH_TABLE) => Some(ParamInfo::linear("Smooth", 0.0, 1.0, 0.0, Percent)),
+        (K::Timeline, LENGTH) => Some(ParamInfo::log("Length", 0.01, 30.0, 1.0, Seconds)),
+        (K::Timeline, LOOP_START) => Some(ParamInfo::linear("Loop Start", 0.0, 1.0, 0.0, Percent)),
+        (K::Timeline, LOOP_END) => Some(ParamInfo::linear("Loop End", 0.0, 1.0, 1.0, Percent)),
+        (K::Random, RATE) => Some(ParamInfo::log("Rate", 0.1, 40.0, 2.0, Hertz)),
+        (K::Random, SMOOTH) => Some(ParamInfo::linear("Smooth", 0.0, 1.0, 0.0, Percent)),
+        (K::Random, JITTER) => Some(ParamInfo::linear("Jitter", 0.0, 1.0, 0.0, Percent)),
+        (K::Random, CHAOS) => Some(ParamInfo::linear("Chaos", 0.0, 1.0, 1.0, Percent)),
+        (K::AudioFollower, GAIN) => Some(ParamInfo::linear("Gain", -24.0, 24.0, 0.0, Decibels)),
+        (K::AudioFollower, FOLLOW_ATTACK) => Some(ParamInfo::log("Attack", 0.0001, 1.0, 0.005, Seconds)),
+        (K::AudioFollower, FOLLOW_RELEASE) => Some(ParamInfo::log("Release", 0.001, 5.0, 0.15, Seconds)),
+        (K::PitchTracker, LOW) => Some(ParamInfo::linear("Low", 0.0, 127.0, 36.0, Note)),
+        (K::PitchTracker, HIGH) => Some(ParamInfo::linear("High", 0.0, 127.0, 84.0, Note)),
+        (K::PitchTracker, SENSITIVITY) => Some(ParamInfo::linear("Sensitivity", 0.0, 1.0, 0.5, Percent)),
+        (K::LowerLimit | K::UpperLimit, LIMIT) => Some(ParamInfo::linear("Limit", 0.0, 1.0, 0.5, Percent)),
+        (K::Scale, FACTOR) => Some(ParamInfo::linear("Factor", -1.0, 1.0, 1.0, Plain)),
+        (K::SampleHold, THRESHOLD) => Some(ParamInfo::linear("Threshold", 0.0, 1.0, 0.5, Percent)),
+        _ => None,
+    }
+}
+
 /// One connection from a modulator to a parameter.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ModTarget {
     pub dest: u16,
     /// -1..1 of the parameter's range.
     pub depth: f32,
+    /// Off: kept but not applied.
+    #[serde(default = "yes")]
+    pub on: bool,
+    /// Bends the modulator's value before it is applied (-1..1, 0: straight).
+    #[serde(default)]
+    pub curve: f32,
+    /// Added to the parameter whatever the modulator does; with the depth it sets
+    /// the lower and upper bounds the modulation moves between.
+    #[serde(default)]
+    pub offset: f32,
+}
+
+fn no_modulator() -> u8 {
+    MOD_NO_MODULATOR
 }
 
 impl ModTarget {
-    pub const NONE: ModTarget = ModTarget { dest: MOD_NO_TARGET, depth: 0.0 };
+    pub const NONE: ModTarget = ModTarget { dest: MOD_NO_TARGET, depth: 0.0, on: true, curve: 0.0, offset: 0.0 };
+
+    pub fn new(dest: usize, depth: f32) -> Self {
+        ModTarget { dest: dest as u16, depth, ..Self::NONE }
+    }
+
+    /// How far (in 0..1 of the parameter's travel) a modulator value `value` moves the target.
+    pub fn amount(&self, value: f32) -> f32 {
+        if !self.on {
+            return 0.0;
+        }
+        let a = value.abs();
+        let bent = if a <= 1.0 && self.curve != 0.0 { Shape::ease(a, self.curve) } else { a };
+        self.offset + self.depth * bent.copysign(value)
+    }
+
+    /// The lowest and highest amount for a modulator with output `range`.
+    pub fn bounds(&self, range: OutputRange) -> (f32, f32) {
+        let low = if range == OutputRange::Bipolar { -1.0 } else { 0.0 };
+        let (a, b) = (self.amount(low), self.amount(1.0));
+        (a.min(b), a.max(b))
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Modulator {
     pub kind: ModulatorKind,
+    /// LFO and Curve: the cycle; Note Curve and Remap: the mapping.
     pub shape: Shape,
     pub mode: LfoMode,
-    /// LFO period in beats when synced (0: free rate).
+    /// LFO period, or Curve length, in beats when synced (0: free rate).
     pub sync_beats: f32,
     pub input: CurveInput,
-    /// Macro modulators: which macro.
+    /// Macro, MIDI CC number, LFO Table's table, Follower and Tracker input, Scale multiplier.
     pub index: u8,
     pub bipolar: bool,
     pub a: f32,
@@ -3667,6 +3921,29 @@ pub struct Modulator {
     pub c: f32,
     pub d: f32,
     pub targets: [ModTarget; MOD_TARGETS],
+    /// Slots 4..8 (7 is the output depth).
+    #[serde(default = "Modulator::more_default")]
+    pub more: [f32; 4],
+    /// Output from 1 down to 0 (wins over `bipolar`).
+    #[serde(default)]
+    pub inverted: bool,
+    #[serde(default)]
+    pub trigger: TriggerMode,
+    /// A modulator whose rises restart this one (and whose falls release it).
+    #[serde(default = "no_modulator")]
+    pub trigger_source: u8,
+    /// The modulator that Remap, the limits, Scale and Sample & Hold read.
+    #[serde(default = "no_modulator")]
+    pub source: u8,
+    /// Random: one sequence for all voices (Unison) instead of one each.
+    #[serde(default)]
+    pub shared: bool,
+    /// Envelope: a retrigger starts from the current level instead of zero.
+    #[serde(default = "yes")]
+    pub seamless: bool,
+    /// Curve: an index into [`CURVE_LOOPS`].
+    #[serde(default)]
+    pub loop_mode: u8,
 }
 
 impl Modulator {
@@ -3683,20 +3960,124 @@ impl Modulator {
         c: 0.5,
         d: 0.5,
         targets: [ModTarget::NONE; MOD_TARGETS],
+        more: Self::MORE,
+        inverted: false,
+        trigger: TriggerMode::Auto,
+        trigger_source: MOD_NO_MODULATOR,
+        source: MOD_NO_MODULATOR,
+        shared: false,
+        seamless: false,
+        loop_mode: 0,
     };
 
-    /// A new modulator of `kind` with sensible settings.
+    /// Slots 4..8 of modulators saved before they existed: no delay or jitter, full chaos and depth.
+    const MORE: [f32; 4] = [0.0, 1.0, 0.0, 1.0];
+
+    fn more_default() -> [f32; 4] {
+        Self::MORE
+    }
+
+    /// A new modulator of `kind` with every setting at its default.
     pub fn new(kind: ModulatorKind) -> Self {
+        let mut m = Self { kind, ..Self::OFF };
+        for i in 0..MOD_MODULATOR_SLOTS {
+            if let Some(info) = modulator_slot(kind, i) {
+                *m.value_mut(i) = info.normalize(info.default);
+            }
+        }
         let triangle = Shape::from_points(&[(0.0, 0.5, 0.0), (0.25, 1.0, 0.0), (0.75, 0.0, 0.0), (1.0, 0.5, 0.0)]);
         let rising = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
         match kind {
-            ModulatorKind::Envelope => Self { kind, a: 0.1, b: 0.4, c: 0.0, d: 0.3, ..Self::OFF },
-            ModulatorKind::Lfo => Self { kind, shape: triangle, a: 0.45, b: 0.0, ..Self::OFF },
-            ModulatorKind::Random => Self { kind, a: 0.5, b: 0.0, ..Self::OFF },
-            ModulatorKind::Curve => Self { kind, shape: rising, ..Self::OFF },
-            _ => Self { kind, ..Self::OFF },
+            ModulatorKind::Envelope => {
+                m.a = 0.1;
+                m.b = 0.4;
+                m.c = 0.0;
+                m.d = 0.3;
+            }
+            ModulatorKind::Lfo => {
+                m.shape = triangle;
+                m.a = 0.45;
+            }
+            ModulatorKind::LfoTable => m.a = 0.45,
+            ModulatorKind::Timeline => m.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (0.1, 1.0, 0.0), (1.0, 0.0, 0.5)]),
+            ModulatorKind::Random => m.a = 0.5,
+            ModulatorKind::Curve | ModulatorKind::Remap => m.shape = rising,
+            ModulatorKind::AudioFollower | ModulatorKind::PitchTracker => m.index = 3,
+            ModulatorKind::MidiCc => m.index = 1,
+            ModulatorKind::Scale => m.index = 2,
+            ModulatorKind::PitchWheel => m.bipolar = true,
+            _ => {}
+        }
+        m
+    }
+
+    pub fn range(&self) -> OutputRange {
+        if self.inverted {
+            OutputRange::Inverted
+        } else if self.bipolar {
+            OutputRange::Bipolar
+        } else {
+            OutputRange::Unipolar
         }
     }
+
+    pub fn set_range(&mut self, range: OutputRange) {
+        self.inverted = range == OutputRange::Inverted;
+        self.bipolar = range == OutputRange::Bipolar;
+    }
+
+    /// Slot `i`, normalised.
+    pub fn value(&self, i: usize) -> f32 {
+        match i {
+            0 => self.a,
+            1 => self.b,
+            2 => self.c,
+            3 => self.d,
+            _ => self.more[(i - 4).min(3)],
+        }
+    }
+
+    pub fn value_mut(&mut self, i: usize) -> &mut f32 {
+        match i {
+            0 => &mut self.a,
+            1 => &mut self.b,
+            2 => &mut self.c,
+            3 => &mut self.d,
+            _ => &mut self.more[(i - 4).min(3)],
+        }
+    }
+
+    /// Slot `i` in real units.
+    pub fn get(&self, i: usize) -> f32 {
+        modulator_slot(self.kind, i).map_or(0.0, |info| info.denormalize(self.value(i)))
+    }
+
+    /// Sets slot `i` from a value in real units.
+    pub fn set(&mut self, i: usize, value: f32) {
+        if let Some(info) = modulator_slot(self.kind, i) {
+            *self.value_mut(i) = info.normalize(value);
+        }
+    }
+
+    /// When notes restart it, given the synth's voicing.
+    pub fn note_trigger(&self, legato: bool) -> TriggerMode {
+        match self.trigger {
+            TriggerMode::Auto if self.trigger_source != MOD_NO_MODULATOR => TriggerMode::Never,
+            TriggerMode::Auto if legato => TriggerMode::Legato,
+            TriggerMode::Auto => TriggerMode::Always,
+            mode => mode,
+        }
+    }
+}
+
+/// Reads up to [`MOD_MODULATORS`] modulators (patches from the first layout have 16).
+fn padded_modulators<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[Modulator; MOD_MODULATORS], D::Error> {
+    let list: Vec<Modulator> = Vec::deserialize(deserializer)?;
+    let mut modulators = [Modulator::OFF; MOD_MODULATORS];
+    for (slot, m) in modulators.iter_mut().zip(list) {
+        *slot = m;
+    }
+    Ok(modulators)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -3704,6 +4085,7 @@ pub struct ModularParams {
     pub modules: [Module; MOD_MODULES],
     pub audio: [AudioMod; MOD_AUDIO],
     pub lanes: [Lane; MOD_LANES],
+    #[serde(deserialize_with = "padded_modulators")]
     pub modulators: [Modulator; MOD_MODULATORS],
     pub macros: [f32; MOD_MACROS],
     pub mono: bool,
@@ -3752,8 +4134,39 @@ impl ModularParams {
         }
     }
 
+    /// Parameter index of slot `i` of modulator `m`.
     pub fn modulator_param(m: usize, i: usize) -> usize {
-        MOD_MODULATOR_PARAMS + m * 4 + i
+        if m < MOD_FIRST_MODULATORS && i < 4 { MOD_MODULATOR_PARAMS + m * 4 + i } else { MOD_MODULATOR_SLOTS_AT + m * MOD_MODULATOR_SLOTS + i }
+    }
+
+    /// The modulator and slot behind parameter `index`, if it is a modulator setting.
+    pub fn param_modulator(index: usize) -> Option<(usize, usize)> {
+        if (MOD_MODULATOR_PARAMS..MOD_MACRO_PARAMS).contains(&index) {
+            Some(((index - MOD_MODULATOR_PARAMS) / 4, (index - MOD_MODULATOR_PARAMS) % 4))
+        } else if (MOD_MODULATOR_SLOTS_AT..MOD_PARAM_COUNT).contains(&index) {
+            let k = index - MOD_MODULATOR_SLOTS_AT;
+            Some((k / MOD_MODULATOR_SLOTS, k % MOD_MODULATOR_SLOTS))
+        } else {
+            None
+        }
+    }
+
+    /// Takes modulator `m` out, with everything connected to it.
+    pub fn remove_modulator(&mut self, m: usize) {
+        self.modulators[m] = Modulator::OFF;
+        for other in &mut self.modulators {
+            if other.source as usize == m {
+                other.source = MOD_NO_MODULATOR;
+            }
+            if other.trigger_source as usize == m {
+                other.trigger_source = MOD_NO_MODULATOR;
+            }
+            for target in &mut other.targets {
+                if Self::param_modulator(target.dest as usize).is_some_and(|(owner, _)| owner == m) {
+                    *target = ModTarget::NONE;
+                }
+            }
+        }
     }
 
     pub fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
@@ -3781,6 +4194,10 @@ impl ModularParams {
             i if i == MOD_UNISON + 1 => &mut self.unison.spread,
             i if i == MOD_UNISON + 2 => &mut self.unison.blend,
             i if i == MOD_UNISON + 3 => &mut self.unison.bias,
+            i if i < MOD_PARAM_COUNT => {
+                let k = i - MOD_MODULATOR_SLOTS_AT;
+                self.modulators[k / MOD_MODULATOR_SLOTS].value_mut(k % MOD_MODULATOR_SLOTS)
+            }
             _ => return None,
         })
     }
@@ -3791,6 +4208,11 @@ impl ModularParams {
             let module = &self.modules[m];
             let name = module_slot(module.kind, s).map_or("?", |i| i.name);
             return format!("{} {} · {name}", m + 1, module.kind.label());
+        }
+        if let Some((m, k)) = Self::param_modulator(index) {
+            let modulator = &self.modulators[m];
+            let name = modulator_slot(modulator.kind, k).map_or("?", |i| i.name);
+            return format!("Mod {} {} · {name}", m + 1, modulator.kind.label());
         }
         MODULAR_PARAMS.get(index).map_or_else(|| "?".into(), |p| p.name.to_string())
     }
@@ -3834,7 +4256,7 @@ impl ModularParams {
         let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
         let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
         let lfo_rate = |hz: f32| (hz / 0.02).ln() / 2000f32.ln();
-        let target = |m: usize, s: usize, depth: f32| ModTarget { dest: ModularParams::module_param(m, s) as u16, depth };
+        let target = |m: usize, s: usize, depth: f32| ModTarget::new(ModularParams::module_param(m, s), depth);
         let mut list = vec![("Init", ModularParams::default())];
 
         // Classic two-operator FM: the modulator sits in its own group, unheard.
@@ -3851,7 +4273,7 @@ impl ModularParams {
         decay.a = 0.0;
         decay.b = 0.6;
         decay.c = 0.0;
-        decay.targets[0] = ModTarget { dest: (MOD_AUDIO_AMOUNT + c) as u16, depth: 0.25 };
+        decay.targets[0] = ModTarget::new(MOD_AUDIO_AMOUNT + c, 0.25);
         p.modulators[0] = decay;
         p.lanes[0].fx[0] = reverb(0.75, 0.3);
         p.gain = 0.3;
@@ -3983,7 +4405,7 @@ impl ModularParams {
         let mut drift = Modulator::new(ModulatorKind::Lfo);
         drift.a = lfo_rate(0.05);
         drift.bipolar = true;
-        drift.targets[0] = ModTarget { dest: (MOD_UNISON + 3) as u16, depth: 0.35 };
+        drift.targets[0] = ModTarget::new(MOD_UNISON + 3, 0.35);
         p.modulators[0] = drift;
         p.lanes[0].fx[0] = reverb(0.85, 0.35);
         p.gain = 0.2;
@@ -4036,6 +4458,113 @@ impl ModularParams {
         p.lanes[0].fx[0] = reverb(0.5, 0.2);
         p.gain = 0.4;
         list.push(("Wavetable · Bandlimited FM", p));
+
+        // Modulation chains. Rates and depths are set in real units through `set`.
+        let modulator = |kind: ModulatorKind, settings: &[(usize, f32)]| {
+            let mut m = Modulator::new(kind);
+            for &(k, value) in settings {
+                m.set(k, value);
+            }
+            m
+        };
+        let modulator_target = |m: usize, k: usize, depth: f32| ModTarget::new(ModularParams::modulator_param(m, k), depth);
+        let tri = Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]);
+
+        // An eighth-note LFO, remapped so the filter snaps open, on a saw and its sub.
+        let mut p = build(&[group, saw(&[]), sine(&[(slot::SEMI, -12.0), (slot::LEVEL, 0.8)]), filter(0, 120.0, 3.0, true), out(0.003, 1.0, 1.0, 0.15)]);
+        let mut wobble = modulator(ModulatorKind::Lfo, &[]);
+        wobble.shape = tri;
+        wobble.mode = LfoMode::Retrig;
+        wobble.sync_beats = 0.5;
+        let mut remap = modulator(ModulatorKind::Remap, &[]);
+        remap.source = 0;
+        remap.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, -0.6)]);
+        remap.targets[0] = target(3, slot::CUTOFF, 0.55);
+        p.modulators[0] = wobble;
+        p.modulators[1] = remap;
+        p.mono = true;
+        p.gain = 0.14;
+        list.push(("Mod · Wobble Bass", p));
+
+        // Fast random values, sampled every sixteenth by a square LFO.
+        let mut p = build(&[group, saw(&[(slot::UNISON, 2.0), (slot::DETUNE, 0.1)]), filter(0, 400.0, 4.0, false), out(0.002, 0.3, 0.6, 0.2)]);
+        let source = modulator(ModulatorKind::Random, &[(mslot::RATE, 40.0)]);
+        let mut clock = modulator(ModulatorKind::Lfo, &[]);
+        clock.shape = Shape::from_points(&[(0.0, 1.0, 0.0), (0.5, 1.0, 0.0), (0.501, 0.0, 0.0), (1.0, 0.0, 0.0)]);
+        clock.sync_beats = 0.25;
+        let mut sh = modulator(ModulatorKind::SampleHold, &[]);
+        sh.source = 0;
+        sh.trigger_source = 1;
+        sh.targets[0] = target(2, slot::CUTOFF, 0.45);
+        p.modulators[..3].copy_from_slice(&[source, clock, sh]);
+        p.lanes[0].fx[0] = delay(0.75, 0.25);
+        p.gain = 0.35;
+        list.push(("Mod · Sample & Hold Filter", p));
+
+        // Vibrato that fades in: a delayed envelope opens the LFO's depth.
+        let mut p = build(&[group, saw(&[]), filter(0, 2500.0, 0.8, false), out(0.02, 1.0, 1.0, 0.3)]);
+        let mut vibrato = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 5.5), (mslot::DEPTH, 0.0)]);
+        vibrato.shape = tri;
+        vibrato.mode = LfoMode::Retrig;
+        vibrato.bipolar = true;
+        vibrato.targets[0] = target(1, slot::CENT, 0.2);
+        let mut fade = modulator(ModulatorKind::Envelope, &[(mslot::DELAY, 0.35), (mslot::ATTACK, 0.8), (mslot::SUSTAIN, 1.0), (mslot::RELEASE, 0.3)]);
+        fade.targets[0] = modulator_target(0, mslot::DEPTH, 1.0);
+        p.modulators[..2].copy_from_slice(&[vibrato, fade]);
+        p.lanes[0].fx[0] = reverb(0.6, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 60.0;
+        p.gain = 0.75;
+        list.push(("Mod · Delayed Vibrato", p));
+
+        // A one-bar drawn filter rhythm that loops while the chord is held.
+        let mut p = build(&[group, saw(&[(slot::UNISON, 4.0), (slot::DETUNE, 0.3), (slot::PHASE_RANDOM, 180.0)]), filter(0, 300.0, 2.0, true), out(0.01, 1.0, 1.0, 0.5)]);
+        let mut rhythm = modulator(ModulatorKind::Timeline, &[]);
+        rhythm.shape = Shape::from_points(&[(0.0, 1.0, 0.0), (0.2, 0.1, 0.5), (0.25, 0.8, 0.0), (0.45, 0.1, 0.5), (0.5, 1.0, 0.0), (0.62, 0.3, 0.0), (0.75, 0.9, 0.0), (1.0, 0.0, 0.5)]);
+        rhythm.sync_beats = 4.0;
+        rhythm.loop_mode = 2;
+        rhythm.targets[0] = target(2, slot::CUTOFF, 0.5);
+        p.modulators[0] = rhythm;
+        p.lanes[0].fx[0] = reverb(0.7, 0.25);
+        p.gain = 0.14;
+        list.push(("Mod · Rhythmic Curve", p));
+
+        // Slow, uneven random drift of pitch and pan, different on every note.
+        let mut p = build(&[group, saw(&[(slot::LEVEL, 0.7)]), saw(&[(slot::CENT, 9.0), (slot::LEVEL, 0.7)]), filter(0, 1800.0, 0.7, false), out(0.6, 1.0, 1.0, 1.2)]);
+        let mut pitch = modulator(ModulatorKind::Random, &[(mslot::RATE, 0.6), (mslot::SMOOTH, 1.0), (mslot::JITTER, 0.6), (mslot::CHAOS, 0.4)]);
+        pitch.bipolar = true;
+        pitch.targets[0] = target(1, slot::CENT, 0.08);
+        pitch.targets[1] = target(2, slot::CENT, -0.08);
+        let mut pan = modulator(ModulatorKind::Random, &[(mslot::RATE, 0.3), (mslot::SMOOTH, 1.0), (mslot::JITTER, 0.8), (mslot::CHAOS, 0.7)]);
+        pan.bipolar = true;
+        pan.targets[0] = target(4, slot::PAN, 0.3);
+        p.modulators[..2].copy_from_slice(&[pitch, pan]);
+        p.lanes[0].fx[0] = reverb(0.85, 0.35);
+        p.gain = 0.2;
+        list.push(("Mod · Drifting Pad", p));
+
+        // For a MIDI keyboard: the mod wheel adds vibrato, aftertouch opens the filter.
+        let mut p = build(&[group, saw(&[]), module(K::Analog, &[(slot::SEMI, 12.0), (slot::LEVEL, 0.3)], 1), filter(0, 900.0, 1.5, false), out(0.005, 1.0, 0.9, 0.25)]);
+        let mut vibrato = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 5.0), (mslot::DEPTH, 0.0)]);
+        vibrato.shape = tri;
+        vibrato.bipolar = true;
+        vibrato.targets[0] = target(1, slot::CENT, 0.25);
+        vibrato.targets[1] = target(2, slot::CENT, 0.25);
+        let mut wheel = modulator(ModulatorKind::MidiCc, &[]);
+        wheel.index = 1;
+        wheel.targets[0] = modulator_target(0, mslot::DEPTH, 1.0);
+        let mut pressure = modulator(ModulatorKind::Pressure, &[]);
+        pressure.targets[0] = target(3, slot::CUTOFF, 0.4);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = ModTarget { curve: 0.4, ..target(3, slot::CUTOFF, 0.2) };
+        p.modulators[..4].copy_from_slice(&[vibrato, wheel, pressure, velocity]);
+        p.lanes[0].fx[0] = delay(0.75, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.gain = 0.55;
+        list.push(("Mod · Expressive Lead", p));
         list
     }
 
@@ -4120,7 +4649,7 @@ impl ModularParams {
     }
 }
 
-pub const MODULAR_PARAMS: [ParamInfo; MOD_UNISON + 4] = [
+pub const MODULAR_PARAMS: [ParamInfo; MOD_PARAM_COUNT] = [
     ParamInfo::linear("M1·1", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("M1·2", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("M1·3", 0.0, 1.0, 0.0, Percent),
@@ -5002,6 +5531,262 @@ pub const MODULAR_PARAMS: [ParamInfo; MOD_UNISON + 4] = [
     ParamInfo::linear("Unison Spread", 0.0, 1.0, 0.7, Percent),
     ParamInfo::linear("Unison Blend", 0.0, 1.0, 0.5, Percent),
     ParamInfo::linear("Unison Bias", -1.0, 1.0, 0.0, Plain),
+    ParamInfo::linear("Mod1 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod1 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod1 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod1 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod1 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod1 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod1 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod1 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod2 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod3 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod4 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod5 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod6 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod7 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod8 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod9 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod10 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod11 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod12 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod13 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod14 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod15 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod16 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod17 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod18 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod19 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod20 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod21 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod22 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod23 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod24 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod25 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod26 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod27 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod28 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod29 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod30 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod31 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod32 8", 0.0, 1.0, 0.0, Percent),
 ];
 
 #[cfg(test)]
@@ -5126,7 +5911,7 @@ mod tests {
         p.modules[4] = Module::new(ModuleKind::Analog);
         p.connect_audio(4, 1, AudioParam::Phase);
         p.modulators[0] = Modulator::new(ModulatorKind::Lfo);
-        p.modulators[0].targets[0] = ModTarget { dest: ModularParams::module_param(4, slot::LEVEL) as u16, depth: 0.5 };
+        p.modulators[0].targets[0] = ModTarget::new(ModularParams::module_param(4, slot::LEVEL), 0.5);
 
         // Insert a filter under the first oscillator: everything below moves down one.
         let at = p.insert_module(Some(1), Module::new(ModuleKind::Filter)).unwrap();

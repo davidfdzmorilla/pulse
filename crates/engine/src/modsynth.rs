@@ -13,16 +13,22 @@
 //!
 //! Any module's output can modulate another module's phase, harmonic, shift,
 //! level or pitch at audio rate; sources below their target are read one
-//! sample late. The global unison plays the whole stack once per unison voice,
+//! sample late. Up to 32 modulators run at control rate (every 32 samples):
+//! per voice, or once for all voices for those that listen to the lanes, the
+//! master or MIDI controllers. Notes, or another modulator's rises, trigger
+//! them; Remap, the limits, Scale and Sample & Hold process another modulator,
+//! and any modulator can modulate another's settings, including its depth.
+//! The global unison plays the whole stack once per unison voice,
 //! each voice detuned, stacked or tuned to a chord. Lane effects are allocated
 //! when the synth is built, on the UI thread; rendering never allocates.
 
 use crate::effects::{EffectProcessor, ProcessContext};
 use crate::instruments::{saw, Gate};
+use crate::engine::Controller;
 use crate::model::{
-    chord_note, chord_size, module_slot, slot, AudioParam, CurveInput, LfoMode, ModularParams, ModuleKind, ModulatorKind, ParamInfo, UnisonMode, WaveEnv,
-    GRAIN_SYNC, MODULAR_PARAMS, MOD_AUDIO, MOD_AUDIO_AMOUNT, MOD_GLIDE, MOD_LANES, MOD_LANE_GAIN, MOD_MACRO_PARAMS, MOD_MASTER, MOD_MODULATORS,
-    MOD_MODULES, MOD_NO_LANE, MOD_NO_MODULE, MOD_UNISON, MOD_UNISON_VOICES,
+    chord_note, chord_size, module_slot, modulator_slot, mslot, slot, AudioParam, CurveInput, LfoMode, ModularParams, Modulator, ModuleKind, ModulatorKind,
+    ParamInfo, TriggerMode, UnisonMode, WaveEnv, GRAIN_SYNC, MODULAR_PARAMS, MOD_AUDIO, MOD_AUDIO_AMOUNT, MOD_GLIDE, MOD_LANES, MOD_LANE_GAIN, MOD_MACRO_PARAMS,
+    MOD_MASTER, MOD_MODULATORS, MOD_MODULES, MOD_NO_LANE, MOD_NO_MODULATOR, MOD_NO_MODULE, MOD_UNISON, MOD_UNISON_VOICES, SCALE_MULTIPLIERS,
 };
 use crate::sample::Sample;
 use crate::wavesynth::{note_freq, Env, Stage, SAMPLE_ROOT_HZ};
@@ -43,6 +49,14 @@ const CONTROL: usize = 32;
 const PARAMS: usize = MODULAR_PARAMS.len();
 /// How long a looping curve output takes to fade out after the note ends.
 const CURVE_FADE: f32 = 0.02;
+/// Pitch bend range in semitones.
+const BEND_RANGE: f32 = 2.0;
+/// Pitch tracking: the input is decimated by this much into a ring this long, and
+/// analysed over a window every `TRACK_EVERY` blocks.
+const TRACK_DECIMATE: usize = 4;
+const TRACK_RING: usize = 1024;
+const TRACK_WINDOW: usize = 384;
+const TRACK_EVERY: u32 = 8;
 
 /// What a modulator envelope's 0..1 settings mean in seconds.
 fn envelope(a: f32, b: f32, c: f32, d: f32) -> WaveEnv {
@@ -216,6 +230,148 @@ impl Grain {
     const FREE: Grain = Grain { module: NO_GRAIN, position: 0.0, rate: 0.0, age: 0.0, length: 1.0, gains: (0.0, 0.0) };
 }
 
+/// The state of one modulator (per voice, or shared by all voices).
+#[derive(Clone, Copy)]
+struct ModState {
+    env: Env,
+    /// Seconds an envelope still waits before its attack; below zero when not waiting.
+    delay: f32,
+    /// LFO cycles, curve position (0..1) or random step progress.
+    phase: f32,
+    /// Curve: going backwards (ping pong).
+    back: bool,
+    /// Held by its note or trigger input.
+    held: bool,
+    /// The trigger input was above its threshold last block.
+    gate: bool,
+    /// Random: the step being left and the one being reached, and the step's length factor.
+    from: f32,
+    to: f32,
+    step: f32,
+    /// Sample & Hold: the held value, and whether to take one this block.
+    sample: f32,
+    pending: bool,
+    /// The latest output (read by modulators listed before it, one block late).
+    out: f32,
+}
+
+impl ModState {
+    const IDLE: ModState = ModState {
+        env: Env::IDLE,
+        delay: -1.0,
+        phase: 0.0,
+        back: false,
+        held: false,
+        gate: false,
+        from: 0.5,
+        to: 0.5,
+        step: 1.0,
+        sample: 0.0,
+        pending: false,
+        out: 0.0,
+    };
+
+    /// Restarts it from the beginning; `random` is a fresh 0..1 value.
+    fn trigger(&mut self, modulator: &Modulator, delay: f32, random: f32) {
+        self.held = true;
+        match modulator.kind {
+            ModulatorKind::Envelope => {
+                if !modulator.seamless {
+                    self.env = Env::IDLE;
+                }
+                if delay > 0.0 {
+                    self.delay = delay;
+                } else {
+                    self.delay = -1.0;
+                    self.env.trigger();
+                }
+            }
+            ModulatorKind::Lfo | ModulatorKind::LfoTable | ModulatorKind::Timeline => {
+                self.phase = 0.0;
+                self.back = false;
+            }
+            ModulatorKind::Random => {
+                self.phase = 0.0;
+                self.from = random;
+                self.to = random;
+            }
+            ModulatorKind::SampleHold => self.pending = true,
+            _ => {}
+        }
+    }
+
+    fn release(&mut self) {
+        self.held = false;
+        self.delay = -1.0;
+        self.env.release();
+    }
+}
+
+/// Slot `k` of modulator `i` in real units, from the (modulated) parameters `m`.
+fn modulator_value(modulator: &Modulator, m: &[f32; PARAMS], i: usize, k: usize) -> f32 {
+    modulator_slot(modulator.kind, k).map_or(0.0, |info| info.denormalize(m[ModularParams::modulator_param(i, k)]))
+}
+
+/// One step of a random modulator: walks to a new value at `rate`, with `jitter` on
+/// the step lengths, `chaos` limiting how far each step goes and `smooth` gliding.
+fn random_tick(state: &mut ModState, rate: f32, smooth: f32, jitter: f32, chaos: f32, dt: f32, mut random: impl FnMut() -> f32) -> f32 {
+    state.phase += rate * dt / state.step;
+    if state.phase >= 1.0 {
+        state.phase = (state.phase - 1.0).min(0.999);
+        // Each step starts where the last one arrived.
+        state.from = state.to;
+        state.to += chaos * (random() - state.to);
+        state.step = 1.0 + jitter * (random() * 2.0 - 1.0) * 0.9;
+    }
+    random_value(state, smooth)
+}
+
+fn random_value(state: &ModState, smooth: f32) -> f32 {
+    let k = if smooth > 0.001 { (state.phase / smooth).min(1.0) } else { 1.0 };
+    state.from + (state.to - state.from) * k * k * (3.0 - 2.0 * k)
+}
+
+/// A drawn curve played over time: `speed` is its share per second, `mode` an index into `CURVE_LOOPS`.
+fn timeline_tick(state: &mut ModState, mode: u8, (start, end): (f32, f32), speed: f32, dt: f32) -> f32 {
+    let (lo, hi) = (start.min(end), start.max(end));
+    let looping = hi - lo > 0.001 && match mode {
+        1 | 3 => true,
+        2 => state.held,
+        _ => false,
+    };
+    let step = speed * dt;
+    if state.back {
+        state.phase -= step;
+        if state.phase <= lo {
+            state.phase = lo + (lo - state.phase).min(hi - lo);
+            state.back = false;
+        }
+    } else {
+        state.phase += step;
+        if looping && state.phase >= hi {
+            if mode == 3 {
+                state.phase = hi - (state.phase - hi).min(hi - lo);
+                state.back = true;
+            } else {
+                state.phase = lo + (state.phase - hi) % (hi - lo);
+            }
+        }
+    }
+    state.phase = state.phase.clamp(0.0, 1.0);
+    state.phase
+}
+
+/// The global sources modulators read, for one block.
+struct ModInputs<'a> {
+    tempo: f32,
+    clock: f64,
+    legato: bool,
+    globals: &'a [f32; MOD_MODULATORS],
+    tables: &'a [Arc<Wavetable>],
+    bend: f32,
+    pressure: f32,
+}
+
 #[derive(Clone)]
 struct Voice {
     active: bool,
@@ -228,9 +384,11 @@ struct Voice {
     /// Which global unison voice this is, of how many.
     unison: usize,
     unisons: usize,
-    envs: [Env; MOD_MODULATORS],
-    lfo: [f32; MOD_MODULATORS],
-    random_state: [(f32, f32, f32); MOD_MODULATORS],
+    mods: [ModState; MOD_MODULATORS],
+    /// Random numbers for its modulators.
+    seed: u32,
+    /// Polyphonic pressure on its key.
+    pressure: f32,
     modules: [ModuleState; MOD_MODULES],
     grains: [Grain; GRAINS],
     /// Each module's latest output (mono), the source of audio-rate modulation.
@@ -466,6 +624,215 @@ pub struct ModSynth {
     lanes: Vec<Vec<Option<(EffectProcessor, bool)>>>,
     bus: [[[f32; CONTROL]; 2]; MOD_LANES],
     master: [[f32; CONTROL]; 2],
+    /// Values of the modulators that are the same for every voice, this block.
+    globals: [f32; MOD_MODULATORS],
+    /// Random modulators in Unison mode: one sequence for all voices.
+    shared: [ModState; MOD_MODULATORS],
+    /// Audio follower levels and tracked pitches (notes), per modulator.
+    follow: [f32; MOD_MODULATORS],
+    tracked: [f32; MOD_MODULATORS],
+    tracker: Box<Tracker>,
+    cc: [f32; 128],
+    bend: f32,
+    pressure: f32,
+    /// Another note was held when the latest note started (legato triggers).
+    phrase: bool,
+}
+
+/// The recent audio of each lane and the master, decimated, for pitch tracking.
+struct Tracker {
+    rings: [[f32; TRACK_RING]; 4],
+    pos: usize,
+    sums: [f32; 4],
+    summed: usize,
+    blocks: u32,
+    window: [f32; TRACK_RING],
+    diff: [f32; TRACK_RING],
+}
+
+impl Tracker {
+    fn push(&mut self, input: [f32; 4]) {
+        for (sum, x) in self.sums.iter_mut().zip(input) {
+            *sum += x;
+        }
+        self.summed += 1;
+        if self.summed == TRACK_DECIMATE {
+            for (ring, sum) in self.rings.iter_mut().zip(self.sums.iter_mut()) {
+                ring[self.pos] = *sum / TRACK_DECIMATE as f32;
+                *sum = 0.0;
+            }
+            self.pos = (self.pos + 1) % TRACK_RING;
+            self.summed = 0;
+        }
+    }
+
+    /// The pitch (a note number) of `input` between notes `low` and `high`, if one is
+    /// clear enough (YIN's cumulative mean difference, below `threshold`).
+    fn detect(&mut self, input: usize, sample_rate: f32, low: f32, high: f32, threshold: f32) -> Option<f32> {
+        let rate = sample_rate / TRACK_DECIMATE as f32;
+        let longest = ((rate / note_freq(low.min(high))) as usize + 2).min(TRACK_RING - TRACK_WINDOW - 1);
+        let shortest = ((rate / note_freq(low.max(high))) as usize).max(2).min(longest);
+        let ring = &self.rings[input.min(3)];
+        // Oldest first: the window and the lags reach back from the newest sample.
+        let count = TRACK_WINDOW + longest;
+        let start = (self.pos + TRACK_RING - count) % TRACK_RING;
+        for (j, x) in self.window[..count].iter_mut().enumerate() {
+            *x = ring[(start + j) % TRACK_RING];
+        }
+        let x = &self.window[..count];
+        let energy: f32 = x[..TRACK_WINDOW].iter().map(|v| v * v).sum::<f32>() / TRACK_WINDOW as f32;
+        if energy < 1e-6 {
+            return None;
+        }
+        let mut total = 0.0;
+        self.diff[0] = 1.0;
+        for tau in 1..=longest {
+            let mut d = 0.0;
+            for j in 0..TRACK_WINDOW {
+                let e = x[j] - x[j + tau];
+                d += e * e;
+            }
+            total += d;
+            self.diff[tau] = if total > 0.0 { d * tau as f32 / total } else { 1.0 };
+        }
+        let mut tau = (shortest..longest).find(|&t| self.diff[t] < threshold)?;
+        while tau + 1 < longest && self.diff[tau + 1] < self.diff[tau] {
+            tau += 1;
+        }
+        // Parabolic interpolation between the neighbouring lags.
+        let (a, b, c) = (self.diff[tau - 1], self.diff[tau], self.diff[tau + 1]);
+        let bottom = a - 2.0 * b + c;
+        let offset = if bottom.abs() > 1e-9 { (0.5 * (a - c) / bottom).clamp(-1.0, 1.0) } else { 0.0 };
+        let freq = rate / (tau as f32 + offset);
+        Some(69.0 + 12.0 * (freq / 440.0).log2())
+    }
+}
+
+/// The modulators for a voice, applied to the parameter values `m`: first the
+/// modulation of modulator settings (with last block's values), then every
+/// modulator in order, then their modulation of everything else.
+fn modulate(p: &ModularParams, voice: &mut Voice, inputs: &ModInputs, m: &mut [f32; PARAMS], block: f32) {
+    let apply = |m: &mut [f32; PARAMS], dest: usize, amount: f32| {
+        let info: &ParamInfo = &MODULAR_PARAMS[dest];
+        m[dest] = info.denormalize(info.normalize(m[dest]) + amount);
+    };
+    for (i, modulator) in p.modulators.iter().enumerate().filter(|(_, md)| md.kind != ModulatorKind::Off) {
+        for target in modulator.targets.iter().filter(|t| ModularParams::param_modulator(t.dest as usize).is_some()) {
+            apply(m, target.dest as usize, target.amount(voice.mods[i].out));
+        }
+    }
+    let mut seed = voice.seed;
+    let mut random = move || {
+        seed ^= seed << 13;
+        seed ^= seed >> 17;
+        seed ^= seed << 5;
+        seed as f32 / u32::MAX as f32
+    };
+    for (i, modulator) in p.modulators.iter().enumerate() {
+        if modulator.kind == ModulatorKind::Off {
+            continue;
+        }
+        let at = |k: usize| modulator_value(modulator, m, i, k);
+        let input = |source: u8| if source == MOD_NO_MODULATOR || source as usize >= MOD_MODULATORS { 0.0 } else { voice.mods[source as usize].out };
+        let (trigger, source) = (input(modulator.trigger_source), input(modulator.source));
+        let state = &mut voice.mods[i];
+        // A trigger input restarts it when it rises and releases it when it falls.
+        if modulator.trigger_source != MOD_NO_MODULATOR && modulator.kind.triggered() {
+            let threshold = if modulator.kind == ModulatorKind::SampleHold { at(mslot::THRESHOLD) } else { 0.5 };
+            let gate = trigger > threshold;
+            if gate && !state.gate {
+                state.trigger(modulator, at(mslot::DELAY), random());
+            } else if !gate && state.gate {
+                state.release();
+            }
+            state.gate = gate;
+        }
+        let cycle = |state: &mut ModState, rate: f32| -> f32 {
+            let free = modulator.mode == LfoMode::Free || modulator.note_trigger(inputs.legato) == TriggerMode::Never && modulator.trigger_source == MOD_NO_MODULATOR;
+            let offset = at(mslot::PHASE);
+            let x = if free {
+                ((inputs.clock * rate as f64 + offset as f64).fract()) as f32
+            } else if modulator.mode == LfoMode::Envelope {
+                if state.phase >= 1.0 { 1.0 } else { (state.phase + offset).fract() }
+            } else {
+                (state.phase + offset).fract()
+            };
+            state.phase += rate * block;
+            if modulator.mode != LfoMode::Envelope {
+                state.phase = state.phase.fract();
+            }
+            x
+        };
+        let synced = |beats: f32| inputs.tempo / 60.0 / beats;
+        let raw = match modulator.kind {
+            ModulatorKind::Off => 0.0,
+            ModulatorKind::Envelope => {
+                if state.delay >= 0.0 {
+                    state.delay -= block;
+                    if state.delay < 0.0 {
+                        state.env.trigger();
+                    }
+                }
+                let mut env = envelope(m[ModularParams::modulator_param(i, 0)], m[ModularParams::modulator_param(i, 1)], m[ModularParams::modulator_param(i, 2)], m[ModularParams::modulator_param(i, 3)]);
+                env.hold = at(mslot::HOLD);
+                state.env.tick(&env, block)
+            }
+            ModulatorKind::Lfo => {
+                let rate = if modulator.sync_beats > 0.0 { synced(modulator.sync_beats) } else { at(mslot::RATE) };
+                let x = cycle(state, rate);
+                modulator.shape.value_at(x)
+            }
+            ModulatorKind::LfoTable => {
+                let rate = if modulator.sync_beats > 0.0 { synced(modulator.sync_beats) } else { at(mslot::RATE) };
+                let x = cycle(state, rate);
+                match inputs.tables.get(MOD_MODULES + i) {
+                    // Smoothing reads a mip level with fewer harmonics.
+                    Some(table) if table.frames() > 0 => {
+                        let level = (at(mslot::SMOOTH_TABLE) * (crate::wavetable::LEVELS - 1) as f32).round() as usize;
+                        (table.read(level, at(mslot::FRAME), x) * 0.5 + 0.5).clamp(0.0, 1.0)
+                    }
+                    _ => 0.5,
+                }
+            }
+            ModulatorKind::Timeline => {
+                let length = if modulator.sync_beats > 0.0 { 1.0 / synced(modulator.sync_beats) } else { at(mslot::LENGTH) };
+                let x = timeline_tick(state, modulator.loop_mode, (at(mslot::LOOP_START), at(mslot::LOOP_END)), 1.0 / length.max(1e-3), block);
+                modulator.shape.value_at(x)
+            }
+            ModulatorKind::Random if modulator.shared => inputs.globals[i],
+            ModulatorKind::Random => random_tick(state, at(mslot::RATE), at(mslot::SMOOTH), at(mslot::JITTER), at(mslot::CHAOS), block, &mut random),
+            ModulatorKind::Note => ((voice.note + inputs.bend * BEND_RANGE) / 127.0).clamp(0.0, 1.0),
+            ModulatorKind::Curve => modulator.shape.value_at(match modulator.input {
+                CurveInput::Velocity => voice.velocity,
+                CurveInput::Note => voice.note / 127.0,
+                CurveInput::Random => voice.random,
+            }),
+            ModulatorKind::Velocity => voice.velocity,
+            ModulatorKind::NoteGate => voice.gate.held as u8 as f32,
+            ModulatorKind::Pressure => voice.pressure.max(inputs.pressure),
+            ModulatorKind::Macro => m[MOD_MACRO_PARAMS + (modulator.index as usize).min(7)],
+            ModulatorKind::Remap => modulator.shape.value_at(source.clamp(0.0, 1.0)),
+            ModulatorKind::LowerLimit => source.max(at(mslot::LIMIT)),
+            ModulatorKind::UpperLimit => source.min(at(mslot::LIMIT)),
+            ModulatorKind::Scale => source * at(mslot::FACTOR) * SCALE_MULTIPLIERS[(modulator.index as usize).min(SCALE_MULTIPLIERS.len() - 1)],
+            ModulatorKind::SampleHold => {
+                if state.pending {
+                    state.sample = source;
+                    state.pending = false;
+                }
+                state.sample
+            }
+            ModulatorKind::AudioFollower | ModulatorKind::PitchTracker | ModulatorKind::PitchWheel | ModulatorKind::MidiCc => inputs.globals[i],
+        };
+        state.out = modulator.range().apply(raw) * at(mslot::DEPTH);
+    }
+    voice.seed = voice.seed.wrapping_mul(0x2C1B_3C6D).wrapping_add(0x297A_2D39);
+    for (i, modulator) in p.modulators.iter().enumerate().filter(|(_, md)| md.kind != ModulatorKind::Off) {
+        let value = voice.mods[i].out;
+        for target in modulator.targets.iter().filter(|t| (t.dest as usize) < PARAMS && ModularParams::param_modulator(t.dest as usize).is_none()) {
+            apply(m, target.dest as usize, target.amount(value));
+        }
+    }
 }
 
 impl ModSynth {
@@ -503,9 +870,9 @@ impl ModSynth {
                 age: 0.0,
                 unison: 0,
                 unisons: 1,
-                envs: [Env::IDLE; MOD_MODULATORS],
-                lfo: [0.0; MOD_MODULATORS],
-                random_state: [(0.5, 0.5, 0.0); MOD_MODULATORS],
+                mods: [ModState::IDLE; MOD_MODULATORS],
+                seed: 0x6C07_8965 ^ (i as u32 + 1).wrapping_mul(0x2545_F491),
+                pressure: 0.0,
                 modules: std::array::from_fn(module),
                 grains: [Grain::FREE; GRAINS],
                 outputs: [0.0; MOD_MODULES],
@@ -527,6 +894,29 @@ impl ModSynth {
             lanes,
             bus: [[[0.0; CONTROL]; 2]; MOD_LANES],
             master: [[0.0; CONTROL]; 2],
+            globals: [0.0; MOD_MODULATORS],
+            shared: [ModState::IDLE; MOD_MODULATORS],
+            follow: [0.0; MOD_MODULATORS],
+            tracked: [60.0; MOD_MODULATORS],
+            tracker: Box::new(Tracker { rings: [[0.0; TRACK_RING]; 4], pos: 0, sums: [0.0; 4], summed: 0, blocks: 0, window: [0.0; TRACK_RING], diff: [0.0; TRACK_RING] }),
+            cc: [0.0; 128],
+            bend: 0.0,
+            pressure: 0.0,
+            phrase: false,
+        }
+    }
+
+    /// A MIDI controller moved.
+    pub fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
+        match controller {
+            Controller::Cc(n) => self.cc[(n & 127) as usize] = value.clamp(0.0, 1.0),
+            Controller::PitchBend => self.bend = value.clamp(-1.0, 1.0),
+            Controller::Pressure => self.pressure = value.clamp(0.0, 1.0),
+            Controller::PolyPressure => {
+                for v in self.voices.iter_mut().filter(|v| v.active && v.gate.pitch == pitch) {
+                    v.pressure = value.clamp(0.0, 1.0);
+                }
+            }
         }
     }
 
@@ -586,6 +976,13 @@ impl ModSynth {
         };
         let p = self.params;
         let counter = self.counter;
+        let mut mod_randoms = [0f32; MOD_MODULATORS];
+        for r in &mut mod_randoms {
+            *r = self.random();
+        }
+        // In a legato phrase, untriggered modulators carry on from the newest held note.
+        let donor = self.voices.iter().enumerate().filter(|&(k, v)| k != index && v.active && v.gate.held).max_by_key(|(_, v)| v.gate.age).map(|(_, v)| v.mods);
+        let phrase = self.phrase;
         let voice = &mut self.voices[index];
         let was_active = voice.active;
         voice.gate = Gate::new(pitch, velocity, gate, counter);
@@ -633,11 +1030,25 @@ impl ModSynth {
                 voice.outputs = [0.0; MOD_MODULES];
                 voice.grains = [Grain::FREE; GRAINS];
             }
-            for (m, modulator) in p.modulators.iter().enumerate() {
-                if modulator.kind == ModulatorKind::Lfo && modulator.mode != LfoMode::Free {
-                    voice.lfo[m] = 0.0;
-                }
-                voice.envs[m].trigger();
+            voice.pressure = 0.0;
+        }
+        for (k, modulator) in p.modulators.iter().enumerate() {
+            if modulator.kind == ModulatorKind::Off {
+                continue;
+            }
+            let mode = modulator.note_trigger(p.mono && p.legato);
+            let fire = match mode {
+                TriggerMode::Always => true,
+                TriggerMode::Legato => !phrase,
+                _ => false,
+            };
+            if fire {
+                voice.mods[k].trigger(modulator, modulator.get(mslot::DELAY), mod_randoms[k]);
+            } else if !was_active {
+                voice.mods[k] = match donor {
+                    Some(donor) if mode == TriggerMode::Legato => donor[k],
+                    _ => ModState { from: mod_randoms[k], to: mod_randoms[k], ..ModState::IDLE },
+                };
             }
         }
         voice.active = true;
@@ -648,6 +1059,7 @@ impl ModSynth {
         let randoms = self.note_randoms();
         self.counter += 1;
         if self.params.mono {
+            self.phrase = self.held_count > 0;
             let legato = self.params.legato && self.voices[0].active && self.voices[0].gate.held && self.held_count > 0;
             if self.held_count < self.held.len() {
                 self.held[self.held_count] = pitch;
@@ -662,6 +1074,7 @@ impl ModSynth {
             self.last_note = Some(pitch as f32);
             return;
         }
+        self.phrase = self.voices.iter().any(|v| v.active && v.gate.held);
         let limit = (VOICES / count).min(POLYPHONY);
         loop {
             let free = self.voices.iter().filter(|v| !v.active).count();
@@ -690,9 +1103,14 @@ impl ModSynth {
         self.last_note = Some(pitch as f32);
     }
 
-    fn release(voice: &mut Voice) {
+    fn release(voice: &mut Voice, p: &ModularParams) {
         voice.gate.held = false;
-        voice.envs.iter_mut().for_each(Env::release);
+        // Modulators with a trigger input are released by it instead.
+        for (state, modulator) in voice.mods.iter_mut().zip(p.modulators.iter()) {
+            if modulator.trigger_source == MOD_NO_MODULATOR {
+                state.release();
+            }
+        }
         voice.modules.iter_mut().for_each(|m| m.env.release());
     }
 
@@ -704,6 +1122,7 @@ impl ModSynth {
             }
             let previous = (self.held_count > 0).then(|| self.held[self.held_count - 1]);
             let count = self.unisons();
+            let p = self.params;
             for voice in &mut self.voices[..count] {
                 if voice.gate.held && voice.gate.pitch == pitch {
                     match previous {
@@ -711,20 +1130,22 @@ impl ModSynth {
                             voice.gate.pitch = previous;
                             voice.target = previous as f32;
                         }
-                        None => Self::release(voice),
+                        None => Self::release(voice, &p),
                     }
                 }
             }
             return;
         }
+        let p = self.params;
         for v in self.voices.iter_mut().filter(|v| v.active && v.gate.held && v.gate.pitch == pitch) {
-            Self::release(v);
+            Self::release(v, &p);
         }
     }
 
     pub fn all_notes_off(&mut self) {
         self.held_count = 0;
-        self.voices.iter_mut().for_each(Self::release);
+        let p = self.params;
+        self.voices.iter_mut().for_each(|v| Self::release(v, &p));
     }
 
     pub fn render(&mut self, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
@@ -743,6 +1164,7 @@ impl ModSynth {
             }
             master[0][..n].fill(0.0);
             master[1][..n].fill(0.0);
+            self.update_globals(&base, n as f32 / self.sample_rate);
             for v in 0..VOICES {
                 if self.voices[v].active {
                     self.render_voice(v, samples, tables, &base, &mut bus, &mut master, n);
@@ -775,6 +1197,7 @@ impl ModSynth {
                     }
                 }
             }
+            self.listen(&base, &bus, &master, n);
             let gain = base[MOD_MASTER];
             for i in 0..n {
                 left[offset + i] += master[0][i] * gain;
@@ -787,60 +1210,76 @@ impl ModSynth {
         }
     }
 
-    /// The control-rate modulators for a voice, applied to the parameter values `m`.
-    fn modulate(&mut self, v: usize, base: &[f32; PARAMS], m: &mut [f32; PARAMS], block: f32) {
-        let p = &self.params;
-        let tempo = self.tempo;
-        let clock = self.clock;
-        let voice = &mut self.voices[v];
-        let mut values = [0f32; MOD_MODULATORS];
-        for (i, modulator) in p.modulators.iter().enumerate() {
-            let at = |k: usize| base[ModularParams::modulator_param(i, k)];
-            values[i] = match modulator.kind {
-                ModulatorKind::Off => continue,
-                ModulatorKind::Envelope => voice.envs[i].tick(&envelope(at(0), at(1), at(2), at(3)), block),
-                ModulatorKind::Lfo => {
-                    let rate = if modulator.sync_beats > 0.0 { (tempo / 60.0) as f32 / modulator.sync_beats } else { 0.02 * 2000f32.powf(at(0)) };
-                    let phase = match modulator.mode {
-                        LfoMode::Free => ((clock * rate as f64).fract()) as f32,
-                        LfoMode::Retrig => voice.lfo[i].fract(),
-                        LfoMode::Envelope => voice.lfo[i].min(1.0),
-                    };
-                    voice.lfo[i] += rate * block;
-                    modulator.shape.value_at((phase + at(1)).fract())
+    /// The modulators that are the same for every voice, for this block.
+    fn update_globals(&mut self, base: &[f32; PARAMS], block: f32) {
+        let Self { params, globals, shared, follow, tracked, cc, bend, seed, .. } = self;
+        let mut random = || {
+            *seed ^= *seed << 13;
+            *seed ^= *seed >> 17;
+            *seed ^= *seed << 5;
+            *seed as f32 / u32::MAX as f32
+        };
+        for (i, modulator) in params.modulators.iter().enumerate() {
+            let at = |k: usize| modulator_value(modulator, base, i, k);
+            globals[i] = match modulator.kind {
+                ModulatorKind::AudioFollower => follow[i].min(1.0),
+                ModulatorKind::PitchTracker => {
+                    let (low, high) = (at(mslot::LOW), at(mslot::HIGH));
+                    let (low, high) = (low.min(high), low.max(high).max(low.min(high) + 1.0));
+                    ((tracked[i] - low) / (high - low)).clamp(0.0, 1.0)
                 }
-                ModulatorKind::Random => {
-                    let rate = 0.1 * 400f32.powf(at(0));
-                    let (mut hold, mut smooth, mut phase) = voice.random_state[i];
-                    phase += rate * block;
-                    if phase >= 1.0 {
-                        phase -= phase.floor();
-                        hold = voice.modules[0].random();
-                    }
-                    let k = if at(1) < 0.01 { 1.0 } else { 1.0 - (-block * rate * 4.0 / at(1)).exp() };
-                    smooth += (hold - smooth) * k;
-                    voice.random_state[i] = (hold, smooth, phase);
-                    smooth
-                }
-                ModulatorKind::Curve => modulator.shape.value_at(match modulator.input {
-                    CurveInput::Velocity => voice.velocity,
-                    CurveInput::Note => voice.note / 127.0,
-                    CurveInput::Random => voice.random,
-                }),
-                ModulatorKind::Note => voice.note / 127.0,
-                ModulatorKind::Velocity => voice.velocity,
-                ModulatorKind::Macro => base[MOD_MACRO_PARAMS + (modulator.index as usize).min(7)],
+                ModulatorKind::PitchWheel => *bend * 0.5 + 0.5,
+                ModulatorKind::MidiCc => cc[(modulator.index & 127) as usize],
+                ModulatorKind::Random if modulator.shared => random_tick(&mut shared[i], at(mslot::RATE), at(mslot::SMOOTH), at(mslot::JITTER), at(mslot::CHAOS), block, &mut random),
+                _ => 0.0,
             };
         }
-        for (i, modulator) in p.modulators.iter().enumerate() {
-            if modulator.kind == ModulatorKind::Off {
-                continue;
+    }
+
+    /// Follows the level and pitch of the lanes and the master (`bus`, `master`: this block).
+    fn listen(&mut self, base: &[f32; PARAMS], bus: &[[[f32; CONTROL]; 2]; MOD_LANES], master: &[[f32; CONTROL]; 2], n: usize) {
+        let sr = self.sample_rate;
+        let channel = |input: usize| if input < MOD_LANES { &bus[input] } else { master };
+        let mut tracking = false;
+        for (i, modulator) in self.params.modulators.iter().enumerate() {
+            match modulator.kind {
+                ModulatorKind::AudioFollower => {
+                    let at = |k: usize| modulator_value(modulator, base, i, k);
+                    let gain = 10f32.powf(at(mslot::GAIN) / 20.0);
+                    let attack = 1.0 - (-1.0 / (at(mslot::FOLLOW_ATTACK) * sr)).exp();
+                    let release = 1.0 - (-1.0 / (at(mslot::FOLLOW_RELEASE) * sr)).exp();
+                    let [l, r] = channel(modulator.index as usize);
+                    let level = &mut self.follow[i];
+                    for j in 0..n {
+                        let x = l[j].abs().max(r[j].abs()) * gain;
+                        *level += (x - *level) * if x > *level { attack } else { release };
+                    }
+                }
+                ModulatorKind::PitchTracker => tracking = true,
+                _ => {}
             }
-            let value = if modulator.bipolar { values[i] * 2.0 - 1.0 } else { values[i] };
-            for target in modulator.targets.iter().filter(|t| (t.dest as usize) < PARAMS) {
-                let dest = target.dest as usize;
-                let info: &ParamInfo = &MODULAR_PARAMS[dest];
-                m[dest] = info.denormalize(info.normalize(m[dest]) + target.depth * value);
+        }
+        if !tracking {
+            return;
+        }
+        for j in 0..n {
+            let mono = |input: usize| {
+                let [l, r] = channel(input);
+                (l[j] + r[j]) * 0.5
+            };
+            self.tracker.push([mono(0), mono(1), mono(2), mono(3)]);
+        }
+        self.tracker.blocks += 1;
+        if self.tracker.blocks < TRACK_EVERY {
+            return;
+        }
+        self.tracker.blocks = 0;
+        for (i, modulator) in self.params.modulators.iter().enumerate().filter(|(_, md)| md.kind == ModulatorKind::PitchTracker) {
+            let at = |k: usize| modulator_value(modulator, base, i, k);
+            let sensitivity = at(mslot::SENSITIVITY);
+            // Sensitive: accepts less clear pitches and follows them faster.
+            if let Some(note) = self.tracker.detect(modulator.index as usize, sr, at(mslot::LOW) - 1.0, at(mslot::HIGH) + 1.0, 0.08 + 0.3 * sensitivity) {
+                self.tracked[i] += (note - self.tracked[i]) * (0.15 + 0.85 * sensitivity);
             }
         }
     }
@@ -862,7 +1301,9 @@ impl ModSynth {
         let dt = 1.0 / sr;
         let block = n as f32 * dt;
         let mut m = *base;
-        self.modulate(v, base, &mut m, block);
+        let inputs = ModInputs { tempo, clock: self.clock, legato: p.mono && p.legato, globals: &self.globals, tables, bend: self.bend, pressure: self.pressure };
+        modulate(&p, &mut self.voices[v], &inputs, &mut m, block);
+        let bend = self.bend * BEND_RANGE;
 
         let Self { voices, blocks, .. } = self;
         let voice = &mut voices[v];
@@ -881,7 +1322,7 @@ impl ModSynth {
         let (unison_semis, unison_mult, unison_gain, unison_pan) = unison_voice(p.unison.mode, p.unison.chord as usize, voice.unison, voice.unisons, unison, voice.note);
         let unison_pan = pan_gains(unison_pan);
         let unison_out = (unison_pan.0 * unison_gain, unison_pan.1 * unison_gain);
-        let note = voice.note + unison_semis;
+        let note = voice.note + unison_semis + bend;
 
         // Module settings for the block, in real units.
         let last = p.modules.iter().rposition(|m| m.kind != ModuleKind::Empty).map_or(0, |l| l + 1);
@@ -1053,7 +1494,7 @@ impl ModSynth {
 
         for i in 0..n {
             if voice.gate.tick() {
-                Self::release(voice);
+                Self::release(voice, &p);
             }
             let held = voice.gate.held;
             let mut sounding = false;
@@ -1649,7 +2090,7 @@ mod tests {
         lfo.shape = crate::model::Shape::from_points(&[(0.0, 1.0, 0.0), (0.5, 1.0, 0.0), (0.501, 0.0, 0.0), (1.0, 0.0, 0.0)]);
         lfo.mode = LfoMode::Retrig;
         lfo.a = (1.0f32 / 0.02).ln() / 2000f32.ln();
-        lfo.targets[0] = ModTarget { dest: ModularParams::module_param(1, slot::LEVEL) as u16, depth: -0.5 };
+        lfo.targets[0] = ModTarget::new(ModularParams::module_param(1, slot::LEVEL), -0.5);
         p.modulators[0] = lfo;
         let (l, _) = play(p, &[60], 48_000);
         assert!(rms(&l[4800..19_200]) < 0.01 && rms(&l[28_800..43_200]) > 0.1, "{} {}", rms(&l[4800..19_200]), rms(&l[28_800..43_200]));
@@ -2038,7 +2479,7 @@ mod tests {
         // Its center can be modulated: unison settings are parameters like any other.
         let mut moving = shepard;
         let mut lfo = Modulator::new(ModulatorKind::Lfo);
-        lfo.targets[0] = ModTarget { dest: (MOD_UNISON + 3) as u16, depth: 0.5 };
+        lfo.targets[0] = ModTarget::new(MOD_UNISON + 3, 0.5);
         moving.modulators[0] = lfo;
         let (out, _) = play(moving, &[48], 24_000);
         assert!(out.iter().all(|s| s.is_finite()) && rms(&out) > 0.05);
@@ -2120,5 +2561,496 @@ mod bench {
             synth.render(&samples, &[], &mut l, &mut r);
         }
         println!("granular, 16 granos × 8 notas: {:.0} % de tiempo real", start.elapsed().as_secs_f64() * 100.0);
+
+        // 32 modulators of every kind, each with 4 targets, on 12 notes; one tracks pitch.
+        use crate::model::{ModTarget, Modulator, ModulatorKind};
+        let mut p = ModularParams::default();
+        for i in 0..MOD_MODULATORS {
+            let mut m = Modulator::new(ModulatorKind::ALL[i % ModulatorKind::ALL.len()]);
+            m.source = ((i + 1) % MOD_MODULATORS) as u8;
+            for k in 0..4 {
+                m.targets[k] = ModTarget::new(ModularParams::module_param(1, k), 0.1);
+            }
+            p.modulators[i] = m;
+        }
+        let mut synth = ModSynth::new(p, 48_000.0);
+        for n in 0..12u8 {
+            synth.note_on(48 + n * 2, 1.0, HELD);
+        }
+        let start = std::time::Instant::now();
+        for _ in 0..(48_000 / 512) {
+            synth.render(&[], &[], &mut l, &mut r);
+        }
+        println!("32 moduladores × 4 destinos, 12 notas: {:.0} % de tiempo real", start.elapsed().as_secs_f64() * 100.0);
+    }
+}
+
+#[cfg(test)]
+mod modulation_tests {
+    use super::*;
+    use crate::model::{ModTarget, Module, OutputRange, Shape, MOD_NO_TARGET};
+    use crate::synth::HELD;
+
+    const SR: f32 = 48_000.0;
+    /// Seconds per control block.
+    const BLOCK: f32 = CONTROL as f32 / SR;
+
+    /// A sine on the master, plus `modulators`.
+    fn patch(modulators: &[Modulator]) -> ModularParams {
+        let mut p = ModularParams::default();
+        p.modules = [Module::EMPTY; MOD_MODULES];
+        let mut sine = Module::new(ModuleKind::Analog);
+        sine.choice[0] = 3;
+        p.modules[0] = Module::new(ModuleKind::Group);
+        p.modules[1] = sine;
+        p.modules[2] = Module::new(ModuleKind::Output);
+        p.modules[2].set(slot::SUSTAIN, 1.0);
+        p.modules[2].set(slot::RELEASE, 0.01);
+        p.modulators[..modulators.len()].copy_from_slice(modulators);
+        p
+    }
+
+    /// Renders `blocks` control blocks; `each` runs before every block with its index.
+    fn run(p: ModularParams, blocks: usize, mut each: impl FnMut(&mut ModSynth, usize)) -> (ModSynth, Vec<f32>) {
+        let mut synth = ModSynth::new(p, SR);
+        let table = Arc::new(crate::wavetable::builtin(0));
+        let tables: Vec<Arc<Wavetable>> = (0..MOD_MODULES + MOD_MODULATORS).map(|_| table.clone()).collect();
+        let mut out = Vec::new();
+        let (mut l, mut r) = ([0.0; CONTROL], [0.0; CONTROL]);
+        for b in 0..blocks {
+            each(&mut synth, b);
+            l.fill(0.0);
+            r.fill(0.0);
+            synth.render(&[], &tables, &mut l, &mut r);
+            out.extend_from_slice(&l);
+        }
+        (synth, out)
+    }
+
+    /// Modulator `k`'s output on voice 0, block by block.
+    fn trace(p: ModularParams, k: usize, blocks: usize, mut each: impl FnMut(&mut ModSynth, usize)) -> Vec<f32> {
+        let mut values = Vec::new();
+        run(p, blocks, |synth, b| {
+            each(synth, b);
+            if b > 0 {
+                values.push(synth.voices[0].mods[k].out);
+            }
+        });
+        values.push(0.0);
+        values.pop();
+        values
+    }
+
+    fn note_at_start(synth: &mut ModSynth, b: usize) {
+        if b == 0 {
+            synth.note_on(60, 1.0, HELD);
+        }
+    }
+
+    fn blocks(seconds: f32) -> usize {
+        (seconds / BLOCK) as usize
+    }
+
+    fn envelope_mod(attack: f32, decay: f32, sustain: f32, release: f32) -> Modulator {
+        let mut env = Modulator::new(ModulatorKind::Envelope);
+        env.set(mslot::ATTACK, attack);
+        env.set(mslot::DECAY, decay);
+        env.set(mslot::SUSTAIN, sustain);
+        env.set(mslot::RELEASE, release);
+        env
+    }
+
+    fn lfo(hz: f32, shape: Shape) -> Modulator {
+        let mut lfo = Modulator::new(ModulatorKind::Lfo);
+        lfo.mode = LfoMode::Retrig;
+        lfo.shape = shape;
+        lfo.set(mslot::RATE, hz);
+        lfo
+    }
+
+    fn square() -> Shape {
+        Shape::from_points(&[(0.0, 1.0, 0.0), (0.5, 1.0, 0.0), (0.501, 0.0, 0.0), (1.0, 0.0, 0.0)])
+    }
+
+    #[test]
+    fn envelopes_wait_hold_and_retrigger_from_zero_or_seamlessly() {
+        let mut env = envelope_mod(0.001, 0.05, 0.0, 0.05);
+        env.set(mslot::DELAY, 0.1);
+        env.set(mslot::HOLD, 0.2);
+        let v = trace(patch(&[env]), 0, blocks(0.5), note_at_start);
+        assert!(v[blocks(0.09)] < 0.01, "waits for the delay: {}", v[blocks(0.09)]);
+        assert!(v[blocks(0.15)] > 0.99 && v[blocks(0.28)] > 0.99, "attacks after it and holds: {} {}", v[blocks(0.15)], v[blocks(0.28)]);
+        assert!(v[blocks(0.45)] < 0.2, "then decays: {}", v[blocks(0.45)]);
+
+        // Mono retrigger halfway through a slow attack.
+        for seamless in [false, true] {
+            let mut env = envelope_mod(0.2, 1.0, 1.0, 0.1);
+            env.seamless = seamless;
+            let mut p = patch(&[env]);
+            p.mono = true;
+            let v = trace(p, 0, blocks(0.2), |s, b| {
+                if b == 0 {
+                    s.note_on(60, 1.0, HELD);
+                }
+                if b == blocks(0.1) {
+                    s.note_on(62, 1.0, HELD);
+                }
+            });
+            let after = v[blocks(0.1) + 1];
+            if seamless {
+                assert!(after > 0.4, "seamless keeps going from where it was: {after}");
+            } else {
+                assert!(after < 0.05, "starts again from zero: {after}");
+            }
+        }
+    }
+
+    #[test]
+    fn output_range_depth_and_connection_bounds() {
+        let target = ModTarget { curve: 0.0, offset: 0.2, ..ModTarget::new(0, 0.5) };
+        assert_eq!(target.bounds(OutputRange::Unipolar), (0.2, 0.7));
+        assert_eq!(target.bounds(OutputRange::Bipolar), (-0.3, 0.7));
+        let off = ModTarget { on: false, ..target };
+        assert_eq!(off.amount(1.0), 0.0, "a switched off connection does nothing");
+        let bent = ModTarget { curve: 1.0, ..ModTarget::new(0, 1.0) };
+        assert!(bent.amount(0.25) > 0.6, "a positive curve rises early: {}", bent.amount(0.25));
+        let bent = ModTarget { curve: -1.0, ..ModTarget::new(0, 1.0) };
+        assert!(bent.amount(0.5) < 0.1 && bent.amount(-0.5) > -0.1, "and a negative one late, symmetrically: {}", bent.amount(0.5));
+
+        let mut env = envelope_mod(0.0005, 1.0, 1.0, 0.1);
+        env.set(mslot::DEPTH, 0.5);
+        let v = trace(patch(&[env]), 0, blocks(0.1), note_at_start);
+        assert!((v[blocks(0.05)] - 0.5).abs() < 0.01, "depth scales the output: {}", v[blocks(0.05)]);
+        env.set_range(OutputRange::Inverted);
+        env.set(mslot::DEPTH, 1.0);
+        let v = trace(patch(&[env]), 0, blocks(0.1), note_at_start);
+        assert!(v[blocks(0.05)].abs() < 0.01, "inverted: {}", v[blocks(0.05)]);
+        let mut half = envelope_mod(0.0005, 0.001, 0.5, 0.1);
+        half.set_range(OutputRange::Bipolar);
+        let v = trace(patch(&[half]), 0, blocks(0.1), note_at_start);
+        assert!(v[blocks(0.05)].abs() < 0.01, "bipolar: half way is the middle: {}", v[blocks(0.05)]);
+    }
+
+    fn random(rate: f32, smooth: f32, jitter: f32, chaos: f32) -> Modulator {
+        let mut r = Modulator::new(ModulatorKind::Random);
+        r.set(mslot::RATE, rate);
+        r.set(mslot::SMOOTH, smooth);
+        r.set(mslot::JITTER, jitter);
+        r.set(mslot::CHAOS, chaos);
+        r
+    }
+
+    fn steps(v: &[f32]) -> Vec<f32> {
+        let mut values: Vec<f32> = v.windows(2).filter(|w| (w[1] - w[0]).abs() > 1e-6).map(|w| w[1]).collect();
+        values.dedup();
+        values
+    }
+
+    #[test]
+    fn random_chaos_smoothing_jitter_and_shared_sequences() {
+        let length = blocks(1.0);
+        let wild = trace(patch(&[random(20.0, 0.0, 0.0, 1.0)]), 0, length, note_at_start);
+        let calm = trace(patch(&[random(20.0, 0.0, 0.0, 0.1)]), 0, length, note_at_start);
+        let frozen = trace(patch(&[random(20.0, 0.0, 0.0, 0.0)]), 0, length, note_at_start);
+        let moves = |v: &[f32]| v.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0f32, f32::max);
+        assert!(steps(&wild).len() >= 15, "about 20 steps a second: {}", steps(&wild).len());
+        assert!(moves(&calm) < 0.12 && moves(&wild) > 0.3, "low chaos takes small steps: {} vs {}", moves(&calm), moves(&wild));
+        assert!(steps(&frozen).is_empty(), "no chaos: only triggers change it");
+
+        let smooth = trace(patch(&[random(20.0, 1.0, 0.0, 1.0)]), 0, length, note_at_start);
+        assert!(moves(&smooth) < moves(&wild) * 0.4, "smoothing glides: {} vs {}", moves(&smooth), moves(&wild));
+
+        // Jitter: uneven step lengths.
+        let lengths = |v: &[f32]| {
+            let changes: Vec<usize> = (1..v.len()).filter(|&i| (v[i] - v[i - 1]).abs() > 1e-6).collect();
+            let gaps: Vec<f32> = changes.windows(2).map(|w| (w[1] - w[0]) as f32).collect();
+            let mean = gaps.iter().sum::<f32>() / gaps.len() as f32;
+            (gaps.iter().map(|g| (g - mean) * (g - mean)).sum::<f32>() / gaps.len() as f32).sqrt() / mean
+        };
+        let even = lengths(&wild);
+        let jittery = lengths(&trace(patch(&[random(20.0, 0.0, 1.0, 1.0)]), 0, length, note_at_start));
+        assert!(jittery > even + 0.2, "jitter varies the steps: {even} → {jittery}");
+
+        // Two notes: each voice has its own sequence unless shared.
+        for shared in [false, true] {
+            let mut r = random(20.0, 0.0, 0.0, 1.0);
+            r.shared = shared;
+            let mut pairs = Vec::new();
+            run(patch(&[r]), length, |s, b| {
+                if b == 0 {
+                    s.note_on(60, 1.0, HELD);
+                    s.note_on(64, 1.0, HELD);
+                }
+                if b > 5 {
+                    pairs.push((s.voices[0].mods[0].out, s.voices[1].mods[0].out));
+                }
+            });
+            let same = pairs.iter().all(|(a, b)| a == b);
+            assert_eq!(same, shared, "shared {shared}");
+        }
+    }
+
+    #[test]
+    fn trigger_modes_and_trigger_inputs() {
+        // Never: notes do not start it.
+        let mut env = envelope_mod(0.001, 1.0, 1.0, 0.1);
+        env.trigger = TriggerMode::Never;
+        let v = trace(patch(&[env]), 0, blocks(0.1), note_at_start);
+        assert!(v.iter().all(|&x| x == 0.0));
+
+        // Legato (poly): a note played over a held one carries on its envelope.
+        let mut env = envelope_mod(0.2, 1.0, 1.0, 0.1);
+        env.trigger = TriggerMode::Legato;
+        let mut second = Vec::new();
+        run(patch(&[env]), blocks(0.25), |s, b| {
+            if b == 0 {
+                s.note_on(60, 1.0, HELD);
+            }
+            if b == blocks(0.1) {
+                s.note_on(64, 1.0, HELD);
+            }
+            if b == blocks(0.1) + 2 {
+                second.push((s.voices[0].mods[0].out, s.voices[1].mods[0].out));
+            }
+        });
+        let (first, other) = second[0];
+        assert!(other > 0.4 && (first - other).abs() < 0.05, "legato continues: {first} {other}");
+
+        // Always (the default in poly) starts the second note from zero.
+        let env = envelope_mod(0.2, 1.0, 1.0, 0.1);
+        let mut second = Vec::new();
+        run(patch(&[env]), blocks(0.25), |s, b| {
+            if b == 0 {
+                s.note_on(60, 1.0, HELD);
+            }
+            if b == blocks(0.1) {
+                s.note_on(64, 1.0, HELD);
+            }
+            if b == blocks(0.1) + 2 {
+                second.push(s.voices[1].mods[0].out);
+            }
+        });
+        assert!(second[0] < 0.05, "{}", second[0]);
+
+        // A 4 Hz square retriggers a short envelope: four peaks a second, released in between.
+        let gate = lfo(4.0, square());
+        let mut env = envelope_mod(0.001, 1.0, 1.0, 0.02);
+        env.trigger_source = 0;
+        let v = trace(patch(&[gate, env]), 1, blocks(1.0), note_at_start);
+        let rises = v.windows(2).filter(|w| w[0] < 0.5 && w[1] >= 0.5).count();
+        assert!((3..=5).contains(&rises), "{rises} retriggers");
+    }
+
+    #[test]
+    fn chained_modulators_reshape_clamp_scale_and_sample() {
+        let ramp = |hz: f32| lfo(hz, Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]));
+        let chained = |kind: ModulatorKind, setting: f32| {
+            let mut m = Modulator::new(kind);
+            m.source = 0;
+            if kind != ModulatorKind::Remap {
+                m.set(0, setting);
+            }
+            m
+        };
+        let mut remap = chained(ModulatorKind::Remap, 0.0);
+        remap.shape = Shape::falling();
+        let pairs = |second: Modulator| {
+            let mut out = Vec::new();
+            run(patch(&[ramp(2.0), second]), blocks(0.5), |s, b| {
+                note_at_start(s, b);
+                if b > 2 {
+                    out.push((s.voices[0].mods[0].out, s.voices[0].mods[1].out));
+                }
+            });
+            out
+        };
+        assert!(pairs(remap).iter().all(|(a, b)| (a + b - 1.0).abs() < 1e-4), "remapped through a falling line");
+        assert!(pairs(chained(ModulatorKind::LowerLimit, 0.3)).iter().all(|&(a, b)| b == a.max(0.3)));
+        assert!(pairs(chained(ModulatorKind::UpperLimit, 0.3)).iter().all(|&(a, b)| b == a.min(0.3)));
+        let mut scale = chained(ModulatorKind::Scale, -0.5);
+        scale.index = 3;
+        assert!(pairs(scale).iter().all(|&(a, b)| (b + 5.0 * a).abs() < 1e-4), "×(-0.5)×10");
+
+        // Sample & hold: a fast ramp sampled by a 4 Hz square holds four values a second.
+        let mut sh = chained(ModulatorKind::SampleHold, 0.5);
+        sh.trigger_source = 2;
+        let v = trace(patch(&[ramp(13.0), sh, lfo(4.0, square())]), 1, blocks(1.0), note_at_start);
+        let held = steps(&v);
+        assert!((3..=5).contains(&held.len()), "held values: {held:?}");
+    }
+
+    #[test]
+    fn modulators_modulate_each_others_settings() {
+        // An envelope opens the depth of a fast LFO (a delayed vibrato), and a
+        // modulator listed later reaches an earlier one's settings one block late.
+        let mut vibrato = lfo(6.0, Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]));
+        vibrato.set(mslot::DEPTH, 0.0);
+        let mut env = envelope_mod(0.5, 1.0, 1.0, 0.1);
+        env.targets[0] = ModTarget::new(ModularParams::modulator_param(0, mslot::DEPTH), 1.0);
+        let v = trace(patch(&[vibrato, env]), 0, blocks(1.0), note_at_start);
+        let peak = |from: f32, to: f32| v[blocks(from)..blocks(to)].iter().fold(0.0f32, |a, &b| a.max(b));
+        assert!(peak(0.0, 0.17) < 0.35 && peak(0.6, 0.99) > 0.95, "{} {}", peak(0.0, 0.17), peak(0.6, 0.99));
+    }
+
+    #[test]
+    fn lfo_table_and_timed_curves() {
+        let mut table = Modulator::new(ModulatorKind::LfoTable);
+        table.mode = LfoMode::Retrig;
+        table.set(mslot::RATE, 5.0);
+        let v = trace(patch(&[table]), 0, blocks(1.0), note_at_start);
+        let crossings = v.windows(2).filter(|w| w[0] < 0.5 && w[1] >= 0.5).count();
+        assert!((4..=6).contains(&crossings), "5 cycles of the table's first frame: {crossings}");
+        let range = |v: &[f32]| v.iter().fold(f32::MAX, |a, &b| a.min(b))..v.iter().fold(f32::MIN, |a, &b| a.max(b));
+        assert!(range(&v).start < 0.1 && range(&v).end > 0.9);
+
+        // A curve rising over 0.5 s, played once or looped over its second half.
+        let mut curve = Modulator::new(ModulatorKind::Timeline);
+        curve.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
+        curve.set(mslot::LENGTH, 0.5);
+        let once = trace(patch(&[curve]), 0, blocks(1.0), note_at_start);
+        assert!((once[blocks(0.25)] - 0.5).abs() < 0.03 && once[blocks(0.9)] == 1.0, "{} {}", once[blocks(0.25)], once[blocks(0.9)]);
+        curve.loop_mode = 1;
+        curve.set(mslot::LOOP_START, 0.5);
+        let looped = trace(patch(&[curve]), 0, blocks(1.0), note_at_start);
+        assert!(looped[blocks(0.3)..].iter().all(|&x| (0.49..=1.0).contains(&x)), "stays inside the loop");
+        assert!(looped[blocks(0.3)..].windows(2).any(|w| w[1] < w[0] - 0.3), "and jumps back");
+    }
+
+    #[test]
+    fn followers_trackers_and_controllers() {
+        // The sine at A4 on the master: its level and its pitch.
+        let mut follower = Modulator::new(ModulatorKind::AudioFollower);
+        follower.index = 3;
+        follower.set(mslot::FOLLOW_RELEASE, 0.05);
+        let mut tracker = Modulator::new(ModulatorKind::PitchTracker);
+        tracker.index = 3;
+        let mut values = Vec::new();
+        run(patch(&[follower, tracker]), blocks(1.0), |s, b| {
+            if b == 0 {
+                s.note_on(69, 1.0, HELD);
+            }
+            if b == blocks(0.6) {
+                s.note_off(69);
+            }
+            values.push((s.globals[0], s.globals[1], s.voices.iter().any(|v| v.active)));
+        });
+        let (level, pitch, _) = values[blocks(0.5)];
+        assert!(level > 0.2, "follows the level: {level}");
+        let expected = (69.0 - 36.0) / (84.0 - 36.0);
+        assert!((pitch - expected).abs() < 0.01, "tracks A4: {pitch} vs {expected}");
+        assert!(values.last().unwrap().0 < 0.01, "and the level falls after the note: {:?}", values.last());
+
+        // MIDI controllers.
+        let mut cc = Modulator::new(ModulatorKind::MidiCc);
+        cc.index = 74;
+        let wheel = Modulator::new(ModulatorKind::PitchWheel);
+        let pressure = Modulator::new(ModulatorKind::Pressure);
+        let gate = Modulator::new(ModulatorKind::NoteGate);
+        let mut seen = Vec::new();
+        let (_, audio) = run(patch(&[cc, wheel, pressure, gate]), blocks(0.5), |s, b| {
+            if b == 0 {
+                s.note_on(69, 1.0, HELD);
+                s.control(Controller::Cc(74), 0, 0.7);
+                s.control(Controller::PitchBend, 0, 1.0);
+                s.control(Controller::PolyPressure, 69, 0.4);
+            }
+            if b == blocks(0.4) {
+                s.note_off(69);
+            }
+            seen.push(s.voices[0].mods.map(|m| m.out));
+        });
+        let held = seen[blocks(0.2)];
+        assert_eq!((held[0], held[1], held[2], held[3]), (0.7, 1.0, 0.4, 1.0));
+        assert_eq!(seen.last().unwrap()[3], 0.0, "the note gate closes");
+        // Bent up a whole tone: A4 becomes B4.
+        let crossings = audio[blocks(0.1) * CONTROL..blocks(0.3) * CONTROL].windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f32 / 0.2;
+        assert!((crossings - 493.9).abs() < 8.0, "{crossings} Hz");
+    }
+
+    #[test]
+    fn thirty_two_modulators_and_patches_with_sixteen() {
+        let mut p = patch(&[]);
+        let mut env = envelope_mod(0.001, 1.0, 1.0, 0.1);
+        env.targets[0] = ModTarget::new(ModularParams::module_param(1, slot::LEVEL), -1.0);
+        p.modulators[31] = env;
+        let (_, quiet) = run(p, blocks(0.2), note_at_start);
+        assert!(quiet[blocks(0.1) * CONTROL..].iter().all(|x| x.abs() < 1e-3), "the 32nd modulator works");
+
+        let index = ModularParams::modulator_param(20, mslot::DEPTH);
+        assert_eq!(ModularParams::param_modulator(index), Some((20, mslot::DEPTH)));
+        assert_eq!(ModularParams::param_modulator(ModularParams::modulator_param(3, 2)), Some((3, 2)));
+        *p.param_mut(index).unwrap() = 0.25;
+        assert_eq!(p.modulators[20].value(mslot::DEPTH), 0.25);
+
+        // A patch from the first layout: 16 modulators without the new fields.
+        let mut old = serde_json::to_value(patch(&[lfo(1.0, square())])).unwrap();
+        let list = old["modulators"].as_array_mut().unwrap();
+        list.truncate(16);
+        for m in list.iter_mut() {
+            let m = m.as_object_mut().unwrap();
+            for key in ["more", "inverted", "trigger", "trigger_source", "source", "shared", "seamless", "loop_mode"] {
+                m.remove(key);
+            }
+            for t in m["targets"].as_array_mut().unwrap() {
+                let t = t.as_object_mut().unwrap();
+                t.remove("on");
+                t.remove("curve");
+                t.remove("offset");
+            }
+        }
+        let loaded: ModularParams = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded.modulators[0].kind, ModulatorKind::Lfo);
+        assert_eq!(loaded.modulators[0].value(mslot::DEPTH), 1.0);
+        assert_eq!(loaded.modulators[0].targets[0].dest, MOD_NO_TARGET);
+        assert!(loaded.modulators[0].targets[0].on);
+        assert_eq!(loaded.modulators[31].kind, ModulatorKind::Off);
+        assert_eq!(loaded.modulators[0].trigger_source, MOD_NO_MODULATOR);
+    }
+
+    /// High-frequency energy of `x` in windows of `size` samples.
+    fn brightness(x: &[f32], size: usize) -> Vec<f32> {
+        x.chunks(size).map(|c| (c.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>() / c.len() as f32).sqrt()).collect()
+    }
+
+    #[test]
+    fn modulation_presets_move_their_filters() {
+        let preset = |name: &str| ModularParams::presets().into_iter().find(|(n, _)| *n == name).unwrap().1;
+        // At 120 BPM: the wobble opens every eighth note (6000 samples).
+        let (_, audio) = run(preset("Mod · Wobble Bass"), blocks(2.0), |s, b| {
+            if b == 0 {
+                s.note_on(36, 1.0, HELD);
+            }
+        });
+        let b = brightness(&audio[24_000..], 1500);
+        let (low, high) = (b.iter().fold(f32::MAX, |a, &x| a.min(x)), b.iter().fold(0.0f32, |a, &x| a.max(x)));
+        assert!(high > low * 3.0, "wobbles: {low} .. {high}");
+        // Sample & hold: a different filter setting every sixteenth (6000 samples), flat in between.
+        let (_, audio) = run(preset("Mod · Sample & Hold Filter"), blocks(2.0), |s, b| {
+            if b == 0 {
+                s.note_on(48, 1.0, HELD);
+            }
+        });
+        let b = brightness(&audio[24_000..72_000], 3000);
+        let across = b.windows(2).skip(1).step_by(2).filter(|w| (w[1] / w[0] - 1.0).abs() > 0.05).count();
+        let within = b.chunks(2).filter(|w| (w[1] / w[0] - 1.0).abs() > 0.05).count();
+        assert!(across >= 4 && within <= 2, "steps: {b:?}");
+    }
+
+    #[test]
+    fn removing_a_modulator_disconnects_it() {
+        let mut p = patch(&[]);
+        p.modulators[0] = Modulator::new(ModulatorKind::Lfo);
+        let mut remap = Modulator::new(ModulatorKind::Remap);
+        remap.source = 0;
+        remap.trigger_source = 0;
+        p.modulators[1] = remap;
+        let mut env = Modulator::new(ModulatorKind::Envelope);
+        env.targets[0] = ModTarget::new(ModularParams::modulator_param(0, mslot::DEPTH), 0.5);
+        env.targets[1] = ModTarget::new(ModularParams::module_param(1, slot::LEVEL), 0.5);
+        p.modulators[2] = env;
+        p.remove_modulator(0);
+        assert_eq!((p.modulators[1].source, p.modulators[1].trigger_source), (MOD_NO_MODULATOR, MOD_NO_MODULATOR));
+        assert_eq!(p.modulators[2].targets[0], ModTarget::NONE);
+        assert_eq!(p.modulators[2].targets[1].dest as usize, ModularParams::module_param(1, slot::LEVEL));
     }
 }

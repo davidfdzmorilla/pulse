@@ -25,6 +25,6 @@ pub use input::{start_input, AudioInput, InputHandle, Marker};
 pub use offline::OfflineRenderer;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};
 pub use engine::{
-    build_chain, swing_offset, ChainSlot, Command, PreparedInstrument, LiveNote, PlacedClip, PlayClip, RecordedNote, SharedState, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
+    build_chain, swing_offset, ChainSlot, Command, PreparedInstrument, LiveNote, Controller, PlacedClip, PlayClip, RecordedNote, SharedState, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
     NUM_RETURNS, NUM_SCENES, QUEUED_STOP,
 };

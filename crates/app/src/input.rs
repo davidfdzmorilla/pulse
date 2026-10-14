@@ -1,7 +1,7 @@
 //! Live note input: hardware MIDI ports and the computer keyboard.
 
 use eframe::egui::{self, Key};
-use engine::{LiveInput, LiveNote};
+use engine::{Controller, LiveInput, LiveNote};
 use midir::{MidiInput, MidiInputConnection};
 use std::collections::HashMap;
 
@@ -42,12 +42,22 @@ impl MidiInputs {
     }
 }
 
-/// Forwards note-on/off messages on any channel.
+/// Forwards notes, controllers, pitch bend and pressure on any channel.
 fn forward(message: &[u8], live: &LiveInput) {
-    let &[status, pitch, velocity] = message else { return };
-    match status & 0xF0 {
-        0x90 => live.send(LiveNote { pitch, velocity: velocity as f32 / 127.0 }),
-        0x80 => live.send(LiveNote { pitch, velocity: 0.0 }),
+    match *message {
+        [status, pressure] if status & 0xF0 == 0xD0 => live.send(LiveNote::control(Controller::Pressure, 0, pressure as f32 / 127.0)),
+        [status, a, b] => match status & 0xF0 {
+            // A note-on with velocity 0 is a note-off.
+            0x90 => live.send(LiveNote::note(a, b as f32 / 127.0)),
+            0x80 => live.send(LiveNote::note(a, 0.0)),
+            0xA0 => live.send(LiveNote::control(Controller::PolyPressure, a, b as f32 / 127.0)),
+            0xB0 => live.send(LiveNote::control(Controller::Cc(a), 0, b as f32 / 127.0)),
+            0xE0 => {
+                let bend = ((b as i32) << 7 | a as i32) - 8192;
+                live.send(LiveNote::control(Controller::PitchBend, 0, bend as f32 / 8192.0));
+            }
+            _ => {}
+        },
         _ => {}
     }
 }
@@ -100,7 +110,7 @@ impl ComputerKeyboard {
     pub fn release_all(&mut self, live: Option<&LiveInput>) {
         for (_, pitch) in self.held.drain() {
             if let Some(live) = live {
-                live.send(LiveNote { pitch, velocity: 0.0 });
+                live.send(LiveNote::note(pitch, 0.0));
             }
         }
     }
@@ -133,11 +143,11 @@ impl ComputerKeyboard {
             if let Some(&(_, semitone)) = PIANO.iter().find(|(k, _)| *k == key) {
                 if pressed && !self.held.contains_key(&key) {
                     let pitch = (self.base_note() + semitone).min(127);
-                    live.send(LiveNote { pitch, velocity: self.velocity as f32 / 127.0 });
+                    live.send(LiveNote::note(pitch, self.velocity as f32 / 127.0));
                     self.held.insert(key, pitch);
                 } else if !pressed {
                     if let Some(pitch) = self.held.remove(&key) {
-                        live.send(LiveNote { pitch, velocity: 0.0 });
+                        live.send(LiveNote::note(pitch, 0.0));
                     }
                 }
                 continue;

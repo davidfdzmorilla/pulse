@@ -142,7 +142,12 @@ pub fn cached_table_for(track: &Track, osc: usize, samples: &SampleCache) -> Opt
 pub fn instrument_tables(track: &Track, samples: &mut SampleCache) -> Box<Vec<Arc<Wavetable>>> {
     match track.instrument {
         InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_) => Box::new((0..2).map(|osc| table_for(track, osc, samples)).collect()),
-        InstrumentKind::Modular(_) => Box::new((0..engine::model::MOD_MODULES).map(|g| table_for(track, g, samples)).collect()),
+        // The modules' tables, then each modulator's (LFO Table reads one).
+        InstrumentKind::Modular(params) => {
+            let mut tables: Vec<Arc<Wavetable>> = (0..engine::model::MOD_MODULES).map(|g| table_for(track, g, samples)).collect();
+            tables.extend(params.modulators.iter().map(|m| samples.builtin_table(if m.kind == engine::model::ModulatorKind::LfoTable { m.index as usize } else { 0 })));
+            Box::new(tables)
+        }
         _ => Box::default(),
     }
 }

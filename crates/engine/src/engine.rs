@@ -92,10 +92,36 @@ impl PlacedClip {
 }
 
 /// A note played live (MIDI keyboard or computer keyboard). Velocity 0 is a note-off.
+/// With a `controller`, it is a controller move instead: `velocity` holds its value.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LiveNote {
     pub pitch: u8,
     pub velocity: f32,
+    pub controller: Option<Controller>,
+}
+
+impl LiveNote {
+    pub fn note(pitch: u8, velocity: f32) -> Self {
+        Self { pitch, velocity, controller: None }
+    }
+
+    /// A controller move; `pitch` is the key for polyphonic pressure.
+    pub fn control(controller: Controller, pitch: u8, value: f32) -> Self {
+        Self { pitch, velocity: value, controller: Some(controller) }
+    }
+}
+
+/// MIDI controllers that instruments can follow.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Controller {
+    /// A continuous controller, 0..1.
+    Cc(u8),
+    /// -1..1.
+    PitchBend,
+    /// Channel pressure, 0..1.
+    Pressure,
+    /// Polyphonic pressure on one key, 0..1.
+    PolyPressure,
 }
 
 /// A note captured while recording, in transport beats. Sent to the UI on note-off.
@@ -474,6 +500,13 @@ impl Instrument {
         }
     }
 
+    /// Only the modular synth follows controllers.
+    fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
+        if let Self::Modular(m) = self {
+            m.control(controller, pitch, value);
+        }
+    }
+
     fn all_notes_off(&mut self) {
         match self {
             Self::Synth(s) => s.all_notes_off(),
@@ -515,6 +548,7 @@ enum Event {
     AllNotesOff,
     NoteOn { pitch: u8, velocity: f32, gate: u32 },
     NoteOff { pitch: u8 },
+    Control { controller: Controller, pitch: u8, value: f32 },
 }
 
 /// (frame offset, sort rank, event). Pre-allocated; never grows on the audio thread.
@@ -524,7 +558,7 @@ fn push_event(events: &mut EventQueue, frame: usize, event: Event) {
     if events.len() < MAX_EVENTS {
         let rank = match event {
             Event::AllNotesOff => 0,
-            Event::NoteOff { .. } => 1,
+            Event::NoteOff { .. } | Event::Control { .. } => 1,
             Event::NoteOn { .. } => 2,
         };
         events.push((frame, rank, event));
@@ -1215,6 +1249,10 @@ impl Engine {
             if !routed {
                 continue;
             }
+            if let Some(controller) = note.controller {
+                push_event(&mut track.events, 0, Event::Control { controller, pitch, value: note.velocity });
+                continue;
+            }
             if note.velocity > 0.0 {
                 push_event(&mut track.events, 0, Event::NoteOn { pitch, velocity: note.velocity, gate: HELD });
                 let capturing = self.playing && (track.recording.is_some() || (arrangement_record && track.armed));
@@ -1305,6 +1343,7 @@ impl Engine {
                     Event::AllNotesOff => track.instrument.all_notes_off(),
                     Event::NoteOff { pitch } => track.instrument.note_off(pitch),
                     Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(&track.samples, pitch, velocity, gate),
+                    Event::Control { controller, pitch, value } => track.instrument.control(controller, pitch, value),
                 }
             }
             track.instrument.render(&track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
@@ -1537,7 +1576,7 @@ mod tests {
         }
 
         fn play_note(&mut self, pitch: u8, velocity: f32) {
-            assert!(self.live.push(LiveNote { pitch, velocity }).is_ok());
+            assert!(self.live.push(LiveNote::note(pitch, velocity)).is_ok());
         }
 
         fn recorded(&mut self) -> Vec<RecordedNote> {
@@ -1686,6 +1725,29 @@ mod tests {
         h.shared.tracks[2].peak.take();
         h.run_beats(0.5);
         assert_eq!(h.shared.tracks[2].peak.take(), 0.0, "note-off should silence the held note");
+    }
+
+    #[test]
+    fn live_controllers_reach_the_modular_synth() {
+        use crate::model::{mslot, slot, ModTarget, ModularParams, Modulator, ModulatorKind};
+        // CC 1 turns the oscillator down: all the way at 1.
+        let mut p = ModularParams::default();
+        let mut cc = Modulator::new(ModulatorKind::MidiCc);
+        cc.index = 1;
+        cc.set(mslot::DEPTH, 1.0);
+        cc.targets[0] = ModTarget::new(ModularParams::module_param(1, slot::LEVEL), -1.0);
+        p.modulators[0] = cc;
+        let mut h = Harness::new();
+        h.send(Command::set_instrument(2, InstrumentKind::Modular(p), SR));
+        h.send(Command::SetInputTrack(Some(2)));
+        h.play_note(60, 0.9);
+        h.run_beats(0.5);
+        assert!(h.shared.tracks[2].peak.take() > 0.0);
+        assert!(h.live.push(LiveNote::control(Controller::Cc(1), 0, 1.0)).is_ok());
+        h.run_beats(0.5);
+        h.shared.tracks[2].peak.take();
+        h.run_beats(0.5);
+        assert!(h.shared.tracks[2].peak.take() < 1e-3, "CC 1 silenced it");
     }
 
     #[test]

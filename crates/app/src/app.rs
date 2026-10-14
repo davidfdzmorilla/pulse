@@ -548,15 +548,50 @@ impl PulseApp {
     }
 
     pub fn open(&mut self) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"]).pick_file() else {
-            return;
-        };
-        match Project::load(&path) {
+        if let Some(path) = rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"]).pick_file() {
+            self.open_from(&path);
+        }
+    }
+
+    pub fn import_live_set(&mut self) {
+        let dialog = rfd::FileDialog::new().add_filter("Set de Ableton Live", &["als"]);
+        if let Some(path) = dialog.pick_file() {
+            self.import_live_set_from(&path);
+        }
+    }
+
+    fn import_live_set_from(&mut self, path: &std::path::Path) {
+        match crate::als::import(path) {
+            Ok((project, report)) => {
+                // No file is attached, so saving asks for a new .pulse and never touches the .als.
+                self.replace_project(project, None);
+                // Mark the import as unsaved work.
+                self.saved = Project::empty();
+                self.status = Some(report.summary());
+            }
+            Err(error) => self.status = Some(format!("No se pudo importar: {error}")),
+        }
+    }
+
+    fn open_from(&mut self, path: &std::path::Path) {
+        match Project::load(path) {
             Ok(project) => {
                 self.status = Some(format!("Abierto {}", path.display()));
-                self.replace_project(project, Some(path));
+                self.replace_project(project, Some(path.to_path_buf()));
             }
             Err(error) => self.status = Some(error),
+        }
+    }
+
+    /// Opens `.pulse` projects and imports `.als` sets dropped onto the window.
+    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+        let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
+        for path in dropped {
+            match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
+                Some("als") => self.import_live_set_from(&path),
+                Some("pulse") => self.open_from(&path),
+                _ => self.status = Some(format!("Formato no compatible: {}", path.display())),
+            }
         }
     }
 
@@ -616,9 +651,13 @@ impl PulseApp {
                 cmd && i.key_pressed(egui::Key::O),
                 cmd && i.key_pressed(egui::Key::N),
                 cmd && i.key_pressed(egui::Key::T),
+                cmd && i.key_pressed(egui::Key::I),
             ]
         });
-        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track] = input;
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, import] = input;
+        if import {
+            self.import_live_set();
+        }
         if space {
             self.toggle_play();
         }
@@ -705,6 +744,7 @@ impl eframe::App for PulseApp {
             self.meters.update(&state);
         }
         self.handle_shortcuts(&ctx);
+        self.handle_dropped_files(&ctx);
 
         let bar = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 5));
         egui::Panel::top("transport").frame(bar).show(ui, |ui| transport::show(self, ui));

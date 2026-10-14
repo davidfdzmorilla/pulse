@@ -1,3 +1,4 @@
+mod als;
 mod app;
 mod arrangement;
 mod browser;

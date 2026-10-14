@@ -7,6 +7,7 @@ edition = "2024"
 eframe = "0.36.2"
 engine = { version = "0.1.0", path = "../engine" }
 flate2 = "1.1.10"
+midir = "0.11.1"
 rfd = "0.17.2"
 roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }

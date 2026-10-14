@@ -1,14 +1,30 @@
 //! Connects the [`Engine`] to the system audio output through cpal.
 
-use crate::engine::{Command, Engine, Garbage, SharedState};
+use crate::engine::{Command, Engine, Garbage, LiveNote, RecordedNote, SharedState};
+use std::sync::Mutex;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::Arc;
 
 /// The UI thread's handle to a running engine.
+/// Sends live notes straight to the audio thread. Cloneable, so MIDI input
+/// callbacks on other threads can share it.
+#[derive(Clone)]
+pub struct LiveInput(Arc<Mutex<Producer<LiveNote>>>);
+
+impl LiveInput {
+    pub fn send(&self, note: LiveNote) {
+        if let Ok(mut producer) = self.0.lock() {
+            let _ = producer.push(note);
+        }
+    }
+}
+
 pub struct EngineHandle {
     commands: Producer<Command>,
+    recorded: Consumer<RecordedNote>,
+    pub live: LiveInput,
     garbage: Consumer<Garbage>,
     pub state: Arc<SharedState>,
     pub sample_rate: f32,
@@ -19,6 +35,11 @@ impl EngineHandle {
     /// Sends a command to the audio thread. Returns false if the queue is full.
     pub fn send(&mut self, command: Command) -> bool {
         self.commands.push(command).is_ok()
+    }
+
+    /// Notes captured by recording since the last call.
+    pub fn take_recorded(&mut self) -> Vec<RecordedNote> {
+        std::iter::from_fn(|| self.recorded.pop().ok()).collect()
     }
 
     /// Frees whatever the audio thread has replaced (clips, devices, chains). Call regularly from the UI thread.
@@ -50,7 +71,9 @@ pub fn start() -> Result<(AudioOutput, EngineHandle), String> {
 
     let (command_tx, command_rx) = RingBuffer::new(4096);
     let (garbage_tx, garbage_rx) = RingBuffer::new(1024);
-    let (engine, state) = Engine::new(sample_rate, command_rx, garbage_tx);
+    let (live_tx, live_rx) = RingBuffer::new(1024);
+    let (recorded_tx, recorded_rx) = RingBuffer::new(4096);
+    let (engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);
 
     let stream = match format {
         SampleFormat::F32 => build::<f32>(&device, config.clone(), engine),
@@ -68,6 +91,8 @@ pub fn start() -> Result<(AudioOutput, EngineHandle), String> {
         AudioOutput { _stream: stream },
         EngineHandle {
             commands: command_tx,
+            recorded: recorded_rx,
+            live: LiveInput(Arc::new(Mutex::new(live_tx))),
             garbage: garbage_rx,
             state,
             sample_rate,

@@ -109,6 +109,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         if icon_button(ui, "stop", false, ACCENT, "Parar (Espacio)").clicked() {
             app.audio.send(Command::Stop);
         }
+        let recording = app.is_arrangement_recording();
+        if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (F9)").clicked() {
+            app.toggle_arrangement_record();
+        }
         if icon_button(ui, "⟲", app.project.loop_enabled, ACCENT, "Loop del Arrangement").clicked() {
             app.project.loop_enabled = !app.project.loop_enabled;
             app.sync_loop();
@@ -123,6 +127,29 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             .clicked()
         {
             app.audio.send(Command::BackToArrangement);
+        }
+
+        ui.add_space(12.0);
+        let keyboard = &app.keyboard;
+        let label = if keyboard.enabled {
+            format!("Teclado {} · {}", crate::project::note_name(keyboard.base_note()), keyboard.velocity)
+        } else {
+            "Teclado".to_string()
+        };
+        if widgets::flat_button(ui, &label, keyboard.enabled, vec2(if keyboard.enabled { 118.0 } else { 64.0 }, 22.0))
+            .on_hover_text("Teclado del ordenador como teclado MIDI (M)\nA S D F G H J K L: teclas blancas · W E T Y U O P: negras\nZ / X: octava · C / V: velocidad")
+            .clicked()
+        {
+            app.toggle_keyboard();
+        }
+        let devices = app.midi.names.len();
+        let midi_hint = if devices == 0 {
+            "Ningún dispositivo MIDI conectado. Clic para volver a buscar.".to_string()
+        } else {
+            format!("Entradas MIDI:\n{}\nClic para volver a buscar.", app.midi.names.join("\n"))
+        };
+        if widgets::toggle(ui, devices > 0, "MIDI", theme::PLAY, vec2(40.0, 22.0)).on_hover_text(midi_hint).clicked() {
+            app.rescan_midi();
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -185,7 +212,7 @@ pub fn status_bar(app: &mut PulseApp, ui: &mut egui::Ui) {
             (Some(error), _) => RichText::new(format!("Sin audio: {error}")).color(theme::METER_RED),
             (None, Some(status)) => RichText::new(status).color(TEXT),
             (None, None) => RichText::new(
-                "Espacio: play/stop · Tab: Session/Arrangement · ⇧Tab: Clip/Dispositivos · ⌘Z: deshacer · ⌘D: duplicar · Supr: borrar",
+                "Espacio: play/stop · Tab: Session/Arrangement · ⇧Tab: Clip/Dispositivos · M: teclado MIDI · F9: grabar · ⌘Z: deshacer · ⌘D: duplicar · Supr: borrar",
             )
             .color(TEXT_DIM),
         };

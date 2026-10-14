@@ -2,11 +2,14 @@ use crate::history::History;
 use crate::project::{Mixer, Project, Track, PALETTE};
 use std::collections::HashMap;
 use std::path::Path;
+use crate::input::{ComputerKeyboard, MidiInputs};
+use crate::recording::{Finished, Recorder};
 use crate::{arrangement, browser, detail, piano_roll, session, theme, transport};
 use eframe::egui;
-use engine::model::{AudioClip, Clip, Device, InstrumentKind, SynthParams, WarpMode};
+use engine::model::{ArrangementClip, AudioClip, Clip, Device, InstrumentKind, MidiClip, SynthParams, WarpMode};
 use engine::{
-    build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, PlacedClip, PlayClip, Sample, SharedState,
+    build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, LiveInput, PlacedClip, PlayClip,
+    RecordedNote, Sample, SharedState,
     Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES,
 };
 use std::path::PathBuf;
@@ -58,6 +61,14 @@ impl Audio {
 
     pub fn position(&self) -> f64 {
         self.handle.as_ref().map_or(0.0, |h| h.state.position())
+    }
+
+    pub fn live(&self) -> Option<LiveInput> {
+        self.handle.as_ref().map(|h| h.live.clone())
+    }
+
+    fn take_recorded(&mut self) -> Vec<RecordedNote> {
+        self.handle.as_mut().map_or_else(Vec::new, |h| h.take_recorded())
     }
 
     fn collect_garbage(&mut self) {
@@ -153,6 +164,11 @@ pub struct PulseApp {
     pub show_browser: bool,
     /// Decoded audio files by path; failed loads are cached as empty samples.
     samples: HashMap<String, Arc<Sample>>,
+    pub midi: MidiInputs,
+    pub keyboard: ComputerKeyboard,
+    pub recorder: Recorder,
+    /// Input track last sent to the engine.
+    input_track: Option<Option<usize>>,
     history: History,
     file: Option<PathBuf>,
     saved: Project,
@@ -182,12 +198,17 @@ impl PulseApp {
             arrangement: Default::default(),
             show_browser: true,
             samples: HashMap::new(),
+            midi: MidiInputs::default(),
+            keyboard: ComputerKeyboard::default(),
+            recorder: Recorder::default(),
+            input_track: None,
             file: None,
             status: None,
             title: String::new(),
             screenshot: std::env::var("PULSE_SCREENSHOT").ok().map(|path| (path, 0)),
         };
         app.sync_all();
+        app.midi = MidiInputs::connect(app.audio.live());
         if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
             app.view = View::Arrangement;
         }
@@ -232,6 +253,7 @@ impl PulseApp {
             let mut commands = vec![
                 Command::SetInstrument { track: t, kind: track.instrument },
                 Command::SetSolo { track: t, solo: track.solo },
+                Command::SetArm { track: t, armed: track.armed },
                 Command::ReplaceChain {
                     target: Target::Track(t),
                     chain: build_chain(&track.devices, self.audio.sample_rate()),
@@ -653,6 +675,112 @@ impl PulseApp {
         })
     }
 
+    // ----- Live input and recording ------------------------------------------------
+
+    pub fn rescan_midi(&mut self) {
+        self.midi = MidiInputs::default();
+        self.midi = MidiInputs::connect(self.audio.live());
+        self.status = Some(match self.midi.names.len() {
+            0 => "No hay dispositivos MIDI conectados".into(),
+            n => format!("{n} dispositivo(s) MIDI: {}", self.midi.names.join(", ")),
+        });
+    }
+
+    pub fn toggle_keyboard(&mut self) {
+        let live = self.audio.live();
+        self.keyboard.toggle(live.as_ref());
+    }
+
+    pub fn toggle_arm(&mut self, track: usize) {
+        let t = &mut self.project.tracks[track];
+        t.armed = !t.armed;
+        let armed = t.armed;
+        self.audio.send(Command::SetArm { track, armed });
+    }
+
+    /// Records a new clip into an empty session slot, starting at the next launch boundary.
+    pub fn record_slot(&mut self, track: usize, slot: usize) {
+        if self.project.tracks[track].is_audio() {
+            self.status = Some("La grabación de audio aún no está disponible; graba en una pista MIDI".into());
+            return;
+        }
+        if !self.project.tracks[track].armed {
+            self.toggle_arm(track);
+        }
+        self.recorder.start_session(track, slot);
+        self.selected_target = Target::Track(track);
+        self.audio.send(Command::RecordClip { track, slot });
+    }
+
+    pub fn stop_session_recording(&mut self, track: usize) {
+        let position = self.audio.position();
+        self.recorder.stop_session(track, position);
+        self.audio.send(Command::StopRecording(track));
+    }
+
+    pub fn is_arrangement_recording(&self) -> bool {
+        self.recorder.arrangement.is_some()
+    }
+
+    /// Starts or stops recording armed tracks onto the arrangement.
+    pub fn toggle_arrangement_record(&mut self) {
+        if self.recorder.arrangement.is_some() {
+            self.audio.send(Command::SetArrangementRecord(false));
+            return;
+        }
+        if !self.project.tracks.iter().any(|t| t.armed && !t.is_audio()) {
+            self.status = Some("Arma una pista MIDI (botón ●) para grabar en ella".into());
+            return;
+        }
+        self.recorder.start_arrangement(self.audio.position());
+        self.audio.send(Command::SetArrangementRecord(true));
+        self.audio.send(Command::Play);
+    }
+
+    /// Live input follows the selected track when no track is armed.
+    fn update_input_track(&mut self) {
+        let desired = match self.selected_target {
+            Target::Track(t) => Some(t),
+            _ => None,
+        };
+        if self.input_track != Some(desired) {
+            self.audio.send(Command::SetInputTrack(desired));
+            self.input_track = Some(desired);
+        }
+    }
+
+    fn update_recording(&mut self) {
+        let Some(state) = self.audio.state() else { return };
+        let notes = self.audio.take_recorded();
+        let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
+        for take in self.recorder.update(notes, &state, &armed) {
+            match take {
+                Finished::Session { track, slot, length, notes } => {
+                    let Some(t) = self.project.tracks.get(track) else { continue };
+                    if t.clips[slot].is_some() {
+                        continue;
+                    }
+                    let count = notes.len();
+                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color };
+                    self.set_clip(track, slot, Some(Clip::Midi(clip)));
+                    self.select_clip(ClipRef::Session { track, slot });
+                    self.status = Some(format!("Grabadas {count} notas en {}", self.project.tracks[track].name));
+                }
+                Finished::Arrangement { track, start, length, notes } => {
+                    let Some(t) = self.project.tracks.get_mut(track) else { continue };
+                    let count = notes.len();
+                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color };
+                    t.arrangement.push(ArrangementClip { start, length, clip: Clip::Midi(clip) });
+                    let index = t.arrangement.len() - 1;
+                    self.sync_arrangement(track);
+                    self.select_clip(ClipRef::Arrangement { track, index });
+                    self.status = Some(format!("Grabadas {count} notas en el Arrangement"));
+                }
+                Finished::Cancelled => {}
+            }
+        }
+    }
+
     pub fn toggle_play(&mut self) {
         let command = if self.audio.is_playing() { Command::Stop } else { Command::Play };
         self.audio.send(command);
@@ -821,9 +949,18 @@ impl PulseApp {
                 cmd && !shift && i.key_pressed(egui::Key::T),
                 cmd && shift && i.key_pressed(egui::Key::T),
                 cmd && i.key_pressed(egui::Key::I),
+                !cmd && i.key_pressed(egui::Key::M),
+                i.key_pressed(egui::Key::F9),
             ]
         });
-        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import] = input;
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, keyboard, record] =
+            input;
+        if keyboard {
+            self.toggle_keyboard();
+        }
+        if record {
+            self.toggle_arrangement_record();
+        }
         if add_audio {
             self.add_audio_track();
         }
@@ -917,6 +1054,10 @@ impl eframe::App for PulseApp {
         }
         self.handle_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
+        let live = self.audio.live();
+        self.keyboard.handle(&ctx, live.as_ref());
+        self.update_input_track();
+        self.update_recording();
 
         let bar = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 5));
         egui::Panel::top("transport").frame(bar).show(ui, |ui| transport::show(self, ui));

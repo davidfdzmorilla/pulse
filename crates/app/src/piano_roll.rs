@@ -8,7 +8,7 @@
 
 use crate::app::{ClipRef, PulseApp};
 use crate::note_edit::{self, Selection, MIN_LENGTH};
-use crate::project::{drum_name, is_black_key, note_name};
+use crate::project::{is_black_key, note_name};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Key, Rect, Sense, Stroke, StrokeKind};
@@ -147,6 +147,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         return;
     }
     let is_drums = app.project.tracks[t].is_drums();
+    // One row per drum sound or pad, the lowest note at the bottom.
+    let drum_rows = if is_drums { app.project.tracks[t].drum_rows() } else { Vec::new() };
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     let state = &mut app.piano_roll;
     if state.selection_clip != Some(clip_ref) {
@@ -170,12 +172,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     state.selection.retain(|&i| i < clip.notes.len());
 
     let pitches: Vec<u8> = if is_drums {
-        // One row per drum machine sound, kick at the bottom.
-        engine::model::DRUM_VOICES.iter().rev().map(|(pitch, _)| *pitch).collect()
+        drum_rows.iter().map(|(pitch, _)| *pitch).collect()
     } else {
         (24..=96).rev().collect()
     };
-    let row_h = if is_drums { 24.0 } else { 13.0 };
+    let row_h = if !is_drums { 13.0 } else if pitches.len() > 12 { 20.0 } else { 24.0 };
     // Sixteenths are 18 px at zoom 1.
     let beat_w = 72.0 * state.zoom;
     let grid_w = clip.length as f32 * beat_w;
@@ -226,7 +227,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let key = Rect::from_min_size(pos2(rect.left(), y), vec2(KEY_W - 2.0, row_h - 1.0));
             painter.rect_filled(key, 1.0, if dark { Color32::from_gray(30) } else { Color32::from_gray(205) });
             let text = if is_drums {
-                drum_name(pitch).unwrap_or_default().to_string()
+                drum_rows[row].1.clone()
             } else if pitch % 12 == 0 {
                 note_name(pitch)
             } else {

@@ -8,9 +8,11 @@ mod instruments;
 mod offline;
 pub mod model;
 mod sample;
+mod sampler;
 mod synth;
 
 pub use audio::{start, AudioOutput, EngineHandle, LiveInput};
+pub use instruments::render_drum_hit;
 pub use input::{start_input, AudioInput, InputHandle, Marker};
 pub use offline::OfflineRenderer;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};

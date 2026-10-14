@@ -10,7 +10,7 @@ use crate::{arrangement, browser, detail, piano_roll, session, theme, transport}
 use eframe::egui;
 use engine::model::{
     ArrangementClip, AudioClip, AutomationLane, Clip, Device, InstrumentKind, MidiClip, Param, ParamInfo, SynthParams, WarpMode,
-    PAN_PARAM, SEND_PARAM, VOLUME_PARAM,
+    PAN_PARAM, RACK_PADS, SEND_PARAM, VOLUME_PARAM,
 };
 use engine::{
     build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, LiveInput,
@@ -178,6 +178,10 @@ pub struct PulseApp {
     /// Automated parameters the user moved by hand; their automation is
     /// suspended until "Back to Arrangement", as in Live.
     pub overridden: HashSet<(Target, Param)>,
+    /// Drum rack pad shown in the device view.
+    pub selected_pad: usize,
+    /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
+    pub sample_drop_zones: Vec<(egui::Rect, usize, usize)>,
     /// Input track last sent to the engine.
     input_track: Option<Option<usize>>,
     history: History,
@@ -214,6 +218,8 @@ impl PulseApp {
             recorder: Recorder::default(),
             capture: None,
             overridden: HashSet::new(),
+            selected_pad: 0,
+            sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
             file: None,
@@ -746,6 +752,64 @@ impl PulseApp {
         }
     }
 
+    pub fn sync_samples(&mut self, track: usize) {
+        let samples = sync::instrument_samples(&self.project.tracks[track], &mut self.samples);
+        self.audio.send(Command::SetSamples { track, samples });
+        self.show_sample_errors();
+    }
+
+    /// Loads files into consecutive sample slots of a sampler or drum rack, starting at `slot`.
+    pub fn set_instrument_samples(&mut self, track: usize, slot: usize, paths: Vec<PathBuf>) {
+        let slots = match self.project.tracks[track].instrument {
+            InstrumentKind::Sampler(_) => 1,
+            InstrumentKind::DrumRack(_) => RACK_PADS,
+            _ => return,
+        };
+        let mut loaded = 0;
+        for (slot, path) in (slot..slots).zip(paths) {
+            let path = path.to_string_lossy().into_owned();
+            if self.sample(&path).frames() == 0 {
+                continue;
+            }
+            self.project.tracks[track].set_sample(slot, Some(path));
+            loaded += 1;
+        }
+        if loaded > 0 {
+            self.sync_samples(track);
+            let name = self.project.tracks[track].sample_name(slot).unwrap_or_default();
+            self.status = Some(if loaded == 1 { format!("Cargado: {name}") } else { format!("{loaded} muestras cargadas") });
+        }
+    }
+
+    pub fn clear_instrument_sample(&mut self, track: usize, slot: usize) {
+        self.project.tracks[track].set_sample(slot, None);
+        self.sync_samples(track);
+    }
+
+    pub fn choose_instrument_samples(&mut self, track: usize, slot: usize) {
+        let dialog = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS);
+        let paths = match self.project.tracks[track].instrument {
+            InstrumentKind::DrumRack(_) => dialog.pick_files(),
+            _ => dialog.pick_file().map(|p| vec![p]),
+        };
+        if let Some(paths) = paths {
+            self.set_instrument_samples(track, slot, paths);
+        }
+    }
+
+    /// Fills a drum rack with the starter kit rendered from the drum machine.
+    pub fn load_basic_kit(&mut self, track: usize) {
+        match crate::kits::basic_kit(&crate::kits::kits_dir().join("Basic Kit")) {
+            Ok((params, files)) => {
+                self.set_instrument(track, InstrumentKind::DrumRack(params));
+                self.project.tracks[track].samples = files;
+                self.sync_samples(track);
+                self.status = Some("Kit básico cargado".into());
+            }
+            Err(error) => self.status = Some(error),
+        }
+    }
+
     fn push_track(&mut self, make: impl FnOnce(usize, [u8; 3]) -> Track) -> Option<usize> {
         let index = self.project.tracks.len();
         if index >= MAX_TRACKS {
@@ -1137,12 +1201,30 @@ impl PulseApp {
         }
     }
 
+    /// Where dropped audio files go when a sampler or drum rack is on screen: the
+    /// slot under the pointer, else the sampler or the selected pad.
+    fn instrument_drop_slot(&self, ctx: &egui::Context) -> Option<(usize, usize)> {
+        let (_, track, _) = *self.sample_drop_zones.first()?;
+        let pointer = ctx.input(|i| i.pointer.latest_pos());
+        let under = pointer.and_then(|p| self.sample_drop_zones.iter().find(|(rect, ..)| rect.contains(p)));
+        if let Some(&(_, track, slot)) = under {
+            return Some((track, slot));
+        }
+        match self.project.tracks.get(track)?.instrument {
+            InstrumentKind::DrumRack(_) => Some((track, self.selected_pad)),
+            _ => Some((track, 0)),
+        }
+    }
+
     /// Opens `.pulse` projects and imports `.als` sets dropped onto the window.
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         let (audio, other): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| is_audio_file(p));
         if !audio.is_empty() {
-            self.add_samples(audio, Placement::Auto);
+            match self.instrument_drop_slot(ctx) {
+                Some((track, slot)) => self.set_instrument_samples(track, slot, audio),
+                None => self.add_samples(audio, Placement::Auto),
+            }
         }
         for path in other {
             match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
@@ -1322,6 +1404,7 @@ impl eframe::App for PulseApp {
         }
         self.handle_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
+        self.sample_drop_zones.clear();
         let live = self.audio.live();
         self.keyboard.handle(&ctx, live.as_ref());
         self.update_input_track();

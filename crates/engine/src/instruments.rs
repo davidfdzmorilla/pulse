@@ -6,7 +6,7 @@ use crate::model::{drum_note, AcidParams, DrumParams, FmParams, SuperSawParams};
 use crate::synth::{midi_to_freq, HELD};
 use std::f32::consts::{PI, TAU};
 
-fn semitones(st: f32) -> f32 {
+pub(crate) fn semitones(st: f32) -> f32 {
     2f32.powf(st / 12.0)
 }
 
@@ -39,13 +39,13 @@ fn square(phase: f32, inc: f32) -> f32 {
 
 /// Topology-preserving-transform state variable filter returning (low, band, high).
 #[derive(Clone, Copy, Default)]
-struct Svf {
+pub(crate) struct Svf {
     ic1: f32,
     ic2: f32,
 }
 
 impl Svf {
-    fn tick(&mut self, x: f32, g: f32, k: f32) -> (f32, f32, f32) {
+    pub(crate) fn tick(&mut self, x: f32, g: f32, k: f32) -> (f32, f32, f32) {
         let a1 = 1.0 / (1.0 + g * (g + k));
         let a2 = g * a1;
         let a3 = g * a2;
@@ -58,12 +58,12 @@ impl Svf {
     }
 }
 
-fn svf_g(cutoff: f32, sample_rate: f32) -> f32 {
+pub(crate) fn svf_g(cutoff: f32, sample_rate: f32) -> f32 {
     (PI * cutoff.clamp(20.0, sample_rate * 0.45) / sample_rate).tan()
 }
 
 #[derive(Clone, Copy, PartialEq)]
-enum Stage {
+pub(crate) enum Stage {
     Idle,
     Attack,
     Decay,
@@ -73,27 +73,27 @@ enum Stage {
 
 /// Linear ADSR envelope.
 #[derive(Clone, Copy)]
-struct Adsr {
-    stage: Stage,
-    level: f32,
+pub(crate) struct Adsr {
+    pub(crate) stage: Stage,
+    pub(crate) level: f32,
     release_step: f32,
 }
 
 impl Adsr {
-    const IDLE: Adsr = Adsr { stage: Stage::Idle, level: 0.0, release_step: 0.0 };
+    pub(crate) const IDLE: Adsr = Adsr { stage: Stage::Idle, level: 0.0, release_step: 0.0 };
 
-    fn trigger(&mut self) {
+    pub(crate) fn trigger(&mut self) {
         self.stage = Stage::Attack;
     }
 
-    fn release(&mut self, release: f32, sample_rate: f32) {
+    pub(crate) fn release(&mut self, release: f32, sample_rate: f32) {
         if !matches!(self.stage, Stage::Idle | Stage::Release) {
             self.stage = Stage::Release;
             self.release_step = self.level / (release.max(0.001) * sample_rate);
         }
     }
 
-    fn tick(&mut self, attack: f32, decay: f32, sustain: f32, sample_rate: f32) -> f32 {
+    pub(crate) fn tick(&mut self, attack: f32, decay: f32, sustain: f32, sample_rate: f32) -> f32 {
         match self.stage {
             Stage::Attack => {
                 self.level += 1.0 / (attack.max(0.0005) * sample_rate);
@@ -125,23 +125,23 @@ impl Adsr {
 
 /// Note bookkeeping shared by the polyphonic instruments.
 #[derive(Clone, Copy)]
-struct Gate {
-    pitch: u8,
-    velocity: f32,
-    held: bool,
+pub(crate) struct Gate {
+    pub(crate) pitch: u8,
+    pub(crate) velocity: f32,
+    pub(crate) held: bool,
     remaining: u32,
-    age: u64,
+    pub(crate) age: u64,
 }
 
 impl Gate {
-    const OFF: Gate = Gate { pitch: 0, velocity: 0.0, held: false, remaining: 0, age: 0 };
+    pub(crate) const OFF: Gate = Gate { pitch: 0, velocity: 0.0, held: false, remaining: 0, age: 0 };
 
-    fn new(pitch: u8, velocity: f32, gate: u32, age: u64) -> Self {
+    pub(crate) fn new(pitch: u8, velocity: f32, gate: u32, age: u64) -> Self {
         Self { pitch, velocity, held: gate == HELD, remaining: gate, age }
     }
 
     /// Advances one sample; true when a timed gate just closed.
-    fn tick(&mut self) -> bool {
+    pub(crate) fn tick(&mut self) -> bool {
         if self.held || self.remaining == 0 {
             return false;
         }
@@ -151,7 +151,7 @@ impl Gate {
 }
 
 /// Picks the voice to (re)use: an idle one, else the oldest.
-fn free_voice(idle: impl Iterator<Item = (usize, bool, u64)>) -> usize {
+pub(crate) fn free_voice(idle: impl Iterator<Item = (usize, bool, u64)>) -> usize {
     let mut best = (0, false, u64::MAX);
     for (index, is_idle, age) in idle {
         if is_idle {
@@ -690,6 +690,23 @@ impl DrumMachine {
             *out_r += out;
         }
     }
+}
+
+/// Renders one drum machine hit, trimmed once it has decayed, for building sample kits.
+pub fn render_drum_hit(params: DrumParams, pitch: u8, sample_rate: f32) -> (Vec<f32>, Vec<f32>) {
+    let mut drums = DrumMachine::new(params, sample_rate);
+    drums.note_on(pitch, 1.0);
+    let frames = (sample_rate * 4.0) as usize;
+    let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
+    for (l, r) in left.chunks_mut(512).zip(right.chunks_mut(512)) {
+        drums.render(l, r);
+    }
+    // Keep everything up to the last sample above -80 dB, plus a few milliseconds.
+    let last = left.iter().zip(&right).rposition(|(l, r)| l.abs().max(r.abs()) > 1e-4).unwrap_or(0);
+    let end = (last + (sample_rate * 0.005) as usize).min(frames);
+    left.truncate(end);
+    right.truncate(end);
+    (left, right)
 }
 
 #[cfg(test)]

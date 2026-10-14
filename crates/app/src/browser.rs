@@ -55,7 +55,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let icon = if kind.is_drums() { "◉" } else { "♫" };
             if item(ui, icon, kind.label(), hint) {
                 if let Some(t) = track {
-                    app.set_instrument(t, kind);
+                    // An empty rack would be silent: start it with the basic kit.
+                    if matches!(kind, InstrumentKind::DrumRack(_)) && app.project.tracks[t].samples.is_empty() {
+                        app.load_basic_kit(t);
+                    } else {
+                        app.set_instrument(t, kind);
+                    }
                     app.detail = crate::app::Detail::Devices;
                 }
             }

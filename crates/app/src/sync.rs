@@ -41,6 +41,17 @@ impl SampleCache {
     }
 }
 
+/// The samples a track's sampler or drum rack plays, decoded.
+pub fn instrument_samples(track: &Track, samples: &mut SampleCache) -> Box<Vec<Arc<Sample>>> {
+    let decoded = (0..track.samples.len())
+        .map(|slot| match track.sample(slot) {
+            Some(path) => samples.get(path),
+            None => Arc::new(Sample::default()),
+        })
+        .collect();
+    Box::new(decoded)
+}
+
 pub fn play_clip(clip: &Clip, samples: &mut SampleCache) -> PlayClip {
     match clip {
         Clip::Midi(midi) => PlayClip::Midi(midi.clone()),
@@ -95,6 +106,7 @@ pub fn project_commands(
         let target = Target::Track(t);
         commands.extend([
             Command::SetInstrument { track: t, kind: track.instrument },
+            Command::SetSamples { track: t, samples: instrument_samples(track, samples) },
             Command::SetSolo { track: t, solo: track.solo },
             Command::SetArm { track: t, armed: track.armed },
             Command::ReplaceChain { target, chain: build_chain(&track.devices, sample_rate) },

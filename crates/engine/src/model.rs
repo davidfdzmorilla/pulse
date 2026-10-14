@@ -3077,6 +3077,14 @@ pub const MOD_MODULATOR_PARAMS: usize = 547;
 pub const MOD_MACRO_PARAMS: usize = 611;
 pub const MOD_GLIDE: usize = 619;
 pub const MOD_MASTER: usize = 620;
+/// Slots 16..24 of every module live here, 8 per module (added after the first layout).
+pub const MOD_EXTRA: usize = 621;
+pub const MOD_EXTRA_SLOTS: usize = 8;
+/// All the slots of a module.
+pub const MOD_MODULE_SLOTS: usize = MOD_SLOTS + MOD_EXTRA_SLOTS;
+/// Global unison: detune, spread, blend, bias (range, center or balance by mode).
+pub const MOD_UNISON: usize = MOD_EXTRA + MOD_MODULES * MOD_EXTRA_SLOTS;
+pub const MOD_UNISON_VOICES: usize = 8;
 /// `ModTarget::dest` of an unused target.
 pub const MOD_NO_TARGET: u16 = u16::MAX;
 /// `Lane::dest` (and an output's send) meaning the master bus.
@@ -3097,6 +3105,12 @@ pub enum ModuleKind {
     Noise,
     Distortion,
     Filter,
+    /// Grains of a sample, spawned at a rate, with randomisation and chords.
+    Granular,
+    /// A resonant filter with saturation inside its feedback loop.
+    NonlinearFilter,
+    /// Like Output, but the level follows a drawn curve instead of an envelope.
+    CurveOutput,
     /// Passes on (and exposes, for audio-rate modulation) the sum of what is above.
     Mix,
     /// Adds the audio routed to its input from anywhere in the stack.
@@ -3107,8 +3121,21 @@ pub enum ModuleKind {
 
 impl ModuleKind {
     /// Modules that can be added, in menu order.
-    pub const ALL: [ModuleKind; 10] =
-        [Self::Group, Self::Analog, Self::Wavetable, Self::Sample, Self::Noise, Self::Distortion, Self::Filter, Self::Mix, Self::Aux, Self::Output];
+    pub const ALL: [ModuleKind; 13] = [
+        Self::Group,
+        Self::Analog,
+        Self::Wavetable,
+        Self::Sample,
+        Self::Granular,
+        Self::Noise,
+        Self::Distortion,
+        Self::Filter,
+        Self::NonlinearFilter,
+        Self::Mix,
+        Self::Aux,
+        Self::Output,
+        Self::CurveOutput,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -3120,6 +3147,9 @@ impl ModuleKind {
             Self::Noise => "Noise",
             Self::Distortion => "Distortion",
             Self::Filter => "Filter",
+            Self::Granular => "Granular",
+            Self::NonlinearFilter => "Nonlinear Filter",
+            Self::CurveOutput => "Curve Output",
             Self::Mix => "Mix",
             Self::Aux => "Aux",
             Self::Output => "Output",
@@ -3127,7 +3157,17 @@ impl ModuleKind {
     }
 
     pub fn is_generator(self) -> bool {
-        matches!(self, Self::Analog | Self::Wavetable | Self::Sample | Self::Noise)
+        matches!(self, Self::Analog | Self::Wavetable | Self::Sample | Self::Noise | Self::Granular)
+    }
+
+    /// Modules that send the signal out (and end the voice when they fall silent).
+    pub fn is_output(self) -> bool {
+        matches!(self, Self::Output | Self::CurveOutput)
+    }
+
+    /// Modules that play an audio file.
+    pub fn uses_sample(self) -> bool {
+        matches!(self, Self::Sample | Self::Granular)
     }
 
     /// Generators with their own oscillator unison.
@@ -3140,6 +3180,119 @@ impl ModuleKind {
 pub const ANALOG_WAVES: [&str; 4] = ["Saw", "Pulse", "Triangle", "Sine"];
 pub const DISTORTION_TYPES: [&str; 6] = ["Overdrive", "Saturate", "Foldback", "Sine", "Hard Clip", "Quantize"];
 pub const FILTER_TYPES: [&str; 7] = ["Low Pass", "Band Pass", "High Pass", "Notch", "Low Shelf", "Peak", "High Shelf"];
+pub const NONLINEAR_TYPES: [&str; 5] = ["Low Pass", "Band Pass", "High Pass", "Notch", "All Pass"];
+/// Flavours of the nonlinear filter's saturation ("Clean" adds none).
+pub const NONLINEAR_MODES: [&str; 5] = ["Clean", "Warm", "Tape", "Diode", "Fuzz"];
+pub const SAMPLE_LOOPS: [&str; 5] = ["Off", "Infinite", "Sustain", "Ping Pong", "Reverse"];
+pub const NOISE_TYPES: [&str; 3] = ["Colored", "Stepped", "Smooth"];
+pub const NOISE_SEEDS: [&str; 2] = ["Random", "Stable"];
+pub const GRAIN_SPAWN: [&str; 3] = ["Free Rate", "Synced", "Density"];
+/// Synced grain rates, in beats per grain, and their names.
+pub const GRAIN_SYNC: [(f32, &str); 8] =
+    [(4.0, "1/1"), (2.0, "1/2"), (1.0, "1/4"), (0.5, "1/8"), (1.0 / 3.0, "1/8T"), (0.25, "1/16"), (0.125, "1/32"), (0.0625, "1/64")];
+pub const CHORD_PICKS: [&str; 4] = ["Up", "Down", "Up-Down", "Random"];
+pub const CURVE_LOOPS: [&str; 4] = ["Off", "Loop", "Sustain", "Ping Pong"];
+/// Chords for grains and the global unison: names and intervals in semitones.
+pub const CHORDS: [(&str, &[i8]); 15] = [
+    ("None", &[0]),
+    ("Octaves", &[0]),
+    ("Fifths", &[0, 7]),
+    ("Major", &[0, 4, 7]),
+    ("Minor", &[0, 3, 7]),
+    ("Sus2", &[0, 2, 7]),
+    ("Sus4", &[0, 5, 7]),
+    ("Major 7", &[0, 4, 7, 11]),
+    ("Minor 7", &[0, 3, 7, 10]),
+    ("Dominant 7", &[0, 4, 7, 10]),
+    ("Diminished", &[0, 3, 6, 9]),
+    ("Augmented", &[0, 4, 8]),
+    ("Major 9", &[0, 4, 7, 11, 14]),
+    ("Pentatonic", &[0, 2, 4, 7, 9]),
+    ("Minor Pentatonic", &[0, 3, 5, 7, 10]),
+];
+
+/// The `step`th note (from 0, upwards) of `chord`, in semitones above the root.
+pub fn chord_note(chord: usize, step: usize) -> f32 {
+    let intervals = CHORDS.get(chord).map_or(&[0i8][..], |c| c.1);
+    let octave = if chord == 0 { 0 } else { step / intervals.len() };
+    (intervals[step % intervals.len()] as f32) + 12.0 * octave as f32
+}
+
+/// How many notes `chord` has in `octaves` octaves (at least one).
+pub fn chord_size(chord: usize, octaves: f32) -> usize {
+    let intervals = CHORDS.get(chord).map_or(1, |c| c.1.len());
+    if chord == 0 {
+        return 1;
+    }
+    let span = octaves.max(0.0) * 12.0;
+    (0..64).take_while(|&k| chord_note(chord, k) <= span + 0.01).count().max(1).min(intervals * 8)
+}
+
+/// Global unison modes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum UnisonMode {
+    /// Slight detune, every voice starting at the same phase.
+    Hard,
+    /// Slight detune, voices starting at different phases.
+    #[default]
+    Smooth,
+    /// Slight detune, phases evenly spread.
+    Synthetic,
+    /// Voices at multiples of the note's frequency.
+    FrequencyStack,
+    /// Voices a pitch interval apart.
+    PitchStack,
+    /// Voices an octave apart, quieter away from the center: an endless rise or fall.
+    Shepard,
+    /// Voices tuned to the notes of a chord.
+    Chords,
+}
+
+impl UnisonMode {
+    pub const ALL: [UnisonMode; 7] = [Self::Hard, Self::Smooth, Self::Synthetic, Self::FrequencyStack, Self::PitchStack, Self::Shepard, Self::Chords];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Hard => "Hard",
+            Self::Smooth => "Smooth",
+            Self::Synthetic => "Synthetic",
+            Self::FrequencyStack => "Frequency Stack",
+            Self::PitchStack => "Pitch Stack",
+            Self::Shepard => "Shepard",
+            Self::Chords => "Chords",
+        }
+    }
+
+    /// What the fourth unison knob does in this mode.
+    pub fn bias_label(self) -> &'static str {
+        match self {
+            Self::FrequencyStack | Self::PitchStack => "Range",
+            Self::Shepard => "Center",
+            Self::Chords => "Balance",
+            _ => "Bias",
+        }
+    }
+}
+
+/// Unison of the whole voice: every module plays once per unison voice.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Unison {
+    pub voices: u8,
+    pub mode: UnisonMode,
+    /// Chords mode: an index into [`CHORDS`].
+    pub chord: u8,
+    pub detune: f32,
+    pub spread: f32,
+    pub blend: f32,
+    /// -1..1: bias, range, center or balance depending on the mode.
+    pub bias: f32,
+}
+
+impl Default for Unison {
+    fn default() -> Self {
+        Self { voices: 1, mode: UnisonMode::Smooth, chord: 3, detune: 0.25, spread: 0.7, blend: 0.5, bias: 0.0 }
+    }
+}
 
 /// Module slot indices.
 pub mod slot {
@@ -3157,6 +3310,33 @@ pub mod slot {
     pub const DETUNE: usize = 13;
     pub const SPREAD: usize = 14;
     pub const BLEND: usize = 15;
+    /// Wavetable.
+    pub const BANDLIMIT: usize = 8;
+    /// Sample (A: offset, B: root).
+    pub const LOOP_START: usize = 9;
+    pub const LOOP_LENGTH: usize = 10;
+    pub const XFADE: usize = 11;
+    /// Noise.
+    pub const SLOPE: usize = 7;
+    pub const NOISE_STEREO: usize = 8;
+    /// Granular.
+    pub const POSITION: usize = 7;
+    pub const LENGTH: usize = 8;
+    pub const RATE: usize = 9;
+    pub const DENSITY: usize = 10;
+    pub const SYNC: usize = 11;
+    pub const GRAIN_ATTACK: usize = 12;
+    pub const GRAIN_DECAY: usize = 13;
+    pub const GRAIN_CURVE: usize = 14;
+    pub const RANDOM_POSITION: usize = 15;
+    pub const RANDOM_TIMING: usize = 16;
+    pub const RANDOM_PITCH: usize = 17;
+    pub const RANDOM_LEVEL: usize = 18;
+    pub const RANDOM_PAN: usize = 19;
+    pub const RANDOM_REVERSE: usize = 20;
+    pub const CHORD_RANGE: usize = 21;
+    pub const ROOT: usize = 22;
+    pub const LENGTH_TRACK: usize = 23;
     // Effects and outputs number their settings from 0.
     pub const DRIVE: usize = 0;
     pub const BIAS: usize = 1;
@@ -3171,6 +3351,12 @@ pub mod slot {
     pub const DECAY: usize = 4;
     pub const SUSTAIN: usize = 5;
     pub const RELEASE: usize = 6;
+    /// Nonlinear filter (also CUTOFF, Q).
+    pub const NL_DRIVE: usize = 2;
+    /// Curve output (also LEVEL, PAN).
+    pub const CURVE_LENGTH: usize = 2;
+    pub const CURVE_START: usize = 3;
+    pub const CURVE_END: usize = 4;
 }
 
 /// What slot `index` of a `kind` module means, in real units: `info.denormalize`
@@ -3207,10 +3393,31 @@ pub fn module_slot(kind: ModuleKind, index: usize) -> Option<ParamInfo> {
         (K::Analog, A) => Some(ParamInfo::linear("Sync", 1.0, 16.0, 1.0, Times)),
         (K::Analog, B) => Some(ParamInfo::linear("PW", 0.02, 0.98, 0.5, Percent)),
         (K::Wavetable, A) => Some(ParamInfo::linear("Frame", 0.0, 255.0, 0.0, Count)),
+        (K::Wavetable, BANDLIMIT) => Some(ParamInfo::log("Bandlimit", 100.0, 22_000.0, 22_000.0, Hertz)),
         (K::Sample, A) => Some(ParamInfo::linear("Offset", 0.0, 1.0, 0.0, Percent)),
         (K::Sample, B) => Some(ParamInfo::linear("Root", 0.0, 127.0, 60.0, Note)),
-        (K::Noise, A) => Some(ParamInfo::linear("Slope", 0.0, 1.0, 0.0, Percent)),
-        (K::Noise, B) => Some(ParamInfo::linear("Stereo", 0.0, 1.0, 1.0, Percent)),
+        (K::Sample, LOOP_START) => Some(ParamInfo::linear("Loop Start", 0.0, 1.0, 0.0, Percent)),
+        (K::Sample, LOOP_LENGTH) => Some(ParamInfo::linear("Length", 0.0, 1.0, 1.0, Percent)),
+        (K::Sample, XFADE) => Some(ParamInfo::linear("X-Fade", 0.0, 0.5, 0.0, Percent)),
+        (K::Noise, SLOPE) => Some(ParamInfo::linear("Slope", -6.0, 6.0, 0.0, Decibels)),
+        (K::Noise, NOISE_STEREO) => Some(ParamInfo::linear("Stereo", 0.0, 1.0, 1.0, Percent)),
+        (K::Granular, POSITION) => Some(ParamInfo::linear("Position", 0.0, 1.0, 0.0, Percent)),
+        (K::Granular, LENGTH) => Some(ParamInfo::log("Length", 5.0, 2000.0, 100.0, Milliseconds)),
+        (K::Granular, RATE) => Some(ParamInfo::log("Rate", 0.5, 500.0, 30.0, Hertz)),
+        (K::Granular, DENSITY) => Some(ParamInfo::linear("Density", 1.0, 16.0, 4.0, Count)),
+        (K::Granular, SYNC) => Some(ParamInfo::linear("Sync", 0.0, 7.0, 5.0, Count)),
+        (K::Granular, GRAIN_ATTACK) => Some(ParamInfo::linear("Attack", 0.0, 1.0, 0.5, Percent)),
+        (K::Granular, GRAIN_DECAY) => Some(ParamInfo::linear("Decay", 0.0, 1.0, 0.5, Percent)),
+        (K::Granular, GRAIN_CURVE) => Some(ParamInfo::linear("Curve", -1.0, 1.0, 0.0, Plain)),
+        (K::Granular, RANDOM_POSITION) => Some(ParamInfo::linear("Rnd Pos", 0.0, 1.0, 0.0, Percent)),
+        (K::Granular, RANDOM_TIMING) => Some(ParamInfo::linear("Rnd Time", 0.0, 1.0, 0.0, Percent)),
+        (K::Granular, RANDOM_PITCH) => Some(ParamInfo::linear("Rnd Pitch", 0.0, 24.0, 0.0, Semitones)),
+        (K::Granular, RANDOM_LEVEL) => Some(ParamInfo::linear("Rnd Level", 0.0, 1.0, 0.0, Percent)),
+        (K::Granular, RANDOM_PAN) => Some(ParamInfo::linear("Rnd Pan", 0.0, 1.0, 0.0, Percent)),
+        (K::Granular, RANDOM_REVERSE) => Some(ParamInfo::linear("Reverse", 0.0, 1.0, 0.0, Percent)),
+        (K::Granular, CHORD_RANGE) => Some(ParamInfo::linear("Chord Range", 0.0, 4.0, 1.0, Octaves)),
+        (K::Granular, ROOT) => Some(ParamInfo::linear("Root", 0.0, 127.0, 60.0, Note)),
+        (K::Granular, LENGTH_TRACK) => Some(ParamInfo::linear("Len Track", 0.0, 1.0, 0.0, Percent)),
         (k, i) if k.is_generator() && i < A => generator(i),
         (k, i) if k.has_unison() && i >= UNISON => unison(i),
         (K::Distortion, DRIVE) => Some(ParamInfo::linear("Drive", 0.0, 48.0, 12.0, Decibels)),
@@ -3220,6 +3427,14 @@ pub fn module_slot(kind: ModuleKind, index: usize) -> Option<ParamInfo> {
         (K::Filter, CUTOFF) => Some(ParamInfo::log("Cutoff", 20.0, 20_000.0, 1000.0, Hertz)),
         (K::Filter, Q) => Some(ParamInfo::log("Q", 0.1, 20.0, 0.707, Plain)),
         (K::Filter, GAIN) => Some(ParamInfo::linear("Gain", -24.0, 24.0, 0.0, Decibels)),
+        (K::NonlinearFilter, CUTOFF) => Some(ParamInfo::log("Cutoff", 20.0, 20_000.0, 1000.0, Hertz)),
+        (K::NonlinearFilter, Q) => Some(ParamInfo::log("Q", 0.5, 25.0, 0.707, Plain)),
+        (K::NonlinearFilter, NL_DRIVE) => Some(ParamInfo::linear("Drive", 0.0, 36.0, 6.0, Decibels)),
+        (K::CurveOutput, LEVEL) => Some(ParamInfo::linear("Gain", 0.0, 2.0, 1.0, Percent)),
+        (K::CurveOutput, PAN) => Some(ParamInfo::linear("Pan", -1.0, 1.0, 0.0, Pan)),
+        (K::CurveOutput, CURVE_LENGTH) => Some(ParamInfo::log("Length", 0.01, 30.0, 1.0, Seconds)),
+        (K::CurveOutput, CURVE_START) => Some(ParamInfo::linear("Loop Start", 0.0, 1.0, 0.0, Percent)),
+        (K::CurveOutput, CURVE_END) => Some(ParamInfo::linear("Loop End", 0.0, 1.0, 1.0, Percent)),
         (K::Mix | K::Aux, LEVEL) => Some(ParamInfo::linear("Level", 0.0, 2.0, 1.0, Percent)),
         (K::Output, LEVEL) => Some(ParamInfo::linear("Gain", 0.0, 2.0, 1.0, Percent)),
         (K::Output, PAN) => Some(ParamInfo::linear("Pan", -1.0, 1.0, 0.0, Pan)),
@@ -3234,40 +3449,78 @@ pub struct Module {
     pub on: bool,
     /// Waveform, effect type, filter slope or output send, by kind.
     pub choice: [u8; 2],
-    /// Sample: loop. Mix/Aux: invert. Output: send out (off: only a modulation source).
+    /// Sample: loop (first layout; now `choice[0]`). Granular: warm start.
+    /// Mix/Aux: invert. Output, Curve Output: send out (off: only a modulation source).
     pub flag: bool,
     /// Wavetable: built-in table, or [`WAVE_USER_TABLE`] for the module's file.
+    /// Granular: chord picking pattern ([`CHORD_PICKS`]).
     pub table: u8,
     pub values: [f32; MOD_SLOTS],
+    /// Slots 16..24.
+    #[serde(default)]
+    pub extra: [f32; MOD_EXTRA_SLOTS],
+    /// Granular: align grains to the root's phase.
+    #[serde(default)]
+    pub alt: bool,
+    /// Curve Output: its level over time.
+    #[serde(default = "Shape::falling")]
+    pub curve: Shape,
 }
 
 impl Module {
-    pub const EMPTY: Module = Module { kind: ModuleKind::Empty, on: true, choice: [0; 2], flag: false, table: 0, values: [0.0; MOD_SLOTS] };
+    pub const EMPTY: Module = Module {
+        kind: ModuleKind::Empty,
+        on: true,
+        choice: [0; 2],
+        flag: false,
+        table: 0,
+        values: [0.0; MOD_SLOTS],
+        extra: [0.0; MOD_EXTRA_SLOTS],
+        alt: false,
+        curve: Shape { points: [ShapePoint { time: 0.0, value: 0.0, bend: 0.0 }; SHAPE_POINTS], count: 0 },
+    };
 
     /// A module of `kind` with every slot at its default.
     pub fn new(kind: ModuleKind) -> Self {
-        let mut module = Module { kind, flag: matches!(kind, ModuleKind::Output | ModuleKind::Sample), ..Self::EMPTY };
-        for (i, value) in module.values.iter_mut().enumerate() {
+        let mut module = Module { kind, flag: kind.is_output(), curve: Shape::falling(), ..Self::EMPTY };
+        for i in 0..MOD_MODULE_SLOTS {
             if let Some(info) = module_slot(kind, i) {
-                *value = info.normalize(info.default);
+                *module.value_mut(i) = info.normalize(info.default);
             }
         }
-        if kind == ModuleKind::Output {
-            module.choice[0] = 0;
+        match kind {
+            // Infinite loop.
+            ModuleKind::Sample => module.choice[0] = 1,
+            ModuleKind::CurveOutput => module.curve = Shape::from_points(&[(0.0, 0.0, 0.0), (0.02, 1.0, 0.0), (1.0, 0.0, 0.6)]),
+            _ => {}
         }
         module
     }
 
+    /// Slot `i`, normalised.
+    pub fn value(&self, i: usize) -> f32 {
+        if i < MOD_SLOTS { self.values[i] } else { self.extra.get(i - MOD_SLOTS).copied().unwrap_or(0.0) }
+    }
+
+    pub fn value_mut(&mut self, i: usize) -> &mut f32 {
+        if i < MOD_SLOTS { &mut self.values[i] } else { &mut self.extra[(i - MOD_SLOTS).min(MOD_EXTRA_SLOTS - 1)] }
+    }
+
     /// Slot `i` in real units.
     pub fn get(&self, i: usize) -> f32 {
-        module_slot(self.kind, i).map_or(0.0, |info| info.denormalize(self.values[i]))
+        module_slot(self.kind, i).map_or(0.0, |info| info.denormalize(self.value(i)))
     }
 
     /// Sets slot `i` from a value in real units.
     pub fn set(&mut self, i: usize, value: f32) {
         if let Some(info) = module_slot(self.kind, i) {
-            self.values[i] = info.normalize(value);
+            *self.value_mut(i) = info.normalize(value);
         }
+    }
+
+    /// The sample's loop mode (an index into [`SAMPLE_LOOPS`]), reading the first layout's flag too.
+    pub fn sample_loop(&self) -> u8 {
+        if self.choice[0] == 0 && self.flag { 1 } else { self.choice[0] }
     }
 }
 
@@ -3457,6 +3710,8 @@ pub struct ModularParams {
     pub legato: bool,
     pub glide: f32,
     pub gain: f32,
+    #[serde(default)]
+    pub unison: Unison,
 }
 
 impl Default for ModularParams {
@@ -3475,6 +3730,7 @@ impl Default for ModularParams {
             legato: false,
             glide: 0.0,
             gain: 0.35,
+            unison: Unison::default(),
         }
     }
 }
@@ -3482,7 +3738,18 @@ impl Default for ModularParams {
 impl ModularParams {
     /// Parameter index of slot `slot` of module `module`.
     pub fn module_param(module: usize, slot: usize) -> usize {
-        module * MOD_SLOTS + slot
+        if slot < MOD_SLOTS { module * MOD_SLOTS + slot } else { MOD_EXTRA + module * MOD_EXTRA_SLOTS + slot - MOD_SLOTS }
+    }
+
+    /// The module and slot behind parameter `index`, if it is a module slot.
+    pub fn param_module(index: usize) -> Option<(usize, usize)> {
+        if index < MOD_AUDIO_AMOUNT {
+            Some((index / MOD_SLOTS, index % MOD_SLOTS))
+        } else if (MOD_EXTRA..MOD_UNISON).contains(&index) {
+            Some(((index - MOD_EXTRA) / MOD_EXTRA_SLOTS, MOD_SLOTS + (index - MOD_EXTRA) % MOD_EXTRA_SLOTS))
+        } else {
+            None
+        }
     }
 
     pub fn modulator_param(m: usize, i: usize) -> usize {
@@ -3506,14 +3773,21 @@ impl ModularParams {
             i if i < MOD_GLIDE => &mut self.macros[i - MOD_MACRO_PARAMS],
             MOD_GLIDE => &mut self.glide,
             MOD_MASTER => &mut self.gain,
+            i if i < MOD_UNISON => {
+                let k = i - MOD_EXTRA;
+                &mut self.modules[k / MOD_EXTRA_SLOTS].extra[k % MOD_EXTRA_SLOTS]
+            }
+            i if i == MOD_UNISON => &mut self.unison.detune,
+            i if i == MOD_UNISON + 1 => &mut self.unison.spread,
+            i if i == MOD_UNISON + 2 => &mut self.unison.blend,
+            i if i == MOD_UNISON + 3 => &mut self.unison.bias,
             _ => return None,
         })
     }
 
     /// A readable name for parameter `index`, e.g. "3 Analog · Level".
     pub fn param_name(&self, index: usize) -> String {
-        if index < MOD_AUDIO_AMOUNT {
-            let (m, s) = (index / MOD_SLOTS, index % MOD_SLOTS);
+        if let Some((m, s)) = Self::param_module(index) {
             let module = &self.modules[m];
             let name = module_slot(module.kind, s).map_or("?", |i| i.name);
             return format!("{} {} · {name}", m + 1, module.kind.label());
@@ -3623,13 +3897,13 @@ impl ModularParams {
         p.gain = 0.25;
         list.push(("Aux · Cross Feed", p));
 
-        let mut p = build(&[group, module(K::Noise, &[(slot::A, 0.3), (slot::LEVEL, 1.2)], 0), filter(1, 800.0, 6.0, false), out(0.8, 1.0, 1.0, 1.5)]);
+        let mut p = build(&[group, module(K::Noise, &[(slot::SLOPE, -4.0), (slot::LEVEL, 2.0)], 0), filter(1, 800.0, 6.0, false), out(0.8, 1.0, 1.0, 1.5)]);
         let mut wind = Modulator::new(ModulatorKind::Lfo);
         wind.a = lfo_rate(0.15);
         wind.targets[0] = target(2, slot::CUTOFF, 0.3);
         p.modulators[0] = wind;
         p.lanes[0].fx[0] = reverb(0.9, 0.3);
-        p.gain = 0.2;
+        p.gain = 0.8;
         list.push(("Noise · Wind", p));
 
         let mut p = build(&[group, sine(&[]), saw(&[(slot::HARMONIC, 2.0), (slot::LEVEL, 0.3)]), filter(0, 700.0, 0.7, true), out(0.003, 1.0, 1.0, 0.1)]);
@@ -3672,6 +3946,96 @@ impl ModularParams {
         p.lanes[1].fx[0] = delay(0.75, 0.35);
         p.gain = 0.32;
         list.push(("Layers · Pad + Pluck", p));
+
+        // ----- Phase 2: global unison, nonlinear filter, curve output, keytracked noise -----
+        let unison = |voices: u8, mode: UnisonMode, detune: f32, spread: f32, blend: f32, bias: f32| Unison { voices, mode, detune, spread, blend, bias, ..Unison::default() };
+
+        let mut p = build(&[group, saw(&[]), filter(0, 7000.0, 0.7, false), out(0.01, 1.0, 0.85, 0.5)]);
+        p.unison = unison(7, UnisonMode::Smooth, 0.4, 1.0, 0.6, 0.0);
+        p.lanes[0].fx[0] = reverb(0.6, 0.2);
+        p.gain = 0.31;
+        list.push(("Unison · Supersaw", p));
+
+        let mut p = build(&[group, saw(&[(slot::LEVEL, 0.8)]), sine(&[(slot::SEMI, -12.0)]), filter(0, 3000.0, 0.7, false), out(0.02, 1.0, 0.9, 0.6)]);
+        p.unison = unison(3, UnisonMode::PitchStack, 0.1, 0.8, 0.5, 0.0);
+        p.lanes[0].fx[0] = delay(0.75, 0.25);
+        p.gain = 0.25;
+        list.push(("Unison · Octave Stack", p));
+
+        let mut p = build(&[group, saw(&[]), filter(0, 2500.0, 1.2, true), out(0.003, 0.5, 0.0, 0.3)]);
+        p.unison = unison(4, UnisonMode::Chords, 0.15, 0.7, 0.5, -0.2);
+        p.unison.chord = 8;
+        let mut env = Modulator::new(ModulatorKind::Envelope);
+        env.a = 0.0;
+        env.b = 0.5;
+        env.c = 0.0;
+        env.targets[0] = target(2, slot::CUTOFF, 0.25);
+        p.modulators[0] = env;
+        p.lanes[0].fx[0] = delay(0.75, 0.3);
+        p.lanes[1].fx[0] = reverb(0.7, 0.25);
+        p.lanes[0].dest = 1;
+        p.gain = 0.45;
+        list.push(("Chords · Minor 7 Stab", p));
+
+        // Octaves of the pitch class, loudest around a center that drifts.
+        let mut p = build(&[group, module(K::Analog, &[], 2), out(0.5, 1.0, 1.0, 1.5)]);
+        p.unison = unison(8, UnisonMode::Shepard, 0.05, 0.6, 0.5, 0.0);
+        let mut drift = Modulator::new(ModulatorKind::Lfo);
+        drift.a = lfo_rate(0.05);
+        drift.bipolar = true;
+        drift.targets[0] = ModTarget { dest: (MOD_UNISON + 3) as u16, depth: 0.35 };
+        p.modulators[0] = drift;
+        p.lanes[0].fx[0] = reverb(0.85, 0.35);
+        p.gain = 0.2;
+        list.push(("Shepard · Drifting Organ", p));
+
+        let mut acid = module(K::NonlinearFilter, &[(slot::CUTOFF, 400.0), (slot::Q, 9.0), (slot::NL_DRIVE, 15.0)], 0);
+        acid.choice[1] = 1;
+        let mut loud = out(0.002, 0.4, 0.6, 0.08);
+        loud.set(slot::LEVEL, 2.0);
+        let mut p = build(&[group, saw(&[]), acid, loud]);
+        let mut env = Modulator::new(ModulatorKind::Envelope);
+        env.a = 0.0;
+        env.b = 0.45;
+        env.c = 0.0;
+        env.targets[0] = target(2, slot::CUTOFF, 0.45);
+        p.modulators[0] = env;
+        p.mono = true;
+        p.legato = true;
+        p.glide = 60.0;
+        p.lanes[0].fx[0] = delay(0.75, 0.2);
+        p.gain = 0.9;
+        list.push(("Nonlinear · Acid", p));
+
+        // A drawn rhythmic gate that loops while the note is held.
+        let mut gate = module(K::CurveOutput, &[(slot::CURVE_LENGTH, 0.5), (slot::CURVE_START, 0.0), (slot::CURVE_END, 1.0)], 0);
+        gate.choice[1] = 1;
+        gate.set(slot::LEVEL, 1.7);
+        gate.curve = Shape::from_points(&[(0.0, 1.0, 0.0), (0.4, 0.9, 0.0), (0.42, 0.0, 0.0), (0.5, 0.0, 0.0), (0.52, 1.0, 0.0), (0.7, 0.8, 0.0), (0.72, 0.0, 0.0), (1.0, 0.0, 0.0)]);
+        let mut p = build(&[group, saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.25), (slot::PHASE_RANDOM, 180.0)]), filter(0, 2200.0, 1.0, false), gate]);
+        p.lanes[0].fx[0] = reverb(0.7, 0.25);
+        p.gain = 1.0;
+        list.push(("Curve · Gated Pad", p));
+
+        // Smooth keytracked noise is pitched: a breathy tone that follows the keyboard.
+        let mut breath = module(K::Noise, &[(slot::LEVEL, 0.8)], 2);
+        breath.choice[1] = 1;
+        let mut p = build(&[group, breath, sine(&[(slot::LEVEL, 0.35)]), filter(0, 2500.0, 0.9, false), out(0.08, 1.0, 0.8, 0.6)]);
+        p.lanes[0].fx[0] = reverb(0.8, 0.3);
+        p.gain = 0.27;
+        list.push(("Noise · Pitched Breath", p));
+
+        // FM into a wavetable; its bandlimit (macro 1) tames the harshness.
+        let mut p = build(&[group, module(K::Wavetable, &[(slot::A, 60.0), (slot::BANDLIMIT, 5000.0)], 0), out(0.005, 1.2, 0.5, 0.5), group, sine(&[(slot::HARMONIC, 2.0)])]);
+        p.modules[1].table = 2;
+        let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[c].amount = 0.45;
+        let mut knob = Modulator::new(ModulatorKind::Macro);
+        knob.targets[0] = target(1, slot::BANDLIMIT, 0.5);
+        p.modulators[0] = knob;
+        p.lanes[0].fx[0] = reverb(0.5, 0.2);
+        p.gain = 0.4;
+        list.push(("Wavetable · Bandlimited FM", p));
         list
     }
 
@@ -3690,11 +4054,9 @@ impl ModularParams {
         }
         for modulator in &mut self.modulators {
             for target in &mut modulator.targets {
-                let dest = target.dest as usize;
-                if dest < MOD_AUDIO_AMOUNT {
-                    let (m, s) = (dest / MOD_SLOTS, dest % MOD_SLOTS);
+                if let Some((m, s)) = Self::param_module(target.dest as usize) {
                     let m = if m == a { b } else if m == b { a } else { m };
-                    target.dest = (m * MOD_SLOTS + s) as u16;
+                    target.dest = Self::module_param(m, s) as u16;
                 }
             }
         }
@@ -3729,7 +4091,7 @@ impl ModularParams {
         }
         for modulator in &mut self.modulators {
             for target in &mut modulator.targets {
-                if (target.dest as usize) < MOD_AUDIO_AMOUNT && target.dest as usize / MOD_SLOTS == index {
+                if Self::param_module(target.dest as usize).is_some_and(|(m, _)| m == index) {
                     *target = ModTarget::NONE;
                 }
             }
@@ -3758,7 +4120,7 @@ impl ModularParams {
     }
 }
 
-pub const MODULAR_PARAMS: [ParamInfo; 621] = [
+pub const MODULAR_PARAMS: [ParamInfo; MOD_UNISON + 4] = [
     ParamInfo::linear("M1·1", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("M1·2", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("M1·3", 0.0, 1.0, 0.0, Percent),
@@ -4380,6 +4742,266 @@ pub const MODULAR_PARAMS: [ParamInfo; 621] = [
     ParamInfo::linear("Macro 8", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("Glide", 0.0, 2000.0, 0.0, Milliseconds),
     ParamInfo::linear("Master", 0.0, 1.0, 0.35, Percent),
+    ParamInfo::linear("M1·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M1·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M1·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M1·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M1·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M1·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M1·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M1·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M2·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M3·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M4·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M5·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M6·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M7·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M8·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M9·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M10·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M11·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M12·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M13·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M14·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M15·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M16·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M17·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M18·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M19·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M20·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M21·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M22·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M23·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M24·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M25·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M26·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M27·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M28·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M29·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M30·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M31·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·17", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·18", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·19", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·20", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·21", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·22", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·23", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("M32·24", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Unison Detune", 0.0, 1.0, 0.25, Percent),
+    ParamInfo::linear("Unison Spread", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("Unison Blend", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Unison Bias", -1.0, 1.0, 0.0, Plain),
 ];
 
 #[cfg(test)]
@@ -4465,6 +5087,36 @@ mod tests {
         value.as_object_mut().unwrap().remove("amp_shape");
         let loaded: KickParams = serde_json::from_value(value).unwrap();
         assert_eq!(loaded, KickParams::default());
+    }
+
+    #[test]
+    fn modular_patches_from_the_first_layout_still_load() {
+        // Saved before the extra slots, the curve output and the global unison existed.
+        let mut json = serde_json::to_value(ModularParams::presets()[1].1).unwrap();
+        json.as_object_mut().unwrap().remove("unison");
+        for module in json["modules"].as_array_mut().unwrap() {
+            let module = module.as_object_mut().unwrap();
+            module.remove("extra");
+            module.remove("alt");
+            module.remove("curve");
+        }
+        let p: ModularParams = serde_json::from_value(json).unwrap();
+        assert_eq!(p.unison, Unison::default());
+        assert_eq!(p.modules[1].kind, ModuleKind::Analog);
+        // An old looping sample keeps looping.
+        let mut old = Module::new(ModuleKind::Sample);
+        old.choice[0] = 0;
+        old.flag = true;
+        assert_eq!(old.sample_loop(), 1);
+        // Extra slots have their own parameter numbers.
+        let index = ModularParams::module_param(5, slot::ROOT);
+        assert!(index >= MOD_EXTRA && index < MOD_UNISON);
+        assert_eq!(ModularParams::param_module(index), Some((5, slot::ROOT)));
+        let mut p = ModularParams::default();
+        p.modules[5] = Module::new(ModuleKind::Granular);
+        *p.param_mut(index).unwrap() = 0.25;
+        assert_eq!(p.modules[5].value(slot::ROOT), 0.25);
+        assert!(p.param_name(index).contains("Root"));
     }
 
     #[test]

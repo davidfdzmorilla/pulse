@@ -49,6 +49,9 @@ pub(crate) enum Action {
     BasicKit,
     SliceFile,
     OpenKickWindow,
+    OpenWaveWindow,
+    /// Opens a file dialog for the wavetable of oscillator `n`.
+    LoadWavetable(usize),
     ExportKick,
 }
 
@@ -209,6 +212,16 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             Action::OpenKickWindow => {
                 if let Target::Track(t) = target {
                     app.kick_window = Some(t);
+                }
+            }
+            Action::OpenWaveWindow => {
+                if let Target::Track(t) = target {
+                    app.wave_window = Some(t);
+                }
+            }
+            Action::LoadWavetable(osc) => {
+                if let Target::Track(t) = target {
+                    app.choose_wavetable(t, osc);
                 }
             }
             Action::ExportKick => {
@@ -474,6 +487,17 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                     });
                 });
             });
+            actions.extend(body_actions);
+        }
+        InstrumentKind::Wavetable(base) => {
+            let header = |ui: &mut egui::Ui| {
+                preset_menu(app, ui, t, &mut head);
+                if ui.small_button("Editor ⤢").on_hover_text("Abre el editor completo: osciladores, filtro, envolventes, LFOs y matriz").clicked() {
+                    head.push(Action::OpenWaveWindow);
+                }
+            };
+            let mut body_actions = Vec::new();
+            device_frame(ui, kind.label(), 560.0, None, header, |ui| crate::wave_ui::compact(app, ui, t, base, &mut body_actions));
             actions.extend(body_actions);
         }
         InstrumentKind::Kick(base) => {

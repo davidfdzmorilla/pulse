@@ -208,6 +208,8 @@ pub enum InstrumentKind {
     DrumRack(RackParams),
     /// Kick drum synthesizer; an optional click sample is the track's first sample.
     Kick(KickParams),
+    /// Wavetable synthesizer; user tables are the track's samples 0 (A) and 1 (B).
+    Wavetable(WaveParams),
 }
 
 /// How the kick designer distorts its body.
@@ -1400,12 +1402,13 @@ const DRUM_PARAMS: [ParamInfo; 24] = {
 
 impl InstrumentKind {
     /// Every instrument, in browser order.
-    pub fn catalog() -> [InstrumentKind; 8] {
+    pub fn catalog() -> [InstrumentKind; 9] {
         [
             InstrumentKind::Synth(SynthParams::default()),
             InstrumentKind::SuperSaw(SuperSawParams::default()),
             InstrumentKind::Acid(AcidParams::default()),
             InstrumentKind::Fm(FmParams::default()),
+            InstrumentKind::Wavetable(WaveParams::default()),
             InstrumentKind::Sampler(SamplerParams::default()),
             InstrumentKind::Kick(KickParams::default()),
             InstrumentKind::DrumMachine(DrumParams::default()),
@@ -1423,6 +1426,7 @@ impl InstrumentKind {
             InstrumentKind::Sampler(_) => "Sampler",
             InstrumentKind::DrumRack(_) => "Drum Rack",
             InstrumentKind::Kick(_) => "Kick Designer",
+            InstrumentKind::Wavetable(_) => "Wavetable Synth",
         }
     }
 
@@ -1432,7 +1436,7 @@ impl InstrumentKind {
 
     /// True for instruments that play the track's samples.
     pub fn uses_samples(&self) -> bool {
-        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_))
+        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_) | InstrumentKind::Wavetable(_))
     }
 
     /// Replaces the parameterless first drum kit with the drum machine.
@@ -1454,6 +1458,7 @@ impl InstrumentKind {
             InstrumentKind::Sampler(_) => &SAMPLER_PARAMS,
             InstrumentKind::DrumRack(_) => &RACK_PARAMS,
             InstrumentKind::Kick(_) => &KICK_PARAMS,
+            InstrumentKind::Wavetable(_) => &WAVE_PARAMS,
         }
     }
 
@@ -1517,6 +1522,7 @@ impl InstrumentKind {
                 9 => &mut p.gain,
                 _ => return None,
             },
+            InstrumentKind::Wavetable(p) => return p.param_mut(index),
             InstrumentKind::Kick(p) => match index {
                 0 => &mut p.tune,
                 1 => &mut p.pitch_amount,
@@ -1741,6 +1747,661 @@ impl AutomationLane {
         self.points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
     }
 }
+
+// ----- Wavetable synth ----------------------------------------------------------------
+
+pub const WAVE_OSCS: usize = 2;
+pub const WAVE_ENVS: usize = 3;
+pub const WAVE_LFOS: usize = 4;
+pub const WAVE_MACROS: usize = 4;
+pub const WAVE_SLOTS: usize = 16;
+/// `WaveOsc::table` for a table loaded from a file (the track's sample slot of that oscillator).
+pub const WAVE_USER_TABLE: u8 = 255;
+/// Parameters below this index can be modulation destinations; above are the slot amounts.
+pub const WAVE_MOD_TARGETS: usize = 66;
+/// `ModSlot::dest` of an unused slot.
+pub const WAVE_NO_TARGET: u8 = 255;
+
+/// How an oscillator bends its reading of the wavetable.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OscWarp {
+    #[default]
+    Off,
+    /// Hard sync: the cycle restarts faster than it plays.
+    Sync,
+    /// Squeezes the cycle towards its start.
+    BendPlus,
+    /// Squeezes the cycle towards its end.
+    BendMinus,
+    /// Moves the middle of the cycle, like pulse width.
+    Pwm,
+    /// Plays the first half forwards and then backwards.
+    Mirror,
+    /// Reduces the output to fewer levels.
+    Quantize,
+    /// Frequency modulation by the other oscillator.
+    Fm,
+}
+
+impl OscWarp {
+    pub const ALL: [OscWarp; 8] = [Self::Off, Self::Sync, Self::BendPlus, Self::BendMinus, Self::Pwm, Self::Mirror, Self::Quantize, Self::Fm];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Sync => "Sync",
+            Self::BendPlus => "Bend +",
+            Self::BendMinus => "Bend -",
+            Self::Pwm => "PWM",
+            Self::Mirror => "Mirror",
+            Self::Quantize => "Quantize",
+            Self::Fm => "FM",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WaveFilter {
+    #[default]
+    Lp12,
+    Lp24,
+    Hp12,
+    Hp24,
+    Bp12,
+    Notch,
+    /// Four-pole ladder low-pass with saturating feedback.
+    Ladder,
+    /// Short feedback delay tuned by the cutoff.
+    Comb,
+    /// Vowel formants; the cutoff moves between them.
+    Formant,
+}
+
+impl WaveFilter {
+    pub const ALL: [WaveFilter; 9] = [Self::Lp12, Self::Lp24, Self::Hp12, Self::Hp24, Self::Bp12, Self::Notch, Self::Ladder, Self::Comb, Self::Formant];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lp12 => "Low 12",
+            Self::Lp24 => "Low 24",
+            Self::Hp12 => "High 12",
+            Self::Hp24 => "High 24",
+            Self::Bp12 => "Band 12",
+            Self::Notch => "Notch",
+            Self::Ladder => "Ladder",
+            Self::Comb => "Comb",
+            Self::Formant => "Formant",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LfoMode {
+    /// Runs continuously; every voice sees the same phase.
+    #[default]
+    Free,
+    /// Restarts with each note.
+    Retrig,
+    /// Plays its shape once per note, like an envelope.
+    Envelope,
+}
+
+impl LfoMode {
+    pub const ALL: [LfoMode; 3] = [Self::Free, Self::Retrig, Self::Envelope]; 
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Free => "Free",
+            Self::Retrig => "Retrig",
+            Self::Envelope => "Env",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModSource {
+    #[default]
+    None,
+    Env1,
+    Env2,
+    Env3,
+    Lfo1,
+    Lfo2,
+    Lfo3,
+    Lfo4,
+    Velocity,
+    /// The played note, 0 at C-2 up to 1 at G8.
+    Note,
+    /// A random value per note.
+    Random,
+    Macro1,
+    Macro2,
+    Macro3,
+    Macro4,
+}
+
+impl ModSource {
+    pub const ALL: [ModSource; 15] = [
+        Self::None,
+        Self::Env1,
+        Self::Env2,
+        Self::Env3,
+        Self::Lfo1,
+        Self::Lfo2,
+        Self::Lfo3,
+        Self::Lfo4,
+        Self::Velocity,
+        Self::Note,
+        Self::Random,
+        Self::Macro1,
+        Self::Macro2,
+        Self::Macro3,
+        Self::Macro4,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "—",
+            Self::Env1 => "Env 1",
+            Self::Env2 => "Env 2",
+            Self::Env3 => "Env 3",
+            Self::Lfo1 => "LFO 1",
+            Self::Lfo2 => "LFO 2",
+            Self::Lfo3 => "LFO 3",
+            Self::Lfo4 => "LFO 4",
+            Self::Velocity => "Velocity",
+            Self::Note => "Note",
+            Self::Random => "Random",
+            Self::Macro1 => "Macro 1",
+            Self::Macro2 => "Macro 2",
+            Self::Macro3 => "Macro 3",
+            Self::Macro4 => "Macro 4",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaveOsc {
+    pub on: bool,
+    /// Index into the built-in tables, or [`WAVE_USER_TABLE`].
+    pub table: u8,
+    pub warp: OscWarp,
+    pub position: f32,
+    pub octave: f32,
+    pub semi: f32,
+    /// Cents.
+    pub fine: f32,
+    pub level: f32,
+    pub pan: f32,
+    /// Unison voices, 1..16.
+    pub unison: f32,
+    pub detune: f32,
+    /// Level of the outer unison voices against the centre ones.
+    pub blend: f32,
+    /// Stereo spread of the unison voices.
+    pub width: f32,
+    /// Start phase, 0..1 of a cycle.
+    pub phase: f32,
+    /// How much the start phase is randomised per voice.
+    pub random_phase: f32,
+    pub warp_amount: f32,
+}
+
+impl Default for WaveOsc {
+    fn default() -> Self {
+        Self {
+            on: true,
+            table: 0,
+            warp: OscWarp::Off,
+            position: 0.0,
+            octave: 0.0,
+            semi: 0.0,
+            fine: 0.0,
+            level: 0.75,
+            pan: 0.0,
+            unison: 1.0,
+            detune: 0.25,
+            blend: 0.75,
+            width: 1.0,
+            phase: 0.0,
+            random_phase: 1.0,
+            warp_amount: 0.0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaveSub {
+    pub on: bool,
+    pub wave: KickWave,
+    pub octave: f32,
+    pub level: f32,
+    pub pan: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaveNoise {
+    pub on: bool,
+    pub level: f32,
+    /// Low-pass on the noise, in Hz.
+    pub color: f32,
+    pub pan: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaveFilterParams {
+    pub on: bool,
+    pub mode: WaveFilter,
+    /// Which sources go through the filter: oscillator A, B, sub, noise.
+    pub routes: [bool; 4],
+    pub cutoff: f32,
+    pub resonance: f32,
+    pub drive: f32,
+    pub mix: f32,
+    /// How much the cutoff follows the played note (1: one octave per octave).
+    pub key_track: f32,
+}
+
+/// Attack-hold-decay-sustain-release envelope; times in seconds.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaveEnv {
+    pub attack: f32,
+    pub hold: f32,
+    pub decay: f32,
+    pub sustain: f32,
+    pub release: f32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaveLfo {
+    /// One cycle, drawn by hand (values 0..1).
+    pub shape: Shape,
+    pub mode: LfoMode,
+    /// Period in beats when synced to the tempo; 0 uses `rate`.
+    pub sync_beats: f32,
+    pub rate: f32,
+    /// Seconds to fade in after a note starts.
+    pub rise: f32,
+}
+
+/// A modulation matrix row: `source` moves parameter `dest` by `amount` of its range.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModSlot {
+    pub source: ModSource,
+    pub dest: u8,
+    pub amount: f32,
+    /// Centres the source on zero, so it moves the parameter both ways.
+    pub bipolar: bool,
+}
+
+impl ModSlot {
+    pub const EMPTY: ModSlot = ModSlot { source: ModSource::None, dest: WAVE_NO_TARGET, amount: 0.0, bipolar: false };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WaveParams {
+    pub osc: [WaveOsc; WAVE_OSCS],
+    pub sub: WaveSub,
+    pub noise: WaveNoise,
+    pub filter: WaveFilterParams,
+    /// Env 1 shapes the volume; 2 and 3 are free for modulation.
+    pub env: [WaveEnv; WAVE_ENVS],
+    pub lfo: [WaveLfo; WAVE_LFOS],
+    pub macros: [f32; WAVE_MACROS],
+    pub matrix: [ModSlot; WAVE_SLOTS],
+    pub mono: bool,
+    /// In mono, overlapping notes glide without restarting the envelopes.
+    pub legato: bool,
+    /// Glide time in milliseconds (0: off).
+    pub glide: f32,
+    pub gain: f32,
+}
+
+impl Default for WaveParams {
+    fn default() -> Self {
+        let env = WaveEnv { attack: 0.001, hold: 0.0, decay: 1.0, sustain: 1.0, release: 0.1 };
+        let mod_env = WaveEnv { attack: 0.001, hold: 0.0, decay: 0.5, sustain: 0.0, release: 0.1 };
+        let triangle = Shape::from_points(&[(0.0, 0.5, 0.0), (0.25, 1.0, 0.0), (0.75, 0.0, 0.0), (1.0, 0.5, 0.0)]);
+        let lfo = WaveLfo { shape: triangle, mode: LfoMode::Free, sync_beats: 0.0, rate: 2.0, rise: 0.0 };
+        Self {
+            osc: [WaveOsc::default(), WaveOsc { on: false, ..WaveOsc::default() }],
+            sub: WaveSub { on: false, wave: KickWave::Sine, octave: -1.0, level: 0.75, pan: 0.0 },
+            noise: WaveNoise { on: false, level: 0.5, color: 20000.0, pan: 0.0 },
+            filter: WaveFilterParams { on: false, mode: WaveFilter::Lp12, routes: [true; 4], cutoff: 18000.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0 },
+            env: [env, mod_env, mod_env],
+            lfo: [lfo; WAVE_LFOS],
+            macros: [0.0; WAVE_MACROS],
+            matrix: [ModSlot::EMPTY; WAVE_SLOTS],
+            mono: false,
+            legato: false,
+            glide: 0.0,
+            gain: 0.5,
+        }
+    }
+}
+
+impl WaveParams {
+    /// Factory presets: (name, settings), grouped by use.
+    pub fn presets() -> Vec<(&'static str, WaveParams)> {
+        let init = WaveParams::default();
+        let saw = 2.0 / 3.0;
+        let slot = |source, dest: usize, amount| ModSlot { source, dest: dest as u8, amount, bipolar: false };
+        let env = |attack, decay, sustain, release| WaveEnv { attack, hold: 0.0, decay, sustain, release };
+        let ramp = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
+        let triangle = Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]);
+        let mut list = vec![("Init", init)];
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, unison: 7.0, detune: 0.35, blend: 0.7, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: saw, octave: 1.0, unison: 5.0, detune: 0.3, level: 0.35, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 9000.0, resonance: 0.15, ..init.filter };
+        p.env[0] = env(0.005, 0.3, 0.8, 0.3);
+        p.gain = 0.5;
+        list.push(("Lead · Supersaw", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 4, position: 0.3, unison: 3.0, detune: 0.15, ..WaveOsc::default() };
+        p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 2.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.6);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 60.0;
+        p.env[0] = env(0.005, 0.5, 0.9, 0.2);
+        p.gain = 0.9;
+        list.push(("Lead · Sync Scream", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, unison: 2.0, detune: 0.18, width: 0.3, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: saw, octave: -1.0, unison: 2.0, detune: 0.12, width: 0.2, level: 0.5, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.6, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 900.0, resonance: 0.25, drive: 0.3, routes: [true, true, false, true], ..init.filter };
+        p.lfo[0] = WaveLfo { rate: 0.3, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 7, 0.15);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.gain = 0.55;
+        list.push(("Bass · Reese", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 9, position: 0.2, unison: 2.0, detune: 0.1, width: 0.4, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.55, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Formant, cutoff: 400.0, resonance: 0.5, drive: 0.4, routes: [true, true, false, true], ..init.filter };
+        p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 0.5, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.7);
+        p.matrix[1] = slot(ModSource::Lfo1, 32, 0.45);
+        p.mono = true;
+        p.gain = 0.45;
+        list.push(("Bass · Growl", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, unison: 3.0, detune: 0.12, width: 0.5, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.7, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 150.0, resonance: 0.55, drive: 0.5, routes: [true, true, false, true], ..init.filter };
+        p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 0.5, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.75);
+        p.mono = true;
+        p.gain = 0.6;
+        list.push(("Bass · Wobble 1/8", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: 0.0, level: 0.3, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.9, ..init.sub };
+        p.mono = true;
+        p.glide = 30.0;
+        p.env[0] = env(0.003, 1.0, 1.0, 0.08);
+        p.gain = 0.7;
+        list.push(("Bass · Sub", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 5, position: 0.55, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { on: true, position: 0.0, octave: 1.0, level: 0.0, ..WaveOsc::default() };
+        p.osc[0].warp = OscWarp::Fm;
+        p.osc[0].warp_amount = 0.4;
+        p.env[1] = env(0.001, 0.25, 0.1, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 12, 0.5);
+        p.sub = WaveSub { on: true, level: 0.5, ..init.sub };
+        p.mono = true;
+        p.gain = 0.75;
+        list.push(("Bass · FM Metal", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, unison: 3.0, detune: 0.2, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 300.0, resonance: 0.2, ..init.filter };
+        p.env[0] = env(0.002, 0.45, 0.0, 0.3);
+        p.env[1] = env(0.001, 0.25, 0.0, 0.2);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.55);
+        p.gain = 0.6;
+        list.push(("Pluck · Bright", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 7, position: 0.2, unison: 2.0, detune: 0.1, ..WaveOsc::default() };
+        p.env[0] = env(0.001, 0.35, 0.0, 0.25);
+        p.env[1] = env(0.001, 0.3, 0.0, 0.2);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.6);
+        p.gain = 0.6;
+        list.push(("Pluck · Digital", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 3, position: 0.0, unison: 4.0, detune: 0.2, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { table: 3, position: 0.5, octave: -1.0, unison: 3.0, detune: 0.25, level: 0.4, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 4000.0, ..init.filter };
+        p.lfo[0] = WaveLfo { rate: 0.12, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.8);
+        p.matrix[1] = slot(ModSource::Lfo1, 13, 0.5);
+        p.env[0] = env(0.8, 1.0, 1.0, 1.5);
+        p.gain = 0.5;
+        list.push(("Pad · Vowel", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 10, position: 0.1, unison: 6.0, detune: 0.25, ..WaveOsc::default() };
+        p.lfo[0] = WaveLfo { rate: 0.08, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.7);
+        p.env[0] = env(1.2, 1.0, 1.0, 2.0);
+        p.gain = 0.5;
+        list.push(("Pad · Spectral", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 8, position: 0.7, random_phase: 0.0, ..WaveOsc::default() };
+        p.env[0] = env(0.003, 0.2, 1.0, 0.06);
+        p.gain = 0.55;
+        list.push(("Keys · Organ", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 5, position: 0.35, random_phase: 0.0, ..WaveOsc::default() };
+        p.env[0] = env(0.001, 2.0, 0.0, 1.5);
+        p.env[1] = env(0.001, 0.8, 0.0, 0.5);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.35);
+        p.gain = 0.55;
+        list.push(("Keys · Bell", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 2, position: 0.0, unison: 5.0, detune: 0.3, ..WaveOsc::default() };
+        p.noise = WaveNoise { on: true, level: 0.35, ..init.noise };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 200.0, resonance: 0.3, ..init.filter };
+        p.lfo[0] = WaveLfo { shape: ramp, mode: LfoMode::Envelope, sync_beats: 16.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 1.0);
+        p.matrix[1] = slot(ModSource::Lfo1, 32, 0.8);
+        p.env[0] = env(0.5, 1.0, 1.0, 1.0);
+        p.gain = 0.5;
+        list.push(("FX · Riser 4 bars", p));
+        list
+    }
+
+    pub fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
+        let p = self;
+        Some(match index {
+                0 => &mut p.osc[0].position,
+                1 => &mut p.osc[0].octave,
+                2 => &mut p.osc[0].semi,
+                3 => &mut p.osc[0].fine,
+                4 => &mut p.osc[0].level,
+                5 => &mut p.osc[0].pan,
+                6 => &mut p.osc[0].unison,
+                7 => &mut p.osc[0].detune,
+                8 => &mut p.osc[0].blend,
+                9 => &mut p.osc[0].width,
+                10 => &mut p.osc[0].phase,
+                11 => &mut p.osc[0].random_phase,
+                12 => &mut p.osc[0].warp_amount,
+                13 => &mut p.osc[1].position,
+                14 => &mut p.osc[1].octave,
+                15 => &mut p.osc[1].semi,
+                16 => &mut p.osc[1].fine,
+                17 => &mut p.osc[1].level,
+                18 => &mut p.osc[1].pan,
+                19 => &mut p.osc[1].unison,
+                20 => &mut p.osc[1].detune,
+                21 => &mut p.osc[1].blend,
+                22 => &mut p.osc[1].width,
+                23 => &mut p.osc[1].phase,
+                24 => &mut p.osc[1].random_phase,
+                25 => &mut p.osc[1].warp_amount,
+                26 => &mut p.sub.octave,
+                27 => &mut p.sub.level,
+                28 => &mut p.sub.pan,
+                29 => &mut p.noise.level,
+                30 => &mut p.noise.color,
+                31 => &mut p.noise.pan,
+                32 => &mut p.filter.cutoff,
+                33 => &mut p.filter.resonance,
+                34 => &mut p.filter.drive,
+                35 => &mut p.filter.mix,
+                36 => &mut p.filter.key_track,
+                37 => &mut p.env[0].attack,
+                38 => &mut p.env[0].hold,
+                39 => &mut p.env[0].decay,
+                40 => &mut p.env[0].sustain,
+                41 => &mut p.env[0].release,
+                42 => &mut p.env[1].attack,
+                43 => &mut p.env[1].hold,
+                44 => &mut p.env[1].decay,
+                45 => &mut p.env[1].sustain,
+                46 => &mut p.env[1].release,
+                47 => &mut p.env[2].attack,
+                48 => &mut p.env[2].hold,
+                49 => &mut p.env[2].decay,
+                50 => &mut p.env[2].sustain,
+                51 => &mut p.env[2].release,
+                52 => &mut p.lfo[0].rate,
+                53 => &mut p.lfo[0].rise,
+                54 => &mut p.lfo[1].rate,
+                55 => &mut p.lfo[1].rise,
+                56 => &mut p.lfo[2].rate,
+                57 => &mut p.lfo[2].rise,
+                58 => &mut p.lfo[3].rate,
+                59 => &mut p.lfo[3].rise,
+                60 => &mut p.macros[0],
+                61 => &mut p.macros[1],
+                62 => &mut p.macros[2],
+                63 => &mut p.macros[3],
+                64 => &mut p.glide,
+                65 => &mut p.gain,
+                66 => &mut p.matrix[0].amount,
+                67 => &mut p.matrix[1].amount,
+                68 => &mut p.matrix[2].amount,
+                69 => &mut p.matrix[3].amount,
+                70 => &mut p.matrix[4].amount,
+                71 => &mut p.matrix[5].amount,
+                72 => &mut p.matrix[6].amount,
+                73 => &mut p.matrix[7].amount,
+                74 => &mut p.matrix[8].amount,
+                75 => &mut p.matrix[9].amount,
+                76 => &mut p.matrix[10].amount,
+                77 => &mut p.matrix[11].amount,
+                78 => &mut p.matrix[12].amount,
+                79 => &mut p.matrix[13].amount,
+                80 => &mut p.matrix[14].amount,
+                81 => &mut p.matrix[15].amount,
+            _ => return None,
+        })
+    }
+}
+
+pub const WAVE_PARAMS: [ParamInfo; 82] = [
+    ParamInfo::linear("A Pos", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("A Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("A Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("A Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("A Level", 0.0, 1.0, 0.75, Percent),
+    ParamInfo::linear("A Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("A Unison", 1.0, 16.0, 1.0, Count),
+    ParamInfo::linear("A Detune", 0.0, 1.0, 0.25, Percent),
+    ParamInfo::linear("A Blend", 0.0, 1.0, 0.75, Percent),
+    ParamInfo::linear("A Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("A Phase", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("A Rand", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("A Warp", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("B Pos", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("B Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("B Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("B Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("B Level", 0.0, 1.0, 0.75, Percent),
+    ParamInfo::linear("B Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("B Unison", 1.0, 16.0, 1.0, Count),
+    ParamInfo::linear("B Detune", 0.0, 1.0, 0.25, Percent),
+    ParamInfo::linear("B Blend", 0.0, 1.0, 0.75, Percent),
+    ParamInfo::linear("B Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("B Phase", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("B Rand", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("B Warp", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Sub Oct", -2.0, 0.0, -1.0, Count),
+    ParamInfo::linear("Sub Level", 0.0, 1.0, 0.75, Percent),
+    ParamInfo::linear("Sub Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("Noise Level", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::log("Noise Color", 200.0, 20000.0, 20000.0, Hertz),
+    ParamInfo::linear("Noise Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::log("Cutoff", 20.0, 20000.0, 18000.0, Hertz),
+    ParamInfo::linear("Res", 0.0, 1.0, 0.1, Percent),
+    ParamInfo::linear("Drive", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Fil Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Key Track", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::log("Env1 A", 0.0005, 10.0, 0.001, Seconds),
+    ParamInfo::linear("Env1 H", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::log("Env1 D", 0.001, 10.0, 1.0, Seconds),
+    ParamInfo::linear("Env1 S", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::log("Env1 R", 0.001, 10.0, 0.1, Seconds),
+    ParamInfo::log("Env2 A", 0.0005, 10.0, 0.001, Seconds),
+    ParamInfo::linear("Env2 H", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::log("Env2 D", 0.001, 10.0, 1.0, Seconds),
+    ParamInfo::linear("Env2 S", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::log("Env2 R", 0.001, 10.0, 0.1, Seconds),
+    ParamInfo::log("Env3 A", 0.0005, 10.0, 0.001, Seconds),
+    ParamInfo::linear("Env3 H", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::log("Env3 D", 0.001, 10.0, 1.0, Seconds),
+    ParamInfo::linear("Env3 S", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::log("Env3 R", 0.001, 10.0, 0.1, Seconds),
+    ParamInfo::log("LFO1 Rate", 0.01, 30.0, 2.0, Hertz),
+    ParamInfo::linear("LFO1 Rise", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::log("LFO2 Rate", 0.01, 30.0, 2.0, Hertz),
+    ParamInfo::linear("LFO2 Rise", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::log("LFO3 Rate", 0.01, 30.0, 2.0, Hertz),
+    ParamInfo::linear("LFO3 Rise", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::log("LFO4 Rate", 0.01, 30.0, 2.0, Hertz),
+    ParamInfo::linear("LFO4 Rise", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::linear("Macro 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Glide", 0.0, 2000.0, 0.0, Milliseconds),
+    ParamInfo::linear("Master", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod 1", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 2", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 3", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 4", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 5", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 6", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 7", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 8", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 9", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 10", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 11", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 12", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 13", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 14", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 15", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Mod 16", -1.0, 1.0, 0.0, Percent),
+];
 
 #[cfg(test)]
 mod tests {

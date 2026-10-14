@@ -1,6 +1,7 @@
 //! Pulse audio engine: clip launcher, arrangement sequencer, device chains and mixer.
 
 mod audio;
+pub mod dsp;
 mod effects;
 mod engine;
 mod input;
@@ -11,14 +12,17 @@ pub mod model;
 mod sample;
 mod sampler;
 mod synth;
+pub mod wavetable;
+mod wavesynth;
 
 pub use audio::{start, AudioOutput, EngineHandle, LiveInput};
+pub use dsp::fft;
 pub use instruments::render_drum_hit;
 pub use kick::{amplitude as kick_amplitude, drive_at as kick_drive_at, effective as kick_effective, length_ms as kick_length_ms, pitch_offset as kick_pitch_offset, render_kick};
 pub use input::{start_input, AudioInput, InputHandle, Marker};
 pub use offline::OfflineRenderer;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};
 pub use engine::{
-    build_chain, swing_offset, ChainSlot, Command, LiveNote, PlacedClip, PlayClip, RecordedNote, SharedState, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
+    build_chain, swing_offset, ChainSlot, Command, PreparedInstrument, LiveNote, PlacedClip, PlayClip, RecordedNote, SharedState, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
     NUM_RETURNS, NUM_SCENES, QUEUED_STOP,
 };

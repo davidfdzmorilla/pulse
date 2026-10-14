@@ -182,6 +182,8 @@ pub struct PulseApp {
     pub selected_pad: usize,
     /// Track whose kick designer editor window is open.
     pub kick_window: Option<usize>,
+    /// Track whose wavetable synth editor window is open.
+    pub wave_window: Option<usize>,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
@@ -202,12 +204,39 @@ pub struct PulseApp {
 impl PulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
-        let project = Project::demo();
-        let mut app = Self {
+        let mut app = Self::with_audio(Project::demo(), Audio::start());
+        app.sync_all();
+        app.midi = MidiInputs::connect(app.audio.live());
+        if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
+            app.view = View::Arrangement;
+        }
+        if std::env::var("PULSE_DETAIL").as_deref() == Ok("clip") {
+            app.detail = Detail::Clip;
+        }
+        if std::env::var("PULSE_PLAY").is_ok() {
+            match app.view {
+                View::Session => app.audio.send(Command::LaunchScene(1)),
+                View::Arrangement => app.audio.send(Command::Play),
+            }
+        }
+        app
+    }
+
+    /// An app without an audio device or a window, for testing the interface.
+    #[cfg(test)]
+    pub fn headless(project: Project) -> Self {
+        let mut app = Self::with_audio(project, Audio { _output: None, handle: None, error: None });
+        app.screenshot = None;
+        app.sync_all();
+        app
+    }
+
+    fn with_audio(project: Project, audio: Audio) -> Self {
+        Self {
             history: History::new(&project),
             saved: project.clone(),
             project,
-            audio: Audio::start(),
+            audio,
             view: View::Session,
             detail: Detail::Devices,
             selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
@@ -225,6 +254,7 @@ impl PulseApp {
             selected_pad: 0,
             slice_mode: crate::slicing::SliceMode::Transients,
             kick_window: None,
+            wave_window: None,
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -232,22 +262,7 @@ impl PulseApp {
             status: None,
             title: String::new(),
             screenshot: std::env::var("PULSE_SCREENSHOT").ok().map(|path| (path, 0)),
-        };
-        app.sync_all();
-        app.midi = MidiInputs::connect(app.audio.live());
-        if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
-            app.view = View::Arrangement;
         }
-        if std::env::var("PULSE_DETAIL").as_deref() == Ok("clip") {
-            app.detail = Detail::Clip;
-        }
-        if std::env::var("PULSE_PLAY").is_ok() {
-            match app.view {
-                View::Session => app.audio.send(Command::LaunchScene(1)),
-                View::Arrangement => app.audio.send(Command::Play),
-            }
-        }
-        app
     }
 
     // ----- Engine synchronisation -------------------------------------------------
@@ -617,7 +632,7 @@ impl PulseApp {
                     let instrument = &mut self.project.tracks[t].instrument;
                     instrument.set(i, value);
                     let kind = *instrument;
-                    self.audio.send(Command::SetInstrument { track: t, kind });
+                    self.audio.send(Command::update_instrument(t, kind));
                 }
             }
         }
@@ -748,7 +763,15 @@ impl PulseApp {
 
     pub fn set_instrument(&mut self, track: usize, kind: InstrumentKind) {
         let previous = std::mem::replace(&mut self.project.tracks[track].instrument, kind);
-        self.audio.send(Command::SetInstrument { track, kind });
+        if previous.label() == kind.label() {
+            self.audio.send(Command::update_instrument(track, kind));
+        } else {
+            let sample_rate = self.audio.sample_rate();
+            self.audio.send(Command::set_instrument(track, kind, sample_rate));
+        }
+        if matches!(kind, InstrumentKind::Wavetable(_)) {
+            self.sync_tables(track);
+        }
         // Another instrument has other parameters: its automation no longer applies.
         if previous.label() != kind.label() {
             let target = Target::Track(track);
@@ -756,6 +779,35 @@ impl PulseApp {
             self.overridden.retain(|(t, p)| !(*t == target && matches!(p, Param::Instrument(_))));
             self.sync_automation(target);
         }
+    }
+
+    /// Sends the wavetables the track's wavetable synth reads (built-in or loaded).
+    pub fn sync_tables(&mut self, track: usize) {
+        let tables = sync::instrument_tables(&self.project.tracks[track], &mut self.samples);
+        self.audio.send(Command::SetWavetables { track, tables });
+        self.show_sample_errors();
+    }
+
+
+    /// The table an oscillator plays, if loaded (wavetable tracks always have theirs).
+    pub fn cached_wavetable(&self, track: usize, osc: usize) -> Option<Arc<engine::wavetable::Wavetable>> {
+        sync::cached_table_for(&self.project.tracks[track], osc, &self.samples)
+    }
+
+    /// Loads a wavetable file into oscillator `osc` of a wavetable synth.
+    pub fn choose_wavetable(&mut self, track: usize, osc: usize) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Wavetable", &AUDIO_EXTENSIONS).pick_file() else { return };
+        let path = path.to_string_lossy().into_owned();
+        let table = self.samples.table(&path);
+        if table.frames() == 0 || self.samples.errors.last().is_some() {
+            self.show_sample_errors();
+            return;
+        }
+        let InstrumentKind::Wavetable(mut params) = self.project.tracks[track].instrument else { return };
+        params.osc[osc].table = engine::model::WAVE_USER_TABLE;
+        self.project.tracks[track].set_sample(osc, Some(path));
+        self.set_instrument(track, InstrumentKind::Wavetable(params));
+        self.status = Some(format!("Wavetable: {} ({} frames)", table.name, table.frames()));
     }
 
     pub fn sync_samples(&mut self, track: usize) {
@@ -1559,6 +1611,7 @@ impl eframe::App for PulseApp {
             View::Arrangement => arrangement::show(self, ui),
         });
         crate::kick_ui::window(self, &ctx);
+        crate::wave_ui::window(self, &ctx);
 
         let interacting = ctx.input(|i| i.pointer.any_down());
         self.history.commit(&self.project, interacting);

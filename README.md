@@ -80,7 +80,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   sus muestras en los mismos pads, y los Simpler/Sampler al Sampler con su nota raíz. Los sintetizadores de
   Live no se pueden leer: esas pistas reciben Pulse Synth (o la Drum Machine si es un Drum Rack sin
   muestras). Los grupos se omiten.
-- **Dispositivos**: desde el navegador, ocho instrumentos y doce efectos, todos automatizables:
+- **Dispositivos**: desde el navegador, nueve instrumentos y doce efectos, todos automatizables:
   - **Pulse Synth**: sintetizador sustractivo sencillo.
   - **Super Saw**: hasta 7 dientes de sierra desafinados y abiertos en estéreo (leads y pads de trance/EDM).
   - **Acid Bass**: bajo monofónico con filtro de 4 polos resonante, envolvente de filtro, acento (velocidad
@@ -91,6 +91,19 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   - **Sampler**: toca una muestra cromáticamente desde su nota raíz, con punto de inicio, ADSR, filtro y tres
     modos: Clásico (mientras se mantiene la nota), One-shot (entera) y Loop. Arrastra un archivo de audio al
     dispositivo o usa «Cargar…».
+  - **Wavetable Synth**: sintetizador de wavetables con editor completo («Editor ⤢»):
+    - 2 osciladores de wavetable con mipmaps sin aliasing, posición, octava/semitono/fino, unísono de hasta
+      16 voces (detune, blend, anchura), fase y fase aleatoria, y warp (Sync, Bend +/-, PWM, Mirror,
+      Quantize, FM del otro oscilador). 12 wavetables incluidas y **carga de las tuyas** (WAV con frames de
+      2048 muestras, o el tamaño indicado en el chunk `clm ` del archivo, o un único ciclo).
+    - Sub (seno, triángulo, cuadrada, sierra) y ruido con color.
+    - Filtro Low/High 12 y 24, Band, Notch, Ladder, Comb y Formant, con drive, mezcla, seguimiento de
+      teclado y elección de qué fuentes lo atraviesan; curva de respuesta en pantalla.
+    - 3 envolventes (la 1 es el volumen), 4 LFOs con forma **dibujada a mano**, Free/Retrig/Env y
+      sincronía al tempo, y **matriz de modulación** de 16 filas (fuentes: envolventes, LFOs, velocidad,
+      nota, aleatorio y 4 macros; destino: cualquier parámetro).
+    - Poly, Mono o Legato con glide. 15 presets de fábrica (leads, bajos Reese/Growl/Wobble, plucks, pads,
+      teclados, riser).
   - **Kick Designer**: sintetizador de bombos con editor completo («Editor ⤢» en el dispositivo):
     - Capas: **cuerpo** (seno, triángulo, cuadrada o sierra, fase inicial, armónicos), **sub** senoidal limpio
       que sigue al cuerpo en fase, y **click** (12 sintetizados: Noise, Snap, Tick, Square, Zap, Metal, Thump,
@@ -130,4 +143,6 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
 4. Multisamples (zonas por tecla y velocidad) en el Sampler; marcadores de troceado editables a mano.
-5. Plugins VST3 / CLAP.
+5. Wavetable Synth, fase 2: modulación arrastrando la fuente al knob, osciladores de muestra/granular/
+   espectral, rack de efectos interno, editor de wavetables y arpegiador.
+6. Plugins VST3 / CLAP.

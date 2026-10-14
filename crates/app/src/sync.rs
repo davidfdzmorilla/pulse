@@ -2,6 +2,7 @@
 
 use crate::project::{Project, Track};
 use engine::model::{AutomationLane, Clip, InstrumentKind, Param, SynthParams};
+use engine::wavetable::Wavetable;
 use engine::{build_chain, Command, PlacedClip, PlayClip, Sample, Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
@@ -12,6 +13,8 @@ use std::sync::Arc;
 #[derive(Default)]
 pub struct SampleCache {
     samples: HashMap<String, Arc<Sample>>,
+    /// Wavetables by file path, or `builtin:<index>` for the generated ones.
+    tables: HashMap<String, Arc<Wavetable>>,
     /// Load errors not yet shown to the user.
     pub errors: Vec<String>,
 }
@@ -32,6 +35,32 @@ impl SampleCache {
         sample
     }
 
+    /// A built-in wavetable, generated on first use.
+    pub fn builtin_table(&mut self, index: usize) -> Arc<Wavetable> {
+        let index = index.min(engine::wavetable::BUILTIN.len() - 1);
+        self.tables.entry(format!("builtin:{index}")).or_insert_with(|| Arc::new(engine::wavetable::builtin(index))).clone()
+    }
+
+    /// A wavetable file: frames of the size its `clm ` chunk declares (2048 by default),
+    /// or the whole file as a single cycle.
+    pub fn table(&mut self, path: &str) -> Arc<Wavetable> {
+        if let Some(table) = self.tables.get(path) {
+            return table.clone();
+        }
+        let sample = self.get(path);
+        let frame_size = std::fs::read(path).ok().and_then(|bytes| engine::wavetable::declared_frame_size(&bytes)).unwrap_or(engine::wavetable::FRAME);
+        let mono: Vec<f32> = sample.left.iter().zip(&sample.right).map(|(l, r)| (l + r) * 0.5).collect();
+        let name = Path::new(path).file_stem().map_or_else(|| path.to_string(), |s| s.to_string_lossy().into_owned());
+        let table = if mono.is_empty() { Arc::new(engine::wavetable::builtin(0)) } else { Arc::new(Wavetable::from_samples(name, &mono, frame_size)) };
+        self.tables.insert(path.to_string(), table.clone());
+        table
+    }
+
+    /// A wavetable already in the cache (built-in key or file path).
+    pub fn cached_table(&self, key: &str) -> Option<Arc<Wavetable>> {
+        self.tables.get(key).cloned()
+    }
+
     pub fn loaded(&self, path: &str) -> Option<&Arc<Sample>> {
         self.samples.get(path)
     }
@@ -50,6 +79,34 @@ pub fn instrument_samples(track: &Track, samples: &mut SampleCache) -> Box<Vec<A
         })
         .collect();
     Box::new(decoded)
+}
+
+/// The table oscillator `osc` of a wavetable synth track reads.
+pub fn table_for(track: &Track, osc: usize, samples: &mut SampleCache) -> Arc<Wavetable> {
+    let InstrumentKind::Wavetable(params) = track.instrument else { return samples.builtin_table(0) };
+    let index = params.osc[osc.min(1)].table;
+    match track.sample(osc) {
+        Some(path) if index == engine::model::WAVE_USER_TABLE => samples.table(path),
+        _ => samples.builtin_table(index as usize),
+    }
+}
+
+/// The table oscillator `osc` reads, if it is already loaded (for drawing).
+pub fn cached_table_for(track: &Track, osc: usize, samples: &SampleCache) -> Option<Arc<Wavetable>> {
+    let InstrumentKind::Wavetable(params) = track.instrument else { return None };
+    let index = params.osc[osc.min(1)].table;
+    match track.sample(osc) {
+        Some(path) if index == engine::model::WAVE_USER_TABLE => samples.cached_table(path),
+        _ => samples.cached_table(&format!("builtin:{}", (index as usize).min(engine::wavetable::BUILTIN.len() - 1))),
+    }
+}
+
+/// Both oscillators' tables for a wavetable synth (nothing for other instruments).
+pub fn instrument_tables(track: &Track, samples: &mut SampleCache) -> Box<Vec<Arc<Wavetable>>> {
+    match track.instrument {
+        InstrumentKind::Wavetable(_) => Box::new((0..2).map(|osc| table_for(track, osc, samples)).collect()),
+        _ => Box::default(),
+    }
 }
 
 pub fn play_clip(clip: &Clip, samples: &mut SampleCache) -> PlayClip {
@@ -105,8 +162,9 @@ pub fn project_commands(
         let track = project.tracks.get(t).unwrap_or(&empty);
         let target = Target::Track(t);
         commands.extend([
-            Command::SetInstrument { track: t, kind: track.instrument },
+            Command::set_instrument(t, track.instrument, sample_rate),
             Command::SetSamples { track: t, samples: instrument_samples(track, samples) },
+            Command::SetWavetables { track: t, tables: instrument_tables(track, samples) },
             Command::SetSolo { track: t, solo: track.solo },
             Command::SetArm { track: t, armed: track.armed },
             Command::ReplaceChain { target, chain: build_chain(&track.devices, sample_rate) },

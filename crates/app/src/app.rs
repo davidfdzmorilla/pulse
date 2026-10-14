@@ -1,8 +1,11 @@
-use crate::project::Project;
-use crate::{device, piano_roll, session, transport};
+use crate::history::History;
+use crate::project::{Mixer, Project, Track, PALETTE};
+use crate::{arrangement, browser, detail, piano_roll, session, theme, transport};
 use eframe::egui;
-use engine::model::MidiClip;
-use engine::{AudioOutput, Command, EngineHandle, SharedState, MAX_TRACKS};
+use engine::model::{Device, InstrumentKind, MidiClip, SynthParams};
+use engine::{build_chain, AudioOutput, ChainSlot, Command, EngineHandle, SharedState, Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 
 /// Wraps the optional audio connection so the UI keeps working without a device.
@@ -40,8 +43,16 @@ impl Audio {
         self.handle.as_ref().map(|h| h.state.clone())
     }
 
-    pub fn device_name(&self) -> Option<&str> {
-        self.handle.as_ref().map(|h| h.device_name.as_str())
+    pub fn sample_rate(&self) -> f32 {
+        self.handle.as_ref().map_or(48_000.0, |h| h.sample_rate)
+    }
+
+    pub fn is_playing(&self) -> bool {
+        self.handle.as_ref().is_some_and(|h| h.state.playing.load(Ordering::Relaxed))
+    }
+
+    pub fn position(&self) -> f64 {
+        self.handle.as_ref().map_or(0.0, |h| h.state.position())
     }
 
     fn collect_garbage(&mut self) {
@@ -51,91 +62,613 @@ impl Audio {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum View {
+    Session,
+    Arrangement,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Detail {
+    Clip,
+    Devices,
+}
+
+/// A clip the editor can open: a session slot or a clip on the arrangement timeline.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum ClipRef {
+    Session { track: usize, slot: usize },
+    Arrangement { track: usize, index: usize },
+}
+
+impl ClipRef {
+    pub fn track(self) -> usize {
+        match self {
+            ClipRef::Session { track, .. } | ClipRef::Arrangement { track, .. } => track,
+        }
+    }
+}
+
+#[derive(Default)]
+pub struct Meters {
+    pub tracks: [f32; MAX_TRACKS],
+    pub returns: [f32; NUM_RETURNS],
+    pub master: f32,
+}
+
+impl Meters {
+    fn update(&mut self, state: &SharedState) {
+        let fall = |meter: &mut f32, peak: f32| *meter = peak.max(*meter * 0.86);
+        for (meter, status) in self.tracks.iter_mut().zip(&state.tracks) {
+            fall(meter, status.peak.take());
+        }
+        for (meter, peak) in self.returns.iter_mut().zip(&state.returns) {
+            fall(meter, peak.take());
+        }
+        fall(&mut self.master, state.master.take());
+    }
+
+    pub fn of(&self, target: Target) -> f32 {
+        match target {
+            Target::Track(i) => self.tracks[i],
+            Target::Return(i) => self.returns[i],
+            Target::Master => self.master,
+        }
+    }
+}
+
 pub struct PulseApp {
     pub project: Project,
     pub audio: Audio,
-    /// Clip open in the piano roll, as (track, slot).
-    pub selected_clip: Option<(usize, usize)>,
-    pub selected_track: usize,
-    /// Decaying peak meters, refreshed every frame.
-    pub meters: [f32; MAX_TRACKS],
-    pub master_meter: f32,
+    pub view: View,
+    pub detail: Detail,
+    pub selected_clip: Option<ClipRef>,
+    pub selected_target: Target,
+    pub meters: Meters,
     pub piano_roll: piano_roll::State,
-    /// Debug aid: with `PULSE_SCREENSHOT=<file.ppm>` the app launches scene 2,
-    /// saves a screenshot of its own window after a few seconds and quits.
+    pub arrangement: arrangement::State,
+    pub show_browser: bool,
+    history: History,
+    file: Option<PathBuf>,
+    saved: Project,
+    pub status: Option<String>,
+    title: String,
+    /// Debug aid: with `PULSE_SCREENSHOT=<file.ppm>` the app saves a screenshot of
+    /// its own window after a few seconds and quits. `PULSE_VIEW=arrangement`
+    /// opens the arrangement view and `PULSE_PLAY=1` starts playback.
     screenshot: Option<(String, u32)>,
 }
 
 impl PulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        cc.egui_ctx.set_visuals(egui::Visuals::dark());
+        theme::apply(&cc.egui_ctx);
+        let project = Project::demo();
         let mut app = Self {
-            project: Project::demo(),
+            history: History::new(&project),
+            saved: project.clone(),
+            project,
             audio: Audio::start(),
-            selected_clip: Some((0, 0)),
-            selected_track: 0,
-            meters: [0.0; MAX_TRACKS],
-            master_meter: 0.0,
+            view: View::Session,
+            detail: Detail::Devices,
+            selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
+            selected_target: Target::Track(0),
+            meters: Meters::default(),
             piano_roll: Default::default(),
+            arrangement: Default::default(),
+            show_browser: true,
+            file: None,
+            status: None,
+            title: String::new(),
             screenshot: std::env::var("PULSE_SCREENSHOT").ok().map(|path| (path, 0)),
         };
         app.sync_all();
-        if app.screenshot.is_some() {
-            app.audio.send(Command::LaunchScene(1));
+        if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
+            app.view = View::Arrangement;
+        }
+        if std::env::var("PULSE_DETAIL").as_deref() == Ok("clip") {
+            app.detail = Detail::Clip;
+        }
+        if std::env::var("PULSE_PLAY").is_ok() {
+            match app.view {
+                View::Session => app.audio.send(Command::LaunchScene(1)),
+                View::Arrangement => app.audio.send(Command::Play),
+            }
         }
         app
     }
 
-    /// Pushes the whole project to the engine.
-    fn sync_all(&mut self) {
+    // ----- Engine synchronisation -------------------------------------------------
+
+    /// Pushes the whole project to the engine (after loading or undo).
+    pub fn sync_all(&mut self) {
         let p = &self.project;
-        let mut commands = vec![
+        let commands = [
             Command::SetTempo(p.tempo),
             Command::SetMetronome(p.metronome),
             Command::SetQuantize(p.quantize),
-            Command::SetMasterVolume(p.master_volume),
+            Command::SetLoop {
+                enabled: p.loop_enabled,
+                start: p.loop_start,
+                end: p.loop_end,
+            },
         ];
-        for (index, track) in p.tracks.iter().enumerate() {
-            commands.push(Command::SetInstrument { track: index, kind: track.instrument });
-            commands.push(Command::SetVolume { track: index, volume: track.volume });
-            commands.push(Command::SetPan { track: index, pan: track.pan });
-            commands.push(Command::SetMute { track: index, mute: track.mute });
-        }
         for command in commands {
             self.audio.send(command);
         }
-        for track in 0..self.project.tracks.len() {
-            for slot in 0..engine::NUM_SCENES {
-                self.sync_clip(track, slot);
+        for t in 0..MAX_TRACKS {
+            let empty;
+            let track = match self.project.tracks.get(t) {
+                Some(track) => track,
+                None => {
+                    empty = Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default()));
+                    &empty
+                }
+            };
+            let mut commands = vec![
+                Command::SetInstrument { track: t, kind: track.instrument },
+                Command::SetSolo { track: t, solo: track.solo },
+                Command::ReplaceChain {
+                    target: Target::Track(t),
+                    chain: build_chain(&track.devices, self.audio.sample_rate()),
+                },
+                Command::SetArrangement {
+                    track: t,
+                    clips: Box::new(track.arrangement.clone()),
+                },
+            ];
+            for (send, &amount) in track.sends.iter().enumerate() {
+                commands.push(Command::SetSend { track: t, send, amount });
             }
+            for slot in 0..NUM_SCENES {
+                commands.push(Command::SetClip {
+                    track: t,
+                    slot,
+                    clip: track.clips[slot].clone().map(Box::new),
+                });
+            }
+            let mixer = track.mixer.clone();
+            for command in commands {
+                self.audio.send(command);
+            }
+            self.send_mixer(Target::Track(t), &mixer);
         }
+        for r in 0..NUM_RETURNS {
+            self.sync_chain(Target::Return(r));
+            self.sync_mixer(Target::Return(r));
+        }
+        self.sync_chain(Target::Master);
+        self.sync_mixer(Target::Master);
     }
 
-    /// Sends the current contents of a slot to the engine.
+    fn send_mixer(&mut self, target: Target, mixer: &Mixer) {
+        self.audio.send(Command::SetGain { target, gain: mixer.gain });
+        self.audio.send(Command::SetPan { target, pan: mixer.pan });
+        self.audio.send(Command::SetMute { target, mute: !mixer.active });
+    }
+
+    pub fn sync_mixer(&mut self, target: Target) {
+        let mixer = self.mixer(target).clone();
+        self.send_mixer(target, &mixer);
+    }
+
+    pub fn sync_chain(&mut self, target: Target) {
+        let chain = build_chain(self.devices(target), self.audio.sample_rate());
+        self.audio.send(Command::ReplaceChain { target, chain });
+    }
+
     pub fn sync_clip(&mut self, track: usize, slot: usize) {
         let clip = self.project.tracks[track].clips[slot].clone().map(Box::new);
         self.audio.send(Command::SetClip { track, slot, clip });
     }
 
+    pub fn sync_arrangement(&mut self, track: usize) {
+        let clips = Box::new(self.project.tracks[track].arrangement.clone());
+        self.audio.send(Command::SetArrangement { track, clips });
+    }
+
+    pub fn sync_clip_ref(&mut self, clip: ClipRef) {
+        match clip {
+            ClipRef::Session { track, slot } => self.sync_clip(track, slot),
+            ClipRef::Arrangement { track, .. } => self.sync_arrangement(track),
+        }
+    }
+
+    pub fn sync_loop(&mut self) {
+        let p = &self.project;
+        let command = Command::SetLoop {
+            enabled: p.loop_enabled,
+            start: p.loop_start,
+            end: p.loop_end,
+        };
+        self.audio.send(command);
+    }
+
+    // ----- Model access -----------------------------------------------------------
+
+    pub fn mixer(&self, target: Target) -> &Mixer {
+        match target {
+            Target::Track(i) => &self.project.tracks[i].mixer,
+            Target::Return(i) => &self.project.returns[i].mixer,
+            Target::Master => &self.project.master.mixer,
+        }
+    }
+
+    pub fn mixer_mut(&mut self, target: Target) -> &mut Mixer {
+        match target {
+            Target::Track(i) => &mut self.project.tracks[i].mixer,
+            Target::Return(i) => &mut self.project.returns[i].mixer,
+            Target::Master => &mut self.project.master.mixer,
+        }
+    }
+
+    pub fn devices(&self, target: Target) -> &Vec<Device> {
+        match target {
+            Target::Track(i) => &self.project.tracks[i].devices,
+            Target::Return(i) => &self.project.returns[i].devices,
+            Target::Master => &self.project.master.devices,
+        }
+    }
+
+    pub fn devices_mut(&mut self, target: Target) -> &mut Vec<Device> {
+        match target {
+            Target::Track(i) => &mut self.project.tracks[i].devices,
+            Target::Return(i) => &mut self.project.returns[i].devices,
+            Target::Master => &mut self.project.master.devices,
+        }
+    }
+
+    pub fn target_name(&self, target: Target) -> String {
+        match target {
+            Target::Track(i) => self.project.tracks[i].name.clone(),
+            Target::Return(i) => self.project.returns[i].name.clone(),
+            Target::Master => "Master".into(),
+        }
+    }
+
+    pub fn target_color(&self, target: Target) -> egui::Color32 {
+        match target {
+            Target::Track(i) => theme::rgb(self.project.tracks[i].color),
+            Target::Return(i) => theme::rgb(self.project.returns[i].color),
+            Target::Master => theme::CONTROL_HOVER,
+        }
+    }
+
+    pub fn clip(&self, clip: ClipRef) -> Option<&MidiClip> {
+        match clip {
+            ClipRef::Session { track, slot } => self.project.tracks.get(track)?.clips[slot].as_ref(),
+            ClipRef::Arrangement { track, index } => {
+                self.project.tracks.get(track)?.arrangement.get(index).map(|a| &a.clip)
+            }
+        }
+    }
+
+    // ----- Edits ------------------------------------------------------------------
+
+    pub fn select_clip(&mut self, clip: ClipRef) {
+        self.selected_clip = Some(clip);
+        self.selected_target = Target::Track(clip.track());
+        self.detail = Detail::Clip;
+    }
+
     pub fn set_clip(&mut self, track: usize, slot: usize, clip: Option<MidiClip>) {
         self.project.tracks[track].clips[slot] = clip;
-        if self.selected_clip == Some((track, slot)) && self.project.tracks[track].clips[slot].is_none() {
+        if self.selected_clip == Some(ClipRef::Session { track, slot }) && self.project.tracks[track].clips[slot].is_none() {
             self.selected_clip = None;
         }
         self.sync_clip(track, slot);
     }
 
-    pub fn toggle_play(&mut self) {
-        let playing = self.audio.state().is_some_and(|s| s.playing.load(std::sync::atomic::Ordering::Relaxed));
-        self.audio.send(if playing { Command::Stop } else { Command::Play });
+    pub fn delete_selected_clip(&mut self) {
+        match self.selected_clip {
+            Some(ClipRef::Session { track, slot }) => self.set_clip(track, slot, None),
+            Some(ClipRef::Arrangement { track, index }) => {
+                let lane = &mut self.project.tracks[track].arrangement;
+                if index < lane.len() {
+                    lane.remove(index);
+                    self.selected_clip = None;
+                    self.sync_arrangement(track);
+                }
+            }
+            None => {}
+        }
     }
 
-    fn update_meters(&mut self) {
-        let Some(state) = self.audio.state() else { return };
-        for (meter, status) in self.meters.iter_mut().zip(&state.tracks) {
-            *meter = status.take_peak().max(*meter * 0.85);
+    pub fn duplicate_selected_clip(&mut self) {
+        match self.selected_clip {
+            Some(ClipRef::Session { track, slot }) => {
+                let free = (slot + 1..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
+                if let Some(target) = free {
+                    let copy = self.project.tracks[track].clips[slot].clone();
+                    self.set_clip(track, target, copy);
+                    self.select_clip(ClipRef::Session { track, slot: target });
+                }
+            }
+            Some(ClipRef::Arrangement { track, index }) => {
+                let lane = &mut self.project.tracks[track].arrangement;
+                if let Some(original) = lane.get(index).cloned() {
+                    let mut copy = original.clone();
+                    copy.start = original.end();
+                    lane.push(copy);
+                    let index = lane.len() - 1;
+                    self.sync_arrangement(track);
+                    self.select_clip(ClipRef::Arrangement { track, index });
+                }
+            }
+            None => {}
         }
-        self.master_meter = state.take_master_peak().max(self.master_meter * 0.85);
+    }
+
+    /// Places a copy of a session clip at the end of the track's arrangement.
+    pub fn copy_to_arrangement(&mut self, track: usize, slot: usize) {
+        let t = &mut self.project.tracks[track];
+        let Some(clip) = t.clips[slot].clone() else { return };
+        let start = (t.arrangement_end() / 4.0).ceil() * 4.0;
+        let length = clip.length.max(4.0);
+        t.arrangement.push(engine::model::ArrangementClip { start, length, clip });
+        self.sync_arrangement(track);
+        self.status = Some(format!("Clip copiado al Arrangement en el compás {}", start as i64 / 4 + 1));
+    }
+
+    pub fn add_device(&mut self, target: Target, device: Device) {
+        let index = self.devices(target).len();
+        let slot = ChainSlot::new(&device, self.audio.sample_rate());
+        self.devices_mut(target).push(device);
+        self.audio.send(Command::InsertDevice { target, index, slot });
+        self.detail = Detail::Devices;
+    }
+
+    pub fn remove_device(&mut self, target: Target, index: usize) {
+        if index < self.devices(target).len() {
+            self.devices_mut(target).remove(index);
+            self.audio.send(Command::RemoveDevice { target, index });
+        }
+    }
+
+    pub fn update_device(&mut self, target: Target, index: usize) {
+        if let Some(&device) = self.devices(target).get(index) {
+            self.audio.send(Command::UpdateDevice { target, index, device });
+        }
+    }
+
+    pub fn move_device(&mut self, target: Target, from: usize, to: usize) {
+        let devices = self.devices_mut(target);
+        if from < devices.len() && to < devices.len() {
+            devices.swap(from, to);
+            self.sync_chain(target);
+        }
+    }
+
+    pub fn set_instrument(&mut self, track: usize, kind: InstrumentKind) {
+        self.project.tracks[track].instrument = kind;
+        self.audio.send(Command::SetInstrument { track, kind });
+    }
+
+    pub fn add_track(&mut self) {
+        let index = self.project.tracks.len();
+        if index >= MAX_TRACKS {
+            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            return;
+        }
+        let color = PALETTE[(index * 5 + 1) % PALETTE.len()];
+        self.project.tracks.push(Track::new(
+            format!("{} MIDI", index + 1),
+            color,
+            InstrumentKind::Synth(SynthParams::default()),
+        ));
+        self.selected_target = Target::Track(index);
+        self.sync_all();
+    }
+
+    pub fn delete_track(&mut self, track: usize) {
+        if self.project.tracks.len() <= 1 {
+            return;
+        }
+        self.project.tracks.remove(track);
+        self.selected_clip = None;
+        self.selected_target = Target::Track(track.min(self.project.tracks.len() - 1));
+        self.sync_all();
+    }
+
+    pub fn duplicate_track(&mut self, track: usize) {
+        if self.project.tracks.len() >= MAX_TRACKS {
+            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            return;
+        }
+        let mut copy = self.project.tracks[track].clone();
+        copy.name = format!("{} copia", copy.name);
+        self.project.tracks.insert(track + 1, copy);
+        self.selected_target = Target::Track(track + 1);
+        self.sync_all();
+    }
+
+    pub fn back_to_arrangement_needed(&self) -> bool {
+        self.audio.state().is_some_and(|s| {
+            s.tracks[..self.project.tracks.len()]
+                .iter()
+                .any(|t| !t.follows_arrangement.load(Ordering::Relaxed))
+        })
+    }
+
+    pub fn toggle_play(&mut self) {
+        let command = if self.audio.is_playing() { Command::Stop } else { Command::Play };
+        self.audio.send(command);
+    }
+
+    // ----- History and files -----------------------------------------------------
+
+    pub fn can_undo(&self) -> bool {
+        self.history.can_undo()
+    }
+
+    pub fn can_redo(&self) -> bool {
+        self.history.can_redo()
+    }
+
+    pub fn undo(&mut self) {
+        if self.history.undo(&mut self.project) {
+            self.after_project_replaced();
+        }
+    }
+
+    pub fn redo(&mut self) {
+        if self.history.redo(&mut self.project) {
+            self.after_project_replaced();
+        }
+    }
+
+    fn after_project_replaced(&mut self) {
+        if self.selected_clip.is_some_and(|c| self.clip(c).is_none()) {
+            self.selected_clip = None;
+        }
+        let tracks = self.project.tracks.len();
+        if matches!(self.selected_target, Target::Track(t) if t >= tracks) {
+            self.selected_target = Target::Track(0);
+        }
+        self.sync_all();
+    }
+
+    fn replace_project(&mut self, project: Project, file: Option<PathBuf>) {
+        self.audio.send(Command::Stop);
+        self.project = project;
+        self.saved = self.project.clone();
+        self.history.reset(&self.project);
+        self.file = file;
+        self.selected_clip = None;
+        self.selected_target = Target::Track(0);
+        self.sync_all();
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.project != self.saved
+    }
+
+    pub fn new_project(&mut self) {
+        self.replace_project(Project::empty(), None);
+        self.status = Some("Proyecto nuevo".into());
+    }
+
+    pub fn open(&mut self) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"]).pick_file() else {
+            return;
+        };
+        match Project::load(&path) {
+            Ok(project) => {
+                self.status = Some(format!("Abierto {}", path.display()));
+                self.replace_project(project, Some(path));
+            }
+            Err(error) => self.status = Some(error),
+        }
+    }
+
+    pub fn save(&mut self) {
+        match self.file.clone() {
+            Some(path) => self.save_to(path),
+            None => self.save_as(),
+        }
+    }
+
+    pub fn save_as(&mut self) {
+        let dialog = rfd::FileDialog::new()
+            .add_filter("Proyecto Pulse", &["pulse"])
+            .set_file_name("Sin título.pulse");
+        if let Some(path) = dialog.save_file() {
+            self.save_to(path);
+        }
+    }
+
+    fn save_to(&mut self, path: PathBuf) {
+        match self.project.save(&path) {
+            Ok(()) => {
+                self.saved = self.project.clone();
+                self.status = Some(format!("Guardado en {}", path.display()));
+                self.file = Some(path);
+            }
+            Err(error) => self.status = Some(error),
+        }
+    }
+
+    pub fn file_name(&self) -> String {
+        self.file
+            .as_ref()
+            .and_then(|p| p.file_stem())
+            .map_or("Sin título".into(), |s| s.to_string_lossy().into_owned())
+    }
+
+    // ----- Frame ------------------------------------------------------------------
+
+    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
+        if ctx.egui_wants_keyboard_input() {
+            return;
+        }
+        let input = ctx.input(|i| {
+            let cmd = i.modifiers.command;
+            let shift = i.modifiers.shift;
+            [
+                i.key_pressed(egui::Key::Space),
+                i.key_pressed(egui::Key::Tab) && !shift,
+                i.key_pressed(egui::Key::Tab) && shift,
+                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
+                cmd && i.key_pressed(egui::Key::D),
+                cmd && !shift && i.key_pressed(egui::Key::Z),
+                cmd && shift && i.key_pressed(egui::Key::Z),
+                cmd && !shift && i.key_pressed(egui::Key::S),
+                cmd && shift && i.key_pressed(egui::Key::S),
+                cmd && i.key_pressed(egui::Key::O),
+                cmd && i.key_pressed(egui::Key::N),
+                cmd && i.key_pressed(egui::Key::T),
+            ]
+        });
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track] = input;
+        if space {
+            self.toggle_play();
+        }
+        if tab {
+            self.view = match self.view {
+                View::Session => View::Arrangement,
+                View::Arrangement => View::Session,
+            };
+        }
+        if shift_tab {
+            self.detail = match self.detail {
+                Detail::Clip => Detail::Devices,
+                Detail::Devices => Detail::Clip,
+            };
+        }
+        if delete {
+            self.delete_selected_clip();
+        }
+        if duplicate {
+            self.duplicate_selected_clip();
+        }
+        if undo {
+            self.undo();
+        }
+        if redo {
+            self.redo();
+        }
+        if save {
+            self.save();
+        }
+        if save_as {
+            self.save_as();
+        }
+        if open {
+            self.open();
+        }
+        if new {
+            self.new_project();
+        }
+        if add_track {
+            self.add_track();
+        }
+    }
+
+    fn update_title(&mut self, ctx: &egui::Context) {
+        let title = format!("{}{} — Pulse", self.file_name(), if self.is_dirty() { " *" } else { "" });
+        if title != self.title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(title.clone()));
+            self.title = title;
+        }
     }
 
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
@@ -162,49 +695,46 @@ impl PulseApp {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
-
-    fn handle_shortcuts(&mut self, ctx: &egui::Context) {
-        if ctx.egui_wants_keyboard_input() {
-            return;
-        }
-        let (space, delete) = ctx.input(|i| {
-            (
-                i.key_pressed(egui::Key::Space),
-                i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
-            )
-        });
-        if space {
-            self.toggle_play();
-        }
-        if delete {
-            if let Some((track, slot)) = self.selected_clip {
-                self.set_clip(track, slot, None);
-            }
-        }
-    }
 }
 
 impl eframe::App for PulseApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         self.audio.collect_garbage();
-        self.update_meters();
+        if let Some(state) = self.audio.state() {
+            self.meters.update(&state);
+        }
         self.handle_shortcuts(&ctx);
 
-        egui::Panel::top("transport").show(ui, |ui| transport::show(self, ui));
+        let bar = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 5));
+        egui::Panel::top("transport").frame(bar).show(ui, |ui| transport::show(self, ui));
+        let status = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 2));
+        egui::Panel::bottom("status").frame(status).show(ui, |ui| transport::status_bar(self, ui));
+        if self.show_browser {
+            let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(6));
+            egui::Panel::left("browser")
+                .frame(frame)
+                .resizable(true)
+                .default_size(180.0)
+                .min_size(140.0)
+                .show(ui, |ui| browser::show(self, ui));
+        }
+        let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(6));
         egui::Panel::bottom("detail")
+            .frame(frame)
             .resizable(true)
-            .default_size(320.0)
-            .min_size(180.0)
-            .show(ui, |ui| {
-                egui::Panel::left("device")
-                    .resizable(true)
-                    .default_size(270.0)
-                    .show(ui, |ui| device::show(self, ui));
-                egui::CentralPanel::default().show(ui, |ui| piano_roll::show(self, ui));
-            });
-        egui::CentralPanel::default().show(ui, |ui| session::show(self, ui));
+            .default_size(290.0)
+            .min_size(200.0)
+            .show(ui, |ui| detail::show(self, ui));
+        let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(6));
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| match self.view {
+            View::Session => session::show(self, ui),
+            View::Arrangement => arrangement::show(self, ui),
+        });
 
+        let interacting = ctx.input(|i| i.pointer.any_down());
+        self.history.commit(&self.project, interacting);
+        self.update_title(&ctx);
         self.debug_screenshot(&ctx);
         // Meters and playheads animate continuously.
         ctx.request_repaint();

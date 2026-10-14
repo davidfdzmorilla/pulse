@@ -6,6 +6,9 @@ edition = "2024"
 [dependencies]
 eframe = "0.36.2"
 engine = { version = "0.1.0", path = "../engine" }
+rfd = "0.17.2"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
 
 [[bin]]
 name = "pulse"

@@ -1,155 +1,119 @@
-//! Session view: the clip launcher grid, scene launchers and mixer strips.
+//! Session view: clip slots, scene launchers in the master column, and the mixer.
 
-use crate::app::PulseApp;
+use crate::app::{ClipRef, PulseApp};
 use crate::project::PALETTE;
-use eframe::egui::{self, pos2, vec2, Align2, Color32, FontId, Rect, Sense, Shape, Stroke, StrokeKind};
+use crate::theme::{self, ACCENT, PLAY, SLOT, SLOT_HOVER, SOLO, TEXT, TEXT_DIM};
+use crate::widgets::{self, Knob};
+use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense};
 use engine::model::MidiClip;
-use engine::{Command, NONE, NUM_SCENES, QUEUED_STOP};
+use engine::{Command, Target, NONE, NUM_RETURNS, NUM_SCENES, QUEUED_STOP};
 use std::sync::atomic::Ordering;
 
-const CELL_W: f32 = 132.0;
-const CELL_H: f32 = 26.0;
-const LAUNCH_W: f32 = 22.0;
-const GAP: f32 = 2.0;
-
-pub fn color(rgb: [u8; 3]) -> Color32 {
-    Color32::from_rgb(rgb[0], rgb[1], rgb[2])
-}
-
-fn dim(c: Color32, factor: f32) -> Color32 {
-    Color32::from_rgb(
-        (c.r() as f32 * factor) as u8,
-        (c.g() as f32 * factor) as u8,
-        (c.b() as f32 * factor) as u8,
-    )
-}
-
-fn triangle(painter: &egui::Painter, center: egui::Pos2, size: f32, fill: Color32) {
-    painter.add(Shape::convex_polygon(
-        vec![
-            pos2(center.x - size * 0.5, center.y - size * 0.6),
-            pos2(center.x + size * 0.6, center.y),
-            pos2(center.x - size * 0.5, center.y + size * 0.6),
-        ],
-        fill,
-        Stroke::NONE,
-    ));
-}
-
-/// Horizontal level meter; green, then yellow and red near full scale.
-pub fn paint_meter(ui: &mut egui::Ui, size: egui::Vec2, level: f32) {
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    paint_meter_in(ui.painter(), rect, level, size.x >= size.y);
-}
-
-fn paint_meter_in(painter: &egui::Painter, rect: Rect, level: f32, horizontal: bool) {
-    painter.rect_filled(rect, 2.0, Color32::from_gray(25));
-    let level = level.clamp(0.0, 1.0);
-    let fill = if level > 0.95 {
-        Color32::from_rgb(230, 70, 60)
-    } else if level > 0.7 {
-        Color32::from_rgb(230, 200, 70)
-    } else {
-        Color32::from_rgb(90, 200, 110)
-    };
-    let bar = if horizontal {
-        Rect::from_min_size(rect.min, vec2(rect.width() * level, rect.height()))
-    } else {
-        Rect::from_min_max(pos2(rect.left(), rect.bottom() - rect.height() * level), rect.max)
-    };
-    painter.rect_filled(bar, 2.0, fill);
-}
+const COL_W: f32 = 108.0;
+const HEADER_H: f32 = 22.0;
+const SLOT_H: f32 = 22.0;
+const LAUNCH_W: f32 = 18.0;
+const SENDS_H: f32 = 56.0;
+const PAN_H: f32 = 58.0;
+const FADER_H: f32 = 120.0;
 
 enum Action {
     Launch(usize, usize),
-    Select(usize, usize),
-    SelectTrack(usize),
+    Select(ClipRef),
+    SelectTarget(Target),
     Create(usize, usize),
     Delete(usize, usize),
     Duplicate(usize, usize),
+    ToArrangement(usize, usize),
+    SetClipColor(usize, usize, [u8; 3]),
     StopTrack(usize),
     LaunchScene(usize),
     StopAll,
+    AddTrack,
+    DeleteTrack(usize),
+    DuplicateTrack(usize),
+}
+
+struct TrackPlayState {
+    playing: i32,
+    queued: i32,
+    clip_position: f64,
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let state = app.audio.state();
-    let blink = (ui.input(|i| i.time) * 4.0).fract() < 0.5;
+    let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
     let mut actions = Vec::new();
 
     egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
-        ui.spacing_mut().item_spacing = vec2(GAP, GAP);
         ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
             for t in 0..app.project.tracks.len() {
-                let status = state.as_ref().map(|s| &s.tracks[t]);
-                let playing = status.map_or(NONE, |s| s.playing.load(Ordering::Relaxed));
-                let queued = status.map_or(NONE, |s| s.queued.load(Ordering::Relaxed));
-                let clip_position = status.map_or(0.0, |s| s.clip_position());
-
+                let play = state.as_ref().map_or(
+                    TrackPlayState { playing: NONE, queued: NONE, clip_position: 0.0 },
+                    |s| TrackPlayState {
+                        playing: s.tracks[t].playing.load(Ordering::Relaxed),
+                        queued: s.tracks[t].queued.load(Ordering::Relaxed),
+                        clip_position: s.tracks[t].clip_position(),
+                    },
+                );
                 ui.vertical(|ui| {
-                    ui.set_width(CELL_W);
+                    ui.set_width(COL_W);
                     track_header(app, ui, t, &mut actions);
                     for slot in 0..NUM_SCENES {
-                        clip_cell(
-                            app,
-                            ui,
-                            (t, slot),
-                            playing == slot as i32,
-                            queued == slot as i32,
-                            clip_position,
-                            blink,
-                            &mut actions,
-                        );
+                        clip_slot(app, ui, t, slot, &play, blink, &mut actions);
                     }
-                    let stop_queued = queued == QUEUED_STOP && blink;
-                    let stop = egui::Button::new("■").fill(if stop_queued {
-                        Color32::from_rgb(160, 60, 50)
-                    } else {
-                        Color32::from_gray(45)
-                    });
-                    if ui.add_sized([CELL_W, 20.0], stop).on_hover_text("Parar pista").clicked() {
+                    let stop_queued = play.queued == QUEUED_STOP && blink;
+                    if stop_cell(ui, stop_queued, "Parar pista").clicked() {
                         actions.push(Action::StopTrack(t));
                     }
-                    mixer_strip(app, ui, t);
+                    ui.add_space(6.0);
+                    mixer_strip(app, ui, Target::Track(t));
                 });
-                ui.add_space(4.0);
             }
 
             ui.vertical(|ui| {
-                ui.set_width(CELL_W);
-                let (rect, _) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::hover());
-                ui.painter().rect_filled(rect, 3.0, Color32::from_gray(55));
-                ui.painter().text(
-                    rect.center(),
-                    Align2::CENTER_CENTER,
-                    "Escenas",
-                    FontId::proportional(13.0),
-                    Color32::WHITE,
-                );
-                for slot in 0..NUM_SCENES {
-                    let (rect, response) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::click());
-                    let hovered = response.hovered();
-                    ui.painter().rect_filled(rect, 3.0, Color32::from_gray(if hovered { 70 } else { 50 }));
-                    triangle(
-                        ui.painter(),
-                        pos2(rect.left() + LAUNCH_W * 0.5, rect.center().y),
-                        9.0,
-                        Color32::from_gray(200),
-                    );
-                    ui.painter().text(
-                        pos2(rect.left() + LAUNCH_W + 4.0, rect.center().y),
-                        Align2::LEFT_CENTER,
-                        &app.project.scene_names[slot],
-                        FontId::proportional(13.0),
-                        Color32::from_gray(220),
-                    );
-                    if response.on_hover_text("Lanzar escena").clicked() {
-                        actions.push(Action::LaunchScene(slot));
-                    }
+                let (rect, response) = ui.allocate_exact_size(vec2(26.0, HEADER_H), Sense::click());
+                let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
+                ui.painter().rect_filled(rect, 2.0, fill);
+                ui.painter().text(rect.center(), Align2::CENTER_CENTER, "+", theme::body(), TEXT);
+                if response.on_hover_text("Nueva pista MIDI (⌘T)").clicked() {
+                    actions.push(Action::AddTrack);
                 }
-                if ui.add_sized([CELL_W, 20.0], egui::Button::new("Parar todo")).clicked() {
+            });
+            ui.add_space(10.0);
+
+            for r in 0..NUM_RETURNS {
+                ui.vertical(|ui| {
+                    ui.set_width(COL_W);
+                    let target = Target::Return(r);
+                    let name = app.project.returns[r].name.clone();
+                    let color = theme::rgb(app.project.returns[r].color);
+                    if header(ui, &name, color, app.selected_target == target).clicked() {
+                        actions.push(Action::SelectTarget(target));
+                    }
+                    let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (NUM_SCENES as f32 + 1.0) - 1.0), Sense::hover());
+                    ui.painter().rect_filled(rect, 2.0, theme::shade(SLOT, 0.8));
+                    ui.add_space(6.0);
+                    mixer_strip(app, ui, target);
+                });
+            }
+            ui.add_space(10.0);
+
+            ui.vertical(|ui| {
+                ui.set_width(COL_W);
+                let target = Target::Master;
+                if header(ui, "Master", theme::CONTROL_HOVER, app.selected_target == target).clicked() {
+                    actions.push(Action::SelectTarget(target));
+                }
+                for slot in 0..NUM_SCENES {
+                    scene_cell(app, ui, slot, &mut actions);
+                }
+                if stop_cell(ui, false, "Parar todos los clips").clicked() {
                     actions.push(Action::StopAll);
                 }
+                ui.add_space(6.0);
+                mixer_strip(app, ui, target);
             });
         });
     });
@@ -159,201 +123,332 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
 }
 
-fn track_header(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) {
-    let track = &app.project.tracks[t];
-    let (rect, response) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::click());
-    let selected = app.selected_track == t;
-    ui.painter().rect_filled(rect, 3.0, color(track.color));
-    if selected {
-        ui.painter().rect_stroke(rect, 3.0, Stroke::new(2.0, Color32::WHITE), StrokeKind::Inside);
-    }
-    ui.painter().text(
-        pos2(rect.left() + 8.0, rect.center().y),
+fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, HEADER_H), Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, if selected { color } else { theme::shade(color, 0.72) });
+    painter.text(
+        rect.left_center() + vec2(6.0, 0.0),
         Align2::LEFT_CENTER,
-        &track.name,
-        FontId::proportional(13.0),
-        Color32::BLACK,
+        name,
+        theme::body(),
+        theme::text_on(color),
     );
-    if response.clicked() {
-        actions.push(Action::SelectTrack(t));
+    if selected {
+        widgets::outline(painter, rect, theme::SELECT);
     }
+    response
 }
 
-#[allow(clippy::too_many_arguments)]
-fn clip_cell(
+fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) {
+    let track = &app.project.tracks[t];
+    let response = header(ui, &track.name, theme::rgb(track.color), app.selected_target == Target::Track(t));
+    if response.clicked() {
+        actions.push(Action::SelectTarget(Target::Track(t)));
+    }
+    response.context_menu(|ui| {
+        let track = &mut app.project.tracks[t];
+        ui.label("Nombre");
+        ui.text_edit_singleline(&mut track.name);
+        ui.label("Color");
+        color_picker(ui, &mut track.color);
+        ui.separator();
+        if ui.button("Duplicar pista").clicked() {
+            actions.push(Action::DuplicateTrack(t));
+            ui.close();
+        }
+        if ui.button("Eliminar pista").clicked() {
+            actions.push(Action::DeleteTrack(t));
+            ui.close();
+        }
+    });
+}
+
+fn color_picker(ui: &mut egui::Ui, color: &mut [u8; 3]) -> bool {
+    let mut changed = false;
+    ui.horizontal_wrapped(|ui| {
+        ui.spacing_mut().item_spacing = vec2(2.0, 2.0);
+        ui.set_max_width(6.0 * 18.0);
+        for c in PALETTE {
+            let (rect, response) = ui.allocate_exact_size(vec2(16.0, 16.0), Sense::click());
+            ui.painter().rect_filled(rect, 2.0, theme::rgb(c));
+            if *color == c {
+                widgets::outline(ui.painter(), rect, Color32::WHITE);
+            }
+            if response.clicked() {
+                *color = c;
+                changed = true;
+            }
+        }
+    });
+    changed
+}
+
+fn clip_slot(
     app: &PulseApp,
     ui: &mut egui::Ui,
-    (t, slot): (usize, usize),
-    is_playing: bool,
-    is_queued: bool,
-    clip_position: f64,
+    t: usize,
+    slot: usize,
+    play: &TrackPlayState,
     blink: bool,
     actions: &mut Vec<Action>,
 ) {
-    let (rect, response) = ui.allocate_exact_size(vec2(CELL_W, CELL_H), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
     let painter = ui.painter();
-    let launch_rect = Rect::from_min_size(rect.min, vec2(LAUNCH_W, CELL_H));
+    let launch = Rect::from_min_size(rect.min, vec2(LAUNCH_W, SLOT_H));
     let clip = app.project.tracks[t].clips[slot].as_ref();
-    let selected = app.selected_clip == Some((t, slot));
-    let pointer_on_launch = response
-        .hover_pos()
-        .is_some_and(|p| launch_rect.contains(p));
+    let selected = app.selected_clip == Some(ClipRef::Session { track: t, slot });
+    let on_launch = response.hover_pos().is_some_and(|p| launch.contains(p));
+    let is_playing = play.playing == slot as i32;
+    let is_queued = play.queued == slot as i32;
 
     match clip {
         Some(clip) => {
-            let base = color(clip.color);
-            painter.rect_filled(rect, 3.0, if selected { base } else { dim(base, 0.75) });
-            painter.rect_filled(launch_rect, 3.0, dim(base, 0.45));
-            let icon = if is_playing {
-                Color32::from_rgb(120, 255, 130)
-            } else if is_queued && blink {
-                Color32::from_rgb(120, 255, 130)
-            } else if pointer_on_launch {
+            let color = theme::rgb(clip.color);
+            painter.rect_filled(rect, 2.0, if response.hovered() { color } else { theme::shade(color, 0.88) });
+            let icon = if is_playing || (is_queued && blink) {
+                PLAY
+            } else if on_launch {
                 Color32::WHITE
             } else {
-                Color32::from_gray(210)
+                theme::shade(theme::text_on(color), 0.9)
             };
-            triangle(painter, launch_rect.center(), 9.0, icon);
+            if is_playing {
+                painter.rect_filled(launch.shrink(2.0), 2.0, theme::shade(color, 0.5));
+            }
+            widgets::play_triangle(painter, launch.center(), 9.0, icon);
             painter.text(
-                pos2(launch_rect.right() + 5.0, rect.center().y),
+                pos2(launch.right() + 2.0, rect.center().y),
                 Align2::LEFT_CENTER,
                 &clip.name,
-                FontId::proportional(12.5),
-                Color32::BLACK,
+                theme::small(),
+                theme::text_on(color),
             );
             if is_playing && clip.length > 0.0 {
-                let progress = (clip_position / clip.length) as f32;
-                let bar = Rect::from_min_size(
-                    pos2(rect.left(), rect.bottom() - 3.0),
-                    vec2(rect.width() * progress, 3.0),
-                );
-                painter.rect_filled(bar, 0.0, Color32::from_rgb(120, 255, 130));
+                let progress = (play.clip_position / clip.length) as f32;
+                let bar = Rect::from_min_size(pos2(rect.left(), rect.bottom() - 2.0), vec2(rect.width() * progress, 2.0));
+                painter.rect_filled(bar, 0.0, theme::shade(theme::text_on(color), 0.9));
             }
         }
         None => {
-            painter.rect_filled(rect, 3.0, Color32::from_gray(if response.hovered() { 48 } else { 38 }));
-            let stop = Rect::from_center_size(launch_rect.center(), vec2(7.0, 7.0));
-            painter.rect_filled(stop, 1.0, Color32::from_gray(if pointer_on_launch { 160 } else { 85 }));
+            painter.rect_filled(rect, 2.0, if response.hovered() { SLOT_HOVER } else { SLOT });
+            let stop = Rect::from_center_size(launch.center(), vec2(6.0, 6.0));
+            painter.rect_filled(stop, 1.0, if on_launch { TEXT } else { theme::CONTROL_HOVER });
         }
     }
     if selected {
-        painter.rect_stroke(rect, 3.0, Stroke::new(1.5, Color32::WHITE), StrokeKind::Inside);
+        widgets::outline(painter, rect, theme::SELECT);
     }
 
-    let clicked_launch = response
-        .interact_pointer_pos()
-        .is_some_and(|p| launch_rect.contains(p));
+    let clicked_launch = response.interact_pointer_pos().is_some_and(|p| launch.contains(p));
     if response.double_clicked() && clip.is_none() {
         actions.push(Action::Create(t, slot));
     } else if response.clicked() {
         if clicked_launch {
             actions.push(Action::Launch(t, slot));
         } else if clip.is_some() {
-            actions.push(Action::Select(t, slot));
+            actions.push(Action::Select(ClipRef::Session { track: t, slot }));
         } else {
-            actions.push(Action::SelectTrack(t));
+            actions.push(Action::SelectTarget(Target::Track(t)));
         }
     }
 
     let hint = if clip.is_some() {
-        "▶ lanza · clic edita · clic derecho para más"
+        "▶ lanza · clic: editar · clic derecho: más opciones"
     } else {
         "Doble clic: nuevo clip MIDI"
     };
     let response = response.on_hover_text(hint);
-    if clip.is_some() {
+    if let Some(clip) = clip {
+        let mut color = clip.color;
         response.context_menu(|ui| {
             if ui.button("Lanzar").clicked() {
                 actions.push(Action::Launch(t, slot));
                 ui.close();
             }
-            if ui.button("Duplicar").clicked() {
+            if ui.button("Copiar al Arrangement").clicked() {
+                actions.push(Action::ToArrangement(t, slot));
+                ui.close();
+            }
+            if ui.button("Duplicar   ⌘D").clicked() {
                 actions.push(Action::Duplicate(t, slot));
                 ui.close();
             }
-            if ui.button("Eliminar").clicked() {
+            if ui.button("Eliminar   Supr").clicked() {
                 actions.push(Action::Delete(t, slot));
                 ui.close();
+            }
+            ui.separator();
+            if color_picker(ui, &mut color) {
+                actions.push(Action::SetClipColor(t, slot, color));
             }
         });
     }
 }
 
-fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
-    let track = &mut app.project.tracks[t];
+fn stop_cell(ui: &mut egui::Ui, highlighted: bool, hint: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, theme::shade(SLOT, 0.85));
+    let square = Rect::from_center_size(rect.center(), vec2(9.0, 9.0));
+    let fill = if highlighted {
+        ACCENT
+    } else if response.hovered() {
+        TEXT
+    } else {
+        TEXT_DIM
+    };
+    painter.rect_filled(square, 1.0, fill);
+    response.on_hover_text(hint)
+}
+
+fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut Vec<Action>) {
+    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL });
+    let launch = Rect::from_min_size(rect.min, vec2(LAUNCH_W, SLOT_H));
+    widgets::play_triangle(painter, launch.center(), 9.0, if response.hovered() { Color32::WHITE } else { TEXT });
+    painter.text(
+        pos2(launch.right() + 2.0, rect.center().y),
+        Align2::LEFT_CENTER,
+        &app.project.scene_names[slot],
+        theme::small(),
+        TEXT,
+    );
+    if response.clicked() {
+        actions.push(Action::LaunchScene(slot));
+    }
+    response.on_hover_text("Lanzar escena · clic derecho: renombrar").context_menu(|ui| {
+        ui.label("Nombre de la escena");
+        ui.text_edit_singleline(&mut app.project.scene_names[slot]);
+    });
+}
+
+fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
+    let peak = app.meters.of(target);
     let mut commands = Vec::new();
-    ui.add_space(4.0);
+
+    // Sends.
+    match target {
+        Target::Track(t) => {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 0.0;
+                ui.set_height(SENDS_H);
+                for send in 0..NUM_RETURNS {
+                    let label = ["A", "B"][send];
+                    let value = &mut app.project.tracks[t].sends[send];
+                    let response = Knob::new(value, 0.0..=1.0, 0.0, label)
+                        .diameter(22.0)
+                        .format(|v| if v <= 0.0 { "-inf".into() } else { format!("{:.0}%", v * 100.0) })
+                        .show(ui);
+                    if response.changed() {
+                        commands.push(Command::SetSend { track: t, send, amount: *value });
+                    }
+                }
+            });
+        }
+        _ => {
+            ui.add_space(SENDS_H + 1.0);
+        }
+    }
+
+    // Pan.
     ui.horizontal(|ui| {
-        let mute_fill = if track.mute { Color32::from_gray(60) } else { Color32::from_rgb(220, 170, 60) };
-        let mute = egui::Button::new(egui::RichText::new(format!("{}", t + 1)).color(Color32::BLACK))
-            .fill(mute_fill);
-        if ui.add_sized([28.0, 20.0], mute).on_hover_text("Activar / silenciar pista").clicked() {
-            track.mute = !track.mute;
-            commands.push(Command::SetMute { track: t, mute: track.mute });
-        }
-        ui.spacing_mut().slider_width = CELL_W - 34.0;
-        let pan = ui
-            .add(egui::Slider::new(&mut track.pan, -1.0..=1.0).show_value(false))
-            .on_hover_text(format!("Pan {:+.0}", track.pan * 50.0));
-        if pan.double_clicked() {
-            track.pan = 0.0;
-        }
-        if pan.changed() || pan.double_clicked() {
-            commands.push(Command::SetPan { track: t, pan: track.pan });
+        ui.set_height(PAN_H);
+        ui.add_space((COL_W - 46.0) / 2.0);
+        let mixer = app.mixer_mut(target);
+        let response = Knob::new(&mut mixer.pan, -1.0..=1.0, 0.0, "Pan")
+            .bipolar()
+            .diameter(26.0)
+            .format(|v| match (v * 50.0).round() as i32 {
+                0 => "C".into(),
+                n if n < 0 => format!("{}L", -n),
+                n => format!("{n}R"),
+            })
+            .show(ui);
+        if response.changed() {
+            commands.push(Command::SetPan { target, pan: mixer.pan });
         }
     });
+
+    // Fader with meter.
     ui.horizontal(|ui| {
-        ui.spacing_mut().slider_width = 110.0;
-        let volume = ui
-            .add(egui::Slider::new(&mut track.volume, 0.0..=1.2).vertical().show_value(false))
-            .on_hover_text(format!("Volumen {:.0}%", track.volume * 100.0));
-        if volume.changed() {
-            commands.push(Command::SetVolume { track: t, volume: track.volume });
+        ui.add_space((COL_W - 34.0) / 2.0);
+        let mixer = app.mixer_mut(target);
+        if widgets::fader_with_meter(ui, &mut mixer.gain, peak, FADER_H).changed() {
+            commands.push(Command::SetGain { target, gain: mixer.gain });
         }
-        let (rect, _) = ui.allocate_exact_size(vec2(10.0, 110.0), Sense::hover());
-        paint_meter_in(ui.painter(), rect, app.meters[t], false);
     });
+
+    // Activator and solo.
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 2.0;
+        let label = match target {
+            Target::Track(t) => (t + 1).to_string(),
+            Target::Return(r) => ["A", "B"][r].to_string(),
+            Target::Master => String::new(),
+        };
+        if target == Target::Master {
+            ui.add_space(18.0);
+            return;
+        }
+        let active = app.mixer(target).active;
+        let width = if matches!(target, Target::Track(_)) { (COL_W - 2.0) / 2.0 } else { COL_W };
+        if widgets::toggle(ui, active, &label, ACCENT, vec2(width, 18.0))
+            .on_hover_text("Activador de pista (silenciar)")
+            .clicked()
+        {
+            let mixer = app.mixer_mut(target);
+            mixer.active = !mixer.active;
+            commands.push(Command::SetMute { target, mute: !mixer.active });
+        }
+        if let Target::Track(t) = target {
+            let solo = app.project.tracks[t].solo;
+            if widgets::toggle(ui, solo, "S", SOLO, vec2(width, 18.0)).on_hover_text("Solo").clicked() {
+                app.project.tracks[t].solo = !solo;
+                commands.push(Command::SetSolo { track: t, solo: !solo });
+            }
+        }
+    });
+
     for command in commands {
         app.audio.send(command);
     }
-}
-
-fn first_empty_slot(app: &PulseApp, t: usize, after: usize) -> Option<usize> {
-    (after + 1..NUM_SCENES).find(|&s| app.project.tracks[t].clips[s].is_none())
 }
 
 fn apply(app: &mut PulseApp, action: Action) {
     match action {
         Action::Launch(t, slot) => {
             if app.project.tracks[t].clips[slot].is_some() {
-                app.selected_clip = Some((t, slot));
+                app.selected_clip = Some(ClipRef::Session { track: t, slot });
             }
-            app.selected_track = t;
+            app.selected_target = Target::Track(t);
             app.audio.send(Command::LaunchClip { track: t, slot });
         }
-        Action::Select(t, slot) => {
-            app.selected_clip = Some((t, slot));
-            app.selected_track = t;
-        }
-        Action::SelectTrack(t) => app.selected_track = t,
+        Action::Select(clip) => app.select_clip(clip),
+        Action::SelectTarget(target) => app.selected_target = target,
         Action::Create(t, slot) => {
-            let track = &app.project.tracks[t];
-            let name = format!("Clip {}", slot + 1);
-            let clip_color = if track.color == [0, 0, 0] { PALETTE[0] } else { track.color };
-            app.set_clip(t, slot, Some(MidiClip::new(name, 4.0, clip_color)));
-            app.selected_clip = Some((t, slot));
-            app.selected_track = t;
+            let color = app.project.tracks[t].color;
+            app.set_clip(t, slot, Some(MidiClip::new("MIDI", 4.0, color)));
+            app.select_clip(ClipRef::Session { track: t, slot });
         }
         Action::Delete(t, slot) => app.set_clip(t, slot, None),
         Action::Duplicate(t, slot) => {
-            if let Some(target) = first_empty_slot(app, t, slot) {
-                let copy = app.project.tracks[t].clips[slot].clone();
-                app.set_clip(t, target, copy);
-                app.selected_clip = Some((t, target));
+            app.selected_clip = Some(ClipRef::Session { track: t, slot });
+            app.duplicate_selected_clip();
+        }
+        Action::ToArrangement(t, slot) => app.copy_to_arrangement(t, slot),
+        Action::SetClipColor(t, slot, color) => {
+            if let Some(clip) = app.project.tracks[t].clips[slot].as_mut() {
+                clip.color = color;
+                app.sync_clip(t, slot);
             }
         }
         Action::StopTrack(t) => app.audio.send(Command::StopTrack(t)),
         Action::LaunchScene(slot) => app.audio.send(Command::LaunchScene(slot)),
         Action::StopAll => app.audio.send(Command::StopAllClips),
+        Action::AddTrack => app.add_track(),
+        Action::DeleteTrack(t) => app.delete_track(t),
+        Action::DuplicateTrack(t) => app.duplicate_track(t),
     }
 }

@@ -1,10 +1,13 @@
-//! The audio-thread side: transport, clip launching, sequencing and mixing.
+//! The audio-thread side: transport, clip launching, arrangement playback,
+//! device chains and mixing.
 //!
 //! The UI talks to the engine only through a lock-free command queue, and reads
 //! back transport and clip state through atomics in [`SharedState`]. Nothing in
-//! [`Engine::process`] allocates or locks.
+//! [`Engine::process`] allocates or locks; anything the engine replaces is
+//! handed back to the UI thread as [`Garbage`] to be freed there.
 
-use crate::model::{InstrumentKind, MidiClip};
+use crate::effects::{EffectProcessor, ProcessContext};
+use crate::model::{ArrangementClip, Device, InstrumentKind, MidiClip};
 use crate::synth::{Click, DrumKit, PolySynth};
 use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -12,6 +15,9 @@ use std::sync::Arc;
 
 pub const MAX_TRACKS: usize = 8;
 pub const NUM_SCENES: usize = 8;
+pub const NUM_RETURNS: usize = 2;
+/// Devices per chain; insertions beyond this are rejected so the chain never reallocates.
+pub const MAX_CHAIN: usize = 16;
 const MAX_BLOCK: usize = 1024;
 const MAX_EVENTS: usize = 512;
 
@@ -19,13 +25,61 @@ const MAX_EVENTS: usize = 512;
 pub const QUEUED_STOP: i32 = -2;
 pub const NONE: i32 = -1;
 
+/// A mixer channel: a track, a return track or the master.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Track(usize),
+    Return(usize),
+    Master,
+}
+
+/// A device ready to run on the audio thread. Build it with [`ChainSlot::new`]
+/// on the UI thread, since that allocates.
+pub struct ChainSlot {
+    processor: Box<EffectProcessor>,
+    enabled: bool,
+}
+
+impl ChainSlot {
+    pub fn new(device: &Device, sample_rate: f32) -> Self {
+        Self {
+            processor: Box::new(EffectProcessor::new(&device.effect, sample_rate)),
+            enabled: device.enabled,
+        }
+    }
+}
+
+/// Builds a ready-to-run chain from device descriptions (allocates; UI thread only).
+pub fn build_chain(devices: &[Device], sample_rate: f32) -> Box<Vec<ChainSlot>> {
+    let mut chain = Vec::with_capacity(MAX_CHAIN);
+    chain.extend(devices.iter().take(MAX_CHAIN).map(|d| ChainSlot::new(d, sample_rate)));
+    Box::new(chain)
+}
+
+/// Things the audio thread no longer needs; the UI thread drops them.
+/// The fields are only held so they are freed off the audio thread.
+#[allow(dead_code)]
+pub enum Garbage {
+    Clip(Box<MidiClip>),
+    Device(ChainSlot),
+    Chain(Box<Vec<ChainSlot>>),
+    Arrangement(Box<Vec<ArrangementClip>>),
+}
+
 pub enum Command {
     Play,
     Stop,
+    /// Moves the playhead and the start marker that Stop returns to.
+    SetPosition(f64),
     SetTempo(f64),
     SetMetronome(bool),
     /// Launch quantization in beats; 0 launches immediately.
     SetQuantize(f64),
+    SetLoop {
+        enabled: bool,
+        start: f64,
+        end: f64,
+    },
     SetClip {
         track: usize,
         slot: usize,
@@ -38,23 +92,56 @@ pub enum Command {
     StopTrack(usize),
     LaunchScene(usize),
     StopAllClips,
+    /// Returns every track from session clips to its arrangement.
+    BackToArrangement,
+    SetArrangement {
+        track: usize,
+        clips: Box<Vec<ArrangementClip>>,
+    },
     SetInstrument {
         track: usize,
         kind: InstrumentKind,
     },
-    SetVolume {
-        track: usize,
-        volume: f32,
+    SetGain {
+        target: Target,
+        gain: f32,
     },
     SetPan {
-        track: usize,
+        target: Target,
         pan: f32,
     },
     SetMute {
-        track: usize,
+        target: Target,
         mute: bool,
     },
-    SetMasterVolume(f32),
+    SetSolo {
+        track: usize,
+        solo: bool,
+    },
+    SetSend {
+        track: usize,
+        send: usize,
+        amount: f32,
+    },
+    InsertDevice {
+        target: Target,
+        index: usize,
+        slot: ChainSlot,
+    },
+    RemoveDevice {
+        target: Target,
+        index: usize,
+    },
+    UpdateDevice {
+        target: Target,
+        index: usize,
+        device: Device,
+    },
+    /// Replaces a whole chain; build it with [`build_chain`].
+    ReplaceChain {
+        target: Target,
+        chain: Box<Vec<ChainSlot>>,
+    },
     /// Audition a note on a track, e.g. while editing in the piano roll.
     PreviewNote {
         track: usize,
@@ -63,61 +150,79 @@ pub enum Command {
     },
 }
 
+/// A float published through an atomic.
 #[derive(Default)]
+struct AtomicF64(AtomicU64);
+
+impl AtomicF64 {
+    fn load(&self) -> f64 {
+        f64::from_bits(self.0.load(Ordering::Relaxed))
+    }
+
+    fn store(&self, value: f64) {
+        self.0.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// Peak level since the UI last read it (f32 bits; non-negative floats order like u32).
+#[derive(Default)]
+pub struct Peak(AtomicU32);
+
+impl Peak {
+    fn publish(&self, peak: f32) {
+        self.0.fetch_max(peak.to_bits(), Ordering::Relaxed);
+    }
+
+    pub fn take(&self) -> f32 {
+        f32::from_bits(self.0.swap(0, Ordering::Relaxed))
+    }
+}
+
 pub struct TrackStatus {
     pub playing: AtomicI32,
     pub queued: AtomicI32,
-    /// Playhead inside the playing clip, in beats (f64 bits).
-    clip_position: AtomicU64,
-    /// Peak since the UI last read it (f32 bits; non-negative floats order like u32).
-    peak: AtomicU32,
+    pub follows_arrangement: AtomicBool,
+    clip_position: AtomicF64,
+    pub peak: Peak,
 }
 
 impl TrackStatus {
+    /// Playhead inside the playing session clip, in beats.
     pub fn clip_position(&self) -> f64 {
-        f64::from_bits(self.clip_position.load(Ordering::Relaxed))
-    }
-
-    pub fn take_peak(&self) -> f32 {
-        f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+        self.clip_position.load()
     }
 }
 
 /// State the audio thread publishes for the UI.
 pub struct SharedState {
     pub playing: AtomicBool,
-    position: AtomicU64,
-    master_peak: AtomicU32,
+    position: AtomicF64,
     pub tracks: [TrackStatus; MAX_TRACKS],
+    pub returns: [Peak; NUM_RETURNS],
+    pub master: Peak,
 }
 
 impl SharedState {
     fn new() -> Self {
-        let tracks = std::array::from_fn(|_| TrackStatus {
-            playing: AtomicI32::new(NONE),
-            queued: AtomicI32::new(NONE),
-            ..Default::default()
-        });
         Self {
             playing: AtomicBool::new(false),
-            position: AtomicU64::new(0f64.to_bits()),
-            master_peak: AtomicU32::new(0),
-            tracks,
+            position: AtomicF64::default(),
+            tracks: std::array::from_fn(|_| TrackStatus {
+                playing: AtomicI32::new(NONE),
+                queued: AtomicI32::new(NONE),
+                follows_arrangement: AtomicBool::new(true),
+                clip_position: AtomicF64::default(),
+                peak: Peak::default(),
+            }),
+            returns: Default::default(),
+            master: Peak::default(),
         }
     }
 
     /// Transport position in beats.
     pub fn position(&self) -> f64 {
-        f64::from_bits(self.position.load(Ordering::Relaxed))
+        self.position.load()
     }
-
-    pub fn take_master_peak(&self) -> f32 {
-        f32::from_bits(self.master_peak.swap(0, Ordering::Relaxed))
-    }
-}
-
-fn publish_peak(slot: &AtomicU32, peak: f32) {
-    slot.fetch_max(peak.to_bits(), Ordering::Relaxed);
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -167,78 +272,10 @@ enum Event {
     NoteOn { pitch: u8, velocity: f32, gate: u32 },
 }
 
-struct Track {
-    slots: [Option<Box<MidiClip>>; NUM_SCENES],
-    playing: Option<usize>,
-    launch_beat: f64,
-    queued: Queued,
-    instrument: Instrument,
-    volume: f32,
-    pan: f32,
-    mute: bool,
-    buffer: Vec<f32>,
-    /// (frame offset, sort rank, event). Pre-allocated; never grows on the audio thread.
-    events: Vec<(usize, u8, Event)>,
-}
+/// (frame offset, sort rank, event). Pre-allocated; never grows on the audio thread.
+type EventQueue = Vec<(usize, u8, Event)>;
 
-impl Track {
-    fn new(sample_rate: f32) -> Self {
-        Self {
-            slots: Default::default(),
-            playing: None,
-            launch_beat: 0.0,
-            queued: Queued::Nothing,
-            instrument: Instrument::new(
-                InstrumentKind::Synth(Default::default()),
-                sample_rate,
-            ),
-            volume: 0.8,
-            pan: 0.0,
-            mute: false,
-            buffer: vec![0.0; MAX_BLOCK],
-            events: Vec::with_capacity(MAX_EVENTS),
-        }
-    }
-
-    fn push_event(&mut self, frame: usize, event: Event) {
-        push_event(&mut self.events, frame, event);
-    }
-
-    /// Queues note-ons of the playing clip that start in the beat range `[from, to)`.
-    fn collect_notes(&mut self, from: f64, to: f64, block_start: f64, beats_per_sample: f64, frames: usize) {
-        let Some(clip) = self.playing.and_then(|slot| self.slots[slot].as_ref()) else { return };
-        if clip.length <= 0.0 || to <= from {
-            return;
-        }
-        let local_from = from - self.launch_beat;
-        let local_to = to - self.launch_beat;
-        let first_lap = (local_from / clip.length).floor() as i64;
-        let last_lap = (local_to / clip.length).floor() as i64;
-        for lap in first_lap..=last_lap {
-            let lap_start = lap as f64 * clip.length;
-            for note in clip.notes.iter().filter(|note| note.start < clip.length) {
-                let t = lap_start + note.start;
-                if t < local_from || t >= local_to {
-                    continue;
-                }
-                let beat = self.launch_beat + t;
-                let frame = (((beat - block_start) / beats_per_sample) as usize).min(frames - 1);
-                let gate = (note.length / beats_per_sample).max(1.0) as u32;
-                push_event(
-                    &mut self.events,
-                    frame,
-                    Event::NoteOn {
-                        pitch: note.pitch,
-                        velocity: note.velocity,
-                        gate,
-                    },
-                );
-            }
-        }
-    }
-}
-
-fn push_event(events: &mut Vec<(usize, u8, Event)>, frame: usize, event: Event) {
+fn push_event(events: &mut EventQueue, frame: usize, event: Event) {
     if events.len() < MAX_EVENTS {
         let rank = match event {
             Event::AllNotesOff => 0,
@@ -248,21 +285,174 @@ fn push_event(events: &mut Vec<(usize, u8, Event)>, frame: usize, event: Event) 
     }
 }
 
+/// Maps beats inside the current segment of a block to frame offsets.
+#[derive(Clone, Copy)]
+struct Timing {
+    segment_beat: f64,
+    segment_frame: usize,
+    beats_per_sample: f64,
+    frames: usize,
+}
+
+impl Timing {
+    fn frame(&self, beat: f64) -> usize {
+        let offset = ((beat - self.segment_beat) / self.beats_per_sample).max(0.0) as usize;
+        (self.segment_frame + offset).min(self.frames - 1)
+    }
+}
+
+/// Schedules note-ons of `clip` (looping, local time 0 at `origin`) that start in
+/// `[from, to)`. Notes are cut short at `limit`.
+fn schedule_notes(
+    clip: &MidiClip,
+    origin: f64,
+    from: f64,
+    to: f64,
+    limit: f64,
+    timing: &Timing,
+    events: &mut EventQueue,
+) {
+    if clip.length <= 0.0 || to <= from {
+        return;
+    }
+    let local_from = from - origin;
+    let local_to = to - origin;
+    let first_lap = (local_from / clip.length).floor() as i64;
+    let last_lap = (local_to / clip.length).floor() as i64;
+    for lap in first_lap..=last_lap {
+        let lap_start = lap as f64 * clip.length;
+        for note in clip.notes.iter().filter(|n| n.start < clip.length) {
+            let t = lap_start + note.start;
+            if t < local_from || t >= local_to {
+                continue;
+            }
+            let beat = origin + t;
+            let length = note.length.min(limit - beat);
+            if length <= 0.0 {
+                continue;
+            }
+            let gate = (length / timing.beats_per_sample).max(1.0) as u32;
+            push_event(
+                events,
+                timing.frame(beat),
+                Event::NoteOn {
+                    pitch: note.pitch,
+                    velocity: note.velocity,
+                    gate,
+                },
+            );
+        }
+    }
+}
+
+struct Channel {
+    chain: Vec<ChainSlot>,
+    gain: f32,
+    pan: f32,
+    mute: bool,
+    left: Vec<f32>,
+    right: Vec<f32>,
+}
+
+impl Channel {
+    fn new() -> Self {
+        Self {
+            chain: Vec::with_capacity(MAX_CHAIN),
+            gain: 1.0,
+            pan: 0.0,
+            mute: false,
+            left: vec![0.0; MAX_BLOCK],
+            right: vec![0.0; MAX_BLOCK],
+        }
+    }
+
+    fn run_chain(&mut self, n: usize, ctx: &ProcessContext) {
+        let (left, right) = (&mut self.left[..n], &mut self.right[..n]);
+        for slot in self.chain.iter_mut().filter(|s| s.enabled) {
+            slot.processor.process(left, right, ctx);
+        }
+    }
+
+    /// Constant-power pan law, unity at center, combined with the fader gain.
+    fn pan_gains(&self, gain: f32) -> (f32, f32) {
+        let angle = (self.pan + 1.0) * std::f32::consts::FRAC_PI_4;
+        let unity = std::f32::consts::SQRT_2;
+        (angle.cos() * gain * unity, angle.sin() * gain * unity)
+    }
+}
+
+struct Track {
+    channel: Channel,
+    slots: [Option<Box<MidiClip>>; NUM_SCENES],
+    playing: Option<usize>,
+    launch_beat: f64,
+    queued: Queued,
+    instrument: Instrument,
+    solo: bool,
+    sends: [f32; NUM_RETURNS],
+    arrangement: Box<Vec<ArrangementClip>>,
+    follows_arrangement: bool,
+    buffer: Vec<f32>,
+    events: EventQueue,
+}
+
+impl Track {
+    fn new(sample_rate: f32) -> Self {
+        Self {
+            channel: Channel::new(),
+            slots: Default::default(),
+            playing: None,
+            launch_beat: 0.0,
+            queued: Queued::Nothing,
+            instrument: Instrument::new(InstrumentKind::Synth(Default::default()), sample_rate),
+            solo: false,
+            sends: [0.0; NUM_RETURNS],
+            arrangement: Box::default(),
+            follows_arrangement: true,
+            buffer: vec![0.0; MAX_BLOCK],
+            events: Vec::with_capacity(MAX_EVENTS),
+        }
+    }
+
+    /// Queues the note-ons that start in the beat range `[from, to)`.
+    fn collect_notes(&mut self, from: f64, to: f64, timing: &Timing) {
+        if let Some(clip) = self.playing.and_then(|slot| self.slots[slot].as_ref()) {
+            schedule_notes(clip, self.launch_beat, from, to, f64::INFINITY, timing, &mut self.events);
+        } else if self.playing.is_none() && self.follows_arrangement {
+            for placed in self.arrangement.iter() {
+                let (start, end) = (from.max(placed.start), to.min(placed.end()));
+                if start < end {
+                    schedule_notes(&placed.clip, placed.start, start, end, placed.end(), timing, &mut self.events);
+                }
+            }
+        }
+    }
+
+    fn stop_session_clip(&mut self) {
+        self.playing = None;
+        self.queued = Queued::Nothing;
+        self.instrument.all_notes_off();
+    }
+}
+
 pub struct Engine {
     commands: Consumer<Command>,
-    garbage: Producer<Box<MidiClip>>,
+    garbage: Producer<Garbage>,
     shared: Arc<SharedState>,
     sample_rate: f32,
     tracks: Vec<Track>,
+    returns: Vec<Channel>,
+    master: Channel,
     playing: bool,
     position: f64,
+    start_marker: f64,
     tempo: f64,
     quantize: f64,
+    loop_enabled: bool,
+    loop_start: f64,
+    loop_end: f64,
     metronome: bool,
     click: Click,
-    master_volume: f32,
-    master_left: Vec<f32>,
-    master_right: Vec<f32>,
     click_buffer: Vec<f32>,
 }
 
@@ -270,7 +460,7 @@ impl Engine {
     pub fn new(
         sample_rate: f32,
         commands: Consumer<Command>,
-        garbage: Producer<Box<MidiClip>>,
+        garbage: Producer<Garbage>,
     ) -> (Self, Arc<SharedState>) {
         let shared = Arc::new(SharedState::new());
         let engine = Self {
@@ -279,32 +469,41 @@ impl Engine {
             shared: shared.clone(),
             sample_rate,
             tracks: (0..MAX_TRACKS).map(|_| Track::new(sample_rate)).collect(),
+            returns: (0..NUM_RETURNS).map(|_| Channel::new()).collect(),
+            master: Channel::new(),
             playing: false,
             position: 0.0,
+            start_marker: 0.0,
             tempo: 120.0,
             quantize: 4.0,
+            loop_enabled: false,
+            loop_start: 0.0,
+            loop_end: 16.0,
             metronome: false,
             click: Click::new(sample_rate),
-            master_volume: 0.8,
-            master_left: vec![0.0; MAX_BLOCK],
-            master_right: vec![0.0; MAX_BLOCK],
             click_buffer: vec![0.0; MAX_BLOCK],
         };
         (engine, shared)
     }
 
-    /// Hands a replaced clip back to the UI thread so it is freed there.
-    fn discard(&mut self, clip: Option<Box<MidiClip>>) {
-        if let Some(clip) = clip {
-            // If the queue is full we have to free it here; it is rare and only costs a free().
-            let _ = self.garbage.push(clip);
+    /// Hands something back to the UI thread so it is freed there.
+    fn discard(&mut self, garbage: Garbage) {
+        // If the queue is full it is freed here; rare, and only costs a free().
+        let _ = self.garbage.push(garbage);
+    }
+
+    fn channel(&mut self, target: Target) -> Option<&mut Channel> {
+        match target {
+            Target::Track(i) => self.tracks.get_mut(i).map(|t| &mut t.channel),
+            Target::Return(i) => self.returns.get_mut(i),
+            Target::Master => Some(&mut self.master),
         }
     }
 
     fn start_transport(&mut self) {
         if !self.playing {
             self.playing = true;
-            self.position = 0.0;
+            self.position = self.start_marker;
         }
     }
 
@@ -313,16 +512,26 @@ impl Engine {
             Command::Play => self.start_transport(),
             Command::Stop => {
                 self.playing = false;
-                self.position = 0.0;
+                self.position = self.start_marker;
                 for track in &mut self.tracks {
-                    track.playing = None;
-                    track.queued = Queued::Nothing;
-                    track.instrument.all_notes_off();
+                    track.stop_session_clip();
+                }
+            }
+            Command::SetPosition(beat) => {
+                self.start_marker = beat.max(0.0);
+                self.position = self.start_marker;
+                for track in &mut self.tracks {
+                    push_event(&mut track.events, 0, Event::AllNotesOff);
                 }
             }
             Command::SetTempo(bpm) => self.tempo = bpm.clamp(20.0, 999.0),
             Command::SetMetronome(on) => self.metronome = on,
             Command::SetQuantize(beats) => self.quantize = beats.max(0.0),
+            Command::SetLoop { enabled, start, end } => {
+                self.loop_enabled = enabled && end > start;
+                self.loop_start = start.max(0.0);
+                self.loop_end = end;
+            }
             Command::SetClip { track, slot, clip } => {
                 let Some(t) = self.tracks.get_mut(track) else { return };
                 if slot >= NUM_SCENES {
@@ -337,7 +546,9 @@ impl Engine {
                 if removed && t.queued == Queued::Slot(slot) {
                     t.queued = Queued::Nothing;
                 }
-                self.discard(old);
+                if let Some(old) = old {
+                    self.discard(Garbage::Clip(old));
+                }
             }
             Command::LaunchClip { track, slot } => {
                 let Some(t) = self.tracks.get_mut(track) else { return };
@@ -377,6 +588,21 @@ impl Engine {
                     t.queued = Queued::Stop;
                 }
             }
+            Command::BackToArrangement => {
+                for t in &mut self.tracks {
+                    t.stop_session_clip();
+                    t.follows_arrangement = true;
+                }
+            }
+            Command::SetArrangement { track, mut clips } => {
+                let Some(t) = self.tracks.get_mut(track) else { return };
+                std::mem::swap(&mut t.arrangement, &mut clips);
+                if t.playing.is_none() {
+                    // Edits under the playhead must not leave hanging notes.
+                    t.instrument.all_notes_off();
+                }
+                self.discard(Garbage::Arrangement(clips));
+            }
             Command::SetInstrument { track, kind } => {
                 let Some(t) = self.tracks.get_mut(track) else { return };
                 match (&mut t.instrument, kind) {
@@ -386,22 +612,64 @@ impl Engine {
                     _ => t.instrument = Instrument::new(kind, self.sample_rate),
                 }
             }
-            Command::SetVolume { track, volume } => {
-                if let Some(t) = self.tracks.get_mut(track) {
-                    t.volume = volume.max(0.0);
+            Command::SetGain { target, gain } => {
+                if let Some(c) = self.channel(target) {
+                    c.gain = gain.max(0.0);
                 }
             }
-            Command::SetPan { track, pan } => {
-                if let Some(t) = self.tracks.get_mut(track) {
-                    t.pan = pan.clamp(-1.0, 1.0);
+            Command::SetPan { target, pan } => {
+                if let Some(c) = self.channel(target) {
+                    c.pan = pan.clamp(-1.0, 1.0);
                 }
             }
-            Command::SetMute { track, mute } => {
-                if let Some(t) = self.tracks.get_mut(track) {
-                    t.mute = mute;
+            Command::SetMute { target, mute } => {
+                if let Some(c) = self.channel(target) {
+                    c.mute = mute;
                 }
             }
-            Command::SetMasterVolume(volume) => self.master_volume = volume.max(0.0),
+            Command::SetSolo { track, solo } => {
+                if let Some(t) = self.tracks.get_mut(track) {
+                    t.solo = solo;
+                }
+            }
+            Command::SetSend { track, send, amount } => {
+                if let Some(s) = self.tracks.get_mut(track).and_then(|t| t.sends.get_mut(send)) {
+                    *s = amount.clamp(0.0, 1.0);
+                }
+            }
+            Command::InsertDevice { target, index, slot } => {
+                let rejected = match self.channel(target) {
+                    Some(c) if c.chain.len() < c.chain.capacity() => {
+                        let index = index.min(c.chain.len());
+                        c.chain.insert(index, slot);
+                        None
+                    }
+                    _ => Some(slot),
+                };
+                if let Some(slot) = rejected {
+                    self.discard(Garbage::Device(slot));
+                }
+            }
+            Command::RemoveDevice { target, index } => {
+                let removed = self
+                    .channel(target)
+                    .filter(|c| index < c.chain.len())
+                    .map(|c| c.chain.remove(index));
+                if let Some(slot) = removed {
+                    self.discard(Garbage::Device(slot));
+                }
+            }
+            Command::UpdateDevice { target, index, device } => {
+                if let Some(slot) = self.channel(target).and_then(|c| c.chain.get_mut(index)) {
+                    slot.enabled = device.enabled;
+                    slot.processor.set_params(&device.effect);
+                }
+            }
+            Command::ReplaceChain { target, mut chain } => {
+                let Some(c) = self.channel(target) else { return };
+                std::mem::swap(&mut c.chain, &mut chain);
+                self.discard(Garbage::Chain(chain));
+            }
             Command::PreviewNote {
                 track,
                 pitch,
@@ -409,13 +677,13 @@ impl Engine {
             } => {
                 let gate = (0.3 * self.sample_rate) as u32;
                 if let Some(t) = self.tracks.get_mut(track) {
-                    t.push_event(0, Event::NoteOn { pitch, velocity, gate });
+                    push_event(&mut t.events, 0, Event::NoteOn { pitch, velocity, gate });
                 }
             }
         }
     }
 
-    /// Renders `frames` interleaved frames into `out`.
+    /// Renders interleaved frames into `out`.
     pub fn process(&mut self, out: &mut [f32], channels: usize) {
         for t in &mut self.tracks {
             t.events.clear();
@@ -429,17 +697,15 @@ impl Engine {
         while done < frames {
             let n = (frames - done).min(MAX_BLOCK);
             self.render_block(n);
+            let (left, right) = (&self.master.left, &self.master.right);
             for i in 0..n {
                 let frame = &mut out[(done + i) * channels..(done + i + 1) * channels];
-                let (l, r) = (self.master_left[i], self.master_right[i]);
                 match channels {
-                    1 => frame[0] = 0.5 * (l + r),
+                    1 => frame[0] = 0.5 * (left[i] + right[i]),
                     _ => {
-                        frame[0] = l;
-                        frame[1] = r;
-                        for extra in &mut frame[2..] {
-                            *extra = 0.0;
-                        }
+                        frame[0] = left[i];
+                        frame[1] = right[i];
+                        frame[2..].fill(0.0);
                     }
                 }
             }
@@ -449,12 +715,23 @@ impl Engine {
     }
 
     fn render_block(&mut self, n: usize) {
+        let beats_per_sample = self.tempo / 60.0 / self.sample_rate as f64;
+        let ctx = ProcessContext {
+            sample_rate: self.sample_rate,
+            tempo: self.tempo,
+            beat: self.position,
+            beats_per_sample: if self.playing { beats_per_sample } else { 0.0 },
+        };
         if self.playing {
-            self.sequence(n);
+            self.sequence(n, beats_per_sample);
         }
 
-        self.master_left[..n].fill(0.0);
-        self.master_right[..n].fill(0.0);
+        for channel in self.returns.iter_mut().chain([&mut self.master]) {
+            channel.left[..n].fill(0.0);
+            channel.right[..n].fill(0.0);
+        }
+
+        let any_solo = self.tracks.iter().any(|t| t.solo);
         for (index, track) in self.tracks.iter_mut().enumerate() {
             let buffer = &mut track.buffer[..n];
             buffer.fill(0.0);
@@ -468,53 +745,111 @@ impl Engine {
                 }
                 match event {
                     Event::AllNotesOff => track.instrument.all_notes_off(),
-                    Event::NoteOn { pitch, velocity, gate } => {
-                        track.instrument.note_on(pitch, velocity, gate)
-                    }
+                    Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(pitch, velocity, gate),
                 }
             }
             track.instrument.render(&mut buffer[cursor..]);
             track.events.clear();
 
-            let gain = if track.mute { 0.0 } else { track.volume };
-            // Equal-power pan.
-            let angle = (track.pan + 1.0) * std::f32::consts::FRAC_PI_4;
-            let (left_gain, right_gain) = (angle.cos() * gain, angle.sin() * gain);
+            let channel = &mut track.channel;
+            channel.left[..n].copy_from_slice(buffer);
+            channel.right[..n].copy_from_slice(buffer);
+            channel.run_chain(n, &ctx);
+
+            let audible = !channel.mute && (!any_solo || track.solo);
+            let gain = if audible { channel.gain } else { 0.0 };
+            let (gl, gr) = channel.pan_gains(gain);
             let mut peak = 0f32;
             for i in 0..n {
-                let s = buffer[i];
-                peak = peak.max((s * gain).abs());
-                self.master_left[i] += s * left_gain;
-                self.master_right[i] += s * right_gain;
+                let (l, r) = (channel.left[i], channel.right[i]);
+                let (out_l, out_r) = (l * gl, r * gr);
+                peak = peak.max(out_l.abs()).max(out_r.abs());
+                self.master.left[i] += out_l;
+                self.master.right[i] += out_r;
+                // Post-fader sends, taken before panning.
+                for (ret, &amount) in self.returns.iter_mut().zip(&track.sends) {
+                    if amount > 0.0 {
+                        ret.left[i] += l * gain * amount;
+                        ret.right[i] += r * gain * amount;
+                    }
+                }
             }
-            publish_peak(&self.shared.tracks[index].peak, peak);
+            self.shared.tracks[index].peak.publish(peak);
         }
 
+        for (index, ret) in self.returns.iter_mut().enumerate() {
+            ret.run_chain(n, &ctx);
+            let (gl, gr) = ret.pan_gains(if ret.mute { 0.0 } else { ret.gain });
+            let mut peak = 0f32;
+            for i in 0..n {
+                let (l, r) = (ret.left[i] * gl, ret.right[i] * gr);
+                peak = peak.max(l.abs()).max(r.abs());
+                self.master.left[i] += l;
+                self.master.right[i] += r;
+            }
+            self.shared.returns[index].publish(peak);
+        }
+
+        let master = &mut self.master;
+        master.run_chain(n, &ctx);
+        let (gl, gr) = master.pan_gains(master.gain);
         let click = &mut self.click_buffer[..n];
         click.fill(0.0);
         self.click.render(click);
-
         let mut peak = 0f32;
         for i in 0..n {
-            // Gentle saturation keeps an overloaded mix from hard clipping.
-            let l = ((self.master_left[i] + click[i]) * self.master_volume).tanh();
-            let r = ((self.master_right[i] + click[i]) * self.master_volume).tanh();
+            let l = master.left[i] * gl + click[i];
+            let r = master.right[i] * gr + click[i];
             peak = peak.max(l.abs()).max(r.abs());
-            self.master_left[i] = l;
-            self.master_right[i] = r;
+            // Safety limit only; the meter shows the real level.
+            master.left[i] = l.clamp(-1.0, 1.0);
+            master.right[i] = r.clamp(-1.0, 1.0);
         }
-        publish_peak(&self.shared.master_peak, peak);
+        self.shared.master.publish(peak);
     }
 
-    /// Advances the transport over `n` frames, applying quantized launches and
-    /// scheduling the notes that fall inside the block.
-    fn sequence(&mut self, n: usize) {
-        let beats_per_sample = self.tempo / 60.0 / self.sample_rate as f64;
-        let start = self.position;
-        let end = start + n as f64 * beats_per_sample;
-        let frame_of = |beat: f64| (((beat - start) / beats_per_sample) as usize).min(n - 1);
+    /// Advances the transport over `n` frames, wrapping at the loop end.
+    fn sequence(&mut self, n: usize, beats_per_sample: f64) {
+        let mut frame = 0;
+        while frame < n {
+            let remaining = n - frame;
+            let start = self.position;
+            let wraps = self.loop_enabled
+                && start < self.loop_end
+                && start + remaining as f64 * beats_per_sample > self.loop_end;
+            let (frames, end) = if wraps {
+                let frames = (((self.loop_end - start) / beats_per_sample).ceil() as usize).clamp(1, remaining);
+                (frames, self.loop_end)
+            } else {
+                (remaining, start + remaining as f64 * beats_per_sample)
+            };
+            let timing = Timing {
+                segment_beat: start,
+                segment_frame: frame,
+                beats_per_sample,
+                frames: n,
+            };
+            self.sequence_segment(start, end, &timing);
+            frame += frames;
+            self.position = end;
 
-        let any_queued = self.tracks.iter().any(|t| t.queued != Queued::Nothing);
+            if wraps {
+                let length = self.loop_end - self.loop_start;
+                self.position = self.loop_start;
+                let wrap_frame = timing.frame(end);
+                for track in &mut self.tracks {
+                    // Session clips keep their phase across the jump.
+                    track.launch_beat -= length;
+                    if track.playing.is_none() {
+                        push_event(&mut track.events, wrap_frame, Event::AllNotesOff);
+                    }
+                }
+            }
+        }
+    }
+
+    /// Applies quantized launches and schedules the notes in `[start, end)`.
+    fn sequence_segment(&mut self, start: f64, end: f64, timing: &Timing) {
         let boundary = if self.quantize <= 0.0 {
             start
         } else {
@@ -522,62 +857,53 @@ impl Engine {
             ((start - 1e-9) / self.quantize).ceil() * self.quantize
         };
 
-        if any_queued && boundary < end {
-            let frame = frame_of(boundary);
-            for track in &mut self.tracks {
-                track.collect_notes(start, boundary, start, beats_per_sample, n);
-                match track.queued {
-                    Queued::Nothing => {}
-                    Queued::Stop => {
-                        track.playing = None;
-                        track.push_event(frame, Event::AllNotesOff);
-                    }
-                    Queued::Slot(slot) => {
-                        track.playing = Some(slot);
-                        track.launch_beat = boundary;
-                        track.push_event(frame, Event::AllNotesOff);
-                    }
+        for track in &mut self.tracks {
+            if track.queued == Queued::Nothing || boundary >= end {
+                track.collect_notes(start, end, timing);
+                continue;
+            }
+            track.collect_notes(start, boundary, timing);
+            match track.queued {
+                Queued::Nothing => {}
+                Queued::Stop => track.playing = None,
+                Queued::Slot(slot) => {
+                    track.playing = Some(slot);
+                    track.launch_beat = boundary;
                 }
-                track.queued = Queued::Nothing;
-                track.collect_notes(boundary, end, start, beats_per_sample, n);
             }
-        } else {
-            for track in &mut self.tracks {
-                track.collect_notes(start, end, start, beats_per_sample, n);
-            }
+            // Session activity on a track overrides its arrangement until "Back to Arrangement".
+            track.follows_arrangement = false;
+            track.queued = Queued::Nothing;
+            push_event(&mut track.events, timing.frame(boundary), Event::AllNotesOff);
+            track.collect_notes(boundary, end, timing);
         }
 
         if self.metronome {
-            let first_beat = (start - 1e-9).ceil();
-            if first_beat < end {
-                self.click
-                    .trigger((first_beat as i64).rem_euclid(4) == 0, frame_of(first_beat));
+            let beat = (start - 1e-9).ceil();
+            if beat < end {
+                self.click.trigger((beat as i64).rem_euclid(4) == 0, timing.frame(beat));
             }
         }
-
-        self.position = end;
     }
 
     fn publish(&self) {
         let s = &self.shared;
         s.playing.store(self.playing, Ordering::Relaxed);
-        s.position.store(self.position.to_bits(), Ordering::Relaxed);
+        s.position.store(self.position);
         for (track, status) in self.tracks.iter().zip(&s.tracks) {
-            let playing = track.playing.map_or(NONE, |p| p as i32);
             let queued = match track.queued {
                 Queued::Nothing => NONE,
                 Queued::Stop => QUEUED_STOP,
                 Queued::Slot(slot) => slot as i32,
             };
-            status.playing.store(playing, Ordering::Relaxed);
+            status.playing.store(track.playing.map_or(NONE, |p| p as i32), Ordering::Relaxed);
             status.queued.store(queued, Ordering::Relaxed);
+            status.follows_arrangement.store(track.follows_arrangement, Ordering::Relaxed);
             let clip_position = match track.playing.and_then(|p| track.slots[p].as_ref()) {
-                Some(clip) if clip.length > 0.0 => {
-                    (self.position - track.launch_beat).rem_euclid(clip.length)
-                }
+                Some(clip) if clip.length > 0.0 => (self.position - track.launch_beat).rem_euclid(clip.length),
                 _ => 0.0,
             };
-            status.clip_position.store(clip_position.to_bits(), Ordering::Relaxed);
+            status.clip_position.store(clip_position);
         }
     }
 }
@@ -585,7 +911,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{InstrumentKind, MidiClip, Note};
+    use crate::model::{Device, Effect, InstrumentKind, MidiClip, Note};
     use rtrb::RingBuffer;
 
     const SR: f32 = 48_000.0;
@@ -594,7 +920,7 @@ mod tests {
         engine: Engine,
         commands: Producer<Command>,
         shared: Arc<SharedState>,
-        _garbage: Consumer<Box<MidiClip>>,
+        _garbage: Consumer<Garbage>,
     }
 
     impl Harness {
@@ -618,6 +944,10 @@ mod tests {
             }
             out
         }
+
+        fn playing(&self, track: usize) -> i32 {
+            self.shared.tracks[track].playing.load(Ordering::Relaxed)
+        }
     }
 
     fn one_note_clip() -> Box<MidiClip> {
@@ -637,7 +967,7 @@ mod tests {
         h.send(Command::LaunchClip { track: 0, slot: 0 });
         let audio = h.run_beats(1.0);
         assert!(h.shared.playing.load(Ordering::Relaxed));
-        assert_eq!(h.shared.tracks[0].playing.load(Ordering::Relaxed), 0);
+        assert_eq!(h.playing(0), 0);
         assert!(energy(&audio) > 1.0, "clip should be audible");
     }
 
@@ -650,10 +980,10 @@ mod tests {
         h.run_beats(1.0);
         h.send(Command::LaunchClip { track: 0, slot: 1 });
         h.run_beats(2.0); // now at beat 3: still in the first bar
-        assert_eq!(h.shared.tracks[0].playing.load(Ordering::Relaxed), 0);
+        assert_eq!(h.playing(0), 0);
         assert_eq!(h.shared.tracks[0].queued.load(Ordering::Relaxed), 1);
         h.run_beats(1.5); // past beat 4
-        assert_eq!(h.shared.tracks[0].playing.load(Ordering::Relaxed), 1);
+        assert_eq!(h.playing(0), 1);
         assert_eq!(h.shared.tracks[0].queued.load(Ordering::Relaxed), NONE);
     }
 
@@ -667,8 +997,8 @@ mod tests {
         h.run_beats(1.0);
         h.send(Command::LaunchScene(1));
         h.run_beats(4.0);
-        assert_eq!(h.shared.tracks[0].playing.load(Ordering::Relaxed), 1);
-        assert_eq!(h.shared.tracks[1].playing.load(Ordering::Relaxed), NONE);
+        assert_eq!(h.playing(0), 1);
+        assert_eq!(h.playing(1), NONE);
     }
 
     #[test]
@@ -680,15 +1010,13 @@ mod tests {
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(clip)) });
         h.send(Command::LaunchClip { track: 0, slot: 0 });
         h.run_beats(8.0);
-        // Fifth lap of a one-beat loop: the kick must sound again.
         let late = h.run_beats(1.0);
         assert!(energy(&late) > 1.0);
-        let pos = h.shared.tracks[0].clip_position();
-        assert!((0.0..1.0).contains(&pos));
+        assert!((0.0..1.0).contains(&h.shared.tracks[0].clip_position()));
     }
 
     #[test]
-    fn stop_silences_and_resets() {
+    fn stop_silences_and_returns_to_the_start_marker() {
         let mut h = Harness::new();
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
         h.send(Command::LaunchClip { track: 0, slot: 0 });
@@ -699,5 +1027,78 @@ mod tests {
         assert!(!h.shared.playing.load(Ordering::Relaxed));
         assert_eq!(h.shared.position(), 0.0);
         assert!(energy(&tail) < 1e-6);
+    }
+
+    fn arrangement_with_note_at(beat: f64) -> Box<Vec<ArrangementClip>> {
+        let mut clip = MidiClip::new("arr", 4.0, [0, 0, 0]);
+        clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0 });
+        Box::new(vec![ArrangementClip { start: beat, length: 4.0, clip }])
+    }
+
+    #[test]
+    fn arrangement_clips_play_at_their_position() {
+        let mut h = Harness::new();
+        h.send(Command::SetArrangement { track: 0, clips: arrangement_with_note_at(4.0) });
+        h.send(Command::Play);
+        let before = h.run_beats(3.5);
+        assert!(energy(&before) < 1e-6, "nothing should sound before the clip");
+        let during = h.run_beats(1.5);
+        assert!(energy(&during) > 1.0, "the arrangement clip should sound");
+    }
+
+    #[test]
+    fn session_launch_overrides_arrangement_until_back_to_arrangement() {
+        let mut h = Harness::new();
+        h.send(Command::SetArrangement { track: 0, clips: arrangement_with_note_at(0.0) });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(0.5);
+        assert!(!h.shared.tracks[0].follows_arrangement.load(Ordering::Relaxed));
+        h.send(Command::BackToArrangement);
+        h.run_beats(0.1);
+        assert!(h.shared.tracks[0].follows_arrangement.load(Ordering::Relaxed));
+        assert_eq!(h.playing(0), NONE);
+    }
+
+    #[test]
+    fn loop_wraps_the_playhead() {
+        let mut h = Harness::new();
+        h.send(Command::SetLoop { enabled: true, start: 4.0, end: 8.0 });
+        h.send(Command::SetPosition(4.0));
+        h.send(Command::Play);
+        h.run_beats(5.0);
+        let pos = h.shared.position();
+        assert!((4.9..5.1).contains(&pos), "expected about beat 5 after wrapping, got {pos}");
+    }
+
+    #[test]
+    fn solo_mutes_other_tracks_and_sends_reach_returns() {
+        let mut h = Harness::new();
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::SetClip { track: 1, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::SetSolo { track: 1, solo: true });
+        h.send(Command::SetSend { track: 1, send: 0, amount: 1.0 });
+        h.send(Command::LaunchScene(0));
+        h.run_beats(1.0);
+        assert_eq!(h.shared.tracks[0].peak.take(), 0.0);
+        assert!(h.shared.tracks[1].peak.take() > 0.0);
+        assert!(h.shared.returns[0].take() > 0.0);
+    }
+
+    #[test]
+    fn device_chain_processes_and_can_be_edited() {
+        let mut h = Harness::new();
+        let device = Device::new(Effect::Reverb(Default::default()));
+        h.send(Command::InsertDevice { target: Target::Master, index: 0, slot: ChainSlot::new(&device, SR) });
+        let mut off = device;
+        off.enabled = false;
+        h.send(Command::UpdateDevice { target: Target::Master, index: 0, device: off });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        let audio = h.run_beats(1.0);
+        assert!(audio.iter().all(|s| s.is_finite()));
+        h.send(Command::RemoveDevice { target: Target::Master, index: 0 });
+        h.run_beats(0.1);
+        assert!(h.engine.master.chain.is_empty());
     }
 }

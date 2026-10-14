@@ -1,7 +1,6 @@
 //! Connects the [`Engine`] to the system audio output through cpal.
 
-use crate::engine::{Command, Engine, SharedState};
-use crate::model::MidiClip;
+use crate::engine::{Command, Engine, Garbage, SharedState};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
@@ -10,7 +9,7 @@ use std::sync::Arc;
 /// The UI thread's handle to a running engine.
 pub struct EngineHandle {
     commands: Producer<Command>,
-    garbage: Consumer<Box<MidiClip>>,
+    garbage: Consumer<Garbage>,
     pub state: Arc<SharedState>,
     pub sample_rate: f32,
     pub device_name: String,
@@ -22,7 +21,7 @@ impl EngineHandle {
         self.commands.push(command).is_ok()
     }
 
-    /// Frees clips the audio thread has replaced. Call regularly from the UI thread.
+    /// Frees whatever the audio thread has replaced (clips, devices, chains). Call regularly from the UI thread.
     pub fn collect_garbage(&mut self) {
         while self.garbage.pop().is_ok() {}
     }
@@ -49,8 +48,8 @@ pub fn start() -> Result<(AudioOutput, EngineHandle), String> {
     let config: StreamConfig = supported.into();
     let sample_rate = config.sample_rate as f32;
 
-    let (command_tx, command_rx) = RingBuffer::new(1024);
-    let (garbage_tx, garbage_rx) = RingBuffer::new(256);
+    let (command_tx, command_rx) = RingBuffer::new(4096);
+    let (garbage_tx, garbage_rx) = RingBuffer::new(1024);
     let (engine, state) = Engine::new(sample_rate, command_rx, garbage_tx);
 
     let stream = match format {

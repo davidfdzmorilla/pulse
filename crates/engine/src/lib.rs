@@ -4,6 +4,7 @@ mod audio;
 mod effects;
 mod engine;
 mod input;
+mod instruments;
 mod offline;
 pub mod model;
 mod sample;

@@ -508,9 +508,7 @@ impl PulseApp {
             Param::Send(_) => Some(SEND_PARAM),
             Param::Device { device, param } => self.devices(target).get(device)?.effect.params().get(param).copied(),
             Param::Instrument(i) => match target {
-                Target::Track(t) if matches!(self.project.tracks[t].instrument, InstrumentKind::Synth(_)) => {
-                    SynthParams::params().get(i).copied()
-                }
+                Target::Track(t) if !self.project.tracks[t].is_audio() => self.project.tracks[t].instrument.params().get(i).copied(),
                 _ => None,
             },
         }
@@ -526,7 +524,10 @@ impl PulseApp {
                 let label = self.devices(target).get(device).map_or("?", |d| d.effect.label());
                 format!("{} {label}: {info}", device + 1)
             }
-            Param::Instrument(_) => format!("Synth: {info}"),
+            Param::Instrument(_) => match target {
+                Target::Track(t) => format!("{}: {info}", self.project.tracks[t].instrument.label()),
+                _ => info.to_string(),
+            },
         }
     }
 
@@ -535,8 +536,8 @@ impl PulseApp {
         let mut params = vec![Param::Volume, Param::Pan];
         if let Target::Track(t) = target {
             params.extend((0..NUM_RETURNS).map(Param::Send));
-            if !self.project.tracks[t].is_audio() && matches!(self.project.tracks[t].instrument, InstrumentKind::Synth(_)) {
-                params.extend((0..SynthParams::params().len()).map(Param::Instrument));
+            if !self.project.tracks[t].is_audio() {
+                params.extend((0..self.project.tracks[t].instrument.params().len()).map(Param::Instrument));
             }
         }
         for (device, d) in self.devices(target).iter().enumerate() {
@@ -557,10 +558,7 @@ impl PulseApp {
             },
             Param::Device { device, param } => self.devices(target).get(device).map_or(0.0, |d| d.effect.get(param)),
             Param::Instrument(i) => match target {
-                Target::Track(t) => match self.project.tracks[t].instrument {
-                    InstrumentKind::Synth(p) => p.get(i),
-                    InstrumentKind::Drums => 0.0,
-                },
+                Target::Track(t) => self.project.tracks[t].instrument.get(i),
                 _ => 0.0,
             },
         }
@@ -604,11 +602,10 @@ impl PulseApp {
             }
             Param::Instrument(i) => {
                 if let Target::Track(t) = target {
-                    if let InstrumentKind::Synth(p) = &mut self.project.tracks[t].instrument {
-                        p.set(i, value);
-                        let kind = self.project.tracks[t].instrument;
-                        self.audio.send(Command::SetInstrument { track: t, kind });
-                    }
+                    let instrument = &mut self.project.tracks[t].instrument;
+                    instrument.set(i, value);
+                    let kind = *instrument;
+                    self.audio.send(Command::SetInstrument { track: t, kind });
                 }
             }
         }
@@ -738,8 +735,15 @@ impl PulseApp {
     }
 
     pub fn set_instrument(&mut self, track: usize, kind: InstrumentKind) {
-        self.project.tracks[track].instrument = kind;
+        let previous = std::mem::replace(&mut self.project.tracks[track].instrument, kind);
         self.audio.send(Command::SetInstrument { track, kind });
+        // Another instrument has other parameters: its automation no longer applies.
+        if previous.label() != kind.label() {
+            let target = Target::Track(track);
+            self.automation_mut(target).retain(|l| !matches!(l.param, Param::Instrument(_)));
+            self.overridden.retain(|(t, p)| !(*t == target && matches!(p, Param::Instrument(_))));
+            self.sync_automation(target);
+        }
     }
 
     fn push_track(&mut self, make: impl FnOnce(usize, [u8; 3]) -> Track) -> Option<usize> {

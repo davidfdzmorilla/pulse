@@ -1,8 +1,8 @@
 //! The UI-side project model. It is the source of truth; the engine receives copies.
 
 use engine::model::{
-    drum_note::*, ArrangementClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, CompressorParams, DelayParams, Device, Effect,
-    Eq3Params, InstrumentKind, MidiClip, Note, Param, ReverbParams, SynthParams, Waveform,
+    drum_note::*, AcidParams, ArrangementClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, FmParams, SuperSawParams, CompressorParams, DelayParams, Device, Effect,
+    InstrumentKind, MidiClip, Note, Param, ReverbParams, SynthParams,
 };
 use engine::{NUM_RETURNS, NUM_SCENES};
 use serde::{Deserialize, Serialize};
@@ -100,7 +100,7 @@ impl Track {
     }
 
     pub fn is_drums(&self) -> bool {
-        matches!(self.instrument, InstrumentKind::Drums)
+        self.instrument.is_drums()
     }
 
     /// Beat where the last arrangement clip ends.
@@ -190,7 +190,11 @@ impl Project {
 
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("No se pudo leer: {e}"))?;
-        serde_json::from_str(&text).map_err(|e| format!("Archivo no válido: {e}"))
+        let mut project: Project = serde_json::from_str(&text).map_err(|e| format!("Archivo no válido: {e}"))?;
+        for track in &mut project.tracks {
+            track.instrument = track.instrument.upgraded();
+        }
+        Ok(project)
     }
 
     pub fn save(&self, path: &Path) -> Result<(), String> {
@@ -202,7 +206,7 @@ impl Project {
     pub fn demo() -> Self {
         let [drums_color, bass_color, keys_color, lead_color] = [PALETTE[1], PALETTE[9], PALETTE[6], PALETTE[11]];
 
-        let mut drums = Track::new("Drums", drums_color, InstrumentKind::Drums);
+        let mut drums = Track::new("Drums", drums_color, InstrumentKind::DrumMachine(Default::default()));
         let four_floor: Vec<Note> = (0..4)
             .flat_map(|beat| {
                 let b = beat as f64;
@@ -234,46 +238,40 @@ impl Project {
             makeup_db: 1.5,
         })));
 
-        let mut bass = Track::new(
-            "Bass",
-            bass_color,
-            InstrumentKind::Synth(SynthParams {
-                waveform: Waveform::Saw,
-                attack: 0.002,
-                decay: 0.15,
-                sustain: 0.5,
-                release: 0.08,
-                cutoff: 900.0,
-                resonance: 0.35,
-                gain: 0.6,
-            }),
-        );
-        // Off-beat eighths following the progression Am - F - C - G.
-        let roots = [33u8, 29, 36, 31];
+        let mut bass = Track::new("Bass", bass_color, InstrumentKind::Acid(AcidParams::default()));
+        // An acid line over Am - F - C - G: accents (velocity 1.0) and one slide per bar,
+        // where a long note overlaps the next.
+        let roots = [45u8, 41, 48, 43];
+        let steps: [(f64, f64, u8, f32); 7] = [
+            (0.5, 0.2, 0, 0.9),
+            (1.0, 0.2, 12, 0.6),
+            (1.5, 0.2, 0, 1.0),
+            (2.5, 0.2, 0, 0.7),
+            (2.75, 0.2, 12, 0.7),
+            (3.0, 0.6, 12, 1.0),
+            (3.5, 0.3, 7, 0.8),
+        ];
         let bassline = roots
             .iter()
             .enumerate()
-            .flat_map(|(bar, &root)| (0..4).map(move |beat| note(bar as f64 * 4.0 + beat as f64 + 0.5, 0.4, root, 0.9)))
+            .flat_map(|(bar, &root)| {
+                steps.iter().map(move |&(at, length, interval, velocity)| note(bar as f64 * 4.0 + at, length, root + interval, velocity))
+            })
             .collect();
-        bass.clips[0] = clip("Offbeat Bass", 16.0, bass_color, bassline);
-        bass.devices.push(Device::new(Effect::Eq3(Eq3Params {
-            low_db: 2.0,
-            high_db: -6.0,
-            ..Default::default()
-        })));
+        bass.clips[0] = clip("Acid Line", 16.0, bass_color, bassline);
 
         let mut keys = Track::new(
             "Chords",
             keys_color,
-            InstrumentKind::Synth(SynthParams {
-                waveform: Waveform::Square,
-                attack: 0.05,
-                decay: 0.6,
-                sustain: 0.4,
-                release: 0.6,
-                cutoff: 1800.0,
-                resonance: 0.1,
-                gain: 0.17,
+            InstrumentKind::SuperSaw(SuperSawParams {
+                detune: 0.3,
+                spread: 0.9,
+                cutoff: 3000.0,
+                decay: 0.5,
+                sustain: 0.8,
+                release: 0.4,
+                gain: 0.3,
+                ..Default::default()
             }),
         );
         let chords: [[u8; 3]; 4] = [[57, 60, 64], [53, 57, 60], [55, 60, 64], [55, 59, 62]];
@@ -292,19 +290,23 @@ impl Project {
             lfo_amount: 1.5,
             ..Default::default()
         })));
+        // The house "pump": the chords duck on every beat.
+        keys.devices.push(Device::new(Effect::Ducker(Default::default())));
 
         let mut lead = Track::new(
             "Lead",
             lead_color,
-            InstrumentKind::Synth(SynthParams {
-                waveform: Waveform::Saw,
-                attack: 0.01,
-                decay: 0.3,
-                sustain: 0.6,
-                release: 0.3,
-                cutoff: 3500.0,
-                resonance: 0.3,
-                gain: 0.3,
+            // A bell: inharmonic ratio, bright attack that fades.
+            InstrumentKind::Fm(FmParams {
+                ratio: 3.5,
+                index: 4.0,
+                mod_decay: 0.4,
+                mod_sustain: 0.1,
+                feedback: 0.1,
+                decay: 1.5,
+                release: 0.8,
+                gain: 0.2,
+                ..Default::default()
             }),
         );
         let melody = [
@@ -347,6 +349,7 @@ impl Project {
 
         let mut project = Self::empty();
         project.tracks = vec![drums, bass, keys, lead];
+        project.master.devices.push(Device::new(Effect::Limiter(Default::default())));
         project.loop_end = 32.0;
         project.scene_names = (1..=NUM_SCENES)
             .map(|i| match i {
@@ -412,14 +415,7 @@ pub fn is_black_key(pitch: u8) -> bool {
 }
 
 pub fn drum_name(pitch: u8) -> Option<&'static str> {
-    Some(match pitch {
-        KICK => "Kick",
-        SNARE => "Snare",
-        CLAP => "Clap",
-        CLOSED_HAT => "Closed Hat",
-        OPEN_HAT => "Open Hat",
-        _ => return None,
-    })
+    engine::model::DRUM_VOICES.iter().find(|(p, _)| *p == pitch).map(|(_, name)| *name)
 }
 
 #[cfg(test)]

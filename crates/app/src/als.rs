@@ -243,7 +243,7 @@ fn track(node: Node, index: usize, ctx: &Context, report: &mut ImportReport) -> 
     let mut track = if audio {
         Track::new_audio(name, color)
     } else if node.descendants().any(|n| n.has_tag_name("DrumGroupDevice")) {
-        Track::new(name, color, InstrumentKind::Drums)
+        Track::new(name, color, InstrumentKind::DrumMachine(Default::default()))
     } else {
         Track::new(name, color, InstrumentKind::Synth(SynthParams::default()))
     };
@@ -593,7 +593,7 @@ mod tests {
 
         let drums = &project.tracks[0];
         assert_eq!(drums.name, "Drums");
-        assert_eq!(drums.instrument, InstrumentKind::Drums);
+        assert!(drums.instrument.is_drums());
         assert!((drums.mixer.gain - 0.501).abs() < 0.001);
         assert_eq!(drums.mixer.pan, -0.25);
         assert_eq!(drums.sends, [0.5, 0.0]);

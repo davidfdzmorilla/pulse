@@ -78,12 +78,17 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   notas o sus muestras y ajustes de warp. Las muestras se buscan por ruta y, si el set viene de otro
   ordenador, por nombre dentro de la carpeta del set. Los dispositivos de Live no se pueden leer: las pistas
   con Drum Rack reciben el Drum Kit y el resto Pulse Synth. Los grupos se omiten.
-- **Dispositivos**: Pulse Synth o Drum Kit más efectos (EQ Three, Compressor, Saturator, Auto Filter,
-  Delay, Reverb) desde el navegador. Knobs: arrastrar arriba/abajo, Shift para ajuste fino, doble clic para
-  el valor por defecto.
-
-## Estructura
-
+- **Dispositivos**: desde el navegador, cinco instrumentos y doce efectos, todos automatizables:
+  - **Pulse Synth**: sintetizador sustractivo sencillo.
+  - **Super Saw**: hasta 7 dientes de sierra desafinados y abiertos en estéreo (leads y pads de trance/EDM).
+  - **Acid Bass**: bajo monofónico con filtro de 4 polos resonante, envolvente de filtro, acento (velocidad
+    > 80 %) y slide entre notas que se solapan.
+  - **FM Synth**: dos operadores con realimentación (campanas, e-pianos, bajos metálicos).
+  - **Drum Machine**: bombo, rimshot, caja, palmas, hats cerrado/abierto, tom y cencerro, cada uno con
+    afinación, decay y nivel (mapa General MIDI; 47/48/50 tocan el tom más agudo).
+  - Efectos: EQ Three, Compressor, **Limiter**, Saturator, **Bitcrusher**, Auto Filter, **Ducker** (bombeo
+    sincronizado al tempo), **Chorus**, **Phaser**, Delay, Reverb y **Utility** (ganancia y anchura estéreo).
+  Knobs: arrastrar arriba/abajo, Shift para ajuste fino, doble clic para el valor por defecto.
 - `crates/engine`: motor de audio en tiempo real (sin bloqueos ni reservas de memoria en el hilo de audio).
 - `crates/app`: interfaz (Session View, mezclador, panel de instrumento, piano roll).
 
@@ -93,4 +98,5 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 2. Monitorización y compensación de latencia al grabar audio; grabar la sesión en el Arrangement;
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
-4. Plugins VST3 / CLAP.
+4. Sampler (instrumento a partir de una muestra) y Drum Rack con muestras.
+5. Plugins VST3 / CLAP.

@@ -9,7 +9,8 @@
 use crate::effects::{EffectProcessor, ProcessContext};
 use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, InstrumentKind, MidiClip, Param, WarpMode};
 use crate::sample::Sample;
-use crate::synth::{Click, DrumKit, PolySynth, HELD};
+use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
+use crate::synth::{Click, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
@@ -326,46 +327,95 @@ enum Queued {
 
 enum Instrument {
     Synth(PolySynth),
-    Drums(DrumKit),
+    Drums(DrumMachine),
+    SuperSaw(SuperSaw),
+    Acid(AcidBass),
+    Fm(FmSynth),
 }
 
 impl Instrument {
     fn new(kind: InstrumentKind, sample_rate: f32) -> Self {
-        match kind {
-            InstrumentKind::Synth(params) => Self::Synth(PolySynth::new(params, sample_rate)),
-            InstrumentKind::Drums => Self::Drums(DrumKit::new(sample_rate)),
+        match kind.upgraded() {
+            InstrumentKind::Synth(p) => Self::Synth(PolySynth::new(p, sample_rate)),
+            InstrumentKind::DrumMachine(p) => Self::Drums(DrumMachine::new(p, sample_rate)),
+            InstrumentKind::SuperSaw(p) => Self::SuperSaw(SuperSaw::new(p, sample_rate)),
+            InstrumentKind::Acid(p) => Self::Acid(AcidBass::new(p, sample_rate)),
+            InstrumentKind::Fm(p) => Self::Fm(FmSynth::new(p, sample_rate)),
+            InstrumentKind::Drums => unreachable!("upgraded above"),
         }
+    }
+
+    fn kind(&self) -> InstrumentKind {
+        match self {
+            Self::Synth(s) => InstrumentKind::Synth(s.params()),
+            Self::Drums(d) => InstrumentKind::DrumMachine(d.params()),
+            Self::SuperSaw(s) => InstrumentKind::SuperSaw(s.params()),
+            Self::Acid(a) => InstrumentKind::Acid(a.params()),
+            Self::Fm(f) => InstrumentKind::Fm(f.params()),
+        }
+    }
+
+    /// Updates parameters in place, keeping sounding notes. False if `kind` is another instrument.
+    fn update(&mut self, kind: InstrumentKind) -> bool {
+        match (self, kind.upgraded()) {
+            (Self::Synth(s), InstrumentKind::Synth(p)) => s.set_params(p),
+            (Self::Drums(d), InstrumentKind::DrumMachine(p)) => d.set_params(p),
+            (Self::SuperSaw(s), InstrumentKind::SuperSaw(p)) => s.set_params(p),
+            (Self::Acid(a), InstrumentKind::Acid(p)) => a.set_params(p),
+            (Self::Fm(f), InstrumentKind::Fm(p)) => f.set_params(p),
+            _ => return false,
+        }
+        true
+    }
+
+    fn set_param(&mut self, index: usize, value: f32) {
+        let mut kind = self.kind();
+        kind.set(index, value);
+        self.update(kind);
     }
 
     fn note_on(&mut self, pitch: u8, velocity: f32, gate_samples: u32) {
         match self {
             Self::Synth(s) => s.note_on(pitch, velocity, gate_samples),
             Self::Drums(d) => d.note_on(pitch, velocity),
+            Self::SuperSaw(s) => s.note_on(pitch, velocity, gate_samples),
+            Self::Acid(a) => a.note_on(pitch, velocity, gate_samples),
+            Self::Fm(f) => f.note_on(pitch, velocity, gate_samples),
         }
     }
 
     fn note_off(&mut self, pitch: u8) {
-        if let Self::Synth(s) = self {
-            s.note_off(pitch);
+        match self {
+            Self::Synth(s) => s.note_off(pitch),
+            Self::Drums(_) => {}
+            Self::SuperSaw(s) => s.note_off(pitch),
+            Self::Acid(a) => a.note_off(pitch),
+            Self::Fm(f) => f.note_off(pitch),
         }
     }
 
     fn all_notes_off(&mut self) {
-        if let Self::Synth(s) = self {
-            s.all_notes_off();
-        }
-    }
-
-    fn set_param(&mut self, index: usize, value: f32) {
-        if let Self::Synth(s) = self {
-            s.set_param(index, value);
-        }
-    }
-
-    fn render(&mut self, out: &mut [f32]) {
         match self {
-            Self::Synth(s) => s.render(out),
-            Self::Drums(d) => d.render(out),
+            Self::Synth(s) => s.all_notes_off(),
+            Self::Drums(_) => {}
+            Self::SuperSaw(s) => s.all_notes_off(),
+            Self::Acid(a) => a.all_notes_off(),
+            Self::Fm(f) => f.all_notes_off(),
+        }
+    }
+
+    /// Adds the instrument's output to `left`/`right`.
+    fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+        match self {
+            Self::Synth(s) => {
+                // Mono synth: render once and copy.
+                s.render(left);
+                right.copy_from_slice(left);
+            }
+            Self::Drums(d) => d.render(left, right),
+            Self::SuperSaw(s) => s.render(left, right),
+            Self::Acid(a) => a.render(left, right),
+            Self::Fm(f) => f.render(left, right),
         }
     }
 }
@@ -632,6 +682,7 @@ struct Track {
     arrangement: Box<Vec<PlacedClip>>,
     follows_arrangement: bool,
     buffer: Vec<f32>,
+    buffer_right: Vec<f32>,
     /// Audio clip output for the current block, mixed after the instrument.
     audio_left: Vec<f32>,
     audio_right: Vec<f32>,
@@ -668,6 +719,7 @@ impl Track {
             arrangement: Box::default(),
             follows_arrangement: true,
             buffer: vec![0.0; MAX_BLOCK],
+            buffer_right: vec![0.0; MAX_BLOCK],
             audio_left: vec![0.0; MAX_BLOCK],
             audio_right: vec![0.0; MAX_BLOCK],
             events: Vec::with_capacity(MAX_EVENTS),
@@ -914,11 +966,9 @@ impl Engine {
             }
             Command::SetInstrument { track, kind } => {
                 let Some(t) = self.tracks.get_mut(track) else { return };
-                match (&mut t.instrument, kind) {
-                    // Keep sounding voices when only synth parameters change.
-                    (Instrument::Synth(synth), InstrumentKind::Synth(params)) => synth.set_params(params),
-                    (Instrument::Drums(_), InstrumentKind::Drums) => {}
-                    _ => t.instrument = Instrument::new(kind, self.sample_rate),
+                // Keep sounding voices when only parameters change.
+                if !t.instrument.update(kind) {
+                    t.instrument = Instrument::new(kind, self.sample_rate);
                 }
             }
             Command::SetGain { target, gain } => {
@@ -1126,14 +1176,15 @@ impl Engine {
 
         let any_solo = self.tracks.iter().any(|t| t.solo);
         for (index, track) in self.tracks.iter_mut().enumerate() {
-            let buffer = &mut track.buffer[..n];
-            buffer.fill(0.0);
+            let (left, right) = (&mut track.buffer[..n], &mut track.buffer_right[..n]);
+            left.fill(0.0);
+            right.fill(0.0);
             track.events.sort_unstable_by_key(|&(frame, rank, _)| (frame, rank));
             let mut cursor = 0;
             for &(frame, _, event) in &track.events {
                 let frame = frame.min(n - 1);
                 if frame > cursor {
-                    track.instrument.render(&mut buffer[cursor..frame]);
+                    track.instrument.render(&mut left[cursor..frame], &mut right[cursor..frame]);
                     cursor = frame;
                 }
                 match event {
@@ -1142,13 +1193,13 @@ impl Engine {
                     Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(pitch, velocity, gate),
                 }
             }
-            track.instrument.render(&mut buffer[cursor..]);
+            track.instrument.render(&mut left[cursor..], &mut right[cursor..]);
             track.events.clear();
 
             let channel = &mut track.channel;
             for i in 0..n {
-                channel.left[i] = buffer[i] + track.audio_left[i];
-                channel.right[i] = buffer[i] + track.audio_right[i];
+                channel.left[i] = left[i] + track.audio_left[i];
+                channel.right[i] = right[i] + track.audio_right[i];
             }
             channel.run_chain(n, &ctx);
 

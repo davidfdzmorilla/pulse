@@ -388,6 +388,13 @@ impl Instrument {
         true
     }
 
+    /// Instruments with tempo-synced settings follow the transport.
+    fn set_tempo(&mut self, tempo: f64) {
+        if let Self::Kick(k) = self {
+            k.set_tempo(tempo);
+        }
+    }
+
     fn set_param(&mut self, index: usize, value: f32) {
         let mut kind = self.kind();
         kind.set(index, value);
@@ -1219,6 +1226,7 @@ impl Engine {
             left.fill(0.0);
             right.fill(0.0);
             track.events.sort_unstable_by_key(|&(frame, rank, _)| (frame, rank));
+            track.instrument.set_tempo(self.tempo);
             let mut cursor = 0;
             for &(frame, _, event) in &track.events {
                 let frame = frame.min(n - 1);

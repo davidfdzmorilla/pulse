@@ -28,11 +28,11 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
     }
 }
 
-fn saw(phase: f32, inc: f32) -> f32 {
+pub(crate) fn saw(phase: f32, inc: f32) -> f32 {
     2.0 * phase - 1.0 - poly_blep(phase, inc)
 }
 
-fn square(phase: f32, inc: f32) -> f32 {
+pub(crate) fn square(phase: f32, inc: f32) -> f32 {
     let raw = if phase < 0.5 { 1.0 } else { -1.0 };
     raw + poly_blep(phase, inc) - poly_blep((phase + 0.5) % 1.0, inc)
 }

@@ -91,12 +91,19 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   - **Sampler**: toca una muestra cromáticamente desde su nota raíz, con punto de inicio, ADSR, filtro y tres
     modos: Clásico (mientras se mantiene la nota), One-shot (entera) y Loop. Arrastra un archivo de audio al
     dispositivo o usa «Cargar…».
-  - **Kick Designer**: sintetizador de bombos. Cuerpo senoidal afinado a una nota (o a la nota tocada con
-    «Key»), envolvente de tono (cantidad, tiempo), envolvente de amplitud (ataque, hold, decay), armónicos,
-    click sintetizado o a partir de una muestra, y distorsión Soft, Hard o Fold. Las dos envolventes se
-    **dibujan a mano** en el editor (pestañas Tono y Amp, sobre la forma de onda): arrastra los puntos, doble
-    clic para añadir o borrar, arrastra el círculo de un tramo para curvarlo, clic derecho para restablecer.
-    Los knobs P. Curve y D. Curve añaden tensión encima del dibujo. 18 presets de fábrica por estilos.
+  - **Kick Designer**: sintetizador de bombos con editor completo («Editor ⤢» en el dispositivo):
+    - Capas: **cuerpo** (seno, triángulo, cuadrada o sierra, fase inicial, armónicos), **sub** senoidal limpio
+      que sigue al cuerpo en fase, y **click** (12 sintetizados: Noise, Snap, Tick, Square, Zap, Metal, Thump,
+      Pulse, Wood, Air, FM, Crackle; o una muestra tuya), con tono, longitud y afinación.
+    - Tres envolventes **dibujadas a mano** (Tono, Amp, Drive) sobre la forma de onda, con rejilla en ms y
+      «Ajustar a rejilla»: arrastra los puntos, doble clic para añadir o borrar, arrastra el círculo de un
+      tramo para curvarlo, clic derecho para restablecer. P. Curve y D. Curve añaden tensión encima.
+    - Proceso: distorsión Soft, Hard, Fold, Tube o Crush; EQ (graves, medios con frecuencia, agudos);
+      **Punch** (compresión con ganancia) y limitador a -0.3 dBFS.
+    - Afinación a una nota con lectura en Hz, o «Key» para seguir la nota tocada; duración libre o
+      **sincronizada al tempo** (1/16 a un compás); sensibilidad a velocidad.
+    - Osciloscopio del ataque y espectro con la fundamental detectada y su nota.
+    - **Exportar WAV** de un golpe. 18 presets de fábrica por estilos.
   - **Drum Rack**: 16 pads (C1–D#2, el pad 1 abajo a la izquierda), cada uno con su muestra, afinación,
     longitud, nivel, panorama y grupo de choke. Clic en un pad para escucharlo y editarlo; arrastra una o
     varias muestras sobre los pads. Al elegirlo en una pista vacía arranca con el **Kit básico** (los sonidos

@@ -14,7 +14,7 @@ mod synth;
 
 pub use audio::{start, AudioOutput, EngineHandle, LiveInput};
 pub use instruments::render_drum_hit;
-pub use kick::{amplitude as kick_amplitude, length_ms as kick_length_ms, pitch_offset as kick_pitch_offset, render_kick};
+pub use kick::{amplitude as kick_amplitude, drive_at as kick_drive_at, effective as kick_effective, length_ms as kick_length_ms, pitch_offset as kick_pitch_offset, render_kick};
 pub use input::{start_input, AudioInput, InputHandle, Marker};
 pub use offline::OfflineRenderer;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};

@@ -180,6 +180,8 @@ pub struct PulseApp {
     pub overridden: HashSet<(Target, Param)>,
     /// Drum rack pad shown in the device view.
     pub selected_pad: usize,
+    /// Track whose kick designer editor window is open.
+    pub kick_window: Option<usize>,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
@@ -222,6 +224,7 @@ impl PulseApp {
             overridden: HashSet::new(),
             selected_pad: 0,
             slice_mode: crate::slicing::SliceMode::Transients,
+            kick_window: None,
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -1555,6 +1558,7 @@ impl eframe::App for PulseApp {
             View::Session => session::show(self, ui),
             View::Arrangement => arrangement::show(self, ui),
         });
+        crate::kick_ui::window(self, &ctx);
 
         let interacting = ctx.input(|i| i.pointer.any_down());
         self.history.commit(&self.project, interacting);

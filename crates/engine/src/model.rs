@@ -219,16 +219,51 @@ pub enum KickDrive {
     Hard,
     /// Wave folding: bright, metallic overtones.
     Fold,
+    /// Asymmetric saturation: warm, with even harmonics.
+    Tube,
+    /// Bit reduction: gritty, digital.
+    Crush,
 }
 
+/// Waveform of the kick designer's body oscillator.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KickWave {
+    #[default]
+    Sine,
+    Triangle,
+    Square,
+    Saw,
+}
+
+impl KickWave {
+    pub const ALL: [KickWave; 4] = [Self::Sine, Self::Triangle, Self::Square, Self::Saw];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Sine => "Sine",
+            Self::Triangle => "Triangle",
+            Self::Square => "Square",
+            Self::Saw => "Saw",
+        }
+    }
+}
+
+/// The kick designer's built-in clicks, all synthesized.
+pub const KICK_CLICKS: [&str; 12] = ["Noise", "Snap", "Tick", "Square", "Zap", "Metal", "Thump", "Pulse", "Wood", "Air", "FM", "Crackle"];
+
+/// Lengths the kick designer can lock to, in beats (0 is free).
+pub const KICK_SYNC_BEATS: [f32; 6] = [0.0, 0.25, 0.5, 1.0, 2.0, 4.0];
+
 impl KickDrive {
-    pub const ALL: [KickDrive; 3] = [Self::Soft, Self::Hard, Self::Fold];
+    pub const ALL: [KickDrive; 5] = [Self::Soft, Self::Hard, Self::Fold, Self::Tube, Self::Crush];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Soft => "Soft",
             Self::Hard => "Hard",
             Self::Fold => "Fold",
+            Self::Tube => "Tube",
+            Self::Crush => "Crush",
         }
     }
 }
@@ -266,6 +301,55 @@ pub struct KickParams {
     /// Hand-drawn level over the decay, after attack and hold.
     #[serde(default = "Shape::falling")]
     pub amp_shape: Shape,
+    /// Hand-drawn drive amount over the whole hit (1 = the Drive knob).
+    #[serde(default = "Shape::flat")]
+    pub drive_shape: Shape,
+    #[serde(default)]
+    pub wave: KickWave,
+    /// Start phase of the body in degrees (90 starts at the peak: a harder attack).
+    #[serde(default)]
+    pub phase: f32,
+    /// Clean sine layer under the body, untouched by distortion.
+    #[serde(default)]
+    pub sub_level: f32,
+    /// Sub pitch relative to the body, in semitones. The sub follows the body's
+    /// sweep in lockstep, so the two never cancel each other.
+    #[serde(default)]
+    pub sub_tune: f32,
+    /// Index into [`KICK_CLICKS`] (used when there is no click sample).
+    #[serde(default)]
+    pub click_type: u8,
+    /// Transposes the click, synthesized or sampled.
+    #[serde(default)]
+    pub click_pitch: f32,
+    #[serde(default)]
+    pub eq_low: f32,
+    #[serde(default)]
+    pub eq_mid: f32,
+    #[serde(default = "default_eq_mid_freq")]
+    pub eq_mid_freq: f32,
+    #[serde(default)]
+    pub eq_high: f32,
+    /// Compression for more punch, 0 (off) .. 1.
+    #[serde(default)]
+    pub punch: f32,
+    /// Keeps the output under -0.3 dBFS.
+    #[serde(default)]
+    pub limiter: bool,
+    /// How much velocity changes the level, 0..1.
+    #[serde(default = "default_velocity")]
+    pub velocity: f32,
+    /// Locks the hit length to this many beats (0: attack + hold + decay).
+    #[serde(default)]
+    pub sync_beats: f32,
+}
+
+fn default_eq_mid_freq() -> f32 {
+    800.0
+}
+
+fn default_velocity() -> f32 {
+    1.0
 }
 
 pub const SHAPE_POINTS: usize = 8;
@@ -291,6 +375,11 @@ impl Shape {
     /// A straight line from 1 down to 0.
     pub fn falling() -> Self {
         Self::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.0, 0.0)])
+    }
+
+    /// Constant at 1.
+    pub fn flat() -> Self {
+        Self::from_points(&[(0.0, 1.0, 0.0), (1.0, 1.0, 0.0)])
     }
 
     /// Builds a shape from (time, value, bend) points, sorted and clamped.
@@ -393,6 +482,21 @@ impl Default for KickParams {
             gain: 0.8,
             pitch_shape: Shape::falling(),
             amp_shape: Shape::falling(),
+            drive_shape: Shape::flat(),
+            wave: KickWave::Sine,
+            phase: 0.0,
+            sub_level: 0.0,
+            sub_tune: 0.0,
+            click_type: 0,
+            click_pitch: 0.0,
+            eq_low: 0.0,
+            eq_mid: 0.0,
+            eq_mid_freq: default_eq_mid_freq(),
+            eq_high: 0.0,
+            punch: 0.0,
+            limiter: false,
+            velocity: default_velocity(),
+            sync_beats: 0.0,
         }
     }
 }
@@ -404,13 +508,13 @@ impl KickParams {
         let shape = Shape::from_points;
         vec![
             ("Init", base),
-            ("House · Punch", KickParams { tune: 33.0, pitch_amount: 36.0, pitch_time: 45.0, hold: 40.0, decay: 220.0, click: 0.5, click_tone: 4000.0, drive: 0.25, ..base }),
-            ("House · Deep", KickParams { tune: 31.0, pitch_amount: 30.0, pitch_time: 55.0, pitch_curve: 0.5, hold: 60.0, decay: 320.0, decay_curve: 0.3, click: 0.2, click_tone: 1800.0, drive: 0.1, ..base }),
-            ("Tech House · Tight", KickParams { tune: 34.0, pitch_amount: 40.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 25.0, decay: 160.0, decay_curve: 0.5, click: 0.55, click_tone: 5000.0, click_length: 4.0, drive: 0.35, ..base }),
-            ("Techno · Rumble", KickParams { tune: 29.0, pitch_amount: 44.0, pitch_time: 70.0, hold: 90.0, decay: 650.0, decay_curve: 0.6, harmonics: 0.15, drive: 0.55, ..base }),
+            ("House · Punch", KickParams { tune: 33.0, pitch_amount: 36.0, pitch_time: 45.0, hold: 40.0, decay: 220.0, click: 0.5, click_tone: 4000.0, drive: 0.25, phase: 90.0, punch: 0.3, click_type: 2, limiter: true, ..base }),
+            ("House · Deep", KickParams { tune: 31.0, pitch_amount: 30.0, pitch_time: 55.0, pitch_curve: 0.5, hold: 60.0, decay: 320.0, decay_curve: 0.3, click: 0.2, click_tone: 1800.0, drive: 0.1, sub_level: 0.3, eq_high: -3.0, ..base }),
+            ("Tech House · Tight", KickParams { tune: 34.0, pitch_amount: 40.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 25.0, decay: 160.0, decay_curve: 0.5, click: 0.55, click_tone: 5000.0, click_length: 4.0, drive: 0.35, phase: 90.0, punch: 0.4, click_type: 1, eq_mid: -3.0, eq_mid_freq: 400.0, limiter: true, ..base }),
+            ("Techno · Rumble", KickParams { tune: 29.0, pitch_amount: 44.0, pitch_time: 70.0, hold: 90.0, decay: 650.0, decay_curve: 0.6, harmonics: 0.15, drive: 0.55, sub_level: 0.35, eq_low: 3.0, punch: 0.3, gain: 0.6, ..base }),
             (
                 "Techno · Industrial",
-                KickParams { tune: 30.0, pitch_amount: 50.0, pitch_time: 60.0, hold: 70.0, decay: 420.0, harmonics: 0.25, click: 0.6, click_tone: 7000.0, drive: 0.6, drive_mode: KickDrive::Fold, gain: 0.6, ..base },
+                KickParams { tune: 30.0, pitch_amount: 50.0, pitch_time: 60.0, hold: 70.0, decay: 420.0, harmonics: 0.25, click: 0.6, click_tone: 7000.0, drive: 0.6, drive_mode: KickDrive::Fold, gain: 0.6, click_type: 5, eq_mid: 3.0, eq_mid_freq: 1500.0, limiter: true, ..base },
             ),
             (
                 "Hard · Kick",
@@ -427,7 +531,7 @@ impl KickParams {
                     drive: 0.8,
                     drive_mode: KickDrive::Hard,
                     gain: 0.6,
-                    ..base
+                    click_type: 4, punch: 0.4, limiter: true, ..base
                 },
             ),
             (
@@ -448,17 +552,17 @@ impl KickParams {
                     drive: 0.75,
                     drive_mode: KickDrive::Fold,
                     gain: 0.55,
-                    ..base
+                    click_type: 4, sub_level: 0.25, limiter: true, ..base
                 },
             ),
             (
                 "Hard · Gabber",
-                KickParams { tune: 38.0, pitch_amount: 40.0, pitch_time: 25.0, pitch_curve: 0.8, hold: 90.0, decay: 250.0, harmonics: 0.5, click: 0.8, click_tone: 8000.0, drive: 1.0, drive_mode: KickDrive::Hard, gain: 0.5, ..base },
+                KickParams { tune: 38.0, pitch_amount: 40.0, pitch_time: 25.0, pitch_curve: 0.8, hold: 90.0, decay: 250.0, harmonics: 0.5, click: 0.8, click_tone: 8000.0, drive: 1.0, drive_mode: KickDrive::Hard, gain: 0.5, click_type: 3, eq_mid: 4.0, eq_mid_freq: 900.0, limiter: true, ..base },
             ),
-            ("Trance · Thud", KickParams { tune: 32.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 30.0, decay: 180.0, decay_curve: 0.6, click: 0.6, click_tone: 2500.0, drive: 0.35, ..base }),
-            ("Psytrance · Click", KickParams { tune: 34.0, pitch_amount: 56.0, pitch_time: 20.0, pitch_curve: 0.85, hold: 15.0, decay: 140.0, decay_curve: 0.7, click: 0.8, click_tone: 6500.0, click_length: 3.0, drive: 0.3, gain: 0.6, ..base }),
-            ("Drum & Bass · Punch", KickParams { tune: 38.0, pitch_amount: 36.0, pitch_time: 25.0, pitch_curve: 0.7, hold: 20.0, decay: 180.0, decay_curve: 0.5, harmonics: 0.1, click: 0.7, click_tone: 4500.0, drive: 0.45, gain: 0.7, ..base }),
-            ("808 · Long", KickParams { tune: 28.0, pitch_amount: 24.0, pitch_time: 40.0, hold: 200.0, decay: 1600.0, decay_curve: 0.3, click: 0.15, drive: 0.1, key_follow: true, ..base }),
+            ("Trance · Thud", KickParams { tune: 32.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 30.0, decay: 180.0, decay_curve: 0.6, click: 0.6, click_tone: 2500.0, drive: 0.35, click_type: 2, phase: 90.0, punch: 0.35, limiter: true, ..base }),
+            ("Psytrance · Click", KickParams { tune: 34.0, pitch_amount: 56.0, pitch_time: 20.0, pitch_curve: 0.85, hold: 15.0, decay: 140.0, decay_curve: 0.7, click: 0.8, click_tone: 6500.0, click_length: 3.0, drive: 0.3, gain: 0.6, click_type: 1, punch: 0.3, eq_low: -2.0, limiter: true, ..base }),
+            ("Drum & Bass · Punch", KickParams { tune: 38.0, pitch_amount: 36.0, pitch_time: 25.0, pitch_curve: 0.7, hold: 20.0, decay: 180.0, decay_curve: 0.5, harmonics: 0.1, click: 0.7, click_tone: 4500.0, drive: 0.45, gain: 0.7, click_type: 8, phase: 90.0, punch: 0.5, limiter: true, ..base }),
+            ("808 · Long", KickParams { tune: 28.0, pitch_amount: 24.0, pitch_time: 40.0, hold: 200.0, decay: 1600.0, decay_curve: 0.3, click: 0.15, drive: 0.1, key_follow: true, sub_level: 0.4, ..base }),
             (
                 // After the hit the pitch keeps gliding down an octave and a half.
                 "808 · Glide",
@@ -474,11 +578,11 @@ impl KickParams {
                     click: 0.1,
                     drive: 0.25,
                     key_follow: true,
-                    ..base
+                    sub_level: 0.3, drive_mode: KickDrive::Tube, ..base
                 },
             ),
-            ("Trap · Boom", KickParams { tune: 26.0, pitch_amount: 28.0, pitch_time: 50.0, hold: 250.0, decay: 1100.0, decay_curve: 0.2, harmonics: 0.1, click: 0.3, click_tone: 2000.0, drive: 0.5, ..base }),
-            ("Lo-Fi · Thump", KickParams { tune: 30.0, pitch_amount: 26.0, pitch_time: 50.0, pitch_curve: 0.4, hold: 40.0, decay: 260.0, harmonics: 0.35, click: 0.35, click_tone: 900.0, click_length: 12.0, drive: 0.4, ..base }),
+            ("Trap · Boom", KickParams { tune: 26.0, pitch_amount: 28.0, pitch_time: 50.0, hold: 250.0, decay: 1100.0, decay_curve: 0.2, harmonics: 0.1, click: 0.3, click_tone: 2000.0, drive: 0.5, sub_level: 0.5, drive_mode: KickDrive::Tube, limiter: true, ..base }),
+            ("Lo-Fi · Thump", KickParams { tune: 30.0, pitch_amount: 26.0, pitch_time: 50.0, pitch_curve: 0.4, hold: 40.0, decay: 260.0, harmonics: 0.35, click: 0.35, click_tone: 900.0, click_length: 12.0, drive: 0.4, click_type: 11, drive_mode: KickDrive::Crush, eq_high: -6.0, ..base }),
             (
                 // The level dips and comes back: two punches from one note.
                 "FX · Double Punch",
@@ -495,7 +599,7 @@ impl KickParams {
                     ..base
                 },
             ),
-            ("FX · Zap", KickParams { tune: 33.0, pitch_amount: 72.0, pitch_time: 120.0, pitch_curve: 0.9, hold: 30.0, decay: 200.0, decay_curve: 0.5, click: 0.2, click_tone: 9000.0, drive: 0.2, ..base }),
+            ("FX · Zap", KickParams { tune: 33.0, pitch_amount: 72.0, pitch_time: 120.0, pitch_curve: 0.9, hold: 30.0, decay: 200.0, decay_curve: 0.5, click: 0.2, click_tone: 9000.0, drive: 0.2, click_type: 10, ..base }),
         ]
     }
 }
@@ -1052,6 +1156,7 @@ pub enum Unit {
     Count,
     /// A MIDI note number, shown as "C3".
     Note,
+    Degrees,
     Plain,
 }
 
@@ -1199,7 +1304,7 @@ const FM_PARAMS: [ParamInfo; 10] = [
     ParamInfo::log("Release", 0.005, 4.0, 0.6, Seconds),
     ParamInfo::linear("Volume", 0.0, 1.0, 0.45, Percent),
 ];
-const KICK_PARAMS: [ParamInfo; 14] = [
+const KICK_PARAMS: [ParamInfo; 24] = [
     ParamInfo::linear("Tune", 16.0, 52.0, 31.0, Note),
     ParamInfo::linear("Pitch", 0.0, 72.0, 40.0, Semitones),
     ParamInfo::log("P. Time", 5.0, 500.0, 60.0, Milliseconds),
@@ -1214,6 +1319,16 @@ const KICK_PARAMS: [ParamInfo; 14] = [
     ParamInfo::log("Click Len", 1.0, 50.0, 6.0, Milliseconds),
     ParamInfo::linear("Drive", 0.0, 1.0, 0.2, Percent),
     ParamInfo::linear("Volume", 0.0, 1.0, 0.8, Percent),
+    ParamInfo::linear("Phase", 0.0, 360.0, 0.0, Degrees),
+    ParamInfo::linear("Sub", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Sub Tune", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("Click Pitch", -24.0, 24.0, 0.0, Semitones),
+    ParamInfo::linear("Low", -12.0, 12.0, 0.0, Decibels),
+    ParamInfo::linear("Mid", -12.0, 12.0, 0.0, Decibels),
+    ParamInfo::log("Mid Freq", 100.0, 5000.0, 800.0, Hertz),
+    ParamInfo::linear("High", -12.0, 12.0, 0.0, Decibels),
+    ParamInfo::linear("Punch", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Velocity", 0.0, 1.0, 1.0, Percent),
 ];
 const SAMPLER_PARAMS: [ParamInfo; 10] = [
     ParamInfo::linear("Root", 0.0, 127.0, 60.0, Note),
@@ -1417,6 +1532,16 @@ impl InstrumentKind {
                 11 => &mut p.click_length,
                 12 => &mut p.drive,
                 13 => &mut p.gain,
+                14 => &mut p.phase,
+                15 => &mut p.sub_level,
+                16 => &mut p.sub_tune,
+                17 => &mut p.click_pitch,
+                18 => &mut p.eq_low,
+                19 => &mut p.eq_mid,
+                20 => &mut p.eq_mid_freq,
+                21 => &mut p.eq_high,
+                22 => &mut p.punch,
+                23 => &mut p.velocity,
                 _ => return None,
             },
             InstrumentKind::DrumRack(p) => match index % 4 {

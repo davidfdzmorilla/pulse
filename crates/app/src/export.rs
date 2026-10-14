@@ -549,7 +549,7 @@ mod diagnostics {
         let out = std::env::var("PULSE_OUT").unwrap();
         let mut audio = Vec::new();
         for (name, preset) in engine::model::KickParams::presets() {
-            let mut hit = engine::render_kick(preset, None, 48_000.0);
+            let mut hit = engine::render_kick(preset, None, 48_000.0, 120.0);
             let peak = peak(&hit, &hit);
             println!("{name:14} {:5.0} ms  pico {:6.1} dBFS", engine::kick_length_ms(&preset), db(peak));
             hit.resize(96_000, 0.0);

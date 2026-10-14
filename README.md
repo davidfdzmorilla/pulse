@@ -80,7 +80,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   sus muestras en los mismos pads, y los Simpler/Sampler al Sampler con su nota raíz. Los sintetizadores de
   Live no se pueden leer: esas pistas reciben Pulse Synth (o la Drum Machine si es un Drum Rack sin
   muestras). Los grupos se omiten.
-- **Dispositivos**: desde el navegador, nueve instrumentos y doce efectos, todos automatizables:
+- **Dispositivos**: desde el navegador, diez instrumentos y doce efectos, todos automatizables:
   - **Pulse Synth**: sintetizador sustractivo sencillo.
   - **Super Saw**: hasta 7 dientes de sierra desafinados y abiertos en estéreo (leads y pads de trance/EDM).
   - **Acid Bass**: bajo monofónico con filtro de 4 polos resonante, envolvente de filtro, acento (velocidad
@@ -115,6 +115,19 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
       WAV de wavetable estándar (frames de 2048 con chunk `clm `), que también abren otros sintes.
     - Poly, Mono o Legato con glide. 16 presets de fábrica (leads, bajos Reese/Growl/Wobble, plucks, arpegio,
       pads, teclados, riser), varios con sus efectos.
+  - **Polychrome Synth**: el mismo motor organizado como un sinte de varios motores, con editor propio
+    (páginas SYNTH, SEQ, FX y MATRIX):
+    - Dos motores, cada uno **Analog** (de seno a triángulo, sierra y pulso con PW, unísono y **drift**),
+      **Harmonic** (aditivo: número de parciales, inclinación, pares/impares y formante), Wavetable, Sample,
+      Granular o Spectral, más la capa de utilidades (sub y ruido).
+    - **Dos filtros** en serie o en paralelo con balance; los dos con los 9 modos.
+    - Modulación: 3 envolventes, 4 LFOs dibujables, **aleatorios** (S&H y suave, con velocidad), 2
+      **combinadores** (×, +, mín, máx, media de dos fuentes), 4 macros y la matriz; todo arrastrable a los
+      knobs.
+    - **Secuenciador de 16 pasos**: nota, velocidad, gate, probabilidad, slide y un carril de modulación
+      («Seq Mod»), dibujados arrastrando sobre los pasos; toca transpuesto a la tecla que mantienes.
+    - Arpegiador y rack de efectos como el Wavetable Synth. 14 presets (pads y metales analógicos, órgano y
+      coro aditivos, línea acid, stab de techno, pluck melódico, doble filtro…).
   - **Kick Designer**: sintetizador de bombos con editor completo («Editor ⤢» en el dispositivo):
     - Capas: **cuerpo** (seno, triángulo, cuadrada o sierra, fase inicial, armónicos), **sub** senoidal limpio
       que sigue al cuerpo en fase, y **click** (12 sintetizados: Noise, Snap, Tick, Square, Zap, Metal, Thump,
@@ -154,6 +167,6 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
 4. Multisamples (zonas por tecla y velocidad) en el Sampler; marcadores de troceado editables a mano.
-5. Wavetable Synth: multisample, segundo filtro, efectos modulables desde la matriz, lectura de presets de
-   otros sintes.
+5. Sintes del motor de wavetables: multisample, efectos modulables desde la matriz, buses de efectos en
+   paralelo, polirritmos en el secuenciador, lectura de presets de otros sintes.
 6. Plugins VST3 / CLAP.

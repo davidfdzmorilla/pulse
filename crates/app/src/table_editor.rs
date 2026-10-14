@@ -6,7 +6,7 @@
 use crate::app::PulseApp;
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke};
-use engine::model::{InstrumentKind, OscKind, WAVE_USER_TABLE};
+use engine::model::{OscKind, WAVE_USER_TABLE};
 use engine::wavetable::{FRAME, PREVIEW_POINTS};
 use std::f32::consts::TAU;
 use std::path::{Path, PathBuf};
@@ -117,11 +117,12 @@ fn save_and_use(app: &mut PulseApp) {
     }
     let path = path.to_string_lossy().into_owned();
     app.samples.forget(&path);
-    let Some(InstrumentKind::Wavetable(mut params)) = app.project.tracks.get(track).map(|t| t.instrument) else { return };
+    let Some(kind) = app.project.tracks.get(track).map(|t| t.instrument) else { return };
+    let Some(mut params) = kind.wave().copied() else { return };
     params.osc[osc].kind = OscKind::Wavetable;
     params.osc[osc].table = WAVE_USER_TABLE;
     app.project.tracks[track].set_sample(osc, Some(path.clone()));
-    app.set_instrument(track, InstrumentKind::Wavetable(params));
+    app.set_instrument(track, kind.with_wave(params));
     app.sync_samples(track);
     app.status = Some(format!("Wavetable guardada y cargada: {path}"));
 }

@@ -12,6 +12,7 @@ mod kick_ui;
 mod kits;
 mod note_edit;
 mod piano_roll;
+mod poly_ui;
 mod presets;
 mod project;
 mod recording;

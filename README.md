@@ -51,6 +51,12 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   Graba igual que MIDI: ● en un slot vacío o ● del transporte. Las tomas se guardan como WAV en `Recordings/`
   junto al proyecto (o en `~/Music/Pulse/Recordings` si aún no lo has guardado) y quedan sincronizadas al tempo.
   No hay monitorización de la entrada todavía: usa la de tu interfaz de audio.
+- **Automatización**: en el Arrangement, el botón **A** de una pista despliega su línea de automatización;
+  elige el parámetro (volumen, panorama, envíos, cualquier knob del sintetizador o de los efectos) y haz clic
+  para añadir puntos, arrástralos para moverlos y doble clic para borrarlos. Los controles automatizados llevan
+  un punto rojo y se mueven solos al reproducir. Si mueves uno a mano, su automatización queda anulada (punto
+  hueco) hasta que pulses **▶ Arrangement**, como en Live. El volumen y el panorama se suavizan dentro de
+  cada bloque de audio para que los cambios no suenen a escalones.
 - **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI y
   de audio (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus
   notas o sus muestras y ajustes de warp. Las muestras se buscan por ruta y, si el set viene de otro
@@ -67,7 +73,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 
 ## Hoja de ruta
 
-1. Automatización de parámetros.
+1. Envolventes de automatización dentro de los clips de sesión; curvas entre puntos.
 2. Monitorización y compensación de latencia al grabar audio; grabar la sesión en el Arrangement;
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.

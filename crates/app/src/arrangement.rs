@@ -3,12 +3,15 @@
 //! - Drag in the top strip to set the loop region; click the ruler to move the start marker.
 //! - Double-click an empty lane to create a clip; drag a clip to move it (also across
 //!   tracks), drag its right edge to resize it. Clip contents loop when it is longer.
+//! - The "A" button of a track shows an automation lane below it: click to add a
+//!   breakpoint, drag to move it, double-click to delete it.
 
 use crate::app::{ClipRef, Placement, PulseApp};
 use crate::theme::{self, ACCENT, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
-use engine::model::{ArrangementClip, Clip, MidiClip};
+use engine::model::{ArrangementClip, AutomationPoint, Clip, MidiClip, Param};
+use std::collections::HashMap;
 use engine::{Sample, PEAK_BLOCK};
 use engine::{Command, Target};
 use std::sync::atomic::Ordering;
@@ -18,19 +21,25 @@ const LOOP_H: f32 = 12.0;
 const RULER_H: f32 = 20.0;
 const LANE_H: f32 = 52.0;
 const EDGE_GRAB: f32 = 6.0;
+const AUTO_H: f32 = 64.0;
+const POINT_GRAB: f32 = 6.0;
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, Debug)]
 enum Drag {
     Move { track: usize, index: usize, grab: f64 },
     Resize { track: usize, index: usize },
     Loop { anchor: f64 },
     Scrub,
+    /// Dragging a breakpoint; `lane` is the lane's rectangle when the drag began.
+    Point { track: usize, param: Param, index: usize, lane: Rect },
 }
 
 pub struct State {
     pub pixels_per_beat: f32,
     pub follow: bool,
     drag: Option<Drag>,
+    /// Tracks showing an automation lane, and the parameter it shows.
+    pub automation: HashMap<usize, Param>,
 }
 
 impl Default for State {
@@ -39,6 +48,7 @@ impl Default for State {
             pixels_per_beat: 14.0,
             follow: false,
             drag: None,
+            automation: HashMap::new(),
         }
     }
 }
@@ -53,6 +63,52 @@ fn snap_unit(pixels_per_beat: f32) -> f64 {
 
 fn snap(beat: f64, unit: f64) -> f64 {
     (beat / unit).round() * unit
+}
+
+/// Breakpoints snap more finely than clips when zoomed in.
+fn point_unit(pixels_per_beat: f32) -> f64 {
+    if pixels_per_beat >= 24.0 {
+        0.25
+    } else {
+        snap_unit(pixels_per_beat)
+    }
+}
+
+/// Vertical position of each track row (relative to the first lane) and its automation lane, if shown.
+struct Layout {
+    rows: Vec<(f32, Option<Param>)>,
+    height: f32,
+}
+
+impl Layout {
+    fn new(app: &PulseApp) -> Self {
+        let mut rows = Vec::new();
+        let mut y = 0.0;
+        for t in 0..app.project.tracks.len() {
+            let shown = app.arrangement.automation.get(&t).copied();
+            rows.push((y, shown));
+            y += row_height(shown.is_some());
+        }
+        Self { rows, height: y }
+    }
+
+    /// Track under `y` (relative to the first lane) and whether it is in its automation lane.
+    fn hit(&self, y: f32) -> Option<(usize, bool)> {
+        self.rows.iter().enumerate().find_map(|(t, &(top, shown))| {
+            let clips_end = top + LANE_H + 1.0;
+            if y >= top && y < clips_end {
+                Some((t, false))
+            } else if shown.is_some() && y >= clips_end && y < clips_end + AUTO_H + 1.0 {
+                Some((t, true))
+            } else {
+                None
+            }
+        })
+    }
+}
+
+fn row_height(automation: bool) -> f32 {
+    LANE_H + 1.0 + if automation { AUTO_H + 1.0 } else { 0.0 }
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
@@ -83,7 +139,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         .map(|t| t.arrangement_end())
         .fold(app.project.loop_end, f64::max);
     let total_beats = ((content_end + 64.0) / 16.0).ceil() * 16.0;
-    let lanes_height = LOOP_H + RULER_H + tracks as f32 * (LANE_H + 1.0);
+    app.arrangement.automation.retain(|&t, _| t < tracks);
+    let layout = Layout::new(app);
+    let lanes_height = LOOP_H + RULER_H + layout.height;
 
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -93,7 +151,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.set_width(HEADER_W);
             ui.add_space(LOOP_H + RULER_H);
             for t in 0..tracks {
-                track_header(app, ui, t);
+                track_header(app, ui, t, layout.rows[t].1);
             }
         });
 
@@ -110,7 +168,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let x_at = |beat: f64| rect.left() + beat as f32 * ppb;
             let lanes_top = rect.top() + LOOP_H + RULER_H;
             let lane_rect = |t: usize| {
-                Rect::from_min_size(pos2(rect.left(), lanes_top + t as f32 * (LANE_H + 1.0)), vec2(rect.width(), LANE_H))
+                Rect::from_min_size(pos2(rect.left(), lanes_top + layout.rows[t].0), vec2(rect.width(), LANE_H))
+            };
+            let auto_rect = |t: usize| {
+                Rect::from_min_size(pos2(rect.left(), lanes_top + layout.rows[t].0 + LANE_H + 1.0), vec2(rect.width(), AUTO_H))
             };
 
             // Background, lanes and grid.
@@ -171,6 +232,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
 
+            // Automation lanes.
+            for t in 0..tracks {
+                if let Some(param) = layout.rows[t].1 {
+                    paint_automation(app, &painter, auto_rect(t), t, param, &x_at);
+                }
+            }
+
             // Playhead and start marker.
             let following = |t: usize| {
                 state.as_ref().is_none_or(|s| s.tracks[t].follows_arrangement.load(Ordering::Relaxed))
@@ -191,7 +259,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 painter.rect_filled(lane_rect(t), 0.0, Color32::from_black_alpha(110));
             }
 
-            handle_pointer(app, ui, &response, rect, lanes_top, unit, x_at(0.0));
+            handle_pointer(app, ui, &response, rect, lanes_top, unit, x_at(0.0), &layout);
         });
     });
 }
@@ -282,8 +350,8 @@ fn paint_clip(
     }
 }
 
-fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
-    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, LANE_H + 1.0), Sense::click());
+fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>) {
+    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some())), Sense::click());
     let selected = app.selected_target == Target::Track(t);
     let track = &app.project.tracks[t];
     let color = theme::rgb(track.color);
@@ -315,6 +383,91 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
     {
         app.toggle_arm(t);
     }
+    let target = Target::Track(t);
+    if widgets::toggle(&mut child, shown.is_some(), "A", theme::METER_RED, vec2(24.0, 16.0))
+        .on_hover_text("Mostrar la automatización de la pista")
+        .clicked()
+    {
+        if shown.is_some() {
+            app.arrangement.automation.remove(&t);
+        } else {
+            // Open on a parameter that already has automation, or the volume.
+            let param = app
+                .automation(target)
+                .iter()
+                .find(|l| !l.points.is_empty())
+                .map_or(Param::Volume, |l| l.param);
+            app.arrangement.automation.insert(t, param);
+        }
+    }
+
+    let Some(param) = shown else { return };
+    let area = Rect::from_min_size(rect.left_top() + vec2(10.0, LANE_H + 6.0), vec2(HEADER_W - 18.0, AUTO_H - 8.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
+    let mut chosen = param;
+    egui::ComboBox::from_id_salt(("automation", t))
+        .selected_text(app.param_name(target, param))
+        .width(HEADER_W - 22.0)
+        .show_ui(&mut child, |ui| {
+            for candidate in app.automatable(target) {
+                let mut label = app.param_name(target, candidate);
+                if app.automation_state(target, candidate).is_some() {
+                    label.push_str("  ●");
+                }
+                ui.selectable_value(&mut chosen, candidate, label);
+            }
+        });
+    if chosen != param {
+        app.arrangement.automation.insert(t, chosen);
+    }
+    if app.automation_state(target, param).is_some() && child.small_button("Borrar automatización").clicked() {
+        app.automation_mut(target).retain(|l| l.param != param);
+        app.overridden.remove(&(target, param));
+        app.sync_automation(target);
+    }
+}
+
+/// Maps a parameter value to a y position inside an automation lane.
+fn value_y(rect: Rect, normalized: f32) -> f32 {
+    rect.bottom() - 4.0 - normalized * (rect.height() - 8.0)
+}
+
+fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usize, param: Param, x_at: &dyn Fn(f64) -> f32) {
+    painter.rect_filled(rect, 0.0, theme::shade(theme::SLOT, 0.8));
+    let target = Target::Track(t);
+    let Some(info) = app.param_info(target, param) else {
+        painter.text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "Parámetro no disponible", theme::small(), TEXT_DIM);
+        return;
+    };
+    let overridden = app.overridden.contains(&(target, param));
+    let color = if overridden { Color32::from_gray(130) } else { theme::METER_RED };
+    let lane = app.automation(target).iter().find(|l| l.param == param && !l.points.is_empty());
+    match lane {
+        None => {
+            let y = value_y(rect, info.normalize(app.param_value(target, param)));
+            painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, Color32::from_gray(100)));
+            painter.text(rect.left_top() + vec2(8.0, 4.0), Align2::LEFT_TOP, "Clic para añadir puntos", theme::small(), TEXT_DIM);
+        }
+        Some(lane) => {
+            let y = |v: f32| value_y(rect, info.normalize(v));
+            let mut line = vec![pos2(rect.left(), y(lane.points[0].value))];
+            line.extend(lane.points.iter().map(|p| pos2(x_at(p.beat), y(p.value))));
+            line.push(pos2(rect.right(), y(lane.points[lane.points.len() - 1].value)));
+            painter.add(egui::Shape::line(line, Stroke::new(1.5, color)));
+            for p in &lane.points {
+                painter.circle_filled(pos2(x_at(p.beat), y(p.value)), 3.5, color);
+            }
+            if overridden {
+                painter.text(
+                    rect.left_top() + vec2(8.0, 4.0),
+                    Align2::LEFT_TOP,
+                    "Anulada a mano · ▶ Arrangement la reactiva",
+                    theme::small(),
+                    TEXT_DIM,
+                );
+            }
+        }
+    }
 }
 
 /// Hit-tests a pointer position against the clips of a lane.
@@ -331,19 +484,32 @@ fn clip_at(app: &PulseApp, track: usize, beat: f64, x: f32, ppb: f32, origin_x: 
         })
 }
 
-fn handle_pointer(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, rect: Rect, lanes_top: f32, unit: f64, origin_x: f32) {
+#[allow(clippy::too_many_arguments)]
+fn handle_pointer(
+    app: &mut PulseApp,
+    ui: &egui::Ui,
+    response: &egui::Response,
+    rect: Rect,
+    lanes_top: f32,
+    unit: f64,
+    origin_x: f32,
+    layout: &Layout,
+) {
     let ppb = app.arrangement.pixels_per_beat;
-    let tracks = app.project.tracks.len();
     let Some(pos) = response.interact_pointer_pos().or_else(|| response.hover_pos()) else {
         return;
     };
     let beat = ((pos.x - origin_x) / ppb).max(0.0) as f64;
-    let lane = if pos.y >= lanes_top {
-        let t = ((pos.y - lanes_top) / (LANE_H + 1.0)) as usize;
-        (t < tracks).then_some(t)
-    } else {
-        None
-    };
+    let hit = if pos.y >= lanes_top { layout.hit(pos.y - lanes_top) } else { None };
+    let lane = hit.filter(|&(_, automation)| !automation).map(|(t, _)| t);
+    let automation = hit.filter(|&(_, automation)| automation).and_then(|(t, _)| {
+        let param = layout.rows[t].1?;
+        let top = lanes_top + layout.rows[t].0 + LANE_H + 1.0;
+        Some((t, param, Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), AUTO_H))))
+    });
+    if handle_automation(app, ui, response, pos, beat, origin_x, automation) {
+        return;
+    }
 
     // Cursor feedback for resizing.
     if app.arrangement.drag.is_none() {
@@ -382,7 +548,7 @@ fn handle_pointer(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, 
         };
     }
 
-    if response.double_clicked() {
+    if response.double_clicked() && automation.is_none() {
         if let Some(t) = lane {
             if clip_at(app, t, beat, pos.x, ppb, origin_x).is_none() {
                 let start = (beat / 4.0).floor() * 4.0;
@@ -446,11 +612,90 @@ fn handle_pointer(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, 
             Some(Drag::Scrub) => {
                 app.audio.send(Command::SetPosition(snap(beat, unit)));
             }
-            None => {}
+            Some(Drag::Point { .. }) | None => {}
         }
     }
 
     if ui.input(|i| i.pointer.primary_released()) {
         app.arrangement.drag = None;
     }
+}
+
+/// Breakpoint editing in an automation lane. Returns true if the pointer was handled.
+fn handle_automation(
+    app: &mut PulseApp,
+    ui: &egui::Ui,
+    response: &egui::Response,
+    pos: egui::Pos2,
+    beat: f64,
+    origin_x: f32,
+    lane: Option<(usize, Param, Rect)>,
+) -> bool {
+    // Clip, loop and scrub drags keep going when they pass over an automation lane.
+    if app.arrangement.drag.is_some_and(|d| !matches!(d, Drag::Point { .. })) {
+        return false;
+    }
+    let ppb = app.arrangement.pixels_per_beat;
+    let unit = point_unit(ppb);
+    let x_at = |b: f64| origin_x + b as f32 * ppb;
+
+    // Dragging a breakpoint continues even if the pointer leaves the lane.
+    if let Some(Drag::Point { track, param, index, lane: rect }) = app.arrangement.drag {
+        if response.dragged() {
+            let target = Target::Track(track);
+            if let Some(info) = app.param_info(target, param) {
+                let value = info.denormalize((rect.bottom() - 4.0 - pos.y) / (rect.height() - 8.0));
+                let lane = app.lane_mut(target, param);
+                let lo = if index > 0 { lane.points[index - 1].beat } else { 0.0 };
+                let hi = lane.points.get(index + 1).map_or(f64::INFINITY, |p| p.beat);
+                let point = &mut lane.points[index];
+                point.beat = snap(beat, unit).clamp(lo, hi);
+                point.value = value;
+                app.sync_automation(target);
+            }
+        }
+        if ui.input(|i| i.pointer.primary_released()) {
+            app.arrangement.drag = None;
+        }
+        return true;
+    }
+
+    let Some((track, param, rect)) = lane else { return false };
+    let target = Target::Track(track);
+    let Some(info) = app.param_info(target, param) else { return true };
+    let y_of = |v: f32| value_y(rect, info.normalize(v));
+    let near = app
+        .automation(target)
+        .iter()
+        .find(|l| l.param == param)
+        .and_then(|l| {
+            l.points
+                .iter()
+                .position(|p| (x_at(p.beat) - pos.x).abs() <= POINT_GRAB && (y_of(p.value) - pos.y).abs() <= POINT_GRAB)
+        });
+
+    if response.double_clicked() {
+        if let Some(index) = near {
+            app.lane_mut(target, param).points.remove(index);
+            app.sync_automation(target);
+        }
+        return true;
+    }
+    if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
+        app.selected_target = target;
+        let index = match near {
+            Some(index) => index,
+            None => {
+                let value = info.denormalize((rect.bottom() - 4.0 - pos.y) / (rect.height() - 8.0));
+                let lane = app.lane_mut(target, param);
+                let point = AutomationPoint { beat: snap(beat, unit), value };
+                let index = lane.points.partition_point(|p| p.beat <= point.beat);
+                lane.points.insert(index, point);
+                app.sync_automation(target);
+                index
+            }
+        };
+        app.arrangement.drag = Some(Drag::Point { track, param, index, lane: rect });
+    }
+    true
 }

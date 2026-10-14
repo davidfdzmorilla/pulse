@@ -116,6 +116,10 @@ impl PolySynth {
         self.params = params;
     }
 
+    pub fn set_param(&mut self, index: usize, value: f32) {
+        self.params.set(index, value);
+    }
+
     /// Starts a note that releases on its own after `gate_samples`, or on
     /// [`Self::note_off`] when the gate is [`HELD`].
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate_samples: u32) {

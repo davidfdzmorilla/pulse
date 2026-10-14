@@ -3,9 +3,9 @@
 use crate::app::{ClipRef, Placement, PulseApp};
 use crate::project::PALETTE;
 use crate::theme::{self, ACCENT, PLAY, SLOT, SLOT_HOVER, SOLO, TEXT, TEXT_DIM};
-use crate::widgets::{self, Knob};
+use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense};
-use engine::model::{Clip, MidiClip};
+use engine::model::{Clip, MidiClip, Param, PAN_PARAM, SEND_PARAM};
 use engine::{Command, Target, NONE, NUM_RETURNS, NUM_SCENES, QUEUED_STOP};
 use std::sync::atomic::Ordering;
 
@@ -378,21 +378,19 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
     let mut commands = Vec::new();
     let mut arm = None;
 
-    // Sends.
+    // Sends, pan and fader go through the parameter helpers so they follow automation.
+    let mut changes: Vec<(Param, f32)> = Vec::new();
     match target {
-        Target::Track(t) => {
+        Target::Track(_) => {
             ui.horizontal(|ui| {
                 ui.spacing_mut().item_spacing.x = 0.0;
                 ui.set_height(SENDS_H);
                 for send in 0..NUM_RETURNS {
-                    let label = ["A", "B"][send];
-                    let value = &mut app.project.tracks[t].sends[send];
-                    let response = Knob::new(value, 0.0..=1.0, 0.0, label)
-                        .diameter(22.0)
-                        .format(|v| if v <= 0.0 { "-inf".into() } else { format!("{:.0}%", v * 100.0) })
-                        .show(ui);
-                    if response.changed() {
-                        commands.push(Command::SetSend { track: t, send, amount: *value });
+                    let param = Param::Send(send);
+                    let value = app.display_value(target, param);
+                    let state = app.automation_state(target, param);
+                    if let Some(v) = widgets::param_knob(ui, &SEND_PARAM, value, ["A", "B"][send], 22.0, state) {
+                        changes.push((param, v));
                     }
                 }
             });
@@ -402,33 +400,28 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
         }
     }
 
-    // Pan.
     ui.horizontal(|ui| {
         ui.set_height(PAN_H);
         ui.add_space((COL_W - 46.0) / 2.0);
-        let mixer = app.mixer_mut(target);
-        let response = Knob::new(&mut mixer.pan, -1.0..=1.0, 0.0, "Pan")
-            .bipolar()
-            .diameter(26.0)
-            .format(|v| match (v * 50.0).round() as i32 {
-                0 => "C".into(),
-                n if n < 0 => format!("{}L", -n),
-                n => format!("{n}R"),
-            })
-            .show(ui);
-        if response.changed() {
-            commands.push(Command::SetPan { target, pan: mixer.pan });
+        let value = app.display_value(target, Param::Pan);
+        let state = app.automation_state(target, Param::Pan);
+        if let Some(v) = widgets::param_knob(ui, &PAN_PARAM, value, "Pan", 26.0, state) {
+            changes.push((Param::Pan, v));
         }
     });
 
-    // Fader with meter.
     ui.horizontal(|ui| {
         ui.add_space((COL_W - 34.0) / 2.0);
-        let mixer = app.mixer_mut(target);
-        if widgets::fader_with_meter(ui, &mut mixer.gain, peak, FADER_H).changed() {
-            commands.push(Command::SetGain { target, gain: mixer.gain });
+        let mut gain = app.display_value(target, Param::Volume);
+        let response = widgets::fader_with_meter(ui, &mut gain, peak, FADER_H);
+        widgets::automation_dot(ui.painter(), response.rect.left_top() + vec2(2.0, 2.0), app.automation_state(target, Param::Volume));
+        if response.changed() {
+            changes.push((Param::Volume, gain));
         }
     });
+    for (param, value) in changes {
+        app.set_param(target, param, value);
+    }
 
     // Activator and solo.
     ui.horizontal(|ui| {

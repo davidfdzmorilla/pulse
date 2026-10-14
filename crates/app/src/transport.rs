@@ -123,10 +123,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.add_space(12.0);
         let needed = app.back_to_arrangement_needed();
         if widgets::flat_button(ui, "▶ Arrangement", needed, vec2(104.0, 22.0))
-            .on_hover_text("Volver al Arrangement: las pistas dejan los clips de sesión y siguen el Arrangement")
+            .on_hover_text("Volver al Arrangement: las pistas dejan los clips de sesión y la automatización que hayas\nmovido a mano vuelve a funcionar")
             .clicked()
         {
-            app.audio.send(Command::BackToArrangement);
+            app.back_to_arrangement();
         }
 
         ui.add_space(12.0);

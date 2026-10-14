@@ -1,13 +1,16 @@
 use crate::history::History;
 use crate::project::{Mixer, Project, Track, PALETTE};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use crate::capture::{write_wav, InputCapture};
 use crate::input::{ComputerKeyboard, MidiInputs};
 use crate::recording::{Finished, Recorder};
 use crate::{arrangement, browser, detail, piano_roll, session, theme, transport};
 use eframe::egui;
-use engine::model::{ArrangementClip, AudioClip, Clip, Device, InstrumentKind, MidiClip, SynthParams, WarpMode};
+use engine::model::{
+    ArrangementClip, AudioClip, AutomationLane, Clip, Device, InstrumentKind, MidiClip, Param, ParamInfo, SynthParams, WarpMode,
+    PAN_PARAM, SEND_PARAM, VOLUME_PARAM,
+};
 use engine::{
     build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, LiveInput, PlacedClip, PlayClip,
     RecordedNote, Sample, SharedState,
@@ -170,6 +173,9 @@ pub struct PulseApp {
     pub recorder: Recorder,
     /// Audio input, opened when an audio track is armed.
     pub capture: Option<InputCapture>,
+    /// Automated parameters the user moved by hand; their automation is
+    /// suspended until "Back to Arrangement", as in Live.
+    pub overridden: HashSet<(Target, Param)>,
     /// Input track last sent to the engine.
     input_track: Option<Option<usize>>,
     history: History,
@@ -205,6 +211,7 @@ impl PulseApp {
             keyboard: ComputerKeyboard::default(),
             recorder: Recorder::default(),
             capture: None,
+            overridden: HashSet::new(),
             input_track: None,
             file: None,
             status: None,
@@ -283,6 +290,29 @@ impl PulseApp {
         }
         self.sync_chain(Target::Master);
         self.sync_mixer(Target::Master);
+        for t in 0..MAX_TRACKS {
+            if t < self.project.tracks.len() {
+                self.sync_automation(Target::Track(t));
+            } else {
+                let lanes = Box::default();
+                self.audio.send(Command::SetAutomation { target: Target::Track(t), lanes });
+            }
+        }
+        for r in 0..NUM_RETURNS {
+            self.sync_automation(Target::Return(r));
+        }
+        self.sync_automation(Target::Master);
+    }
+
+    /// Sends a channel's lanes that have points and are not overridden.
+    pub fn sync_automation(&mut self, target: Target) {
+        let lanes: Vec<AutomationLane> = self
+            .automation(target)
+            .iter()
+            .filter(|lane| !lane.points.is_empty() && !self.overridden.contains(&(target, lane.param)))
+            .cloned()
+            .collect();
+        self.audio.send(Command::SetAutomation { target, lanes: Box::new(lanes) });
     }
 
     fn send_mixer(&mut self, target: Target, mixer: &Mixer) {
@@ -527,6 +557,156 @@ impl PulseApp {
         }
     }
 
+    // ----- Parameters and automation ----------------------------------------------
+
+    pub fn automation(&self, target: Target) -> &Vec<AutomationLane> {
+        match target {
+            Target::Track(i) => &self.project.tracks[i].automation,
+            Target::Return(i) => &self.project.returns[i].automation,
+            Target::Master => &self.project.master.automation,
+        }
+    }
+
+    pub fn automation_mut(&mut self, target: Target) -> &mut Vec<AutomationLane> {
+        match target {
+            Target::Track(i) => &mut self.project.tracks[i].automation,
+            Target::Return(i) => &mut self.project.returns[i].automation,
+            Target::Master => &mut self.project.master.automation,
+        }
+    }
+
+    /// The lane for `param`, created empty if needed.
+    pub fn lane_mut(&mut self, target: Target, param: Param) -> &mut AutomationLane {
+        let lanes = self.automation_mut(target);
+        let index = match lanes.iter().position(|l| l.param == param) {
+            Some(index) => index,
+            None => {
+                lanes.push(AutomationLane::new(param));
+                lanes.len() - 1
+            }
+        };
+        &mut lanes[index]
+    }
+
+    pub fn param_info(&self, target: Target, param: Param) -> Option<ParamInfo> {
+        match param {
+            Param::Volume => Some(VOLUME_PARAM),
+            Param::Pan => Some(PAN_PARAM),
+            Param::Send(_) => Some(SEND_PARAM),
+            Param::Device { device, param } => self.devices(target).get(device)?.effect.params().get(param).copied(),
+            Param::Instrument(i) => match target {
+                Target::Track(t) if matches!(self.project.tracks[t].instrument, InstrumentKind::Synth(_)) => {
+                    SynthParams::params().get(i).copied()
+                }
+                _ => None,
+            },
+        }
+    }
+
+    pub fn param_name(&self, target: Target, param: Param) -> String {
+        let info = self.param_info(target, param).map_or("?", |i| i.name);
+        match param {
+            Param::Volume => "Volumen".into(),
+            Param::Pan => "Pan".into(),
+            Param::Send(i) => format!("Envío {}", ["A", "B"].get(i).unwrap_or(&"?")),
+            Param::Device { device, .. } => {
+                let label = self.devices(target).get(device).map_or("?", |d| d.effect.label());
+                format!("{} {label}: {info}", device + 1)
+            }
+            Param::Instrument(_) => format!("Synth: {info}"),
+        }
+    }
+
+    /// Every parameter of a channel that can be automated.
+    pub fn automatable(&self, target: Target) -> Vec<Param> {
+        let mut params = vec![Param::Volume, Param::Pan];
+        if let Target::Track(t) = target {
+            params.extend((0..NUM_RETURNS).map(Param::Send));
+            if !self.project.tracks[t].is_audio() && matches!(self.project.tracks[t].instrument, InstrumentKind::Synth(_)) {
+                params.extend((0..SynthParams::params().len()).map(Param::Instrument));
+            }
+        }
+        for (device, d) in self.devices(target).iter().enumerate() {
+            params.extend((0..d.effect.params().len()).map(|param| Param::Device { device, param }));
+        }
+        params
+    }
+
+    /// The value set by hand (what plays where there is no automation).
+    pub fn param_value(&self, target: Target, param: Param) -> f32 {
+        let mixer = self.mixer(target);
+        match param {
+            Param::Volume => mixer.gain,
+            Param::Pan => mixer.pan,
+            Param::Send(i) => match target {
+                Target::Track(t) => self.project.tracks[t].sends.get(i).copied().unwrap_or(0.0),
+                _ => 0.0,
+            },
+            Param::Device { device, param } => self.devices(target).get(device).map_or(0.0, |d| d.effect.get(param)),
+            Param::Instrument(i) => match target {
+                Target::Track(t) => match self.project.tracks[t].instrument {
+                    InstrumentKind::Synth(p) => p.get(i),
+                    InstrumentKind::Drums => 0.0,
+                },
+                _ => 0.0,
+            },
+        }
+    }
+
+    /// Whether `param` has automation, and whether it is currently overridden.
+    pub fn automation_state(&self, target: Target, param: Param) -> Option<bool> {
+        let has_points = self.automation(target).iter().any(|l| l.param == param && !l.points.is_empty());
+        has_points.then(|| self.overridden.contains(&(target, param)))
+    }
+
+    /// Value to display: the automated one while the transport plays, else the manual one.
+    pub fn display_value(&self, target: Target, param: Param) -> f32 {
+        if self.audio.is_playing() && self.automation_state(target, param) == Some(false) {
+            let position = self.audio.position();
+            if let Some(value) = self.automation(target).iter().find(|l| l.param == param).and_then(|l| l.value_at(position)) {
+                return value;
+            }
+        }
+        self.param_value(target, param)
+    }
+
+    /// Sets a parameter by hand. Moving an automated parameter overrides its automation.
+    pub fn set_param(&mut self, target: Target, param: Param, value: f32) {
+        match param {
+            Param::Volume => self.mixer_mut(target).gain = value.max(0.0),
+            Param::Pan => self.mixer_mut(target).pan = value.clamp(-1.0, 1.0),
+            Param::Send(i) => {
+                if let Target::Track(t) = target {
+                    if let Some(send) = self.project.tracks[t].sends.get_mut(i) {
+                        *send = value.clamp(0.0, 1.0);
+                    }
+                    self.audio.send(Command::SetSend { track: t, send: i, amount: value.clamp(0.0, 1.0) });
+                }
+            }
+            Param::Device { device, param } => {
+                if let Some(d) = self.devices_mut(target).get_mut(device) {
+                    d.effect.set(param, value);
+                }
+                self.update_device(target, device);
+            }
+            Param::Instrument(i) => {
+                if let Target::Track(t) = target {
+                    if let InstrumentKind::Synth(p) = &mut self.project.tracks[t].instrument {
+                        p.set(i, value);
+                        let kind = self.project.tracks[t].instrument;
+                        self.audio.send(Command::SetInstrument { track: t, kind });
+                    }
+                }
+            }
+        }
+        if matches!(param, Param::Volume | Param::Pan) {
+            self.sync_mixer(target);
+        }
+        if self.automation_state(target, param) == Some(false) && self.overridden.insert((target, param)) {
+            self.sync_automation(target);
+        }
+    }
+
     // ----- Edits ------------------------------------------------------------------
 
     pub fn select_clip(&mut self, clip: ClipRef) {
@@ -606,6 +786,17 @@ impl PulseApp {
         if index < self.devices(target).len() {
             self.devices_mut(target).remove(index);
             self.audio.send(Command::RemoveDevice { target, index });
+            // Lanes follow their device: drop the removed one's, shift the ones after it.
+            let lanes = self.automation_mut(target);
+            lanes.retain(|l| !matches!(l.param, Param::Device { device, .. } if device == index));
+            for lane in lanes.iter_mut() {
+                if let Param::Device { device, .. } = &mut lane.param {
+                    if *device > index {
+                        *device -= 1;
+                    }
+                }
+            }
+            self.sync_automation(target);
         }
     }
 
@@ -619,7 +810,17 @@ impl PulseApp {
         let devices = self.devices_mut(target);
         if from < devices.len() && to < devices.len() {
             devices.swap(from, to);
+            for lane in self.automation_mut(target).iter_mut() {
+                if let Param::Device { device, .. } = &mut lane.param {
+                    if *device == from {
+                        *device = to;
+                    } else if *device == to {
+                        *device = from;
+                    }
+                }
+            }
             self.sync_chain(target);
+            self.sync_automation(target);
         }
     }
 
@@ -671,8 +872,18 @@ impl PulseApp {
         self.sync_all();
     }
 
+    /// Returns tracks to their arrangement clips and re-enables overridden automation.
+    pub fn back_to_arrangement(&mut self) {
+        self.audio.send(Command::BackToArrangement);
+        let targets: Vec<Target> = self.overridden.drain().map(|(target, _)| target).collect();
+        for target in targets {
+            self.sync_automation(target);
+        }
+    }
+
     pub fn back_to_arrangement_needed(&self) -> bool {
-        self.audio.state().is_some_and(|s| {
+        !self.overridden.is_empty()
+            || self.audio.state().is_some_and(|s| {
             s.tracks[..self.project.tracks.len()]
                 .iter()
                 .any(|t| !t.follows_arrangement.load(Ordering::Relaxed))

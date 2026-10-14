@@ -4,6 +4,7 @@
 //! knob shows and overrides automation the same way the mixer does.
 
 use crate::app::PulseApp;
+use crate::presets::Preset;
 use crate::theme::{self, ACCENT, CONTROL, SURFACE, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
@@ -37,6 +38,9 @@ enum Action {
     Replace(usize, Device),
     Param(Param, f32),
     Instrument(InstrumentKind),
+    ApplyPreset(Preset),
+    SavePreset(String),
+    DeletePreset(Preset),
     Preview(u8),
     /// Opens a file dialog for sample slot `n`.
     LoadSamples(usize),
@@ -158,6 +162,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     app.set_instrument(t, kind);
                 }
             }
+            Action::ApplyPreset(preset) => {
+                if let Target::Track(t) = target {
+                    app.apply_preset(t, preset);
+                }
+            }
+            Action::SavePreset(name) => {
+                if let Target::Track(t) = target {
+                    app.save_preset(t, name);
+                }
+            }
+            Action::DeletePreset(preset) => app.delete_preset(&preset),
             Action::Preview(pitch) => {
                 if let Target::Track(track) = target {
                     app.audio.send(Command::PreviewNote { track, pitch, velocity: 0.9 });
@@ -272,9 +287,11 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             actions.push(Action::Param(id, v));
         }
     };
+    // Actions from the title bar (presets and the like).
+    let mut head = Vec::new();
     match kind {
         InstrumentKind::Synth(base) => {
-            device_frame(ui, kind.label(), 470.0, None, |_| {}, |ui| {
+            device_frame(ui, kind.label(), 470.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 let mut waveform = base.waveform;
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Oscilador").color(TEXT_DIM).size(10.5));
@@ -307,7 +324,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             });
         }
         InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => {
-            device_frame(ui, kind.label(), 600.0, None, |_| {}, |ui| {
+            device_frame(ui, kind.label(), 600.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 egui::Grid::new("drum_machine").spacing([8.0, 2.0]).show(ui, |ui| {
                     for (voice, (pitch, name)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
                         ui.vertical(|ui| {
@@ -331,7 +348,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         }
         InstrumentKind::Acid(base) => {
             let width = kind.params().len() as f32 * 52.0 + 110.0;
-            device_frame(ui, kind.label(), width, None, |_| {}, |ui| {
+            device_frame(ui, kind.label(), width, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 let mut square = base.square;
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Oscilador").color(TEXT_DIM).size(10.5));
@@ -347,7 +364,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             });
         }
         InstrumentKind::Sampler(base) => {
-            device_frame(ui, kind.label(), 560.0, None, |_| {}, |ui| {
+            device_frame(ui, kind.label(), 560.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 ui.vertical(|ui| {
                     let rect = sample_slot(app, ui, t, 0, vec2(220.0, 78.0), zones);
                     waveform(app, ui, t, 0, rect, app.display_value(target, Param::Instrument(2)));
@@ -389,11 +406,12 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         InstrumentKind::DrumRack(base) => {
             let pad = app.selected_pad.min(RACK_PADS - 1);
             let header = |ui: &mut egui::Ui| {
+                preset_menu(app, ui, t, &mut head);
                 if ui.small_button("Kit básico").on_hover_text("Carga sonidos de la Drum Machine en los pads").clicked() {
-                    actions.push(Action::BasicKit);
+                    head.push(Action::BasicKit);
                 }
                 if ui.small_button("Trocear archivo…").on_hover_text("Corta un loop en golpes, uno por pad, y crea el clip que lo toca").clicked() {
-                    actions.push(Action::SliceFile);
+                    head.push(Action::SliceFile);
                 }
             };
             let mut body_actions = Vec::new();
@@ -442,15 +460,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             actions.extend(body_actions);
         }
         InstrumentKind::Kick(base) => {
-            let header = |ui: &mut egui::Ui| {
-                egui::ComboBox::from_id_salt(("kick_preset", t)).selected_text("Presets").width(110.0).show_ui(ui, |ui| {
-                    for (name, preset) in KickParams::presets() {
-                        if ui.selectable_label(false, name).clicked() {
-                            actions.push(Action::Instrument(InstrumentKind::Kick(preset)));
-                        }
-                    }
-                });
-            };
+            let header = |ui: &mut egui::Ui| preset_menu(app, ui, t, &mut head);
             let mut body_actions = Vec::new();
             device_frame(ui, kind.label(), 680.0, None, header, |ui| {
                 // The display follows automation, like the knobs.
@@ -460,7 +470,8 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 }
                 let InstrumentKind::Kick(shown) = shown else { return };
                 ui.vertical(|ui| {
-                    kick_display(app, ui, t, &shown);
+                    let click = app.project.tracks[t].sample(0).and_then(|path| app.loaded_sample(path)).cloned();
+                    kick_editor(ui, t, click, &shown, base, &mut body_actions);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
                         let mut mode = base.drive_mode;
@@ -493,13 +504,14 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         }
         InstrumentKind::SuperSaw(_) | InstrumentKind::Fm(_) => {
             let width = kind.params().len() as f32 * 52.0 + 24.0;
-            device_frame(ui, kind.label(), width, None, |_| {}, |ui| {
+            device_frame(ui, kind.label(), width, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 for (i, info) in kind.params().iter().enumerate() {
                     knob(ui, actions, i, info.name, 30.0);
                 }
             });
         }
     }
+    actions.extend(head);
 }
 
 /// Small ADSR curve, like the envelope displays on hardware synths.
@@ -603,46 +615,218 @@ fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, action
     }
 }
 
-/// Waveform of one kick hit with its pitch envelope on top, cached until a setting changes.
-fn kick_display(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: &KickParams) {
-    let (rect, _) = ui.allocate_exact_size(vec2(240.0, 84.0), Sense::hover());
+/// The kick's envelope editor: the hit's waveform with the pitch or the level
+/// curve on top, both drawable by hand.
+///
+/// Drag a point to move it, double-click to add or remove one, drag the small
+/// handle in the middle of a segment to bend it; right-click to reset.
+fn kick_editor(ui: &mut egui::Ui, t: usize, click: Option<std::sync::Arc<engine::Sample>>, shown: &KickParams, base: KickParams, actions: &mut Vec<Action>) {
+    let (rect, response) = ui.allocate_exact_size(vec2(260.0, 84.0), Sense::click_and_drag());
+    let id = ui.id().with(("kick_editor", t));
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 2.0, theme::BG);
-    let click = app.project.tracks[t].sample(0).and_then(|path| app.loaded_sample(path)).cloned();
-    let key = (*p, click.as_ref().map(|c| std::sync::Arc::as_ptr(c) as usize));
-    let id = ui.id().with(("kick_display", t));
-    type Cached = ((KickParams, Option<usize>), Vec<(f32, f32)>);
-    let cached: Option<Cached> = ui.ctx().memory(|m| m.data.get_temp(id));
-    let columns = rect.width() as usize;
-    let peaks = match cached {
-        Some((k, peaks)) if k == key => peaks,
+
+    // Which curve is edited, chosen with the tabs in the corner.
+    let mut amp_tab: bool = ui.ctx().memory(|m| m.data.get_temp(id.with("tab"))).unwrap_or(false);
+    let tabs = [(false, "Tono"), (true, "Amp")];
+    let mut x = rect.left() + 4.0;
+    for (tab, label) in tabs {
+        let galley = painter.layout_no_wrap(label.into(), theme::small(), theme::TEXT);
+        let tab_rect = Rect::from_min_size(pos2(x, rect.top() + 2.0), galley.size() + vec2(8.0, 2.0));
+        painter.rect_filled(tab_rect, 2.0, if tab == amp_tab { theme::CONTROL_HOVER } else { theme::SURFACE });
+        painter.galley(tab_rect.min + vec2(4.0, 1.0), galley, theme::TEXT);
+        if response.clicked() && response.interact_pointer_pos().is_some_and(|p| tab_rect.contains(p)) {
+            amp_tab = tab;
+            ui.ctx().memory_mut(|m| m.data.insert_temp(id.with("tab"), amp_tab));
+        }
+        x = tab_rect.right() + 3.0;
+    }
+
+    // The rendered hit, cached until a setting or the click sample changes.
+    let key = (*shown, click.as_ref().map(|c| std::sync::Arc::as_ptr(c) as usize));
+    type Cached = ((KickParams, Option<usize>), std::sync::Arc<Vec<f32>>);
+    const PREVIEW_RATE: f32 = 12_000.0;
+    let hit = match ui.ctx().memory(|m| m.data.get_temp::<Cached>(id.with("hit"))) {
+        Some((k, hit)) if k == key => hit,
         _ => {
-            let hit = engine::render_kick(*p, click, 12_000.0);
-            let per = hit.len().div_ceil(columns).max(1);
-            let peaks: Vec<(f32, f32)> = hit.chunks(per).map(|c| c.iter().fold((0f32, 0f32), |(lo, hi), &s| (lo.min(s), hi.max(s)))).collect();
-            ui.ctx().memory_mut(|m| m.data.insert_temp(id, (key, peaks.clone())));
-            peaks
+            let hit = std::sync::Arc::new(engine::render_kick(*shown, click, PREVIEW_RATE));
+            ui.ctx().memory_mut(|m| m.data.insert_temp(id.with("hit"), (key, hit.clone())));
+            hit
         }
     };
-    let (mid, half) = (rect.center().y, rect.height() * 0.42);
-    for (x, &(lo, hi)) in peaks.iter().enumerate() {
+
+    let length = engine::kick_length_ms(shown);
+    let decay_start = shown.attack.max(0.05) + shown.hold;
+    // Milliseconds shown across the editor, and where the drawn shape starts and spans.
+    let (span_ms, shape_start, shape_ms) = if amp_tab { (length, decay_start, shown.decay.max(1.0)) } else { (shown.pitch_time.max(0.1), 0.0, shown.pitch_time.max(0.1)) };
+    let x_of_ms = |ms: f32| rect.left() + ms / span_ms * rect.width();
+    let ms_of_x = |x: f32| (x - rect.left()) / rect.width() * span_ms;
+    let (top, bottom) = (rect.top() + 16.0, rect.bottom() - 4.0);
+    let y_of = |v: f32| bottom - v * (bottom - top);
+    let v_of = |y: f32| ((bottom - y) / (bottom - top)).clamp(0.0, 1.0);
+    let x_of_t = |time: f32| x_of_ms(shape_start + time * shape_ms);
+    let t_of_x = |x: f32| ((ms_of_x(x) - shape_start) / shape_ms).clamp(0.0, 1.0);
+
+    // Waveform of the part of the hit in view.
+    let columns = rect.width() as usize;
+    let (mid, half) = (rect.center().y + 6.0, (rect.height() - 16.0) * 0.45);
+    for x in 0..columns {
+        let from = ((x as f32 / columns as f32 * span_ms) * PREVIEW_RATE / 1000.0) as usize;
+        let to = ((((x + 1) as f32 / columns as f32) * span_ms) * PREVIEW_RATE / 1000.0) as usize;
+        let slice = &hit[from.min(hit.len())..to.max(from + 1).min(hit.len())];
+        let (lo, hi) = slice.iter().fold((0f32, 0f32), |(lo, hi), &s| (lo.min(s), hi.max(s)));
         let px = rect.left() + x as f32 + 0.5;
-        painter.line_segment([pos2(px, mid - hi.clamp(-1.2, 1.2) * half), pos2(px, mid - lo.clamp(-1.2, 1.2) * half)], Stroke::new(1.0, theme::PLAY));
+        painter.line_segment([pos2(px, mid - hi.clamp(-1.2, 1.2) * half), pos2(px, mid - lo.clamp(-1.2, 1.2) * half)], Stroke::new(1.0, Color32::from_rgb(60, 110, 70)));
     }
-    // Pitch envelope, from its start pitch down to the note.
-    let length = engine::kick_length_ms(p);
-    let points: Vec<_> = (0..=columns)
+
+    // The curve as it sounds (with the curve knob's tension), then the drawn shape.
+    let (shape, tension) = if amp_tab { (base.amp_shape, shown.decay_curve) } else { (base.pitch_shape, shown.pitch_curve) };
+    let effective: Vec<_> = (0..=columns)
         .map(|x| {
-            let ms = x as f32 / columns as f32 * length;
-            let offset = engine::kick_pitch_offset(p, ms) / 72.0;
-            pos2(rect.left() + x as f32, rect.bottom() - 4.0 - offset * (rect.height() - 8.0))
+            let px = rect.left() + x as f32;
+            let ms = ms_of_x(px);
+            let v = if amp_tab { engine::kick_amplitude(shown, ms) } else { engine::kick_pitch_offset(shown, ms) / shown.pitch_amount.max(0.001) };
+            pos2(px, y_of(v))
         })
         .collect();
-    painter.add(egui::Shape::line(points, Stroke::new(1.5, ACCENT)));
-    let hz = 440.0 * 2f32.powf((p.tune - 69.0) / 12.0);
-    let note = if p.key_follow { "Key".to_string() } else { format!("{} · {hz:.1} Hz", crate::project::note_name(p.tune.round() as u8)) };
-    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, note, theme::small(), theme::TEXT);
-    painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, format!("{length:.0} ms"), theme::small(), TEXT_DIM);
+    painter.add(egui::Shape::line(effective, Stroke::new(1.0, theme::shade(ACCENT, 0.5))));
+    let drawn: Vec<_> = (0..=columns)
+        .filter_map(|x| {
+            let px = rect.left() + x as f32;
+            let ms = ms_of_x(px);
+            (ms >= shape_start).then(|| pos2(px, y_of(shape.value_at(t_of_x(px)))))
+        })
+        .collect();
+    painter.add(egui::Shape::line(drawn, Stroke::new(1.5, ACCENT)));
+    if tension > 0.01 {
+        painter.text(rect.right_bottom() + vec2(-4.0, -3.0), Align2::RIGHT_BOTTOM, "+ tensión", theme::small(), TEXT_DIM);
+    }
+
+    let points = shape.points();
+    let point_pos = |i: usize| pos2(x_of_t(points[i].time), y_of(points[i].value));
+    let bend_pos = |i: usize| {
+        let (a, b) = (points[i - 1], points[i]);
+        let time = (a.time + b.time) * 0.5;
+        pos2(x_of_t(time), y_of(shape.value_at(time)))
+    };
+    for i in 1..points.len() {
+        painter.circle_stroke(bend_pos(i), 2.5, Stroke::new(1.0, theme::shade(ACCENT, 0.8)));
+    }
+    let pointer = response.hover_pos();
+    for i in 0..points.len() {
+        let hovered = pointer.is_some_and(|p| p.distance(point_pos(i)) < 6.0);
+        painter.circle_filled(point_pos(i), if hovered { 4.5 } else { 3.5 }, if hovered { Color32::WHITE } else { ACCENT });
+    }
+
+    // Editing.
+    let nearest = |pos: egui::Pos2| -> Option<(bool, usize)> {
+        let point = (0..points.len()).map(|i| (point_pos(i).distance(pos), i)).min_by(|a, b| a.0.total_cmp(&b.0));
+        let bend = (1..points.len()).map(|i| (bend_pos(i).distance(pos), i)).min_by(|a, b| a.0.total_cmp(&b.0));
+        match (point, bend) {
+            (Some((d, i)), _) if d < 7.0 => Some((false, i)),
+            (_, Some((d, i))) if d < 6.0 => Some((true, i)),
+            _ => None,
+        }
+    };
+    let mut edited = shape;
+    let grab_id = id.with("grab");
+    if response.drag_started() {
+        // Where the button went down: a drag only starts after the pointer has moved.
+        let origin = ui.input(|i| i.pointer.press_origin()).or(response.interact_pointer_pos());
+        let grab = origin.and_then(nearest);
+        ui.ctx().memory_mut(|m| m.data.insert_temp(grab_id, grab));
+    }
+    if response.dragged() {
+        let grab: Option<(bool, usize)> = ui.ctx().memory(|m| m.data.get_temp(grab_id)).flatten();
+        if let (Some((is_bend, i)), Some(pos)) = (grab, response.interact_pointer_pos()) {
+            if is_bend {
+                // Dragging up raises the middle of the segment, whichever way it goes.
+                let direction = (points[i].value - points[i - 1].value).signum();
+                let bend = edited.points[i].bend - response.drag_delta().y / 40.0 * direction;
+                edited.points[i].bend = bend.clamp(-1.0, 1.0);
+            } else {
+                edited.move_point(i, t_of_x(pos.x), v_of(pos.y));
+            }
+        }
+    }
+    if response.double_clicked() {
+        // The strip with the tabs is not part of the drawing area.
+        if let Some(pos) = response.interact_pointer_pos().filter(|p| p.y > top - 4.0) {
+            match nearest(pos) {
+                Some((false, i)) => edited.remove(i),
+                _ if ms_of_x(pos.x) > shape_start => {
+                    edited.insert(t_of_x(pos.x), v_of(pos.y));
+                }
+                _ => {}
+            }
+        }
+    }
+    response.context_menu(|ui| {
+        if ui.button("Restablecer curva").clicked() {
+            edited = engine::model::Shape::falling();
+            ui.close();
+        }
+    });
+    response.on_hover_text("Arrastra los puntos · doble clic añade o borra · arrastra el círculo de un tramo para curvarlo · clic derecho para restablecer");
+    if edited != shape {
+        let params = if amp_tab { KickParams { amp_shape: edited, ..base } } else { KickParams { pitch_shape: edited, ..base } };
+        actions.push(Action::Instrument(InstrumentKind::Kick(params)));
+    }
+
+    let hz = 440.0 * 2f32.powf((shown.tune - 69.0) / 12.0);
+    let note = if shown.key_follow { "Key".to_string() } else { format!("{} · {hz:.1} Hz", crate::project::note_name(shown.tune.round() as u8)) };
+    let label = if amp_tab { format!("{length:.0} ms") } else { format!("{note} · {span_ms:.0} ms") };
+    painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, label, theme::small(), TEXT_DIM);
+}
+
+/// Factory and user presets for the instrument on track `t`, and saving a new one.
+fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) {
+    let kind = app.project.tracks[t].instrument;
+    ui.menu_button("Presets", |ui| {
+        ui.set_min_width(190.0);
+        let factory = crate::presets::factory(&kind);
+        if !factory.is_empty() {
+            ui.label(egui::RichText::new("DE FÁBRICA").color(TEXT_DIM).size(10.0));
+            egui::ScrollArea::vertical().id_salt("factory_presets").max_height(260.0).show(ui, |ui| {
+                for preset in factory {
+                    if ui.button(&preset.name).clicked() {
+                        actions.push(Action::ApplyPreset(preset));
+                        ui.close();
+                    }
+                }
+            });
+            ui.separator();
+        }
+        ui.label(egui::RichText::new("MIS PRESETS").color(TEXT_DIM).size(10.0));
+        let mine = crate::presets::list(&crate::presets::user_root(), &kind);
+        if mine.is_empty() {
+            ui.label(egui::RichText::new("Todavía no hay ninguno").color(TEXT_DIM).size(10.5));
+        }
+        for preset in mine {
+            ui.horizontal(|ui| {
+                if ui.button(&preset.name).clicked() {
+                    actions.push(Action::ApplyPreset(preset.clone()));
+                    ui.close();
+                }
+                if ui.small_button("✕").on_hover_text("Borrar el preset").clicked() {
+                    actions.push(Action::DeletePreset(preset.clone()));
+                }
+            });
+        }
+        ui.separator();
+        let name_id = ui.id().with(("preset_name", t));
+        let mut name: String = ui.ctx().memory(|m| m.data.get_temp(name_id)).unwrap_or_default();
+        ui.horizontal(|ui| {
+            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Nombre").desired_width(110.0));
+            let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+            if (ui.button("Guardar").clicked() || enter) && !name.trim().is_empty() {
+                actions.push(Action::SavePreset(name.trim().to_string()));
+                name.clear();
+                ui.close();
+            }
+        });
+        ui.ctx().memory_mut(|m| m.data.insert_temp(name_id, name));
+    });
 }
 
 /// The kick's click source: synthesized, or a sample dropped or loaded here.
@@ -668,4 +852,101 @@ fn click_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Act
             actions.push(Action::ClearSample(0));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Event, PointerButton, Pos2, RawInput};
+
+    /// Runs the kick editor headless for one frame per event batch and returns
+    /// the shape it last asked for, and where the editor was drawn.
+    fn run(frames: &[Vec<Event>], params: KickParams) -> (Option<KickParams>, Rect) {
+        let ctx = egui::Context::default();
+        let mut result = None;
+        let mut rect = Rect::NOTHING;
+        let mut current = params;
+        for (n, events) in frames.iter().enumerate() {
+            let input = RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(400.0, 200.0))),
+                events: events.clone(),
+                time: Some(n as f64 * 0.05),
+                ..Default::default()
+            };
+            let _ = ctx.run_ui(input, |ui| {
+                let mut actions = Vec::new();
+                rect = ui.cursor();
+                rect = Rect::from_min_size(rect.min, vec2(260.0, 84.0));
+                kick_editor(ui, 0, None, &current, current, &mut actions);
+                for action in actions {
+                    if let Action::Instrument(InstrumentKind::Kick(p)) = action {
+                        current = p;
+                        result = Some(p);
+                    }
+                }
+            });
+        }
+        (result, rect)
+    }
+
+    fn press(pos: Pos2, pressed: bool) -> Event {
+        Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() }
+    }
+
+    /// Where shape time/value land in the editor (pitch tab: time spans the pitch sweep).
+    fn at(rect: Rect, time: f32, value: f32) -> Pos2 {
+        let (top, bottom) = (rect.top() + 16.0, rect.bottom() - 4.0);
+        pos2(rect.left() + time * rect.width(), bottom - value * (bottom - top))
+    }
+
+    #[test]
+    fn double_click_adds_a_point_and_dragging_moves_it() {
+        let params = KickParams::default();
+        let (_, rect) = run(&[vec![]], params);
+        let target = at(rect, 0.5, 0.8);
+        let click = vec![Event::PointerMoved(target), press(target, true), press(target, false)];
+        let (added, _) = run(&[vec![Event::PointerMoved(target)], click.clone(), click], params);
+        let added = added.expect("a double click adds a point");
+        assert_eq!(added.pitch_shape.count, 3);
+        let point = added.pitch_shape.points[1];
+        assert!((point.time - 0.5).abs() < 0.02 && (point.value - 0.8).abs() < 0.03, "{point:?}");
+
+        // Drag that point down and to the right.
+        let to = at(rect, 0.7, 0.3);
+        let mut frames = vec![vec![Event::PointerMoved(target)], vec![press(target, true)]];
+        for step in 1..=6 {
+            frames.push(vec![Event::PointerMoved(target + (to - target) * step as f32 / 6.0)]);
+        }
+        frames.push(vec![press(to, false)]);
+        let (moved, _) = run(&frames, added);
+        let point = moved.expect("dragging edits the shape").pitch_shape.points[1];
+        assert!((point.time - 0.7).abs() < 0.03 && (point.value - 0.3).abs() < 0.05, "{point:?}");
+    }
+
+    #[test]
+    fn double_clicking_a_point_removes_it() {
+        let params = KickParams { pitch_shape: engine::model::Shape::from_points(&[(0.0, 1.0, 0.0), (0.4, 0.5, 0.0), (1.0, 0.0, 0.0)]), ..Default::default() };
+        let (_, rect) = run(&[vec![]], params);
+        let target = at(rect, 0.4, 0.5);
+        let click = vec![Event::PointerMoved(target), press(target, true), press(target, false)];
+        let (removed, _) = run(&[vec![Event::PointerMoved(target)], click.clone(), click], params);
+        assert_eq!(removed.expect("removed").pitch_shape.count, 2);
+    }
+
+    #[test]
+    fn dragging_a_segment_handle_up_bends_it_up() {
+        let params = KickParams::default();
+        let (_, rect) = run(&[vec![]], params);
+        // The handle of the straight 1 → 0 line sits in its middle.
+        let handle = at(rect, 0.5, 0.5);
+        let mut frames = vec![vec![Event::PointerMoved(handle)], vec![press(handle, true)]];
+        for step in 1..=5 {
+            frames.push(vec![Event::PointerMoved(handle - vec2(0.0, 4.0 * step as f32))]);
+        }
+        frames.push(vec![press(handle - vec2(0.0, 20.0), false)]);
+        let (bent, _) = run(&frames, params);
+        let shape = bent.expect("bent").pitch_shape;
+        assert_eq!(shape.count, 2, "no point was added");
+        assert!(shape.value_at(0.5) > 0.6, "the middle rose: {}", shape.value_at(0.5));
+    }
 }

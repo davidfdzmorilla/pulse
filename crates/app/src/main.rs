@@ -11,6 +11,7 @@ mod input;
 mod kits;
 mod note_edit;
 mod piano_roll;
+mod presets;
 mod project;
 mod recording;
 mod sample_editor;

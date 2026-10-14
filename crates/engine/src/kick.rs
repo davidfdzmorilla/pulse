@@ -3,7 +3,7 @@
 //! and distortion. Monophonic: a new hit fades the previous one out quickly.
 
 use crate::instruments::{Svf, semitones, svf_g};
-use crate::model::{KickDrive, KickParams};
+use crate::model::{KickDrive, KickParams, Shape};
 use crate::sample::Sample;
 use std::f32::consts::{PI, TAU};
 use std::sync::Arc;
@@ -17,15 +17,18 @@ fn note_freq(note: f32) -> f32 {
     440.0 * 2f32.powf((note - 69.0) / 12.0)
 }
 
-/// Power curve used by both envelopes: `x` falls from 1 to 0 as `t` goes 0..1;
-/// `curve` 0 is linear, 1 drops fast and lingers.
-fn falling(t: f32, curve: f32) -> f32 {
-    (1.0 - t.clamp(0.0, 1.0)).powf(1.0 + curve.clamp(0.0, 1.0) * 6.0)
+/// A drawn shape at `t` (0..1) with the curve knob's tension on top: `curve` 0
+/// keeps the drawing, 1 makes it drop fast and linger. On the default straight
+/// line this is the classic (1 - t)^n kick envelope.
+fn shaped(shape: &Shape, t: f32, curve: f32) -> f32 {
+    shape.value_at(t).powf(1.0 + curve.clamp(0.0, 1.0) * 6.0)
 }
 
 /// Pitch offset in semitones `ms` milliseconds into a hit.
 pub fn pitch_offset(p: &KickParams, ms: f32) -> f32 {
-    p.pitch_amount * falling(ms / p.pitch_time.max(0.1), p.pitch_curve)
+    let t = ms / p.pitch_time.max(0.1);
+    // Past the sweep the shape holds its last value.
+    p.pitch_amount * shaped(&p.pitch_shape, t.min(1.0), p.pitch_curve)
 }
 
 /// Amplitude envelope `ms` milliseconds into a hit.
@@ -36,7 +39,9 @@ pub fn amplitude(p: &KickParams, ms: f32) -> f32 {
     } else if ms < attack + p.hold {
         1.0
     } else {
-        falling((ms - attack - p.hold) / p.decay.max(1.0), p.decay_curve)
+        // A drawn curve may not end at zero: fade the last 2 ms so the hit never clicks off.
+        let end_fade = ((length_ms(p) - ms) / 2.0).clamp(0.0, 1.0);
+        shaped(&p.amp_shape, (ms - attack - p.hold) / p.decay.max(1.0), p.decay_curve) * end_fade
     }
 }
 
@@ -283,5 +288,24 @@ mod tests {
         let body = render_kick(KickParams { click: 0.0, ..params }, None, SR);
         assert!((hit[50] - body[50] - 0.9 * params.gain * OUTPUT).abs() < 1e-3, "the sample is the click: {}", hit[50] - body[50]);
         assert_eq!(hit[150], body[150], "the click sample is over");
+    }
+
+    #[test]
+    fn drawn_shapes_drive_the_envelopes() {
+        // Level dips to silence half way through the decay and comes back: a double hit.
+        let amp_shape = Shape::from_points(&[(0.0, 1.0, 0.0), (0.4, 0.0, 0.0), (0.5, 0.0, 0.0), (0.6, 1.0, 0.0), (1.0, 1.0, 0.0)]);
+        let params = KickParams { amp_shape, attack: 0.1, hold: 0.0, decay: 200.0, decay_curve: 0.0, click: 0.0, ..Default::default() };
+        let hit = render_kick(params, None, SR);
+        let peak = |from_ms: f32, to_ms: f32| hit[(from_ms * 48.0) as usize..(to_ms * 48.0) as usize].iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak(88.0, 92.0) < 0.05, "silent in the dip");
+        assert!(peak(150.0, 190.0) > 0.3, "back up after it");
+        assert!(hit.last().unwrap().abs() < 0.01, "a curve ending high still fades out");
+
+        // A pitch shape that stays at half the amount keeps the body an octave up when Pitch is 24.
+        let pitch_shape = Shape::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.5, 0.0)]);
+        let params = KickParams { pitch_shape, pitch_amount: 24.0, pitch_curve: 0.0, pitch_time: 10.0, hold: 1000.0, click: 0.0, drive: 0.0, ..Default::default() };
+        let hit = render_kick(params, None, SR);
+        let found = frequency(&hit, 4_800, 52_800);
+        assert!((found - note_freq(params.tune + 12.0)).abs() < 1.5, "{found} Hz");
     }
 }

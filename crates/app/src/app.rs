@@ -180,6 +180,8 @@ pub struct PulseApp {
     pub overridden: HashSet<(Target, Param)>,
     /// Drum rack pad shown in the device view.
     pub selected_pad: usize,
+    /// How loops are cut into drum rack pads.
+    pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
     pub sample_drop_zones: Vec<(egui::Rect, usize, usize)>,
     /// Input track last sent to the engine.
@@ -219,6 +221,7 @@ impl PulseApp {
             capture: None,
             overridden: HashSet::new(),
             selected_pad: 0,
+            slice_mode: crate::slicing::SliceMode::Transients,
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -808,6 +811,95 @@ impl PulseApp {
             }
             Err(error) => self.status = Some(error),
         }
+    }
+
+    /// A new folder for the slices of `name`, next to the kits.
+    fn slices_dir(name: &str) -> PathBuf {
+        let base = crate::kits::kits_dir().with_file_name("Slices");
+        let clean: String = name.chars().map(|c| if c == '/' || c == ':' { '-' } else { c }).collect();
+        (1..)
+            .map(|n| base.join(if n == 1 { clean.clone() } else { format!("{clean} {n}") }))
+            .find(|dir| !dir.exists())
+            .expect("an unused folder name")
+    }
+
+    /// Slices a whole file into the drum rack on `track`, replacing its pads, and
+    /// puts the clip that replays it in the first free session slot.
+    pub fn slice_file_into(&mut self, track: usize) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS).pick_file() else { return };
+        let sample = self.sample(&path.to_string_lossy());
+        if sample.frames() == 0 {
+            return;
+        }
+        let name = path.file_stem().map_or("Loop".into(), |s| s.to_string_lossy().into_owned());
+        let bpm = guess_loop_bpm(sample.duration(), self.project.tempo).unwrap_or(self.project.tempo);
+        let color = self.project.tracks[track].color;
+        let region = (0.0, sample.duration());
+        match crate::slicing::slice(&sample, region, bpm, self.slice_mode, &name, &Self::slices_dir(&name), color) {
+            Ok((sliced, _)) => {
+                let pads = sliced.clip.notes.len();
+                self.set_instrument(track, InstrumentKind::DrumRack(sliced.params));
+                self.project.tracks[track].samples = sliced.files;
+                self.sync_samples(track);
+                let free = (0..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
+                match free {
+                    Some(slot) => {
+                        self.set_clip(track, slot, Some(Clip::Midi(sliced.clip)));
+                        self.status = Some(format!("{name}: {pads} trozos a {bpm:.1} BPM, clip en la escena {}", slot + 1));
+                    }
+                    None => self.status = Some(format!("{name}: {pads} trozos (no quedan slots libres para el clip)")),
+                }
+            }
+            Err(error) => self.status = Some(error),
+        }
+    }
+
+    /// Cuts an audio clip into a new drum rack track, with a MIDI clip in the same
+    /// place that plays the slices in order (like "Slice to New MIDI Track").
+    pub fn slice_clip(&mut self, clip_ref: ClipRef) {
+        let Some(Clip::Audio(audio)) = self.clip(clip_ref).cloned() else { return };
+        let sample = self.sample(&audio.sample);
+        if sample.frames() == 0 {
+            self.status = Some("No se encuentra la muestra del clip".into());
+            return;
+        }
+        let bpm = if audio.warp == WarpMode::Off { self.project.tempo } else { audio.original_bpm };
+        let region = (audio.offset, audio.length * 60.0 / bpm);
+        let mode = self.slice_mode;
+        let dir = Self::slices_dir(&audio.name);
+        let (mut sliced, grid) = match crate::slicing::slice(&sample, region, bpm, mode, &audio.name, &dir, audio.color) {
+            Ok(result) => result,
+            Err(error) => {
+                self.status = Some(error);
+                return;
+            }
+        };
+        sliced.params.tune = [audio.transpose; RACK_PADS];
+        sliced.params.level = [engine::model::db_to_gain(audio.gain_db).min(1.0); RACK_PADS];
+        let pads = sliced.clip.notes.len();
+        let name = audio.name.clone();
+        let midi = Clip::Midi(sliced.clip);
+        let placed = match clip_ref {
+            ClipRef::Arrangement { track, index } => self.project.tracks[track].arrangement.get(index).map(|a| (a.start, a.length)),
+            ClipRef::Session { .. } => None,
+        };
+        let added = self.push_track(|_, color| {
+            let mut track = Track::new(format!("{name} Slices"), color, InstrumentKind::DrumRack(sliced.params));
+            track.samples = sliced.files;
+            match (clip_ref, placed) {
+                (ClipRef::Session { slot, .. }, _) => track.clips[slot] = Some(midi),
+                (_, Some((start, length))) => track.arrangement.push(ArrangementClip { start, length, clip: midi }),
+                _ => {}
+            }
+            track
+        });
+        let Some(track) = added else { return };
+        self.select_clip(match clip_ref {
+            ClipRef::Session { slot, .. } => ClipRef::Session { track, slot },
+            ClipRef::Arrangement { .. } => ClipRef::Arrangement { track, index: 0 },
+        });
+        let grid_note = if grid > 0.0 { format!(" (rejilla de {grid} beats)") } else { String::new() };
+        self.status = Some(format!("{name}: {pads} trozos en un Drum Rack nuevo{grid_note}"));
     }
 
     fn push_track(&mut self, make: impl FnOnce(usize, [u8; 3]) -> Track) -> Option<usize> {

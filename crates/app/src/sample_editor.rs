@@ -4,6 +4,7 @@ use crate::app::{ClipRef, PulseApp};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets::{self, Knob};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
+use crate::slicing::SliceMode;
 use engine::model::{Clip, WarpMode};
 
 fn label(ui: &mut egui::Ui, text: &str) {
@@ -16,6 +17,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let Some(Clip::Audio(before)) = app.clip(clip_ref).cloned() else { return };
     let sample = app.sample(&before.sample);
     let mut clip = before.clone();
+    let mut slice = false;
 
     ui.horizontal(|ui| {
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
@@ -65,6 +67,21 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             ui.horizontal(|ui| {
                 label(ui, "Inicio");
                 ui.add(egui::DragValue::new(&mut clip.offset).range(0.0..=sample.duration().max(0.0)).speed(0.005).suffix(" s").fixed_decimals(3));
+            });
+            ui.horizontal(|ui| {
+                label(ui, "Trocear");
+                egui::ComboBox::from_id_salt("slice_mode")
+                    .selected_text(app.slice_mode.label())
+                    .width(92.0)
+                    .show_ui(ui, |ui| {
+                        for mode in SliceMode::ALL {
+                            ui.selectable_value(&mut app.slice_mode, mode, mode.label());
+                        }
+                    });
+                slice = ui
+                    .button("A Drum Rack")
+                    .on_hover_text("Corta la región del clip en golpes, uno por pad, en una pista MIDI nueva con un clip que los toca en orden")
+                    .clicked();
             });
             ui.label(
                 egui::RichText::new(match clip.warp {
@@ -143,5 +160,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement[index].clip = new,
         }
         app.sync_clip_ref(clip_ref);
+    }
+    if slice {
+        app.slice_clip(clip_ref);
     }
 }

@@ -543,3 +543,42 @@ mod diagnostics {
         }
     }
 }
+
+#[cfg(test)]
+mod playback {
+    use super::*;
+    use crate::project::{Track, PALETTE};
+    use engine::model::{Clip, InstrumentKind, MidiClip, Note, SynthParams};
+    use std::sync::atomic::Ordering;
+
+    /// A track added like `PulseApp::add_track`, holding a C major chord.
+    fn project_with_new_chord_track() -> (Project, usize) {
+        let mut project = Project::demo();
+        let index = project.tracks.len();
+        let mut track = Track::new(format!("{} MIDI", index + 1), PALETTE[1], InstrumentKind::Synth(SynthParams::default()));
+        let mut clip = MidiClip::new("MIDI", 4.0, PALETTE[1]);
+        for pitch in [60, 64, 67] {
+            clip.notes.push(Note { start: 0.0, length: 2.0, pitch, velocity: 0.8 });
+        }
+        track.clips[0] = Some(Clip::Midi(clip));
+        project.tracks.push(track);
+        (project, index)
+    }
+
+    #[test]
+    fn a_new_synth_track_plays_its_chord_clip() {
+        let (project, index) = project_with_new_chord_track();
+        let mut renderer = OfflineRenderer::new(48_000.0);
+        for command in sync::project_commands(&project, &mut SampleCache::default(), 48_000.0, &HashSet::new()) {
+            renderer.send(command);
+        }
+        renderer.send(Command::LaunchClip { track: index, slot: 0 });
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        renderer.render(24_000, &mut l, &mut r);
+        let state = renderer.state.clone();
+        let playing = state.tracks[index].playing.load(Ordering::Relaxed);
+        let track_peak = state.tracks[index].peak.take();
+        assert_eq!(playing, 0);
+        assert!(track_peak > 0.01, "the new track should sound");
+    }
+}

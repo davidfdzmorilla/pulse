@@ -524,20 +524,42 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
     ui.add_space(2.0);
 }
 
+/// Prefix marking copied notes in the system clipboard.
+const CLIPBOARD_PREFIX: &str = "pulse-notes:";
+
+/// Puts copied notes on the system clipboard too. macOS only reports ⌘V to the app
+/// when the clipboard holds text, so this is also what makes pasting work.
+fn copy_notes(ui: &egui::Ui, state: &mut State, notes: Vec<Note>) {
+    if let Ok(json) = serde_json::to_string(&notes) {
+        ui.ctx().copy_text(format!("{CLIPBOARD_PREFIX}{json}"));
+    }
+    state.clipboard = notes;
+}
+
+/// Notes from pasted text, falling back to the last notes copied in Pulse.
+fn pasted_notes(state: &State, text: &str) -> Vec<Note> {
+    text.strip_prefix(CLIPBOARD_PREFIX)
+        .and_then(|json| serde_json::from_str(json).ok())
+        .unwrap_or_else(|| state.clipboard.clone())
+}
+
 fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
     let events = ui.input(|i| i.events.clone());
     for event in events {
         let targets = note_edit::targets(&clip.notes, &state.selection);
         let selected: Vec<usize> = state.selection.iter().copied().collect();
         match event {
-            egui::Event::Copy if !selected.is_empty() => state.clipboard = note_edit::copy(&clip.notes, &selected),
+            egui::Event::Copy if !selected.is_empty() => copy_notes(ui, state, note_edit::copy(&clip.notes, &selected)),
             egui::Event::Cut if !selected.is_empty() => {
-                state.clipboard = note_edit::copy(&clip.notes, &selected);
+                copy_notes(ui, state, note_edit::copy(&clip.notes, &selected));
                 note_edit::delete(&mut clip.notes, &state.selection);
                 state.selection.clear();
             }
-            egui::Event::Paste(_) if !state.clipboard.is_empty() => {
-                state.selection = note_edit::paste(&mut clip.notes, &state.clipboard, state.insert_at, clip.length);
+            egui::Event::Paste(text) => {
+                let notes = pasted_notes(state, &text);
+                if !notes.is_empty() {
+                    state.selection = note_edit::paste(&mut clip.notes, &notes, state.insert_at, clip.length);
+                }
             }
             egui::Event::Key { key, pressed: true, modifiers, .. } => {
                 let cmd = modifiers.command;
@@ -570,5 +592,19 @@ fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pasted_text_round_trips_notes_and_falls_back_to_the_internal_clipboard() {
+        let notes = vec![Note { start: 0.5, length: 0.25, pitch: 64, velocity: 0.7 }];
+        let text = format!("{CLIPBOARD_PREFIX}{}", serde_json::to_string(&notes).unwrap());
+        let state = State { clipboard: vec![Note { start: 0.0, length: 1.0, pitch: 36, velocity: 1.0 }], ..Default::default() };
+        assert_eq!(pasted_notes(&state, &text), notes);
+        assert_eq!(pasted_notes(&state, "texto cualquiera")[0].pitch, 36);
     }
 }

@@ -370,7 +370,11 @@ fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut 
 }
 
 fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
-    let peak = app.meters.of(target);
+    let monitoring_input = matches!(target, Target::Track(t) if app.project.tracks[t].armed && app.project.tracks[t].is_audio());
+    let peak = match (&app.capture, monitoring_input) {
+        (Some(capture), true) => capture.level,
+        _ => app.meters.of(target),
+    };
     let mut commands = Vec::new();
     let mut arm = None;
 

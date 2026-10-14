@@ -32,8 +32,10 @@ pub struct ArrangementTake {
 
 /// A finished take, ready to become a clip.
 pub enum Finished {
-    Session { track: usize, slot: usize, length: f64, notes: Vec<Note> },
+    Session { track: usize, slot: usize, start: f64, length: f64, notes: Vec<Note> },
     Arrangement { track: usize, start: f64, length: f64, notes: Vec<Note> },
+    /// An arrangement take ended; audio tracks record exactly this span.
+    ArrangementEnded { start: f64, end: f64 },
     /// The engine never started the take (e.g. the slot was filled meanwhile).
     Cancelled,
 }
@@ -119,6 +121,7 @@ impl Recorder {
                     finished.push(Finished::Session {
                         track: take.track,
                         slot: take.slot,
+                        start,
                         length,
                         notes: local_notes(&take.notes, start, length),
                     });
@@ -142,6 +145,7 @@ impl Recorder {
                 take.last_position = position;
             } else if take.seen {
                 let take = self.arrangement.take().expect("checked above");
+                finished.push(Finished::ArrangementEnded { start: take.start, end: take.last_position });
                 let start = take.start.floor();
                 for (track, &is_armed) in armed.iter().enumerate() {
                     let notes: Vec<RecordedNote> = take.notes.iter().filter(|n| n.track == track).copied().collect();

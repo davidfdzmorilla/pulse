@@ -2,6 +2,7 @@ mod als;
 mod app;
 mod arrangement;
 mod browser;
+mod capture;
 mod detail;
 mod devices;
 mod history;

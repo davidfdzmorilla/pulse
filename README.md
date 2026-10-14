@@ -46,6 +46,11 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   o, si no hay ninguna, a la pista seleccionada. Para grabar en Session, arma la pista y pulsa el ● de un slot
   vacío: la toma empieza en el siguiente compás y, al volver a pulsarlo, se cierra redondeada a compases y
   sigue sonando en bucle. Para grabar en el Arrangement pulsa ● en el transporte (F9) con pistas armadas.
+- **Grabar audio**: arma una pista de audio (●); la primera vez macOS pide permiso para usar el micrófono
+  (concédeselo a la Terminal si ejecutas Pulse desde ella). Su medidor pasa a mostrar el nivel de entrada.
+  Graba igual que MIDI: ● en un slot vacío o ● del transporte. Las tomas se guardan como WAV en `Recordings/`
+  junto al proyecto (o en `~/Music/Pulse/Recordings` si aún no lo has guardado) y quedan sincronizadas al tempo.
+  No hay monitorización de la entrada todavía: usa la de tu interfaz de audio.
 - **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI y
   de audio (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus
   notas o sus muestras y ajustes de warp. Las muestras se buscan por ruta y, si el set viene de otro
@@ -63,6 +68,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 ## Hoja de ruta
 
 1. Automatización de parámetros.
-2. Grabación de audio; grabar la sesión en el Arrangement; cuantización de lo grabado.
+2. Monitorización y compensación de latencia al grabar audio; grabar la sesión en el Arrangement;
+   cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
 4. Plugins VST3 / CLAP.

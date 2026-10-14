@@ -1,15 +1,20 @@
-//! The modular synth's editor: generator cards with their modifier chains,
-//! effect lanes, and modulator cards whose handles drag onto any knob.
+//! The modular synth's editor: the module stack (groups, generators, effects,
+//! Mix/Aux and outputs) on the left, the effect lanes on the right and the
+//! modulators along the bottom. Drag a module's ⟿ handle onto a generator's
+//! Phase, Harmonic, Shift, Level or Semi knob (or an Aux) for audio-rate
+//! modulation; drag a modulator's ✥ handle onto any knob for control-rate
+//! modulation.
 
 use crate::app::PulseApp;
 use crate::devices::{self, Action};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
-use eframe::egui::{self, pos2, vec2, Color32, Sense, Stroke};
+use eframe::egui::{self, pos2, vec2, Color32, Stroke};
 use engine::model::{
-    CurveInput, Device, Effect, GenKind, Generator, InstrumentKind, KickDrive, LfoMode, ModTarget, Modifier, ModifierKind, ModularParams,
-    Modulator, ModulatorKind, OscKind, Param, ParamInfo, Unit, WaveFilter, WaveOsc, MODULAR_PARAMS, MOD_AMP, MOD_GENS, MOD_GLIDE, MOD_LANES,
-    MOD_LANE_FX, MOD_LANE_GAIN, MOD_MACRO_PARAMS, MOD_MASTER, MOD_MODIFIERS, MOD_MODULATORS, MOD_NO_LANE, WAVE_USER_TABLE,
+    module_slot, slot, AudioMod, AudioParam, CurveInput, Device, Effect, InstrumentKind, LfoMode, ModTarget, ModularParams, ModuleKind,
+    Modulator, ModulatorKind, Param, ParamInfo, Unit, ANALOG_WAVES, DISTORTION_TYPES, FILTER_TYPES, MODULAR_PARAMS, MOD_AUDIO_AMOUNT, MOD_GLIDE,
+    MOD_LANES, MOD_LANE_FX, MOD_LANE_GAIN, MOD_MACRO_PARAMS, MOD_MASTER, MOD_MODULATORS, MOD_MODULES, MOD_NO_LANE, MOD_NO_MODULE, MOD_SLOTS,
+    WAVE_USER_TABLE,
 };
 use engine::wavetable::BUILTIN;
 use engine::Target;
@@ -18,6 +23,23 @@ use engine::Target;
 #[derive(Clone, Copy)]
 pub struct ModulatorRef(pub usize);
 
+/// Payload dragged from a module's audio handle onto a modulation target.
+#[derive(Clone, Copy)]
+pub struct AudioSourceRef(pub usize);
+
+/// Changes to the stack itself.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum StackEdit {
+    /// A new module below this one (None: at the top).
+    Insert(Option<usize>, ModuleKind),
+    Duplicate(usize),
+    Remove(usize),
+    /// Up (true) or down.
+    Move(usize, bool),
+}
+
+const AUDIO_GREEN: Color32 = Color32::from_rgb(90, 220, 120);
+
 fn set(actions: &mut Vec<Action>, params: ModularParams) {
     actions.push(Action::Instrument(InstrumentKind::Modular(params)));
 }
@@ -25,11 +47,20 @@ fn set(actions: &mut Vec<Action>, params: ModularParams) {
 fn modulator_color(kind: ModulatorKind) -> Color32 {
     match kind {
         ModulatorKind::Envelope => Color32::from_rgb(110, 200, 255),
-        ModulatorKind::Lfo => Color32::from_rgb(120, 230, 140),
+        ModulatorKind::Lfo => Color32::from_rgb(255, 170, 70),
         ModulatorKind::Random => Color32::from_rgb(240, 210, 110),
         ModulatorKind::Curve => Color32::from_rgb(200, 160, 255),
         ModulatorKind::Macro => Color32::from_rgb(240, 140, 220),
-        _ => Color32::from_rgb(255, 170, 120),
+        _ => Color32::from_rgb(255, 140, 120),
+    }
+}
+
+fn module_color(kind: ModuleKind) -> Color32 {
+    match kind {
+        k if k.is_generator() => Color32::from_rgb(110, 170, 255),
+        ModuleKind::Distortion | ModuleKind::Filter => ACCENT,
+        ModuleKind::Output => theme::PLAY,
+        _ => Color32::from_gray(150),
     }
 }
 
@@ -40,9 +71,9 @@ fn modulator_name(p: &ModularParams, m: usize) -> String {
 }
 
 /// A knob for parameter `i`. `display` shows a normalised (0..1) setting in real
-/// units. The knob draws the modulation it gets and accepts dropped modulators.
-fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, display: Option<ParamInfo>, diameter: f32, actions: &mut Vec<Action>) {
-    let Some(raw) = MODULAR_PARAMS.get(i) else { return };
+/// units. It draws the control-rate modulation it gets and accepts modulators.
+fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, display: Option<ParamInfo>, diameter: f32, actions: &mut Vec<Action>) -> Option<egui::Response> {
+    let raw = MODULAR_PARAMS.get(i)?;
     let (target, id) = (Target::Track(t), Param::Instrument(i));
     let value = app.display_value(target, id);
     let info = display.unwrap_or(*raw);
@@ -51,7 +82,7 @@ fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, disp
     if let Some(v) = changed {
         actions.push(Action::Param(id, if display.is_some() { info.normalize(v) } else { v }));
     }
-    let InstrumentKind::Modular(p) = app.project.tracks[t].instrument else { return };
+    let InstrumentKind::Modular(p) = app.project.tracks[t].instrument else { return Some(response) };
     let n = raw.normalize(value);
     let mut k = 0;
     for modulator in p.modulators.iter().filter(|md| md.kind != ModulatorKind::Off) {
@@ -64,8 +95,11 @@ fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, disp
     if response.dnd_hover_payload::<ModulatorRef>().is_some() {
         ui.painter().rect_stroke(response.rect, 3.0, Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
     }
-    if let Some(source) = response.dnd_release_payload::<ModulatorRef>() {
-        actions.push(Action::ModularTarget(source.0, i));
+    // Taking a payload of the wrong type would throw it away, so check the type first.
+    if egui::DragAndDrop::has_payload_of_type::<ModulatorRef>(ui.ctx()) {
+        if let Some(source) = response.dnd_release_payload::<ModulatorRef>() {
+            actions.push(Action::ModularTarget(source.0, i));
+        }
     }
     if k > 0 {
         response.context_menu(|ui| {
@@ -86,198 +120,195 @@ fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, disp
             }
         });
     }
+    Some(response)
 }
 
-/// Real-unit views of the normalised modifier and modulator settings.
-fn modifier_display(kind: ModifierKind) -> [Option<(&'static str, ParamInfo)>; 2] {
-    use Unit::*;
-    let pct = |name| Some((name, ParamInfo::linear(name, 0.0, 1.0, 0.5, Percent)));
-    match kind {
-        ModifierKind::Filter => [Some(("Cutoff", ParamInfo::log("Cutoff", 20.0, 20_000.0, 632.0, Hertz))), pct("Res")],
-        ModifierKind::Distortion => [pct("Drive"), Some(("Tone", ParamInfo::log("Tone", 200.0, 20_000.0, 2000.0, Hertz)))],
-        ModifierKind::FmFrom | ModifierKind::PmFrom => [pct("Depth"), None],
-        ModifierKind::PhaseDistort => [pct("Amount"), None],
-        ModifierKind::Bitcrush => [pct("Crush"), None],
-        ModifierKind::Downsample => [Some(("Factor", ParamInfo::log("Factor", 1.0, 64.0, 8.0, Times))), None],
-        ModifierKind::Gain => [Some(("Gain", ParamInfo::linear("Gain", -24.0, 24.0, 0.0, Decibels))), None],
-        ModifierKind::RingMod | ModifierKind::Off => [None, None],
+/// A module slot knob, which also accepts audio-rate connections when `audio` is set.
+#[allow(clippy::too_many_arguments)]
+fn slot_knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, module: usize, s: usize, audio: Option<AudioParam>, p: &ModularParams, actions: &mut Vec<Action>) {
+    let Some(info) = module_slot(p.modules[module].kind, s) else { return };
+    let Some(response) = knob(app, ui, t, ModularParams::module_param(module, s), info.name, Some(info), 26.0, actions) else { return };
+    let Some(param) = audio else { return };
+    let linked = p.audio.iter().any(|l| l.target as usize == module && l.param == param && l.source != MOD_NO_MODULE);
+    if linked {
+        ui.painter().circle_filled(response.rect.left_top() + vec2(5.0, 6.0), 3.0, AUDIO_GREEN);
     }
-}
-
-fn gen_view(app: &PulseApp, ui: &mut egui::Ui, t: usize, g: usize, generator: &Generator) {
-    let size = vec2(130.0, 64.0);
-    match generator.kind {
-        GenKind::Analog | GenKind::Harmonic => {
-            let osc = WaveOsc {
-                kind: if generator.kind == GenKind::Analog { OscKind::Analog } else { OscKind::Harmonic },
-                position: if generator.kind == GenKind::Analog { generator.position } else { 0.0 },
-                partials: 48.0,
-                tilt: generator.position * 2.0 - 1.0,
-                ..WaveOsc::default()
-            };
-            crate::wave_ui::cycle_view(ui, &osc, size);
-        }
-        GenKind::Wavetable => {
-            let table = app.cached_wavetable(t, g);
-            crate::wave_ui::table_view(ui, table.as_ref(), generator.position, size);
-        }
-        _ => {
-            let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-            ui.painter().rect_filled(rect, 2.0, theme::BG);
-            let text = match generator.kind {
-                GenKind::Sample => app.project.tracks[t].sample_name(g).unwrap_or_else(|| "Carga una muestra".into()),
-                _ => "Ruido".into(),
-            };
-            ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, text, theme::small(), TEXT_DIM);
+    if response.dnd_hover_payload::<AudioSourceRef>().is_some() {
+        ui.painter().rect_stroke(response.rect, 3.0, Stroke::new(1.5, AUDIO_GREEN), egui::StrokeKind::Inside);
+    }
+    if egui::DragAndDrop::has_payload_of_type::<AudioSourceRef>(ui.ctx()) {
+        if let Some(source) = response.dnd_release_payload::<AudioSourceRef>() {
+            actions.push(Action::AudioLink(source.0, module, param));
         }
     }
 }
 
-fn lane_label(lane: u8) -> &'static str {
-    match lane {
-        0 => "→ A",
-        1 => "→ B",
-        2 => "→ C",
-        _ => "Sin salida",
-    }
+fn audio_handle(ui: &mut egui::Ui, t: usize, i: usize) {
+    ui.dnd_drag_source(egui::Id::new(("modular_audio", t, i)), AudioSourceRef(i), |ui| {
+        ui.label(egui::RichText::new("⟿").color(Color32::BLACK).background_color(AUDIO_GREEN).size(12.0));
+    })
+    .response
+    .on_hover_text("Arrástralo a Phase, Harmonic, Shift, Level o Semi de un generador, o a un Aux: modulación de audio");
 }
 
-fn generator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, g: usize, p: ModularParams, actions: &mut Vec<Action>) {
-    let generator = p.gens[g];
-    egui::Frame::new().fill(theme::SURFACE).corner_radius(3.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
-        ui.set_width(720.0);
+fn insert_menu(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, after: Option<usize>, label: &str, actions: &mut Vec<Action>) {
+    egui::ComboBox::from_id_salt(id).selected_text(label).width(if label.len() > 2 { 120.0 } else { 26.0 }).show_ui(ui, |ui| {
+        for kind in ModuleKind::ALL {
+            if ui.selectable_label(false, kind.label()).clicked() {
+                actions.push(Action::StackEdit(StackEdit::Insert(after, kind)));
+            }
+        }
+    });
+}
+
+fn choice_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut u8, names: &[&str], width: f32) {
+    egui::ComboBox::from_id_salt(id).selected_text(names.get(*value as usize).copied().unwrap_or("?")).width(width).show_ui(ui, |ui| {
+        for (i, name) in names.iter().enumerate() {
+            ui.selectable_value(value, i as u8, *name);
+        }
+    });
+}
+
+fn stack_buttons(ui: &mut egui::Ui, t: usize, i: usize, actions: &mut Vec<Action>) {
+    if ui.small_button("▲").on_hover_text("Subir").clicked() {
+        actions.push(Action::StackEdit(StackEdit::Move(i, true)));
+    }
+    if ui.small_button("▼").on_hover_text("Bajar").clicked() {
+        actions.push(Action::StackEdit(StackEdit::Move(i, false)));
+    }
+    if ui.small_button("⧉").on_hover_text("Duplicar").clicked() {
+        actions.push(Action::StackEdit(StackEdit::Duplicate(i)));
+    }
+    if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+        actions.push(Action::StackEdit(StackEdit::Remove(i)));
+    }
+    insert_menu(ui, ("modular_insert", t, i), Some(i), "+", actions);
+}
+
+fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: ModularParams, actions: &mut Vec<Action>) {
+    let module = p.modules[i];
+    let group_number = (0..=i).filter(|&k| p.modules[k].kind == ModuleKind::Group).count();
+    if module.kind == ModuleKind::Group {
+        egui::Frame::new().fill(theme::CONTROL).corner_radius(2.0).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
+            ui.set_width(740.0);
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(format!("GRUPO {group_number}")).strong());
+                ui.label(egui::RichText::new("la señal empieza de cero aquí").color(TEXT_DIM).size(10.0));
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| stack_buttons(ui, t, i, actions));
+            });
+        });
+        return;
+    }
+    let color = module_color(module.kind);
+    egui::Frame::new().fill(theme::SURFACE).corner_radius(3.0).inner_margin(egui::Margin { left: 10, right: 6, top: 4, bottom: 4 }).show(ui, |ui| {
+        ui.set_width(726.0);
+        let rect = ui.max_rect();
+        ui.painter().rect_filled(egui::Rect::from_min_size(rect.min - vec2(8.0, 4.0), vec2(3.0, rect.height() + 8.0)), 1.0, color);
+        let mut next = module;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("G{}", g + 1)).strong().color(ACCENT));
-            let mut kind = generator.kind;
-            egui::ComboBox::from_id_salt(("mod_gen_kind", t, g)).selected_text(kind.label()).width(84.0).show_ui(ui, |ui| {
-                for k in GenKind::ALL {
-                    ui.selectable_value(&mut kind, k, k.label());
-                }
-            });
-            let mut output = generator.output;
-            egui::ComboBox::from_id_salt(("mod_gen_out", t, g)).selected_text(lane_label(output)).width(84.0).show_ui(ui, |ui| {
-                for lane in [0, 1, 2, MOD_NO_LANE] {
-                    ui.selectable_value(&mut output, lane, lane_label(lane)).on_hover_text(if lane == MOD_NO_LANE { "Solo se oye a través de los generadores que lo leen (FM, PM, ring)" } else { "" });
-                }
-            });
-            let mut table = generator.table;
-            if generator.kind == GenKind::Wavetable {
-                let name = if table == WAVE_USER_TABLE { app.project.tracks[t].sample_name(g).unwrap_or_else(|| "Archivo".into()) } else { BUILTIN.get(table as usize).copied().unwrap_or(BUILTIN[0]).to_string() };
-                egui::ComboBox::from_id_salt(("mod_gen_table", t, g)).selected_text(name).width(120.0).show_ui(ui, |ui| {
-                    for (i, label) in BUILTIN.iter().enumerate() {
-                        ui.selectable_value(&mut table, i as u8, *label);
-                    }
-                });
-            }
-            if matches!(generator.kind, GenKind::Wavetable | GenKind::Sample) && ui.small_button("Cargar…").on_hover_text("Archivo de audio o de wavetable para este generador").clicked() {
-                actions.push(Action::LoadGenFile(g));
-            }
-            let remove = ui.small_button("✕").on_hover_text("Quitar el generador").clicked();
-            if kind != generator.kind || output != generator.output || table != generator.table || remove {
-                let mut next = p;
-                next.gens[g] = if remove { Generator::OFF } else { Generator { kind, output, table, ..generator } };
-                set(actions, next);
-            }
-        });
-        ui.horizontal_top(|ui| {
-            gen_view(app, ui, t, g, &generator);
-            ui.spacing_mut().item_spacing.x = 0.0;
-            let shape_label = match generator.kind {
-                GenKind::Analog => "Shape",
-                GenKind::Wavetable => "Pos",
-                GenKind::Sample => "Start",
-                GenKind::Noise => "Color",
-                GenKind::Harmonic => "Tilt",
-                GenKind::Off => "",
-            };
-            for (i, label) in [(0, "Level"), (1, "Pan"), (2, "Oct"), (3, "Semi"), (4, "Fine"), (5, shape_label), (6, "Unison"), (7, "Detune"), (8, "Width")] {
-                knob(app, ui, t, ModularParams::gen_param(g, i), label, None, 26.0, actions);
-            }
-        });
-        // The modifier chain.
-        ui.horizontal_top(|ui| {
-            for k in 0..MOD_MODIFIERS {
-                let modifier = generator.modifiers[k];
-                if modifier.kind == ModifierKind::Off {
-                    continue;
-                }
-                egui::Frame::new().fill(theme::CONTROL).corner_radius(3.0).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
-                    ui.vertical(|ui| {
-                        let mut next = modifier;
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(modifier.kind.label()).strong().size(11.0));
-                            match modifier.kind {
-                                ModifierKind::Filter => {
-                                    egui::ComboBox::from_id_salt(("mod_filter", t, g, k)).selected_text(next.filter.label()).width(64.0).show_ui(ui, |ui| {
-                                        for f in WaveFilter::ALL {
-                                            ui.selectable_value(&mut next.filter, f, f.label());
-                                        }
-                                    });
-                                }
-                                ModifierKind::Distortion => {
-                                    egui::ComboBox::from_id_salt(("mod_drive", t, g, k)).selected_text(next.drive.label()).width(54.0).show_ui(ui, |ui| {
-                                        for d in KickDrive::ALL {
-                                            ui.selectable_value(&mut next.drive, d, d.label());
-                                        }
-                                    });
-                                }
-                                kind if kind.uses_source() => {
-                                    egui::ComboBox::from_id_salt(("mod_source", t, g, k)).selected_text(format!("G{}", next.source + 1)).width(44.0).show_ui(ui, |ui| {
-                                        for s in (0..MOD_GENS).filter(|&s| s != g && p.gens[s].kind != GenKind::Off) {
-                                            ui.selectable_value(&mut next.source, s as u8, format!("G{}", s + 1));
-                                        }
-                                    });
-                                }
-                                _ => {}
-                            }
-                            if ui.small_button("✕").clicked() {
-                                next.kind = ModifierKind::Off;
-                            }
-                        });
-                        ui.horizontal(|ui| {
-                            ui.spacing_mut().item_spacing.x = 0.0;
-                            for (j, display) in modifier_display(modifier.kind).into_iter().enumerate() {
-                                if let Some((label, info)) = display {
-                                    knob(app, ui, t, ModularParams::modifier_param(g, k, j), label, Some(info), 24.0, actions);
-                                }
-                            }
-                            let mix_label = if modifier.kind == ModifierKind::RingMod { "Amount" } else { "Mix" };
-                            if !modifier.kind.on_phase() {
-                                knob(app, ui, t, ModularParams::modifier_param(g, k, 2), mix_label, None, 24.0, actions);
-                            }
-                        });
-                        if next != modifier {
-                            let mut params = p;
-                            params.gens[g].modifiers[k] = next;
-                            set(actions, params);
+            ui.checkbox(&mut next.on, "");
+            ui.label(egui::RichText::new(format!("{} {}", i + 1, module.kind.label())).strong().color(color));
+            audio_handle(ui, t, i);
+            match module.kind {
+                ModuleKind::Analog => choice_combo(ui, ("mm_wave", t, i), &mut next.choice[0], &ANALOG_WAVES, 72.0),
+                ModuleKind::Wavetable => {
+                    let name = if module.table == WAVE_USER_TABLE { app.project.tracks[t].sample_name(i).unwrap_or_else(|| "Archivo".into()) } else { BUILTIN.get(module.table as usize).copied().unwrap_or(BUILTIN[0]).to_string() };
+                    egui::ComboBox::from_id_salt(("mm_table", t, i)).selected_text(name).width(120.0).show_ui(ui, |ui| {
+                        for (k, label) in BUILTIN.iter().enumerate() {
+                            ui.selectable_value(&mut next.table, k as u8, *label);
                         }
                     });
-                });
+                }
+                ModuleKind::Distortion => choice_combo(ui, ("mm_dist", t, i), &mut next.choice[0], &DISTORTION_TYPES, 84.0),
+                ModuleKind::Filter => {
+                    choice_combo(ui, ("mm_filter", t, i), &mut next.choice[0], &FILTER_TYPES, 84.0);
+                    choice_combo(ui, ("mm_slope", t, i), &mut next.choice[1], &["1×", "2×"], 36.0);
+                }
+                ModuleKind::Mix | ModuleKind::Aux => {
+                    ui.checkbox(&mut next.flag, "Invertir");
+                }
+                ModuleKind::Sample => {
+                    ui.checkbox(&mut next.flag, "Loop");
+                }
+                ModuleKind::Output => {
+                    ui.checkbox(&mut next.flag, "Out").on_hover_text("Apagado: no suena, solo sirve como fuente de modulación");
+                    choice_combo(ui, ("mm_send", t, i), &mut next.choice[0], &["→ Carril 1", "→ Carril 2", "→ Carril 3", "→ Master"], 84.0);
+                }
+                _ => {}
             }
-            if let Some(free) = generator.modifiers.iter().position(|m| m.kind == ModifierKind::Off) {
-                egui::ComboBox::from_id_salt(("mod_add_modifier", t, g)).selected_text("+ Modificador").width(110.0).show_ui(ui, |ui| {
-                    for kind in ModifierKind::ALL {
-                        if ui.selectable_label(false, kind.label()).clicked() {
-                            let mut next = p;
-                            let source = (0..MOD_GENS).find(|&s| s != g && p.gens[s].kind != GenKind::Off).unwrap_or(0) as u8;
-                            next.gens[g].modifiers[free] = Modifier { kind, source, ..Modifier::OFF };
-                            set(actions, next);
-                        }
+            if matches!(module.kind, ModuleKind::Wavetable | ModuleKind::Sample) && ui.small_button("Cargar…").clicked() {
+                actions.push(Action::LoadGenFile(i));
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| stack_buttons(ui, t, i, actions));
+        });
+        if next != module {
+            let mut params = p;
+            params.modules[i] = next;
+            set(actions, params);
+        }
+        // Settings.
+        ui.horizontal_wrapped(|ui| {
+            ui.spacing_mut().item_spacing.x = 0.0;
+            let audio_for = |s: usize| -> Option<AudioParam> {
+                if module.kind.is_generator() {
+                    match s {
+                        slot::PHASE => Some(AudioParam::Phase),
+                        slot::HARMONIC => Some(AudioParam::Harmonic),
+                        slot::SHIFT => Some(AudioParam::Shift),
+                        slot::LEVEL => Some(AudioParam::Level),
+                        slot::SEMI => Some(AudioParam::Pitch),
+                        _ => None,
                     }
-                });
+                } else if matches!(module.kind, ModuleKind::Mix | ModuleKind::Aux | ModuleKind::Output) && s == slot::LEVEL {
+                    Some(AudioParam::Level)
+                } else {
+                    None
+                }
+            };
+            for s in 0..MOD_SLOTS {
+                if module_slot(module.kind, s).is_some() {
+                    slot_knob(app, ui, t, i, s, audio_for(s), &p, actions);
+                }
+            }
+            if module.kind == ModuleKind::Aux {
+                let (rect, response) = ui.allocate_exact_size(vec2(90.0, 50.0), egui::Sense::hover());
+                let hovered = response.dnd_hover_payload::<AudioSourceRef>().is_some();
+                ui.painter().rect_stroke(rect.shrink(4.0), 3.0, Stroke::new(1.0, if hovered { AUDIO_GREEN } else { Color32::from_gray(80) }), egui::StrokeKind::Inside);
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "⟵ Input", theme::small(), AUDIO_GREEN);
+                if let Some(source) = response.dnd_release_payload::<AudioSourceRef>() {
+                    actions.push(Action::AudioLink(source.0, i, AudioParam::Input));
+                }
             }
         });
+        // Audio-rate connections into this module.
+        for (c, link) in p.audio.iter().enumerate().filter(|(_, l)| l.target as usize == i && l.source != MOD_NO_MODULE) {
+            ui.horizontal(|ui| {
+                let source = link.source as usize;
+                let name = p.modules.get(source).map_or("?", |m| m.kind.label());
+                ui.label(egui::RichText::new(format!("⟿ {} {name} → {}", source + 1, link.param.label())).color(AUDIO_GREEN).size(10.5));
+                let id = Param::Instrument(MOD_AUDIO_AMOUNT + c);
+                let mut amount = app.display_value(Target::Track(t), id) * 100.0;
+                if ui.add(egui::Slider::new(&mut amount, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
+                    actions.push(Action::Param(id, amount / 100.0));
+                }
+                if ui.small_button("✕").clicked() {
+                    let mut params = p;
+                    params.audio[c] = AudioMod::NONE;
+                    set(actions, params);
+                }
+            });
+        }
     });
 }
 
 fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularParams, actions: &mut Vec<Action>) {
     let lane = p.lanes[l];
     egui::Frame::new().fill(theme::SURFACE).corner_radius(3.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
-        ui.set_width(360.0);
+        ui.set_width(330.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("CARRIL {}", ["A", "B", "C"][l])).strong());
+            ui.label(egui::RichText::new(format!("CARRIL {}", l + 1)).strong());
             let mut dest = lane.dest;
-            let label = |d: u8| if d == MOD_NO_LANE { "→ Master".to_string() } else { format!("→ Carril {}", ["A", "B", "C"][d as usize]) };
+            let label = |d: u8| if d == MOD_NO_LANE { "→ Master".to_string() } else { format!("→ Carril {}", d + 1) };
             egui::ComboBox::from_id_salt(("mod_lane_dest", t, l)).selected_text(label(dest)).width(90.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut dest, MOD_NO_LANE, label(MOD_NO_LANE));
                 for d in (l + 1)..MOD_LANES {
@@ -414,7 +445,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
         }
         for (s, target) in targets {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("→ {}", MODULAR_PARAMS[target.dest as usize].name)).size(10.5));
+                ui.label(egui::RichText::new(format!("→ {}", p.param_name(target.dest as usize))).size(10.5));
                 let mut depth = target.depth * 100.0;
                 if ui.add(egui::Slider::new(&mut depth, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
                     next.targets[s].depth = depth / 100.0;
@@ -432,13 +463,14 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
     });
 }
 
-/// The compact device in the chain: generators summary and the main knobs.
+/// The compact device in the chain: the stack in brief and the macros.
 pub fn compact(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, actions: &mut Vec<Action>) {
     ui.vertical(|ui| {
-        let active: Vec<usize> = (0..MOD_GENS).filter(|&g| p.gens[g].kind != GenKind::Off).collect();
-        ui.label(egui::RichText::new(format!("{} generadores · {} moduladores", active.len(), p.modulators.iter().filter(|m| m.kind != ModulatorKind::Off).count())).color(TEXT_DIM).size(10.5));
-        for &g in active.iter().take(4) {
-            ui.label(egui::RichText::new(format!("G{} {} {}", g + 1, p.gens[g].kind.label(), lane_label(p.gens[g].output))).size(10.5));
+        let used: Vec<usize> = (0..MOD_MODULES).filter(|&m| p.modules[m].kind != ModuleKind::Empty).collect();
+        ui.label(egui::RichText::new(format!("{} módulos · {} moduladores", used.len(), p.modulators.iter().filter(|m| m.kind != ModulatorKind::Off).count())).color(TEXT_DIM).size(10.5));
+        for &m in used.iter().take(6) {
+            let module = p.modules[m];
+            ui.label(egui::RichText::new(format!("{} {}", m + 1, module.kind.label())).size(10.5).color(module_color(module.kind)));
         }
         if ui.small_button("▶").on_hover_text("Escuchar").clicked() {
             actions.push(Action::Preview(60));
@@ -450,13 +482,13 @@ pub fn compact(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, ac
             for m in 0..4 {
                 knob(app, ui, t, MOD_MACRO_PARAMS + m, &format!("Macro {}", m + 1), None, 26.0, actions);
             }
-            knob(app, ui, t, MOD_MASTER, "Master", None, 26.0, actions);
         });
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
-            for (j, label) in ["Attack", "Hold", "Decay", "Sustain", "Release"].into_iter().enumerate() {
-                knob(app, ui, t, MOD_AMP + j, label, None, 26.0, actions);
+            for m in 4..8 {
+                knob(app, ui, t, MOD_MACRO_PARAMS + m, &format!("Macro {}", m + 1), None, 26.0, actions);
             }
+            knob(app, ui, t, MOD_MASTER, "Master", None, 26.0, actions);
         });
     });
 }
@@ -471,7 +503,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut actions = Vec::new();
     let title = format!("Modular Synth · {}", app.project.tracks[t].name);
     egui::Window::new(title).id(egui::Id::new(("modular_window", t))).open(&mut open).resizable(false).collapsible(false).default_pos(pos2(40.0, 40.0)).show(ctx, |ui| {
-        ui.set_width(1110.0);
+        ui.set_width(1120.0);
         let app: &PulseApp = app;
         ui.horizontal(|ui| {
             devices::preset_menu(app, ui, t, &mut actions);
@@ -486,42 +518,35 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             ui.spacing_mut().item_spacing.x = 0.0;
             knob(app, ui, t, MOD_GLIDE, "Glide", None, 22.0, &mut actions);
             knob(app, ui, t, MOD_MASTER, "Master", None, 22.0, &mut actions);
-            ui.add_space(8.0);
-            for (j, label) in ["Amp A", "Amp H", "Amp D", "Amp S", "Amp R"].into_iter().enumerate() {
-                knob(app, ui, t, MOD_AMP + j, label, None, 22.0, &mut actions);
-            }
-            ui.add_space(8.0);
-            for m in 0..8 {
-                knob(app, ui, t, MOD_MACRO_PARAMS + m, &format!("M{}", m + 1), None, 22.0, &mut actions);
-            }
             if ui.button("▶").on_hover_text("Escuchar").clicked() {
                 actions.push(Action::Preview(60));
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("MACROS").color(TEXT_DIM).size(10.0).strong());
+            ui.spacing_mut().item_spacing.x = 4.0;
+            for m in 0..8 {
+                knob(app, ui, t, MOD_MACRO_PARAMS + m, &format!("Macro {}", m + 1), None, 34.0, &mut actions);
             }
         });
         ui.separator();
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("GENERADORES").color(TEXT_DIM).size(10.0).strong());
-                egui::ScrollArea::vertical().id_salt(("modular_gens", t)).max_height(430.0).show(ui, |ui| {
-                    for g in (0..MOD_GENS).filter(|&g| p.gens[g].kind != GenKind::Off) {
-                        generator_card(app, ui, t, g, p, &mut actions);
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("PILA DE MÓDULOS").color(TEXT_DIM).size(10.0).strong());
+                    ui.label(egui::RichText::new("de arriba abajo; cada grupo empieza de cero").color(TEXT_DIM).size(10.0));
+                });
+                egui::ScrollArea::vertical().id_salt(("modular_stack", t)).max_height(470.0).show(ui, |ui| {
+                    for i in (0..MOD_MODULES).filter(|&i| p.modules[i].kind != ModuleKind::Empty) {
+                        module_card(app, ui, t, i, p, &mut actions);
                     }
-                    if let Some(free) = p.gens.iter().position(|g| g.kind == GenKind::Off) {
-                        egui::ComboBox::from_id_salt(("modular_add_gen", t)).selected_text("+ Generador").width(130.0).show_ui(ui, |ui| {
-                            for kind in GenKind::ALL {
-                                if ui.selectable_label(false, kind.label()).clicked() {
-                                    let mut next = p;
-                                    next.gens[free] = Generator::new(kind);
-                                    set(&mut actions, next);
-                                }
-                            }
-                        });
-                    }
+                    let last = p.modules.iter().rposition(|m| m.kind != ModuleKind::Empty);
+                    insert_menu(ui, ("modular_add", t), last, "+ Añadir módulo", &mut actions);
                 });
             });
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("CARRILES DE EFECTOS").color(TEXT_DIM).size(10.0).strong());
-                egui::ScrollArea::vertical().id_salt(("modular_lanes", t)).max_height(430.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt(("modular_lanes", t)).max_height(470.0).show(ui, |ui| {
                     for l in 0..MOD_LANES {
                         lane_panel(app, ui, t, l, p, &mut actions);
                     }
@@ -559,12 +584,20 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 mod tests {
     use super::*;
     use eframe::egui::{Event, PointerButton, Pos2, RawInput, Rect};
+    use engine::model::Module;
 
     fn app_with(p: ModularParams) -> PulseApp {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         app.set_instrument(0, InstrumentKind::Modular(p));
         app.selected_target = Target::Track(0);
         app
+    }
+
+    fn params(app: &PulseApp) -> ModularParams {
+        match app.project.tracks[0].instrument {
+            InstrumentKind::Modular(p) => p,
+            _ => unreachable!(),
+        }
     }
 
     #[test]
@@ -578,15 +611,12 @@ mod tests {
                 let _ = ctx.run_ui(input, |ui| window(&mut app, &ui.ctx().clone()));
             }
             assert_eq!(app.modular_window, Some(0), "{name}");
-            assert_eq!(app.project.tracks[0].instrument, InstrumentKind::Modular(preset), "{name}: drawing changes nothing");
+            assert_eq!(params(&app), preset, "{name}: drawing changes nothing");
         }
     }
 
-    #[test]
-    fn dragging_a_modulator_onto_a_knob_connects_it() {
-        let mut p = ModularParams::default();
-        p.modulators[0] = Modulator::new(ModulatorKind::Lfo);
-        let mut app = app_with(p);
+    /// Drags `payload` from a label onto the slot knob, headless.
+    fn drag_onto_knob<P: Clone + Send + Sync + 'static>(app: &mut PulseApp, payload: P, module: usize, s: usize) -> Vec<Action> {
         let ctx = egui::Context::default();
         let (mut handle, mut knob_rect) = (Rect::NOTHING, Rect::NOTHING);
         let mut actions = Vec::new();
@@ -595,17 +625,19 @@ mod tests {
             let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 600.0))), events, time: Some(n as f64 * 0.05), ..Default::default() };
             let _ = ctx.run_ui(input, |ui| {
                 let at = ui.cursor().min;
-                ui.dnd_drag_source(egui::Id::new("handle"), ModulatorRef(0), |ui| {
-                    ui.label("✥ LFO 1");
+                ui.dnd_drag_source(egui::Id::new("handle"), payload.clone(), |ui| {
+                    ui.label("⟿ source");
                 });
                 *handle = Rect::from_min_max(at, pos2(at.x + 40.0, ui.cursor().min.y));
                 ui.add_space(30.0);
                 let at = ui.cursor().min;
-                knob(app, ui, 0, ModularParams::gen_param(0, 0), "Level", None, 30.0, actions);
-                *knob_rect = Rect::from_min_size(at, vec2(46.0, 58.0));
+                let p = params(app);
+                let audio = (s == slot::PHASE).then_some(AudioParam::Phase);
+                slot_knob(app, ui, 0, module, s, audio, &p, actions);
+                *knob_rect = Rect::from_min_size(at, vec2(46.0, 54.0));
             });
         };
-        run(vec![], 0, &mut app, &mut actions, &mut handle, &mut knob_rect);
+        run(vec![], 0, app, &mut actions, &mut handle, &mut knob_rect);
         let (from, to) = (handle.left_center() + vec2(10.0, 0.0), knob_rect.center());
         let mut frames = vec![vec![Event::PointerMoved(from)], vec![press(from, true)]];
         for k in 1..=8 {
@@ -614,12 +646,48 @@ mod tests {
         frames.push(vec![press(to, false)]);
         frames.push(vec![]);
         for (n, events) in frames.into_iter().enumerate() {
-            run(events, n + 1, &mut app, &mut actions, &mut handle, &mut knob_rect);
+            run(events, n + 1, app, &mut actions, &mut handle, &mut knob_rect);
         }
+        actions
+    }
+
+    #[test]
+    fn dragging_audio_onto_a_phase_knob_makes_an_audio_connection() {
+        let mut p = ModularParams::default();
+        p.insert_module(Some(2), Module::new(ModuleKind::Group));
+        p.insert_module(Some(3), Module::new(ModuleKind::Analog));
+        let mut app = app_with(p);
+        let actions = drag_onto_knob(&mut app, AudioSourceRef(4), 1, slot::PHASE);
         devices::apply(&mut app, Target::Track(0), actions);
-        let InstrumentKind::Modular(after) = app.project.tracks[0].instrument else { unreachable!() };
-        assert_eq!(after.modulators[0].targets[0].dest as usize, ModularParams::gen_param(0, 0));
-        assert_eq!(after.modulators[0].targets[0].depth, 0.5);
+        let link = params(&app).audio[0];
+        assert_eq!((link.source, link.target, link.param, link.amount), (4, 1, AudioParam::Phase, 0.5));
+    }
+
+    #[test]
+    fn dragging_a_modulator_onto_a_knob_connects_it() {
+        let mut p = ModularParams::default();
+        p.modulators[0] = Modulator::new(ModulatorKind::Lfo);
+        let mut app = app_with(p);
+        let actions = drag_onto_knob(&mut app, ModulatorRef(0), 1, slot::LEVEL);
+        devices::apply(&mut app, Target::Track(0), actions);
+        let target = params(&app).modulators[0].targets[0];
+        assert_eq!((target.dest as usize, target.depth), (ModularParams::module_param(1, slot::LEVEL), 0.5));
+    }
+
+    #[test]
+    fn stack_edits_move_files_with_their_modules() {
+        let mut p = ModularParams::default();
+        p.modules[1] = Module::new(ModuleKind::Sample);
+        let mut app = app_with(p);
+        app.project.tracks[0].set_sample(1, Some("/x/hit.wav".into()));
+        app.edit_stack(0, StackEdit::Insert(Some(0), ModuleKind::Analog));
+        assert_eq!(params(&app).modules[2].kind, ModuleKind::Sample);
+        assert_eq!(app.project.tracks[0].sample(2), Some("/x/hit.wav"), "the file followed its module");
+        app.edit_stack(0, StackEdit::Move(2, true));
+        assert_eq!(app.project.tracks[0].sample(1), Some("/x/hit.wav"));
+        app.edit_stack(0, StackEdit::Remove(1));
+        assert_eq!(app.project.tracks[0].sample(1), None);
+        assert_eq!(params(&app).modules[2].kind, ModuleKind::Output);
     }
 
     #[test]
@@ -635,7 +703,7 @@ mod tests {
 
     fn render_presets(out: Option<String>) {
         use engine::OfflineRenderer;
-        let (mut all_l, mut all_r) = (Vec::new(), Vec::new());
+        let (mut all_l, mut all_r, mut failures) = (Vec::new(), Vec::new(), Vec::new());
         for (name, preset) in ModularParams::presets() {
             let mut project = crate::project::Project::empty();
             let mut track = crate::project::Track::new(name, [200, 100, 50], InstrumentKind::Modular(preset));
@@ -658,7 +726,9 @@ mod tests {
             let rms = (l.iter().map(|s| s * s).sum::<f32>() / l.len() as f32).sqrt();
             println!("{name:26} pico {:6.1} dBFS", 20.0 * peak.max(1e-6).log10());
             assert!(l.iter().chain(&r).all(|s| s.is_finite()), "{name}");
-            assert!(rms > 0.005 && peak < 1.0, "{name}: peak {peak}, rms {rms}");
+            if !(rms > 0.005 && peak < 1.0) {
+                failures.push(format!("{name}: peak {peak}, rms {rms}"));
+            }
             renderer.send(engine::Command::StopAllClips);
             renderer.render(48_000, &mut l, &mut r);
             all_l.extend(l);
@@ -667,5 +737,6 @@ mod tests {
         if let Some(out) = out {
             crate::capture::write_wav(std::path::Path::new(&out), &all_l, &all_r, 48_000.0).unwrap();
         }
+        assert!(failures.is_empty(), "{failures:?}");
     }
 }

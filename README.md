@@ -128,17 +128,19 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
       («Seq Mod»), dibujados arrastrando sobre los pasos; toca transpuesto a la tecla que mantienes.
     - Arpegiador y rack de efectos como el Wavetable Synth. 14 presets (pads y metales analógicos, órgano y
       coro aditivos, línea acid, stab de techno, pluck melódico, doble filtro…).
-  - **Modular Synth**: sinte modular de enrutamiento libre (editor «Editor ⤢»):
-    - Hasta **8 generadores** (Analog, Wavetable, Sample, Noise, Harmonic) con nivel, panorama, afinación,
-      forma, unísono y salida a uno de **3 carriles** (o a ninguno, para usarlos solo como moduladores).
-    - Cada generador lleva una cadena de **4 modificadores**: Filter (9 modos), Distortion (5 tipos), **FM
-      from**, **PM from** y **Ring Mod** desde otro generador, **Phase Distortion**, Bitcrush, Downsample y
-      Gain.
-    - **Carriles de efectos** A, B y C con 4 efectos cada uno, ganancia y destino (Master o un carril
-      posterior, para encadenarlos).
-    - Hasta **16 moduladores** (Envelope, LFO dibujable, Random, Curve, Note, Velocity, Macro), cada uno con
-      8 destinos: arrastra su asa «✥» a cualquier knob; los knobs muestran sus anillos y, con clic derecho,
-      ajustas o quitas cada conexión. 8 macros, envolvente de amplitud, mono/legato/glide. 12 presets.
+  - **Modular Synth**: sinte modular de pila (editor «Editor ⤢»), en construcción por fases:
+    - **Pila de hasta 32 módulos** leída de arriba abajo dentro de **grupos** (cada grupo empieza de cero):
+      generadores (Analog con 4 ondas, sync y PW; Wavetable; Sample con raíz, offset y loop; Noise con
+      pendiente y estéreo) que suman su señal a la de arriba; efectos (**Filter** con 7 tipos y pendiente
+      1×/2×, **Distortion** con 6 tipos, bias y spread) que procesan lo de arriba; **Mix**, **Aux** y
+      salidas **Output** con su envolvente, ganancia, panorama y envío a un carril, al master o a ninguna
+      parte (solo como fuente de modulación). Mover, duplicar, insertar debajo y quitar módulos.
+    - Generadores con Level (hasta 200 %), Semi, Cent, **Harmonic** (multiplicador; ×0 sin seguimiento
+      de teclado), **Shift** en Hz, fase y **fase aleatoria**, y unísono (voces, detune, spread, blend).
+    - **Modulación de audio**: arrastra el asa verde «⟿» de un módulo a Phase (FM clásica), Harmonic
+      (FM lineal), Shift (FM en Hz), Level (ring), Semi (FM exponencial) de otro, o al Input de un Aux.
+    - 3 carriles de efectos encadenables, moduladores (Envelope, LFO, Random, Curve, Note, Velocity,
+      Macro) arrastrables a cualquier knob, 8 macros, mono/legato/glide. 10 presets.
   - **Kick Designer**: sintetizador de bombos con editor completo («Editor ⤢» en el dispositivo):
     - Capas: **cuerpo** (seno, triángulo, cuadrada o sierra, fase inicial, armónicos), **sub** senoidal limpio
       que sigue al cuerpo en fase, y **click** (12 sintetizados: Noise, Snap, Tick, Square, Zap, Metal, Thump,

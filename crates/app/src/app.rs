@@ -1227,10 +1227,12 @@ impl PulseApp {
                 Detail::Devices => Detail::Clip,
             };
         }
-        if delete {
+        // With notes selected in the clip editor, these act on the notes instead.
+        let editing_notes = self.detail == Detail::Clip && self.piano_roll.has_selection();
+        if delete && !editing_notes {
             self.delete_selected_clip();
         }
-        if duplicate {
+        if duplicate && !editing_notes {
             self.duplicate_selected_clip();
         }
         if undo {

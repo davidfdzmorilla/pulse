@@ -34,6 +34,13 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 - **Arrangement**: doble clic en una pista crea un clip; arrastrar lo mueve (también entre pistas); el borde
   derecho cambia su longitud; la franja superior define el loop; clic en la regla mueve el cursor.
   Lanzar clips de sesión anula el Arrangement de esa pista hasta pulsar **▶ Arrangement**.
+- **Piano roll**: clic en una nota la selecciona (Shift añade), arrastrar la mueve (Alt copia), el borde
+  derecho la alarga, arrastrar en vacío selecciona con un rectángulo, doble clic crea o borra. **B** activa
+  el modo dibujo (clic añade o borra). Flechas ←→ mueven en la rejilla (Shift: un compás), ↑↓ transponen
+  (Shift: una octava). ⌘A, ⌘C, ⌘X, ⌘V (pega en el marcador naranja, que se coloca con un clic en vacío),
+  ⌘D duplica y Supr borra las notas seleccionadas. **⌘U** cuantiza a la rejilla elegida (1/4 a 1/32) con
+  la intensidad indicada, opcionalmente también los finales. El carril de velocidad, debajo, se edita
+  arrastrando. Clic en una tecla la escucha.
 - **Mezclador**: envíos A/B, panorama, fader en dB con medidor, activador (silencio) y solo.
   Dos retornos (Reverb y Delay) y el Master, todos con su cadena de efectos.
 - **Audio**: arrastra archivos (WAV, AIFF, FLAC, MP3, OGG, M4A) a la ventana, usa "Añadir muestra…" en el
@@ -78,7 +85,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 
 ## Hoja de ruta
 
-1. Envolventes de automatización dentro de los clips de sesión; curvas entre puntos.
+1. Envolventes de automatización dentro de los clips de sesión; curvas entre puntos; cuantización al grabar.
 2. Monitorización y compensación de latencia al grabar audio; grabar la sesión en el Arrangement;
    cuantización de lo grabado.
 3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.

@@ -14,6 +14,7 @@ mod sampler;
 mod synth;
 pub mod wavetable;
 mod wavesynth;
+mod modsynth;
 pub use wavesynth::preview_cycle;
 
 pub use audio::{start, AudioOutput, EngineHandle, LiveInput};

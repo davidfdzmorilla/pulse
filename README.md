@@ -80,7 +80,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   sus muestras en los mismos pads, y los Simpler/Sampler al Sampler con su nota raíz. Los sintetizadores de
   Live no se pueden leer: esas pistas reciben Pulse Synth (o la Drum Machine si es un Drum Rack sin
   muestras). Los grupos se omiten.
-- **Dispositivos**: desde el navegador, diez instrumentos y doce efectos, todos automatizables:
+- **Dispositivos**: desde el navegador, once instrumentos y doce efectos, todos automatizables:
   - **Pulse Synth**: sintetizador sustractivo sencillo.
   - **Super Saw**: hasta 7 dientes de sierra desafinados y abiertos en estéreo (leads y pads de trance/EDM).
   - **Acid Bass**: bajo monofónico con filtro de 4 polos resonante, envolvente de filtro, acento (velocidad
@@ -128,6 +128,17 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
       («Seq Mod»), dibujados arrastrando sobre los pasos; toca transpuesto a la tecla que mantienes.
     - Arpegiador y rack de efectos como el Wavetable Synth. 14 presets (pads y metales analógicos, órgano y
       coro aditivos, línea acid, stab de techno, pluck melódico, doble filtro…).
+  - **Modular Synth**: sinte modular de enrutamiento libre (editor «Editor ⤢»):
+    - Hasta **8 generadores** (Analog, Wavetable, Sample, Noise, Harmonic) con nivel, panorama, afinación,
+      forma, unísono y salida a uno de **3 carriles** (o a ninguno, para usarlos solo como moduladores).
+    - Cada generador lleva una cadena de **4 modificadores**: Filter (9 modos), Distortion (5 tipos), **FM
+      from**, **PM from** y **Ring Mod** desde otro generador, **Phase Distortion**, Bitcrush, Downsample y
+      Gain.
+    - **Carriles de efectos** A, B y C con 4 efectos cada uno, ganancia y destino (Master o un carril
+      posterior, para encadenarlos).
+    - Hasta **16 moduladores** (Envelope, LFO dibujable, Random, Curve, Note, Velocity, Macro), cada uno con
+      8 destinos: arrastra su asa «✥» a cualquier knob; los knobs muestran sus anillos y, con clic derecho,
+      ajustas o quitas cada conexión. 8 macros, envolvente de amplitud, mono/legato/glide. 12 presets.
   - **Kick Designer**: sintetizador de bombos con editor completo («Editor ⤢» en el dispositivo):
     - Capas: **cuerpo** (seno, triángulo, cuadrada o sierra, fase inicial, armónicos), **sub** senoidal limpio
       que sigue al cuerpo en fase, y **click** (12 sintetizados: Noise, Snap, Tick, Square, Zap, Metal, Thump,

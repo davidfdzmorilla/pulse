@@ -29,6 +29,10 @@ pub fn factory(kind: &InstrumentKind) -> Vec<Preset> {
             .into_iter()
             .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Polychrome(params), samples: Vec::new() })
             .collect(),
+        InstrumentKind::Modular(_) => engine::model::ModularParams::presets()
+            .into_iter()
+            .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Modular(params), samples: Vec::new() })
+            .collect(),
         _ => Vec::new(),
     }
 }

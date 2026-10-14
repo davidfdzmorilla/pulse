@@ -213,6 +213,8 @@ pub enum InstrumentKind {
     /// The same engine laid out around its analog, harmonic and sample engines,
     /// two filters and the step sequencer.
     Polychrome(WaveParams),
+    /// Free-form synth: generators with modifier chains, effect lanes and modulators.
+    Modular(ModularParams),
 }
 
 /// How the kick designer distorts its body.
@@ -1178,11 +1180,11 @@ pub struct ParamInfo {
 }
 
 impl ParamInfo {
-    const fn linear(name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> Self {
+    pub const fn linear(name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> Self {
         Self { name, min, max, default, log: false, unit }
     }
 
-    const fn log(name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> Self {
+    pub const fn log(name: &'static str, min: f32, max: f32, default: f32, unit: Unit) -> Self {
         Self { name, min, max, default, log: true, unit }
     }
 
@@ -1405,7 +1407,7 @@ const DRUM_PARAMS: [ParamInfo; 24] = {
 
 impl InstrumentKind {
     /// Every instrument, in browser order.
-    pub fn catalog() -> [InstrumentKind; 10] {
+    pub fn catalog() -> [InstrumentKind; 11] {
         [
             InstrumentKind::Synth(SynthParams::default()),
             InstrumentKind::SuperSaw(SuperSawParams::default()),
@@ -1413,6 +1415,7 @@ impl InstrumentKind {
             InstrumentKind::Fm(FmParams::default()),
             InstrumentKind::Wavetable(WaveParams::default()),
             InstrumentKind::Polychrome(WaveParams::polychrome()),
+            InstrumentKind::Modular(ModularParams::default()),
             InstrumentKind::Sampler(SamplerParams::default()),
             InstrumentKind::Kick(KickParams::default()),
             InstrumentKind::DrumMachine(DrumParams::default()),
@@ -1432,6 +1435,7 @@ impl InstrumentKind {
             InstrumentKind::Kick(_) => "Kick Designer",
             InstrumentKind::Wavetable(_) => "Wavetable Synth",
             InstrumentKind::Polychrome(_) => "Polychrome Synth",
+            InstrumentKind::Modular(_) => "Modular Synth",
         }
     }
 
@@ -1450,6 +1454,7 @@ impl InstrumentKind {
                 let layout = |p: &WaveParams| p.fx.map(|d| d.map(|d| std::mem::discriminant(&d.effect)));
                 layout(a) != layout(b)
             }
+            (InstrumentKind::Modular(a), InstrumentKind::Modular(b)) => a.layout_differs(b),
             _ => false,
         }
     }
@@ -1472,7 +1477,7 @@ impl InstrumentKind {
 
     /// True for instruments that play the track's samples.
     pub fn uses_samples(&self) -> bool {
-        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_) | InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_))
+        matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_) | InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_) | InstrumentKind::Modular(_))
     }
 
     /// Replaces the parameterless first drum kit with the drum machine.
@@ -1495,6 +1500,7 @@ impl InstrumentKind {
             InstrumentKind::DrumRack(_) => &RACK_PARAMS,
             InstrumentKind::Kick(_) => &KICK_PARAMS,
             InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_) => &WAVE_PARAMS,
+            InstrumentKind::Modular(_) => &MODULAR_PARAMS,
         }
     }
 
@@ -1559,6 +1565,7 @@ impl InstrumentKind {
                 _ => return None,
             },
             InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) => return p.param_mut(index),
+            InstrumentKind::Modular(p) => return p.param_mut(index),
             InstrumentKind::Kick(p) => match index {
                 0 => &mut p.tune,
                 1 => &mut p.pitch_amount,
@@ -3045,6 +3052,1025 @@ pub const WAVE_PARAMS: [ParamInfo; 106] = [
     ParamInfo::linear("F2 Key", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("F Balance", 0.0, 1.0, 0.5, Percent),
     ParamInfo::log("Rnd Rate", 0.1, 40.0, 4.0, Hertz),
+];
+
+// ----- Modular synth ------------------------------------------------------------------
+
+pub const MOD_GENS: usize = 8;
+pub const MOD_MODIFIERS: usize = 4;
+pub const MOD_LANES: usize = 3;
+pub const MOD_LANE_FX: usize = 4;
+pub const MOD_MODULATORS: usize = 16;
+pub const MOD_TARGETS: usize = 8;
+pub const MOD_MACROS: usize = 8;
+/// Continuous settings per generator, then three per modifier.
+pub const MOD_GEN_PARAMS: usize = 9 + MOD_MODIFIERS * 3;
+pub const MOD_LANE_GAIN: usize = 168;
+pub const MOD_MODULATOR_PARAMS: usize = 171;
+pub const MOD_MACRO_PARAMS: usize = 235;
+pub const MOD_AMP: usize = 243;
+pub const MOD_GLIDE: usize = 248;
+pub const MOD_MASTER: usize = 249;
+/// `ModTarget::dest` of an unused target.
+pub const MOD_NO_TARGET: u16 = u16::MAX;
+/// `Generator::output` that sends nowhere (muted).
+pub const MOD_NO_LANE: u8 = 255;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GenKind {
+    /// An empty slot.
+    #[default]
+    Off,
+    /// Sine → triangle → saw → pulse (Shape), band-limited.
+    Analog,
+    /// A wavetable scanned by Shape (built-in, or the file in the generator's sample slot).
+    Wavetable,
+    /// The generator's sample, chromatic from C3 (Shape: start).
+    Sample,
+    /// White noise through a tilt (Shape: dark → bright).
+    Noise,
+    /// Additive partials; Shape sets the spectral tilt.
+    Harmonic,
+}
+
+impl GenKind {
+    pub const ALL: [GenKind; 5] = [Self::Analog, Self::Wavetable, Self::Sample, Self::Noise, Self::Harmonic];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "—",
+            Self::Analog => "Analog",
+            Self::Wavetable => "Wavetable",
+            Self::Sample => "Sample",
+            Self::Noise => "Noise",
+            Self::Harmonic => "Harmonic",
+        }
+    }
+}
+
+/// What a modifier in a generator's chain does. A and B are 0..1 and mapped per kind.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModifierKind {
+    #[default]
+    Off,
+    /// A: cutoff (20 Hz..20 kHz), B: resonance.
+    Filter,
+    /// A: drive, B: tone (low-pass after the drive).
+    Distortion,
+    /// Multiplies by the source generator. Mix: amount.
+    RingMod,
+    /// Frequency modulation by the source generator. A: depth.
+    FmFrom,
+    /// Phase modulation by the source generator. A: depth.
+    PmFrom,
+    /// Bends the phase like the classic phase-distortion synths. A: amount.
+    PhaseDistort,
+    /// A: bit depth (16 down to 1).
+    Bitcrush,
+    /// A: sample-rate reduction (×1 to ×64).
+    Downsample,
+    /// A: gain (-24..+24 dB).
+    Gain,
+}
+
+impl ModifierKind {
+    pub const ALL: [ModifierKind; 9] =
+        [Self::Filter, Self::Distortion, Self::RingMod, Self::FmFrom, Self::PmFrom, Self::PhaseDistort, Self::Bitcrush, Self::Downsample, Self::Gain];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "—",
+            Self::Filter => "Filter",
+            Self::Distortion => "Distortion",
+            Self::RingMod => "Ring Mod",
+            Self::FmFrom => "FM from",
+            Self::PmFrom => "PM from",
+            Self::PhaseDistort => "Phase Dist",
+            Self::Bitcrush => "Bitcrush",
+            Self::Downsample => "Downsample",
+            Self::Gain => "Gain",
+        }
+    }
+
+    /// Modifiers that read another generator.
+    pub fn uses_source(self) -> bool {
+        matches!(self, Self::RingMod | Self::FmFrom | Self::PmFrom)
+    }
+
+    /// Modifiers applied to the oscillator's phase rather than its output.
+    pub fn on_phase(self) -> bool {
+        matches!(self, Self::FmFrom | Self::PmFrom | Self::PhaseDistort)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Modifier {
+    pub kind: ModifierKind,
+    pub filter: WaveFilter,
+    pub drive: KickDrive,
+    /// Generator read by ring, FM and PM modifiers.
+    pub source: u8,
+    pub a: f32,
+    pub b: f32,
+    pub mix: f32,
+}
+
+impl Modifier {
+    pub const OFF: Modifier = Modifier { kind: ModifierKind::Off, filter: WaveFilter::Lp24, drive: KickDrive::Soft, source: 0, a: 0.5, b: 0.5, mix: 1.0 };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Generator {
+    pub kind: GenKind,
+    /// Built-in wavetable, or [`WAVE_USER_TABLE`] for the generator's file.
+    pub table: u8,
+    /// Lane the generator plays into (0..3), or [`MOD_NO_LANE`].
+    pub output: u8,
+    pub level: f32,
+    pub pan: f32,
+    pub octave: f32,
+    pub semi: f32,
+    pub fine: f32,
+    /// Wave shape, table position or sample start, by kind.
+    pub position: f32,
+    pub unison: f32,
+    pub detune: f32,
+    pub width: f32,
+    pub modifiers: [Modifier; MOD_MODIFIERS],
+}
+
+impl Generator {
+    pub const OFF: Generator = Generator {
+        kind: GenKind::Off,
+        table: 0,
+        output: 0,
+        level: 0.7,
+        pan: 0.0,
+        octave: 0.0,
+        semi: 0.0,
+        fine: 0.0,
+        position: 2.0 / 3.0,
+        unison: 1.0,
+        detune: 0.2,
+        width: 1.0,
+        modifiers: [Modifier::OFF; MOD_MODIFIERS],
+    };
+
+    pub fn new(kind: GenKind) -> Self {
+        Self { kind, ..Self::OFF }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Lane {
+    pub gain: f32,
+    pub fx: [Option<Device>; MOD_LANE_FX],
+    /// Where the lane goes: [`MOD_NO_LANE`] is the master, otherwise a later lane.
+    pub dest: u8,
+}
+
+impl Lane {
+    pub const EMPTY: Lane = Lane { gain: 1.0, fx: [None; MOD_LANE_FX], dest: MOD_NO_LANE };
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ModulatorKind {
+    #[default]
+    Off,
+    /// A: attack, B: decay, C: sustain, D: release.
+    Envelope,
+    /// A drawn cycle. A: rate (0.02..40 Hz) unless synced, B: phase offset.
+    Lfo,
+    /// A: rate (0.1..40 Hz), B: smoothing (0: steps, 1: glides).
+    Random,
+    /// Velocity, note or a random value per note, mapped through a drawn curve.
+    Curve,
+    Note,
+    Velocity,
+    /// One of the eight macros.
+    Macro,
+}
+
+impl ModulatorKind {
+    pub const ALL: [ModulatorKind; 7] = [Self::Envelope, Self::Lfo, Self::Random, Self::Curve, Self::Note, Self::Velocity, Self::Macro];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "—",
+            Self::Envelope => "Envelope",
+            Self::Lfo => "LFO",
+            Self::Random => "Random",
+            Self::Curve => "Curve",
+            Self::Note => "Note",
+            Self::Velocity => "Velocity",
+            Self::Macro => "Macro",
+        }
+    }
+}
+
+/// What a curve modulator reads.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CurveInput {
+    #[default]
+    Velocity,
+    Note,
+    Random,
+}
+
+impl CurveInput {
+    pub const ALL: [CurveInput; 3] = [Self::Velocity, Self::Note, Self::Random];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Velocity => "Velocity",
+            Self::Note => "Note",
+            Self::Random => "Random",
+        }
+    }
+}
+
+/// One connection from a modulator to a parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModTarget {
+    pub dest: u16,
+    /// -1..1 of the parameter's range.
+    pub depth: f32,
+}
+
+impl ModTarget {
+    pub const NONE: ModTarget = ModTarget { dest: MOD_NO_TARGET, depth: 0.0 };
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Modulator {
+    pub kind: ModulatorKind,
+    pub shape: Shape,
+    pub mode: LfoMode,
+    /// LFO period in beats when synced (0: free rate).
+    pub sync_beats: f32,
+    pub input: CurveInput,
+    /// Macro modulators: which macro.
+    pub index: u8,
+    pub bipolar: bool,
+    pub a: f32,
+    pub b: f32,
+    pub c: f32,
+    pub d: f32,
+    pub targets: [ModTarget; MOD_TARGETS],
+}
+
+impl Modulator {
+    pub const OFF: Modulator = Modulator {
+        kind: ModulatorKind::Off,
+        shape: Shape { points: [ShapePoint { time: 0.0, value: 0.0, bend: 0.0 }; SHAPE_POINTS], count: 0 },
+        mode: LfoMode::Free,
+        sync_beats: 0.0,
+        input: CurveInput::Velocity,
+        index: 0,
+        bipolar: false,
+        a: 0.5,
+        b: 0.5,
+        c: 0.5,
+        d: 0.5,
+        targets: [ModTarget::NONE; MOD_TARGETS],
+    };
+
+    /// A new modulator of `kind` with sensible settings.
+    pub fn new(kind: ModulatorKind) -> Self {
+        let triangle = Shape::from_points(&[(0.0, 0.5, 0.0), (0.25, 1.0, 0.0), (0.75, 0.0, 0.0), (1.0, 0.5, 0.0)]);
+        let rising = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
+        match kind {
+            ModulatorKind::Envelope => Self { kind, a: 0.1, b: 0.4, c: 0.0, d: 0.3, ..Self::OFF },
+            ModulatorKind::Lfo => Self { kind, shape: triangle, a: 0.45, b: 0.0, ..Self::OFF },
+            ModulatorKind::Random => Self { kind, a: 0.5, b: 0.0, ..Self::OFF },
+            ModulatorKind::Curve => Self { kind, shape: rising, ..Self::OFF },
+            _ => Self { kind, ..Self::OFF },
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ModularParams {
+    pub gens: [Generator; MOD_GENS],
+    pub lanes: [Lane; MOD_LANES],
+    pub modulators: [Modulator; MOD_MODULATORS],
+    pub macros: [f32; MOD_MACROS],
+    pub amp: WaveEnv,
+    pub mono: bool,
+    pub legato: bool,
+    pub glide: f32,
+    pub gain: f32,
+}
+
+impl Default for ModularParams {
+    fn default() -> Self {
+        let mut gens = [Generator::OFF; MOD_GENS];
+        gens[0] = Generator::new(GenKind::Analog);
+        Self {
+            gens,
+            lanes: [Lane::EMPTY; MOD_LANES],
+            modulators: [Modulator::OFF; MOD_MODULATORS],
+            macros: [0.0; MOD_MACROS],
+            amp: WaveEnv { attack: 0.002, hold: 0.0, decay: 1.0, sustain: 1.0, release: 0.15 },
+            mono: false,
+            legato: false,
+            glide: 0.0,
+            gain: 0.6,
+        }
+    }
+}
+
+impl ModularParams {
+    /// Parameter index of generator `g`'s setting `i` (0..9), or of modifier `m`'s A/B/Mix (`i` 0..3).
+    pub fn gen_param(g: usize, i: usize) -> usize {
+        g * MOD_GEN_PARAMS + i
+    }
+
+    pub fn modifier_param(g: usize, m: usize, i: usize) -> usize {
+        g * MOD_GEN_PARAMS + 9 + m * 3 + i
+    }
+
+    pub fn modulator_param(m: usize, i: usize) -> usize {
+        MOD_MODULATOR_PARAMS + m * 4 + i
+    }
+
+    pub fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
+        let p = self;
+        Some(match index {
+            0 => &mut p.gens[0].level,
+            1 => &mut p.gens[0].pan,
+            2 => &mut p.gens[0].octave,
+            3 => &mut p.gens[0].semi,
+            4 => &mut p.gens[0].fine,
+            5 => &mut p.gens[0].position,
+            6 => &mut p.gens[0].unison,
+            7 => &mut p.gens[0].detune,
+            8 => &mut p.gens[0].width,
+            9 => &mut p.gens[0].modifiers[0].a,
+            10 => &mut p.gens[0].modifiers[0].b,
+            11 => &mut p.gens[0].modifiers[0].mix,
+            12 => &mut p.gens[0].modifiers[1].a,
+            13 => &mut p.gens[0].modifiers[1].b,
+            14 => &mut p.gens[0].modifiers[1].mix,
+            15 => &mut p.gens[0].modifiers[2].a,
+            16 => &mut p.gens[0].modifiers[2].b,
+            17 => &mut p.gens[0].modifiers[2].mix,
+            18 => &mut p.gens[0].modifiers[3].a,
+            19 => &mut p.gens[0].modifiers[3].b,
+            20 => &mut p.gens[0].modifiers[3].mix,
+            21 => &mut p.gens[1].level,
+            22 => &mut p.gens[1].pan,
+            23 => &mut p.gens[1].octave,
+            24 => &mut p.gens[1].semi,
+            25 => &mut p.gens[1].fine,
+            26 => &mut p.gens[1].position,
+            27 => &mut p.gens[1].unison,
+            28 => &mut p.gens[1].detune,
+            29 => &mut p.gens[1].width,
+            30 => &mut p.gens[1].modifiers[0].a,
+            31 => &mut p.gens[1].modifiers[0].b,
+            32 => &mut p.gens[1].modifiers[0].mix,
+            33 => &mut p.gens[1].modifiers[1].a,
+            34 => &mut p.gens[1].modifiers[1].b,
+            35 => &mut p.gens[1].modifiers[1].mix,
+            36 => &mut p.gens[1].modifiers[2].a,
+            37 => &mut p.gens[1].modifiers[2].b,
+            38 => &mut p.gens[1].modifiers[2].mix,
+            39 => &mut p.gens[1].modifiers[3].a,
+            40 => &mut p.gens[1].modifiers[3].b,
+            41 => &mut p.gens[1].modifiers[3].mix,
+            42 => &mut p.gens[2].level,
+            43 => &mut p.gens[2].pan,
+            44 => &mut p.gens[2].octave,
+            45 => &mut p.gens[2].semi,
+            46 => &mut p.gens[2].fine,
+            47 => &mut p.gens[2].position,
+            48 => &mut p.gens[2].unison,
+            49 => &mut p.gens[2].detune,
+            50 => &mut p.gens[2].width,
+            51 => &mut p.gens[2].modifiers[0].a,
+            52 => &mut p.gens[2].modifiers[0].b,
+            53 => &mut p.gens[2].modifiers[0].mix,
+            54 => &mut p.gens[2].modifiers[1].a,
+            55 => &mut p.gens[2].modifiers[1].b,
+            56 => &mut p.gens[2].modifiers[1].mix,
+            57 => &mut p.gens[2].modifiers[2].a,
+            58 => &mut p.gens[2].modifiers[2].b,
+            59 => &mut p.gens[2].modifiers[2].mix,
+            60 => &mut p.gens[2].modifiers[3].a,
+            61 => &mut p.gens[2].modifiers[3].b,
+            62 => &mut p.gens[2].modifiers[3].mix,
+            63 => &mut p.gens[3].level,
+            64 => &mut p.gens[3].pan,
+            65 => &mut p.gens[3].octave,
+            66 => &mut p.gens[3].semi,
+            67 => &mut p.gens[3].fine,
+            68 => &mut p.gens[3].position,
+            69 => &mut p.gens[3].unison,
+            70 => &mut p.gens[3].detune,
+            71 => &mut p.gens[3].width,
+            72 => &mut p.gens[3].modifiers[0].a,
+            73 => &mut p.gens[3].modifiers[0].b,
+            74 => &mut p.gens[3].modifiers[0].mix,
+            75 => &mut p.gens[3].modifiers[1].a,
+            76 => &mut p.gens[3].modifiers[1].b,
+            77 => &mut p.gens[3].modifiers[1].mix,
+            78 => &mut p.gens[3].modifiers[2].a,
+            79 => &mut p.gens[3].modifiers[2].b,
+            80 => &mut p.gens[3].modifiers[2].mix,
+            81 => &mut p.gens[3].modifiers[3].a,
+            82 => &mut p.gens[3].modifiers[3].b,
+            83 => &mut p.gens[3].modifiers[3].mix,
+            84 => &mut p.gens[4].level,
+            85 => &mut p.gens[4].pan,
+            86 => &mut p.gens[4].octave,
+            87 => &mut p.gens[4].semi,
+            88 => &mut p.gens[4].fine,
+            89 => &mut p.gens[4].position,
+            90 => &mut p.gens[4].unison,
+            91 => &mut p.gens[4].detune,
+            92 => &mut p.gens[4].width,
+            93 => &mut p.gens[4].modifiers[0].a,
+            94 => &mut p.gens[4].modifiers[0].b,
+            95 => &mut p.gens[4].modifiers[0].mix,
+            96 => &mut p.gens[4].modifiers[1].a,
+            97 => &mut p.gens[4].modifiers[1].b,
+            98 => &mut p.gens[4].modifiers[1].mix,
+            99 => &mut p.gens[4].modifiers[2].a,
+            100 => &mut p.gens[4].modifiers[2].b,
+            101 => &mut p.gens[4].modifiers[2].mix,
+            102 => &mut p.gens[4].modifiers[3].a,
+            103 => &mut p.gens[4].modifiers[3].b,
+            104 => &mut p.gens[4].modifiers[3].mix,
+            105 => &mut p.gens[5].level,
+            106 => &mut p.gens[5].pan,
+            107 => &mut p.gens[5].octave,
+            108 => &mut p.gens[5].semi,
+            109 => &mut p.gens[5].fine,
+            110 => &mut p.gens[5].position,
+            111 => &mut p.gens[5].unison,
+            112 => &mut p.gens[5].detune,
+            113 => &mut p.gens[5].width,
+            114 => &mut p.gens[5].modifiers[0].a,
+            115 => &mut p.gens[5].modifiers[0].b,
+            116 => &mut p.gens[5].modifiers[0].mix,
+            117 => &mut p.gens[5].modifiers[1].a,
+            118 => &mut p.gens[5].modifiers[1].b,
+            119 => &mut p.gens[5].modifiers[1].mix,
+            120 => &mut p.gens[5].modifiers[2].a,
+            121 => &mut p.gens[5].modifiers[2].b,
+            122 => &mut p.gens[5].modifiers[2].mix,
+            123 => &mut p.gens[5].modifiers[3].a,
+            124 => &mut p.gens[5].modifiers[3].b,
+            125 => &mut p.gens[5].modifiers[3].mix,
+            126 => &mut p.gens[6].level,
+            127 => &mut p.gens[6].pan,
+            128 => &mut p.gens[6].octave,
+            129 => &mut p.gens[6].semi,
+            130 => &mut p.gens[6].fine,
+            131 => &mut p.gens[6].position,
+            132 => &mut p.gens[6].unison,
+            133 => &mut p.gens[6].detune,
+            134 => &mut p.gens[6].width,
+            135 => &mut p.gens[6].modifiers[0].a,
+            136 => &mut p.gens[6].modifiers[0].b,
+            137 => &mut p.gens[6].modifiers[0].mix,
+            138 => &mut p.gens[6].modifiers[1].a,
+            139 => &mut p.gens[6].modifiers[1].b,
+            140 => &mut p.gens[6].modifiers[1].mix,
+            141 => &mut p.gens[6].modifiers[2].a,
+            142 => &mut p.gens[6].modifiers[2].b,
+            143 => &mut p.gens[6].modifiers[2].mix,
+            144 => &mut p.gens[6].modifiers[3].a,
+            145 => &mut p.gens[6].modifiers[3].b,
+            146 => &mut p.gens[6].modifiers[3].mix,
+            147 => &mut p.gens[7].level,
+            148 => &mut p.gens[7].pan,
+            149 => &mut p.gens[7].octave,
+            150 => &mut p.gens[7].semi,
+            151 => &mut p.gens[7].fine,
+            152 => &mut p.gens[7].position,
+            153 => &mut p.gens[7].unison,
+            154 => &mut p.gens[7].detune,
+            155 => &mut p.gens[7].width,
+            156 => &mut p.gens[7].modifiers[0].a,
+            157 => &mut p.gens[7].modifiers[0].b,
+            158 => &mut p.gens[7].modifiers[0].mix,
+            159 => &mut p.gens[7].modifiers[1].a,
+            160 => &mut p.gens[7].modifiers[1].b,
+            161 => &mut p.gens[7].modifiers[1].mix,
+            162 => &mut p.gens[7].modifiers[2].a,
+            163 => &mut p.gens[7].modifiers[2].b,
+            164 => &mut p.gens[7].modifiers[2].mix,
+            165 => &mut p.gens[7].modifiers[3].a,
+            166 => &mut p.gens[7].modifiers[3].b,
+            167 => &mut p.gens[7].modifiers[3].mix,
+            168 => &mut p.lanes[0].gain,
+            169 => &mut p.lanes[1].gain,
+            170 => &mut p.lanes[2].gain,
+            171 => &mut p.modulators[0].a,
+            172 => &mut p.modulators[0].b,
+            173 => &mut p.modulators[0].c,
+            174 => &mut p.modulators[0].d,
+            175 => &mut p.modulators[1].a,
+            176 => &mut p.modulators[1].b,
+            177 => &mut p.modulators[1].c,
+            178 => &mut p.modulators[1].d,
+            179 => &mut p.modulators[2].a,
+            180 => &mut p.modulators[2].b,
+            181 => &mut p.modulators[2].c,
+            182 => &mut p.modulators[2].d,
+            183 => &mut p.modulators[3].a,
+            184 => &mut p.modulators[3].b,
+            185 => &mut p.modulators[3].c,
+            186 => &mut p.modulators[3].d,
+            187 => &mut p.modulators[4].a,
+            188 => &mut p.modulators[4].b,
+            189 => &mut p.modulators[4].c,
+            190 => &mut p.modulators[4].d,
+            191 => &mut p.modulators[5].a,
+            192 => &mut p.modulators[5].b,
+            193 => &mut p.modulators[5].c,
+            194 => &mut p.modulators[5].d,
+            195 => &mut p.modulators[6].a,
+            196 => &mut p.modulators[6].b,
+            197 => &mut p.modulators[6].c,
+            198 => &mut p.modulators[6].d,
+            199 => &mut p.modulators[7].a,
+            200 => &mut p.modulators[7].b,
+            201 => &mut p.modulators[7].c,
+            202 => &mut p.modulators[7].d,
+            203 => &mut p.modulators[8].a,
+            204 => &mut p.modulators[8].b,
+            205 => &mut p.modulators[8].c,
+            206 => &mut p.modulators[8].d,
+            207 => &mut p.modulators[9].a,
+            208 => &mut p.modulators[9].b,
+            209 => &mut p.modulators[9].c,
+            210 => &mut p.modulators[9].d,
+            211 => &mut p.modulators[10].a,
+            212 => &mut p.modulators[10].b,
+            213 => &mut p.modulators[10].c,
+            214 => &mut p.modulators[10].d,
+            215 => &mut p.modulators[11].a,
+            216 => &mut p.modulators[11].b,
+            217 => &mut p.modulators[11].c,
+            218 => &mut p.modulators[11].d,
+            219 => &mut p.modulators[12].a,
+            220 => &mut p.modulators[12].b,
+            221 => &mut p.modulators[12].c,
+            222 => &mut p.modulators[12].d,
+            223 => &mut p.modulators[13].a,
+            224 => &mut p.modulators[13].b,
+            225 => &mut p.modulators[13].c,
+            226 => &mut p.modulators[13].d,
+            227 => &mut p.modulators[14].a,
+            228 => &mut p.modulators[14].b,
+            229 => &mut p.modulators[14].c,
+            230 => &mut p.modulators[14].d,
+            231 => &mut p.modulators[15].a,
+            232 => &mut p.modulators[15].b,
+            233 => &mut p.modulators[15].c,
+            234 => &mut p.modulators[15].d,
+            235 => &mut p.macros[0],
+            236 => &mut p.macros[1],
+            237 => &mut p.macros[2],
+            238 => &mut p.macros[3],
+            239 => &mut p.macros[4],
+            240 => &mut p.macros[5],
+            241 => &mut p.macros[6],
+            242 => &mut p.macros[7],
+            243 => &mut p.amp.attack,
+            244 => &mut p.amp.hold,
+            245 => &mut p.amp.decay,
+            246 => &mut p.amp.sustain,
+            247 => &mut p.amp.release,
+            248 => &mut p.glide,
+            249 => &mut p.gain,
+            _ => return None,
+        })
+    }
+
+    /// Factory presets: each shows a way of wiring the generators together.
+    pub fn presets() -> Vec<(&'static str, ModularParams)> {
+        let init = ModularParams::default();
+        let sine = Generator { position: 0.0, ..Generator::new(GenKind::Analog) };
+        let saw = Generator::new(GenKind::Analog);
+        let square = Generator { position: 1.0, ..Generator::new(GenKind::Analog) };
+        let filter = |mode: WaveFilter, cutoff_hz: f32, resonance: f32| Modifier { kind: ModifierKind::Filter, filter: mode, a: (cutoff_hz / 20.0).ln() / 1000f32.ln(), b: resonance, ..Modifier::OFF };
+        let from = |kind: ModifierKind, source: u8, a: f32| Modifier { kind, source, a, ..Modifier::OFF };
+        let target = |g: usize, i: usize, depth: f32| ModTarget { dest: ModularParams::gen_param(g, i) as u16, depth };
+        let modifier_target = |g: usize, m: usize, i: usize, depth: f32| ModTarget { dest: ModularParams::modifier_param(g, m, i) as u16, depth };
+        let lfo_rate = |hz: f32| (hz / 0.02).ln() / 2000f32.ln();
+        let env = |attack, decay, sustain, release| WaveEnv { attack, hold: 0.0, decay, sustain, release };
+        let fx = |effect: Effect| Some(Device::new(effect));
+        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
+        let chorus = fx(Effect::Chorus(ChorusParams::default()));
+        let with = |targets: &[ModTarget], kind: ModulatorKind| {
+            let mut m = Modulator::new(kind);
+            for (i, t) in targets.iter().enumerate().take(MOD_TARGETS) {
+                m.targets[i] = *t;
+            }
+            m
+        };
+        let mut list = vec![("Init", init)];
+
+        let mut p = init;
+        p.gens[0] = Generator { unison: 4.0, detune: 0.25, modifiers: [filter(WaveFilter::Lp24, 600.0, 0.25), Modifier::OFF, Modifier::OFF, Modifier::OFF], ..saw };
+        p.gens[1] = Generator { octave: -1.0, unison: 2.0, level: 0.5, modifiers: p.gens[0].modifiers, ..saw };
+        p.gens[2] = Generator { octave: 1.0, level: 0.25, ..square };
+        let mut e = with(&[modifier_target(0, 0, 0, 0.35), modifier_target(1, 0, 0, 0.35)], ModulatorKind::Envelope);
+        e.a = 0.2;
+        e.b = 0.55;
+        p.modulators[0] = e;
+        p.amp = env(0.01, 0.5, 0.8, 0.4);
+        p.lanes[0].fx[0] = reverb(0.5, 0.15);
+        p.gain = 0.4;
+        list.push(("Stack · Octave Saws", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { modifiers: [from(ModifierKind::FmFrom, 1, 0.3), Modifier::OFF, Modifier::OFF, Modifier::OFF], ..sine };
+        p.gens[1] = Generator { output: MOD_NO_LANE, octave: 1.0, semi: 7.0, ..sine };
+        let mut e = with(&[modifier_target(0, 0, 0, -0.3)], ModulatorKind::Envelope);
+        e.a = 0.0;
+        e.b = 0.7;
+        e.c = 0.0;
+        p.modulators[0] = e;
+        p.amp = env(0.002, 2.5, 0.0, 1.5);
+        p.lanes[0].fx[0] = reverb(0.75, 0.3);
+        p.gain = 0.6;
+        list.push(("FM · Bell", p));
+
+        let mut p = init;
+        p.gens[0] = Generator {
+            modifiers: [from(ModifierKind::PmFrom, 1, 0.4), filter(WaveFilter::Lp24, 900.0, 0.35), Modifier { kind: ModifierKind::Distortion, a: 0.4, b: 0.7, ..Modifier::OFF }, Modifier::OFF],
+            ..saw
+        };
+        p.gens[1] = Generator { output: MOD_NO_LANE, octave: -1.0, ..sine };
+        let mut lfo = with(&[modifier_target(0, 0, 0, 0.5), modifier_target(0, 1, 0, 0.3)], ModulatorKind::Lfo);
+        lfo.sync_beats = 0.5;
+        lfo.mode = LfoMode::Retrig;
+        p.modulators[0] = lfo;
+        p.mono = true;
+        p.glide = 30.0;
+        p.gain = 0.8;
+        list.push(("FM · Growl Bass", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { modifiers: [Modifier { kind: ModifierKind::RingMod, source: 1, mix: 1.0, ..Modifier::OFF }, Modifier::OFF, Modifier::OFF, Modifier::OFF], ..sine };
+        p.gens[1] = Generator { output: MOD_NO_LANE, semi: 7.0, fine: 13.0, ..sine };
+        p.amp = env(0.002, 1.2, 0.2, 0.8);
+        p.lanes[0].fx[0] = delay(0.75, 0.3);
+        p.gain = 0.55;
+        list.push(("Ring · Metallic", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { modifiers: [Modifier { kind: ModifierKind::PhaseDistort, a: 0.3, ..Modifier::OFF }, filter(WaveFilter::Lp12, 2500.0, 0.1), Modifier::OFF, Modifier::OFF], ..sine };
+        let mut e = with(&[modifier_target(0, 0, 0, 0.6)], ModulatorKind::Envelope);
+        e.a = 0.0;
+        e.b = 0.45;
+        e.c = 0.0;
+        p.modulators[0] = e;
+        p.mono = true;
+        p.amp = env(0.002, 1.0, 0.8, 0.1);
+        p.gain = 0.95;
+        list.push(("PD · Phase Bass", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { kind: GenKind::Wavetable, table: 3, unison: 3.0, detune: 0.2, position: 0.3, output: 0, ..Generator::OFF };
+        p.gens[1] = Generator { octave: -1.0, unison: 2.0, level: 0.4, output: 1, modifiers: [filter(WaveFilter::Lp24, 1500.0, 0.1), Modifier::OFF, Modifier::OFF, Modifier::OFF], ..saw };
+        let mut lfo = with(&[target(0, 5, 0.4)], ModulatorKind::Lfo);
+        lfo.a = lfo_rate(0.1);
+        p.modulators[0] = lfo;
+        p.lanes[0] = Lane { gain: 1.0, fx: [chorus, None, None, None], dest: 2 };
+        p.lanes[1] = Lane { gain: 1.0, fx: [delay(0.75, 0.35), None, None, None], dest: 2 };
+        p.lanes[2] = Lane { gain: 1.0, fx: [reverb(0.9, 0.35), None, None, None], dest: MOD_NO_LANE };
+        p.amp = env(0.8, 1.0, 1.0, 1.8);
+        p.gain = 0.45;
+        list.push(("Lanes · Dual Pad", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { kind: GenKind::Noise, position: 0.2, level: 0.4, ..Generator::OFF };
+        p.gens[1] = Generator { unison: 6.0, detune: 0.3, modifiers: [filter(WaveFilter::Lp24, 200.0, 0.3), Modifier::OFF, Modifier::OFF, Modifier::OFF], ..saw };
+        let mut ramp = with(&[target(0, 5, 0.8), modifier_target(1, 0, 0, 0.6)], ModulatorKind::Lfo);
+        ramp.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
+        ramp.mode = LfoMode::Envelope;
+        ramp.sync_beats = 16.0;
+        p.modulators[0] = ramp;
+        p.lanes[0].fx[0] = reverb(0.9, 0.3);
+        p.amp = env(0.5, 1.0, 1.0, 1.0);
+        p.gain = 0.5;
+        list.push(("Noise · Riser 4 bars", p));
+
+        let mut p = init;
+        p.gens[0] = Generator {
+            modifiers: [Modifier { kind: ModifierKind::Bitcrush, a: 0.7, ..Modifier::OFF }, Modifier { kind: ModifierKind::Downsample, a: 0.3, ..Modifier::OFF }, Modifier::OFF, Modifier::OFF],
+            ..square
+        };
+        p.mono = true;
+        p.legato = true;
+        p.glide = 60.0;
+        p.lanes[0].fx[0] = delay(0.5, 0.25);
+        p.gain = 0.8;
+        list.push(("Crush · Lo-Fi Lead", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { kind: GenKind::Harmonic, position: 0.85, ..Generator::OFF };
+        p.gens[1] = Generator { octave: -1.0, level: 0.5, ..sine };
+        p.lanes[0].fx[0] = chorus;
+        p.amp = env(0.004, 0.2, 1.0, 0.06);
+        p.gain = 0.5;
+        list.push(("Layer · Organ + Sub", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { kind: GenKind::Wavetable, table: 11, unison: 4.0, detune: 0.2, modifiers: [filter(WaveFilter::Bp12, 1200.0, 0.4), Modifier::OFF, Modifier::OFF, Modifier::OFF], ..Generator::OFF };
+        let mut random = with(&[target(0, 5, 0.6), modifier_target(0, 0, 0, 0.3)], ModulatorKind::Random);
+        random.a = 0.3;
+        random.b = 0.8;
+        p.modulators[0] = random;
+        p.lanes[0].fx[0] = reverb(0.85, 0.35);
+        p.amp = env(0.6, 1.0, 1.0, 1.5);
+        p.gain = 1.0;
+        list.push(("Random · Texture", p));
+
+        let mut p = init;
+        p.gens[0] = Generator { unison: 2.0, detune: 0.15, modifiers: [filter(WaveFilter::Lp24, 300.0, 0.2), Modifier::OFF, Modifier::OFF, Modifier::OFF], ..saw };
+        let mut curve = with(&[modifier_target(0, 0, 0, 0.5)], ModulatorKind::Curve);
+        curve.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, -0.6)]);
+        p.modulators[0] = curve;
+        let mut e = with(&[modifier_target(0, 0, 0, 0.3)], ModulatorKind::Envelope);
+        e.a = 0.0;
+        e.b = 0.4;
+        e.c = 0.0;
+        p.modulators[1] = e;
+        p.amp = env(0.002, 0.45, 0.0, 0.3);
+        p.lanes[0].fx[0] = delay(0.75, 0.2);
+        p.gain = 0.65;
+        list.push(("Velocity · Curve Pluck", p));
+        list
+    }
+
+    /// True when going from `self` to `other` changes what the synth has to allocate:
+    /// the effects in the lanes or the comb filters in the generators.
+    pub fn layout_differs(&self, other: &ModularParams) -> bool {
+        let fx = |p: &ModularParams| p.lanes.map(|l| l.fx.map(|d| d.map(|d| std::mem::discriminant(&d.effect))));
+        let combs = |p: &ModularParams| p.gens.map(|g| g.modifiers.map(|m| m.kind == ModifierKind::Filter && m.filter == WaveFilter::Comb));
+        fx(self) != fx(other) || combs(self) != combs(other)
+    }
+}
+
+pub const MODULAR_PARAMS: [ParamInfo; 250] = [
+    ParamInfo::linear("G1 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G1 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G1 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G1 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G1 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G1 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G1 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G1 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G1 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G1 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G1 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G1 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G1 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G1 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G2 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G2 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G2 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G2 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G2 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G2 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G2 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G2 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G2 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G2 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G2 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G2 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G2 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G2 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G3 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G3 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G3 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G3 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G3 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G3 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G3 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G3 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G3 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G3 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G3 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G3 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G3 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G3 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G4 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G4 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G4 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G4 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G4 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G4 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G4 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G4 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G4 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G4 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G4 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G4 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G4 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G4 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G5 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G5 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G5 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G5 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G5 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G5 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G5 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G5 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G5 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G5 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G5 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G5 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G5 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G5 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G6 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G6 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G6 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G6 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G6 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G6 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G6 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G6 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G6 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G6 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G6 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G6 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G6 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G6 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G7 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G7 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G7 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G7 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G7 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G7 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G7 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G7 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G7 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G7 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G7 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G7 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G7 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G7 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G8 Level", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("G8 Pan", -1.0, 1.0, 0.0, Pan),
+    ParamInfo::linear("G8 Oct", -4.0, 4.0, 0.0, Count),
+    ParamInfo::linear("G8 Semi", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("G8 Fine", -100.0, 100.0, 0.0, Plain),
+    ParamInfo::linear("G8 Shape", 0.0, 1.0, 0.667, Percent),
+    ParamInfo::linear("G8 Unison", 1.0, 8.0, 1.0, Count),
+    ParamInfo::linear("G8 Detune", 0.0, 1.0, 0.2, Percent),
+    ParamInfo::linear("G8 Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G8 M1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G8 M2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G8 M3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("G8 M4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("G8 M4 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Lane A", 0.0, 1.5, 1.0, Percent),
+    ParamInfo::linear("Lane B", 0.0, 1.5, 1.0, Percent),
+    ParamInfo::linear("Lane C", 0.0, 1.5, 1.0, Percent),
+    ParamInfo::linear("Mod1 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod1 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod1 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod1 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod2 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod2 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod2 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod2 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod3 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod3 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod3 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod3 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod4 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod4 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod4 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod4 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod5 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod5 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod5 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod5 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod6 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod6 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod6 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod6 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod7 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod7 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod7 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod7 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod8 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod8 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod8 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod8 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod9 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod9 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod9 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod9 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod10 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod10 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod10 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod10 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod11 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod11 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod11 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod11 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod12 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod12 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod12 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod12 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod13 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod13 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod13 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod13 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod14 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod14 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod14 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod14 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod15 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod15 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod15 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod15 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod16 A", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod16 B", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod16 C", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Mod16 D", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Macro 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 7", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Macro 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::log("Amp A", 0.0005, 10.0, 0.002, Seconds),
+    ParamInfo::linear("Amp H", 0.0, 5.0, 0.0, Seconds),
+    ParamInfo::log("Amp D", 0.001, 10.0, 1.0, Seconds),
+    ParamInfo::linear("Amp S", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::log("Amp R", 0.001, 10.0, 0.15, Seconds),
+    ParamInfo::linear("Glide", 0.0, 2000.0, 0.0, Milliseconds),
+    ParamInfo::linear("Master", 0.0, 1.0, 0.6, Percent),
 ];
 
 #[cfg(test)]

@@ -51,6 +51,11 @@ pub(crate) enum Action {
     OpenKickWindow,
     OpenWaveWindow,
     OpenPolyWindow,
+    OpenModularWindow,
+    /// Opens a file dialog for modular generator `n`.
+    LoadGenFile(usize),
+    /// Connects modular modulator `.0` to parameter `.1`.
+    ModularTarget(usize, usize),
     /// New settings for the track's wavetable-engine synth (either kind).
     Wave(engine::model::WaveParams),
     /// Opens a file dialog for the sample of oscillator `n`.
@@ -221,6 +226,21 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             Action::OpenKickWindow => {
                 if let Target::Track(t) = target {
                     app.kick_window = Some(t);
+                }
+            }
+            Action::OpenModularWindow => {
+                if let Target::Track(t) = target {
+                    app.modular_window = Some(t);
+                }
+            }
+            Action::LoadGenFile(g) => {
+                if let Target::Track(t) = target {
+                    app.choose_gen_file(t, g);
+                }
+            }
+            Action::ModularTarget(modulator, dest) => {
+                if let Target::Track(t) = target {
+                    app.add_modular_target(t, modulator, dest);
                 }
             }
             Action::OpenPolyWindow => {
@@ -522,6 +542,17 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                     });
                 });
             });
+            actions.extend(body_actions);
+        }
+        InstrumentKind::Modular(base) => {
+            let header = |ui: &mut egui::Ui| {
+                preset_menu(app, ui, t, &mut head);
+                if ui.small_button("Editor ⤢").on_hover_text("Abre el editor: generadores, modificadores, carriles y moduladores").clicked() {
+                    head.push(Action::OpenModularWindow);
+                }
+            };
+            let mut body_actions = Vec::new();
+            device_frame(ui, kind.label(), 520.0, None, header, |ui| crate::modular_ui::compact(app, ui, t, base, &mut body_actions));
             actions.extend(body_actions);
         }
         InstrumentKind::Wavetable(base) | InstrumentKind::Polychrome(base) => {

@@ -187,6 +187,8 @@ pub struct PulseApp {
     pub table_editor: Option<crate::table_editor::TableEditor>,
     /// Track whose polychrome synth editor window is open.
     pub poly_window: Option<usize>,
+    /// Track whose modular synth editor window is open.
+    pub modular_window: Option<usize>,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
@@ -260,6 +262,7 @@ impl PulseApp {
             wave_window: None,
             table_editor: None,
             poly_window: None,
+            modular_window: None,
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -774,6 +777,16 @@ impl PulseApp {
             let sample_rate = self.audio.sample_rate();
             self.audio.send(Command::set_instrument(track, kind, sample_rate));
         }
+        if let InstrumentKind::Modular(after) = kind {
+            self.sync_tables(track);
+            let kinds_changed = match previous {
+                InstrumentKind::Modular(before) => before.gens.map(|g| (g.kind, g.table)) != after.gens.map(|g| (g.kind, g.table)),
+                _ => true,
+            };
+            if kinds_changed {
+                self.sync_samples(track);
+            }
+        }
         if let Some(after) = kind.wave() {
             self.sync_tables(track);
             // The oscillators' files are sent as samples once their kind plays them.
@@ -822,6 +835,42 @@ impl PulseApp {
         self.project.tracks[track].set_sample(osc, Some(path));
         self.set_instrument(track, kind.with_wave(params));
         self.status = Some(format!("Wavetable: {} ({} frames)", table.name, table.frames()));
+    }
+
+    /// Connects modulator `modulator` of a modular synth to parameter `dest` (depth 50 %).
+    pub fn add_modular_target(&mut self, track: usize, modulator: usize, dest: usize) {
+        use engine::model::{ModTarget, MODULAR_PARAMS};
+        let InstrumentKind::Modular(mut params) = self.project.tracks[track].instrument else { return };
+        let name = MODULAR_PARAMS.get(dest).map_or("?", |p| p.name);
+        let targets = &mut params.modulators[modulator].targets;
+        if targets.iter().any(|t| t.dest as usize == dest) {
+            self.status = Some(format!("Ya modula {name}"));
+            return;
+        }
+        let Some(free) = targets.iter().position(|t| t.dest == engine::model::MOD_NO_TARGET) else {
+            self.status = Some("Este modulador ya tiene 8 destinos".into());
+            return;
+        };
+        targets[free] = ModTarget { dest: dest as u16, depth: 0.5 };
+        self.set_instrument(track, InstrumentKind::Modular(params));
+        self.status = Some(format!("→ {name} (50 %) · clic derecho en el knob para ajustar"));
+    }
+
+    /// Loads the audio or wavetable file a modular generator plays.
+    pub fn choose_gen_file(&mut self, track: usize, g: usize) {
+        let Some(path) = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS).pick_file() else { return };
+        let path = path.to_string_lossy().into_owned();
+        if self.sample(&path).frames() == 0 {
+            return;
+        }
+        let InstrumentKind::Modular(mut params) = self.project.tracks[track].instrument else { return };
+        if params.gens[g].kind == engine::model::GenKind::Wavetable {
+            params.gens[g].table = engine::model::WAVE_USER_TABLE;
+        }
+        self.project.tracks[track].set_sample(g, Some(path));
+        self.set_instrument(track, InstrumentKind::Modular(params));
+        self.sync_samples(track);
+        self.sync_tables(track);
     }
 
     /// Routes `source` to parameter `dest` in the first free matrix slot (50 %).
@@ -1659,6 +1708,7 @@ impl eframe::App for PulseApp {
         crate::kick_ui::window(self, &ctx);
         crate::wave_ui::window(self, &ctx);
         crate::poly_ui::window(self, &ctx);
+        crate::modular_ui::window(self, &ctx);
         crate::table_editor::window(self, &ctx);
 
         let interacting = ctx.input(|i| i.pointer.any_down());

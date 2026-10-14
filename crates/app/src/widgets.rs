@@ -357,6 +357,18 @@ pub fn param_knob(
     diameter: f32,
     automation: Option<bool>,
 ) -> Option<f32> {
+    param_knob_response(ui, info, value, label, diameter, automation).0
+}
+
+/// Like [`param_knob`], also returning the knob's response (for drops, menus and overlays).
+pub fn param_knob_response(
+    ui: &mut Ui,
+    info: &engine::model::ParamInfo,
+    value: f32,
+    label: &str,
+    diameter: f32,
+    automation: Option<bool>,
+) -> (Option<f32>, Response) {
     let mut v = value;
     let mut knob = Knob::new(&mut v, info.min..=info.max, info.default, label)
         .diameter(diameter)
@@ -369,5 +381,24 @@ pub fn param_knob(
     }
     let response = knob.show(ui);
     automation_dot(ui.painter(), response.rect.right_top() + vec2(-4.0, 6.0), automation);
-    response.changed().then_some(v)
+    (response.changed().then_some(v), response)
+}
+
+/// An arc just outside a knob drawn by [`Knob::show`] in `rect`, between two
+/// positions of its travel (0..1): how far a modulation moves it.
+pub fn modulation_ring(painter: &egui::Painter, rect: egui::Rect, diameter: f32, from: f32, to: f32, color: Color32) {
+    let center = pos2(rect.center().x, rect.top() + 14.0 + diameter * 0.5);
+    let radius = diameter * 0.5 + 3.5;
+    let (start, sweep) = (PI * 0.75, PI * 1.5);
+    let (a, b) = (from.clamp(0.0, 1.0).min(to.clamp(0.0, 1.0)), from.clamp(0.0, 1.0).max(to.clamp(0.0, 1.0)));
+    if b - a < 0.002 {
+        return;
+    }
+    let points: Vec<_> = (0..=24)
+        .map(|i| {
+            let angle = start + sweep * (a + (b - a) * i as f32 / 24.0);
+            pos2(center.x + radius * angle.cos(), center.y + radius * angle.sin())
+        })
+        .collect();
+    painter.add(Shape::line(points, Stroke::new(2.0, color)));
 }

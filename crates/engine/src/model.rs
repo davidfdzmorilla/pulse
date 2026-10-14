@@ -1434,6 +1434,21 @@ impl InstrumentKind {
         matches!(self, InstrumentKind::Drums | InstrumentKind::DrumMachine(_) | InstrumentKind::DrumRack(_))
     }
 
+    /// True when switching from `self` to `other` needs a newly built instrument
+    /// (another kind, or a different set of effects in the wavetable synth's rack).
+    pub fn needs_rebuild(&self, other: &InstrumentKind) -> bool {
+        if self.label() != other.label() {
+            return true;
+        }
+        match (self, other) {
+            (InstrumentKind::Wavetable(a), InstrumentKind::Wavetable(b)) => {
+                let layout = |p: &WaveParams| p.fx.map(|d| d.map(|d| std::mem::discriminant(&d.effect)));
+                layout(a) != layout(b)
+            }
+            _ => false,
+        }
+    }
+
     /// True for instruments that play the track's samples.
     pub fn uses_samples(&self) -> bool {
         matches!(self, InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Kick(_) | InstrumentKind::Wavetable(_))
@@ -1757,8 +1772,97 @@ pub const WAVE_MACROS: usize = 4;
 pub const WAVE_SLOTS: usize = 16;
 /// `WaveOsc::table` for a table loaded from a file (the track's sample slot of that oscillator).
 pub const WAVE_USER_TABLE: u8 = 255;
-/// Parameters below this index can be modulation destinations; above are the slot amounts.
+/// Index of the first matrix slot amount; the 16 amounts follow. Every other
+/// parameter can be a modulation destination (see [`wave_is_target`]).
 pub const WAVE_MOD_TARGETS: usize = 66;
+/// Grain parameters of oscillator A (B's follow), after the slot amounts.
+pub const WAVE_GRAIN: usize = WAVE_MOD_TARGETS + WAVE_SLOTS;
+pub const WAVE_ARP_GATE: usize = WAVE_GRAIN + 8;
+/// Effects in the synth's own rack.
+pub const WAVE_FX: usize = 6;
+
+/// True for parameters the matrix can modulate (all but its own amounts).
+pub fn wave_is_target(index: usize) -> bool {
+    index < WAVE_MOD_TARGETS || (WAVE_GRAIN..WAVE_PARAMS.len()).contains(&index)
+}
+
+/// What an oscillator plays.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OscKind {
+    /// A wavetable, scanned by Position.
+    #[default]
+    Wavetable,
+    /// The oscillator's sample, played chromatically from C3 (Position: start).
+    Sample,
+    /// Grains of the oscillator's sample (Position: where they are taken from).
+    Granular,
+    /// The sample's spectrum turned into a wavetable (Position: time in the sample).
+    Spectral,
+}
+
+impl OscKind {
+    pub const ALL: [OscKind; 4] = [Self::Wavetable, Self::Sample, Self::Granular, Self::Spectral];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Wavetable => "Wavetable",
+            Self::Sample => "Sample",
+            Self::Granular => "Granular",
+            Self::Spectral => "Spectral",
+        }
+    }
+
+    /// Kinds that play the oscillator's sample file.
+    pub fn uses_sample(self) -> bool {
+        matches!(self, Self::Sample | Self::Granular | Self::Spectral)
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ArpMode {
+    #[default]
+    Up,
+    Down,
+    UpDown,
+    Random,
+    /// In the order the keys were pressed.
+    Played,
+}
+
+impl ArpMode {
+    pub const ALL: [ArpMode; 5] = [Self::Up, Self::Down, Self::UpDown, Self::Random, Self::Played];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Up => "Up",
+            Self::Down => "Down",
+            Self::UpDown => "Up/Down",
+            Self::Random => "Random",
+            Self::Played => "Played",
+        }
+    }
+}
+
+/// Arpeggiator: plays the held notes one at a time, in time with the tempo.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ArpParams {
+    pub on: bool,
+    pub mode: ArpMode,
+    /// Step length in beats (0.25: sixteenths).
+    pub rate_beats: f32,
+    /// Octaves the pattern spans, 1..4.
+    pub octaves: u8,
+}
+
+impl Default for ArpParams {
+    fn default() -> Self {
+        Self { on: false, mode: ArpMode::Up, rate_beats: 0.25, octaves: 1 }
+    }
+}
+
+fn yes() -> bool {
+    true
+}
 /// `ModSlot::dest` of an unused slot.
 pub const WAVE_NO_TARGET: u8 = 255;
 
@@ -1923,6 +2027,23 @@ impl ModSource {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WaveOsc {
     pub on: bool,
+    #[serde(default)]
+    pub kind: OscKind,
+    /// Sample mode: loop the sample instead of playing it once.
+    #[serde(default = "yes")]
+    pub sample_loop: bool,
+    /// Granular: grain length in milliseconds.
+    #[serde(default = "default_grain_size")]
+    pub grain_size: f32,
+    /// Granular: grains per second.
+    #[serde(default = "default_density")]
+    pub density: f32,
+    /// Granular: random spread of where grains start, 0..1 of the sample.
+    #[serde(default)]
+    pub spray: f32,
+    /// Granular: random pitch per grain, in semitones.
+    #[serde(default)]
+    pub grain_pitch: f32,
     /// Index into the built-in tables, or [`WAVE_USER_TABLE`].
     pub table: u8,
     pub warp: OscWarp,
@@ -1947,10 +2068,24 @@ pub struct WaveOsc {
     pub warp_amount: f32,
 }
 
+fn default_grain_size() -> f32 {
+    80.0
+}
+
+fn default_density() -> f32 {
+    30.0
+}
+
 impl Default for WaveOsc {
     fn default() -> Self {
         Self {
             on: true,
+            kind: OscKind::Wavetable,
+            sample_loop: true,
+            grain_size: default_grain_size(),
+            density: default_density(),
+            spray: 0.0,
+            grain_pitch: 0.0,
             table: 0,
             warp: OscWarp::Off,
             position: 0.0,
@@ -2055,6 +2190,18 @@ pub struct WaveParams {
     /// Glide time in milliseconds (0: off).
     pub glide: f32,
     pub gain: f32,
+    /// The synth's own effects, applied after the voices are mixed.
+    #[serde(default)]
+    pub fx: [Option<Device>; WAVE_FX],
+    #[serde(default)]
+    pub arp: ArpParams,
+    /// Length of each arpeggiated note, as a fraction of a step.
+    #[serde(default = "default_arp_gate")]
+    pub arp_gate: f32,
+}
+
+fn default_arp_gate() -> f32 {
+    0.5
 }
 
 impl Default for WaveParams {
@@ -2076,6 +2223,9 @@ impl Default for WaveParams {
             legato: false,
             glide: 0.0,
             gain: 0.5,
+            fx: [None; WAVE_FX],
+            arp: ArpParams::default(),
+            arp_gate: default_arp_gate(),
         }
     }
 }
@@ -2090,6 +2240,11 @@ impl WaveParams {
         let ramp = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
         let triangle = Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]);
         let mut list = vec![("Init", init)];
+        let fx = |effect: Effect| Some(Device::new(effect));
+        let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
+        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let chorus = fx(Effect::Chorus(ChorusParams::default()));
+        let drive = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, ..SaturatorParams::default() }));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: saw, unison: 7.0, detune: 0.35, blend: 0.7, ..WaveOsc::default() };
@@ -2097,6 +2252,8 @@ impl WaveParams {
         p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 9000.0, resonance: 0.15, ..init.filter };
         p.env[0] = env(0.005, 0.3, 0.8, 0.3);
         p.gain = 0.5;
+                p.fx[0] = delay(0.75, 0.2);
+        p.fx[1] = reverb(0.6, 0.2);
         list.push(("Lead · Supersaw", p));
 
         let mut p = init;
@@ -2108,6 +2265,8 @@ impl WaveParams {
         p.glide = 60.0;
         p.env[0] = env(0.005, 0.5, 0.9, 0.2);
         p.gain = 0.9;
+                p.fx[0] = drive(9.0);
+        p.fx[1] = delay(0.5, 0.15);
         list.push(("Lead · Sync Scream", p));
 
         let mut p = init;
@@ -2121,6 +2280,7 @@ impl WaveParams {
         p.legato = true;
         p.glide = 40.0;
         p.gain = 0.55;
+                p.fx[0] = chorus;
         list.push(("Bass · Reese", p));
 
         let mut p = init;
@@ -2132,6 +2292,7 @@ impl WaveParams {
         p.matrix[1] = slot(ModSource::Lfo1, 32, 0.45);
         p.mono = true;
         p.gain = 0.45;
+                p.fx[0] = drive(6.0);
         list.push(("Bass · Growl", p));
 
         let mut p = init;
@@ -2171,7 +2332,9 @@ impl WaveParams {
         p.env[0] = env(0.002, 0.45, 0.0, 0.3);
         p.env[1] = env(0.001, 0.25, 0.0, 0.2);
         p.matrix[0] = slot(ModSource::Env2, 32, 0.55);
-        p.gain = 0.6;
+        p.gain = 0.85;
+                p.fx[0] = delay(0.75, 0.25);
+        p.fx[1] = reverb(0.5, 0.18);
         list.push(("Pluck · Bright", p));
 
         let mut p = init;
@@ -2183,6 +2346,19 @@ impl WaveParams {
         list.push(("Pluck · Digital", p));
 
         let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, unison: 5.0, detune: 0.3, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 1200.0, resonance: 0.3, ..init.filter };
+        p.env[0] = env(0.002, 0.2, 0.0, 0.15);
+        p.env[1] = env(0.001, 0.15, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.4);
+        p.arp = ArpParams { on: true, mode: ArpMode::UpDown, rate_beats: 0.25, octaves: 2 };
+        p.arp_gate = 0.6;
+        p.fx[0] = delay(0.75, 0.3);
+        p.fx[1] = reverb(0.6, 0.2);
+        p.gain = 0.95;
+        list.push(("Arp · Trance Pluck", p));
+
+        let mut p = init;
         p.osc[0] = WaveOsc { table: 3, position: 0.0, unison: 4.0, detune: 0.2, ..WaveOsc::default() };
         p.osc[1] = WaveOsc { table: 3, position: 0.5, octave: -1.0, unison: 3.0, detune: 0.25, level: 0.4, ..WaveOsc::default() };
         p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 4000.0, ..init.filter };
@@ -2191,6 +2367,8 @@ impl WaveParams {
         p.matrix[1] = slot(ModSource::Lfo1, 13, 0.5);
         p.env[0] = env(0.8, 1.0, 1.0, 1.5);
         p.gain = 0.5;
+                p.fx[0] = chorus;
+        p.fx[1] = reverb(0.85, 0.35);
         list.push(("Pad · Vowel", p));
 
         let mut p = init;
@@ -2199,6 +2377,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Lfo1, 0, 0.7);
         p.env[0] = env(1.2, 1.0, 1.0, 2.0);
         p.gain = 0.5;
+                p.fx[0] = reverb(0.9, 0.4);
         list.push(("Pad · Spectral", p));
 
         let mut p = init;
@@ -2213,6 +2392,7 @@ impl WaveParams {
         p.env[1] = env(0.001, 0.8, 0.0, 0.5);
         p.matrix[0] = slot(ModSource::Env2, 0, 0.35);
         p.gain = 0.55;
+                p.fx[0] = reverb(0.7, 0.25);
         list.push(("Keys · Bell", p));
 
         let mut p = init;
@@ -2224,6 +2404,7 @@ impl WaveParams {
         p.matrix[1] = slot(ModSource::Lfo1, 32, 0.8);
         p.env[0] = env(0.5, 1.0, 1.0, 1.0);
         p.gain = 0.5;
+                p.fx[0] = reverb(0.9, 0.3);
         list.push(("FX · Riser 4 bars", p));
         list
     }
@@ -2313,12 +2494,21 @@ impl WaveParams {
                 79 => &mut p.matrix[13].amount,
                 80 => &mut p.matrix[14].amount,
                 81 => &mut p.matrix[15].amount,
+                82 => &mut p.osc[0].grain_size,
+                83 => &mut p.osc[0].density,
+                84 => &mut p.osc[0].spray,
+                85 => &mut p.osc[0].grain_pitch,
+                86 => &mut p.osc[1].grain_size,
+                87 => &mut p.osc[1].density,
+                88 => &mut p.osc[1].spray,
+                89 => &mut p.osc[1].grain_pitch,
+                90 => &mut p.arp_gate,
             _ => return None,
         })
     }
 }
 
-pub const WAVE_PARAMS: [ParamInfo; 82] = [
+pub const WAVE_PARAMS: [ParamInfo; 91] = [
     ParamInfo::linear("A Pos", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("A Oct", -4.0, 4.0, 0.0, Count),
     ParamInfo::linear("A Semi", -12.0, 12.0, 0.0, Semitones),
@@ -2401,6 +2591,15 @@ pub const WAVE_PARAMS: [ParamInfo; 82] = [
     ParamInfo::linear("Mod 14", -1.0, 1.0, 0.0, Percent),
     ParamInfo::linear("Mod 15", -1.0, 1.0, 0.0, Percent),
     ParamInfo::linear("Mod 16", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::log("A Grain", 5.0, 500.0, 80.0, Milliseconds),
+    ParamInfo::log("A Density", 1.0, 200.0, 30.0, Count),
+    ParamInfo::linear("A Spray", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("A G.Pitch", 0.0, 24.0, 0.0, Semitones),
+    ParamInfo::log("B Grain", 5.0, 500.0, 80.0, Milliseconds),
+    ParamInfo::log("B Density", 1.0, 200.0, 30.0, Count),
+    ParamInfo::linear("B Spray", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("B G.Pitch", 0.0, 24.0, 0.0, Semitones),
+    ParamInfo::linear("Arp Gate", 0.05, 1.0, 0.5, Percent),
 ];
 
 #[cfg(test)]

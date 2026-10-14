@@ -8,7 +8,7 @@ use crate::project::{drum_name, is_black_key, note_name};
 use crate::theme::{self, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke, StrokeKind};
-use engine::model::{drum_note, Note};
+use engine::model::{drum_note, Clip, Note};
 use engine::Command;
 use std::sync::atomic::Ordering;
 
@@ -59,7 +59,8 @@ fn playhead(app: &PulseApp, clip_ref: ClipRef) -> Option<f64> {
                 && status.playing.load(Ordering::Relaxed) < 0
                 && position >= placed.start
                 && position < placed.end();
-            (audible && placed.clip.length > 0.0).then(|| (position - placed.start).rem_euclid(placed.clip.length))
+            let length = placed.clip.length();
+            (audible && length > 0.0).then(|| (position - placed.start).rem_euclid(length))
         }
     }
 }
@@ -76,14 +77,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     };
     let t = clip_ref.track();
     let playhead = playhead(app, clip_ref);
+    if matches!(app.clip(clip_ref), Some(Clip::Audio(_))) {
+        crate::sample_editor::show(app, ui, clip_ref, playhead);
+        return;
+    }
     let is_drums = app.project.tracks[t].is_drums();
     let state = &mut app.piano_roll;
-    let Some(clip) = (match clip_ref {
+    let clip = match clip_ref {
         ClipRef::Session { track, slot } => app.project.tracks[track].clips[slot].as_mut(),
         ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement.get_mut(index).map(|a| &mut a.clip),
-    }) else {
-        return;
     };
+    let Some(Clip::Midi(clip)) = clip else { return };
     let mut changed = false;
     let mut preview = None;
 

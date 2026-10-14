@@ -22,7 +22,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 | ⌘Z / ⇧⌘Z | Deshacer / rehacer |
 | ⌘S / ⇧⌘S / ⌘O / ⌘N | Guardar / guardar como / abrir / nuevo |
 | ⌘D | Duplicar el clip seleccionado |
-| ⌘T | Nueva pista MIDI |
+| ⌘T / ⇧⌘T | Nueva pista MIDI / de audio |
 | ⌘I | Importar un set de Ableton Live (`.als`) |
 | Supr | Borrar el clip seleccionado |
 
@@ -33,10 +33,16 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   Lanzar clips de sesión anula el Arrangement de esa pista hasta pulsar **▶ Arrangement**.
 - **Mezclador**: envíos A/B, panorama, fader en dB con medidor, activador (silencio) y solo.
   Dos retornos (Reverb y Delay) y el Master, todos con su cadena de efectos.
-- **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI
-  (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus notas.
-  Los dispositivos de Live no se pueden leer: las pistas con Drum Rack reciben el Drum Kit y el resto Pulse Synth.
-  Las pistas de audio y los grupos se omiten (se indica en la barra de estado).
+- **Audio**: arrastra archivos (WAV, AIFF, FLAC, MP3, OGG, M4A) a la ventana, usa "Añadir muestra…" en el
+  navegador, o haz doble clic en un slot o en el Arrangement de una pista de audio. Los loops se detectan por su
+  duración (compases enteros) y se sincronizan al tempo; los sonidos cortos quedan sin warp. En el editor de
+  muestra eliges el modo de warp (Off, Re-Pitch, Stretch), el BPM original, el inicio (clic en la forma de
+  onda), la longitud, la ganancia y la transposición (en Stretch).
+- **Importar de Live**: ⌘I o arrastrar un `.als` a la ventana. Se importan tempo, loop, escenas, pistas MIDI y
+  de audio (nombre, color, volumen, panorama, envíos, activador), clips de sesión y del Arrangement con sus
+  notas o sus muestras y ajustes de warp. Las muestras se buscan por ruta y, si el set viene de otro
+  ordenador, por nombre dentro de la carpeta del set. Los dispositivos de Live no se pueden leer: las pistas
+  con Drum Rack reciben el Drum Kit y el resto Pulse Synth. Los grupos se omiten.
 - **Dispositivos**: Pulse Synth o Drum Kit más efectos (EQ Three, Compressor, Saturator, Auto Filter,
   Delay, Reverb) desde el navegador. Knobs: arrastrar arriba/abajo, Shift para ajuste fino, doble clic para
   el valor por defecto.
@@ -48,7 +54,7 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 
 ## Hoja de ruta
 
-1. Pistas de audio, samples y warping (también para importar las pistas de audio de Live).
-2. Automatización de parámetros.
-3. Entrada MIDI y grabación de notas (y de la sesión en el Arrangement).
+1. Automatización de parámetros.
+2. Entrada MIDI y grabación de notas (y de la sesión en el Arrangement); grabación de audio.
+3. Warp con marcadores múltiples y algoritmos de stretch de mayor calidad.
 4. Plugins VST3 / CLAP.

@@ -31,13 +31,108 @@ impl MidiClip {
     }
 }
 
+/// How an audio clip follows the project tempo.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum WarpMode {
+    /// Plays at the file's own speed.
+    Off,
+    /// Speed follows the tempo, so pitch changes with it (like a turntable).
+    Repitch,
+    /// Follows the tempo while keeping the pitch (granular time-stretch).
+    Stretch,
+}
+
+impl WarpMode {
+    pub const ALL: [WarpMode; 3] = [Self::Off, Self::Repitch, Self::Stretch];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "Off",
+            Self::Repitch => "Re-Pitch",
+            Self::Stretch => "Stretch",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct AudioClip {
+    pub name: String,
+    pub color: [u8; 3],
+    /// Path of the audio file.
+    pub sample: String,
+    /// Loop length in beats.
+    pub length: f64,
+    /// Where the clip starts inside the file, in seconds.
+    pub offset: f64,
+    pub warp: WarpMode,
+    /// Tempo the file was recorded at; used by Re-Pitch and Stretch.
+    pub original_bpm: f64,
+    pub gain_db: f32,
+    /// Semitones; applies in Stretch mode.
+    pub transpose: f32,
+}
+
+/// A session or arrangement clip. Serialized untagged so projects saved before
+/// audio clips existed (plain MIDI clips) still load.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum Clip {
+    Midi(MidiClip),
+    Audio(AudioClip),
+}
+
+impl Clip {
+    pub fn name(&self) -> &str {
+        match self {
+            Clip::Midi(c) => &c.name,
+            Clip::Audio(c) => &c.name,
+        }
+    }
+
+    pub fn name_mut(&mut self) -> &mut String {
+        match self {
+            Clip::Midi(c) => &mut c.name,
+            Clip::Audio(c) => &mut c.name,
+        }
+    }
+
+    pub fn color(&self) -> [u8; 3] {
+        match self {
+            Clip::Midi(c) => c.color,
+            Clip::Audio(c) => c.color,
+        }
+    }
+
+    pub fn color_mut(&mut self) -> &mut [u8; 3] {
+        match self {
+            Clip::Midi(c) => &mut c.color,
+            Clip::Audio(c) => &mut c.color,
+        }
+    }
+
+    /// Loop length in beats.
+    pub fn length(&self) -> f64 {
+        match self {
+            Clip::Midi(c) => c.length,
+            Clip::Audio(c) => c.length,
+        }
+    }
+
+    pub fn as_midi(&self) -> Option<&MidiClip> {
+        match self {
+            Clip::Midi(c) => Some(c),
+            Clip::Audio(_) => None,
+        }
+    }
+}
+
 /// A clip placed on the arrangement timeline. Its content loops if `length`
 /// is longer than the clip itself.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ArrangementClip {
     pub start: f64,
     pub length: f64,
-    pub clip: MidiClip,
+    pub clip: Clip,
 }
 
 impl ArrangementClip {

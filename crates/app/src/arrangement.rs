@@ -4,11 +4,12 @@
 //! - Double-click an empty lane to create a clip; drag a clip to move it (also across
 //!   tracks), drag its right edge to resize it. Clip contents loop when it is longer.
 
-use crate::app::{ClipRef, PulseApp};
+use crate::app::{ClipRef, Placement, PulseApp};
 use crate::theme::{self, ACCENT, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
-use engine::model::{ArrangementClip, MidiClip};
+use engine::model::{ArrangementClip, Clip, MidiClip};
+use engine::{Sample, PEAK_BLOCK};
 use engine::{Command, Target};
 use std::sync::atomic::Ordering;
 
@@ -162,7 +163,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         pos2(x_at(placed.end()), lane.bottom() - 1.0),
                     );
                     let selected = app.selected_clip == Some(ClipRef::Arrangement { track: t, index });
-                    paint_clip(&painter, clip_rect, placed, selected, ppb);
+                    let sample = match &placed.clip {
+                        Clip::Audio(audio) => app.loaded_sample(&audio.sample).map(|s| s.as_ref()),
+                        Clip::Midi(_) => None,
+                    };
+                    paint_clip(&painter, clip_rect, placed, sample, selected, ppb, app.project.tempo);
                 }
             }
 
@@ -183,46 +188,86 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     });
 }
 
-fn paint_clip(painter: &egui::Painter, rect: Rect, placed: &ArrangementClip, selected: bool, ppb: f32) {
-    let color = theme::rgb(placed.clip.color);
+#[allow(clippy::too_many_arguments)]
+fn paint_clip(
+    painter: &egui::Painter,
+    rect: Rect,
+    placed: &ArrangementClip,
+    sample: Option<&Sample>,
+    selected: bool,
+    ppb: f32,
+    tempo: f64,
+) {
+    let color = theme::rgb(placed.clip.color());
     painter.rect_filled(rect, 2.0, theme::shade(color, 0.45));
     let title = Rect::from_min_size(rect.min, vec2(rect.width(), 14.0));
     painter.rect_filled(title, 2.0, color);
     painter.with_clip_rect(title.intersect(painter.clip_rect())).text(
         title.left_center() + vec2(4.0, 0.0),
         Align2::LEFT_CENTER,
-        &placed.clip.name,
+        placed.clip.name(),
         theme::small(),
         theme::text_on(color),
     );
+    let body = Rect::from_min_max(pos2(rect.left(), title.bottom() + 3.0), pos2(rect.right(), rect.bottom() - 3.0));
+    let content_length = placed.clip.length();
+    let laps = if content_length > 0.0 { (placed.length / content_length).ceil() as usize } else { 0 };
+    let clipped = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
 
-    // Note preview, repeating the clip content across the placed length.
-    let clip = &placed.clip;
-    if clip.length > 0.0 && !clip.notes.is_empty() {
-        let (lo, hi) = clip
-            .notes
-            .iter()
-            .fold((u8::MAX, u8::MIN), |(lo, hi), n| (lo.min(n.pitch), hi.max(n.pitch)));
-        let span = (hi - lo).max(1) as f32;
-        let body = Rect::from_min_max(pos2(rect.left(), title.bottom() + 3.0), pos2(rect.right(), rect.bottom() - 3.0));
-        let laps = (placed.length / clip.length).ceil() as usize;
-        let painter = painter.with_clip_rect(rect.intersect(painter.clip_rect()));
-        for lap in 0..laps {
-            for n in &clip.notes {
-                let start = lap as f64 * clip.length + n.start;
-                if start >= placed.length {
-                    continue;
+    match &placed.clip {
+        Clip::Midi(clip) if !clip.notes.is_empty() => {
+            // Note preview, repeating the clip content across the placed length.
+            let (lo, hi) = clip
+                .notes
+                .iter()
+                .fold((u8::MAX, u8::MIN), |(lo, hi), n| (lo.min(n.pitch), hi.max(n.pitch)));
+            let span = (hi - lo).max(1) as f32;
+            for lap in 0..laps {
+                for n in &clip.notes {
+                    let start = lap as f64 * clip.length + n.start;
+                    if start >= placed.length {
+                        continue;
+                    }
+                    let x0 = rect.left() + start as f32 * ppb;
+                    let x1 = x0 + (n.length as f32 * ppb).max(1.5);
+                    let y = body.bottom() - body.height() * (n.pitch - lo) as f32 / span;
+                    clipped.line_segment([pos2(x0, y), pos2(x1.min(rect.right()), y)], Stroke::new(2.0, theme::shade(color, 1.15)));
                 }
-                let x0 = rect.left() + start as f32 * ppb;
-                let x1 = x0 + (n.length as f32 * ppb).max(1.5);
-                let y = body.bottom() - body.height() * (n.pitch - lo) as f32 / span;
-                painter.line_segment([pos2(x0, y), pos2(x1.min(rect.right()), y)], Stroke::new(2.0, theme::shade(color, 1.15)));
-            }
-            if lap > 0 {
-                let x = rect.left() + (lap as f64 * clip.length) as f32 * ppb;
-                painter.line_segment([pos2(x, body.top()), pos2(x, body.bottom())], Stroke::new(1.0, theme::shade(color, 0.7)));
             }
         }
+        Clip::Audio(audio) => {
+            let Some(sample) = sample.filter(|s| s.frames() > 0) else {
+                clipped.text(body.center(), Align2::CENTER_CENTER, "Muestra no encontrada", theme::small(), TEXT);
+                return;
+            };
+            // One waveform column per pixel, mapping beats to file time like the engine does.
+            let reference_bpm = match audio.warp {
+                engine::model::WarpMode::Off => tempo,
+                _ => audio.original_bpm.max(1.0),
+            };
+            let mid = body.center().y;
+            let half = body.height() * 0.5;
+            let wave = theme::shade(color, 1.25);
+            let x_end = rect.right().min(painter.clip_rect().right());
+            let mut x = rect.left().max(painter.clip_rect().left());
+            while x < x_end {
+                let beat = ((x - rect.left()) / ppb) as f64;
+                let local = beat.rem_euclid(audio.length.max(0.0001));
+                let next_local = local + (1.0 / ppb) as f64;
+                let to_block = |b: f64| ((audio.offset + b * 60.0 / reference_bpm) * sample.sample_rate as f64) as usize / PEAK_BLOCK;
+                let (a, b) = (to_block(local), to_block(next_local).max(to_block(local) + 1));
+                let (lo, hi) = sample.peaks.get(a..b.min(sample.peaks.len())).unwrap_or(&[]).iter().fold((0f32, 0f32), |(lo, hi), &(l, h)| (lo.min(l), hi.max(h)));
+                if hi > lo {
+                    clipped.line_segment([pos2(x, mid - hi * half), pos2(x, mid - lo * half)], Stroke::new(1.0, wave));
+                }
+                x += 1.0;
+            }
+        }
+        Clip::Midi(_) => {}
+    }
+    for lap in 1..laps {
+        let x = rect.left() + (lap as f64 * content_length) as f32 * ppb;
+        clipped.line_segment([pos2(x, body.top()), pos2(x, body.bottom())], Stroke::new(1.0, theme::shade(color, 0.7)));
     }
     if selected {
         widgets::outline(painter, rect, theme::SELECT);
@@ -326,11 +371,15 @@ fn handle_pointer(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, 
         if let Some(t) = lane {
             if clip_at(app, t, beat, pos.x, ppb, origin_x).is_none() {
                 let start = (beat / 4.0).floor() * 4.0;
+                if app.project.tracks[t].is_audio() {
+                    app.choose_samples(Placement::Arrangement { track: t, start });
+                    return;
+                }
                 let color = app.project.tracks[t].color;
                 app.project.tracks[t].arrangement.push(ArrangementClip {
                     start,
                     length: 4.0,
-                    clip: MidiClip::new("MIDI", 4.0, color),
+                    clip: Clip::Midi(MidiClip::new("MIDI", 4.0, color)),
                 });
                 let index = app.project.tracks[t].arrangement.len() - 1;
                 app.sync_arrangement(t);

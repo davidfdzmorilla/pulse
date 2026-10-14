@@ -7,6 +7,7 @@ mod devices;
 mod history;
 mod piano_roll;
 mod project;
+mod sample_editor;
 mod session;
 mod theme;
 mod transport;

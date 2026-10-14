@@ -1,7 +1,7 @@
 //! The UI-side project model. It is the source of truth; the engine receives copies.
 
 use engine::model::{
-    drum_note::*, ArrangementClip, AutoFilterParams, CompressorParams, DelayParams, Device, Effect,
+    drum_note::*, ArrangementClip, AutoFilterParams, Clip, CompressorParams, DelayParams, Device, Effect,
     Eq3Params, InstrumentKind, MidiClip, Note, ReverbParams, SynthParams, Waveform,
 };
 use engine::{NUM_RETURNS, NUM_SCENES};
@@ -42,8 +42,18 @@ impl Default for Mixer {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TrackKind {
+    #[default]
+    Midi,
+    Audio,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track {
+    /// Defaults to MIDI so projects saved before audio tracks existed still load.
+    #[serde(default)]
+    pub kind: TrackKind,
     pub name: String,
     pub color: [u8; 3],
     pub instrument: InstrumentKind,
@@ -51,13 +61,14 @@ pub struct Track {
     pub solo: bool,
     pub sends: [f32; NUM_RETURNS],
     pub devices: Vec<Device>,
-    pub clips: [Option<MidiClip>; NUM_SCENES],
+    pub clips: [Option<Clip>; NUM_SCENES],
     pub arrangement: Vec<ArrangementClip>,
 }
 
 impl Track {
     pub fn new(name: impl Into<String>, color: [u8; 3], instrument: InstrumentKind) -> Self {
         Self {
+            kind: TrackKind::Midi,
             name: name.into(),
             color,
             instrument,
@@ -68,6 +79,17 @@ impl Track {
             clips: Default::default(),
             arrangement: Vec::new(),
         }
+    }
+
+    pub fn new_audio(name: impl Into<String>, color: [u8; 3]) -> Self {
+        Self {
+            kind: TrackKind::Audio,
+            ..Self::new(name, color, InstrumentKind::Synth(SynthParams::default()))
+        }
+    }
+
+    pub fn is_audio(&self) -> bool {
+        self.kind == TrackKind::Audio
     }
 
     pub fn is_drums(&self) -> bool {
@@ -331,13 +353,13 @@ fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
     }
 }
 
-fn clip(name: &str, length: f64, color: [u8; 3], notes: Vec<Note>) -> Option<MidiClip> {
-    Some(MidiClip {
+fn clip(name: &str, length: f64, color: [u8; 3], notes: Vec<Note>) -> Option<Clip> {
+    Some(Clip::Midi(MidiClip {
         name: name.into(),
         length,
         notes,
         color,
-    })
+    }))
 }
 
 pub fn note_name(pitch: u8) -> String {

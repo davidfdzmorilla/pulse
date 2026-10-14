@@ -1,9 +1,14 @@
 use crate::history::History;
 use crate::project::{Mixer, Project, Track, PALETTE};
+use std::collections::HashMap;
+use std::path::Path;
 use crate::{arrangement, browser, detail, piano_roll, session, theme, transport};
 use eframe::egui;
-use engine::model::{Device, InstrumentKind, MidiClip, SynthParams};
-use engine::{build_chain, AudioOutput, ChainSlot, Command, EngineHandle, SharedState, Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
+use engine::model::{AudioClip, Clip, Device, InstrumentKind, SynthParams, WarpMode};
+use engine::{
+    build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, PlacedClip, PlayClip, Sample, SharedState,
+    Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES,
+};
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
@@ -89,6 +94,24 @@ impl ClipRef {
     }
 }
 
+/// File extensions offered when choosing samples.
+pub const AUDIO_EXTENSIONS: [&str; 9] = ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "caf", "wave"];
+
+pub fn is_audio_file(path: &Path) -> bool {
+    path.extension()
+        .and_then(|e| e.to_str())
+        .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
+}
+
+/// Where newly added samples go.
+#[derive(Clone, Copy)]
+pub enum Placement {
+    /// The selected audio track (or a new one), in the current view.
+    Auto,
+    Session { track: usize, slot: usize },
+    Arrangement { track: usize, start: f64 },
+}
+
 #[derive(Default)]
 pub struct Meters {
     pub tracks: [f32; MAX_TRACKS],
@@ -128,6 +151,8 @@ pub struct PulseApp {
     pub piano_roll: piano_roll::State,
     pub arrangement: arrangement::State,
     pub show_browser: bool,
+    /// Decoded audio files by path; failed loads are cached as empty samples.
+    samples: HashMap<String, Arc<Sample>>,
     history: History,
     file: Option<PathBuf>,
     saved: Project,
@@ -156,6 +181,7 @@ impl PulseApp {
             piano_roll: Default::default(),
             arrangement: Default::default(),
             show_browser: true,
+            samples: HashMap::new(),
             file: None,
             status: None,
             title: String::new(),
@@ -196,14 +222,13 @@ impl PulseApp {
             self.audio.send(command);
         }
         for t in 0..MAX_TRACKS {
-            let empty;
-            let track = match self.project.tracks.get(t) {
-                Some(track) => track,
-                None => {
-                    empty = Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default()));
-                    &empty
-                }
-            };
+            let track = self
+                .project
+                .tracks
+                .get(t)
+                .cloned()
+                .unwrap_or_else(|| Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default())));
+            let arrangement = self.placed_clips(&track);
             let mut commands = vec![
                 Command::SetInstrument { track: t, kind: track.instrument },
                 Command::SetSolo { track: t, solo: track.solo },
@@ -211,20 +236,14 @@ impl PulseApp {
                     target: Target::Track(t),
                     chain: build_chain(&track.devices, self.audio.sample_rate()),
                 },
-                Command::SetArrangement {
-                    track: t,
-                    clips: Box::new(track.arrangement.clone()),
-                },
+                Command::SetArrangement { track: t, clips: arrangement },
             ];
             for (send, &amount) in track.sends.iter().enumerate() {
                 commands.push(Command::SetSend { track: t, send, amount });
             }
             for slot in 0..NUM_SCENES {
-                commands.push(Command::SetClip {
-                    track: t,
-                    slot,
-                    clip: track.clips[slot].clone().map(Box::new),
-                });
+                let clip = track.clips[slot].as_ref().map(|c| Box::new(self.play_clip(c)));
+                commands.push(Command::SetClip { track: t, slot, clip });
             }
             let mixer = track.mixer.clone();
             for command in commands {
@@ -257,13 +276,153 @@ impl PulseApp {
     }
 
     pub fn sync_clip(&mut self, track: usize, slot: usize) {
-        let clip = self.project.tracks[track].clips[slot].clone().map(Box::new);
+        let clip = self.project.tracks[track].clips[slot].clone();
+        let clip = clip.map(|c| Box::new(self.play_clip(&c)));
         self.audio.send(Command::SetClip { track, slot, clip });
     }
 
     pub fn sync_arrangement(&mut self, track: usize) {
-        let clips = Box::new(self.project.tracks[track].arrangement.clone());
+        let t = self.project.tracks[track].clone();
+        let clips = self.placed_clips(&t);
         self.audio.send(Command::SetArrangement { track, clips });
+    }
+
+    // ----- Samples ----------------------------------------------------------------
+
+    /// Returns the decoded file, loading it on first use.
+    pub fn sample(&mut self, path: &str) -> Arc<Sample> {
+        if let Some(sample) = self.samples.get(path) {
+            return sample.clone();
+        }
+        let sample = match Sample::load(Path::new(path)) {
+            Ok(sample) => Arc::new(sample),
+            Err(error) => {
+                self.status = Some(format!("No se pudo cargar la muestra: {error}"));
+                Arc::new(Sample::default())
+            }
+        };
+        self.samples.insert(path.to_string(), sample.clone());
+        sample
+    }
+
+    /// The decoded file if it is already loaded (for drawing).
+    pub fn loaded_sample(&self, path: &str) -> Option<&Arc<Sample>> {
+        self.samples.get(path)
+    }
+
+    fn play_clip(&mut self, clip: &Clip) -> PlayClip {
+        match clip {
+            Clip::Midi(midi) => PlayClip::Midi(midi.clone()),
+            Clip::Audio(audio) => {
+                let sample = self.sample(&audio.sample);
+                PlayClip::Audio(audio.clone(), sample)
+            }
+        }
+    }
+
+    fn placed_clips(&mut self, track: &Track) -> Box<Vec<PlacedClip>> {
+        let placed = track
+            .arrangement
+            .iter()
+            .map(|a| PlacedClip {
+                start: a.start,
+                length: a.length,
+                clip: self.play_clip(&a.clip),
+            })
+            .collect();
+        Box::new(placed)
+    }
+
+    /// Builds a clip for a file, guessing whether it is a tempo-synced loop or a one-shot.
+    fn new_audio_clip(&self, path: &Path, sample: &Sample, color: [u8; 3]) -> AudioClip {
+        let duration = sample.duration();
+        let tempo = self.project.tempo;
+        let name = path.file_stem().map_or("Audio".into(), |s| s.to_string_lossy().into_owned());
+        let (warp, original_bpm, length) = match guess_loop_bpm(duration, tempo) {
+            Some(bpm) => (WarpMode::Stretch, bpm, (duration * bpm / 60.0).round().max(1.0)),
+            None => (WarpMode::Off, tempo, ((duration * tempo / 60.0) * 4.0).ceil().max(1.0) / 4.0),
+        };
+        AudioClip {
+            name,
+            color,
+            sample: path.to_string_lossy().into_owned(),
+            length,
+            offset: 0.0,
+            warp,
+            original_bpm,
+            gain_db: 0.0,
+            transpose: 0.0,
+        }
+    }
+
+    pub fn choose_samples(&mut self, placement: Placement) {
+        let dialog = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS);
+        if let Some(paths) = dialog.pick_files() {
+            self.add_samples(paths, placement);
+        }
+    }
+
+    /// Adds audio files as clips: consecutive session slots or back to back on the timeline.
+    pub fn add_samples(&mut self, paths: Vec<PathBuf>, placement: Placement) {
+        let mut placement = match placement {
+            Placement::Auto => {
+                let track = match self.selected_target {
+                    Target::Track(t) if self.project.tracks[t].is_audio() => Some(t),
+                    _ => self.add_audio_track(),
+                };
+                let Some(track) = track else { return };
+                match self.view {
+                    View::Session => {
+                        let free = (0..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
+                        let Some(slot) = free else {
+                            self.status = Some("No quedan slots libres en esa pista".into());
+                            return;
+                        };
+                        Placement::Session { track, slot }
+                    }
+                    View::Arrangement => {
+                        let start = (self.project.tracks[track].arrangement_end() / 4.0).ceil() * 4.0;
+                        Placement::Arrangement { track, start }
+                    }
+                }
+            }
+            explicit => explicit,
+        };
+
+        let mut added = 0;
+        for path in paths {
+            let sample = self.sample(&path.to_string_lossy());
+            if sample.frames() == 0 {
+                continue;
+            }
+            match placement {
+                Placement::Session { track, slot } => {
+                    if slot >= NUM_SCENES {
+                        break;
+                    }
+                    let clip = self.new_audio_clip(&path, &sample, self.project.tracks[track].color);
+                    self.set_clip(track, slot, Some(Clip::Audio(clip)));
+                    self.select_clip(ClipRef::Session { track, slot });
+                    let next = (slot + 1..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
+                    placement = Placement::Session { track, slot: next.unwrap_or(NUM_SCENES) };
+                }
+                Placement::Arrangement { track, start } => {
+                    let clip = self.new_audio_clip(&path, &sample, self.project.tracks[track].color);
+                    let length = clip.length;
+                    let lane = &mut self.project.tracks[track].arrangement;
+                    lane.push(engine::model::ArrangementClip { start, length, clip: Clip::Audio(clip) });
+                    let index = lane.len() - 1;
+                    self.sync_arrangement(track);
+                    self.select_clip(ClipRef::Arrangement { track, index });
+                    placement = Placement::Arrangement { track, start: start + length };
+                }
+                Placement::Auto => unreachable!("resolved above"),
+            }
+            added += 1;
+        }
+        if added > 0 {
+            self.status = Some(format!("{added} muestra(s) añadida(s)"));
+        }
     }
 
     pub fn sync_clip_ref(&mut self, clip: ClipRef) {
@@ -333,7 +492,7 @@ impl PulseApp {
         }
     }
 
-    pub fn clip(&self, clip: ClipRef) -> Option<&MidiClip> {
+    pub fn clip(&self, clip: ClipRef) -> Option<&Clip> {
         match clip {
             ClipRef::Session { track, slot } => self.project.tracks.get(track)?.clips[slot].as_ref(),
             ClipRef::Arrangement { track, index } => {
@@ -350,7 +509,7 @@ impl PulseApp {
         self.detail = Detail::Clip;
     }
 
-    pub fn set_clip(&mut self, track: usize, slot: usize, clip: Option<MidiClip>) {
+    pub fn set_clip(&mut self, track: usize, slot: usize, clip: Option<Clip>) {
         self.project.tracks[track].clips[slot] = clip;
         if self.selected_clip == Some(ClipRef::Session { track, slot }) && self.project.tracks[track].clips[slot].is_none() {
             self.selected_clip = None;
@@ -403,7 +562,7 @@ impl PulseApp {
         let t = &mut self.project.tracks[track];
         let Some(clip) = t.clips[slot].clone() else { return };
         let start = (t.arrangement_end() / 4.0).ceil() * 4.0;
-        let length = clip.length.max(4.0);
+        let length = clip.length().max(4.0);
         t.arrangement.push(engine::model::ArrangementClip { start, length, clip });
         self.sync_arrangement(track);
         self.status = Some(format!("Clip copiado al Arrangement en el compás {}", start as i64 / 4 + 1));
@@ -443,20 +602,25 @@ impl PulseApp {
         self.audio.send(Command::SetInstrument { track, kind });
     }
 
-    pub fn add_track(&mut self) {
+    fn push_track(&mut self, make: impl FnOnce(usize, [u8; 3]) -> Track) -> Option<usize> {
         let index = self.project.tracks.len();
         if index >= MAX_TRACKS {
             self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
-            return;
+            return None;
         }
         let color = PALETTE[(index * 5 + 1) % PALETTE.len()];
-        self.project.tracks.push(Track::new(
-            format!("{} MIDI", index + 1),
-            color,
-            InstrumentKind::Synth(SynthParams::default()),
-        ));
+        self.project.tracks.push(make(index, color));
         self.selected_target = Target::Track(index);
         self.sync_all();
+        Some(index)
+    }
+
+    pub fn add_track(&mut self) {
+        self.push_track(|i, color| Track::new(format!("{} MIDI", i + 1), color, InstrumentKind::Synth(SynthParams::default())));
+    }
+
+    pub fn add_audio_track(&mut self) -> Option<usize> {
+        self.push_track(|i, color| Track::new_audio(format!("{} Audio", i + 1), color))
     }
 
     pub fn delete_track(&mut self, track: usize) {
@@ -586,7 +750,11 @@ impl PulseApp {
     /// Opens `.pulse` projects and imports `.als` sets dropped onto the window.
     fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
-        for path in dropped {
+        let (audio, other): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| is_audio_file(p));
+        if !audio.is_empty() {
+            self.add_samples(audio, Placement::Auto);
+        }
+        for path in other {
             match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
                 Some("als") => self.import_live_set_from(&path),
                 Some("pulse") => self.open_from(&path),
@@ -650,11 +818,15 @@ impl PulseApp {
                 cmd && shift && i.key_pressed(egui::Key::S),
                 cmd && i.key_pressed(egui::Key::O),
                 cmd && i.key_pressed(egui::Key::N),
-                cmd && i.key_pressed(egui::Key::T),
+                cmd && !shift && i.key_pressed(egui::Key::T),
+                cmd && shift && i.key_pressed(egui::Key::T),
                 cmd && i.key_pressed(egui::Key::I),
             ]
         });
-        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, import] = input;
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import] = input;
+        if add_audio {
+            self.add_audio_track();
+        }
         if import {
             self.import_live_set();
         }

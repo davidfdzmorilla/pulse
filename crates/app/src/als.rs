@@ -1,53 +1,55 @@
 //! Import of Ableton Live sets (`.als`): gzip-compressed XML.
 //!
-//! Brings in what Pulse can represent: tempo, loop, scene names, MIDI tracks with
-//! their mixer settings, session clips and arrangement clips with their notes.
-//! Live's devices are proprietary, so tracks get Pulse's default instrument
-//! (or the drum kit when the track holds a Drum Rack). Audio and group tracks
-//! are skipped and counted in the report. The parser is lenient: anything
-//! missing falls back to a default instead of failing the import.
+//! Brings in what Pulse can represent: tempo, loop, scene names, MIDI and audio
+//! tracks with their mixer settings, session clips and arrangement clips (notes,
+//! or samples with their warp settings). Live's devices are proprietary, so MIDI
+//! tracks get Pulse's default instrument (or the drum kit when the track holds a
+//! Drum Rack). Group tracks are skipped and counted in the report. The parser is
+//! lenient: anything missing falls back to a default instead of failing.
 
 use crate::project::{Mixer, Project, Track, PALETTE};
-use engine::model::{ArrangementClip, InstrumentKind, MidiClip, Note, SynthParams};
+use engine::model::{ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, SynthParams, WarpMode};
 use engine::{MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
 use roxmltree::{Document, Node};
 use std::io::Read;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 #[derive(Debug, Default, PartialEq)]
 pub struct ImportReport {
     pub midi_tracks: usize,
+    pub audio_tracks: usize,
     pub session_clips: usize,
     pub arrangement_clips: usize,
-    pub skipped_audio_tracks: usize,
     pub skipped_group_tracks: usize,
-    /// MIDI tracks beyond Pulse's track limit.
+    /// Tracks beyond Pulse's track limit.
     pub dropped_tracks: usize,
     /// Session clips in scenes beyond Pulse's scene count.
     pub dropped_clips: usize,
+    /// Audio clips whose file could not be found on this computer.
+    pub missing_samples: usize,
 }
 
 impl ImportReport {
     pub fn summary(&self) -> String {
         let mut text = format!(
-            "Importadas {} pistas MIDI, {} clips de sesión y {} del Arrangement",
-            self.midi_tracks, self.session_clips, self.arrangement_clips
+            "Importadas {} pistas MIDI y {} de audio, {} clips de sesión y {} del Arrangement",
+            self.midi_tracks, self.audio_tracks, self.session_clips, self.arrangement_clips
         );
-        let mut skipped = Vec::new();
-        if self.skipped_audio_tracks > 0 {
-            skipped.push(format!("{} pistas de audio", self.skipped_audio_tracks));
+        let mut notes = Vec::new();
+        if self.missing_samples > 0 {
+            notes.push(format!("{} muestras no encontradas", self.missing_samples));
         }
         if self.skipped_group_tracks > 0 {
-            skipped.push(format!("{} grupos", self.skipped_group_tracks));
+            notes.push(format!("{} grupos omitidos", self.skipped_group_tracks));
         }
         if self.dropped_tracks > 0 {
-            skipped.push(format!("{} pistas MIDI por encima del máximo de {MAX_TRACKS}", self.dropped_tracks));
+            notes.push(format!("{} pistas omitidas por encima del máximo de {MAX_TRACKS}", self.dropped_tracks));
         }
         if self.dropped_clips > 0 {
-            skipped.push(format!("{} clips más allá de la escena {NUM_SCENES}", self.dropped_clips));
+            notes.push(format!("{} clips omitidos más allá de la escena {NUM_SCENES}", self.dropped_clips));
         }
-        if !skipped.is_empty() {
-            text.push_str(&format!(" · omitidos: {}", skipped.join(", ")));
+        if !notes.is_empty() {
+            text.push_str(&format!(" · {}", notes.join(", ")));
         }
         text
     }
@@ -64,10 +66,23 @@ pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     } else {
         String::from_utf8(bytes).map_err(|_| "El archivo no es un set de Ableton Live".to_string())?
     };
-    parse(&xml)
+    parse_in(&xml, path.parent())
 }
 
+#[cfg(test)]
 pub fn parse(xml: &str) -> Result<(Project, ImportReport), String> {
+    parse_in(xml, None)
+}
+
+/// What clip parsing needs to know about the set.
+struct Context<'a> {
+    /// Folder of the `.als`, for resolving relative sample paths.
+    base: Option<&'a Path>,
+    tempo: f64,
+}
+
+/// Parses a set; `base` is the folder it lives in, used to find its samples.
+pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport), String> {
     let doc = Document::parse(xml).map_err(|e| format!("XML no válido: {e}"))?;
     let root = doc.root_element();
     if root.tag_name().name() != "Ableton" {
@@ -96,21 +111,24 @@ pub fn parse(xml: &str) -> Result<(Project, ImportReport), String> {
 
     project.scene_names = scene_names(set);
 
+    let ctx = Context { base, tempo: project.tempo };
     let tracks = child(set, "Tracks").map(|t| t.children().filter(Node::is_element).collect::<Vec<_>>());
     for node in tracks.unwrap_or_default() {
         match node.tag_name().name() {
-            "MidiTrack" => {
+            "MidiTrack" | "AudioTrack" => {
                 if project.tracks.len() >= MAX_TRACKS {
                     report.dropped_tracks += 1;
                     continue;
                 }
-                let track = midi_track(node, project.tracks.len(), &mut report);
+                let track = track(node, project.tracks.len(), &ctx, &mut report);
+                if track.is_audio() {
+                    report.audio_tracks += 1;
+                } else {
+                    report.midi_tracks += 1;
+                }
                 project.tracks.push(track);
-                report.midi_tracks += 1;
             }
-            "AudioTrack" => report.skipped_audio_tracks += 1,
             "GroupTrack" => report.skipped_group_tracks += 1,
-            "ReturnTrack" => {}
             _ => {}
         }
     }
@@ -127,10 +145,7 @@ pub fn parse(xml: &str) -> Result<(Project, ImportReport), String> {
     }
 
     if project.tracks.is_empty() {
-        return Err(format!(
-            "El set no tiene pistas MIDI que importar ({} pistas de audio)",
-            report.skipped_audio_tracks
-        ));
+        return Err("El set no tiene pistas MIDI ni de audio que importar".into());
     }
     Ok((project, report))
 }
@@ -220,15 +235,18 @@ fn scene_names(set: Node) -> Vec<String> {
         .collect()
 }
 
-fn midi_track(node: Node, index: usize, report: &mut ImportReport) -> Track {
-    let name = track_name(node).unwrap_or_else(|| format!("{} MIDI", index + 1));
-    let drums = node.descendants().any(|n| n.has_tag_name("DrumGroupDevice"));
-    let instrument = if drums {
-        InstrumentKind::Drums
+fn track(node: Node, index: usize, ctx: &Context, report: &mut ImportReport) -> Track {
+    let audio = node.has_tag_name("AudioTrack");
+    let kind = if audio { "Audio" } else { "MIDI" };
+    let name = track_name(node).unwrap_or_else(|| format!("{} {kind}", index + 1));
+    let color = color(node, index * 5);
+    let mut track = if audio {
+        Track::new_audio(name, color)
+    } else if node.descendants().any(|n| n.has_tag_name("DrumGroupDevice")) {
+        Track::new(name, color, InstrumentKind::Drums)
     } else {
-        InstrumentKind::Synth(SynthParams::default())
+        Track::new(name, color, InstrumentKind::Synth(SynthParams::default()))
     };
-    let mut track = Track::new(name, color(node, index * 5), instrument);
     track.mixer = mixer(node);
     if let Some(sends) = path(node, &["DeviceChain", "Mixer", "Sends"]) {
         let holders = sends.children().filter(|n| n.has_tag_name("TrackSendHolder"));
@@ -244,18 +262,34 @@ fn midi_track(node: Node, index: usize, report: &mut ImportReport) -> Track {
     if let Some(slots) = sequencer.and_then(|s| child(s, "ClipSlotList")) {
         let slots = slots.children().filter(|n| n.has_tag_name("ClipSlot"));
         for (slot, outer) in slots.enumerate() {
-            let Some(clip) = path(outer, &["ClipSlot", "Value", "MidiClip"]) else { continue };
+            let Some(value) = path(outer, &["ClipSlot", "Value"]) else { continue };
+            let clip = if let Some(midi) = child(value, "MidiClip") {
+                Clip::Midi(session_clip(midi, color))
+            } else if let Some(audio) = child(value, "AudioClip") {
+                Clip::Audio(audio_clip(audio, color, None, ctx, report))
+            } else {
+                continue;
+            };
             if slot >= NUM_SCENES {
                 report.dropped_clips += 1;
                 continue;
             }
-            track.clips[slot] = Some(session_clip(clip, track.color));
+            track.clips[slot] = Some(clip);
             report.session_clips += 1;
         }
     }
     let arranged = sequencer.and_then(|s| path(s, &["ClipTimeable", "ArrangerAutomation", "Events"]));
-    for clip in arranged.into_iter().flat_map(|e| e.children().filter(|n| n.has_tag_name("MidiClip"))) {
-        if let Some(placed) = arrangement_clip(clip, track.color) {
+    for clip in arranged.into_iter().flat_map(|e| e.children().filter(Node::is_element)) {
+        let placed = match clip.tag_name().name() {
+            "MidiClip" => arrangement_clip(clip, color),
+            "AudioClip" => arrangement_span(clip).map(|(start, end)| ArrangementClip {
+                start,
+                length: end - start,
+                clip: Clip::Audio(audio_clip(clip, color, Some(end - start), ctx, report)),
+            }),
+            _ => None,
+        };
+        if let Some(placed) = placed {
             track.arrangement.push(placed);
             report.arrangement_clips += 1;
         }
@@ -307,8 +341,16 @@ fn notes(clip: Node, window_start: f64, length: f64) -> Vec<Note> {
     notes
 }
 
-fn clip_name(clip: Node) -> String {
-    value(clip, &["Name"]).filter(|n| !n.is_empty()).unwrap_or("MIDI").to_string()
+fn clip_name(clip: Node) -> Option<String> {
+    value(clip, &["Name"]).filter(|n| !n.is_empty()).map(str::to_string)
+}
+
+fn clip_color(clip: Node, track_color: [u8; 3]) -> [u8; 3] {
+    if child(clip, "Color").is_some() || child(clip, "ColorIndex").is_some() {
+        color(clip, 0)
+    } else {
+        track_color
+    }
 }
 
 fn session_clip(clip: Node, track_color: [u8; 3]) -> MidiClip {
@@ -318,32 +360,144 @@ fn session_clip(clip: Node, track_color: [u8; 3]) -> MidiClip {
     };
     let (start, length) = content_window(clip, visible);
     MidiClip {
-        name: clip_name(clip),
+        name: clip_name(clip).unwrap_or_else(|| "MIDI".into()),
         length,
         notes: notes(clip, start, length),
-        color: if child(clip, "Color").is_some() || child(clip, "ColorIndex").is_some() {
-            color(clip, 0)
-        } else {
-            track_color
-        },
+        color: clip_color(clip, track_color),
     }
 }
 
-fn arrangement_clip(clip: Node, track_color: [u8; 3]) -> Option<ArrangementClip> {
+/// Where an arrangement clip sits on the timeline, in beats.
+fn arrangement_span(clip: Node) -> Option<(f64, f64)> {
     let start = number(clip, &["CurrentStart"]).or_else(|| attribute_number(clip, "Time"))?;
     let end = number(clip, &["CurrentEnd"])?;
-    if end <= start {
-        return None;
-    }
+    (end > start).then_some((start.max(0.0), end))
+}
+
+fn arrangement_clip(clip: Node, track_color: [u8; 3]) -> Option<ArrangementClip> {
+    let (start, end) = arrangement_span(clip)?;
     let mut content = session_clip(clip, track_color);
     let (window_start, length) = content_window(clip, end - start);
     content.length = length;
     content.notes = notes(clip, window_start, length);
     Some(ArrangementClip {
-        start: start.max(0.0),
+        start,
         length: end - start,
-        clip: content,
+        clip: Clip::Midi(content),
     })
+}
+
+/// Tempo implied by a clip's warp markers: (bpm, seconds, beats) of the first marker.
+fn warp_reference(clip: Node) -> Option<(f64, f64, f64)> {
+    let mut markers: Vec<(f64, f64)> = path(clip, &["WarpMarkers"])?
+        .children()
+        .filter(|n| n.has_tag_name("WarpMarker"))
+        .filter_map(|m| Some((attribute_number(m, "SecTime")?, attribute_number(m, "BeatTime")?)))
+        .collect();
+    markers.sort_by(|a, b| a.1.total_cmp(&b.1));
+    let (&(first_sec, first_beat), &(last_sec, last_beat)) = (markers.first()?, markers.last()?);
+    // Several markers can warp unevenly; Pulse uses the average tempo between the outer ones.
+    (last_beat > first_beat && last_sec > first_sec)
+        .then(|| ((last_beat - first_beat) / (last_sec - first_sec) * 60.0, first_sec, first_beat))
+}
+
+/// `timeline_length` is the clip's span on the arrangement, if it is placed there.
+fn audio_clip(clip: Node, track_color: [u8; 3], timeline_length: Option<f64>, ctx: &Context, report: &mut ImportReport) -> AudioClip {
+    let sample = resolve_sample(clip, ctx.base);
+    if sample.as_os_str().is_empty() || !sample.exists() {
+        report.missing_samples += 1;
+    }
+    let loop_start = number(clip, &["Loop", "LoopStart"]).unwrap_or(0.0);
+    let loop_end = number(clip, &["Loop", "LoopEnd"]).unwrap_or(loop_start + 4.0);
+    let looping = flag(clip, &["Loop", "LoopOn"]).unwrap_or(true);
+    let warped = flag(clip, &["IsWarped"]).unwrap_or(true);
+
+    let (warp, original_bpm, offset, length) = if warped {
+        let (bpm, first_sec, first_beat) = warp_reference(clip).unwrap_or((ctx.tempo, 0.0, 0.0));
+        let length = match (looping, timeline_length) {
+            (false, Some(span)) => span,
+            _ => loop_end - loop_start,
+        };
+        let mode = if number(clip, &["WarpMode"]) == Some(3.0) { WarpMode::Repitch } else { WarpMode::Stretch };
+        let offset = first_sec + (loop_start - first_beat) * 60.0 / bpm;
+        (mode, bpm, offset, length)
+    } else {
+        // Unwarped clips keep their start and loop markers in seconds.
+        let seconds = match (looping, timeline_length) {
+            (false, Some(span)) => span * 60.0 / ctx.tempo,
+            _ => loop_end - loop_start,
+        };
+        (WarpMode::Off, ctx.tempo, loop_start, seconds * ctx.tempo / 60.0)
+    };
+
+    let volume = number(clip, &["SampleVolume"]).unwrap_or(1.0);
+    let name = clip_name(clip)
+        .or_else(|| sample.file_stem().map(|s| s.to_string_lossy().into_owned()))
+        .unwrap_or_else(|| "Audio".into());
+    AudioClip {
+        name,
+        color: clip_color(clip, track_color),
+        sample: sample.to_string_lossy().into_owned(),
+        length: if length > 0.0 { length } else { 4.0 },
+        offset: offset.max(0.0),
+        warp,
+        original_bpm,
+        gain_db: if volume > 0.0 { (20.0 * volume.log10()) as f32 } else { -70.0 },
+        transpose: number(clip, &["PitchCoarse"]).unwrap_or(0.0) as f32,
+    }
+}
+
+/// Finds a clip's audio file: its absolute path, its path relative to the set
+/// (Live 11+ string, or Live 10 path elements), or a search by name in the set folder.
+fn resolve_sample(clip: Node, base: Option<&Path>) -> PathBuf {
+    let Some(file) = path(clip, &["SampleRef", "FileRef"]) else { return PathBuf::new() };
+    let name = value(file, &["Name"]).filter(|n| !n.is_empty());
+    let mut candidates = Vec::new();
+    if let Some(absolute) = value(file, &["Path"]).filter(|p| !p.is_empty()) {
+        candidates.push(PathBuf::from(absolute));
+    }
+    if let Some(base) = base {
+        if let Some(relative) = value(file, &["RelativePath"]).filter(|p| !p.is_empty()) {
+            candidates.push(base.join(relative));
+        }
+        if let (Some(elements), Some(name)) = (child(file, "RelativePath"), name) {
+            let mut joined = base.to_path_buf();
+            for element in elements.children().filter(|n| n.has_tag_name("RelativePathElement")) {
+                match element.attribute("Dir") {
+                    Some("") | None => joined.push(".."),
+                    Some(dir) => joined.push(dir),
+                }
+            }
+            joined.push(name);
+            candidates.push(joined);
+        }
+    }
+    if let Some(found) = candidates.iter().find(|p| p.is_file()) {
+        return found.clone();
+    }
+    let file_name = name.map(str::to_string).or_else(|| {
+        candidates.first().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned())
+    });
+    if let (Some(base), Some(file_name)) = (base, &file_name) {
+        if let Some(found) = find_file(base, file_name, 4) {
+            return found;
+        }
+    }
+    candidates.into_iter().next().unwrap_or_else(|| PathBuf::from(file_name.unwrap_or_default()))
+}
+
+fn find_file(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
+    let entries: Vec<_> = std::fs::read_dir(dir).ok()?.flatten().collect();
+    if let Some(entry) = entries.iter().find(|e| e.file_name().to_string_lossy() == name) {
+        return Some(entry.path());
+    }
+    if depth == 0 {
+        return None;
+    }
+    entries
+        .iter()
+        .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+        .find_map(|e| find_file(&e.path(), name, depth - 1))
 }
 
 #[cfg(test)]
@@ -443,14 +597,16 @@ mod tests {
         assert!((drums.mixer.gain - 0.501).abs() < 0.001);
         assert_eq!(drums.mixer.pan, -0.25);
         assert_eq!(drums.sends, [0.5, 0.0]);
-        assert_eq!(report.skipped_audio_tracks, 1);
+        assert_eq!(report.audio_tracks, 1);
         assert_eq!(report.midi_tracks, 1);
+        assert!(project.tracks[1].is_audio());
+        assert_eq!(project.tracks[1].name, "Vocals");
     }
 
     #[test]
     fn imports_session_clip_notes() {
         let (project, report) = parse(SET).unwrap();
-        let clip = project.tracks[0].clips[0].as_ref().unwrap();
+        let Some(Clip::Midi(clip)) = project.tracks[0].clips[0].as_ref() else { panic!("expected a MIDI clip") };
         assert_eq!(clip.name, "Beat");
         assert_eq!(clip.length, 4.0);
         // The disabled note is skipped; notes are sorted by time.
@@ -466,11 +622,12 @@ mod tests {
         let (project, report) = parse(SET).unwrap();
         let placed = &project.tracks[0].arrangement[0];
         assert_eq!((placed.start, placed.length), (8.0, 16.0));
-        assert_eq!(placed.clip.length, 4.0);
+        let Clip::Midi(clip) = &placed.clip else { panic!("expected a MIDI clip") };
+        assert_eq!(clip.length, 4.0);
         // Only the note inside the loop window [4, 8) survives, shifted to clip time.
-        assert_eq!(placed.clip.notes.len(), 1);
-        assert_eq!(placed.clip.notes[0].start, 0.5);
-        assert_eq!(placed.clip.name, "MIDI");
+        assert_eq!(clip.notes.len(), 1);
+        assert_eq!(clip.notes[0].start, 0.5);
+        assert_eq!(clip.name, "MIDI");
         assert_eq!(report.arrangement_clips, 1);
     }
 
@@ -500,9 +657,81 @@ mod tests {
     }
 
     #[test]
-    fn rejects_sets_without_midi_and_non_live_files() {
-        let audio_only = r#"<Ableton><LiveSet><Tracks><AudioTrack/></Tracks></LiveSet></Ableton>"#;
-        assert!(parse(audio_only).unwrap_err().contains("1 pistas de audio"));
+    fn rejects_empty_sets_and_non_live_files() {
+        let empty = r#"<Ableton><LiveSet><Tracks><GroupTrack/></Tracks></LiveSet></Ableton>"#;
+        assert!(parse(empty).is_err());
         assert!(parse("<html/>").is_err());
+    }
+
+    /// An audio track with a warped session loop and an unwarped arrangement clip.
+    fn audio_set(sample_path: &str) -> String {
+        format!(r#"<Ableton><LiveSet>
+          <Tracks><AudioTrack>
+            <Name><EffectiveName Value="Loops"/></Name>
+            <DeviceChain><MainSequencer>
+              <ClipSlotList><ClipSlot><ClipSlot><Value>
+                <AudioClip Time="0">
+                  <CurrentStart Value="0"/><CurrentEnd Value="8"/>
+                  <Loop><LoopStart Value="4"/><LoopEnd Value="12"/><LoopOn Value="true"/></Loop>
+                  <Name Value="Break"/>
+                  <SampleRef><FileRef><RelativePath Value="Samples/break.wav"/><Path Value="{sample_path}"/></FileRef></SampleRef>
+                  <WarpMarkers><WarpMarker SecTime="0" BeatTime="0"/><WarpMarker SecTime="8" BeatTime="16"/></WarpMarkers>
+                  <IsWarped Value="true"/><WarpMode Value="3"/>
+                  <PitchCoarse Value="-2"/><SampleVolume Value="0.5"/>
+                </AudioClip>
+              </Value></ClipSlot></ClipSlot></ClipSlotList>
+              <ClipTimeable><ArrangerAutomation><Events>
+                <AudioClip Time="16">
+                  <CurrentStart Value="16"/><CurrentEnd Value="24"/>
+                  <Loop><LoopStart Value="1.5"/><LoopEnd Value="5.5"/><LoopOn Value="false"/></Loop>
+                  <SampleRef><FileRef><Name Value="break.wav"/></FileRef></SampleRef>
+                  <IsWarped Value="false"/>
+                </AudioClip>
+              </Events></ArrangerAutomation></ClipTimeable>
+            </MainSequencer></DeviceChain>
+          </AudioTrack></Tracks>
+          <MasterTrack><DeviceChain><Mixer><Tempo><Manual Value="120"/></Tempo></Mixer></DeviceChain></MasterTrack>
+        </LiveSet></Ableton>"#)
+    }
+
+    #[test]
+    fn imports_warped_audio_clips() {
+        let (project, report) = parse(&audio_set("/nowhere/break.wav")).unwrap();
+        let track = &project.tracks[0];
+        assert!(track.is_audio());
+        let Some(Clip::Audio(clip)) = &track.clips[0] else { panic!("expected an audio clip") };
+        assert_eq!(clip.name, "Break");
+        // Markers say 16 beats in 8 seconds: 120 BPM; loop start at beat 4 is 2 s into the file.
+        assert_eq!(clip.original_bpm, 120.0);
+        assert_eq!(clip.offset, 2.0);
+        assert_eq!(clip.length, 8.0);
+        assert_eq!(clip.warp, WarpMode::Repitch);
+        assert_eq!(clip.transpose, -2.0);
+        assert!((clip.gain_db + 6.02).abs() < 0.01);
+        assert_eq!(report.audio_tracks, 1);
+        assert_eq!(report.missing_samples, 2);
+    }
+
+    #[test]
+    fn unwarped_clips_use_seconds_and_samples_are_found_next_to_the_set() {
+        let dir = std::env::temp_dir().join(format!("pulse-als-audio-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Samples/Imported")).unwrap();
+        std::fs::write(dir.join("Samples/Imported/break.wav"), b"stub").unwrap();
+        let (project, report) = parse_in(&audio_set("/nowhere/break.wav"), Some(&dir)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+
+        let placed = &project.tracks[0].arrangement[0];
+        let Clip::Audio(clip) = &placed.clip else { panic!("expected an audio clip") };
+        assert_eq!((placed.start, placed.length), (16.0, 8.0));
+        assert_eq!(clip.warp, WarpMode::Off);
+        // Unwarped: the loop start is in seconds, the 8-beat span is 4 s at 120 BPM.
+        assert_eq!(clip.offset, 1.5);
+        assert_eq!(clip.length, 8.0);
+        // Both clips are found by file name inside the set folder, even though the
+        // session clip's absolute path points to another computer.
+        assert!(clip.sample.ends_with("Samples/Imported/break.wav"));
+        let Some(Clip::Audio(session)) = &project.tracks[0].clips[0] else { panic!("expected an audio clip") };
+        assert!(session.sample.ends_with("Samples/Imported/break.wav"));
+        assert_eq!(report.missing_samples, 0);
     }
 }

@@ -1,0 +1,12 @@
+[package]
+name = "app"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+eframe = "0.36.2"
+engine = { version = "0.1.0", path = "../engine" }
+
+[[bin]]
+name = "pulse"
+path = "src/main.rs"

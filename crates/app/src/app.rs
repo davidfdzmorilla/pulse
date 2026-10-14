@@ -2,6 +2,7 @@ use crate::history::History;
 use crate::project::{Mixer, Project, Track, PALETTE};
 use std::collections::HashMap;
 use std::path::Path;
+use crate::capture::{write_wav, InputCapture};
 use crate::input::{ComputerKeyboard, MidiInputs};
 use crate::recording::{Finished, Recorder};
 use crate::{arrangement, browser, detail, piano_roll, session, theme, transport};
@@ -167,6 +168,8 @@ pub struct PulseApp {
     pub midi: MidiInputs,
     pub keyboard: ComputerKeyboard,
     pub recorder: Recorder,
+    /// Audio input, opened when an audio track is armed.
+    pub capture: Option<InputCapture>,
     /// Input track last sent to the engine.
     input_track: Option<Option<usize>>,
     history: History,
@@ -201,6 +204,7 @@ impl PulseApp {
             midi: MidiInputs::default(),
             keyboard: ComputerKeyboard::default(),
             recorder: Recorder::default(),
+            capture: None,
             input_track: None,
             file: None,
             status: None,
@@ -694,14 +698,97 @@ impl PulseApp {
     pub fn toggle_arm(&mut self, track: usize) {
         let t = &mut self.project.tracks[track];
         t.armed = !t.armed;
-        let armed = t.armed;
+        let (armed, audio) = (t.armed, t.is_audio());
         self.audio.send(Command::SetArm { track, armed });
+        if armed && audio {
+            self.ensure_capture();
+        }
+    }
+
+    /// Opens the audio input (macOS asks for microphone permission the first time).
+    fn ensure_capture(&mut self) -> bool {
+        if self.capture.is_some() {
+            return true;
+        }
+        let Some(state) = self.audio.state() else { return false };
+        match InputCapture::open(state) {
+            Ok(capture) => {
+                self.status = Some(format!("Entrada de audio: {}", capture.device_name()));
+                self.capture = Some(capture);
+                true
+            }
+            Err(error) => {
+                self.status = Some(format!("No se pudo abrir la entrada de audio: {error}"));
+                false
+            }
+        }
+    }
+
+    /// Keeps the input flowing while audio tracks are armed; closes it otherwise.
+    fn pump_capture(&mut self) {
+        let wanted = self.project.tracks.iter().any(|t| t.armed && t.is_audio())
+            || self.recorder.session.iter().any(|take| self.project.tracks.get(take.track).is_some_and(|t| t.is_audio()));
+        if !wanted {
+            self.capture = None;
+            return;
+        }
+        let keep_all = !self.recorder.session.is_empty() || self.recorder.arrangement.is_some();
+        if let Some(capture) = &mut self.capture {
+            capture.pump(keep_all);
+        }
+    }
+
+    /// Folder for recorded takes: next to the project, or in ~/Music/Pulse.
+    fn recordings_dir(&self) -> PathBuf {
+        let base = match &self.file {
+            Some(file) => file.parent().map(Path::to_path_buf).unwrap_or_default(),
+            None => std::env::var_os("HOME").map_or_else(PathBuf::new, |home| PathBuf::from(home).join("Music/Pulse")),
+        };
+        base.join("Recordings")
+    }
+
+    /// Cuts `beats` of input starting at `start` (transport beats) into a new audio clip.
+    fn audio_take(&mut self, track: usize, start: f64, beats: f64) -> Option<AudioClip> {
+        let tempo = self.project.tempo;
+        let capture = self.capture.as_ref()?;
+        let rate = capture.sample_rate();
+        let first = capture.frame_at_beat(start)?;
+        let frames = (beats * 60.0 / tempo * rate as f64).round() as usize;
+        let (left, right) = capture.extract(first, frames);
+
+        let dir = self.recordings_dir();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.status = Some(format!("No se pudo crear {}: {e}", dir.display()));
+            return None;
+        }
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_secs());
+        let name = format!("{} {stamp}", self.project.tracks[track].name);
+        let path = dir.join(format!("{name}.wav"));
+        if let Err(error) = write_wav(&path, &left, &right, rate) {
+            self.status = Some(error);
+            return None;
+        }
+        let key = path.to_string_lossy().into_owned();
+        self.samples.insert(key.clone(), Arc::new(Sample::from_channels(left, right, rate)));
+        Some(AudioClip {
+            name,
+            color: self.project.tracks[track].color,
+            sample: key,
+            length: beats,
+            offset: 0.0,
+            // Recorded at the project tempo; Stretch keeps the pitch if the tempo changes later.
+            warp: WarpMode::Stretch,
+            original_bpm: tempo,
+            gain_db: 0.0,
+            transpose: 0.0,
+        })
     }
 
     /// Records a new clip into an empty session slot, starting at the next launch boundary.
     pub fn record_slot(&mut self, track: usize, slot: usize) {
-        if self.project.tracks[track].is_audio() {
-            self.status = Some("La grabación de audio aún no está disponible; graba en una pista MIDI".into());
+        if self.project.tracks[track].is_audio() && !self.ensure_capture() {
             return;
         }
         if !self.project.tracks[track].armed {
@@ -728,8 +815,11 @@ impl PulseApp {
             self.audio.send(Command::SetArrangementRecord(false));
             return;
         }
-        if !self.project.tracks.iter().any(|t| t.armed && !t.is_audio()) {
-            self.status = Some("Arma una pista MIDI (botón ●) para grabar en ella".into());
+        if !self.project.tracks.iter().any(|t| t.armed) {
+            self.status = Some("Arma una pista (botón ●) para grabar en ella".into());
+            return;
+        }
+        if self.project.tracks.iter().any(|t| t.armed && t.is_audio()) && !self.ensure_capture() {
             return;
         }
         self.recorder.start_arrangement(self.audio.position());
@@ -751,13 +841,22 @@ impl PulseApp {
 
     fn update_recording(&mut self) {
         let Some(state) = self.audio.state() else { return };
+        self.pump_capture();
         let notes = self.audio.take_recorded();
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
         for take in self.recorder.update(notes, &state, &armed) {
             match take {
-                Finished::Session { track, slot, length, notes } => {
+                Finished::Session { track, slot, start, length, notes } => {
                     let Some(t) = self.project.tracks.get(track) else { continue };
                     if t.clips[slot].is_some() {
+                        continue;
+                    }
+                    if t.is_audio() {
+                        if let Some(clip) = self.audio_take(track, start, length) {
+                            self.set_clip(track, slot, Some(Clip::Audio(clip)));
+                            self.select_clip(ClipRef::Session { track, slot });
+                            self.status = Some(format!("Toma de audio guardada en {}", self.recordings_dir().display()));
+                        }
                         continue;
                     }
                     let count = notes.len();
@@ -775,6 +874,24 @@ impl PulseApp {
                     self.sync_arrangement(track);
                     self.select_clip(ClipRef::Arrangement { track, index });
                     self.status = Some(format!("Grabadas {count} notas en el Arrangement"));
+                }
+                Finished::ArrangementEnded { start, end } => {
+                    let beats = ((end - start) * 4.0).round() / 4.0;
+                    if beats <= 0.0 {
+                        continue;
+                    }
+                    let tracks: Vec<usize> = (0..self.project.tracks.len())
+                        .filter(|&t| self.project.tracks[t].armed && self.project.tracks[t].is_audio())
+                        .collect();
+                    for track in tracks {
+                        let Some(clip) = self.audio_take(track, start, beats) else { continue };
+                        let lane = &mut self.project.tracks[track].arrangement;
+                        lane.push(ArrangementClip { start, length: beats, clip: Clip::Audio(clip) });
+                        let index = lane.len() - 1;
+                        self.sync_arrangement(track);
+                        self.select_clip(ClipRef::Arrangement { track, index });
+                        self.status = Some(format!("Toma de audio guardada en {}", self.recordings_dir().display()));
+                    }
                 }
                 Finished::Cancelled => {}
             }

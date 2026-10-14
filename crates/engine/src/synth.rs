@@ -389,7 +389,8 @@ impl DrumKit {
                 }
             }
 
-            *sample += s;
+            // -6 dB of headroom: kick and clap often land together.
+            *sample += s * 0.5;
         }
     }
 }

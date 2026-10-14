@@ -215,7 +215,7 @@ impl Project {
             ratio: 3.0,
             attack_ms: 8.0,
             release_ms: 90.0,
-            makeup_db: 3.0,
+            makeup_db: 1.5,
         })));
 
         let mut bass = Track::new(
@@ -257,7 +257,7 @@ impl Project {
                 release: 0.6,
                 cutoff: 1800.0,
                 resonance: 0.1,
-                gain: 0.25,
+                gain: 0.17,
             }),
         );
         let chords: [[u8; 3]; 4] = [[57, 60, 64], [53, 57, 60], [55, 60, 64], [55, 59, 62]];

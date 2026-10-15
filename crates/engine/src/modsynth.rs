@@ -23,12 +23,14 @@
 //! when the synth is built, on the UI thread; rendering never allocates.
 
 use crate::effects::{EffectProcessor, ProcessContext};
+use crate::model::Effect;
 use crate::instruments::{saw, Gate};
 use crate::engine::Controller;
 use crate::model::{
     chord_note, chord_size, module_slot, modulator_slot, mslot, slot, AudioParam, CurveInput, LfoMode, ModularParams, Modulator, ModuleKind, ModulatorKind,
-    ParamInfo, TriggerMode, UnisonMode, WaveEnv, GRAIN_SYNC, MODULAR_PARAMS, MOD_AUDIO, MOD_AUDIO_AMOUNT, MOD_GLIDE, MOD_LANES, MOD_LANE_GAIN, MOD_MACRO_PARAMS,
+    TriggerMode, UnisonMode, WaveEnv, GRAIN_SYNC, MODULAR_PARAMS, MOD_AUDIO, MOD_AUDIO_AMOUNT, MOD_GLIDE, MOD_LANES, MOD_LANE_GAIN, MOD_MACRO_PARAMS,
     MOD_MASTER, MOD_MODULATORS, MOD_MODULES, MOD_NO_LANE, MOD_NO_MODULATOR, MOD_NO_MODULE, MOD_UNISON, MOD_UNISON_VOICES, SCALE_MULTIPLIERS,
+    MOD_FINE, MOD_LANE_FX_PARAMS, MOD_LANE_MIX, MOD_PITCH, MOD_SEND_SIDEBAND,
 };
 use crate::sample::Sample;
 use crate::wavesynth::{note_freq, Env, Stage, SAMPLE_ROOT_HZ};
@@ -38,8 +40,6 @@ use std::sync::Arc;
 
 /// Voices allocated; each note takes one per global unison voice.
 const VOICES: usize = 32;
-/// Notes that can sound at once.
-const POLYPHONY: usize = 12;
 /// Oscillator unison inside a generator.
 const UNISON: usize = 8;
 /// Grains per voice, shared by its granular modules.
@@ -49,8 +49,17 @@ const CONTROL: usize = 32;
 const PARAMS: usize = MODULAR_PARAMS.len();
 /// How long a looping curve output takes to fade out after the note ends.
 const CURVE_FADE: f32 = 0.02;
-/// Pitch bend range in semitones.
-const BEND_RANGE: f32 = 2.0;
+/// Parameters that lanes read from the newest voice: their effects' settings and mixes.
+const LANE_VALUES: usize = MOD_PITCH - MOD_LANE_FX_PARAMS;
+/// A poly lane's tail ends once it stays below this for longer than its longest delay
+/// (plus `TAIL_HOLD` seconds), or after `TAIL_MAX` seconds.
+const TAIL_SILENCE: f32 = 1e-5;
+const TAIL_HOLD: f32 = 0.05;
+const TAIL_MAX: f32 = 30.0;
+/// What followers and trackers can listen to: the three lanes, the master and the sideband.
+const LISTEN: usize = MOD_LANES + 2;
+/// `Block::lane` of an output sent to the sideband bus.
+const SIDEBAND: usize = usize::MAX - 1;
 /// Pitch tracking: the input is decimated by this much into a ring this long, and
 /// analysed over a window every `TRACK_EVERY` blocks.
 const TRACK_DECIMATE: usize = 4;
@@ -393,6 +402,13 @@ struct Voice {
     grains: [Grain; GRAINS],
     /// Each module's latest output (mono), the source of audio-rate modulation.
     outputs: [f32; MOD_MODULES],
+    /// Its modules have finished; only its poly lanes' effects still ring.
+    tail: bool,
+    /// Seconds its tail has been silent.
+    quiet: f32,
+    /// Lane gains, effect settings and mixes as this voice's modulators set them.
+    lane_gains: [f32; MOD_LANES],
+    lane_values: [f32; LANE_VALUES],
 }
 
 /// Per-block settings of one module.
@@ -608,6 +624,40 @@ fn spawn_grain(grains: &mut [Grain; GRAINS], state: &mut ModuleState, b: &Block,
     grains[free] = Grain { module: k as u8, position: start + rate * age as f64, rate, age, length: b.grain_length, gains: (gl * level, gr * level) };
 }
 
+/// A lane's effects, each with whether it is on.
+type FxChain = Vec<Option<(EffectProcessor, bool)>>;
+
+/// Allocates lane `l`'s effects; call off the audio thread.
+fn lane_processors(params: &ModularParams, l: usize, sample_rate: f32) -> FxChain {
+    params.lanes[l].fx.iter().map(|slot| slot.map(|d| (EffectProcessor::new(&d.effect, sample_rate), d.enabled))).collect()
+}
+
+/// Runs lane `l`'s effects over `buf` with its settings `values` (see [`LANE_VALUES`]),
+/// then blends in the dry signal by the lane's mix.
+fn process_lane(chain: &mut FxChain, l: usize, values: &[f32; LANE_VALUES], buf: &mut [[f32; CONTROL]; 2], n: usize, ctx: &ProcessContext) {
+    if chain.iter().flatten().all(|(_, on)| !on) {
+        return;
+    }
+    let dry = *buf;
+    let [left, right] = buf;
+    for (slot, (processor, _)) in chain.iter_mut().enumerate().filter_map(|(k, fx)| fx.as_mut().filter(|(_, on)| *on).map(|fx| (k, fx))) {
+        let at = ModularParams::lane_fx_param(l, slot, 0) - MOD_LANE_FX_PARAMS;
+        let settings = processor.effect().params().len();
+        for k in 0..settings {
+            processor.set_param(k, values[at + k]);
+        }
+        processor.process(&mut left[..n], &mut right[..n], ctx);
+    }
+    let mix = values[MOD_LANE_MIX - MOD_LANE_FX_PARAMS + l].clamp(0.0, 1.0);
+    if mix < 1.0 {
+        for (wet, dry) in buf.iter_mut().zip(dry.iter()) {
+            for (w, d) in wet[..n].iter_mut().zip(&dry[..n]) {
+                *w = d + (*w - d) * mix;
+            }
+        }
+    }
+}
+
 pub struct ModSynth {
     params: ModularParams,
     sample_rate: f32,
@@ -621,9 +671,9 @@ pub struct ModSynth {
     held_count: usize,
     last_note: Option<f32>,
     seed: u32,
-    lanes: Vec<Vec<Option<(EffectProcessor, bool)>>>,
-    bus: [[[f32; CONTROL]; 2]; MOD_LANES],
-    master: [[f32; CONTROL]; 2],
+    lanes: Vec<FxChain>,
+    /// Per voice, the effects of the poly lanes (empty for the others).
+    poly: Vec<Vec<FxChain>>,
     /// Values of the modulators that are the same for every voice, this block.
     globals: [f32; MOD_MODULATORS],
     /// Random modulators in Unison mode: one sequence for all voices.
@@ -641,9 +691,9 @@ pub struct ModSynth {
 
 /// The recent audio of each lane and the master, decimated, for pitch tracking.
 struct Tracker {
-    rings: [[f32; TRACK_RING]; 4],
+    rings: [[f32; TRACK_RING]; LISTEN],
     pos: usize,
-    sums: [f32; 4],
+    sums: [f32; LISTEN],
     summed: usize,
     blocks: u32,
     window: [f32; TRACK_RING],
@@ -651,7 +701,7 @@ struct Tracker {
 }
 
 impl Tracker {
-    fn push(&mut self, input: [f32; 4]) {
+    fn push(&mut self, input: [f32; LISTEN]) {
         for (sum, x) in self.sums.iter_mut().zip(input) {
             *sum += x;
         }
@@ -672,7 +722,7 @@ impl Tracker {
         let rate = sample_rate / TRACK_DECIMATE as f32;
         let longest = ((rate / note_freq(low.min(high))) as usize + 2).min(TRACK_RING - TRACK_WINDOW - 1);
         let shortest = ((rate / note_freq(low.max(high))) as usize).max(2).min(longest);
-        let ring = &self.rings[input.min(3)];
+        let ring = &self.rings[input.min(LISTEN - 1)];
         // Oldest first: the window and the lags reach back from the newest sample.
         let count = TRACK_WINDOW + longest;
         let start = (self.pos + TRACK_RING - count) % TRACK_RING;
@@ -713,7 +763,7 @@ impl Tracker {
 /// modulator in order, then their modulation of everything else.
 fn modulate(p: &ModularParams, voice: &mut Voice, inputs: &ModInputs, m: &mut [f32; PARAMS], block: f32) {
     let apply = |m: &mut [f32; PARAMS], dest: usize, amount: f32| {
-        let info: &ParamInfo = &MODULAR_PARAMS[dest];
+        let Some(info) = p.param_info(dest) else { return };
         m[dest] = info.denormalize(info.normalize(m[dest]) + amount);
     };
     for (i, modulator) in p.modulators.iter().enumerate().filter(|(_, md)| md.kind != ModulatorKind::Off) {
@@ -801,7 +851,7 @@ fn modulate(p: &ModularParams, voice: &mut Voice, inputs: &ModInputs, m: &mut [f
             }
             ModulatorKind::Random if modulator.shared => inputs.globals[i],
             ModulatorKind::Random => random_tick(state, at(mslot::RATE), at(mslot::SMOOTH), at(mslot::JITTER), at(mslot::CHAOS), block, &mut random),
-            ModulatorKind::Note => ((voice.note + inputs.bend * BEND_RANGE) / 127.0).clamp(0.0, 1.0),
+            ModulatorKind::Note => ((voice.note + inputs.bend * p.bend_range as f32) / 127.0).clamp(0.0, 1.0),
             ModulatorKind::Curve => modulator.shape.value_at(match modulator.input {
                 CurveInput::Velocity => voice.velocity,
                 CurveInput::Note => voice.note / 127.0,
@@ -876,9 +926,15 @@ impl ModSynth {
                 modules: std::array::from_fn(module),
                 grains: [Grain::FREE; GRAINS],
                 outputs: [0.0; MOD_MODULES],
+                tail: false,
+                quiet: 0.0,
+                lane_gains: [1.0; MOD_LANES],
+                lane_values: [0.0; LANE_VALUES],
             }
         };
-        let lanes = params.lanes.iter().map(|lane| lane.fx.iter().map(|slot| slot.map(|d| (EffectProcessor::new(&d.effect, sample_rate), d.enabled))).collect()).collect();
+        let lanes = (0..MOD_LANES).map(|l| lane_processors(&params, l, sample_rate)).collect();
+        // Poly lanes have their effects once per voice.
+        let poly = (0..VOICES).map(|_| (0..MOD_LANES).map(|l| if params.lane_poly(l) { lane_processors(&params, l, sample_rate) } else { Vec::new() }).collect()).collect();
         Self {
             params,
             sample_rate,
@@ -892,13 +948,12 @@ impl ModSynth {
             last_note: None,
             seed: 0x2468_ACE1,
             lanes,
-            bus: [[[0.0; CONTROL]; 2]; MOD_LANES],
-            master: [[0.0; CONTROL]; 2],
+            poly,
             globals: [0.0; MOD_MODULATORS],
             shared: [ModState::IDLE; MOD_MODULATORS],
             follow: [0.0; MOD_MODULATORS],
             tracked: [60.0; MOD_MODULATORS],
-            tracker: Box::new(Tracker { rings: [[0.0; TRACK_RING]; 4], pos: 0, sums: [0.0; 4], summed: 0, blocks: 0, window: [0.0; TRACK_RING], diff: [0.0; TRACK_RING] }),
+            tracker: Box::new(Tracker { rings: [[0.0; TRACK_RING]; LISTEN], pos: 0, sums: [0.0; LISTEN], summed: 0, blocks: 0, window: [0.0; TRACK_RING], diff: [0.0; TRACK_RING] }),
             cc: [0.0; 128],
             bend: 0.0,
             pressure: 0.0,
@@ -926,11 +981,13 @@ impl ModSynth {
 
     pub fn set_params(&mut self, params: ModularParams) {
         self.params = params;
-        for (lane, settings) in self.lanes.iter_mut().zip(params.lanes.iter()) {
-            for (slot, device) in lane.iter_mut().zip(settings.fx.iter()) {
-                if let (Some((processor, enabled)), Some(device)) = (slot.as_mut(), device) {
-                    processor.set_params(&device.effect);
-                    *enabled = device.enabled;
+        for lanes in std::iter::once(&mut self.lanes).chain(self.poly.iter_mut()) {
+            for (lane, settings) in lanes.iter_mut().zip(params.lanes.iter()) {
+                for (slot, device) in lane.iter_mut().zip(settings.fx.iter()) {
+                    if let (Some((processor, enabled)), Some(device)) = (slot.as_mut(), device) {
+                        processor.set_params(&device.effect);
+                        *enabled = device.enabled;
+                    }
                 }
             }
         }
@@ -983,8 +1040,14 @@ impl ModSynth {
         // In a legato phrase, untriggered modulators carry on from the newest held note.
         let donor = self.voices.iter().enumerate().filter(|&(k, v)| k != index && v.active && v.gate.held).max_by_key(|(_, v)| v.gate.age).map(|(_, v)| v.mods);
         let phrase = self.phrase;
+        if !self.voices[index].active {
+            for (processor, _) in self.poly[index].iter_mut().flatten().flatten() {
+                processor.reset();
+            }
+        }
         let voice = &mut self.voices[index];
         let was_active = voice.active;
+        voice.tail = false;
         voice.gate = Gate::new(pitch, velocity, gate, counter);
         voice.target = pitch as f32;
         voice.velocity = velocity;
@@ -1075,7 +1138,7 @@ impl ModSynth {
             return;
         }
         self.phrase = self.voices.iter().any(|v| v.active && v.gate.held);
-        let limit = (VOICES / count).min(POLYPHONY);
+        let limit = (VOICES / count).min((self.params.polyphony as usize).max(1));
         loop {
             let free = self.voices.iter().filter(|v| !v.active).count();
             let mut notes = 0;
@@ -1154,35 +1217,109 @@ impl ModSynth {
         for (i, value) in base.iter_mut().enumerate() {
             *value = params.param_mut(i).map_or(0.0, |v| *v);
         }
+        let p = self.params;
+        // Poly lanes come first, from lane 1 on.
+        let polys = (0..MOD_LANES).take_while(|&l| p.lane_poly(l)).count();
+        let poly_fx = (0..polys).any(|l| p.lanes[l].fx.iter().flatten().any(|d| d.enabled));
+        // Echoes can come after a silence as long as the delay.
+        let hold = TAIL_HOLD
+            + (0..polys)
+                .flat_map(|l| p.lanes[l].fx.iter().flatten())
+                .filter_map(|d| match d.effect {
+                    Effect::Delay(delay) if d.enabled => Some((delay.time_beats * 60.0 / self.tempo.max(1.0)) as f32),
+                    _ => None,
+                })
+                .fold(0f32, f32::max);
+        let dt = 1.0 / self.sample_rate;
         let mut offset = 0;
         while offset < left.len() {
             let n = (left.len() - offset).min(CONTROL);
-            let (mut bus, mut master) = (self.bus, self.master);
-            for lane in &mut bus {
-                lane[0][..n].fill(0.0);
-                lane[1][..n].fill(0.0);
-            }
-            master[0][..n].fill(0.0);
-            master[1][..n].fill(0.0);
+            let mut bus = [[[0f32; CONTROL]; 2]; MOD_LANES];
+            let mut master = [[0f32; CONTROL]; 2];
+            let mut sideband = [[0f32; CONTROL]; 2];
             self.update_globals(&base, n as f32 / self.sample_rate);
-            for v in 0..VOICES {
-                if self.voices[v].active {
-                    self.render_voice(v, samples, tables, &base, &mut bus, &mut master, n);
-                }
-            }
             let tempo = self.tempo;
             let ctx = ProcessContext { sample_rate: self.sample_rate, tempo, beat: self.clock * tempo / 60.0, beats_per_sample: tempo / 60.0 / self.sample_rate as f64 };
-            for lane in 0..MOD_LANES {
-                {
-                    let [l, r] = &mut bus[lane];
-                    for (processor, _) in self.lanes[lane].iter_mut().flatten().filter(|(_, on)| *on) {
-                        processor.process(&mut l[..n], &mut r[..n], &ctx);
+            let mut newest: Option<(usize, u64)> = None;
+            for v in 0..VOICES {
+                if !self.voices[v].active {
+                    continue;
+                }
+                let mut own = [[[0f32; CONTROL]; 2]; MOD_LANES];
+                let alive = !self.voices[v].tail && self.render_voice(v, samples, tables, &base, &mut own, &mut master, &mut sideband, n);
+                if !self.voices[v].tail && newest.is_none_or(|(_, age)| self.voices[v].gate.age > age) {
+                    newest = Some((v, self.voices[v].gate.age));
+                }
+                let voice = &mut self.voices[v];
+                let mut peak = 0f32;
+                for l in 0..MOD_LANES {
+                    if l >= polys {
+                        for (to, from) in bus[l].iter_mut().zip(own[l].iter()) {
+                            for (a, b) in to[..n].iter_mut().zip(&from[..n]) {
+                                *a += b;
+                            }
+                        }
+                        continue;
+                    }
+                    process_lane(&mut self.poly[v][l], l, &voice.lane_values, &mut own[l], n, &ctx);
+                    if !p.lane_audible(l) {
+                        continue;
+                    }
+                    let gain = voice.lane_gains[l];
+                    let dest = p.lanes[l].dest as usize;
+                    let into = (p.lanes[l].dest != MOD_NO_LANE && dest > l && dest < MOD_LANES).then_some(dest);
+                    for i in 0..n {
+                        let (a, b) = (own[l][0][i] * gain, own[l][1][i] * gain);
+                        peak = peak.max(a.abs()).max(b.abs());
+                        // What the lane plays, for followers and trackers listening to it.
+                        bus[l][0][i] += a;
+                        bus[l][1][i] += b;
+                        let out = match into {
+                            Some(d) if d < polys => &mut own[d],
+                            Some(d) => &mut bus[d],
+                            None => &mut master,
+                        };
+                        out[0][i] += a;
+                        out[1][i] += b;
                     }
                 }
-                let gain = base[MOD_LANE_GAIN + lane];
-                let dest = self.params.lanes[lane].dest as usize;
+                if voice.tail {
+                    voice.age += n as f32 * dt;
+                    voice.quiet = if peak < TAIL_SILENCE { voice.quiet + n as f32 * dt } else { 0.0 };
+                    if voice.quiet > hold || voice.age > TAIL_MAX {
+                        voice.tail = false;
+                        voice.active = false;
+                    }
+                } else if !alive {
+                    // Its effects ring on after the modules finish, as long as they sound.
+                    if poly_fx {
+                        voice.tail = true;
+                        voice.age = 0.0;
+                        voice.quiet = 0.0;
+                    } else {
+                        voice.active = false;
+                    }
+                }
+            }
+            // Shared lanes follow the modulation of the newest note.
+            let (gains, values) = match newest {
+                Some((v, _)) => (self.voices[v].lane_gains, self.voices[v].lane_values),
+                None => {
+                    let mut values = [0f32; LANE_VALUES];
+                    values.copy_from_slice(&base[MOD_LANE_FX_PARAMS..MOD_PITCH]);
+                    ([0, 1, 2].map(|l| base[MOD_LANE_GAIN + l]), values)
+                }
+            };
+            for lane in polys..MOD_LANES {
+                process_lane(&mut self.lanes[lane], lane, &values, &mut bus[lane], n, &ctx);
+                if !p.lane_audible(lane) {
+                    bus[lane] = [[0.0; CONTROL]; 2];
+                    continue;
+                }
+                let gain = gains[lane];
+                let dest = p.lanes[lane].dest as usize;
                 // Lanes only feed later lanes, so routing can never loop.
-                let into = (self.params.lanes[lane].dest != MOD_NO_LANE && dest > lane && dest < MOD_LANES).then_some(dest);
+                let into = (p.lanes[lane].dest != MOD_NO_LANE && dest > lane && dest < MOD_LANES).then_some(dest);
                 for i in 0..n {
                     let (a, b) = (bus[lane][0][i] * gain, bus[lane][1][i] * gain);
                     match into {
@@ -1197,14 +1334,12 @@ impl ModSynth {
                     }
                 }
             }
-            self.listen(&base, &bus, &master, n);
+            self.listen(&base, &bus, &master, &sideband, n);
             let gain = base[MOD_MASTER];
             for i in 0..n {
                 left[offset + i] += master[0][i] * gain;
                 right[offset + i] += master[1][i] * gain;
             }
-            self.bus = bus;
-            self.master = master;
             self.clock += n as f64 / self.sample_rate as f64;
             offset += n;
         }
@@ -1236,10 +1371,14 @@ impl ModSynth {
         }
     }
 
-    /// Follows the level and pitch of the lanes and the master (`bus`, `master`: this block).
-    fn listen(&mut self, base: &[f32; PARAMS], bus: &[[[f32; CONTROL]; 2]; MOD_LANES], master: &[[f32; CONTROL]; 2], n: usize) {
+    /// Follows the level and pitch of the lanes, the master and the sideband (this block's).
+    fn listen(&mut self, base: &[f32; PARAMS], bus: &[[[f32; CONTROL]; 2]; MOD_LANES], master: &[[f32; CONTROL]; 2], sideband: &[[f32; CONTROL]; 2], n: usize) {
         let sr = self.sample_rate;
-        let channel = |input: usize| if input < MOD_LANES { &bus[input] } else { master };
+        let channel = |input: usize| match input {
+            i if i < MOD_LANES => &bus[i],
+            i if i == MOD_LANES => master,
+            _ => sideband,
+        };
         let mut tracking = false;
         for (i, modulator) in self.params.modulators.iter().enumerate() {
             match modulator.kind {
@@ -1267,7 +1406,7 @@ impl ModSynth {
                 let [l, r] = channel(input);
                 (l[j] + r[j]) * 0.5
             };
-            self.tracker.push([mono(0), mono(1), mono(2), mono(3)]);
+            self.tracker.push(std::array::from_fn(mono));
         }
         self.tracker.blocks += 1;
         if self.tracker.blocks < TRACK_EVERY {
@@ -1293,8 +1432,9 @@ impl ModSynth {
         base: &[f32; PARAMS],
         bus: &mut [[[f32; CONTROL]; 2]; MOD_LANES],
         master: &mut [[f32; CONTROL]; 2],
+        sideband: &mut [[f32; CONTROL]; 2],
         n: usize,
-    ) {
+    ) -> bool {
         let p = self.params;
         let sr = self.sample_rate;
         let tempo = self.tempo as f32;
@@ -1303,10 +1443,12 @@ impl ModSynth {
         let mut m = *base;
         let inputs = ModInputs { tempo, clock: self.clock, legato: p.mono && p.legato, globals: &self.globals, tables, bend: self.bend, pressure: self.pressure };
         modulate(&p, &mut self.voices[v], &inputs, &mut m, block);
-        let bend = self.bend * BEND_RANGE;
+        let bend = self.bend * p.bend_range as f32 + m[MOD_PITCH] + m[MOD_FINE] / 100.0;
 
         let Self { voices, blocks, .. } = self;
         let voice = &mut voices[v];
+        voice.lane_values.copy_from_slice(&m[MOD_LANE_FX_PARAMS..MOD_PITCH]);
+        voice.lane_gains = [0, 1, 2].map(|l| m[MOD_LANE_GAIN + l]);
         let glide = m[MOD_GLIDE];
         if glide > 0.0 && voice.note != voice.target {
             voice.note += (voice.target - voice.note) * (1.0 - (-block * 3000.0 / glide).exp());
@@ -1470,14 +1612,17 @@ impl ModSynth {
                         b.curve_end = at(slot::CURVE_END);
                     }
                     let send = module.choice[0] as usize;
-                    b.lane = module.flag.then_some(if send < MOD_LANES { send } else { usize::MAX });
+                    b.lane = module.flag.then_some(match send {
+                        s if s < MOD_LANES => s,
+                        s if s == MOD_SEND_SIDEBAND as usize => SIDEBAND,
+                        _ => usize::MAX,
+                    });
                 }
                 _ => {}
             }
         }
         if !has_output {
-            voice.active = false;
-            return;
+            return false;
         }
 
         // Audio-rate connections with their (modulated) amounts.
@@ -1702,6 +1847,10 @@ impl ModSynth {
                                 bus[lane][0][i] += ol;
                                 bus[lane][1][i] += or;
                             }
+                            Some(SIDEBAND) => {
+                                sideband[0][i] += ol;
+                                sideband[1][i] += or;
+                            }
                             Some(_) => {
                                 master[0][i] += ol;
                                 master[1][i] += or;
@@ -1713,11 +1862,12 @@ impl ModSynth {
                 }
             }
             if !sounding {
-                voice.active = false;
-                break;
+                voice.age += block;
+                return false;
             }
         }
         voice.age += block;
+        true
     }
 
     /// One frame of a sample generator's unison voice `u`, moving its play head
@@ -1880,9 +2030,9 @@ mod tests {
     use crate::model::{AudioMod, Device, Effect, Lane, ModTarget, Module, Modulator, UtilityParams};
     use crate::synth::HELD;
 
-    const SR: f32 = 48_000.0;
+    pub(super) const SR: f32 = 48_000.0;
 
-    fn play(p: ModularParams, notes: &[u8], frames: usize) -> (Vec<f32>, Vec<f32>) {
+    pub(super) fn play(p: ModularParams, notes: &[u8], frames: usize) -> (Vec<f32>, Vec<f32>) {
         let mut synth = ModSynth::new(p, SR);
         for &n in notes {
             synth.note_on(n, 1.0, HELD);
@@ -1896,15 +2046,15 @@ mod tests {
         (l, r)
     }
 
-    fn rms(x: &[f32]) -> f32 {
+    pub(super) fn rms(x: &[f32]) -> f32 {
         (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
     }
 
-    fn frequency(signal: &[f32]) -> f32 {
+    pub(super) fn frequency(signal: &[f32]) -> f32 {
         signal.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f32 * SR / signal.len() as f32
     }
 
-    fn sine() -> Module {
+    pub(super) fn sine() -> Module {
         let mut m = Module::new(ModuleKind::Analog);
         m.choice[0] = 3;
         m
@@ -1918,11 +2068,11 @@ mod tests {
         p
     }
 
-    fn group() -> Module {
+    pub(super) fn group() -> Module {
         Module::new(ModuleKind::Group)
     }
 
-    fn output() -> Module {
+    pub(super) fn output() -> Module {
         Module::new(ModuleKind::Output)
     }
 
@@ -2112,7 +2262,7 @@ mod tests {
         for k in 0..20 {
             poly.note_on(40 + k, 1.0, HELD);
         }
-        assert_eq!(poly.voices.iter().filter(|v| v.active).count(), POLYPHONY);
+        assert_eq!(poly.voices.iter().filter(|v| v.active).count(), ModularParams::default().polyphony as usize);
     }
 
     // ----- Phase 2: generators, nonlinear filter, curve output, global unison -----
@@ -2582,6 +2732,30 @@ mod bench {
             synth.render(&[], &[], &mut l, &mut r);
         }
         println!("32 moduladores × 4 destinos, 12 notas: {:.0} % de tiempo real", start.elapsed().as_secs_f64() * 100.0);
+
+        // Poly lanes: a saturator, a chorus and a reverb per voice, an LFO on each.
+        use crate::model::{Device, Effect};
+        let mut p = ModularParams::default();
+        for (slot, effect) in [Effect::Saturator(Default::default()), Effect::Chorus(Default::default()), Effect::Reverb(Default::default())].into_iter().enumerate() {
+            p.lanes[0].fx[slot] = Some(Device::new(effect));
+        }
+        p.lanes[0].poly = true;
+        let mut lfo = Modulator::new(ModulatorKind::Lfo);
+        for k in 0..3 {
+            lfo.targets[k] = ModTarget::new(ModularParams::lane_fx_param(0, k, 0), 0.2);
+        }
+        p.modulators[0] = lfo;
+        let start = std::time::Instant::now();
+        let mut synth = ModSynth::new(p, 48_000.0);
+        println!("crear 32 voces × 3 efectos: {:.0} ms", start.elapsed().as_secs_f64() * 1000.0);
+        for n in 0..12u8 {
+            synth.note_on(48 + n * 2, 1.0, HELD);
+        }
+        let start = std::time::Instant::now();
+        for _ in 0..(48_000 / 512) {
+            synth.render(&[], &[], &mut l, &mut r);
+        }
+        println!("carril poly (saturador + chorus + reverb), 12 notas: {:.0} % de tiempo real", start.elapsed().as_secs_f64() * 100.0);
     }
 }
 
@@ -2596,7 +2770,7 @@ mod modulation_tests {
     const BLOCK: f32 = CONTROL as f32 / SR;
 
     /// A sine on the master, plus `modulators`.
-    fn patch(modulators: &[Modulator]) -> ModularParams {
+    pub(super) fn patch(modulators: &[Modulator]) -> ModularParams {
         let mut p = ModularParams::default();
         p.modules = [Module::EMPTY; MOD_MODULES];
         let mut sine = Module::new(ModuleKind::Analog);
@@ -2611,7 +2785,7 @@ mod modulation_tests {
     }
 
     /// Renders `blocks` control blocks; `each` runs before every block with its index.
-    fn run(p: ModularParams, blocks: usize, mut each: impl FnMut(&mut ModSynth, usize)) -> (ModSynth, Vec<f32>) {
+    pub(super) fn run(p: ModularParams, blocks: usize, mut each: impl FnMut(&mut ModSynth, usize)) -> (ModSynth, Vec<f32>) {
         let mut synth = ModSynth::new(p, SR);
         let table = Arc::new(crate::wavetable::builtin(0));
         let tables: Vec<Arc<Wavetable>> = (0..MOD_MODULES + MOD_MODULATORS).map(|_| table.clone()).collect();
@@ -2647,7 +2821,7 @@ mod modulation_tests {
         }
     }
 
-    fn blocks(seconds: f32) -> usize {
+    pub(super) fn blocks(seconds: f32) -> usize {
         (seconds / BLOCK) as usize
     }
 
@@ -3052,5 +3226,228 @@ mod modulation_tests {
         assert_eq!((p.modulators[1].source, p.modulators[1].trigger_source), (MOD_NO_MODULATOR, MOD_NO_MODULATOR));
         assert_eq!(p.modulators[2].targets[0], ModTarget::NONE);
         assert_eq!(p.modulators[2].targets[1].dest as usize, ModularParams::module_param(1, slot::LEVEL));
+    }
+}
+
+#[cfg(test)]
+mod lane_tests {
+    use super::*;
+    use super::modulation_tests::{blocks, patch, run};
+    use super::tests::{frequency, group, output, play, rms, sine, SR};
+    use crate::model::{Device, Effect, ModTarget, UtilityParams, MOD_NO_TARGET};
+    use crate::synth::HELD;
+
+    fn utility(gain_db: f32) -> Option<Device> {
+        Some(Device::new(Effect::Utility(UtilityParams { gain_db, ..Default::default() })))
+    }
+
+    fn saturator() -> Option<Device> {
+        Some(Device::new(Effect::Saturator(crate::model::SaturatorParams { drive_db: 30.0, output_db: -12.0, mix: 1.0 })))
+    }
+
+    #[test]
+    fn poly_lanes_distort_each_voice_on_its_own() {
+        let mut p = patch(&[]);
+        p.lanes[0].fx[0] = saturator();
+        let render = |p: ModularParams, notes: &[u8]| play(p, notes, 9600).0;
+        let error = |p: ModularParams| {
+            let (chord, a, b) = (render(p, &[57, 64]), render(p, &[57]), render(p, &[64]));
+            let sum: Vec<f32> = a.iter().zip(&b).map(|(x, y)| x + y).collect();
+            let diff: Vec<f32> = chord.iter().zip(&sum).map(|(x, y)| x - y).collect();
+            rms(&diff) / rms(&chord)
+        };
+        // Shared: the two notes distort together (intermodulation).
+        assert!(error(p) > 0.1, "{}", error(p));
+        p.lanes[0].poly = true;
+        // Poly: the chord is just the two notes, each distorted alone.
+        assert!(error(p) < 1e-4, "{}", error(p));
+    }
+
+    #[test]
+    fn only_lanes_from_the_first_on_can_be_poly() {
+        let mut p = ModularParams::default();
+        p.lanes[1].poly = true;
+        assert!(!p.lane_poly(1), "lane 2 needs lane 1 poly too");
+        p.lanes[0].poly = true;
+        assert!(p.lane_poly(0) && p.lane_poly(1) && !p.lane_poly(2));
+    }
+
+    #[test]
+    fn poly_lane_tails_ring_after_the_note() {
+        let mut p = patch(&[]);
+        let delay = crate::model::DelayParams { time_beats: 0.5, feedback: 0.5, mix: 0.5, ping_pong: false, filter_hz: 12_000.0 };
+        p.lanes[0].fx[0] = Some(Device::new(Effect::Delay(delay)));
+        p.lanes[0].poly = true;
+        let mut active = Vec::new();
+        let (_, audio) = run(p, blocks(6.0), |s, b| {
+            if b == 0 {
+                s.note_on(69, 1.0, HELD);
+            }
+            if b == blocks(0.1) {
+                s.note_off(69);
+            }
+            active.push(s.voices.iter().filter(|v| v.active).count());
+        });
+        // The echo at 120 BPM comes a quarter of a second later, after the note.
+        let echo = &audio[blocks(0.3) * CONTROL..blocks(0.4) * CONTROL];
+        assert!(rms(echo) > 0.01, "the echo rings in the voice's own delay: {}", rms(echo));
+        assert_eq!(active[blocks(0.3)], 1, "the voice stays for its tail");
+        assert_eq!(*active.last().unwrap(), 0, "and ends when the tail dies away");
+    }
+
+    #[test]
+    fn mute_solo_and_mix() {
+        let mut p = patch(&[]);
+        let level = |p: ModularParams| rms(&play(p, &[60], 9600).0[2400..]);
+        let plain = level(p);
+        p.lanes[0].fx[0] = utility(-12.0);
+        assert!((level(p) / plain - 0.251).abs() < 0.02);
+        p.lanes[0].mix = 0.0;
+        assert!((level(p) / plain - 1.0).abs() < 0.02, "mix 0: dry");
+        p.lanes[0].mix = 0.5;
+        assert!((level(p) / plain - 0.626).abs() < 0.02, "mix 50 %: half way");
+        p.lanes[0].mute = true;
+        assert_eq!(level(p), 0.0, "muted");
+        p.lanes[0].mute = false;
+        p.lanes[1].solo = true;
+        assert_eq!(level(p), 0.0, "another lane soloed");
+        p.lanes[0].solo = true;
+        assert!(level(p) > 0.0, "soloed too");
+        // The same in a poly lane.
+        p.lanes[0].poly = true;
+        p.lanes[1].poly = true;
+        assert!((level(p) / plain - 0.626).abs() < 0.02);
+        p.lanes[0].mute = true;
+        assert_eq!(level(p), 0.0, "a muted poly lane");
+    }
+
+    #[test]
+    fn modulators_move_lane_effect_settings() {
+        // Velocity turns a lane's utility gain from -24 dB up to 0 dB.
+        let mut velocity = Modulator::new(ModulatorKind::Velocity);
+        let gain = ModularParams::lane_fx_param(0, 0, 0);
+        velocity.targets[0] = ModTarget::new(gain, 0.5);
+        let mut p = patch(&[velocity]);
+        p.lanes[0].fx[0] = utility(-24.0);
+        assert_eq!(p.param_info(gain).map(|i| i.name), Some("Gain"));
+        let level = |p: ModularParams, velocity: f32| {
+            let mut synth = ModSynth::new(p, SR);
+            synth.note_on(60, velocity, HELD);
+            let (mut l, mut r) = (vec![0.0; 9600], vec![0.0; 9600]);
+            synth.render(&[], &[], &mut l, &mut r);
+            rms(&l[2400..]) / velocity
+        };
+        for poly in [false, true] {
+            p.lanes[0].poly = poly;
+            let (soft, hard) = (level(p, 0.1), level(p, 1.0));
+            assert!(hard > soft * 4.0, "poly {poly}: {soft} {hard}");
+        }
+    }
+
+    #[test]
+    fn moving_and_removing_lane_effects_keeps_their_modulation() {
+        let mut lfo = Modulator::new(ModulatorKind::Lfo);
+        lfo.targets[0] = ModTarget::new(ModularParams::lane_fx_param(0, 0, 1), 0.3);
+        lfo.targets[1] = ModTarget::new(ModularParams::lane_fx_param(0, 1, 0), 0.4);
+        lfo.targets[2] = ModTarget::new(ModularParams::lane_fx_param(1, 0, 0), 0.5);
+        let mut p = patch(&[lfo]);
+        p.lanes[0].fx[0] = utility(-6.0);
+        p.lanes[0].fx[1] = saturator();
+        p.lanes[1].fx[0] = utility(-3.0);
+        p.move_lane_fx(0, 1, true);
+        assert_eq!(p.lanes[0].fx[0], saturator());
+        let dests = |p: &ModularParams| [0, 1, 2].map(|k| p.modulators[0].targets[k].dest);
+        let at = |l, s, k| ModularParams::lane_fx_param(l, s, k) as u16;
+        assert_eq!(dests(&p), [at(0, 1, 1), at(0, 0, 0), at(1, 0, 0)], "the modulation follows its effect");
+        p.remove_lane_fx(0, 0);
+        assert_eq!(p.lanes[0].fx[0], utility(-6.0), "the gap closes");
+        assert_eq!(dests(&p), [at(0, 0, 1), MOD_NO_TARGET, at(1, 0, 0)], "the removed effect's modulation goes with it");
+    }
+
+    #[test]
+    fn outputs_can_feed_the_sideband() {
+        // The first output goes to the sideband, unheard; a follower listening to it
+        // opens a second, silent-by-default output.
+        let mut follower = Modulator::new(ModulatorKind::AudioFollower);
+        follower.index = (MOD_LANES + 1) as u8;
+        follower.targets[0] = ModTarget::new(ModularParams::module_param(5, slot::LEVEL), 1.0);
+        let mut p = patch(&[follower]);
+        p.modules[2].choice[0] = MOD_SEND_SIDEBAND;
+        p.modules[3] = group();
+        p.modules[4] = sine();
+        p.modules[5] = output();
+        p.modules[5].set(slot::LEVEL, 0.0);
+        let (l, _) = play(p, &[69], 9600);
+        assert!(rms(&l[4800..]) > 0.05, "the follower hears the sideband: {}", rms(&l[4800..]));
+        p.modulators[0].kind = ModulatorKind::Off;
+        let (l, _) = play(p, &[69], 9600);
+        assert!(rms(&l) < 1e-6, "and the sideband itself is silent");
+    }
+
+    #[test]
+    fn polyphony_bend_range_and_master_pitch() {
+        let mut p = ModularParams::default();
+        p.polyphony = 3;
+        let mut synth = ModSynth::new(p, SR);
+        for n in 60..66 {
+            synth.note_on(n, 1.0, HELD);
+        }
+        assert_eq!(synth.voices.iter().filter(|v| v.active).count(), 3);
+
+        let mut p = patch(&[]);
+        p.pitch = 12.0;
+        let (l, _) = play(p, &[57], 24_000);
+        assert!((frequency(&l[2400..]) - 440.0).abs() < 3.0, "an octave up: {}", frequency(&l[2400..]));
+        p.pitch = 0.0;
+        p.fine = 100.0;
+        let (l, _) = play(p, &[69], 24_000);
+        assert!((frequency(&l[2400..]) - 466.2).abs() < 3.0, "a semitone of fine tuning: {}", frequency(&l[2400..]));
+        p.fine = 0.0;
+        p.bend_range = 12;
+        let (_, audio) = run(p, blocks(0.4), |s, b| {
+            if b == 0 {
+                s.note_on(57, 1.0, HELD);
+                s.control(Controller::PitchBend, 0, 1.0);
+            }
+        });
+        let f = frequency(&audio[blocks(0.1) * CONTROL..]);
+        assert!((f - 440.0).abs() < 5.0, "bent up an octave: {f}");
+    }
+
+    #[test]
+    fn the_sideband_pump_preset_ducks_on_every_beat() {
+        let (_, preset) = ModularParams::presets().into_iter().find(|(name, _)| name.contains("Sideband Pump")).unwrap();
+        // The level just after each beat (every half second) against the level before the next.
+        let dip = |p: ModularParams| {
+            let (l, _) = play(p, &[60, 64, 67], 144_000);
+            let at = |from: f32, to: f32| rms(&l[(from * SR) as usize..(to * SR) as usize]);
+            let ducked: f32 = (2..6).map(|k| at(k as f32 * 0.5 + 0.03, k as f32 * 0.5 + 0.12)).sum();
+            let open: f32 = (2..6).map(|k| at(k as f32 * 0.5 + 0.35, k as f32 * 0.5 + 0.48)).sum();
+            ducked / open
+        };
+        assert!(dip(preset) < 0.6, "ducks on the beat: {}", dip(preset));
+        let mut flat = preset;
+        flat.modulators[0].kind = ModulatorKind::Off;
+        assert!(dip(flat) > 0.85, "steady without the follower: {}", dip(flat));
+    }
+
+    #[test]
+    fn patches_with_four_lane_effects_still_load() {
+        let mut p = ModularParams::default();
+        p.lanes[0].fx[0] = utility(-6.0);
+        let json = serde_json::to_value(p).unwrap();
+        let mut old = json.clone();
+        for lane in old["lanes"].as_array_mut().unwrap() {
+            let lane = lane.as_object_mut().unwrap();
+            lane["fx"].as_array_mut().unwrap().truncate(4);
+            for key in ["mute", "solo", "poly", "mix"] {
+                lane.remove(key);
+            }
+        }
+        for key in ["polyphony", "bend_range", "pitch", "fine"] {
+            old.as_object_mut().unwrap().remove(key);
+        }
+        let loaded: ModularParams = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded, p);
     }
 }

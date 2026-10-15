@@ -1608,9 +1608,18 @@ impl InstrumentKind {
     }
 
     pub fn set(&mut self, index: usize, value: f32) {
-        let info = self.params().get(index).copied();
+        let info = self.param_info(index);
         if let (Some(info), Some(slot)) = (info, self.param_mut(index)) {
             *slot = value.clamp(info.min, info.max);
+        }
+    }
+
+    /// The range of parameter `index` as it is now (a modular synth's lane effect
+    /// settings take their effect's), or None if there is no such parameter.
+    pub fn param_info(&self, index: usize) -> Option<ParamInfo> {
+        match self {
+            InstrumentKind::Modular(p) => p.param_info(index),
+            _ => self.params().get(index).copied(),
         }
     }
 }
@@ -3067,7 +3076,9 @@ pub const MOD_MODULES: usize = 32;
 pub const MOD_SLOTS: usize = 16;
 pub const MOD_AUDIO: usize = 32;
 pub const MOD_LANES: usize = 3;
-pub const MOD_LANE_FX: usize = 4;
+pub const MOD_LANE_FX: usize = 8;
+/// Effects per lane in the first layout.
+pub const MOD_FIRST_LANE_FX: usize = 4;
 pub const MOD_MODULATORS: usize = 32;
 /// Modulators whose first four settings have numbers in the first layout.
 pub const MOD_FIRST_MODULATORS: usize = 16;
@@ -3091,7 +3102,20 @@ pub const MOD_UNISON_VOICES: usize = 8;
 /// their numbers from the first layout, at [`MOD_MODULATOR_PARAMS`]).
 pub const MOD_MODULATOR_SLOTS_AT: usize = MOD_UNISON + 4;
 pub const MOD_MODULATOR_SLOTS: usize = 8;
-pub const MOD_PARAM_COUNT: usize = MOD_MODULATOR_SLOTS_AT + MOD_MODULATORS * MOD_MODULATOR_SLOTS;
+/// The continuous settings of every lane effect, [`MOD_FX_SLOTS`] per effect
+/// (in the effect's own units, see [`ModularParams::param_info`]).
+pub const MOD_LANE_FX_PARAMS: usize = MOD_MODULATOR_SLOTS_AT + MOD_MODULATORS * MOD_MODULATOR_SLOTS;
+pub const MOD_FX_SLOTS: usize = 6;
+/// Dry/wet of each lane.
+pub const MOD_LANE_MIX: usize = MOD_LANE_FX_PARAMS + MOD_LANES * MOD_LANE_FX * MOD_FX_SLOTS;
+/// Master pitch in semitones and its fine tuning in cents.
+pub const MOD_PITCH: usize = MOD_LANE_MIX + MOD_LANES;
+pub const MOD_FINE: usize = MOD_PITCH + 1;
+pub const MOD_PARAM_COUNT: usize = MOD_FINE + 1;
+/// An output's send (`Module::choice[0]`) to the sideband bus: heard only by the
+/// audio follower and pitch tracker.
+pub const MOD_SEND_SIDEBAND: u8 = 4;
+pub const MOD_POLYPHONY: u8 = 32;
 /// `Modulator::source` and `trigger_source` when nothing is connected.
 pub const MOD_NO_MODULATOR: u8 = 255;
 /// `ModTarget::dest` of an unused target.
@@ -3583,13 +3607,38 @@ impl AudioMod {
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Lane {
     pub gain: f32,
+    #[serde(deserialize_with = "padded_lane_fx")]
     pub fx: [Option<Device>; MOD_LANE_FX],
     /// Where the lane goes: [`MOD_NO_LANE`] is the master, otherwise a later lane.
     pub dest: u8,
+    #[serde(default)]
+    pub mute: bool,
+    #[serde(default)]
+    pub solo: bool,
+    /// Effects run once per voice (only from the first lane on, without gaps).
+    #[serde(default)]
+    pub poly: bool,
+    /// Dry/wet, 0..1.
+    #[serde(default = "full")]
+    pub mix: f32,
+}
+
+fn full() -> f32 {
+    1.0
+}
+
+/// Reads up to [`MOD_LANE_FX`] effects (lanes from the first layout have 4).
+fn padded_lane_fx<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[Option<Device>; MOD_LANE_FX], D::Error> {
+    let list: Vec<Option<Device>> = Vec::deserialize(deserializer)?;
+    let mut fx = [None; MOD_LANE_FX];
+    for (slot, d) in fx.iter_mut().zip(list) {
+        *slot = d;
+    }
+    Ok(fx)
 }
 
 impl Lane {
-    pub const EMPTY: Lane = Lane { gain: 1.0, fx: [None; MOD_LANE_FX], dest: MOD_NO_LANE };
+    pub const EMPTY: Lane = Lane { gain: 1.0, fx: [None; MOD_LANE_FX], dest: MOD_NO_LANE, mute: false, solo: false, poly: false, mix: 1.0 };
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3759,7 +3808,7 @@ impl OutputRange {
 }
 
 /// Audio Follower and Pitch Tracker inputs.
-pub const MOD_LISTEN: [&str; 4] = ["Lane A", "Lane B", "Lane C", "Master"];
+pub const MOD_LISTEN: [&str; 5] = ["Lane 1", "Lane 2", "Lane 3", "Master", "Sideband"];
 /// Scale modulator multipliers.
 pub const SCALE_MULTIPLIERS: [f32; 5] = [0.01, 0.1, 1.0, 10.0, 100.0];
 
@@ -4094,6 +4143,25 @@ pub struct ModularParams {
     pub gain: f32,
     #[serde(default)]
     pub unison: Unison,
+    /// Notes that can sound at once (each takes one voice per unison voice).
+    #[serde(default = "default_polyphony")]
+    pub polyphony: u8,
+    /// Pitch wheel range in semitones.
+    #[serde(default = "default_bend_range")]
+    pub bend_range: u8,
+    /// Master pitch (semitones) and fine tuning (cents).
+    #[serde(default)]
+    pub pitch: f32,
+    #[serde(default)]
+    pub fine: f32,
+}
+
+fn default_polyphony() -> u8 {
+    12
+}
+
+fn default_bend_range() -> u8 {
+    2
 }
 
 impl Default for ModularParams {
@@ -4113,6 +4181,10 @@ impl Default for ModularParams {
             glide: 0.0,
             gain: 0.35,
             unison: Unison::default(),
+            polyphony: default_polyphony(),
+            bend_range: default_bend_range(),
+            pitch: 0.0,
+            fine: 0.0,
         }
     }
 }
@@ -4143,12 +4215,52 @@ impl ModularParams {
     pub fn param_modulator(index: usize) -> Option<(usize, usize)> {
         if (MOD_MODULATOR_PARAMS..MOD_MACRO_PARAMS).contains(&index) {
             Some(((index - MOD_MODULATOR_PARAMS) / 4, (index - MOD_MODULATOR_PARAMS) % 4))
-        } else if (MOD_MODULATOR_SLOTS_AT..MOD_PARAM_COUNT).contains(&index) {
+        } else if (MOD_MODULATOR_SLOTS_AT..MOD_LANE_FX_PARAMS).contains(&index) {
             let k = index - MOD_MODULATOR_SLOTS_AT;
             Some((k / MOD_MODULATOR_SLOTS, k % MOD_MODULATOR_SLOTS))
         } else {
             None
         }
+    }
+
+    /// Moves modulation aimed at lane effect settings: `to` maps a lane and slot to
+    /// their new place, or None when the effect goes (and its modulation with it).
+    fn retarget_lane_fx(&mut self, to: impl Fn(usize, usize) -> Option<(usize, usize)>) {
+        for modulator in &mut self.modulators {
+            for target in &mut modulator.targets {
+                if let Some((lane, slot, k)) = Self::param_lane_fx(target.dest as usize) {
+                    *target = match to(lane, slot) {
+                        Some((lane, slot)) => ModTarget { dest: Self::lane_fx_param(lane, slot, k) as u16, ..*target },
+                        None => ModTarget::NONE,
+                    };
+                }
+            }
+        }
+    }
+
+    /// Takes the effect in slot `slot` of lane `l` out, closing the gap.
+    pub fn remove_lane_fx(&mut self, l: usize, slot: usize) {
+        let fx = &mut self.lanes[l].fx;
+        fx.copy_within(slot + 1.., slot);
+        fx[MOD_LANE_FX - 1] = None;
+        self.retarget_lane_fx(|lane, s| match s {
+            _ if lane != l || s < slot => Some((lane, s)),
+            _ if s == slot => None,
+            _ => Some((lane, s - 1)),
+        });
+    }
+
+    /// Swaps the effect in slot `slot` of lane `l` with the one above (`up`) or below.
+    pub fn move_lane_fx(&mut self, l: usize, slot: usize, up: bool) {
+        let other = if up { slot.checked_sub(1) } else { Some(slot + 1).filter(|&o| o < MOD_LANE_FX) };
+        let Some(other) = other.filter(|&o| self.lanes[l].fx[o].is_some()) else { return };
+        self.lanes[l].fx.swap(slot, other);
+        self.retarget_lane_fx(|lane, s| match s {
+            _ if lane != l => Some((lane, s)),
+            _ if s == slot => Some((lane, other)),
+            _ if s == other => Some((lane, slot)),
+            _ => Some((lane, s)),
+        });
     }
 
     /// Takes modulator `m` out, with everything connected to it.
@@ -4167,6 +4279,40 @@ impl ModularParams {
                 }
             }
         }
+    }
+
+    /// Parameter index of setting `k` of the effect in slot `slot` of lane `lane`.
+    pub fn lane_fx_param(lane: usize, slot: usize, k: usize) -> usize {
+        MOD_LANE_FX_PARAMS + (lane * MOD_LANE_FX + slot) * MOD_FX_SLOTS + k
+    }
+
+    /// The lane, effect slot and setting behind parameter `index`, if it is a lane effect's.
+    pub fn param_lane_fx(index: usize) -> Option<(usize, usize, usize)> {
+        if !(MOD_LANE_FX_PARAMS..MOD_LANE_MIX).contains(&index) {
+            return None;
+        }
+        let k = index - MOD_LANE_FX_PARAMS;
+        let (fx, setting) = (k / MOD_FX_SLOTS, k % MOD_FX_SLOTS);
+        Some((fx / MOD_LANE_FX, fx % MOD_LANE_FX, setting))
+    }
+
+    /// The range of parameter `index`: lane effect settings have their effect's.
+    pub fn param_info(&self, index: usize) -> Option<ParamInfo> {
+        match Self::param_lane_fx(index) {
+            Some((lane, slot, k)) => self.lanes[lane].fx[slot].as_ref()?.effect.params().get(k).copied(),
+            None => MODULAR_PARAMS.get(index).copied(),
+        }
+    }
+
+    /// Whether lane `l` runs its effects per voice: it and every lane before it are poly.
+    pub fn lane_poly(&self, l: usize) -> bool {
+        self.lanes[..=l.min(MOD_LANES - 1)].iter().all(|lane| lane.poly)
+    }
+
+    /// Whether lane `l` is heard: not muted, and soloed if any lane is.
+    pub fn lane_audible(&self, l: usize) -> bool {
+        let lane = &self.lanes[l];
+        !lane.mute && (lane.solo || !self.lanes.iter().any(|other| other.solo))
     }
 
     pub fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
@@ -4194,10 +4340,17 @@ impl ModularParams {
             i if i == MOD_UNISON + 1 => &mut self.unison.spread,
             i if i == MOD_UNISON + 2 => &mut self.unison.blend,
             i if i == MOD_UNISON + 3 => &mut self.unison.bias,
-            i if i < MOD_PARAM_COUNT => {
+            i if i < MOD_LANE_FX_PARAMS => {
                 let k = i - MOD_MODULATOR_SLOTS_AT;
                 self.modulators[k / MOD_MODULATOR_SLOTS].value_mut(k % MOD_MODULATOR_SLOTS)
             }
+            i if i < MOD_LANE_MIX => {
+                let (lane, slot, k) = Self::param_lane_fx(i)?;
+                return self.lanes[lane].fx[slot].as_mut()?.effect.param_mut(k);
+            }
+            i if i < MOD_PITCH => &mut self.lanes[i - MOD_LANE_MIX].mix,
+            MOD_PITCH => &mut self.pitch,
+            MOD_FINE => &mut self.fine,
             _ => return None,
         })
     }
@@ -4213,6 +4366,11 @@ impl ModularParams {
             let modulator = &self.modulators[m];
             let name = modulator_slot(modulator.kind, k).map_or("?", |i| i.name);
             return format!("Mod {} {} · {name}", m + 1, modulator.kind.label());
+        }
+        if let Some((lane, slot, k)) = Self::param_lane_fx(index) {
+            let effect = self.lanes[lane].fx[slot].map(|d| d.effect);
+            let name = effect.and_then(|e| e.params().get(k)).map_or("?", |i| i.name);
+            return format!("Lane {} {} · {name}", lane + 1, effect.map_or("?", |e| e.label()));
         }
         MODULAR_PARAMS.get(index).map_or_else(|| "?".into(), |p| p.name.to_string())
     }
@@ -4565,6 +4723,65 @@ impl ModularParams {
         p.glide = 40.0;
         p.gain = 0.55;
         list.push(("Mod · Expressive Lead", p));
+
+        // Poly lane: each note of the chord is driven on its own, so chords stay clean
+        // (no intermodulation); velocity drives harder. A shared reverb lane after it.
+        let mut p = build(&[group, saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.2)]), filter(0, 3200.0, 0.9, false), out(0.01, 0.8, 0.8, 0.5)]);
+        p.lanes[0].fx[0] = fx(Effect::Saturator(SaturatorParams { drive_db: 16.0, output_db: -10.0, mix: 1.0 }));
+        p.lanes[0].poly = true;
+        p.lanes[0].dest = 2;
+        p.lanes[2].fx[0] = reverb(0.8, 0.3);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = ModTarget::new(ModularParams::lane_fx_param(0, 0, 0), 0.25);
+        p.modulators[0] = velocity;
+        p.gain = 0.42;
+        list.push(("Lanes · Poly Drive Chords", p));
+
+        // Parallel lanes: the same saw clean with chorus in lane 1, crushed in lane 2.
+        let mut p = build(&[group, saw(&[]), filter(0, 5000.0, 0.7, false), out(0.005, 0.6, 0.6, 0.3), group, saw(&[]), out(0.005, 0.6, 0.6, 0.3)]);
+        p.modules[6].choice[0] = 1;
+        p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams::default()));
+        p.lanes[1].fx[0] = fx(Effect::Bitcrusher(BitcrusherParams { bits: 5.0, downsample: 6.0, mix: 1.0 }));
+        p.lanes[1].mix = 0.6;
+        p.lanes[1].gain = 0.5;
+        p.gain = 0.37;
+        list.push(("Lanes · Parallel Crush", p));
+
+        // Sidechain pumping inside the patch: a looping curve beats quarter notes into the
+        // sideband, unheard; a follower listening to it ducks the pad.
+        let mut beat = module(K::CurveOutput, &[(slot::CURVE_LENGTH, 0.5), (slot::CURVE_START, 0.0), (slot::CURVE_END, 1.0)], 0);
+        beat.choice[0] = MOD_SEND_SIDEBAND;
+        beat.choice[1] = 1;
+        beat.curve = Shape::from_points(&[(0.0, 1.0, 0.0), (0.25, 0.0, 0.5), (1.0, 0.0, 0.0)]);
+        let mut p = build(&[group, saw(&[(slot::UNISON, 4.0), (slot::DETUNE, 0.25), (slot::PHASE_RANDOM, 180.0)]), filter(0, 2600.0, 0.8, false), out(0.05, 1.0, 1.0, 0.6), group, sine(&[]), beat]);
+        let mut follower = modulator(ModulatorKind::AudioFollower, &[(mslot::FOLLOW_ATTACK, 0.002), (mslot::FOLLOW_RELEASE, 0.15)]);
+        follower.index = (MOD_LANES + 1) as u8;
+        follower.targets[0] = target(3, slot::LEVEL, -0.45);
+        p.modulators[0] = follower;
+        p.lanes[0].fx[0] = reverb(0.6, 0.2);
+        p.gain = 0.3;
+        list.push(("Lanes · Sideband Pump", p));
+
+        // Poly echoes: every note has its own delay, so echoes of one note never
+        // smear into the next; a random modulator sets each note's feedback.
+        let mut p = build(&[group, sine(&[]), filter(0, 4000.0, 0.7, false), out(0.002, 0.25, 0.0, 0.2)]);
+        p.modules[1].set(slot::HARMONIC, 1.0);
+        let mut pluck = Module::new(K::Analog);
+        pluck.choice[0] = 1;
+        pluck.set(slot::LEVEL, 0.4);
+        p.modules[2] = pluck;
+        p.modules[3] = filter(0, 4000.0, 0.7, false);
+        p.modules[4] = out(0.002, 0.25, 0.0, 0.2);
+        p.lanes[0].fx[0] = fx(Effect::Delay(DelayParams { time_beats: 0.75, feedback: 0.4, mix: 0.45, ping_pong: true, ..DelayParams::default() }));
+        p.lanes[0].poly = true;
+        p.lanes[0].dest = 1;
+        p.lanes[1].fx[0] = reverb(0.6, 0.2);
+        let mut random = modulator(ModulatorKind::Random, &[]);
+        random.targets[0] = ModTarget::new(ModularParams::lane_fx_param(0, 0, 0), 0.3);
+        p.modulators[0] = random;
+        p.modules[4].set(slot::LEVEL, 1.8);
+        p.gain = 1.0;
+        list.push(("Lanes · Poly Echo Pluck", p));
         list
     }
 
@@ -4645,7 +4862,8 @@ impl ModularParams {
     /// True when going from `self` to `other` changes what the synth allocates (lane effects).
     pub fn layout_differs(&self, other: &ModularParams) -> bool {
         let fx = |p: &ModularParams| p.lanes.map(|l| l.fx.map(|d| d.map(|d| std::mem::discriminant(&d.effect))));
-        fx(self) != fx(other)
+        let poly = |p: &ModularParams| [0, 1, 2].map(|l| p.lane_poly(l));
+        fx(self) != fx(other) || poly(self) != poly(other)
     }
 }
 
@@ -5787,6 +6005,155 @@ pub const MODULAR_PARAMS: [ParamInfo; MOD_PARAM_COUNT] = [
     ParamInfo::linear("Mod32 6", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("Mod32 7", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("Mod32 8", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX1 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX1 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX1 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX1 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX1 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX1 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX2 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX2 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX2 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX2 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX2 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX2 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX3 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX3 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX3 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX3 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX3 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX3 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX4 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX4 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX4 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX4 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX4 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX4 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX5 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX5 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX5 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX5 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX5 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX5 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX6 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX6 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX6 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX6 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX6 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX6 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX7 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX7 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX7 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX7 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX7 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX7 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX8 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX8 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX8 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX8 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX8 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L1 FX8 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX1 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX1 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX1 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX1 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX1 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX1 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX2 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX2 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX2 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX2 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX2 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX2 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX3 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX3 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX3 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX3 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX3 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX3 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX4 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX4 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX4 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX4 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX4 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX4 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX5 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX5 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX5 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX5 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX5 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX5 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX6 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX6 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX6 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX6 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX6 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX6 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX7 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX7 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX7 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX7 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX7 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX7 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX8 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX8 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX8 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX8 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX8 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L2 FX8 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX1 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX1 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX1 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX1 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX1 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX1 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX2 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX2 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX2 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX2 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX2 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX2 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX3 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX3 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX3 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX3 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX3 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX3 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX4 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX4 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX4 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX4 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX4 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX4 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX5 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX5 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX5 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX5 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX5 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX5 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX6 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX6 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX6 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX6 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX6 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX6 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX7 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX7 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX7 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX7 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX7 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX7 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX8 1", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX8 2", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX8 3", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX8 4", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX8 5", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("L3 FX8 6", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Lane 1 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Lane 2 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Lane 3 Mix", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Pitch", -24.0, 24.0, 0.0, Semitones),
+    ParamInfo::linear("Fine", -100.0, 100.0, 0.0, Plain),
 ];
 
 #[cfg(test)]
@@ -5815,7 +6182,9 @@ mod tests {
             }
         }
         for mut kind in InstrumentKind::catalog() {
-            for (i, info) in kind.params().iter().enumerate() {
+            // A modular synth's lane effect settings exist only while the effect does.
+            let modular = matches!(kind, InstrumentKind::Modular(_));
+            for (i, info) in kind.params().iter().enumerate().filter(|&(i, _)| !modular || ModularParams::param_lane_fx(i).is_none()) {
                 kind.set(i, info.max);
                 assert_eq!(kind.get(i), info.max, "{} {}", kind.label(), info.name);
                 kind.set(i, info.min);

@@ -15,7 +15,7 @@ use engine::model::{
     module_slot, modulator_slot, mslot, slot, AudioMod, AudioParam, CurveInput, Device, Effect, InstrumentKind, LfoMode, ModTarget, ModularParams,
     ModuleKind, Modulator, ModulatorKind, OutputRange, Param, ParamInfo, TriggerMode, UnisonMode, MOD_LISTEN, MOD_NO_MODULATOR, SCALE_MULTIPLIERS, ANALOG_WAVES, CHORDS, CHORD_PICKS, CURVE_LOOPS, DISTORTION_TYPES, FILTER_TYPES,
     GRAIN_SPAWN, GRAIN_SYNC, MODULAR_PARAMS, MOD_AUDIO_AMOUNT, MOD_GLIDE, MOD_LANES, MOD_LANE_FX, MOD_LANE_GAIN, MOD_MACRO_PARAMS, MOD_MASTER,
-    MOD_MODULATORS, MOD_MODULES, MOD_MODULE_SLOTS, MOD_NO_LANE, MOD_NO_MODULE, MOD_UNISON, MOD_UNISON_VOICES, NOISE_SEEDS, NOISE_TYPES,
+    MOD_MODULATORS, MOD_MODULES, MOD_MODULE_SLOTS, MOD_NO_LANE, MOD_FINE, MOD_LANE_MIX, MOD_PITCH, MOD_POLYPHONY, MOD_NO_MODULE, MOD_UNISON, MOD_UNISON_VOICES, NOISE_SEEDS, NOISE_TYPES,
     NONLINEAR_MODES, NONLINEAR_TYPES, SAMPLE_LOOPS, WAVE_USER_TABLE,
 };
 use engine::wavetable::BUILTIN;
@@ -39,6 +39,11 @@ pub enum StackEdit {
     /// Up (true) or down.
     Move(usize, bool),
 }
+
+/// Widths of the module stack and of each effect lane, and the height of both.
+const STACK_WIDTH: f32 = 600.0;
+const LANE_WIDTH: f32 = 196.0;
+const LANES_HEIGHT: f32 = 470.0;
 
 const AUDIO_GREEN: Color32 = Color32::from_rgb(90, 220, 120);
 /// Modulation of a modulator's setting.
@@ -89,8 +94,15 @@ fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, disp
     if let Some(v) = changed {
         actions.push(Action::Param(id, if display.is_some() { info.normalize(v) } else { v }));
     }
-    let InstrumentKind::Modular(p) = app.project.tracks[t].instrument else { return Some(response) };
-    let n = raw.normalize(value);
+    modulation_overlay(app, ui, t, i, raw.normalize(value), &response, diameter, actions);
+    Some(response)
+}
+
+/// What a knob for parameter `i` (at `n`, 0..1, of its travel) shows and accepts of
+/// the modulators: their rings, drops of a modulator's handle and the menu of connections.
+#[allow(clippy::too_many_arguments)]
+fn modulation_overlay(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, n: f32, response: &egui::Response, diameter: f32, actions: &mut Vec<Action>) {
+    let InstrumentKind::Modular(p) = app.project.tracks[t].instrument else { return };
     let mut k = 0;
     // Modulation of another modulator's setting is drawn in yellow.
     let of_modulator = ModularParams::param_modulator(i).is_some();
@@ -131,7 +143,6 @@ fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label: &str, disp
             }
         });
     }
-    Some(response)
 }
 
 /// A module slot knob, which also accepts audio-rate connections when `audio` is set.
@@ -172,12 +183,16 @@ fn insert_menu(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, af
     });
 }
 
-fn choice_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut u8, names: &[&str], width: f32) {
-    egui::ComboBox::from_id_salt(id).selected_text(names.get(*value as usize).copied().unwrap_or("?")).width(width).show_ui(ui, |ui| {
-        for (i, name) in names.iter().enumerate() {
-            ui.selectable_value(value, i as u8, *name);
-        }
-    });
+fn choice_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, value: &mut u8, names: &[&str], width: f32) -> egui::Response {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(names.get(*value as usize).copied().unwrap_or("?"))
+        .width(width)
+        .show_ui(ui, |ui| {
+            for (i, name) in names.iter().enumerate() {
+                ui.selectable_value(value, i as u8, *name);
+            }
+        })
+        .response
 }
 
 /// Settings that only matter in some modes stay out of the way in the others.
@@ -267,7 +282,7 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
     let group_number = (0..=i).filter(|&k| p.modules[k].kind == ModuleKind::Group).count();
     if module.kind == ModuleKind::Group {
         egui::Frame::new().fill(theme::CONTROL).corner_radius(2.0).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
-            ui.set_width(740.0);
+            ui.set_width(STACK_WIDTH);
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(format!("GRUPO {group_number}")).strong());
                 ui.label(egui::RichText::new("la señal empieza de cero aquí").color(TEXT_DIM).size(10.0));
@@ -278,7 +293,7 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
     }
     let color = module_color(module.kind);
     egui::Frame::new().fill(theme::SURFACE).corner_radius(3.0).inner_margin(egui::Margin { left: 10, right: 6, top: 4, bottom: 4 }).show(ui, |ui| {
-        ui.set_width(726.0);
+        ui.set_width(STACK_WIDTH - 14.0);
         let rect = ui.max_rect();
         ui.painter().rect_filled(egui::Rect::from_min_size(rect.min - vec2(8.0, 4.0), vec2(3.0, rect.height() + 8.0)), 1.0, color);
         let mut next = module;
@@ -287,7 +302,9 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
             ui.label(egui::RichText::new(format!("{} {}", i + 1, module.kind.label())).strong().color(color));
             audio_handle(ui, t, i);
             match module.kind {
-                ModuleKind::Analog => choice_combo(ui, ("mm_wave", t, i), &mut next.choice[0], &ANALOG_WAVES, 72.0),
+                ModuleKind::Analog => {
+                    choice_combo(ui, ("mm_wave", t, i), &mut next.choice[0], &ANALOG_WAVES, 72.0);
+                }
                 ModuleKind::Wavetable => {
                     let name = if module.table == WAVE_USER_TABLE { app.project.tracks[t].sample_name(i).unwrap_or_else(|| "Archivo".into()) } else { BUILTIN.get(module.table as usize).copied().unwrap_or(BUILTIN[0]).to_string() };
                     egui::ComboBox::from_id_salt(("mm_table", t, i)).selected_text(name).width(120.0).show_ui(ui, |ui| {
@@ -296,7 +313,9 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                         }
                     });
                 }
-                ModuleKind::Distortion => choice_combo(ui, ("mm_dist", t, i), &mut next.choice[0], &DISTORTION_TYPES, 84.0),
+                ModuleKind::Distortion => {
+                    choice_combo(ui, ("mm_dist", t, i), &mut next.choice[0], &DISTORTION_TYPES, 84.0);
+                }
                 ModuleKind::Filter => {
                     choice_combo(ui, ("mm_filter", t, i), &mut next.choice[0], &FILTER_TYPES, 84.0);
                     choice_combo(ui, ("mm_slope", t, i), &mut next.choice[1], &["1×", "2×"], 36.0);
@@ -333,7 +352,8 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                 }
                 ModuleKind::Output | ModuleKind::CurveOutput => {
                     ui.checkbox(&mut next.flag, "Out").on_hover_text("Apagado: no suena, solo sirve como fuente de modulación");
-                    choice_combo(ui, ("mm_send", t, i), &mut next.choice[0], &["→ Carril 1", "→ Carril 2", "→ Carril 3", "→ Master"], 84.0);
+                    choice_combo(ui, ("mm_send", t, i), &mut next.choice[0], &["→ Lane 1", "→ Lane 2", "→ Lane 3", "→ Master", "→ Sideband"], 90.0)
+                        .on_hover_text("Sideband: no suena; lo escuchan Audio Follower y Pitch Tracker");
                     if module.kind == ModuleKind::CurveOutput {
                         choice_combo(ui, ("mm_curve_loop", t, i), &mut next.choice[1], &CURVE_LOOPS, 78.0);
                     }
@@ -424,68 +444,110 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
     });
 }
 
+/// A knob for setting `k` of the effect in slot `slot` of lane `l`, in the effect's
+/// units, that also takes modulators.
+#[allow(clippy::too_many_arguments)]
+fn fx_knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, slot: usize, k: usize, edited: &mut Device, actions: &mut Vec<Action>) {
+    let Some(info) = edited.effect.params().get(k).copied() else { return };
+    let i = ModularParams::lane_fx_param(l, slot, k);
+    let value = edited.effect.get(k);
+    let (changed, response) = widgets::param_knob_response(ui, &info, value, info.name, 20.0, None);
+    if let Some(v) = changed {
+        edited.effect.set(k, v);
+    }
+    modulation_overlay(app, ui, t, i, info.normalize(value), &response, 20.0, actions);
+}
+
+/// One effect lane: poly, mute and solo on top, its effects, and its gain, mix and
+/// destination at the bottom.
 fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularParams, actions: &mut Vec<Action>) {
     let lane = p.lanes[l];
+    let poly = p.lane_poly(l);
+    let heard = p.lane_audible(l);
     egui::Frame::new().fill(theme::SURFACE).corner_radius(3.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
-        ui.set_width(330.0);
+        ui.set_width(LANE_WIDTH);
+        let mut next = p;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("CARRIL {}", l + 1)).strong());
-            let mut dest = lane.dest;
-            let label = |d: u8| if d == MOD_NO_LANE { "→ Master".to_string() } else { format!("→ Carril {}", d + 1) };
-            egui::ComboBox::from_id_salt(("mod_lane_dest", t, l)).selected_text(label(dest)).width(90.0).show_ui(ui, |ui| {
-                ui.selectable_value(&mut dest, MOD_NO_LANE, label(MOD_NO_LANE));
-                for d in (l + 1)..MOD_LANES {
-                    ui.selectable_value(&mut dest, d as u8, label(d as u8));
-                }
+            let title = egui::RichText::new(format!("LANE {}", l + 1)).strong();
+            ui.label(if heard { title } else { title.color(TEXT_DIM) });
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.toggle_value(&mut next.lanes[l].solo, "S").on_hover_text("Solo: silencia los demás carriles");
+                ui.toggle_value(&mut next.lanes[l].mute, "M").on_hover_text("Mute");
+                let response = ui.toggle_value(&mut next.lanes[l].poly, "Poly");
+                let hint = if lane.poly && !poly {
+                    "Polifónico: no se aplica hasta que lo sean también los carriles de su izquierda"
+                } else {
+                    "Polifónico: los efectos se aplican a cada voz por separado (y suenan hasta que se apaga su cola)"
+                };
+                response.on_hover_text(hint);
             });
-            if dest != lane.dest {
-                let mut next = p;
-                next.lanes[l].dest = dest;
-                set(actions, next);
+        });
+        let used = lane.fx.iter().filter(|d| d.is_some()).count();
+        // A fixed height, so that every lane's output controls line up at the bottom.
+        let effects = egui::ScrollArea::vertical().id_salt(("mod_lane_fx", t, l)).auto_shrink([true, false]).max_width(LANE_WIDTH).max_height(LANES_HEIGHT - 96.0);
+        effects.show(ui, |ui| {
+            ui.set_min_width(LANE_WIDTH);
+            for slot in 0..MOD_LANE_FX {
+                let Some(device) = lane.fx[slot] else { continue };
+                let mut edited = device;
+                egui::Frame::new().fill(theme::CONTROL).corner_radius(2.0).inner_margin(egui::Margin::same(4)).show(ui, |ui| {
+                    ui.set_width(LANE_WIDTH - 8.0);
+                    ui.horizontal(|ui| {
+                        ui.checkbox(&mut edited.enabled, egui::RichText::new(device.effect.label()).size(11.0));
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+                                next.remove_lane_fx(l, slot);
+                            }
+                            if slot + 1 < used && ui.small_button("▼").on_hover_text("Bajar").clicked() {
+                                next.move_lane_fx(l, slot, false);
+                            }
+                            if slot > 0 && ui.small_button("▲").on_hover_text("Subir").clicked() {
+                                next.move_lane_fx(l, slot, true);
+                            }
+                        });
+                    });
+                    devices::discrete_controls(ui, &mut edited.effect, 200 + l * 10 + slot);
+                    ui.horizontal_wrapped(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        for k in 0..device.effect.params().len() {
+                            fx_knob(app, ui, t, l, slot, k, &mut edited, actions);
+                        }
+                    });
+                });
+                // Unless it moved or went this frame.
+                if edited != device && next.lanes[l].fx[slot] == Some(device) {
+                    next.lanes[l].fx[slot] = Some(edited);
+                }
             }
+            if let Some(free) = lane.fx.iter().position(Option::is_none) {
+                egui::ComboBox::from_id_salt(("mod_lane_add", t, l)).selected_text("+ Efecto").width(100.0).show_ui(ui, |ui| {
+                    for effect in Effect::catalog() {
+                        if ui.selectable_label(false, effect.label()).clicked() {
+                            next.lanes[l].fx[free] = Some(Device::new(effect));
+                        }
+                    }
+                });
+            }
+        });
+        ui.separator();
+        ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 0.0;
             knob(app, ui, t, MOD_LANE_GAIN + l, "Gain", None, 22.0, actions);
+            knob(app, ui, t, MOD_LANE_MIX + l, "Mix", None, 22.0, actions);
+            ui.spacing_mut().item_spacing.x = 6.0;
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Enviar a").color(TEXT_DIM).size(10.0));
+                let label = |d: u8| if d == MOD_NO_LANE { "Master".to_string() } else { format!("Lane {}", d + 1) };
+                egui::ComboBox::from_id_salt(("mod_lane_dest", t, l)).selected_text(label(lane.dest)).width(76.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut next.lanes[l].dest, MOD_NO_LANE, label(MOD_NO_LANE));
+                    for d in (l + 1)..MOD_LANES {
+                        ui.selectable_value(&mut next.lanes[l].dest, d as u8, label(d as u8));
+                    }
+                });
+            });
         });
-        for slot in 0..MOD_LANE_FX {
-            let Some(device) = lane.fx[slot] else { continue };
-            let mut edited = device;
-            let mut remove = false;
-            ui.horizontal(|ui| {
-                ui.checkbox(&mut edited.enabled, egui::RichText::new(device.effect.label()).size(11.0));
-                remove = ui.small_button("✕").clicked();
-            });
-            ui.horizontal_wrapped(|ui| {
-                devices::discrete_controls(ui, &mut edited.effect, 200 + l * 10 + slot);
-                ui.spacing_mut().item_spacing.x = 0.0;
-                for (i, info) in device.effect.params().iter().enumerate() {
-                    if let Some(v) = widgets::param_knob(ui, info, device.effect.get(i), info.name, 20.0, None) {
-                        edited.effect.set(i, v);
-                    }
-                }
-            });
-            if remove || edited != device {
-                let mut next = p;
-                next.lanes[l].fx[slot] = if remove { None } else { Some(edited) };
-                if remove {
-                    let kept: Vec<Option<Device>> = next.lanes[l].fx.iter().copied().filter(Option::is_some).collect();
-                    next.lanes[l].fx = [None; MOD_LANE_FX];
-                    for (i, d) in kept.into_iter().enumerate() {
-                        next.lanes[l].fx[i] = d;
-                    }
-                }
-                set(actions, next);
-            }
-        }
-        if let Some(free) = lane.fx.iter().position(Option::is_none) {
-            egui::ComboBox::from_id_salt(("mod_lane_add", t, l)).selected_text("+ Efecto").width(100.0).show_ui(ui, |ui| {
-                for effect in Effect::catalog() {
-                    if ui.selectable_label(false, effect.label()).clicked() {
-                        let mut next = p;
-                        next.lanes[l].fx[free] = Some(Device::new(effect));
-                        set(actions, next);
-                    }
-                }
-            });
+        if next != p {
+            set(actions, next);
         }
     });
 }
@@ -795,6 +857,34 @@ pub fn compact(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, ac
     });
 }
 
+/// Voice settings, under the stack: voicing, polyphony, bend range, glide, master
+/// pitch and the global unison.
+fn voice_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, actions: &mut Vec<Action>) {
+    egui::Frame::new().fill(theme::SURFACE).corner_radius(3.0).inner_margin(egui::Margin::same(6)).show(ui, |ui| {
+        ui.set_width(STACK_WIDTH - 12.0);
+        let mut next = p;
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("VOZ").color(TEXT_DIM).size(10.0).strong());
+            let mut voicing = (p.mono, p.legato);
+            ui.selectable_value(&mut voicing, (false, false), "Poly");
+            ui.selectable_value(&mut voicing, (true, false), "Mono");
+            ui.selectable_value(&mut voicing, (true, true), "Legato");
+            (next.mono, next.legato) = voicing;
+            ui.add_enabled(!p.mono, egui::DragValue::new(&mut next.polyphony).range(1..=MOD_POLYPHONY).suffix(" notas"))
+                .on_hover_text("Polifonía: notas a la vez (cada una usa una voz por voz de unísono)");
+            ui.add(egui::DragValue::new(&mut next.bend_range).range(0..=48).prefix("Bend ±").suffix(" st")).on_hover_text("Rango de la rueda de pitch bend");
+            ui.spacing_mut().item_spacing.x = 0.0;
+            knob(app, ui, t, MOD_GLIDE, "Glide", None, 22.0, actions);
+            knob(app, ui, t, MOD_PITCH, "Pitch", None, 22.0, actions);
+            knob(app, ui, t, MOD_FINE, "Fine", None, 22.0, actions);
+        });
+        if next != p {
+            set(actions, next);
+        }
+        ui.horizontal(|ui| unison_panel(app, ui, t, p, actions));
+    });
+}
+
 pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let Some(t) = app.modular_window else { return };
     let Some(InstrumentKind::Modular(p)) = app.project.tracks.get(t).map(|track| track.instrument) else {
@@ -805,29 +895,17 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut actions = Vec::new();
     let title = format!("Modular Synth · {}", app.project.tracks[t].name);
     egui::Window::new(title).id(egui::Id::new(("modular_window", t))).open(&mut open).resizable(false).collapsible(false).default_pos(pos2(40.0, 40.0)).show(ctx, |ui| {
-        ui.set_width(1120.0);
+        ui.set_width(STACK_WIDTH + 3.0 * (LANE_WIDTH + 18.0) + 16.0);
         let app: &PulseApp = app;
+        // Top: presets and the eight macros.
         ui.horizontal(|ui| {
-            devices::preset_menu(app, ui, t, &mut actions);
+            ui.vertical(|ui| {
+                devices::preset_menu(app, ui, t, &mut actions);
+                if ui.button("▶ Escuchar").clicked() {
+                    actions.push(Action::Preview(60));
+                }
+            });
             ui.separator();
-            let mut voicing = (p.mono, p.legato);
-            ui.selectable_value(&mut voicing, (false, false), "Poly");
-            ui.selectable_value(&mut voicing, (true, false), "Mono");
-            ui.selectable_value(&mut voicing, (true, true), "Legato");
-            if voicing != (p.mono, p.legato) {
-                set(&mut actions, ModularParams { mono: voicing.0, legato: voicing.1, ..p });
-            }
-            ui.spacing_mut().item_spacing.x = 0.0;
-            knob(app, ui, t, MOD_GLIDE, "Glide", None, 22.0, &mut actions);
-            knob(app, ui, t, MOD_MASTER, "Master", None, 22.0, &mut actions);
-            if ui.button("▶").on_hover_text("Escuchar").clicked() {
-                actions.push(Action::Preview(60));
-            }
-            ui.spacing_mut().item_spacing.x = 6.0;
-            ui.separator();
-            unison_panel(app, ui, t, p, &mut actions);
-        });
-        ui.horizontal(|ui| {
             ui.label(egui::RichText::new("MACROS").color(TEXT_DIM).size(10.0).strong());
             ui.spacing_mut().item_spacing.x = 4.0;
             for m in 0..8 {
@@ -835,30 +913,38 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             }
         });
         ui.separator();
+        // Middle: the generators with the voice settings under them, and the effect
+        // lanes on their right with the master level.
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("PILA DE MÓDULOS").color(TEXT_DIM).size(10.0).strong());
+                    ui.label(egui::RichText::new("GENERADORES").color(TEXT_DIM).size(10.0).strong());
                     ui.label(egui::RichText::new("de arriba abajo; cada grupo empieza de cero").color(TEXT_DIM).size(10.0));
                 });
-                egui::ScrollArea::vertical().id_salt(("modular_stack", t)).max_height(470.0).show(ui, |ui| {
+                egui::ScrollArea::vertical().id_salt(("modular_stack", t)).max_height(LANES_HEIGHT - 70.0).show(ui, |ui| {
                     for i in (0..MOD_MODULES).filter(|&i| p.modules[i].kind != ModuleKind::Empty) {
                         module_card(app, ui, t, i, p, &mut actions);
                     }
                     let last = p.modules.iter().rposition(|m| m.kind != ModuleKind::Empty);
                     insert_menu(ui, ("modular_add", t), last, "+ Añadir módulo", &mut actions);
                 });
+                voice_panel(app, ui, t, p, &mut actions);
             });
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("CARRILES DE EFECTOS").color(TEXT_DIM).size(10.0).strong());
-                egui::ScrollArea::vertical().id_salt(("modular_lanes", t)).max_height(470.0).show(ui, |ui| {
+                ui.horizontal_top(|ui| {
                     for l in 0..MOD_LANES {
-                        lane_panel(app, ui, t, l, p, &mut actions);
+                        ui.vertical(|ui| lane_panel(app, ui, t, l, p, &mut actions));
                     }
+                });
+                ui.horizontal(|ui| {
+                    ui.add_space(3.0 * (LANE_WIDTH + 18.0) - 60.0);
+                    knob(app, ui, t, MOD_MASTER, "Master", None, 30.0, &mut actions);
                 });
             });
         });
         ui.separator();
+        // Bottom: the modulators.
         ui.label(egui::RichText::new("MODULADORES").color(TEXT_DIM).size(10.0).strong());
         egui::ScrollArea::horizontal().id_salt(("modular_mods", t)).show(ui, |ui| {
             ui.horizontal_top(|ui| {
@@ -956,6 +1042,8 @@ mod tests {
             let _ = ctx.run_ui(input, |ui| window(&mut app, &ui.ctx().clone()));
         }
         assert_eq!(params(&app), p, "drawing changes nothing");
+        let rect = ctx.memory(|m| m.area_rect(egui::Id::new(("modular_window", 0)))).expect("the window was drawn");
+        assert!(rect.width() <= 1300.0, "the widest module headers fit: {} px", rect.width());
         // Settings for other modes stay hidden.
         let granular = Module::new(ModuleKind::Granular);
         assert!(slot_shown(&granular, slot::RATE) && !slot_shown(&granular, slot::DENSITY) && !slot_shown(&granular, slot::CHORD_RANGE));
@@ -1070,6 +1158,58 @@ mod tests {
     }
 
     #[test]
+    fn every_lane_setting_draws_and_the_window_fits() {
+        let mut p = ModularParams::default();
+        for (k, effect) in Effect::catalog().into_iter().enumerate() {
+            let (lane, slot) = (k / MOD_LANE_FX, k % MOD_LANE_FX);
+            p.lanes[lane].fx[slot] = Some(Device::new(effect));
+        }
+        p.lanes[0].poly = true;
+        p.lanes[2].poly = true;
+        p.lanes[1].mute = true;
+        p.lanes[2].solo = true;
+        p.lanes[0].mix = 0.4;
+        p.lanes[0].dest = 2;
+        p.modules[2].choice[0] = engine::model::MOD_SEND_SIDEBAND;
+        let mut follower = Modulator::new(ModulatorKind::AudioFollower);
+        follower.index = 4;
+        follower.targets[0] = ModTarget::new(ModularParams::lane_fx_param(0, 1, 0), 0.3);
+        p.modulators[0] = follower;
+        (p.polyphony, p.bend_range, p.pitch, p.fine) = (6, 12, -12.0, 15.0);
+        let mut app = app_with(p);
+        app.modular_window = Some(0);
+        let ctx = egui::Context::default();
+        for n in 0..3 {
+            let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1600.0, 1000.0))), time: Some(n as f64 * 0.05), ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| window(&mut app, &ui.ctx().clone()));
+        }
+        assert_eq!(params(&app), p, "drawing changes nothing");
+        let rect = ctx.memory(|m| m.area_rect(egui::Id::new(("modular_window", 0)))).expect("the window was drawn");
+        assert!(rect.width() <= 1300.0 && rect.height() <= 900.0, "fits a laptop screen: {} × {} px", rect.width(), rect.height());
+        assert!(p.param_name(ModularParams::lane_fx_param(0, 1, 0)).starts_with("Lane 1"));
+    }
+
+    #[test]
+    fn dragging_a_modulator_onto_a_lane_effect_knob_connects_it() {
+        let mut p = ModularParams::default();
+        p.modulators[0] = Modulator::new(ModulatorKind::Lfo);
+        p.lanes[1].fx[2] = Some(Device::new(Effect::catalog()[0]));
+        let mut app = app_with(p);
+        let actions = drag_onto(&mut app, ModulatorRef(0), |app, ui, actions| {
+            let mut edited = params(app).lanes[1].fx[2].unwrap();
+            fx_knob(app, ui, 0, 1, 2, 0, &mut edited, actions);
+        });
+        devices::apply(&mut app, Target::Track(0), actions);
+        let target = params(&app).modulators[0].targets[0];
+        assert_eq!(target.dest as usize, ModularParams::lane_fx_param(1, 2, 0));
+        // Automation sees the effect's own range.
+        let info = app.param_info(Target::Track(0), Param::Instrument(target.dest as usize)).unwrap();
+        assert_eq!(info, Effect::catalog()[0].params()[0]);
+        assert!(app.automatable(Target::Track(0)).contains(&Param::Instrument(target.dest as usize)));
+        assert!(!app.automatable(Target::Track(0)).contains(&Param::Instrument(ModularParams::lane_fx_param(0, 0, 0))), "no effect there");
+    }
+
+    #[test]
     fn stack_edits_move_files_with_their_modules() {
         let mut p = ModularParams::default();
         p.modules[1] = Module::new(ModuleKind::Sample);
@@ -1101,6 +1241,12 @@ mod tests {
     #[ignore]
     fn modulation_presets_to_wav() {
         render_presets(Some(std::env::var("PULSE_OUT").unwrap()), "Mod ·");
+    }
+
+    #[test]
+    #[ignore = "diagnostic: writes the lane presets to $PULSE_OUT"]
+    fn lane_presets_to_wav() {
+        render_presets(Some(std::env::var("PULSE_OUT").unwrap()), "Lanes ·");
     }
 
     /// Renders one modular patch for `seconds`, with `file` loaded into module 1.

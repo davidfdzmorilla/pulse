@@ -30,7 +30,20 @@ impl MidiInputs {
             let Some(port) = input.ports().get(index).cloned() else { continue };
             let name = input.port_name(&port).unwrap_or_else(|_| format!("Puerto {}", index + 1));
             let live = live.clone();
-            let read = move |_: u64, bytes: &[u8], parser: &mut MidiParser| parser.feed(bytes, |message| forward(message, &live));
+            // PULSE_MIDI_LOG=1 prints every packet and what it was read as.
+            let log = std::env::var_os("PULSE_MIDI_LOG").is_some();
+            let port_name = name.clone();
+            let read = move |_: u64, bytes: &[u8], parser: &mut MidiParser| {
+                if log {
+                    eprintln!("[midi] {port_name}: paquete {}", hex(bytes));
+                }
+                parser.feed(bytes, |message| {
+                    if log {
+                        eprintln!("[midi]   → {}", describe(message));
+                    }
+                    forward(message, &live)
+                })
+            };
             match input.connect(&port, "Pulse input", read, MidiParser::default()) {
                 Ok(connection) => {
                     inputs.connections.push(connection);
@@ -38,6 +51,9 @@ impl MidiInputs {
                 }
                 Err(e) => inputs.error = Some(format!("{name}: {e}")),
             }
+        }
+        if std::env::var_os("PULSE_MIDI_LOG").is_some() {
+            eprintln!("[midi] puertos conectados: {:?}; error: {:?}", inputs.names, inputs.error);
         }
         inputs
     }
@@ -93,6 +109,27 @@ impl MidiParser {
             }
         }
     }
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02X}")).collect::<Vec<_>>().join(" ")
+}
+
+/// A MIDI message in words, for the log.
+fn describe(message: &[u8]) -> String {
+    let channel = message[0] & 0x0F;
+    let what = match (message[0] & 0xF0, message.get(1).copied().unwrap_or(0), message.get(2).copied().unwrap_or(0)) {
+        (0x90, n, 0) => format!("note-off {n} ({})", crate::project::note_name(n)),
+        (0x90, n, v) => format!("note-on {n} ({}) vel {v}", crate::project::note_name(n)),
+        (0x80, n, _) => format!("note-off {n} ({})", crate::project::note_name(n)),
+        (0xB0, c, v) => format!("CC {c} = {v}"),
+        (0xE0, lo, hi) => format!("pitch bend {}", ((hi as i32) << 7 | lo as i32) - 8192),
+        (0xD0, v, _) => format!("aftertouch {v}"),
+        (0xA0, n, v) => format!("presión polifónica {n} = {v}"),
+        (0xC0, p, _) => format!("program change {p}"),
+        _ => hex(message),
+    };
+    format!("canal {} · {what}", channel + 1)
 }
 
 /// Forwards notes, controllers, pitch bend and pressure on any channel.

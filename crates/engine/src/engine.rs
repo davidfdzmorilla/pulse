@@ -188,6 +188,9 @@ pub enum Command {
         slot: usize,
     },
     StopTrack(usize),
+    /// Puts the tracks in a new order: track `i` becomes the one that was at
+    /// `order[i]`. Everything moves with them (clips playing, instruments, plugins).
+    ReorderTracks([usize; MAX_TRACKS]),
     LaunchScene(usize),
     StopAllClips,
     /// Returns every track from session clips to its arrangement.
@@ -933,6 +936,11 @@ struct Track {
     held: [Option<(f64, f32)>; 128],
 }
 
+fn is_permutation(order: &[usize]) -> bool {
+    let mut seen = [false; MAX_TRACKS];
+    order.len() == MAX_TRACKS && order.iter().all(|&o| o < MAX_TRACKS && !std::mem::replace(&mut seen[o], true))
+}
+
 /// Sends the notes still held on a track to the UI, ending them at `end`.
 fn flush_held(track: &mut Track, index: usize, end: f64, recorded: &mut Producer<RecordedNote>) {
     for (pitch, held) in track.held.iter_mut().enumerate() {
@@ -1171,6 +1179,26 @@ impl Engine {
                 if let Some(t) = self.tracks.get_mut(track) {
                     t.queued = Queued::Stop;
                 }
+            }
+            Command::ReorderTracks(order) => {
+                if !is_permutation(&order[..]) {
+                    return;
+                }
+                // Follow each cycle of the permutation with swaps: nothing allocates.
+                let mut done = [false; MAX_TRACKS];
+                for start in 0..MAX_TRACKS {
+                    let mut i = start;
+                    while !done[i] {
+                        done[i] = true;
+                        let from = order[i];
+                        if done[from] {
+                            break;
+                        }
+                        self.tracks.swap(i, from);
+                        i = from;
+                    }
+                }
+                self.input_track = self.input_track.and_then(|t| order.iter().position(|&o| o == t));
             }
             Command::LaunchScene(slot) => {
                 if slot >= NUM_SCENES {
@@ -1732,6 +1760,37 @@ mod tests {
         assert!(h.shared.playing.load(Ordering::Relaxed));
         assert_eq!(h.playing(0), 0);
         assert!(energy(&audio) > 1.0, "clip should be audible");
+    }
+
+    #[test]
+    fn reordering_tracks_moves_what_they_play() {
+        let mut h = Harness::new();
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::SetClip { track: 2, slot: 1, clip: Some(one_note_clip()) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.send(Command::LaunchClip { track: 2, slot: 1 });
+        h.send(Command::SetInputTrack(Some(2)));
+        h.run_beats(1.0);
+        // New order: 2, 0, 1, 3, 4…
+        let mut order: [usize; MAX_TRACKS] = std::array::from_fn(|i| i);
+        order[..3].copy_from_slice(&[2, 0, 1]);
+        h.send(Command::ReorderTracks(order));
+        h.run_beats(0.5);
+        assert_eq!((h.playing(0), h.playing(1), h.playing(2)), (1, 0, NONE));
+        assert_eq!(h.engine.input_track, Some(0));
+        // Not a permutation: ignored.
+        h.send(Command::ReorderTracks([0; MAX_TRACKS]));
+        h.run_beats(0.5);
+        assert_eq!((h.playing(0), h.playing(1)), (1, 0));
+        // A long cycle and its inverse put everything back.
+        let shift: [usize; MAX_TRACKS] = std::array::from_fn(|i| (i + 1) % MAX_TRACKS);
+        let back: [usize; MAX_TRACKS] = std::array::from_fn(|i| (i + MAX_TRACKS - 1) % MAX_TRACKS);
+        h.send(Command::ReorderTracks(shift));
+        h.run_beats(0.25);
+        assert_eq!((h.playing(0), h.playing(MAX_TRACKS - 1)), (0, 1));
+        h.send(Command::ReorderTracks(back));
+        h.run_beats(0.25);
+        assert_eq!((h.playing(0), h.playing(1)), (1, 0));
     }
 
     #[test]

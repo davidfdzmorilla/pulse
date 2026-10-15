@@ -92,6 +92,9 @@ impl PulseApp {
 /// put into a native view that is in no window, resized, and taken out again. Must run
 /// on the main thread (from `main`).
 pub fn check_installed() -> Vec<String> {
+    #[cfg(target_os = "macos")]
+    let mut report = vec![format!("Ventanas de editor: {}", mac::check_closing())];
+    #[cfg(not(target_os = "macos"))]
     let mut report = Vec::new();
     for bundle in engine::plugin::default_folders().iter().flat_map(|f| engine::plugin::bundles(f)) {
         let Ok(list) = engine::plugin::scan(&bundle) else { continue };
@@ -156,16 +159,67 @@ fn check_editor(_handle: &engine::plugin::PluginHandle) -> String {
 mod mac {
     use engine::plugin::{PluginHandle, PluginView};
     use objc2::rc::Retained;
-    use objc2::MainThreadMarker;
-    use objc2_app_kit::{NSBackingStoreType, NSFloatingWindowLevel, NSWindow, NSWindowStyleMask};
-    use objc2_foundation::{NSPoint, NSRect, NSSize, NSString};
+    use objc2::runtime::ProtocolObject;
+    use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+    use objc2_app_kit::{NSBackingStoreType, NSFloatingWindowLevel, NSWindow, NSWindowDelegate, NSWindowStyleMask};
+    use objc2_foundation::{NSNotification, NSObject, NSObjectProtocol, NSPoint, NSRect, NSSize, NSString};
     use std::cell::Cell;
     use std::rc::Rc;
+
+    pub struct DelegateState {
+        closed: Rc<Cell<bool>>,
+    }
+
+    define_class!(
+        // SAFETY: NSObject has no subclassing requirements, and this class has no Drop.
+        #[unsafe(super(NSObject))]
+        #[thread_kind = MainThreadOnly]
+        #[ivars = DelegateState]
+        struct WindowDelegate;
+
+        unsafe impl NSObjectProtocol for WindowDelegate {}
+
+        unsafe impl NSWindowDelegate for WindowDelegate {
+            /// The user closed the window (hiding with the app does not count).
+            #[unsafe(method(windowWillClose:))]
+            fn window_will_close(&self, _notification: &NSNotification) {
+                self.ivars().closed.set(true);
+            }
+        }
+    );
+
+    /// Whether hiding an editor window leaves it open and closing it does not: checked on
+    /// a window that is never put on screen.
+    pub fn check_closing() -> String {
+        let Some(mtm) = MainThreadMarker::new() else { return "no es el hilo principal".into() };
+        let rect = NSRect::new(NSPoint::new(-10_000.0, -10_000.0), NSSize::new(10.0, 10.0));
+        let window = unsafe { NSWindow::initWithContentRect_styleMask_backing_defer(mtm.alloc(), rect, NSWindowStyleMask::Titled | NSWindowStyleMask::Closable, NSBackingStoreType::Buffered, true) };
+        unsafe { window.setReleasedWhenClosed(false) };
+        let closed = Rc::new(Cell::new(false));
+        let delegate = WindowDelegate::new(mtm, closed.clone());
+        window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
+        window.orderOut(None);
+        let after_hiding = closed.get();
+        window.performClose(None);
+        let after_closing = closed.get();
+        window.setDelegate(None);
+        format!("ocultar la ventana {} la cierra; cerrarla {} avisa", if after_hiding { "SÍ" } else { "no" }, if after_closing { "sí" } else { "NO" })
+    }
+
+    impl WindowDelegate {
+        fn new(mtm: MainThreadMarker, closed: Rc<Cell<bool>>) -> Retained<Self> {
+            let this = Self::alloc(mtm).set_ivars(DelegateState { closed });
+            unsafe { msg_send![super(this), init] }
+        }
+    }
 
     pub struct Editor {
         // The view goes before the window: the editor leaves its window first.
         view: Option<PluginView>,
         window: Retained<NSWindow>,
+        /// The window keeps only a weak reference to its delegate.
+        _delegate: Retained<WindowDelegate>,
+        closed: Rc<Cell<bool>>,
         /// The content size last given to the editor (or asked for by it).
         size: Rc<Cell<(f64, f64)>>,
     }
@@ -204,8 +258,11 @@ mod mac {
                 window.close();
                 return Err("su editor no se pudo abrir".into());
             }
+            let closed = Rc::new(Cell::new(false));
+            let delegate = WindowDelegate::new(mtm, closed.clone());
+            window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             window.makeKeyAndOrderFront(None);
-            Ok(Editor { view: Some(view), window, size })
+            Ok(Editor { view: Some(view), window, _delegate: delegate, closed, size })
         }
 
         /// What the window is doing, for the log.
@@ -226,13 +283,14 @@ mod mac {
         }
 
         pub fn front(&self) {
+            // Also brings back a window something else hid.
             self.window.makeKeyAndOrderFront(None);
         }
 
         /// False once the user closed the window. Hands window resizes to the editor.
         pub fn poll(&self) -> bool {
-            // Hidden while Pulse is in the background is not closed.
-            if !self.window.isVisible() && !self.window.isMiniaturized() && !hidden_by_app(&self.window) {
+            // Only closing counts: the window also hides while Pulse is in the background.
+            if self.closed.get() {
                 return false;
             }
             if let (Some(view), Some(content)) = (&self.view, self.window.contentView()) {
@@ -252,11 +310,6 @@ mod mac {
         }
     }
 
-    /// Windows that hide on deactivation are invisible while another app is in front.
-    fn hidden_by_app(window: &NSWindow) -> bool {
-        window.hidesOnDeactivate() && !objc2_app_kit_active()
-    }
-
     fn objc2_app_kit_active() -> bool {
         // NSApplication is not among the features used; ask through the runtime.
         unsafe {
@@ -274,6 +327,7 @@ mod mac {
     impl Drop for Editor {
         fn drop(&mut self) {
             self.view.take();
+            self.window.setDelegate(None);
             self.window.close();
         }
     }

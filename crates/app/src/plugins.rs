@@ -440,6 +440,29 @@ pub(crate) mod tests {
         assert_eq!(reopened.samples.plugins[&id].value(level), 0.125, "the live instance too");
     }
 
+    /// A knob linked to a plugin's parameter, turned while recording: automation.
+    #[test]
+    fn a_linked_plugin_knob_turned_while_recording_becomes_automation() {
+        let mut app = app();
+        let synth = app.plugin_library.found[0].clone();
+        app.set_plugin_instrument(3, &synth);
+        let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!("a plugin instrument") };
+        let level = app.samples.plugins.get(&id).unwrap().params()[0].id;
+        app.project.midi_map.push(crate::midi_map::Mapping { cc: 71, control: crate::midi_map::Control::Plugin { id, param: level } });
+        app.start_automation_take();
+        app.record_automation(1.0);
+        for (beat, value) in [(2.0, 100), (3.0, 20)] {
+            app.apply_cc(71, value);
+            app.record_automation(beat);
+        }
+        assert_eq!(app.finish_automation_take(), 1);
+        let param = engine::model::Param::Instrument(level as usize);
+        let lane = app.automation(Target::Track(3)).iter().find(|l| l.param == param).expect("a lane for the plugin's parameter");
+        let values: Vec<(f64, f32)> = lane.points.iter().map(|p| (p.beat, (p.value * 127.0).round())).collect();
+        assert_eq!(values.last(), Some(&(3.0, 20.0)), "{values:?}");
+        assert!(values.contains(&(2.0, 100.0)), "{values:?}");
+    }
+
     #[test]
     fn a_plugin_effect_works_in_a_chain_and_survives_undo() {
         let mut app = app();

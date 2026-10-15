@@ -246,4 +246,52 @@ mod tests {
         app.transport(Transport::Record);
         assert!(app.project.tracks[1].armed && !app.project.tracks[2].armed);
     }
+
+    /// A MIDI knob linked with MIDI learn, turned while recording: its moves become
+    /// automation that plays back.
+    #[test]
+    fn a_linked_knob_turned_while_recording_becomes_automation() {
+        use crate::midi_map::{Control, Mapping, Transport};
+        use engine::model::Param;
+        use engine::Target;
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+            track.automation.clear();
+        }
+        app.project.tempo = 120.0;
+        let volume = Control::Param { target: Target::Track(1), param: Param::Volume };
+        app.project.midi_map.push(Mapping { cc: 74, control: volume });
+        app.sync_all();
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).ceil() as usize {
+                engine.process(&mut buffer, 2);
+                app.update_recording();
+            }
+        };
+        app.selected_target = Target::Track(1);
+        app.transport(Transport::Record);
+        run(&mut app, 1.0);
+        // The knob turns up over two beats.
+        for step in 0..=16 {
+            app.apply_cc(74, 40 + step * 5);
+            run(&mut app, 0.125);
+        }
+        run(&mut app, 1.0);
+        app.transport(Transport::Record);
+        run(&mut app, 0.5);
+        assert!(!app.is_arrangement_recording());
+        let lane = app.automation(Target::Track(1)).iter().find(|l| l.param == Param::Volume).expect("a volume lane");
+        let (first, last) = (lane.points.first().unwrap(), lane.points.last().unwrap());
+        assert!(lane.points.len() >= 10, "{} points", lane.points.len());
+        assert!(first.beat > 0.5 && first.beat < 1.5, "starts where the knob started: {first:?}");
+        assert!(last.beat > 2.5 && last.beat < 3.5, "ends where it stopped: {last:?}");
+        assert!(last.value > first.value);
+        assert!(app.status.as_deref().unwrap_or("").contains("automatización"), "{:?}", app.status);
+        // It plays back: not overridden, and the engine has it.
+        assert_eq!(app.automation_state(Target::Track(1), Param::Volume), Some(false));
+    }
 }

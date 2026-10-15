@@ -1,6 +1,7 @@
 mod als;
 mod app;
 mod arrangement;
+mod automation_rec;
 mod browser;
 mod capture;
 mod clip_select;

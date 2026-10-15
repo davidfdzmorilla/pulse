@@ -8,7 +8,7 @@ use std::collections::HashMap;
 /// Open connections to every MIDI input port; notes go straight to the audio thread.
 #[derive(Default)]
 pub struct MidiInputs {
-    connections: Vec<MidiInputConnection<()>>,
+    connections: Vec<MidiInputConnection<MidiParser>>,
     pub names: Vec<String>,
     pub error: Option<String>,
 }
@@ -30,7 +30,8 @@ impl MidiInputs {
             let Some(port) = input.ports().get(index).cloned() else { continue };
             let name = input.port_name(&port).unwrap_or_else(|_| format!("Puerto {}", index + 1));
             let live = live.clone();
-            match input.connect(&port, "Pulse input", move |_, message, _| forward(message, &live), ()) {
+            let read = move |_: u64, bytes: &[u8], parser: &mut MidiParser| parser.feed(bytes, |message| forward(message, &live));
+            match input.connect(&port, "Pulse input", read, MidiParser::default()) {
                 Ok(connection) => {
                     inputs.connections.push(connection);
                     inputs.names.push(name);
@@ -39,6 +40,58 @@ impl MidiInputs {
             }
         }
         inputs
+    }
+}
+
+/// Splits raw MIDI bytes into messages. CoreMIDI can hand over several messages in
+/// one packet (chords, bursts of pitch bend or modulation), keyboards may leave out
+/// repeated status bytes (running status), and clock or active-sensing bytes may come
+/// in between; system exclusive data is skipped.
+#[derive(Default)]
+pub struct MidiParser {
+    status: u8,
+    data: [u8; 2],
+    len: usize,
+    sysex: bool,
+}
+
+impl MidiParser {
+    pub fn feed(&mut self, bytes: &[u8], mut message: impl FnMut(&[u8])) {
+        for &b in bytes {
+            match b {
+                // Real-time bytes may come anywhere, even inside other messages.
+                0xF8..=0xFF => {}
+                0xF0 => {
+                    self.sysex = true;
+                    self.status = 0;
+                }
+                0xF7 => self.sysex = false,
+                0x80..=0xEF => {
+                    self.status = b;
+                    self.len = 0;
+                    self.sysex = false;
+                }
+                // Other system common messages: their data is not for us.
+                0xF1..=0xF6 => {
+                    self.status = 0;
+                    self.sysex = false;
+                }
+                _ => {
+                    if self.sysex || self.status == 0 {
+                        continue;
+                    }
+                    self.data[self.len] = b;
+                    self.len += 1;
+                    let needed = if matches!(self.status & 0xF0, 0xC0 | 0xD0) { 1 } else { 2 };
+                    if self.len == needed {
+                        let full = [self.status, self.data[0], self.data[1]];
+                        message(&full[..1 + needed]);
+                        // The status stays for running status.
+                        self.len = 0;
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -162,5 +215,40 @@ impl ComputerKeyboard {
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod midi_tests {
+    use super::MidiParser;
+
+    fn parse(chunks: &[&[u8]]) -> Vec<Vec<u8>> {
+        let mut parser = MidiParser::default();
+        let mut out = Vec::new();
+        for chunk in chunks {
+            parser.feed(chunk, |m| out.push(m.to_vec()));
+        }
+        out
+    }
+
+    #[test]
+    fn packets_with_several_messages_are_split() {
+        // A chord in one packet, then pitch bend and the modulation wheel together.
+        let out = parse(&[&[0x90, 60, 100, 0x90, 64, 90, 0x90, 67, 80], &[0xE0, 0, 80, 0xB0, 1, 64]]);
+        assert_eq!(out, [vec![0x90, 60, 100], vec![0x90, 64, 90], vec![0x90, 67, 80], vec![0xE0, 0, 80], vec![0xB0, 1, 64]]);
+    }
+
+    #[test]
+    fn running_status_clock_and_sysex() {
+        let out = parse(&[
+            &[0x90, 60, 100, 62, 100],  // running status: a second note-on
+            &[64, 0],                    // and a third (a note-off), in the next packet
+            &[0xE0, 0xF8, 0x10, 0x40],  // clock inside a pitch bend
+            &[0xF0, 1, 2, 3, 0xF7],     // system exclusive
+            &[0xD0, 70, 0x80, 60, 0],   // channel pressure, then a note-off
+            &[0xB0, 1],                 // a controller split across packets
+            &[127],
+        ]);
+        assert_eq!(out, [vec![0x90, 60, 100], vec![0x90, 62, 100], vec![0x90, 64, 0], vec![0xE0, 0x10, 0x40], vec![0xD0, 70], vec![0x80, 60, 0], vec![0xB0, 1, 127]]);
     }
 }

@@ -526,10 +526,12 @@ impl Instrument {
         }
     }
 
-    /// Only the modular synth follows controllers.
+    /// The modular synth and plugins follow controllers.
     fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
-        if let Self::Modular(m) = self {
-            m.control(controller, pitch, value);
+        match self {
+            Self::Modular(m) => m.control(controller, pitch, value),
+            Self::Plugin(_, Some(p)) => p.control(controller, pitch, value),
+            _ => {}
         }
     }
 

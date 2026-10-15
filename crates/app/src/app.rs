@@ -265,6 +265,8 @@ pub struct PulseApp {
     pub stems: Option<crate::stems_ui::StemJob>,
     /// Something the user must see (title, text), in a window until dismissed.
     pub notice: Option<(String, String)>,
+    /// Imported audio's tempo, found in the background (see `tempo_ui`).
+    pub tempo: crate::tempo_ui::Tempo,
     pub devices: crate::settings::Devices,
     /// A text field has the keyboard: editing shortcuts are its.
     pub text_focus: bool,
@@ -389,6 +391,7 @@ impl PulseApp {
             updates: Default::default(),
             stems: None,
             notice: None,
+            tempo: Default::default(),
             devices: Default::default(),
             text_focus: false,
             menu_bar: None,
@@ -472,7 +475,10 @@ impl PulseApp {
         let duration = sample.duration();
         let tempo = self.project.tempo;
         let name = path.file_stem().map_or("Audio".into(), |s| s.to_string_lossy().into_owned());
-        let (warp, original_bpm, length) = match guess_loop_bpm(duration, tempo) {
+        // A first guess while the tempo is found (see `tempo_ui`): short files are
+        // likely loops cut to whole bars; longer ones play as they are.
+        let guess = if duration <= 30.0 { guess_loop_bpm(duration, tempo) } else { None };
+        let (warp, original_bpm, length) = match guess {
             Some(bpm) => (WarpMode::Stretch, bpm, (duration * bpm / 60.0).round().max(1.0)),
             None => (WarpMode::Off, tempo, ((duration * tempo / 60.0) * 4.0).ceil().max(1.0) / 4.0),
         };
@@ -525,6 +531,7 @@ impl PulseApp {
         };
 
         let mut added = 0;
+        let mut created = Vec::new();
         for path in paths {
             let sample = self.sample(&path.to_string_lossy());
             if sample.frames() == 0 {
@@ -538,6 +545,7 @@ impl PulseApp {
                     let clip = self.new_audio_clip(&path, &sample, self.project.tracks[track].color);
                     self.set_clip(track, slot, Some(Clip::Audio(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
+                    created.push(ClipRef::Session { track, slot });
                     let next = (slot + 1..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
                     placement = Placement::Session { track, slot: next.unwrap_or(NUM_SCENES) };
                 }
@@ -549,6 +557,7 @@ impl PulseApp {
                     let index = lane.len() - 1;
                     self.sync_arrangement(track);
                     self.select_clip(ClipRef::Arrangement { track, index });
+                    created.push(ClipRef::Arrangement { track, index });
                     placement = Placement::Arrangement { track, start: start + length };
                 }
                 Placement::Auto => unreachable!("resolved above"),
@@ -557,6 +566,10 @@ impl PulseApp {
         }
         if added > 0 {
             self.status = Some(format!("{added} muestra(s) añadida(s)"));
+        }
+        // Each file's tempo, so its clips follow the project's.
+        for clip in created {
+            self.detect_tempo(vec![clip], false);
         }
     }
 
@@ -2141,6 +2154,7 @@ impl eframe::App for PulseApp {
         crate::settings::window(self, &ctx);
         self.follow_updates();
         self.follow_stems(&ctx);
+        self.follow_tempo(&ctx);
         self.show_notice(&ctx);
         crate::updates::window(self, &ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();

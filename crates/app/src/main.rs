@@ -35,6 +35,7 @@ mod shape_edit;
 mod slicing;
 mod sync;
 mod table_editor;
+mod tempo_ui;
 mod theme;
 mod tracks;
 mod updates;

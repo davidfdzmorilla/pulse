@@ -1,0 +1,10 @@
+[package]
+name = "beats"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+beat-this = { version = "1.1.0", default-features = false }
+
+[dev-dependencies]
+hound = "3.5.1"

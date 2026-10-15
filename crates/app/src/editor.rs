@@ -65,6 +65,10 @@ impl PulseApp {
     /// Once a frame: drops editors whose window was closed or whose plugin went away,
     /// follows window resizes, and reopens suspended editors.
     pub fn poll_editors(&mut self) {
+        // CLAP plugins may have asked to run something on this thread.
+        for handle in self.samples.plugins.values() {
+            handle.idle();
+        }
         let plugins = &self.samples.plugins;
         self.editors.open.retain(|id, _editor| {
             #[cfg(target_os = "macos")]
@@ -96,7 +100,8 @@ pub fn check_installed() -> Vec<String> {
                 Ok((_processor, handle)) => check_editor(&handle),
                 Err(error) => error,
             };
-            report.push(format!("{}: {line}", info.name));
+            let format = if engine::plugin::is_clap(&info.path) { "CLAP" } else { "VST3" };
+            report.push(format!("{} [{format}]: {line}", info.name));
         }
     }
     report

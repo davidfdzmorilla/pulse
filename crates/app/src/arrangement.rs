@@ -45,6 +45,25 @@ pub struct State {
     pub automation: HashMap<usize, Param>,
     /// What the automation parameter list is filtered by (long lists: plugins).
     pub automation_filter: String,
+    /// What was right-clicked, for its menu.
+    menu: Option<Menu>,
+    /// A track to duplicate or delete once the view is drawn (true: the selected ones).
+    track_action: Option<(TrackAction, usize, bool)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum TrackAction {
+    Duplicate,
+    Delete,
+}
+
+/// What a right-click landed on.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Menu {
+    Clip(ClipRef),
+    /// An empty place on a track, at a beat (snapped to the grid).
+    Lane { track: usize, beat: f64 },
+    Automation { track: usize, param: Param },
 }
 
 impl Default for State {
@@ -55,6 +74,8 @@ impl Default for State {
             drag: None,
             automation: HashMap::new(),
             automation_filter: String::new(),
+            menu: None,
+            track_action: None,
         }
     }
 }
@@ -269,9 +290,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
 
             handle_pointer(app, ui, &response, rect, lanes_top, unit, x_at(0.0), &layout);
+            context_menu(app, &response);
         });
     });
     app.finish_track_drag(ui, &headers, true);
+    match app.arrangement.track_action.take() {
+        Some((TrackAction::Duplicate, _, true)) => app.duplicate_selected_tracks(),
+        Some((TrackAction::Duplicate, t, false)) => app.duplicate_track(t),
+        Some((TrackAction::Delete, _, true)) => app.delete_selected_tracks(),
+        Some((TrackAction::Delete, t, false)) => app.delete_track(t),
+        None => {}
+    }
     app.update_clip_gesture(ui, &clip_rects, &lane_rects, &[]);
 }
 
@@ -366,6 +395,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some())), Sense::click_and_drag());
     let response = response.on_hover_text("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover");
     app.track_header_input(t, &response);
+    track_menu(app, &response, t, shown.is_some());
     let selected = app.is_track_selected(t);
     let track = &app.project.tracks[t];
     let color = theme::rgb(track.color);
@@ -530,6 +560,133 @@ fn place_clips(app: &mut PulseApp, snapshot: &[Vec<ArrangementClip>], moved: &[(
     placed
 }
 
+/// A track header's menu: name, colour, automation lane, duplicate and delete (the
+/// selected tracks, if it is one of them).
+fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automation_shown: bool) {
+    response.context_menu(|ui| {
+        let several = app.is_track_selected(t) && app.track_selection().len() > 1;
+        let count = app.track_selection().len();
+        let track = &mut app.project.tracks[t];
+        ui.label("Nombre");
+        ui.text_edit_singleline(&mut track.name);
+        ui.label("Color");
+        crate::session::color_picker(ui, &mut track.color);
+        ui.separator();
+        if ui.button(if automation_shown { "Ocultar automatización" } else { "Mostrar automatización" }).clicked() {
+            if automation_shown {
+                app.arrangement.automation.remove(&t);
+            } else {
+                let param = app.automation(Target::Track(t)).iter().find(|l| !l.points.is_empty()).map_or(Param::Volume, |l| l.param);
+                app.arrangement.automation.insert(t, param);
+            }
+            ui.close();
+        }
+        let label = |verb: &str| if several { format!("{verb} {count} pistas") } else { format!("{verb} pista") };
+        // After the view is drawn: the rest of it still reads this track.
+        if ui.button(label("Duplicar")).clicked() {
+            app.arrangement.track_action = Some((TrackAction::Duplicate, t, several));
+            ui.close();
+        }
+        if ui.button(label("Eliminar")).clicked() {
+            app.arrangement.track_action = Some((TrackAction::Delete, t, several));
+            ui.close();
+        }
+    });
+}
+
+/// The right-click menu of the timeline: for a clip, an empty place on a track,
+/// or an automation lane.
+fn context_menu(app: &mut PulseApp, response: &egui::Response) {
+    response.context_menu(|ui| {
+        let Some(menu) = app.arrangement.menu else {
+            ui.close();
+            return;
+        };
+        match menu {
+            Menu::Clip(clip) => clip_menu(app, ui, clip),
+            Menu::Lane { track, beat } => {
+                let Some(t) = app.project.tracks.get(track) else { return ui.close() };
+                let audio = t.is_audio();
+                let bar = (beat / 4.0).floor() * 4.0;
+                if app.clip_clipboard.is_some() && ui.button("Pegar aquí").clicked() {
+                    app.paste_clips_at(track, beat);
+                    ui.close();
+                }
+                if audio {
+                    if ui.button("Añadir muestra aquí…").clicked() {
+                        app.choose_samples(Placement::Arrangement { track, start: bar });
+                        ui.close();
+                    }
+                } else if ui.button("Nuevo clip MIDI aquí").clicked() {
+                    let color = app.project.tracks[track].color;
+                    app.project.tracks[track].arrangement.push(ArrangementClip { start: bar, length: 4.0, clip: Clip::Midi(MidiClip::new("MIDI", 4.0, color)) });
+                    let index = app.project.tracks[track].arrangement.len() - 1;
+                    app.sync_arrangement(track);
+                    app.select_clip(ClipRef::Arrangement { track, index });
+                    ui.close();
+                }
+            }
+            Menu::Automation { track, param } => {
+                let target = Target::Track(track);
+                ui.label(egui::RichText::new(app.param_name(target, param)).color(TEXT_DIM).size(10.5));
+                if app.automation_state(target, param).is_some() && ui.button("Borrar automatización").clicked() {
+                    app.automation_mut(target).retain(|l| l.param != param);
+                    app.overridden.remove(&(target, param));
+                    app.sync_automation(target);
+                    ui.close();
+                }
+                if ui.button("Ocultar carril").clicked() {
+                    app.arrangement.automation.remove(&track);
+                    ui.close();
+                }
+            }
+        }
+    });
+}
+
+/// A clip's menu: what acts on the selected clips, and the clip's name and colour.
+fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef) {
+    let ClipRef::Arrangement { track, index } = clip else { return };
+    let Some(placed) = app.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) else { return ui.close() };
+    let audio = matches!(placed.clip, Clip::Audio(_));
+    let count = app.clip_selection().len();
+    let label = |verb: &str| if count > 1 { format!("{verb} {count} clips") } else { verb.to_string() };
+    if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems…")).on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
+        app.separate_stems(clip);
+        ui.close();
+    }
+    if ui.button(label("Copiar")).clicked() {
+        app.copy_clips();
+        ui.close();
+    }
+    if ui.button(label("Cortar")).clicked() {
+        app.copy_clips();
+        app.delete_selected_clip();
+        ui.close();
+    }
+    if ui.button(format!("{}   ⌘D", label("Duplicar"))).clicked() {
+        app.duplicate_selected_clip();
+        ui.close();
+    }
+    if ui.button(format!("{}   ⌫", label("Eliminar"))).clicked() {
+        app.delete_selected_clip();
+        ui.close();
+    }
+    if count > 1 {
+        return;
+    }
+    ui.separator();
+    let clip = &mut app.project.tracks[track].arrangement[index].clip;
+    let before = clip.clone();
+    ui.label("Nombre");
+    ui.text_edit_singleline(clip.name_mut());
+    ui.label("Color");
+    crate::session::color_picker(ui, clip.color_mut());
+    if *clip != before {
+        app.sync_arrangement(track);
+    }
+}
+
 /// Hit-tests a pointer position against the clips of a lane.
 fn clip_at(app: &PulseApp, track: usize, beat: f64, x: f32, ppb: f32, origin_x: f32) -> Option<(usize, bool)> {
     app.project.tracks[track]
@@ -567,6 +724,26 @@ fn handle_pointer(
         let top = lanes_top + layout.rows[t].0 + LANE_H + 1.0;
         Some((t, param, Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), AUTO_H))))
     });
+    // A right-click picks what the menu is about (and selects a clip not selected).
+    if response.secondary_clicked() {
+        app.arrangement.menu = match (lane, automation) {
+            (Some(t), _) => Some(match clip_at(app, t, beat, pos.x, ppb, origin_x) {
+                Some((index, _)) => {
+                    let clip = ClipRef::Arrangement { track: t, index };
+                    if !app.is_clip_selected(clip) {
+                        app.select_clip(clip);
+                    }
+                    Menu::Clip(clip)
+                }
+                None => {
+                    app.selected_target = Target::Track(t);
+                    Menu::Lane { track: t, beat: snap(beat, unit) }
+                }
+            }),
+            (None, Some((t, param, _))) => Some(Menu::Automation { track: t, param }),
+            _ => None,
+        };
+    }
     if handle_automation(app, ui, response, pos, beat, origin_x, automation) {
         return;
     }
@@ -791,4 +968,129 @@ fn handle_automation(
         app.arrangement.drag = Some(Drag::Point { track, param, index, lane: rect });
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::Project;
+    use egui::{Modifiers, PointerButton, Pos2};
+
+    /// Drives the arrangement view with mouse events and reads the texts it draws.
+    struct Screen {
+        ctx: egui::Context,
+        time: f64,
+    }
+
+    impl Screen {
+        fn new() -> Self {
+            Self { ctx: egui::Context::default(), time: 0.0 }
+        }
+
+        fn frame(&mut self, app: &mut PulseApp, events: Vec<egui::Event>) -> Vec<(String, Rect)> {
+            self.time += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0))),
+                time: Some(self.time),
+                events,
+                ..Default::default()
+            };
+            let output = self.ctx.run_ui(input, |ui| show(app, ui));
+            let mut texts = Vec::new();
+            fn collect(shape: &egui::Shape, texts: &mut Vec<(String, Rect)>) {
+                match shape {
+                    egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), Rect::from_min_size(t.pos, t.galley.size()))),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
+                    _ => {}
+                }
+            }
+            output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+            texts
+        }
+
+        fn click(&mut self, app: &mut PulseApp, at: Pos2, button: PointerButton) -> Vec<(String, Rect)> {
+            let press = |pressed| egui::Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE };
+            self.frame(app, vec![egui::Event::PointerMoved(at)]);
+            self.frame(app, vec![press(true)]);
+            self.frame(app, vec![press(false)]);
+            self.frame(app, vec![])
+        }
+
+        /// Right-clicks `at`, then clicks the menu item whose text is `item`.
+        fn menu(&mut self, app: &mut PulseApp, at: Pos2, item: &str) {
+            let texts = self.click(app, at, PointerButton::Secondary);
+            let Some((_, rect)) = texts.iter().find(|(text, _)| text == item) else {
+                panic!("no «{item}» in the menu: {:?}", texts.iter().map(|(t, _)| t).filter(|t| t.len() < 40).collect::<Vec<_>>())
+            };
+            self.click(app, rect.center(), PointerButton::Primary);
+            self.frame(app, vec![]);
+        }
+    }
+
+    /// Lane `t` at `beat`, with no automation lanes shown above it.
+    fn at(app: &PulseApp, t: usize, beat: f64) -> Pos2 {
+        pos2(150.0 + beat as f32 * app.arrangement.pixels_per_beat, 81.0 + t as f32 * 53.0)
+    }
+
+    fn app() -> PulseApp {
+        let mut app = PulseApp::headless(Project::demo());
+        app.view = crate::app::View::Arrangement;
+        for track in &mut app.project.tracks {
+            track.arrangement.clear();
+            track.automation.clear();
+        }
+        let color = app.project.tracks[0].color;
+        app.project.tracks[0].arrangement.push(ArrangementClip { start: 4.0, length: 4.0, clip: Clip::Midi(MidiClip::new("A", 4.0, color)) });
+        app.sync_all();
+        app
+    }
+
+    #[test]
+    fn right_clicking_a_clip_opens_its_menu() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let clip = at(&app, 0, 5.0);
+        screen.menu(&mut app, clip, "Copiar");
+        assert_eq!(app.selected_clip, Some(ClipRef::Arrangement { track: 0, index: 0 }), "right-clicking selects it");
+        assert!(app.clip_clipboard.is_some());
+        screen.menu(&mut app, clip, "Duplicar   ⌘D");
+        assert_eq!(app.project.tracks[0].arrangement.len(), 2);
+        screen.menu(&mut app, clip, "Eliminar   ⌫");
+        let starts: Vec<f64> = app.project.tracks[0].arrangement.iter().map(|c| c.start).collect();
+        assert_eq!(starts, vec![8.0], "the copy stays");
+    }
+
+    #[test]
+    fn right_clicking_an_empty_place_pastes_or_makes_a_clip_there() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let (empty, clip, other) = (at(&app, 1, 9.5), at(&app, 0, 5.0), at(&app, 2, 13.0));
+        screen.menu(&mut app, empty, "Nuevo clip MIDI aquí");
+        let lane: Vec<(f64, f64)> = app.project.tracks[1].arrangement.iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(lane, vec![(8.0, 4.0)], "at the bar");
+        screen.menu(&mut app, clip, "Copiar");
+        screen.menu(&mut app, other, "Pegar aquí");
+        let lane: Vec<f64> = app.project.tracks[2].arrangement.iter().map(|c| c.start).collect();
+        assert_eq!(lane, vec![13.0], "where it was right-clicked (on the grid)");
+    }
+
+    #[test]
+    fn track_headers_and_automation_lanes_have_menus_too() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let tracks = app.project.tracks.len();
+        let header = |t: usize| pos2(60.0, 70.0 + t as f32 * 53.0);
+        screen.menu(&mut app, header(1), "Mostrar automatización");
+        assert_eq!(app.arrangement.automation.get(&1), Some(&Param::Volume));
+        // Points on the lane, then its menu (the lane is under track 1's clips).
+        app.lane_mut(Target::Track(1), Param::Volume).points.push(AutomationPoint { beat: 0.0, value: 0.5 });
+        let lane = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 55.0 + 53.0 + 53.0 + 30.0);
+        screen.menu(&mut app, lane, "Borrar automatización");
+        assert!(app.automation(Target::Track(1)).iter().all(|l| l.param != Param::Volume || l.points.is_empty()));
+        screen.menu(&mut app, lane, "Ocultar carril");
+        assert!(app.arrangement.automation.is_empty());
+        // Deleting a track from its own header, drawn as it goes.
+        screen.menu(&mut app, header(1), "Eliminar pista");
+        assert_eq!(app.project.tracks.len(), tracks - 1);
+    }
 }

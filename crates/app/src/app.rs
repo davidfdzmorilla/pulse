@@ -230,7 +230,9 @@ pub struct PulseApp {
     /// Recent projects, newest first.
     pub recent: Vec<PathBuf>,
     /// A copied or cut clip.
-    pub clip_clipboard: Option<Clip>,
+    pub clip_clipboard: Option<crate::clip_select::Clipboard>,
+    /// Whether notes were copied last (⌘V pastes notes in the clip editor).
+    pub paste_notes: bool,
     /// Answers to questions (unsaved changes…) for tests and headless apps, in order.
     pub answers: std::collections::VecDeque<crate::commands::Answer>,
     /// Whether dialogs may be shown (false in tests and headless apps).
@@ -343,6 +345,7 @@ impl PulseApp {
             file: None,
             recent: Vec::new(),
             clip_clipboard: None,
+            paste_notes: false,
             answers: Default::default(),
             interactive: false,
             quitting: false,

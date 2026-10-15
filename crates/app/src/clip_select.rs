@@ -2,8 +2,8 @@
 //! empty place selects the clips and tracks it touches (in both views), and
 //! session clips dragged together land in other slots (⌥ copies them).
 
-use crate::app::{ClipRef, PulseApp};
-use engine::model::Clip;
+use crate::app::{ClipRef, PulseApp, View};
+use engine::model::{ArrangementClip, Clip};
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 use engine::Target;
@@ -21,7 +21,155 @@ pub enum Gesture {
     SessionMove { from: (usize, usize), to: Option<(usize, usize)>, copy: bool },
 }
 
+/// Copied clips, placed relative to each other so they paste in the same layout.
+/// Each has a place in both views: a slot for the session and a start for the
+/// arrangement (clips from one view are laid out one after another in the other).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Clipboard {
+    pub items: Vec<CopiedClip>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CopiedClip {
+    /// Tracks, slots and beats from the first copied clip's.
+    pub track: usize,
+    pub slot: usize,
+    pub start: f64,
+    pub length: f64,
+    pub clip: Clip,
+}
+
 impl PulseApp {
+    /// Copies the selected clips.
+    pub fn copy_clips(&mut self) {
+        let selection = self.clip_selection();
+        let Some(&first) = selection.first() else { return };
+        let first_track = selection.iter().map(|c| c.track()).min().unwrap_or(0);
+        let first_slot = selection.iter().filter_map(|c| match *c {
+            ClipRef::Session { slot, .. } => Some(slot),
+            ClipRef::Arrangement { .. } => None,
+        }).min().unwrap_or(0);
+        let first_start = selection.iter().filter_map(|&c| self.placed(c).map(|p| p.start)).fold(f64::INFINITY, f64::min);
+        // (track, slot, start, length, clip), the missing places filled in below.
+        let mut raw: Vec<(usize, Option<usize>, Option<f64>, f64, Clip)> = Vec::new();
+        for &c in &selection {
+            let track = c.track() - first_track;
+            match c {
+                ClipRef::Session { slot, .. } => {
+                    let Some(clip) = self.clip(c).cloned() else { continue };
+                    raw.push((track, Some(slot - first_slot), None, clip.length().max(1.0), clip));
+                }
+                ClipRef::Arrangement { .. } => {
+                    let Some(placed) = self.placed(c).cloned() else { continue };
+                    raw.push((track, None, Some(placed.start - first_start), placed.length, placed.clip));
+                }
+            }
+        }
+        // Arrangement clips take the slots after the session ones of their track, in
+        // time order; session clips go after the arrangement ones, in slot order.
+        raw.sort_by(|a, b| (a.0, a.1, a.2).partial_cmp(&(b.0, b.1, b.2)).unwrap_or(std::cmp::Ordering::Equal));
+        let mut items: Vec<CopiedClip> = Vec::new();
+        for track in raw.iter().map(|r| r.0).collect::<std::collections::BTreeSet<_>>() {
+            let lane: Vec<_> = raw.iter().filter(|r| r.0 == track).collect();
+            let mut next_slot = lane.iter().filter_map(|r| r.1).max().map_or(0, |s| s + 1);
+            let mut next_start = lane.iter().filter_map(|r| r.2.map(|s| s + r.3)).fold(0.0, f64::max);
+            for &(_, slot, start, length, ref clip) in lane {
+                let slot = slot.unwrap_or_else(|| {
+                    next_slot += 1;
+                    next_slot - 1
+                });
+                let start = start.unwrap_or_else(|| {
+                    next_start += length;
+                    next_start - length
+                });
+                items.push(CopiedClip { track, slot, start, length, clip: clip.clone() });
+            }
+        }
+        self.status = Some(match items.len() {
+            1 => format!("Copiado «{}»", self.clip(first).map_or("", |c| c.name())),
+            n => format!("{n} clips copiados"),
+        });
+        self.clip_clipboard = Some(Clipboard { items });
+    }
+
+    fn placed(&self, clip: ClipRef) -> Option<&ArrangementClip> {
+        match clip {
+            ClipRef::Arrangement { track, index } => self.project.tracks.get(track)?.arrangement.get(index),
+            ClipRef::Session { .. } => None,
+        }
+    }
+
+    /// Pastes the copied clips in the same layout. In the session, from the selected
+    /// slot down (lower if they don't fit there); on the arrangement, after the
+    /// selected clips, or at the bar of the playhead if none is selected. The first
+    /// track is the selected one.
+    pub fn paste_clips(&mut self) {
+        let Some(board) = self.clip_clipboard.clone() else { return };
+        let to_arrangement = match self.selected_clip {
+            Some(ClipRef::Arrangement { .. }) => true,
+            Some(ClipRef::Session { .. }) => false,
+            None => self.view == View::Arrangement,
+        };
+        let first_track = match (self.selected_clip, self.selected_target) {
+            (Some(c), _) => c.track(),
+            (None, Target::Track(t)) => t,
+            _ => 0,
+        };
+        let tracks = self.project.tracks.len();
+        let fits = |app: &PulseApp, item: &CopiedClip| {
+            let t = first_track + item.track;
+            t < tracks && matches!(item.clip, Clip::Audio(_)) == app.project.tracks[t].is_audio()
+        };
+        if !board.items.iter().all(|item| fits(self, item)) {
+            self.status = Some("Los clips no caben: faltan pistas o son de otro tipo (audio o MIDI)".into());
+            return;
+        }
+        let mut pasted = Vec::new();
+        if to_arrangement {
+            let selected_end = self.clip_selection().iter().filter_map(|&c| self.placed(c).map(|p| p.end())).fold(f64::NEG_INFINITY, f64::max);
+            let start = if selected_end.is_finite() { selected_end } else { (self.audio.position() / 4.0).floor() * 4.0 };
+            for item in &board.items {
+                let t = first_track + item.track;
+                let lane = &mut self.project.tracks[t].arrangement;
+                lane.push(ArrangementClip { start: start + item.start, length: item.length, clip: item.clip.clone() });
+                pasted.push(ClipRef::Arrangement { track: t, index: lane.len() - 1 });
+            }
+            let mut touched: Vec<usize> = pasted.iter().map(|c| c.track()).collect();
+            touched.dedup();
+            for t in touched {
+                self.sync_arrangement(t);
+            }
+        } else {
+            let first_slot = match self.selected_clip {
+                Some(ClipRef::Session { slot, .. }) => slot,
+                _ => 0,
+            };
+            let place = |down: usize| -> Option<Vec<(usize, usize)>> {
+                board
+                    .items
+                    .iter()
+                    .map(|item| {
+                        let (t, s) = (first_track + item.track, first_slot + down + item.slot);
+                        (s < engine::NUM_SCENES && self.project.tracks[t].clips[s].is_none()).then_some((t, s))
+                    })
+                    .collect()
+            };
+            let Some(places) = (0..engine::NUM_SCENES).find_map(place) else {
+                self.status = Some("No quedan huecos libres debajo para los clips".into());
+                return;
+            };
+            for (item, &(t, s)) in board.items.iter().zip(&places) {
+                self.project.tracks[t].clips[s] = Some(item.clip.clone());
+                self.sync_clip(t, s);
+                pasted.push(ClipRef::Session { track: t, slot: s });
+            }
+        }
+        if pasted.len() > 1 {
+            self.status = Some(format!("{} clips pegados", pasted.len()));
+        }
+        self.set_clip_selection(pasted);
+    }
+
     /// The selected clips. The selected one is always among them.
     pub fn clip_selection(&self) -> Vec<ClipRef> {
         let Some(primary) = self.selected_clip.filter(|&c| self.clip(c).is_some()) else { return Vec::new() };
@@ -463,5 +611,59 @@ mod tests {
         // ⌫ (the menu's Delete) deletes the three.
         app.delete_selected_clip();
         assert_eq!(starts(&app), vec![(1, 0.0)]);
+    }
+
+    #[test]
+    fn several_clips_are_copied_and_pasted_in_their_layout() {
+        let mut app = empty_tracks();
+        let (a, b) = (midi(&app, "a"), midi(&app, "b"));
+        app.set_clip(0, 0, Some(a.clone()));
+        app.set_clip(1, 1, Some(b.clone()));
+        app.set_clip_selection(vec![ClipRef::Session { track: 0, slot: 0 }, ClipRef::Session { track: 1, slot: 1 }]);
+        app.copy_clips();
+        // From the selected slot down: the first row where both fit.
+        app.paste_clips();
+        assert_eq!(session_clips(&app), vec![(0, 0), (0, 1), (1, 1), (1, 2)]);
+        assert_eq!(app.clip_selection(), vec![ClipRef::Session { track: 0, slot: 1 }, ClipRef::Session { track: 1, slot: 2 }]);
+        // Into the arrangement (nothing selected there): at the playhead's bar, one
+        // track per track, each clip after the other.
+        app.view = View::Arrangement;
+        app.selected_clip = None;
+        app.selected_target = Target::Track(1);
+        app.paste_clips();
+        let starts = |app: &PulseApp| -> Vec<(usize, f64, String)> {
+            app.project.tracks.iter().enumerate().flat_map(|(t, track)| track.arrangement.iter().map(move |c| (t, c.start, c.clip.name().to_string()))).collect()
+        };
+        assert_eq!(starts(&app), vec![(1, 0.0, "a".into()), (2, 0.0, "b".into())]);
+        // Pasted again: after the pasted ones (which are selected).
+        app.paste_clips();
+        assert_eq!(starts(&app), vec![(1, 0.0, "a".into()), (1, 4.0, "a".into()), (2, 0.0, "b".into()), (2, 4.0, "b".into())]);
+
+        // Arrangement clips keep their distances, and go to the session one per slot.
+        app.set_clip_selection(vec![ClipRef::Arrangement { track: 1, index: 0 }, ClipRef::Arrangement { track: 1, index: 1 }, ClipRef::Arrangement { track: 2, index: 1 }]);
+        app.copy_clips();
+        let board = app.clip_clipboard.clone().unwrap();
+        let places: Vec<(usize, usize, f64)> = board.items.iter().map(|i| (i.track, i.slot, i.start)).collect();
+        assert_eq!(places, vec![(0, 0, 0.0), (0, 1, 4.0), (1, 0, 4.0)]);
+        app.view = View::Session;
+        app.selected_clip = Some(ClipRef::Session { track: 2, slot: 4 });
+        app.paste_clips();
+        assert!(session_clips(&app).ends_with(&[(2, 4), (2, 5), (3, 4)]), "{:?}", session_clips(&app));
+
+        // ⌘X takes them all, and they paste back.
+        let before = session_clips(&app);
+        app.set_clip_selection(vec![ClipRef::Session { track: 2, slot: 4 }, ClipRef::Session { track: 3, slot: 4 }]);
+        assert_eq!(app.detail, crate::app::Detail::Clip, "the clip editor is open, with no notes selected");
+        app.run(crate::commands::Command::Cut, &egui::Context::default());
+        assert_eq!(session_clips(&app).len(), before.len() - 2);
+        app.selected_clip = Some(ClipRef::Session { track: 2, slot: 4 });
+        app.paste_clips();
+        assert_eq!(session_clips(&app), before);
+
+        // Not enough tracks to the right: nothing pasted.
+        app.selected_clip = Some(ClipRef::Session { track: 3, slot: 7 });
+        app.paste_clips();
+        assert_eq!(session_clips(&app), before);
+        assert!(app.status.as_deref().unwrap_or("").contains("no caben"));
     }
 }

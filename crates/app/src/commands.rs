@@ -5,10 +5,10 @@
 //!
 //! Anything that would throw away unsaved work asks first.
 
-use crate::app::{ClipRef, Detail, PulseApp, View};
+use crate::app::{Detail, PulseApp, View};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
-use engine::{Target, NUM_SCENES};
+use engine::Target;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -83,7 +83,7 @@ pub const SHORTCUTS: [(&str, &str); 29] = [
     ("⌘Q", "Salir"),
     ("⌘,", "Ajustes (audio, MIDI, plugins)"),
     ("⌘Z / ⇧⌘Z", "Deshacer / Rehacer"),
-    ("⌘X / ⌘C / ⌘V", "Cortar / Copiar / Pegar (clips, o notas en el editor de clips)"),
+    ("⌘X / ⌘C / ⌘V", "Cortar / Copiar / Pegar los clips seleccionados (o las notas seleccionadas en el editor)"),
     ("⌘D", "Duplicar"),
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),
@@ -128,6 +128,20 @@ impl PulseApp {
             Command::SelectAll => editing_notes,
             Command::DuplicateTrack | Command::DeleteTrack => track,
             _ => true,
+        }
+    }
+
+    /// Whether an editing command goes to the notes in the clip editor rather than
+    /// to the clips: only with one clip open, and notes selected (or, for pasting,
+    /// notes copied last).
+    fn edits_notes(&self, command: Command) -> bool {
+        if self.detail != Detail::Clip || self.clip_selection().len() > 1 {
+            return false;
+        }
+        match command {
+            Command::SelectAll => true,
+            Command::Paste => self.paste_notes || self.clip_clipboard.is_none(),
+            _ => self.piano_roll.has_selection(),
         }
     }
 
@@ -182,8 +196,12 @@ impl PulseApp {
             }
             Command::Undo => self.undo(),
             Command::Redo => self.redo(),
-            // In the clip editor these act on notes: it reads them as editing events.
-            Command::Cut | Command::Copy | Command::Paste | Command::SelectAll if self.detail == Detail::Clip => {
+            // In the clip editor, with notes selected (or notes copied last, for
+            // pasting), these act on notes: it reads them as editing events.
+            Command::Cut | Command::Copy | Command::Paste | Command::SelectAll if self.edits_notes(command) => {
+                if matches!(command, Command::Cut | Command::Copy) {
+                    self.paste_notes = true;
+                }
                 let event = match command {
                     Command::Cut => egui::Event::Cut,
                     Command::Copy => egui::Event::Copy,
@@ -192,21 +210,22 @@ impl PulseApp {
                 };
                 ctx.input_mut(|i| i.events.push(event));
             }
-            Command::Duplicate if self.detail == Detail::Clip => {
+            Command::Duplicate if self.edits_notes(command) => {
                 ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::D, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::COMMAND }));
             }
-            Command::Delete if self.detail == Detail::Clip && self.piano_roll.has_selection() => {
+            Command::Delete if self.edits_notes(command) => {
                 ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }));
             }
             Command::Cut => {
-                // Only the clip copied (the clipboard holds one) goes.
-                self.copy_clip();
-                if let Some(clip) = self.selected_clip {
-                    self.delete_clips(&[clip]);
-                }
+                self.paste_notes = false;
+                self.copy_clips();
+                self.delete_selected_clip();
             }
-            Command::Copy => self.copy_clip(),
-            Command::Paste => self.paste_clip(),
+            Command::Copy => {
+                self.paste_notes = false;
+                self.copy_clips();
+            }
+            Command::Paste => self.paste_clips(),
             Command::Duplicate => self.duplicate_selected_clip(),
             Command::Delete => self.delete_selected_clip(),
             Command::SelectAll => {}
@@ -332,52 +351,6 @@ impl PulseApp {
             let _ = std::fs::write(path, text);
         }
     }
-
-    // ----- Clips on the clipboard ---------------------------------------------------
-
-    fn copy_clip(&mut self) {
-        let clip = self.selected_clip.and_then(|c| self.clip(c)).cloned();
-        if let Some(clip) = clip {
-            self.status = Some(format!("Copiado «{}»", clip.name()));
-            self.clip_clipboard = Some(clip);
-        }
-    }
-
-    /// Pastes the copied clip: into the selected session slot (or the next free one
-    /// below it), or after the selected arrangement clip.
-    fn paste_clip(&mut self) {
-        let Some(clip) = self.clip_clipboard.clone() else { return };
-        match self.selected_clip {
-            Some(ClipRef::Session { track, slot }) => {
-                let free = (slot..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
-                match free {
-                    Some(target) => {
-                        self.set_clip(track, target, Some(clip));
-                        self.select_clip(ClipRef::Session { track, slot: target });
-                    }
-                    None => self.status = Some("No quedan huecos libres debajo en esta pista".into()),
-                }
-            }
-            Some(ClipRef::Arrangement { track, index }) => {
-                let lane = &mut self.project.tracks[track].arrangement;
-                let start = lane.get(index).map_or(0.0, |c| c.end());
-                let length = clip.length().max(1.0);
-                lane.push(engine::model::ArrangementClip { start, length, clip });
-                let index = lane.len() - 1;
-                self.sync_arrangement(track);
-                self.select_clip(ClipRef::Arrangement { track, index });
-            }
-            None => {
-                // Nothing selected: the first free slot of the selected track.
-                if let Target::Track(track) = self.selected_target {
-                    if let Some(slot) = (0..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none()) {
-                        self.set_clip(track, slot, Some(clip));
-                        self.select_clip(ClipRef::Session { track, slot });
-                    }
-                }
-            }
-        }
-    }
 }
 
 /// The help window with every keyboard shortcut.
@@ -399,6 +372,7 @@ pub fn shortcuts_window(app: &mut PulseApp, ctx: &egui::Context) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::ClipRef;
     use crate::project::Project;
 
     fn app() -> PulseApp {
@@ -531,6 +505,10 @@ mod tests {
         let mut app = app();
         app.select_clip(ClipRef::Session { track: 0, slot: 0 });
         assert_eq!(app.detail, Detail::Clip);
+        // With no notes selected, ⌘C copies the clip.
+        app.run(Command::Copy, &ctx());
+        assert!(app.clip_clipboard.take().is_some());
+        app.piano_roll.select_notes(ClipRef::Session { track: 0, slot: 0 }, &[0]);
         let ctx = ctx();
         let mut copied = Vec::new();
         let _ = ctx.run_ui(Default::default(), |ui| {
@@ -539,6 +517,14 @@ mod tests {
         });
         assert_eq!(copied, [egui::Event::Copy], "the note editor gets the copy");
         assert!(app.clip_clipboard.is_none(), "no clip was copied");
+        // ⌘V then pastes notes, even with a clip on the clipboard.
+        app.clip_clipboard = Some(crate::clip_select::Clipboard { items: Vec::new() });
+        let mut pasted = Vec::new();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            app.run(Command::Paste, ui.ctx());
+            pasted = ui.input(|i| i.events.clone());
+        });
+        assert_eq!(pasted, [egui::Event::Paste(String::new())]);
     }
 
     #[test]

@@ -1,10 +1,9 @@
 #!/bin/bash
-# Installs target/bundle/Pulse.app (built by scripts/bundle.sh) in ~/Applications,
+# Installs the Pulse.app built by scripts/bundle.sh in ~/Applications,
 # keeping the version there as "Pulse (anterior).app". Only needed the first time:
 # afterwards Pulse updates itself from GitHub.
 set -euo pipefail
-root=$(cd "$(dirname "$0")/.." && pwd)
-app="$root/target/bundle/Pulse.app"
+app="${PULSE_BUNDLE_DIR:-$HOME/Library/Caches/Pulse/bundle}/Pulse.app"
 dest="$HOME/Applications"
 [ -d "$app" ] || { echo "Primero: scripts/bundle.sh" >&2; exit 1; }
 mkdir -p "$dest"

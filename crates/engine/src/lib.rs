@@ -10,6 +10,7 @@ mod kick;
 mod offline;
 pub mod model;
 pub mod plugin;
+mod clap_host;
 mod sample;
 mod sampler;
 mod synth;

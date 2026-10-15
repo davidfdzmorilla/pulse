@@ -48,34 +48,45 @@ pub struct PluginInfo {
     pub instrument: bool,
 }
 
-/// The folders where plugins are installed on this system.
+/// The folders where VST3 and CLAP plugins are installed on this system.
 pub fn default_folders() -> Vec<PathBuf> {
     let mut folders = Vec::new();
+    let home = std::env::var_os("HOME").map(PathBuf::from);
     if cfg!(target_os = "macos") {
-        if let Some(home) = std::env::var_os("HOME") {
-            folders.push(PathBuf::from(home).join("Library/Audio/Plug-Ins/VST3"));
+        for format in ["VST3", "CLAP"] {
+            if let Some(home) = &home {
+                folders.push(home.join("Library/Audio/Plug-Ins").join(format));
+            }
+            folders.push(PathBuf::from("/Library/Audio/Plug-Ins").join(format));
         }
-        folders.push(PathBuf::from("/Library/Audio/Plug-Ins/VST3"));
     } else if cfg!(target_os = "windows") {
         folders.push(PathBuf::from(r"C:\Program Files\Common Files\VST3"));
+        folders.push(PathBuf::from(r"C:\Program Files\Common Files\CLAP"));
     } else {
-        if let Some(home) = std::env::var_os("HOME") {
-            folders.push(PathBuf::from(home).join(".vst3"));
+        for format in ["vst3", "clap"] {
+            if let Some(home) = &home {
+                folders.push(home.join(format!(".{format}")));
+            }
+            folders.push(PathBuf::from("/usr/lib").join(format));
+            folders.push(PathBuf::from("/usr/local/lib").join(format));
         }
-        folders.push(PathBuf::from("/usr/lib/vst3"));
-        folders.push(PathBuf::from("/usr/local/lib/vst3"));
     }
     folders
 }
 
-/// Every `.vst3` bundle under `folder`, however deep.
+/// Whether `path` is a CLAP plugin (otherwise VST3).
+pub fn is_clap(path: &Path) -> bool {
+    path.extension().is_some_and(|e| e.eq_ignore_ascii_case("clap"))
+}
+
+/// Every `.vst3` and `.clap` bundle under `folder`, however deep.
 pub fn bundles(folder: &Path) -> Vec<PathBuf> {
     let mut found = Vec::new();
     let Ok(entries) = std::fs::read_dir(folder) else { return found };
     let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     entries.sort();
     for path in entries {
-        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("vst3")) {
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("vst3") || e.eq_ignore_ascii_case("clap")) {
             found.push(path);
         } else if path.is_dir() {
             found.extend(bundles(&path));
@@ -84,8 +95,8 @@ pub fn bundles(folder: &Path) -> Vec<PathBuf> {
     found
 }
 
-/// The plugins in a bundle (loads it).
-pub fn scan(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
+/// The plugins in a VST3 bundle (loads it).
+fn vst3_scan(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
     let module = module(bundle)?;
     let factory = &module.factory;
     let mut vendor = String::new();
@@ -165,7 +176,7 @@ fn modules() -> &'static Mutex<HashMap<PathBuf, Arc<Module>>> {
 }
 
 /// The binary inside a bundle (or the path itself if it is a plain library).
-fn binary(bundle: &Path) -> PathBuf {
+pub(crate) fn binary(bundle: &Path) -> PathBuf {
     if bundle.is_file() {
         return bundle.to_path_buf();
     }
@@ -724,35 +735,13 @@ pub struct PluginParam {
     pub automatable: bool,
 }
 
-/// The UI-thread half of a plugin instance.
-pub struct PluginHandle {
+/// The UI-thread half of a VST3 instance.
+struct Vst3Handle {
     instance: Arc<Instance>,
     queue: ParamQueue,
-    pub name: String,
-    /// The parameters, read once (plugins can have thousands), and their index by id.
-    params: OnceLock<(Vec<PluginParam>, HashMap<u32, usize>)>,
 }
 
-impl PluginHandle {
-    /// The parameters the host may set, in the plugin's order.
-    pub fn params(&self) -> &[PluginParam] {
-        &self.cached().0
-    }
-
-    /// Parameter `id`, if the host may set it.
-    pub fn param(&self, id: u32) -> Option<&PluginParam> {
-        let (params, index) = self.cached();
-        index.get(&id).map(|&i| &params[i])
-    }
-
-    fn cached(&self) -> &(Vec<PluginParam>, HashMap<u32, usize>) {
-        self.params.get_or_init(|| {
-            let params = self.read_params();
-            let index = params.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
-            (params, index)
-        })
-    }
-
+impl Vst3Handle {
     /// Shows `value` for parameter `id` in the plugin's own editor, without sending it
     /// to the processor (automation reaches the processor from the engine).
     pub fn show(&self, id: u32, value: f64) {
@@ -848,13 +837,11 @@ impl PluginHandle {
         state
     }
 
-    /// The plugin's own editor, if it has one. The host puts it in a window of its
-    /// own (see [`PluginView::attach`]). UI thread only.
-    pub fn editor(&self) -> Option<PluginView> {
+    fn editor(&self) -> Option<Vst3View> {
         let controller = self.instance.controller.as_ref()?;
         let view = unsafe { ComPtr::from_raw(controller.createView(ViewType::kEditor)) }?;
         let frame = ComWrapper::new(PlugFrame { resize: std::cell::RefCell::new(None) });
-        Some(PluginView { view, frame, attached: false, _instance: self.instance.clone() })
+        Some(Vst3View { view, frame, attached: false, _instance: self.instance.clone() })
     }
 }
 
@@ -891,15 +878,15 @@ impl IPlugFrameTrait for PlugFrame {
     }
 }
 
-/// A plugin's editor. Dropping it takes it out of its window.
-pub struct PluginView {
+/// A VST3 editor. Dropping it takes it out of its window.
+struct Vst3View {
     view: ComPtr<IPlugView>,
     frame: ComWrapper<PlugFrame>,
     attached: bool,
     _instance: Arc<Instance>,
 }
 
-impl PluginView {
+impl Vst3View {
     /// Whether it can show itself in a native view of `platform` (see [`PLATFORM_VIEW`]).
     pub fn supports(&self, platform: &str) -> bool {
         let Ok(name) = std::ffi::CString::new(platform) else { return false };
@@ -946,7 +933,7 @@ impl PluginView {
     }
 }
 
-impl Drop for PluginView {
+impl Drop for Vst3View {
     fn drop(&mut self) {
         unsafe {
             if self.attached {
@@ -972,8 +959,8 @@ fn split_state(state: &[u8]) -> Option<(&[u8], &[u8])> {
     Some((component, &rest[b0..b1]))
 }
 
-/// The audio-thread half of a plugin instance: an instrument or an effect.
-pub struct PluginProcessor {
+/// The audio-thread half of a VST3 instance.
+struct Vst3Processor {
     instance: Arc<Instance>,
     params: Option<Consumer<(u32, f64)>>,
     events: ComWrapper<EventList>,
@@ -998,18 +985,17 @@ pub struct PluginProcessor {
     /// Controller values waiting for the next block.
     controls: Vec<(ParamID, f64)>,
     sample_rate: f32,
-    pub instrument: bool,
 }
 
-unsafe impl Send for PluginProcessor {}
+unsafe impl Send for Vst3Processor {}
 
-impl Drop for PluginProcessor {
+impl Drop for Vst3Processor {
     fn drop(&mut self) {
         *self.instance.idle.lock().unwrap() = self.params.take();
     }
 }
 
-impl PluginProcessor {
+impl Vst3Processor {
     pub fn set_tempo(&mut self, tempo: f64) {
         self.context.tempo = tempo;
     }
@@ -1176,12 +1162,12 @@ impl PluginProcessor {
     }
 }
 
-/// Loads plugin `cid` from `bundle` and starts it at `sample_rate`, restoring `state`
-/// if given (from [`PluginHandle::state`]). Call on the UI thread.
-pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(PluginProcessor, PluginHandle), String> {
+/// Loads VST3 plugin `cid` from `bundle` (see [`instantiate`]): its processor and handle,
+/// and whether it is an instrument.
+fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(Vst3Processor, Vst3Handle, bool), String> {
     let module = module(bundle)?;
     let class = parse_cid(cid).ok_or_else(|| format!("Identificador de plugin no válido: {cid}"))?;
-    let name = scan(bundle).ok().and_then(|list| list.into_iter().find(|p| p.cid == cid)).map_or_else(|| "Plugin".to_string(), |p| p.name);
+    let name = vst3_scan(bundle).ok().and_then(|list| list.into_iter().find(|p| p.cid == cid)).map_or_else(|| "Plugin".to_string(), |p| p.name);
     let host = ComWrapper::new(HostApplication);
     let host_ptr = host.to_com_ptr::<FUnknown>().ok_or("host")?;
     unsafe {
@@ -1359,7 +1345,7 @@ pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u
         let changes = ComWrapper::new(ParamChanges::new());
         let changes_ptr = changes.to_com_ptr::<IParameterChanges>().ok_or("changes")?;
         let instance = Arc::new(Instance { component, processor, controller, separate, connected, _module: module, _host: host, _handler: handler, idle: Mutex::new(None) });
-        let processor = PluginProcessor {
+        let processor = Vst3Processor {
             instance: instance.clone(),
             params: Some(consumer),
             events,
@@ -1378,10 +1364,236 @@ pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u
             midi_map,
             controls: Vec::with_capacity(MAX_CHANGES),
             sample_rate,
-            instrument: n_events > 0,
         };
-        Ok((processor, PluginHandle { instance, queue, name, params: OnceLock::new() }))
+        Ok((processor, Vst3Handle { instance, queue }, n_events > 0))
     }
+}
+
+
+// ----- The common interface: VST3 or CLAP ------------------------------------------------
+
+/// The plugins in a `.vst3` or `.clap` bundle (loads it).
+pub fn scan(bundle: &Path) -> Result<Vec<PluginInfo>, String> {
+    if is_clap(bundle) { crate::clap_host::scan(bundle) } else { vst3_scan(bundle) }
+}
+
+enum Processor {
+    Vst3(Vst3Processor),
+    Clap(crate::clap_host::ClapProcessor),
+}
+
+/// The audio-thread half of a plugin instance: an instrument or an effect.
+pub struct PluginProcessor {
+    inner: Processor,
+    pub instrument: bool,
+}
+
+macro_rules! each {
+    ($inner:expr, $p:ident => $call:expr) => {
+        match $inner {
+            Processor::Vst3($p) => $call,
+            Processor::Clap($p) => $call,
+        }
+    };
+}
+
+impl PluginProcessor {
+    pub fn set_tempo(&mut self, tempo: f64) {
+        each!(&mut self.inner, p => p.set_tempo(tempo))
+    }
+
+    pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
+        each!(&mut self.inner, p => p.note_on(pitch, velocity, gate))
+    }
+
+    pub fn note_off(&mut self, pitch: u8) {
+        each!(&mut self.inner, p => p.note_off(pitch))
+    }
+
+    pub fn all_notes_off(&mut self) {
+        each!(&mut self.inner, p => p.all_notes_off())
+    }
+
+    /// A MIDI controller moved: CC, pitch bend (-1..1) or pressure (0..1).
+    pub fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
+        each!(&mut self.inner, p => p.control(controller, pitch, value))
+    }
+
+    /// Sets parameter `id` (normalized) from the next block on: automation.
+    pub fn set_normalized(&mut self, id: u32, value: f64) {
+        each!(&mut self.inner, p => p.set_normalized(id, value))
+    }
+
+    /// Adds an instrument's output to `left`/`right`.
+    pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+        each!(&mut self.inner, p => p.render(left, right))
+    }
+
+    /// Runs an effect over `left`/`right` in place.
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+        each!(&mut self.inner, p => p.process(left, right))
+    }
+
+    /// Whether controller `number` (CC 0..127, then aftertouch and pitch bend) reaches
+    /// the plugin.
+    pub fn takes_controller(&self, number: usize) -> bool {
+        match &self.inner {
+            Processor::Vst3(p) => p.midi_map.get(number).is_some_and(Option::is_some),
+            Processor::Clap(p) => p.takes_midi(),
+        }
+    }
+}
+
+enum Handle {
+    Vst3(Vst3Handle),
+    Clap(crate::clap_host::ClapHandle),
+}
+
+/// The UI-thread half of a plugin instance.
+pub struct PluginHandle {
+    inner: Handle,
+    pub name: String,
+    /// The parameters, read once (plugins can have thousands), and their index by id.
+    params: OnceLock<(Vec<PluginParam>, HashMap<u32, usize>)>,
+}
+
+macro_rules! handle {
+    ($inner:expr, $h:ident => $call:expr) => {
+        match $inner {
+            Handle::Vst3($h) => $call,
+            Handle::Clap($h) => $call,
+        }
+    };
+}
+
+impl PluginHandle {
+    /// The parameters the host may set, in the plugin's order.
+    pub fn params(&self) -> &[PluginParam] {
+        &self.cached().0
+    }
+
+    /// Parameter `id`, if the host may set it.
+    pub fn param(&self, id: u32) -> Option<&PluginParam> {
+        let (params, index) = self.cached();
+        index.get(&id).map(|&i| &params[i])
+    }
+
+    fn cached(&self) -> &(Vec<PluginParam>, HashMap<u32, usize>) {
+        self.params.get_or_init(|| {
+            let params = handle!(&self.inner, h => h.read_params());
+            let index = params.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
+            (params, index)
+        })
+    }
+
+    /// The normalized (0..1) value of parameter `id`.
+    pub fn value(&self, id: u32) -> f64 {
+        handle!(&self.inner, h => h.value(id))
+    }
+
+    /// How the plugin shows `value` (normalized) of parameter `id`, e.g. "-6.0 dB".
+    pub fn display(&self, id: u32, value: f64) -> String {
+        handle!(&self.inner, h => h.display(id, value))
+    }
+
+    /// Sets parameter `id` (normalized); the processor gets it at its next block.
+    pub fn set(&self, id: u32, value: f64) {
+        handle!(&self.inner, h => h.set(id, value))
+    }
+
+    /// Shows `value` for parameter `id` in the plugin's own editor, without sending it
+    /// to the processor (automation reaches the processor from the engine).
+    pub fn show(&self, id: u32, value: f64) {
+        handle!(&self.inner, h => h.show(id, value))
+    }
+
+    /// The plugin's whole state, to restore with [`instantiate`].
+    pub fn state(&self) -> Vec<u8> {
+        handle!(&self.inner, h => h.state())
+    }
+
+    /// Once a frame, on the UI thread: lets the plugin do what it asked to do there.
+    pub fn idle(&self) {
+        if let Handle::Clap(h) = &self.inner {
+            h.idle();
+        }
+    }
+
+    /// The plugin's own editor, if it has one. The host puts it in a window of its
+    /// own (see [`PluginView::attach`]). UI thread only.
+    pub fn editor(&self) -> Option<PluginView> {
+        Some(match &self.inner {
+            Handle::Vst3(h) => PluginView(View::Vst3(h.editor()?)),
+            Handle::Clap(h) => PluginView(View::Clap(h.editor()?)),
+        })
+    }
+}
+
+enum View {
+    Vst3(Vst3View),
+    Clap(crate::clap_host::ClapView),
+}
+
+/// A plugin's editor. Dropping it takes it out of its window.
+pub struct PluginView(View);
+
+macro_rules! view {
+    ($inner:expr, $v:ident => $call:expr) => {
+        match $inner {
+            View::Vst3($v) => $call,
+            View::Clap($v) => $call,
+        }
+    };
+}
+
+impl PluginView {
+    /// Whether it can show itself in a native view of `platform` (see [`PLATFORM_VIEW`]).
+    pub fn supports(&self, platform: &str) -> bool {
+        view!(&self.0, v => v.supports(platform))
+    }
+
+    /// Its size in points.
+    pub fn size(&self) -> (i32, i32) {
+        view!(&self.0, v => v.size())
+    }
+
+    pub fn can_resize(&self) -> bool {
+        view!(&self.0, v => v.can_resize())
+    }
+
+    /// Called with the size the editor asks for; the window must take it.
+    pub fn on_resize(&self, resize: impl Fn(i32, i32) + 'static) {
+        view!(&self.0, v => v.on_resize(resize))
+    }
+
+    /// Puts the editor in `parent`, a native view of [`PLATFORM_VIEW`].
+    ///
+    /// # Safety
+    /// `parent` must be a live view of that kind, and outlive this editor.
+    pub unsafe fn attach(&mut self, parent: *mut c_void) -> bool {
+        view!(&mut self.0, v => unsafe { v.attach(parent) })
+    }
+
+    /// The window was resized by the user to `width` × `height`: the editor follows,
+    /// or answers with the nearest size it accepts.
+    pub fn set_size(&self, width: i32, height: i32) -> (i32, i32) {
+        view!(&self.0, v => v.set_size(width, height))
+    }
+}
+
+/// Loads plugin `cid` (a VST3 class id or a CLAP plugin id) from `bundle` and starts it
+/// at `sample_rate`, restoring `state` if given (from [`PluginHandle::state`]). Call on
+/// the UI thread.
+pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(PluginProcessor, PluginHandle), String> {
+    let name = scan(bundle).ok().and_then(|list| list.into_iter().find(|p| p.cid == cid)).map_or_else(|| "Plugin".to_string(), |p| p.name);
+    let (processor, handle, instrument) = if is_clap(bundle) {
+        let (p, h, instrument) = crate::clap_host::instantiate(bundle, cid, sample_rate, state)?;
+        (Processor::Clap(p), Handle::Clap(h), instrument)
+    } else {
+        let (p, h, instrument) = vst3_instantiate(bundle, cid, sample_rate, state)?;
+        (Processor::Vst3(p), Handle::Vst3(h), instrument)
+    };
+    Ok((PluginProcessor { inner: processor, instrument }, PluginHandle { inner: handle, name, params: OnceLock::new() }))
 }
 
 #[cfg(test)]
@@ -1415,6 +1627,94 @@ pub(crate) mod tests {
 
     fn synth() -> PluginInfo {
         scan(&test_bundle()).unwrap().into_iter().find(|p| p.instrument).unwrap()
+    }
+
+    /// The same test plugin as a `.clap` bundle.
+    pub(crate) fn clap_bundle() -> PathBuf {
+        static BUNDLE: OnceLock<PathBuf> = OnceLock::new();
+        BUNDLE
+            .get_or_init(|| {
+                let vst3 = test_bundle();
+                let bundle = vst3.with_file_name("PulseTest.clap");
+                let binary = binary(&bundle);
+                std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+                std::fs::copy(super::binary(&vst3), &binary).unwrap();
+                bundle
+            })
+            .clone()
+    }
+
+    #[test]
+    fn clap_plugins_scan_play_and_keep_their_state() {
+        let found = scan(&clap_bundle()).unwrap();
+        let names: Vec<(&str, &str, bool, &str)> = found.iter().map(|p| (p.name.as_str(), p.cid.as_str(), p.instrument, p.category.as_str())).collect();
+        assert_eq!(names, [("Pulse Test Synth", "org.pulse.test-synth", true, "instrument|synthesizer"), ("Pulse Test Gain", "org.pulse.test-gain", false, "audio-effect|utility")]);
+        let synth = &found[0];
+        let (mut p, handle) = instantiate(&synth.path, &synth.cid, 48_000.0, None).unwrap();
+        assert!(p.instrument);
+        assert_eq!(handle.name, "Pulse Test Synth");
+        // Plain ranges, seen as normalized values.
+        let params: Vec<(&str, i32, f64)> = handle.params().iter().map(|p| (p.name.as_str(), p.steps, p.default)).collect();
+        assert_eq!(params, [("Level", 0, 0.5), ("Octave", 2, 0.5), ("Bend", 0, 0.5)]);
+        assert_eq!(handle.display(1, 1.0), "+1");
+        assert_eq!(handle.display(2, 0.75), "+1.0 st");
+        // A note with its length.
+        p.note_on(69, 1.0, 24_000);
+        let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
+        let mut at = 0;
+        for size in [100, 2000, 333, 21567, 24_000] {
+            p.render(&mut l[at..at + size], &mut r[at..at + size]);
+            at += size;
+        }
+        assert!((frequency(&l[..24_000], 48_000.0) - 440.0).abs() < 2.0, "{}", frequency(&l[..24_000], 48_000.0));
+        assert!((rms(&l[1000..24_000]) - 0.5 / 2f32.sqrt()).abs() < 0.01);
+        assert_eq!(rms(&l[24_000..]), 0.0, "the note ends after its length");
+        // Parameters: level a quarter, an octave up (stepped), then saved and restored.
+        handle.set(0, 0.25);
+        handle.set(1, 0.9);
+        p.note_on(57, 1.0, HELD);
+        let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
+        p.render(&mut l, &mut r);
+        assert!((frequency(&l, 48_000.0) - 440.0).abs() < 2.0, "an octave up: {}", frequency(&l, 48_000.0));
+        assert!((rms(&l[1000..]) - 0.25 / 2f32.sqrt()).abs() < 0.01);
+        assert_eq!((handle.value(0), handle.value(1)), (0.25, 1.0), "the stepped octave snapped to +1");
+        // Pitch bend and the wheel, as MIDI.
+        assert!(p.takes_controller(1) && p.takes_controller(129));
+        p.control(Controller::PitchBend, 0, 1.0);
+        p.control(Controller::Cc(1), 0, 1.0);
+        let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
+        p.render(&mut l, &mut r);
+        assert!((frequency(&l, 48_000.0) - 493.9).abs() < 2.0, "bent to B4: {}", frequency(&l, 48_000.0));
+        assert!((rms(&l[1000..]) - 1.0 / 2f32.sqrt()).abs() < 0.01, "full level from the wheel");
+        p.all_notes_off();
+        let state = handle.state();
+        drop((p, handle));
+        let (_, handle) = instantiate(&synth.path, &synth.cid, 48_000.0, Some(&state)).unwrap();
+        assert_eq!((handle.value(0), handle.value(1)), (1.0, 1.0));
+        // MIDI pitch bend tops out at 8191/8192.
+        assert!((handle.value(2) - 1.0).abs() < 1e-3, "{}", handle.value(2));
+    }
+
+    #[test]
+    fn clap_effects_and_idle_parameter_changes() {
+        let gain = scan(&clap_bundle()).unwrap().into_iter().find(|p| !p.instrument).unwrap();
+        let (mut p, handle) = instantiate(&gain.path, &gain.cid, 44_100.0, None).unwrap();
+        let mut l: Vec<f32> = (0..3000).map(|i| (i as f32 * 0.01).sin()).collect();
+        let mut r = l.clone();
+        let original = l.clone();
+        p.process(&mut l, &mut r);
+        assert_eq!(l, original, "1× at the default (0.5 of 0..2)");
+        handle.set(0, 0.25);
+        p.set_normalized(0, 0.25);
+        p.process(&mut l, &mut r);
+        assert_eq!(l, original.iter().map(|x| x * 0.5).collect::<Vec<_>>());
+        assert_eq!(handle.display(0, 0.25), "0.50x");
+        // Without a processor (no audio running), changes reach the plugin by a flush.
+        drop(p);
+        handle.set(0, 1.0);
+        assert_eq!(handle.value(0), 1.0);
+        assert_eq!(handle.state().len(), 8);
+        assert!(handle.editor().is_none(), "the test plugins have no editor");
     }
 
     fn frequency(signal: &[f32], sr: f32) -> f32 {
@@ -1583,8 +1883,9 @@ pub(crate) mod tests {
                 let state = handle.state();
                 let restored = instantiate(&info.path, &info.cid, sr, Some(&state)).map(|(_, h)| h.state().len());
                 println!(
-                    "{} ({}, {}): cargado en {:.0} ms, {} parámetros, pico {:.1} dBFS, {:.1} % de un núcleo, estado {} bytes, restaurado {:?}",
+                    "{} [{}] ({}, {}): cargado en {:.0} ms, {} parámetros, pico {:.1} dBFS, {:.1} % de un núcleo, estado {} bytes, restaurado {:?}",
                     info.name,
+                    if is_clap(&info.path) { "CLAP" } else { "VST3" },
                     info.vendor,
                     info.category,
                     loaded.as_secs_f64() * 1000.0,
@@ -1634,7 +1935,7 @@ pub(crate) mod tests {
         let sr = 48_000.0;
         for info in default_folders().iter().flat_map(|f| bundles(f)).filter_map(|b| scan(&b).ok()).flatten().filter(|p| p.instrument) {
             let (mut p, _handle) = instantiate(&info.path, &info.cid, sr, None).unwrap();
-            let mapped: Vec<usize> = (0..MIDI_CONTROLLERS).filter(|&n| p.midi_map[n].is_some()).collect();
+            let mapped: Vec<usize> = (0..MIDI_CONTROLLERS).filter(|&n| p.takes_controller(n)).collect();
             let pitch = |p: &mut PluginProcessor, bend: f32| {
                 p.control(Controller::PitchBend, 0, bend);
                 p.note_on(69, 0.8, HELD);
@@ -1649,12 +1950,13 @@ pub(crate) mod tests {
             };
             let (flat, bent) = (pitch(&mut p, 0.0), pitch(&mut p, 1.0));
             println!(
-                "{}: {} controladores mapeados (rueda CC1: {}, pitch bend: {}, aftertouch: {}); La4 {flat:.1} Hz, con el bend arriba {bent:.1} Hz",
+                "{} [{}]: {} controladores (rueda CC1: {}, pitch bend: {}, aftertouch: {}); La4 {flat:.1} Hz, con el bend arriba {bent:.1} Hz",
                 info.name,
+                if is_clap(&info.path) { "CLAP" } else { "VST3" },
                 mapped.len(),
-                p.midi_map[1].is_some(),
-                p.midi_map[ControllerNumbers_::kPitchBend as usize].is_some(),
-                p.midi_map[ControllerNumbers_::kAfterTouch as usize].is_some()
+                p.takes_controller(1),
+                p.takes_controller(ControllerNumbers_::kPitchBend as usize),
+                p.takes_controller(ControllerNumbers_::kAfterTouch as usize)
             );
         }
     }

@@ -326,7 +326,10 @@ pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::U
     }
     let found = app.plugin_library.found.clone();
     for info in &found {
-        let label = if info.vendor.is_empty() { info.name.clone() } else { format!("{} · {}", info.name, info.vendor) };
+        let mut label = if info.vendor.is_empty() { info.name.clone() } else { format!("{} · {}", info.name, info.vendor) };
+        if engine::plugin::is_clap(&info.path) {
+            label.push_str(" (CLAP)");
+        }
         if info.instrument {
             let hint = if track.is_some() { "Clic: será el instrumento de la pista seleccionada" } else { "Selecciona una pista MIDI" };
             if item(ui, "♫", &label, hint) {
@@ -579,6 +582,40 @@ pub(crate) mod tests {
         app.sync_all();
         app.poll_editors();
         assert!(!app.editors.is_open(id));
+    }
+
+    #[test]
+    fn clap_plugins_work_like_vst3_ones() {
+        // The test plugin as a .clap, in a folder of its own.
+        let folder = test_bundle().parent().unwrap().with_file_name("app-clap");
+        let bundle = folder.join("PulseTest.clap");
+        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
+        std::fs::copy(test_bundle().join("Contents/MacOS/PulseTest"), bundle.join("Contents/MacOS/PulseTest")).unwrap();
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        app.plugin_library.search(&[folder]);
+        let names: Vec<&str> = app.plugin_library.found.iter().map(|p| p.name.as_str()).collect();
+        assert_eq!(names, ["Pulse Test Synth", "Pulse Test Gain"]);
+        for (t, track) in app.project.tracks.iter_mut().enumerate() {
+            track.mixer.gain = if t == 3 { 1.0 } else { 0.0 };
+        }
+        let (synth, gain) = (app.plugin_library.found[0].clone(), app.plugin_library.found[1].clone());
+        app.set_plugin_instrument(3, &synth);
+        let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!("{:?}", app.status) };
+        assert_eq!(app.project.plugin(id).unwrap().cid, "org.pulse.test-synth");
+        let loud = rms(&render(&mut app));
+        assert!(loud > 0.01, "{loud}");
+        // A plugin effect, automated, and the instrument's level set by hand: saved and loaded.
+        app.add_plugin_effect(Target::Track(3), &gain);
+        let device = app.project.tracks[3].devices.len() - 1;
+        app.set_param(Target::Track(3), Param::Instrument(0), 0.25);
+        let quiet = rms(&render(&mut app));
+        assert!((quiet / loud - 0.5).abs() < 0.03, "{quiet} / {loud}");
+        let file = std::env::temp_dir().join(format!("pulse-clap-test-{}.pulse", std::process::id()));
+        app.save_to_path(&file);
+        let mut reopened = PulseApp::headless(crate::project::Project::load(&file).unwrap());
+        let _ = std::fs::remove_file(&file);
+        assert!((rms(&render(&mut reopened)) / loud - 0.5).abs() < 0.03, "the saved state");
+        assert_eq!(reopened.param_name(Target::Track(3), Param::Device { device, param: 0 }), "Pulse Test Gain: Gain");
     }
 
     #[test]

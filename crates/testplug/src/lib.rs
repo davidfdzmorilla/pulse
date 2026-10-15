@@ -2,7 +2,8 @@
 //! instrument that plays a sine per note, and "Pulse Test Gain", an effect. Each has
 //! a separate edit controller, parameters (one of them stepped) and a state, so the
 //! host's loading, buses, events, parameter changes and state round trips can all
-//! be checked without any third-party plugin installed.
+//! be checked without any third-party plugin installed. The same library is also a
+//! CLAP plugin with both (see `clap`).
 
 #![allow(non_snake_case)]
 
@@ -11,6 +12,8 @@ use std::ffi::{c_char, c_void};
 use std::{ptr, slice};
 
 use vst3::{uid, Class, ComRef, ComWrapper, Steinberg::Vst::*, Steinberg::*};
+
+mod clap;
 
 const SYNTH_CID: TUID = uid(0x50554C53, 0x45545354, 0x53594E54, 0x48000001);
 const SYNTH_CONTROLLER_CID: TUID = uid(0x50554C53, 0x45545354, 0x53594E54, 0x48000002);

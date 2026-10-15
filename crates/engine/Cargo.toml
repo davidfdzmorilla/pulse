@@ -10,6 +10,7 @@ rtrb = "0.4.0"
 serde = { version = "1.0.229", features = ["derive"] }
 symphonia = { version = "0.6.1", features = ["all"] }
 vst3 = "0.3.0"
+clap-sys = "0.5.0"
 
 [dev-dependencies]
 serde_json = "1.0.154"

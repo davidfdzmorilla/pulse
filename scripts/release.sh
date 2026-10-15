@@ -40,9 +40,11 @@ fi
 sed -i '' "1,/^version = /s/^version = \".*\"/version = \"$version\"/" crates/app/Cargo.toml
 cargo test --release --workspace --quiet
 scripts/bundle.sh
-zip="target/bundle/Pulse-$version.zip"
+out=${PULSE_BUNDLE_DIR:-$HOME/Library/Caches/Pulse/bundle}
+codesign --verify --strict "$out/Pulse.app"
+zip="$out/Pulse-$version.zip"
 rm -f "$zip"
-ditto -c -k --keepParent target/bundle/Pulse.app "$zip"
+ditto -c -k --keepParent "$out/Pulse.app" "$zip"
 
 git add crates/app/Cargo.toml Cargo.lock
 git commit --quiet -m "Pulse $version"

@@ -195,10 +195,17 @@ fn bundle_version(bundle: &Path) -> Option<String> {
 }
 
 /// Who signed a bundle ("adhoc" for ad hoc signatures), if the signature is valid.
-fn signer(bundle: &Path) -> Result<String, String> {
-    let verify = Command::new("/usr/bin/codesign").args(["--verify", "--strict"]).arg(bundle).output().map_err(|e| e.to_string())?;
+/// `strict` also refuses stray file attributes: right for a fresh download, but
+/// an installed copy picks some up from the system (Finder info, iCloud).
+fn signer(bundle: &Path, strict: bool) -> Result<String, String> {
+    let mut verify = Command::new("/usr/bin/codesign");
+    verify.arg("--verify");
+    if strict {
+        verify.arg("--strict");
+    }
+    let verify = verify.arg(bundle).output().map_err(|e| e.to_string())?;
     if !verify.status.success() {
-        return Err("La firma de la versión descargada no es válida".into());
+        return Err(format!("La firma de {} no es válida", bundle.display()));
     }
     let details = Command::new("/usr/bin/codesign").args(["-dvv"]).arg(bundle).output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&details.stderr);
@@ -207,6 +214,33 @@ fn signer(bundle: &Path) -> Result<String, String> {
         .find_map(|l| l.strip_prefix("Authority="))
         .map(str::to_string)
         .unwrap_or_else(|| "adhoc".into()))
+}
+
+/// Checks that `new` is validly signed with the very certificate `ours` was (its
+/// designated requirement names the certificate's hash, not just its name). An
+/// ad hoc signed `ours` (a build that was never signed properly) accepts any valid
+/// signature.
+fn same_signer(ours: &Path, new: &Path) -> Result<(), String> {
+    let theirs = signer(new, true)?;
+    // A broken signature here must not open the door to any download.
+    let mine = signer(ours, false).map_err(|e| format!("No se puede comprobar esta versión de Pulse: {e}"))?;
+    if mine == "adhoc" {
+        return Ok(());
+    }
+    let requirement = output(Command::new("/usr/bin/codesign").args(["-d", "-r-"]).arg(ours))
+        .and_then(|text| text.lines().find_map(|l| l.strip_prefix("designated => ").map(str::to_string)))
+        .ok_or("No se pudo leer la firma de esta versión de Pulse")?;
+    let check = Command::new("/usr/bin/codesign")
+        .args(["--verify", "--strict"])
+        .arg(format!("-R={requirement}"))
+        .arg(new)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if check.status.success() {
+        Ok(())
+    } else {
+        Err(format!("La versión descargada está firmada por «{theirs}» con otro certificado que esta: no se instala"))
+    }
 }
 
 /// Puts `new` where `current` is, keeping `current` as "Pulse (anterior).app"
@@ -259,10 +293,7 @@ fn install(release: &Release, bundle: &Path, token: &str) -> Result<String, Stri
         if version != release.version() {
             return Err(format!("La descarga es la versión {version}, no la {}", release.version()));
         }
-        let (theirs, ours) = (signer(&new)?, signer(bundle).unwrap_or_else(|_| "adhoc".into()));
-        if ours != "adhoc" && theirs != ours {
-            return Err(format!("La versión descargada está firmada por «{theirs}», no por «{ours}»: no se instala"));
-        }
+        same_signer(bundle, &new)?;
         swap_in(bundle, &new)?;
         Ok(version)
     })();
@@ -552,6 +583,52 @@ mod tests {
         assert_eq!(read(&current), Some("2".into()));
         std::fs::remove_dir_all(&dir).ok();
         assert!(swap_back(&current).is_err());
+    }
+
+    /// Who signed the installed Pulse and a downloaded release (set PULSE_DOWNLOADED
+    /// to an unzipped Pulse.app).
+    #[test]
+    #[ignore = "diagnostic: reads signatures of the installed app"]
+    fn signers() {
+        let installed = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Applications/Pulse.app");
+        println!("instalada: {:?}", signer(&installed, false));
+        println!("instalada (estricta): {:?}", signer(&installed, true));
+        if let Ok(path) = std::env::var("PULSE_DOWNLOADED") {
+            println!("descargada (estricta): {:?}", signer(Path::new(&path), true));
+            println!("misma firma que la instalada: {:?}", same_signer(&installed, Path::new(&path)));
+            // Itself ad hoc signed: must be refused.
+            let copy = std::env::temp_dir().join(format!("pulse-adhoc-{}/Pulse.app", std::process::id()));
+            let _ = std::fs::remove_dir_all(copy.parent().unwrap());
+            std::fs::create_dir_all(copy.parent().unwrap()).unwrap();
+            Command::new("/usr/bin/ditto").arg(&path).arg(&copy).status().unwrap();
+            Command::new("/usr/bin/codesign").args(["--force", "--sign", "-"]).arg(&copy).status().unwrap();
+            println!("copia con firma ad hoc: {:?}", same_signer(&installed, &copy));
+            let _ = std::fs::remove_dir_all(copy.parent().unwrap());
+        }
+    }
+
+    /// The whole update against GitHub, on a copy of the installed Pulse in a
+    /// temporary folder: finds the latest release, downloads it, checks it and
+    /// swaps it in, then back.
+    #[test]
+    #[ignore = "diagnostic: talks to GitHub and downloads the latest release"]
+    fn update_a_copy_from_github() {
+        let token = token().expect("gh auth token");
+        let release = latest_release(&token).unwrap();
+        println!("última publicada: {} ({:?})", release.version(), release.zip().map(|a| &a.name));
+        let dir = std::env::temp_dir().join(format!("pulse-update-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundle = dir.join("Pulse.app");
+        let installed = PathBuf::from(std::env::var("HOME").unwrap()).join("Applications/Pulse.app");
+        assert!(Command::new("/usr/bin/ditto").arg(&installed).arg(&bundle).status().unwrap().success());
+        let result = install(&release, &bundle, &token);
+        println!("instalación: {result:?}");
+        println!("en su sitio: {:?} · anterior: {:?}", bundle_version(&bundle), bundle_version(&dir.join(PREVIOUS)));
+        println!("volver: {:?} → {:?}", swap_back(&bundle), bundle_version(&bundle));
+        println!("restos de la descarga: {}", dir.join(".pulse-update").exists());
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(result, Ok(release.version().to_string()));
     }
 
     #[test]

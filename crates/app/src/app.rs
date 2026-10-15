@@ -175,6 +175,10 @@ pub struct PulseApp {
     pub view: View,
     pub detail: Detail,
     pub selected_clip: Option<ClipRef>,
+    /// Clips selected together with the selected one (⌘ clic, recuadro); see `clip_select`.
+    pub selected_clips: Vec<ClipRef>,
+    /// A selection rectangle or session clips being dragged.
+    pub clip_gesture: Option<crate::clip_select::Gesture>,
     pub selected_target: Target,
     /// Tracks selected together with the selected one (⌘ or ⇧ clic); see `tracks`.
     pub selected_tracks: Vec<usize>,
@@ -307,6 +311,8 @@ impl PulseApp {
             view: View::Session,
             detail: Detail::Devices,
             selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
+            selected_clips: Vec::new(),
+            clip_gesture: None,
             selected_target: Target::Track(0),
             selected_tracks: Vec::new(),
             track_drag: None,
@@ -796,6 +802,7 @@ impl PulseApp {
 
     pub fn select_clip(&mut self, clip: ClipRef) {
         self.selected_clip = Some(clip);
+        self.selected_clips.clear();
         self.selected_target = Target::Track(clip.track());
         self.detail = Detail::Clip;
     }
@@ -808,22 +815,31 @@ impl PulseApp {
         self.sync_clip(track, slot);
     }
 
+    /// Deletes every selected clip.
     pub fn delete_selected_clip(&mut self) {
-        match self.selected_clip {
-            Some(ClipRef::Session { track, slot }) => self.set_clip(track, slot, None),
-            Some(ClipRef::Arrangement { track, index }) => {
-                let lane = &mut self.project.tracks[track].arrangement;
-                if index < lane.len() {
-                    lane.remove(index);
-                    self.selected_clip = None;
-                    self.sync_arrangement(track);
-                }
-            }
-            None => {}
-        }
+        let clips = self.clip_selection();
+        self.delete_clips(&clips);
     }
 
+    /// Duplicates every selected clip: below it in the session (in the next free
+    /// slot), after it on the arrangement. The copies end up selected.
     pub fn duplicate_selected_clip(&mut self) {
+        let clips = self.clip_selection();
+        if clips.len() <= 1 {
+            return self.duplicate_clip();
+        }
+        let mut copies = Vec::new();
+        for clip in clips {
+            self.selected_clip = Some(clip);
+            self.duplicate_clip();
+            if let Some(copy) = self.selected_clip.filter(|&c| c != clip) {
+                copies.push(copy);
+            }
+        }
+        self.set_clip_selection(copies);
+    }
+
+    fn duplicate_clip(&mut self) {
         match self.selected_clip {
             Some(ClipRef::Session { track, slot }) => {
                 let free = (slot + 1..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());

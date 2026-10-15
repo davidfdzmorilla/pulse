@@ -74,7 +74,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 27] = [
+pub const SHORTCUTS: [(&str, &str); 29] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -88,8 +88,10 @@ pub const SHORTCUTS: [(&str, &str); 27] = [
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),
     ("⌘T / ⇧⌘T", "Nueva pista MIDI / de audio"),
-    ("⌘ clic / ⇧ clic", "Seleccionar varias pistas (en sus cabeceras)"),
+    ("⌘ clic / ⇧ clic", "Seleccionar varias pistas (en sus cabeceras) o varios clips"),
     ("Arrastrar cabecera", "Mover las pistas seleccionadas"),
+    ("Arrastrar en un hueco", "Seleccionar clips y pistas con un recuadro"),
+    ("Arrastrar clip / ⌥", "Mover los clips seleccionados / copiarlos"),
     ("Tab", "Cambiar entre Session y Arrangement"),
     ("⇧Tab", "Cambiar entre el clip y los dispositivos"),
     ("⌃⌘F", "Pantalla completa"),
@@ -197,8 +199,11 @@ impl PulseApp {
                 ctx.input_mut(|i| i.events.push(egui::Event::Key { key: egui::Key::Delete, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }));
             }
             Command::Cut => {
+                // Only the clip copied (the clipboard holds one) goes.
                 self.copy_clip();
-                self.delete_selected_clip();
+                if let Some(clip) = self.selected_clip {
+                    self.delete_clips(&[clip]);
+                }
             }
             Command::Copy => self.copy_clip(),
             Command::Paste => self.paste_clip(),

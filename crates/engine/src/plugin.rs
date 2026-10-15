@@ -15,6 +15,7 @@
 
 #![allow(non_snake_case)]
 
+use crate::engine::Controller;
 use crate::synth::HELD;
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::cell::UnsafeCell;
@@ -31,6 +32,8 @@ const MAX_CHANGES: usize = 64;
 const MAX_POINTS: usize = 16;
 /// Notes waiting for their automatic note-off.
 const MAX_PENDING: usize = 256;
+/// MIDI controller numbers in VST3: CC 0..127, then aftertouch (128) and pitch bend (129).
+const MIDI_CONTROLLERS: usize = 130;
 
 /// A plugin found in a folder: one of the audio classes of a bundle.
 #[derive(Clone, Debug, PartialEq)]
@@ -960,6 +963,11 @@ pub struct PluginProcessor {
     context: ProcessContext,
     pending: Vec<(u8, u32)>,
     held: [bool; 128],
+    /// The parameter each MIDI controller drives (CC 0..127, aftertouch, pitch bend),
+    /// as the plugin's MIDI mapping says.
+    midi_map: Box<[Option<ParamID>; MIDI_CONTROLLERS]>,
+    /// Controller values waiting for the next block.
+    controls: Vec<(ParamID, f64)>,
     sample_rate: f32,
     pub instrument: bool,
 }
@@ -981,6 +989,33 @@ impl PluginProcessor {
         self.note(true, pitch, velocity, 0);
         if gate != HELD && self.pending.len() < MAX_PENDING {
             self.pending.push((pitch, gate));
+        }
+    }
+
+    /// A MIDI controller moved: CC, pitch bend (-1..1) or pressure (0..1).
+    pub fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
+        let (number, normalized) = match controller {
+            Controller::Cc(n) => (n.min(127) as usize, value as f64),
+            Controller::Pressure => (ControllerNumbers_::kAfterTouch as usize, value as f64),
+            Controller::PitchBend => (ControllerNumbers_::kPitchBend as usize, (value as f64 + 1.0) * 0.5),
+            Controller::PolyPressure => {
+                let mut event: Event = unsafe { std::mem::zeroed() };
+                event.r#type = Event_::EventTypes_::kPolyPressureEvent as u16;
+                event.__field0.polyPressure = PolyPressureEvent { channel: 0, pitch: pitch.min(127) as i16, pressure: value.clamp(0.0, 1.0), noteId: -1 };
+                let list = self.events.list();
+                if list.len() < MAX_EVENTS {
+                    list.push(event);
+                }
+                return;
+            }
+        };
+        let Some(id) = self.midi_map[number] else { return };
+        let value = normalized.clamp(0.0, 1.0);
+        // The latest value per parameter; the list never grows past its capacity.
+        if let Some(slot) = self.controls.iter_mut().find(|(p, _)| *p == id) {
+            slot.1 = value;
+        } else if self.controls.len() < self.controls.capacity() {
+            self.controls.push((id, value));
         }
     }
 
@@ -1064,6 +1099,9 @@ impl PluginProcessor {
             while let Ok((id, value)) = params.pop() {
                 self.changes.set(id, value);
             }
+        }
+        for (id, value) in self.controls.drain(..) {
+            self.changes.set(id, value);
         }
         // Notes whose length ends in this block.
         let mut k = 0;
@@ -1152,6 +1190,17 @@ pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u
             },
             _ => None,
         };
+        // Which parameter each MIDI controller drives, asked once here (the controller
+        // belongs to the UI thread).
+        let mut midi_map = Box::new([None; MIDI_CONTROLLERS]);
+        if let Some(mapping) = controller.as_ref().and_then(|c| c.cast::<IMidiMapping>()) {
+            for (number, slot) in midi_map.iter_mut().enumerate() {
+                let mut id: ParamID = 0;
+                if mapping.getMidiControllerAssignment(0, 0, number as CtrlNumber, &mut id) == kResultTrue {
+                    *slot = Some(id);
+                }
+            }
+        }
         let (producer, consumer) = RingBuffer::new(1024);
         let queue: ParamQueue = Arc::new(Mutex::new(producer));
         let handler = controller.as_ref().map(|c| {
@@ -1293,6 +1342,8 @@ pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u
             context,
             pending: Vec::with_capacity(MAX_PENDING),
             held: [false; 128],
+            midi_map,
+            controls: Vec::with_capacity(MIDI_CONTROLLERS),
             sample_rate,
             instrument: n_events > 0,
         };
@@ -1376,7 +1427,7 @@ pub(crate) mod tests {
         let info = synth();
         let (mut p, handle) = instantiate(&info.path, &info.cid, 48_000.0, None).unwrap();
         let params = handle.params();
-        assert_eq!(params.iter().map(|p| (p.name.as_str(), p.steps)).collect::<Vec<_>>(), [("Level", 0), ("Octave", 2)]);
+        assert_eq!(params.iter().map(|p| (p.name.as_str(), p.steps)).collect::<Vec<_>>(), [("Level", 0), ("Octave", 2), ("Bend", 0)]);
         assert_eq!(handle.value(0), 0.5);
         handle.set(0, 0.25);
         handle.set(1, 1.0);
@@ -1398,6 +1449,28 @@ pub(crate) mod tests {
         p.render(&mut l, &mut r);
         assert!((frequency(&l, 48_000.0) - 440.0).abs() < 2.0);
         assert!((rms(&l[1000..]) - 0.25 / 2f32.sqrt()).abs() < 0.01);
+    }
+
+    #[test]
+    fn pitch_bend_and_controllers_reach_the_parameters_they_are_mapped_to() {
+        let info = synth();
+        let (mut p, _handle) = instantiate(&info.path, &info.cid, 48_000.0, None).unwrap();
+        p.note_on(69, 1.0, HELD);
+        // Pitch bend all the way up: a whole tone; the wheel at a quarter: level 25 %.
+        p.control(Controller::PitchBend, 0, 1.0);
+        p.control(Controller::Cc(1), 0, 0.25);
+        // Unmapped controllers are ignored.
+        p.control(Controller::Cc(74), 0, 1.0);
+        p.control(Controller::Pressure, 0, 1.0);
+        let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
+        p.render(&mut l, &mut r);
+        assert!((frequency(&l, 48_000.0) - 493.9).abs() < 2.0, "bent to B4: {}", frequency(&l, 48_000.0));
+        assert!((rms(&l[1000..]) - 0.25 / 2f32.sqrt()).abs() < 0.01, "{}", rms(&l[1000..]));
+        // Back to the middle.
+        p.control(Controller::PitchBend, 0, 0.0);
+        let (mut l, mut r) = (vec![0.0; 24_000], vec![0.0; 24_000]);
+        p.render(&mut l, &mut r);
+        assert!((frequency(&l, 48_000.0) - 440.0).abs() < 2.0, "{}", frequency(&l, 48_000.0));
     }
 
     #[test]
@@ -1519,6 +1592,38 @@ pub(crate) mod tests {
         let info = synth();
         let (_, handle) = instantiate(&info.path, &info.cid, 48_000.0, None).unwrap();
         assert!(handle.editor().is_none());
+    }
+
+    /// Pitch bend and the modulation wheel on the instruments installed on this computer.
+    #[test]
+    #[ignore = "diagnostic: runs the plugins installed on this computer"]
+    fn installed_plugins_follow_controllers() {
+        let sr = 48_000.0;
+        for info in default_folders().iter().flat_map(|f| bundles(f)).filter_map(|b| scan(&b).ok()).flatten().filter(|p| p.instrument) {
+            let (mut p, _handle) = instantiate(&info.path, &info.cid, sr, None).unwrap();
+            let mapped: Vec<usize> = (0..MIDI_CONTROLLERS).filter(|&n| p.midi_map[n].is_some()).collect();
+            let pitch = |p: &mut PluginProcessor, bend: f32| {
+                p.control(Controller::PitchBend, 0, bend);
+                p.note_on(69, 0.8, HELD);
+                let (mut l, mut r) = (vec![0f32; 48_000], vec![0f32; 48_000]);
+                for (a, b) in l.chunks_mut(512).zip(r.chunks_mut(512)) {
+                    p.render(a, b);
+                }
+                p.note_off(69);
+                let (mut tail_l, mut tail_r) = (vec![0f32; 48_000], vec![0f32; 48_000]);
+                p.render(&mut tail_l, &mut tail_r);
+                frequency(&l[12_000..], sr)
+            };
+            let (flat, bent) = (pitch(&mut p, 0.0), pitch(&mut p, 1.0));
+            println!(
+                "{}: {} controladores mapeados (rueda CC1: {}, pitch bend: {}, aftertouch: {}); La4 {flat:.1} Hz, con el bend arriba {bent:.1} Hz",
+                info.name,
+                mapped.len(),
+                p.midi_map[1].is_some(),
+                p.midi_map[ControllerNumbers_::kPitchBend as usize].is_some(),
+                p.midi_map[ControllerNumbers_::kAfterTouch as usize].is_some()
+            );
+        }
     }
 
     #[test]

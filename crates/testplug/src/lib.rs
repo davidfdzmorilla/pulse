@@ -48,7 +48,7 @@ enum Kind {
 /// Parameters: (id, title, steps, default).
 fn params(kind: Kind) -> &'static [(u32, &'static str, i32, f64)] {
     match kind {
-        Kind::Synth => &[(0, "Level", 0, 0.5), (1, "Octave", 2, 0.5)],
+        Kind::Synth => &[(0, "Level", 0, 0.5), (1, "Octave", 2, 0.5), (2, "Bend", 0, 0.5)],
         Kind::Gain => &[(0, "Gain", 0, 0.5)],
     }
 }
@@ -261,8 +261,8 @@ impl IAudioProcessorTrait for Processor {
             }
             Kind::Synth => {
                 let level = values[0] as f32;
-                // Octave: -1, 0 or +1.
-                let octave = (values[1] * 2.0).round() - 1.0;
+                // Octave: -1, 0 or +1; bend: ±2 semitones.
+                let octave = (values[1] * 2.0).round() - 1.0 + (values[2] * 2.0 - 1.0) * 2.0 / 12.0;
                 let sr = self.sample_rate.get();
                 let mut mix = vec![0f32; n];
                 for (pitch, velocity, phase) in voices.iter_mut() {
@@ -291,7 +291,20 @@ struct Controller {
 }
 
 impl Class for Controller {
-    type Interfaces = (IEditController,);
+    type Interfaces = (IEditController, IMidiMapping);
+}
+
+/// The synth maps the modulation wheel to its level and pitch bend to its bend.
+impl IMidiMappingTrait for Controller {
+    unsafe fn getMidiControllerAssignment(&self, bus: i32, _channel: i16, number: CtrlNumber, id: *mut ParamID) -> tresult {
+        let param = match (self.kind, bus, number as u32) {
+            (Kind::Synth, 0, 1) => 0,
+            (Kind::Synth, 0, n) if n == ControllerNumbers_::kPitchBend as u32 => 2,
+            _ => return kResultFalse,
+        };
+        unsafe { *id = param };
+        kResultTrue
+    }
 }
 
 impl IPluginBaseTrait for Controller {

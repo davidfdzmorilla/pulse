@@ -586,7 +586,7 @@ fn connection_editor(ui: &mut egui::Ui, target: &mut ModTarget, range: OutputRan
     if ui.add(egui::Slider::new(&mut depth, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
         target.depth = depth / 100.0;
     }
-    ui.menu_button("⋯", |ui| {
+    crate::widgets::field_menu_button(ui, "⋯", |ui| {
         ui.label(egui::RichText::new("Curva").size(10.5).color(TEXT_DIM));
         ui.add(egui::Slider::new(&mut target.curve, -1.0..=1.0).fixed_decimals(2));
         ui.label(egui::RichText::new("Límites (en % del recorrido del knob)").size(10.5).color(TEXT_DIM));

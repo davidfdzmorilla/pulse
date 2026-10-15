@@ -426,10 +426,10 @@ fn modifiers(text: &str) -> (Modifiers, &str) {
     let mut mods = Modifiers::NONE;
     for part in first.split('+') {
         match part {
-            "cmd" => mods = mods | Modifiers::COMMAND | Modifiers::MAC_CMD,
-            "shift" => mods = mods | Modifiers::SHIFT,
-            "alt" => mods = mods | Modifiers::ALT,
-            "ctrl" => mods = mods | Modifiers::CTRL,
+            "cmd" => mods |= Modifiers::COMMAND | Modifiers::MAC_CMD,
+            "shift" => mods |= Modifiers::SHIFT,
+            "alt" => mods |= Modifiers::ALT,
+            "ctrl" => mods |= Modifiers::CTRL,
             _ => return (Modifiers::NONE, text),
         }
     }

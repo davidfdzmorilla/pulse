@@ -161,8 +161,11 @@ impl Default for Meters {
 }
 
 impl Meters {
-    fn update(&mut self, state: &SharedState) {
-        let fall = |meter: &mut f32, peak: f32| *meter = peak.max(*meter * 0.86);
+    /// `dt`: seconds since the last frame (the meters fall at the same speed
+    /// whatever the frame rate).
+    fn update(&mut self, state: &SharedState, dt: f32) {
+        let k = 0.86f32.powf(dt * 60.0);
+        let fall = |meter: &mut f32, peak: f32| *meter = peak.max(*meter * k);
         for (meter, status) in self.tracks.iter_mut().zip(&state.tracks) {
             fall(meter, status.peak.take());
         }
@@ -170,6 +173,11 @@ impl Meters {
             fall(meter, peak.take());
         }
         fall(&mut self.master, state.master.take());
+    }
+
+    /// Whether any meter still shows something.
+    pub fn sounding(&self) -> bool {
+        self.tracks.iter().chain(&self.returns).chain([&self.master]).any(|&m| m > 1e-4)
     }
 
     pub fn of(&self, target: Target) -> f32 {
@@ -1351,7 +1359,11 @@ impl PulseApp {
             return;
         }
         let name = path.file_stem().map_or("Loop".into(), |s| s.to_string_lossy().into_owned());
-        let bpm = guess_loop_bpm(sample.duration(), self.project.tempo).unwrap_or(self.project.tempo);
+        // Its tempo from its beats; a loop without clear ones by how long it is.
+        let bpm = self
+            .file_bpm(&path.to_string_lossy())
+            .or_else(|| guess_loop_bpm(sample.duration(), self.project.tempo))
+            .unwrap_or(self.project.tempo);
         let color = self.project.tracks[track].color;
         let region = (0.0, sample.duration());
         match crate::slicing::slice(&sample, region, bpm, self.slice_mode, &name, &Self::slices_dir(&name), color) {
@@ -2120,7 +2132,8 @@ impl eframe::App for PulseApp {
         self.handle_close_request(&ctx);
         self.audio.collect_garbage();
         if let Some(state) = self.audio.state() {
-            self.meters.update(&state);
+            let dt = ctx.input(|i| i.stable_dt).min(0.1);
+            self.meters.update(&state, dt);
         }
         self.handle_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
@@ -2192,8 +2205,12 @@ impl eframe::App for PulseApp {
         crate::export::window(self, &ctx);
         self.debug_screenshot(&ctx);
         self.script_output(&ctx);
-        // Meters and playheads animate continuously.
-        ctx.request_repaint();
+        // Meters and playheads move while anything plays or sounds (60 frames a
+        // second is plenty); otherwise a few frames a second are enough for what
+        // comes in without input (MIDI, the menu bar, background jobs). Every vsync
+        // (144 Hz on some displays) kept a core a fifth busy doing nothing.
+        let moving = self.audio.is_playing() || self.meters.sounding() || self.capture.is_some();
+        ctx.request_repaint_after(std::time::Duration::from_millis(if moving { 16 } else { 100 }));
     }
 }
 

@@ -43,6 +43,10 @@ pub fn folder(root: &Path, kind: &InstrumentKind) -> PathBuf {
 }
 
 pub fn user_root() -> PathBuf {
+    // A test script keeps its presets with its output.
+    if let Some(dir) = crate::script::out_dir() {
+        return dir.join("Presets");
+    }
     crate::kits::kits_dir().with_file_name("Presets")
 }
 

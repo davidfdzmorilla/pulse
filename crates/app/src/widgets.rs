@@ -281,6 +281,14 @@ pub fn edit_menu<R>(response: &Response, add_contents: impl FnOnce(&mut Ui) -> R
     egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(add_contents)
 }
 
+/// A menu button whose menu has fields (a name to type, sliders), which egui's own
+/// menus close on the first click in them: this one closes on a click outside it
+/// (its buttons close it themselves).
+pub fn field_menu_button<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let config = egui::containers::menu::MenuConfig::find(ui).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    egui::containers::menu::MenuButton::new(label).config(config).ui(ui, add_contents).1.map(|r| r.inner)
+}
+
 /// Names a hand-drawn widget for accessibility (VoiceOver, and test scripts).
 pub fn name(response: &Response, typ: egui::WidgetType, label: impl Into<String>) {
     let (enabled, label) = (response.enabled(), label.into());

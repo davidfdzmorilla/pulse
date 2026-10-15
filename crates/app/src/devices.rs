@@ -781,7 +781,7 @@ fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, action
 /// Factory and user presets for the instrument on track `t`, and saving a new one.
 pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) {
     let kind = app.project.tracks[t].instrument;
-    ui.menu_button("Presets", |ui| {
+    widgets::field_menu_button(ui, "Presets", |ui| {
         ui.set_min_width(190.0);
         let factory = crate::presets::factory(&kind);
         if !factory.is_empty() {

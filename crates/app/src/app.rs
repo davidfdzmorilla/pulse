@@ -89,7 +89,7 @@ pub enum View {
     Arrangement,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Detail {
     Clip,
     Devices,
@@ -204,8 +204,23 @@ pub struct PulseApp {
     /// Input track last sent to the engine.
     input_track: Option<Option<usize>>,
     history: History,
-    file: Option<PathBuf>,
+    pub(crate) file: Option<PathBuf>,
     saved: Project,
+    /// Recent projects, newest first.
+    pub recent: Vec<PathBuf>,
+    /// A copied or cut clip.
+    pub clip_clipboard: Option<Clip>,
+    /// Answers to questions (unsaved changes…) for tests and headless apps, in order.
+    pub answers: std::collections::VecDeque<crate::commands::Answer>,
+    /// Whether dialogs may be shown (false in tests and headless apps).
+    pub interactive: bool,
+    /// The window is closing (the user chose to quit).
+    pub quitting: bool,
+    pub show_shortcuts: bool,
+    /// A text field has the keyboard: editing shortcuts are its.
+    pub text_focus: bool,
+    /// The macOS menu bar.
+    menu_bar: Option<crate::native_menu::MenuBar>,
     pub status: Option<String>,
     title: String,
     /// Debug aid: with `PULSE_SCREENSHOT=<file.ppm>` the app saves a screenshot of
@@ -220,6 +235,9 @@ impl PulseApp {
         let mut app = Self::with_audio(Project::demo(), Audio::start());
         app.plugin_library = crate::plugins::Library::load_cache();
         app.learn = crate::midi_map::Learn::load();
+        app.interactive = true;
+        app.recent = crate::commands::load_recent();
+        app.menu_bar = crate::native_menu::MenuBar::install();
         app.sync_all();
         app.midi = MidiInputs::connect(app.audio.live(), app.learn.shared.clone());
         app.sync_midi_map();
@@ -282,6 +300,14 @@ impl PulseApp {
             export: Default::default(),
             input_track: None,
             file: None,
+            recent: Vec::new(),
+            clip_clipboard: None,
+            answers: Default::default(),
+            interactive: false,
+            quitting: false,
+            show_shortcuts: false,
+            text_focus: false,
+            menu_bar: None,
             status: None,
             title: String::new(),
             screenshot: std::env::var("PULSE_SCREENSHOT").ok().map(|path| (path, 0)),
@@ -1638,11 +1664,22 @@ impl PulseApp {
         }
     }
 
+    /// Whether the system menu bar has the commands (otherwise the in-app menu does).
+    pub fn has_menu_bar(&self) -> bool {
+        self.menu_bar.is_some()
+    }
+
+    /// Opens a project file (without asking about unsaved changes: see `commands`).
+    pub(crate) fn open_path(&mut self, path: &std::path::Path) {
+        self.open_from(path);
+    }
+
     fn open_from(&mut self, path: &std::path::Path) {
         match Project::load(path) {
             Ok(project) => {
                 self.status = Some(format!("Abierto {}", path.display()));
                 self.replace_project(project, Some(path.to_path_buf()));
+                self.remember_recent(path);
             }
             Err(error) => self.status = Some(error),
         }
@@ -1714,6 +1751,7 @@ impl PulseApp {
             Ok(()) => {
                 self.saved = self.project.clone();
                 self.status = Some(format!("Guardado en {}", path.display()));
+                self.remember_recent(&path);
                 self.file = Some(path);
             }
             Err(error) => self.status = Some(error),
@@ -1771,7 +1809,7 @@ impl PulseApp {
             self.add_audio_track();
         }
         if import {
-            self.import_live_set();
+            self.run(crate::commands::Command::ImportLive, ctx);
         }
         if space {
             self.toggle_play();
@@ -1809,10 +1847,10 @@ impl PulseApp {
             self.save_as();
         }
         if open {
-            self.open();
+            self.run(crate::commands::Command::Open, ctx);
         }
         if new {
-            self.new_project();
+            self.run(crate::commands::Command::New, ctx);
         }
         if add_track {
             self.add_track();
@@ -1857,6 +1895,12 @@ impl eframe::App for PulseApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         crate::widgets::set_learning(&ctx, self.learn.on);
+        // The menu bar's choices, and the window's close button.
+        let chosen = self.menu_bar.as_ref().map(|bar| bar.chosen()).unwrap_or_default();
+        for command in chosen {
+            self.run(command, &ctx);
+        }
+        self.handle_close_request(&ctx);
         self.audio.collect_garbage();
         if let Some(state) = self.audio.state() {
             self.meters.update(&state);
@@ -1905,6 +1949,12 @@ impl eframe::App for PulseApp {
         self.show_plugin_automation();
         self.poll_midi_map();
         crate::midi_map::window(self, &ctx);
+        crate::commands::shortcuts_window(self, &ctx);
+        self.text_focus = ctx.egui_wants_keyboard_input();
+        if let Some(mut bar) = self.menu_bar.take() {
+            bar.update(|c| self.command_enabled(c), &self.recent);
+            self.menu_bar = Some(bar);
+        }
 
         // A sweep of a controller is one undo step, like a drag.
         let interacting = ctx.input(|i| i.pointer.any_down()) || self.learn.moving();

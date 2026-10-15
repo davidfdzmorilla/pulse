@@ -183,33 +183,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 app.undo();
             }
             ui.add_space(8.0);
-            ui.menu_button("Archivo", |ui| {
-                if ui.button("Nuevo   ⌘N").clicked() {
-                    app.new_project();
-                    ui.close();
-                }
-                if ui.button("Abrir…   ⌘O").clicked() {
-                    app.open();
-                    ui.close();
-                }
-                if ui.button("Importar set de Live (.als)…   ⌘I").clicked() {
-                    app.import_live_set();
-                    ui.close();
-                }
-                if ui.button("Exportar audio…   ⇧⌘R").clicked() {
-                    app.export.open = true;
-                    ui.close();
-                }
-                ui.separator();
-                if ui.button("Guardar   ⌘S").clicked() {
-                    app.save();
-                    ui.close();
-                }
-                if ui.button("Guardar como…   ⇧⌘S").clicked() {
-                    app.save_as();
-                    ui.close();
-                }
-            });
+            // Without a system menu bar, the same menus inside the window.
+            if !app.has_menu_bar() {
+                in_app_menus(app, ui);
+            }
             if widgets::toggle(ui, app.show_browser, "☰", theme::CONTROL_HOVER, vec2(24.0, 22.0))
                 .on_hover_text("Mostrar u ocultar el navegador")
                 .clicked()
@@ -285,5 +262,48 @@ fn press(app: &mut PulseApp, action: Transport) {
         app.touched(Control::Transport(action));
     } else {
         app.transport(action);
+    }
+}
+
+/// The menu bar's menus as buttons, where there is no system menu bar.
+fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
+    use crate::native_menu::{Item, MENUS};
+    let ctx = ui.ctx().clone();
+    let mut chosen = None;
+    for (title, items) in MENUS.iter().skip(1) {
+        ui.menu_button(*title, |ui| {
+            for item in *items {
+                match *item {
+                    Item::Run(command, label, shortcut) => {
+                        let label = if shortcut.is_empty() { label.to_string() } else { format!("{label}   ⌘{}", shortcut.to_uppercase()) };
+                        if ui.add_enabled(app.command_enabled(command), egui::Button::new(label)).clicked() {
+                            chosen = Some(command);
+                            ui.close();
+                        }
+                    }
+                    Item::Separator => {
+                        ui.separator();
+                    }
+                    Item::Recent => {
+                        ui.menu_button("Abrir recientes", |ui| {
+                            for (i, path) in app.recent.iter().enumerate() {
+                                let name = path.file_stem().map_or_else(|| path.display().to_string(), |s| s.to_string_lossy().into_owned());
+                                if ui.button(name).on_hover_text(path.display().to_string()).clicked() {
+                                    chosen = Some(crate::commands::Command::OpenRecent(i));
+                                    ui.close();
+                                }
+                            }
+                            if app.recent.is_empty() {
+                                ui.label("Ningún proyecto reciente");
+                            }
+                        });
+                    }
+                    Item::System(..) => {}
+                }
+            }
+        });
+    }
+    if let Some(command) = chosen {
+        app.run(command, &ctx);
     }
 }

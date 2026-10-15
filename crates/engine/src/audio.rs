@@ -160,11 +160,9 @@ pub fn start_with(settings: &AudioSettings) -> Result<(AudioOutput, EngineHandle
         cpal::BufferSize::Default => None,
     };
 
-    let (command_tx, command_rx) = RingBuffer::new(4096);
-    let (garbage_tx, garbage_rx) = RingBuffer::new(1024);
-    let (live_tx, live_rx) = RingBuffer::new(1024);
-    let (recorded_tx, recorded_rx) = RingBuffer::new(4096);
-    let (engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);
+    let (engine, mut handle) = detached(sample_rate);
+    handle.device_name = device_name;
+    handle.buffer = buffer;
 
     let stream = match format {
         SampleFormat::F32 => build::<f32>(&device, config.clone(), engine),
@@ -178,19 +176,28 @@ pub fn start_with(settings: &AudioSettings) -> Result<(AudioOutput, EngineHandle
         .play()
         .map_err(|e| format!("Cannot start audio stream: {e}"))?;
 
-    Ok((
-        AudioOutput { _stream: stream },
-        EngineHandle {
-            commands: command_tx,
-            recorded: recorded_rx,
-            live: LiveInput(Arc::new(Mutex::new(live_tx))),
-            garbage: garbage_rx,
-            state,
-            sample_rate,
-            device_name,
-            buffer,
-        },
-    ))
+    Ok((AudioOutput { _stream: stream }, handle))
+}
+
+/// An engine and its handle with no audio device: whoever holds the engine calls
+/// [`Engine::process`] (tests drive it by hand).
+pub fn detached(sample_rate: f32) -> (Engine, EngineHandle) {
+    let (command_tx, command_rx) = RingBuffer::new(4096);
+    let (garbage_tx, garbage_rx) = RingBuffer::new(1024);
+    let (live_tx, live_rx) = RingBuffer::new(1024);
+    let (recorded_tx, recorded_rx) = RingBuffer::new(4096);
+    let (engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);
+    let handle = EngineHandle {
+        commands: command_tx,
+        recorded: recorded_rx,
+        live: LiveInput(Arc::new(Mutex::new(live_tx))),
+        garbage: garbage_rx,
+        state,
+        sample_rate,
+        device_name: "Sin dispositivo".into(),
+        buffer: None,
+    };
+    (engine, handle)
 }
 
 fn build<T>(device: &cpal::Device, config: StreamConfig, mut engine: Engine) -> Result<cpal::Stream, String>

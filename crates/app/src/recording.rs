@@ -190,4 +190,60 @@ mod tests {
         let local = local_notes(&[note(3.5, 2.0, 60)], 0.0, 4.0);
         assert_eq!(local[0].length, 0.5);
     }
+
+    /// The record button with nothing armed, on a real engine run by hand: it arms
+    /// the selected track, records what is played, and the take becomes a clip.
+    #[test]
+    fn the_record_button_arms_the_selected_track_and_records_it() {
+        use crate::midi_map::Transport;
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+            track.arrangement.clear();
+        }
+        app.sync_all();
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+            // 120 BPM: half a second per beat, in blocks of 512 frames.
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).ceil() as usize {
+                engine.process(&mut buffer, 2);
+                app.update_recording();
+            }
+        };
+        app.project.tempo = 120.0;
+        app.sync_all();
+
+        // The master selected: nothing to arm, and it says so.
+        app.selected_target = engine::Target::Master;
+        app.transport(Transport::Record);
+        assert!(!app.is_arrangement_recording());
+        assert!(app.status.as_deref().unwrap_or("").contains("Selecciona una pista"));
+
+        // A MIDI track selected: armed, recording and playing.
+        app.selected_target = engine::Target::Track(1);
+        app.transport(Transport::Record);
+        assert!(app.project.tracks[1].armed, "the selected track is armed");
+        assert!(app.is_arrangement_recording());
+        run(&mut app, 0.5);
+        assert!(app.audio.is_playing());
+        let live = app.audio.live().unwrap();
+        live.send(engine::LiveNote::note(60, 0.8));
+        run(&mut app, 1.0);
+        live.send(engine::LiveNote::note(60, 0.0));
+        run(&mut app, 0.5);
+        // Pressed again: the take ends and lands on the arrangement.
+        app.transport(Transport::Record);
+        run(&mut app, 0.5);
+        assert!(!app.is_arrangement_recording());
+        let lane = &app.project.tracks[1].arrangement;
+        assert_eq!(lane.len(), 1, "one take");
+        let engine::model::Clip::Midi(clip) = &lane[0].clip else { panic!("a MIDI take") };
+        assert_eq!(clip.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60]);
+        // Recording again keeps the armed track and doesn't arm others.
+        app.selected_target = engine::Target::Track(2);
+        app.transport(Transport::Record);
+        assert!(app.project.tracks[1].armed && !app.project.tracks[2].armed);
+    }
 }

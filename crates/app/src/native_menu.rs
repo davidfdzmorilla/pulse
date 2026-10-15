@@ -27,6 +27,8 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         &[
             Run(C::About, "Acerca de Pulse", ""),
             Separator,
+            Run(C::Settings, "Ajustes…", ","),
+            Separator,
             System("Ocultar Pulse", "hide:", "h"),
             System("Ocultar otras", "hideOtherApplications:", "⌥h"),
             System("Mostrar todas", "unhideAllApplications:", ""),

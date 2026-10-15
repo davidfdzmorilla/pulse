@@ -270,7 +270,7 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
     use crate::native_menu::{Item, MENUS};
     let ctx = ui.ctx().clone();
     let mut chosen = None;
-    for (title, items) in MENUS.iter().skip(1) {
+    for (title, items) in MENUS.iter() {
         ui.menu_button(*title, |ui| {
             for item in *items {
                 match *item {

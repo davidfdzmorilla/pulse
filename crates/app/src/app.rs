@@ -29,8 +29,21 @@ pub struct Audio {
 }
 
 impl Audio {
-    fn start() -> Self {
-        match engine::start() {
+    /// No audio (headless, or between two starts).
+    pub(crate) fn none() -> Self {
+        Self { _output: None, handle: None, error: None }
+    }
+
+    /// The device name, sample rate and buffer size in use.
+    pub fn info(&self) -> (String, f32, Option<u32>) {
+        match &self.handle {
+            Some(h) => (h.device_name.clone(), h.sample_rate, h.buffer),
+            None => ("Sin audio".into(), 48_000.0, None),
+        }
+    }
+
+    pub(crate) fn start(settings: &engine::AudioSettings) -> Self {
+        match engine::start_with(settings) {
             Ok((output, handle)) => Self {
                 _output: Some(output),
                 handle: Some(handle),
@@ -217,6 +230,10 @@ pub struct PulseApp {
     /// The window is closing (the user chose to quit).
     pub quitting: bool,
     pub show_shortcuts: bool,
+    /// Preferences, the window for them and the devices it shows.
+    pub settings: crate::settings::Settings,
+    pub show_settings: bool,
+    pub devices: crate::settings::Devices,
     /// A text field has the keyboard: editing shortcuts are its.
     pub text_focus: bool,
     /// The macOS menu bar.
@@ -232,12 +249,24 @@ pub struct PulseApp {
 impl PulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
-        let mut app = Self::with_audio(Project::demo(), Audio::start());
+        let settings = crate::settings::Settings::load();
+        let mut app = Self::with_audio(Project::demo(), Audio::start(&settings.audio));
+        app.settings = settings;
         app.plugin_library = crate::plugins::Library::load_cache();
         app.learn = crate::midi_map::Learn::load();
         app.interactive = true;
         app.recent = crate::commands::load_recent();
         app.menu_bar = crate::native_menu::MenuBar::install();
+        // A project given on the command line, else the last one (if wanted).
+        let argument = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.extension().is_some_and(|e| e == "pulse" || e == "als"));
+        let last = app.settings.reopen_last.then(|| app.recent.first().cloned()).flatten();
+        if let Some(path) = argument.or(last) {
+            if path.extension().is_some_and(|e| e == "als") {
+                app.import_live_set_from(&path);
+            } else {
+                app.open_from(&path);
+            }
+        }
         app.sync_all();
         app.midi = MidiInputs::connect(app.audio.live(), app.learn.shared.clone());
         app.sync_midi_map();
@@ -306,6 +335,9 @@ impl PulseApp {
             interactive: false,
             quitting: false,
             show_shortcuts: false,
+            settings: Default::default(),
+            show_settings: false,
+            devices: Default::default(),
             text_focus: false,
             menu_bar: None,
             status: None,
@@ -1376,7 +1408,7 @@ impl PulseApp {
             return true;
         }
         let Some(state) = self.audio.state() else { return false };
-        match InputCapture::open(state) {
+        match InputCapture::open(state, &self.settings.audio) {
             Ok(capture) => {
                 self.status = Some(format!("Entrada de audio: {}", capture.device_name()));
                 self.capture = Some(capture);
@@ -1701,7 +1733,7 @@ impl PulseApp {
     }
 
     /// Opens `.pulse` projects and imports `.als` sets dropped onto the window.
-    fn handle_dropped_files(&mut self, ctx: &egui::Context) {
+    pub(crate) fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         let (audio, other): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| is_audio_file(p));
         if !audio.is_empty() {
@@ -1712,8 +1744,9 @@ impl PulseApp {
         }
         for path in other {
             match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
-                Some("als") => self.import_live_set_from(&path),
-                Some("pulse") => self.open_from(&path),
+                Some("als") if self.may_discard() => self.import_live_set_from(&path),
+                Some("pulse") if self.may_discard() => self.open_from(&path),
+                Some("als" | "pulse") => {}
                 _ => self.status = Some(format!("Formato no compatible: {}", path.display())),
             }
         }
@@ -1950,6 +1983,7 @@ impl eframe::App for PulseApp {
         self.poll_midi_map();
         crate::midi_map::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
+        crate::settings::window(self, &ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         if let Some(mut bar) = self.menu_bar.take() {
             bar.update(|c| self.command_enabled(c), &self.recent);

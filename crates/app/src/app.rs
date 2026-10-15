@@ -543,7 +543,7 @@ impl PulseApp {
             Param::Send(_) => Some(SEND_PARAM),
             Param::Device { device, param } => self.devices(target).get(device)?.effect.params().get(param).copied(),
             Param::Instrument(i) => match target {
-                Target::Track(t) if !self.project.tracks[t].is_audio() => self.project.tracks[t].instrument.params().get(i).copied(),
+                Target::Track(t) if !self.project.tracks[t].is_audio() => self.project.tracks[t].instrument.param_info(i),
                 _ => None,
             },
         }
@@ -572,7 +572,9 @@ impl PulseApp {
         if let Target::Track(t) = target {
             params.extend((0..NUM_RETURNS).map(Param::Send));
             if !self.project.tracks[t].is_audio() {
-                params.extend((0..self.project.tracks[t].instrument.params().len()).map(Param::Instrument));
+                let instrument = &self.project.tracks[t].instrument;
+                // Only settings that exist now (a modular synth's lane effects come and go).
+                params.extend((0..instrument.params().len()).filter(|&i| instrument.param_info(i).is_some()).map(Param::Instrument));
             }
         }
         for (device, d) in self.devices(target).iter().enumerate() {
@@ -839,9 +841,9 @@ impl PulseApp {
 
     /// Connects modulator `modulator` of a modular synth to parameter `dest` (depth 50 %).
     pub fn add_modular_target(&mut self, track: usize, modulator: usize, dest: usize) {
-        use engine::model::{ModTarget, MODULAR_PARAMS};
+        use engine::model::ModTarget;
         let InstrumentKind::Modular(mut params) = self.project.tracks[track].instrument else { return };
-        let name = MODULAR_PARAMS.get(dest).map_or("?", |p| p.name);
+        let name = params.param_name(dest);
         let targets = &mut params.modulators[modulator].targets;
         if targets.iter().any(|t| t.dest as usize == dest) {
             self.status = Some(format!("Ya modula {name}"));

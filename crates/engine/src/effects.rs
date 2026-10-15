@@ -617,6 +617,55 @@ impl EffectProcessor {
         self.set_params(&effect);
     }
 
+    /// Silences the effect's memory (delay lines, filter states) without allocating.
+    pub fn reset(&mut self) {
+        match self {
+            Self::Eq3(fx) => {
+                fx.low = Default::default();
+                fx.high = Default::default();
+            }
+            Self::Compressor(fx) => fx.envelope_db = 0.0,
+            Self::Delay(fx) => {
+                fx.lines.iter_mut().for_each(|line| line.fill(0.0));
+                fx.write = 0;
+                fx.current = 0.0;
+                fx.damping = [0.0; 2];
+            }
+            Self::Reverb(fx) => {
+                for comb in fx.combs.iter_mut().flatten() {
+                    comb.buffer.fill(0.0);
+                    comb.index = 0;
+                    comb.store = 0.0;
+                }
+                for allpass in fx.allpasses.iter_mut().flatten() {
+                    allpass.buffer.fill(0.0);
+                    allpass.index = 0;
+                }
+            }
+            Self::AutoFilter(fx) => fx.filters = Default::default(),
+            Self::Chorus(fx) => {
+                fx.lines.iter_mut().for_each(|line| line.fill(0.0));
+                fx.write = 0;
+                fx.phase = 0.0;
+            }
+            Self::Phaser(fx) => {
+                fx.stages = [[(0.0, 0.0); PHASER_STAGES]; 2];
+                fx.feedback = [0.0; 2];
+                fx.phase = 0.0;
+            }
+            Self::Bitcrusher(fx) => {
+                fx.counter = 0.0;
+                fx.held = [0.0; 2];
+            }
+            Self::Limiter(fx) => {
+                fx.delay.iter_mut().for_each(|line| line.fill(0.0));
+                fx.position = 0;
+                fx.gain = 1.0;
+            }
+            Self::Saturator(_) | Self::Ducker(_) | Self::Utility(_) => {}
+        }
+    }
+
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], ctx: &ProcessContext) {
         match self {
             Self::Eq3(fx) => fx.process(l, r, ctx.sample_rate),

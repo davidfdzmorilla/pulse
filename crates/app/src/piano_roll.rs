@@ -94,6 +94,12 @@ impl State {
     pub fn has_selection(&self) -> bool {
         !self.selection.is_empty()
     }
+
+    #[cfg(test)]
+    pub fn select_notes(&mut self, clip: ClipRef, notes: &[usize]) {
+        self.selection = notes.iter().copied().collect();
+        self.selection_clip = Some(clip);
+    }
 }
 
 /// Playhead inside the clip, if it is currently sounding.

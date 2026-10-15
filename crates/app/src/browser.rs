@@ -73,7 +73,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         }
 
-        heading(ui, "PLUGINS VST3");
+        heading(ui, "PLUGINS (VST3 · CLAP)");
         crate::plugins::browser(app, ui, |ui, icon, label, hint| item(ui, icon, label, hint));
 
         heading(ui, "MUESTRAS");

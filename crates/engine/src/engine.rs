@@ -86,6 +86,14 @@ impl PlayClip {
             PlayClip::Audio(c, _) => c.length,
         }
     }
+
+    /// The clip's automation, in clip time.
+    pub fn envelopes(&self) -> &[AutomationLane] {
+        match self {
+            PlayClip::Midi(c) => &c.envelopes,
+            PlayClip::Audio(c, _) => &c.envelopes,
+        }
+    }
 }
 
 /// An arrangement clip ready to play; its content loops over `length` beats.
@@ -857,17 +865,31 @@ impl Channel {
     /// Returns values of parameters the channel does not own itself (sends, instrument).
     fn automate(&mut self, beat: f64, mut other: impl FnMut(Param, f32)) {
         for lane in self.automation.iter() {
-            let Some(value) = lane.value_at(beat) else { continue };
-            match lane.param {
-                Param::Volume => self.gain = value.max(0.0),
-                Param::Pan => self.pan = value.clamp(-1.0, 1.0),
-                Param::Device { device, param } => {
-                    if let Some(slot) = self.chain.get_mut(device) {
-                        slot.processor.set_param(param, value);
-                    }
-                }
-                param @ (Param::Send(_) | Param::Instrument(_)) => other(param, value),
+            if let Some(value) = lane.value_at(beat) {
+                Self::set(lane.param, value, &mut self.gain, &mut self.pan, &mut self.chain, &mut other);
             }
+        }
+    }
+
+    /// Like [`Channel::automate`], with lanes from elsewhere (a clip's envelopes).
+    fn automate_with(&mut self, lanes: &[AutomationLane], beat: f64, mut other: impl FnMut(Param, f32)) {
+        for lane in lanes {
+            if let Some(value) = lane.value_at(beat) {
+                Self::set(lane.param, value, &mut self.gain, &mut self.pan, &mut self.chain, &mut other);
+            }
+        }
+    }
+
+    fn set(param: Param, value: f32, gain: &mut f32, pan: &mut f32, chain: &mut [ChainSlot], other: &mut impl FnMut(Param, f32)) {
+        match param {
+            Param::Volume => *gain = value.max(0.0),
+            Param::Pan => *pan = value.clamp(-1.0, 1.0),
+            Param::Device { device, param } => {
+                if let Some(slot) = chain.get_mut(device) {
+                    slot.processor.set_param(param, value);
+                }
+            }
+            param @ (Param::Send(_) | Param::Instrument(_)) => other(param, value),
         }
     }
 
@@ -1547,8 +1569,8 @@ impl Engine {
     fn apply_automation(&mut self) {
         let beat = self.position;
         for track in &mut self.tracks {
-            let (sends, instrument) = (&mut track.sends, &mut track.instrument);
-            track.channel.automate(beat, |param, value| match param {
+            let Track { channel, sends, instrument, slots, playing, launch_beat, follows_arrangement, arrangement, .. } = track;
+            let mut other = |param: Param, value: f32| match param {
                 Param::Send(i) => {
                     if let Some(send) = sends.get_mut(i) {
                         *send = value.clamp(0.0, 1.0);
@@ -1556,7 +1578,21 @@ impl Engine {
                 }
                 Param::Instrument(i) => instrument.set_param(i, value),
                 _ => {}
-            });
+            };
+            channel.automate(beat, &mut other);
+            // The sounding clip's envelopes, in its own time (looping with it), win
+            // over the track's automation.
+            let clip = if *follows_arrangement {
+                arrangement.iter().find(|c| beat >= c.start && beat < c.end()).map(|c| (&c.clip, beat - c.start))
+            } else {
+                playing.and_then(|p| slots[p].as_deref()).map(|c| (c, beat - *launch_beat))
+            };
+            if let Some((clip, since)) = clip {
+                let length = clip.length();
+                if length > 0.0 && !clip.envelopes().is_empty() {
+                    channel.automate_with(clip.envelopes(), since.rem_euclid(length), &mut other);
+                }
+            }
         }
         for channel in self.returns.iter_mut().chain([&mut self.master]) {
             channel.automate(beat, |_, _| {});
@@ -1865,6 +1901,7 @@ mod tests {
 
     fn audio_clip(warp: WarpMode) -> AudioClip {
         AudioClip {
+            envelopes: Vec::new(),
             name: "sine".into(),
             color: [0, 0, 0],
             sample: "sine.wav".into(),
@@ -2139,6 +2176,55 @@ mod tests {
         assert_eq!(h.engine.tracks[0].channel.automation.len(), 3);
         let Effect::AutoFilter(p) = h.engine.tracks[0].channel.chain[0].processor.effect() else { panic!() };
         assert_eq!(p.cutoff, 100.0, "device parameters follow their lane");
+    }
+
+    #[test]
+    fn clip_envelopes_follow_the_clip_and_win_over_track_automation() {
+        use crate::model::{AutomationPoint, Param};
+        let ramp = |param| AutomationLane {
+            param,
+            points: vec![AutomationPoint { beat: 0.0, value: 0.0 }, AutomationPoint { beat: 2.0, value: 1.0 }],
+        };
+        let near = |a: f32, b: f32| (a - b).abs() < 0.05;
+        // A session clip, 4 beats, its volume rising over its first 2; the track's
+        // own automation says 0.25 throughout.
+        let mut h = Harness::new();
+        h.send(Command::SetAutomation {
+            target: Target::Track(0),
+            lanes: Box::new(vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.25 }] }]),
+        });
+        let mut clip = MidiClip::new("env", 4.0, [0, 0, 0]);
+        clip.envelopes.push(ramp(Param::Volume));
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip.clone()))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(1.0);
+        let gain = h.engine.tracks[0].channel.gain;
+        assert!(near(gain, 0.5), "half way up its ramp, over the track's 0.25: {gain}");
+        h.run_beats(2.0);
+        assert!(near(h.engine.tracks[0].channel.gain, 1.0), "held after the last point");
+        // The clip loops: its envelope starts again.
+        h.run_beats(2.0);
+        let gain = h.engine.tracks[0].channel.gain;
+        assert!(near(gain, 0.5), "a loop later, the same place in the clip: {gain}");
+        // Stopped: the track's automation again.
+        h.send(Command::BackToArrangement);
+        h.run_beats(0.25);
+        assert!(near(h.engine.tracks[0].channel.gain, 0.25));
+
+        // On the arrangement, from where the clip is placed.
+        let mut h = Harness::new();
+        let placed = PlacedClip { start: 8.0, length: 8.0, clip: PlayClip::Midi(clip) };
+        h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![placed]) });
+        h.send(Command::Play);
+        h.run_beats(6.0);
+        let before = h.engine.tracks[0].channel.gain;
+        assert!(near(before, 1.0), "before the clip, untouched: {before}");
+        h.run_beats(3.0);
+        let gain = h.engine.tracks[0].channel.gain;
+        assert!(near(gain, 0.5), "a beat into the clip: {gain}");
+        h.run_beats(4.0);
+        let gain = h.engine.tracks[0].channel.gain;
+        assert!(near(gain, 0.5), "a beat into its second loop: {gain}");
     }
 
     #[test]

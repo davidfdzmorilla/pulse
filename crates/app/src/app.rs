@@ -202,6 +202,8 @@ pub struct PulseApp {
     pub recorder: Recorder,
     /// Controls moved while recording onto the arrangement (see `automation_rec`).
     pub automation_take: Option<crate::automation_rec::AutomationTake>,
+    /// Controls moved while recording session clips, for their envelopes.
+    pub clip_automation: Vec<crate::automation_rec::ClipAutomationTake>,
     /// Audio input, opened when an audio track is armed.
     pub capture: Option<InputCapture>,
     pub export: crate::export::Dialog,
@@ -343,6 +345,7 @@ impl PulseApp {
             keyboard: ComputerKeyboard::default(),
             recorder: Recorder::default(),
             automation_take: None,
+            clip_automation: Vec::new(),
             capture: None,
             overridden: HashSet::new(),
             selected_pad: 0,
@@ -458,6 +461,7 @@ impl PulseApp {
             None => (WarpMode::Off, tempo, ((duration * tempo / 60.0) * 4.0).ceil().max(1.0) / 4.0),
         };
         AudioClip {
+            envelopes: Vec::new(),
             name,
             color,
             sample: path.to_string_lossy().into_owned(),
@@ -1529,6 +1533,7 @@ impl PulseApp {
         let key = path.to_string_lossy().into_owned();
         self.samples.insert(key.clone(), Arc::new(Sample::from_channels(left, right, rate)));
         Some(AudioClip {
+            envelopes: Vec::new(),
             name,
             color: self.project.tracks[track].color,
             sample: key,
@@ -1627,15 +1632,28 @@ impl PulseApp {
         }
         let notes = self.audio.take_recorded();
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
-        for take in self.recorder.update(notes, &state, &armed) {
+        let finished = self.recorder.update(notes, &state, &armed);
+        let recording: Vec<(usize, usize, f64)> = self
+            .recorder
+            .session
+            .iter()
+            .filter(|take| state.tracks[take.track].recording.load(Ordering::Relaxed) == take.slot as i32)
+            .filter_map(|take| take.start.map(|start| (take.track, take.slot, start)))
+            .collect();
+        self.record_clip_automation(state.position(), &recording);
+        for take in finished {
             match take {
                 Finished::Session { track, slot, start, length, notes } => {
                     let Some(t) = self.project.tracks.get(track) else { continue };
                     if t.clips[slot].is_some() {
                         continue;
                     }
-                    if t.is_audio() {
-                        if let Some(clip) = self.audio_take(track, start, length) {
+                    let audio = t.is_audio();
+                    let envelopes = self.take_clip_envelopes(track, slot, length);
+                    let moved = envelopes.len();
+                    if audio {
+                        if let Some(mut clip) = self.audio_take(track, start, length) {
+                            clip.envelopes = envelopes;
                             self.set_clip(track, slot, Some(Clip::Audio(clip)));
                             self.select_clip(ClipRef::Session { track, slot });
                             self.status = Some(format!("Toma de audio guardada en {}", self.recordings_dir().display()));
@@ -1645,16 +1663,21 @@ impl PulseApp {
                     let count = notes.len();
                     let notes = self.quantize_take(notes, start, length);
                     let t = &self.project.tracks[track];
-                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color };
+                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes };
                     self.set_clip(track, slot, Some(Clip::Midi(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
-                    self.status = Some(format!("Grabadas {count} notas en {}", self.project.tracks[track].name));
+                    let automation = match moved {
+                        0 => String::new(),
+                        1 => " y la automatización de 1 control".into(),
+                        n => format!(" y la automatización de {n} controles"),
+                    };
+                    self.status = Some(format!("Grabadas {count} notas{automation} en {}", self.project.tracks[track].name));
                 }
                 Finished::Arrangement { track, start, length, notes } => {
                     let notes = self.quantize_take(notes, start, length);
                     let Some(t) = self.project.tracks.get_mut(track) else { continue };
                     let count = notes.len();
-                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color };
+                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color, envelopes: Vec::new() };
                     t.arrangement.push(ArrangementClip { start, length, clip: Clip::Midi(clip) });
                     let index = t.arrangement.len() - 1;
                     self.sync_arrangement(track);

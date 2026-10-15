@@ -163,6 +163,39 @@ impl Separator {
     }
 }
 
+/// `x` sampled at `from` Hz, at `to` Hz instead: windowed-sinc interpolation
+/// (Blackman, 32 zero crossings on each side), low-passed below the lower
+/// Nyquist frequency when going down.
+pub fn resample(x: &[f32], from: f32, to: f32) -> Vec<f32> {
+    if (from - to).abs() < 0.5 || x.is_empty() {
+        return x.to_vec();
+    }
+    const HALF: isize = 32;
+    let ratio = from as f64 / to as f64;
+    let cutoff = (1.0 / ratio).min(1.0) * 0.97;
+    let length = ((x.len() as f64) / ratio).round() as usize;
+    let reach = (HALF as f64 / cutoff).ceil() as isize;
+    (0..length)
+        .map(|i| {
+            let center = i as f64 * ratio;
+            let base = center.floor() as isize;
+            let mut sum = 0.0f64;
+            for k in base - reach + 1..=base + reach {
+                let Some(&sample) = usize::try_from(k).ok().and_then(|k| x.get(k)) else { continue };
+                let t = (k as f64 - center) * cutoff;
+                let w = t / HALF as f64;
+                if w.abs() >= 1.0 {
+                    continue;
+                }
+                let sinc = if t.abs() < 1e-9 { 1.0 } else { (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t) };
+                let blackman = 0.42 + 0.5 * (std::f64::consts::PI * w).cos() + 0.08 * (2.0 * std::f64::consts::PI * w).cos();
+                sum += sample as f64 * sinc * blackman * cutoff;
+            }
+            sum as f32
+        })
+        .collect()
+}
+
 /// ONNX Runtime's environment: one per process, made the first time.
 fn environment() -> ort::Result<ort::environment::Environment> {
     static ENVIRONMENT: std::sync::Mutex<Option<ort::environment::Environment>> = std::sync::Mutex::new(None);
@@ -312,6 +345,24 @@ mod tests {
     fn reflection_matches_torch() {
         // torch.nn.functional.pad([1, 2, 3, 4], (2, 3), mode="reflect")
         assert_eq!(reflect(&[1.0, 2.0, 3.0, 4.0], 2, 3), vec![3.0, 2.0, 1.0, 2.0, 3.0, 4.0, 3.0, 2.0, 1.0]);
+    }
+
+    #[test]
+    fn resampling_keeps_tones_and_length() {
+        let tone = |rate: f32, n: usize| -> Vec<f32> { (0..n).map(|i| (2.0 * std::f32::consts::PI * 1000.0 * i as f32 / rate).sin()).collect() };
+        let from = tone(48_000.0, 48_000);
+        let to = resample(&from, 48_000.0, 44_100.0);
+        assert_eq!(to.len(), 44_100);
+        let expected = tone(44_100.0, 44_100);
+        // Away from the edges, the same 1 kHz sine at the new rate.
+        let error = (200..44_000).map(|i| (to[i] - expected[i]).abs()).fold(0.0, f32::max);
+        assert!(error < 1e-3, "{error}");
+        // Up again.
+        let back = resample(&to, 44_100.0, 48_000.0);
+        assert_eq!(back.len(), 48_000);
+        let error = (200..47_800).map(|i| (back[i] - from[i]).abs()).fold(0.0, f32::max);
+        assert!(error < 2e-3, "{error}");
+        assert_eq!(resample(&from, 44_100.0, 44_100.0), from);
     }
 
     #[test]

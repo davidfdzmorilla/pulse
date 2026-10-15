@@ -199,3 +199,22 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
   versión sale de la última etiqueta (`v1.2.3`); el script pasa las pruebas,
   firma Pulse.app, crea la etiqueta y la publica en GitHub, de donde la app se
   actualiza.
+
+## Separación de stems
+
+«Separar en stems» (menú de un clip de audio, o el editor de clips de audio) usa
+HTDemucs (Meta, licencia MIT) con ONNX Runtime, en la CPU y sin conexión. El
+modelo (`htdemucs.onnx`, 174 MB) no va dentro de la app: se descarga una vez de
+la publicación `modelo-htdemucs-1` del repositorio y se guarda en
+`~/Library/Application Support/Pulse/Models`.
+
+Para regenerarlo (en un entorno de Python con `demucs onnx onnxruntime soundfile`):
+
+    python scripts/stems/export_htdemucs.py salida/
+    python scripts/stems/make_reference.py salida/ demo.wav
+    PULSE_STEMS_DIR=salida/ cargo test --release -p stems -- --include-ignored
+
+Las pruebas comparan el espectrograma, la reconstrucción, la red y la separación
+de una canción con los resultados de PyTorch. Si el archivo cambia, hay que
+actualizar su tamaño y su SHA-256 en `crates/app/src/stems_ui.rs` y publicarlo
+con otra etiqueta.

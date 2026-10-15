@@ -38,10 +38,8 @@ impl PulseApp {
                 editor.front();
                 return;
             }
-            eprintln!("[editor] abriendo {name} (hilo principal: {})", objc2::MainThreadMarker::new().is_some());
             match mac::Editor::open(handle, &name) {
                 Ok(editor) => {
-                    eprintln!("[editor] {name}: {}", editor.describe());
                     self.editors.open.insert(id, editor);
                 }
                 Err(error) => {
@@ -71,14 +69,9 @@ impl PulseApp {
         self.editors.open.retain(|id, _editor| {
             #[cfg(target_os = "macos")]
             if !_editor.poll() {
-                eprintln!("[editor] {} cerrado: {}", id.0, _editor.describe());
                 return false;
             }
-            if !plugins.contains_key(id) {
-                eprintln!("[editor] {} cerrado: su plugin ya no está cargado", id.0);
-                return false;
-            }
-            true
+            plugins.contains_key(id)
         });
         for id in std::mem::take(&mut self.editors.reopen) {
             if self.samples.plugins.contains_key(&id) {
@@ -263,23 +256,6 @@ mod mac {
             window.setDelegate(Some(ProtocolObject::from_ref(&*delegate)));
             window.makeKeyAndOrderFront(None);
             Ok(Editor { view: Some(view), window, _delegate: delegate, closed, size })
-        }
-
-        /// What the window is doing, for the log.
-        pub fn describe(&self) -> String {
-            let frame = self.window.frame();
-            format!(
-                "ventana visible={} minimizada={} nivel={} app activa={} marco=({:.0},{:.0} {:.0}×{:.0}) en pantalla={}",
-                self.window.isVisible(),
-                self.window.isMiniaturized(),
-                self.window.level(),
-                objc2_app_kit_active(),
-                frame.origin.x,
-                frame.origin.y,
-                frame.size.width,
-                frame.size.height,
-                self.window.isOnActiveSpace(),
-            )
         }
 
         pub fn front(&self) {

@@ -13,6 +13,7 @@ mod kits;
 mod modular_ui;
 mod note_edit;
 mod piano_roll;
+mod plugins;
 mod poly_ui;
 mod presets;
 mod project;

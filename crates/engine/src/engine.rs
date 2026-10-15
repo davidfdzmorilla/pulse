@@ -7,7 +7,8 @@
 //! handed back to the UI thread as [`Garbage`] to be freed there.
 
 use crate::effects::{EffectProcessor, ProcessContext};
-use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, InstrumentKind, MidiClip, Param, WarpMode};
+use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, Effect, InstrumentKind, MidiClip, Param, PluginId, WarpMode};
+use crate::plugin::PluginProcessor;
 use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
 use crate::kick::KickSynth;
@@ -53,6 +54,15 @@ impl ChainSlot {
             processor: Box::new(EffectProcessor::new(&device.effect, sample_rate)),
             enabled: device.enabled,
         }
+    }
+
+    /// A plugin effect, loaded with [`crate::plugin::instantiate`].
+    pub fn plugin(device: &Device, plugin: PluginProcessor) -> Self {
+        let id = match device.effect {
+            Effect::Plugin(id) => id,
+            _ => PluginId(0),
+        };
+        Self { processor: Box::new(EffectProcessor::Plugin(id, Some(Box::new(plugin)))), enabled: device.enabled }
     }
 }
 
@@ -387,6 +397,12 @@ impl Command {
     pub fn update_instrument(track: usize, kind: InstrumentKind) -> Command {
         Command::SetInstrument { track, instrument: Box::new(PreparedInstrument { kind, built: None }) }
     }
+
+    /// Puts a loaded plugin instrument (see [`crate::plugin::instantiate`]) on a track.
+    pub fn set_plugin(track: usize, id: PluginId, plugin: PluginProcessor) -> Command {
+        let kind = InstrumentKind::Plugin(id);
+        Command::SetInstrument { track, instrument: Box::new(PreparedInstrument { kind, built: Some(Instrument::Plugin(id, Some(Box::new(plugin)))) }) }
+    }
 }
 
 enum Instrument {
@@ -401,6 +417,8 @@ enum Instrument {
     /// The wavetable engine; true when it is the polychrome synth.
     Wavetable(Box<WaveSynth>, bool),
     Modular(Box<ModSynth>),
+    /// A VST3 instrument; None (silent) until the app loads it.
+    Plugin(PluginId, Option<Box<PluginProcessor>>),
 }
 
 impl Instrument {
@@ -417,6 +435,7 @@ impl Instrument {
             InstrumentKind::Wavetable(p) => Self::Wavetable(Box::new(WaveSynth::new(p, sample_rate)), false),
             InstrumentKind::Polychrome(p) => Self::Wavetable(Box::new(WaveSynth::new(p, sample_rate)), true),
             InstrumentKind::Modular(p) => Self::Modular(Box::new(ModSynth::new(p, sample_rate))),
+            InstrumentKind::Plugin(id) => Self::Plugin(id, None),
             InstrumentKind::Drums => unreachable!("upgraded above"),
         }
     }
@@ -434,6 +453,7 @@ impl Instrument {
             Self::Wavetable(w, false) => InstrumentKind::Wavetable(w.params()),
             Self::Wavetable(w, true) => InstrumentKind::Polychrome(w.params()),
             Self::Modular(m) => InstrumentKind::Modular(m.params()),
+            Self::Plugin(id, _) => InstrumentKind::Plugin(*id),
         }
     }
 
@@ -450,6 +470,7 @@ impl Instrument {
             (Self::Kick(k), InstrumentKind::Kick(p)) => k.set_params(p),
             (Self::Wavetable(w, false), InstrumentKind::Wavetable(p)) | (Self::Wavetable(w, true), InstrumentKind::Polychrome(p)) => w.set_params(p),
             (Self::Modular(m), InstrumentKind::Modular(p)) => m.set_params(p),
+            (Self::Plugin(id, _), InstrumentKind::Plugin(other)) => return *id == other,
             _ => return false,
         }
         true
@@ -461,6 +482,7 @@ impl Instrument {
             Self::Kick(k) => k.set_tempo(tempo),
             Self::Wavetable(w, _) => w.set_tempo(tempo),
             Self::Modular(m) => m.set_tempo(tempo),
+            Self::Plugin(_, Some(p)) => p.set_tempo(tempo),
             _ => {}
         }
     }
@@ -483,6 +505,8 @@ impl Instrument {
             Self::Kick(k) => k.note_on(pitch, velocity),
             Self::Wavetable(w, _) => w.note_on(pitch, velocity, gate_samples),
             Self::Modular(m) => m.note_on(pitch, velocity, gate_samples),
+            Self::Plugin(_, Some(p)) => p.note_on(pitch, velocity, gate_samples),
+            Self::Plugin(_, None) => {}
         }
     }
 
@@ -497,6 +521,8 @@ impl Instrument {
             Self::Rack(_) | Self::Kick(_) => {}
             Self::Wavetable(w, _) => w.note_off(pitch),
             Self::Modular(m) => m.note_off(pitch),
+            Self::Plugin(_, Some(p)) => p.note_off(pitch),
+            Self::Plugin(_, None) => {}
         }
     }
 
@@ -519,6 +545,8 @@ impl Instrument {
             Self::Kick(k) => k.all_notes_off(),
             Self::Wavetable(w, _) => w.all_notes_off(),
             Self::Modular(m) => m.all_notes_off(),
+            Self::Plugin(_, Some(p)) => p.all_notes_off(),
+            Self::Plugin(_, None) => {}
         }
     }
 
@@ -539,6 +567,8 @@ impl Instrument {
             Self::Kick(k) => k.render(samples, left, right),
             Self::Wavetable(w, _) => w.render(samples, tables, left, right),
             Self::Modular(m) => m.render(samples, tables, left, right),
+            Self::Plugin(_, Some(p)) => p.render(left, right),
+            Self::Plugin(_, None) => {}
         }
     }
 }
@@ -1748,6 +1778,33 @@ mod tests {
         h.shared.tracks[2].peak.take();
         h.run_beats(0.5);
         assert!(h.shared.tracks[2].peak.take() < 1e-3, "CC 1 silenced it");
+    }
+
+    #[test]
+    fn plugin_instruments_and_effects_play_in_the_engine() {
+        use crate::model::{Device, Effect, PluginId};
+        use crate::plugin::{instantiate, scan, tests::test_bundle};
+        let found = scan(&test_bundle()).unwrap();
+        let (synth, gain) = (&found[0], &found[1]);
+        let (processor, _handle) = instantiate(&synth.path, &synth.cid, SR, None).unwrap();
+        let mut h = Harness::new();
+        h.send(Command::set_plugin(2, PluginId(7), processor));
+        h.send(Command::SetInputTrack(Some(2)));
+        h.play_note(69, 1.0);
+        h.run_beats(0.5);
+        let plain = h.shared.tracks[2].peak.take();
+        assert!(plain > 0.2, "the plugin plays the live note: {plain}");
+
+        // A plugin effect in the chain: gain 0.5×.
+        let (effect, handle) = instantiate(&gain.path, &gain.cid, SR, None).unwrap();
+        handle.set(0, 0.25);
+        let device = Device::new(Effect::Plugin(PluginId(8)));
+        h.send(Command::InsertDevice { target: Target::Track(2), index: 0, slot: ChainSlot::plugin(&device, effect) });
+        h.run_beats(0.5);
+        h.shared.tracks[2].peak.take();
+        h.run_beats(0.5);
+        let halved = h.shared.tracks[2].peak.take();
+        assert!((halved / plain - 0.5).abs() < 0.02, "{halved} vs {plain}");
     }
 
     #[test]

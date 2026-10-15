@@ -2,7 +2,7 @@
 
 use engine::model::{
     drum_note::*, AcidParams, ArrangementClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, FmParams, SuperSawParams, CompressorParams, DelayParams, Device, Effect,
-    InstrumentKind, MidiClip, Note, Param, ReverbParams, SynthParams, RACK_FIRST_NOTE, RACK_PADS,
+    InstrumentKind, MidiClip, Note, Param, PluginId, ReverbParams, SynthParams, RACK_FIRST_NOTE, RACK_PADS,
 };
 use engine::{NUM_RETURNS, NUM_SCENES};
 use serde::{Deserialize, Serialize};
@@ -188,6 +188,44 @@ pub struct Project {
     pub returns: Vec<ReturnTrack>,
     pub master: MasterTrack,
     pub scene_names: Vec<String>,
+    /// The VST3 plugins the instruments and devices refer to by id.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub plugins: Vec<PluginRef>,
+}
+
+/// A plugin instance: which plugin, and its saved state.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct PluginRef {
+    pub id: PluginId,
+    /// The `.vst3` bundle.
+    pub path: String,
+    /// The class id (32 hex digits).
+    pub cid: String,
+    pub name: String,
+    #[serde(default)]
+    pub vendor: String,
+    /// The plugin's state, in base64, as of the last save (see `PulseApp::capture_plugins`).
+    #[serde(default)]
+    pub state: String,
+}
+
+/// The state is left out: it changes inside the plugin and is copied in only to
+/// save, so it must not count as an edit (or undo would undo the plugin's sound).
+impl PartialEq for PluginRef {
+    fn eq(&self, other: &Self) -> bool {
+        (self.id, &self.path, &self.cid, &self.name, &self.vendor) == (other.id, &other.path, &other.cid, &other.name, &other.vendor)
+    }
+}
+
+impl Project {
+    pub fn plugin(&self, id: PluginId) -> Option<&PluginRef> {
+        self.plugins.iter().find(|p| p.id == id)
+    }
+
+    /// An id no plugin of the project uses yet.
+    pub fn new_plugin_id(&self) -> PluginId {
+        PluginId(self.plugins.iter().map(|p| p.id.0 + 1).max().unwrap_or(1))
+    }
 }
 
 fn default_swing_grid() -> f64 {
@@ -225,6 +263,7 @@ impl Project {
                 automation: Vec::new(),
             },
             scene_names: (1..=NUM_SCENES).map(|i| i.to_string()).collect(),
+            plugins: Vec::new(),
         }
     }
 

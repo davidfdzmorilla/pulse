@@ -1,0 +1,12 @@
+[package]
+name = "pulse-testplug"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "A tiny VST3 plugin (a sine synth and a gain) that Pulse's plugin host is tested against."
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+vst3 = "0.3.0"

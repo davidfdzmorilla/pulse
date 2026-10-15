@@ -176,6 +176,10 @@ pub struct PulseApp {
     pub detail: Detail,
     pub selected_clip: Option<ClipRef>,
     pub selected_target: Target,
+    /// Tracks selected together with the selected one (⌘ or ⇧ clic); see `tracks`.
+    pub selected_tracks: Vec<usize>,
+    /// Track headers being dragged to a new place.
+    pub track_drag: Option<crate::tracks::TrackDrag>,
     pub meters: Meters,
     pub piano_roll: piano_roll::State,
     pub arrangement: arrangement::State,
@@ -215,7 +219,7 @@ pub struct PulseApp {
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
     pub sample_drop_zones: Vec<(egui::Rect, usize, usize)>,
     /// Input track last sent to the engine.
-    input_track: Option<Option<usize>>,
+    pub(crate) input_track: Option<Option<usize>>,
     history: History,
     pub(crate) file: Option<PathBuf>,
     saved: Project,
@@ -304,6 +308,8 @@ impl PulseApp {
             detail: Detail::Devices,
             selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
             selected_target: Target::Track(0),
+            selected_tracks: Vec::new(),
+            track_drag: None,
             meters: Meters::default(),
             piano_roll: Default::default(),
             arrangement: Default::default(),

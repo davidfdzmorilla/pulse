@@ -74,7 +74,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 25] = [
+pub const SHORTCUTS: [(&str, &str); 27] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -88,6 +88,8 @@ pub const SHORTCUTS: [(&str, &str); 25] = [
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),
     ("⌘T / ⇧⌘T", "Nueva pista MIDI / de audio"),
+    ("⌘ clic / ⇧ clic", "Seleccionar varias pistas (en sus cabeceras)"),
+    ("Arrastrar cabecera", "Mover las pistas seleccionadas"),
     ("Tab", "Cambiar entre Session y Arrangement"),
     ("⇧Tab", "Cambiar entre el clip y los dispositivos"),
     ("⌃⌘F", "Pantalla completa"),
@@ -207,16 +209,8 @@ impl PulseApp {
             Command::NewAudioTrack => {
                 self.add_audio_track();
             }
-            Command::DuplicateTrack => {
-                if let Target::Track(t) = self.selected_target {
-                    self.duplicate_track(t);
-                }
-            }
-            Command::DeleteTrack => {
-                if let Target::Track(t) = self.selected_target {
-                    self.delete_track(t);
-                }
-            }
+            Command::DuplicateTrack => self.duplicate_selected_tracks(),
+            Command::DeleteTrack => self.delete_selected_tracks(),
             Command::ShowSession => self.view = View::Session,
             Command::ShowArrangement => self.view = View::Arrangement,
             Command::ToggleDetail => {

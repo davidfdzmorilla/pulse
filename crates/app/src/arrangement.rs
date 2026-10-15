@@ -145,6 +145,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     app.arrangement.automation.retain(|&t, _| t < tracks);
     let layout = Layout::new(app);
     let lanes_height = LOOP_H + RULER_H + layout.height;
+    let mut headers = Vec::new();
 
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -154,7 +155,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.set_width(HEADER_W);
             ui.add_space(LOOP_H + RULER_H);
             for t in 0..tracks {
-                track_header(app, ui, t, layout.rows[t].1);
+                headers.push(track_header(app, ui, t, layout.rows[t].1));
             }
         });
 
@@ -265,6 +266,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             handle_pointer(app, ui, &response, rect, lanes_top, unit, x_at(0.0), &layout);
         });
     });
+    app.finish_track_drag(ui, &headers, true);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -353,9 +355,12 @@ fn paint_clip(
     }
 }
 
-fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>) {
-    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some())), Sense::click());
-    let selected = app.selected_target == Target::Track(t);
+/// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
+fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>) -> Rect {
+    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some())), Sense::click_and_drag());
+    let response = response.on_hover_text("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover");
+    app.track_header_input(t, &response);
+    let selected = app.is_track_selected(t);
     let track = &app.project.tracks[t];
     let color = theme::rgb(track.color);
     let painter = ui.painter();
@@ -364,9 +369,6 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     painter.rect_filled(Rect::from_min_size(body.min, vec2(5.0, LANE_H)), 2.0, color);
     painter.text(body.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, &track.name, theme::body(), TEXT);
     let (active, solo) = (track.mixer.active, track.solo);
-    if response.clicked() {
-        app.selected_target = Target::Track(t);
-    }
 
     let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(110.0, 18.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -404,7 +406,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
         }
     }
 
-    let Some(param) = shown else { return };
+    let Some(param) = shown else { return rect };
     let area = Rect::from_min_size(rect.left_top() + vec2(10.0, LANE_H + 6.0), vec2(HEADER_W - 18.0, AUTO_H - 8.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
     let mut chosen = param;
@@ -449,6 +451,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
         app.overridden.remove(&(target, param));
         app.sync_automation(target);
     }
+    rect
 }
 
 /// Maps a parameter value to a y position inside an automation lane.

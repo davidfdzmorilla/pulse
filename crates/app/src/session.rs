@@ -50,6 +50,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let state = app.audio.state();
     let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
     let mut actions = Vec::new();
+    let mut headers = Vec::new();
 
     egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
         ui.horizontal_top(|ui| {
@@ -78,7 +79,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 );
                 ui.vertical(|ui| {
                     ui.set_width(COL_W);
-                    track_header(app, ui, t, &mut actions);
+                    headers.push(track_header(app, ui, t, &mut actions));
                     for slot in 0..NUM_SCENES {
                         clip_slot(app, ui, t, slot, &play, blink, &mut actions);
                     }
@@ -108,7 +109,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     let target = Target::Return(r);
                     let name = app.project.returns[r].name.clone();
                     let color = theme::rgb(app.project.returns[r].color);
-                    if header(ui, &name, color, app.selected_target == target).clicked() {
+                    if header(ui, &name, color, app.selected_target == target, Sense::click()).clicked() {
                         actions.push(Action::SelectTarget(target));
                     }
                     let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (NUM_SCENES as f32 + 1.0) - 1.0), Sense::hover());
@@ -122,7 +123,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.vertical(|ui| {
                 ui.set_width(COL_W);
                 let target = Target::Master;
-                if header(ui, "Master", theme::CONTROL_HOVER, app.selected_target == target).clicked() {
+                if header(ui, "Master", theme::CONTROL_HOVER, app.selected_target == target, Sense::click()).clicked() {
                     actions.push(Action::SelectTarget(target));
                 }
                 for slot in 0..NUM_SCENES {
@@ -140,10 +141,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     for action in actions {
         apply(app, action);
     }
+    app.finish_track_drag(ui, &headers, false);
 }
 
-fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, HEADER_H), Sense::click());
+fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: Sense) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, HEADER_H), sense);
     let painter = ui.painter();
     painter.rect_filled(rect, 2.0, if selected { color } else { theme::shade(color, 0.72) });
     painter.text(
@@ -159,12 +161,14 @@ fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool) -> egui
     response
 }
 
-fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) {
+/// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
+fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) -> egui::Rect {
     let track = &app.project.tracks[t];
-    let response = header(ui, &track.name, theme::rgb(track.color), app.selected_target == Target::Track(t));
-    if response.clicked() {
-        actions.push(Action::SelectTarget(Target::Track(t)));
-    }
+    let response = header(ui, &track.name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag())
+        .on_hover_text("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover");
+    app.track_header_input(t, &response);
+    let several = app.is_track_selected(t) && app.track_selection().len() > 1;
+    let count = app.track_selection().len();
     response.context_menu(|ui| {
         let track = &mut app.project.tracks[t];
         ui.label("Nombre");
@@ -172,15 +176,17 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
         ui.label("Color");
         color_picker(ui, &mut track.color);
         ui.separator();
-        if ui.button("Duplicar pista").clicked() {
+        let label = |verb: &str| if several { format!("{verb} {count} pistas") } else { format!("{verb} pista") };
+        if ui.button(label("Duplicar")).clicked() {
             actions.push(Action::DuplicateTrack(t));
             ui.close();
         }
-        if ui.button("Eliminar pista").clicked() {
+        if ui.button(label("Eliminar")).clicked() {
             actions.push(Action::DeleteTrack(t));
             ui.close();
         }
     });
+    response.rect
 }
 
 fn color_picker(ui: &mut egui::Ui, color: &mut [u8; 3]) -> bool {
@@ -505,9 +511,11 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::LaunchScene(slot) => app.audio.send(Command::LaunchScene(slot)),
         Action::StopAll => app.audio.send(Command::StopAllClips),
         Action::AddTrack => app.add_track(),
+        Action::DeleteTrack(t) if app.is_track_selected(t) => app.delete_selected_tracks(),
         Action::DeleteTrack(t) => app.delete_track(t),
         Action::Record(t, slot) => app.record_slot(t, slot),
         Action::StopRecording(t) => app.stop_session_recording(t),
+        Action::DuplicateTrack(t) if app.is_track_selected(t) => app.duplicate_selected_tracks(),
         Action::DuplicateTrack(t) => app.duplicate_track(t),
     }
 }

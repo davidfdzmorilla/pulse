@@ -30,6 +30,7 @@ mod slicing;
 mod sync;
 mod table_editor;
 mod theme;
+mod tracks;
 mod transport;
 mod wave_ui;
 mod widgets;

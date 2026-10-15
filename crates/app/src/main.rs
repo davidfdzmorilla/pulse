@@ -28,6 +28,7 @@ mod project;
 mod recording;
 mod sample_editor;
 mod session;
+mod scene;
 mod settings;
 mod shape_edit;
 mod slicing;
@@ -39,6 +40,14 @@ mod updates;
 mod transport;
 mod wave_ui;
 mod widgets;
+
+/// The window's size: 1440×900, or PULSE_SIZE=WxH (for screenshots).
+fn window_size() -> [f32; 2] {
+    std::env::var("PULSE_SIZE")
+        .ok()
+        .and_then(|s| s.split_once('x').and_then(|(w, h)| Some([w.parse().ok()?, h.parse().ok()?])))
+        .unwrap_or([1440.0, 900.0])
+}
 
 fn main() -> eframe::Result {
     let args: Vec<String> = std::env::args().collect();
@@ -79,7 +88,7 @@ fn main() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_title("Pulse")
-            .with_inner_size([1440.0, 900.0])
+            .with_inner_size(window_size())
             .with_min_inner_size([1000.0, 640.0]),
         ..Default::default()
     };

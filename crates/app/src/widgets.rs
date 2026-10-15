@@ -191,7 +191,7 @@ fn meter_position(peak: f32) -> f32 {
 }
 
 pub fn paint_meter(painter: &egui::Painter, rect: Rect, peak: f32) {
-    painter.rect_filled(rect, 1.0, theme::BG);
+    painter.rect_filled(rect, 1.0, theme::SLOT);
     let level = meter_position(peak);
     if level <= 0.0 {
         return;
@@ -247,7 +247,7 @@ pub fn fader_with_meter(ui: &mut Ui, gain: &mut f32, peak: f32, height: f32) -> 
     }
 
     let painter = ui.painter();
-    painter.rect_filled(track, 2.0, theme::BG);
+    painter.rect_filled(track, 2.0, theme::CONTROL);
     let unity_y = track.bottom() - track.height() * gain_to_fader(1.0);
     painter.line_segment(
         [pos2(track.left() - 3.0, unity_y), pos2(track.right() + 3.0, unity_y)],

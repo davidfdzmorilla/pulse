@@ -277,7 +277,9 @@ impl PulseApp {
         app.settings = settings;
         app.plugin_library = crate::plugins::Library::load_cache();
         app.learn = crate::midi_map::Learn::load();
-        app.interactive = true;
+        // Screenshots (a debug aid) leave the user's settings and recent projects alone.
+        let screenshot = std::env::var_os("PULSE_SCREENSHOT").is_some();
+        app.interactive = !screenshot;
         app.recent = crate::commands::load_recent();
         app.menu_bar = crate::native_menu::MenuBar::install();
         // A project opened from Finder or given on the command line, else the
@@ -287,7 +289,7 @@ impl PulseApp {
         let from_finder = crate::open_files::take().into_iter().find(project);
         let argument = std::env::args().nth(1).map(PathBuf::from).filter(project);
         let last = app.settings.reopen_last.then(|| app.recent.first().cloned()).flatten();
-        if let Some(path) = from_finder.or(argument).or(last) {
+        if let Some(path) = from_finder.or(argument).or(last).filter(|_| !screenshot) {
             if path.extension().is_some_and(|e| e == "als") {
                 app.import_live_set_from(&path);
             } else {
@@ -303,6 +305,9 @@ impl PulseApp {
         }
         if std::env::var("PULSE_DETAIL").as_deref() == Ok("clip") {
             app.detail = Detail::Clip;
+        }
+        if let Ok(scene) = std::env::var("PULSE_SCENE") {
+            app.apply_scene(&scene);
         }
         if std::env::var("PULSE_PLAY").is_ok() {
             match app.view {

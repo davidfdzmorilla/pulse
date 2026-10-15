@@ -3,6 +3,7 @@ mod app;
 mod arrangement;
 mod browser;
 mod capture;
+mod commands;
 mod detail;
 mod devices;
 mod editor;
@@ -13,6 +14,7 @@ mod kick_ui;
 mod kits;
 mod midi_map;
 mod modular_ui;
+mod native_menu;
 mod note_edit;
 mod piano_roll;
 mod plugins;
@@ -45,6 +47,17 @@ fn main() -> eframe::Result {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
+        }
+        return Ok(());
+    }
+
+    #[cfg(target_os = "macos")]
+    if args.get(1).map(String::as_str) == Some("--check-menus") {
+        // As for a fresh project: nothing to undo, revert or paste, no clip selected.
+        use commands::Command as C;
+        let fresh = |c: C| !matches!(c, C::Undo | C::Redo | C::Revert | C::Cut | C::Copy | C::Paste | C::Duplicate | C::Delete | C::SelectAll);
+        for line in native_menu::describe(fresh) {
+            println!("{line}");
         }
         return Ok(());
     }

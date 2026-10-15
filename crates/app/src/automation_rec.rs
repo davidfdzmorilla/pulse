@@ -36,6 +36,22 @@ impl PulseApp {
             .collect()
     }
 
+    /// Automation Arm on or off. While recording: off keeps what was recorded so
+    /// far, on starts recording the controls from here.
+    pub fn toggle_automation_arm(&mut self) {
+        let armed = !self.settings.automation_arm;
+        let settings = crate::settings::Settings { automation_arm: armed, ..self.settings.clone() };
+        self.set_settings(settings);
+        if self.is_arrangement_recording() {
+            if armed {
+                self.start_automation_take();
+            } else {
+                self.finish_automation_take();
+            }
+        }
+        self.status = Some(if armed { "Armar automatización: encendido" } else { "Armar automatización: apagado" }.into());
+    }
+
     /// Recording starts: remembers where every control is.
     pub fn start_automation_take(&mut self) {
         self.automation_take = Some(AutomationTake { last: self.param_values(), points: HashMap::new() });

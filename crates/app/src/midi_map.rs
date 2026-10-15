@@ -33,6 +33,7 @@ pub enum Transport {
     Record,
     Loop,
     Metronome,
+    AutomationArm,
 }
 
 impl Transport {
@@ -43,6 +44,7 @@ impl Transport {
             Transport::Record => "Grabar",
             Transport::Loop => "Loop",
             Transport::Metronome => "Metrónomo",
+            Transport::AutomationArm => "Armar automatización",
         }
     }
 }
@@ -278,6 +280,7 @@ impl PulseApp {
                 self.project.metronome = !self.project.metronome;
                 self.audio.send(Command::SetMetronome(self.project.metronome));
             }
+            Transport::AutomationArm => self.toggle_automation_arm(),
         }
     }
 }

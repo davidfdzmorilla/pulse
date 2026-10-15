@@ -294,4 +294,70 @@ mod tests {
         // It plays back: not overridden, and the engine has it.
         assert_eq!(app.automation_state(Target::Track(1), Param::Volume), Some(false));
     }
+
+    /// With Automation Arm off nothing is written; turned on while recording, the
+    /// moves from then on are; turned off, what was recorded is kept.
+    #[test]
+    fn automation_arm_decides_whether_moves_are_recorded() {
+        use crate::midi_map::{Control, Mapping, Transport};
+        use engine::model::Param;
+        use engine::Target;
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+            track.automation.clear();
+        }
+        app.project.tempo = 120.0;
+        app.project.midi_map.push(Mapping { cc: 74, control: Control::Param { target: Target::Track(1), param: Param::Volume } });
+        app.project.midi_map.push(Mapping { cc: 20, control: Control::Transport(Transport::AutomationArm) });
+        app.sync_all();
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).ceil() as usize {
+                engine.process(&mut buffer, 2);
+                app.update_recording();
+            }
+        };
+        let sweep = |app: &mut crate::app::PulseApp, run: &mut dyn FnMut(&mut crate::app::PulseApp, f64), from: u8| {
+            for step in 0..8 {
+                app.apply_cc(74, from + step * 4);
+                run(app, 0.125);
+            }
+        };
+        let lane = |app: &crate::app::PulseApp| app.automation(Target::Track(1)).iter().find(|l| l.param == Param::Volume).map(|l| l.points.clone()).unwrap_or_default();
+        assert!(app.settings.automation_arm, "on by default");
+
+        // Off: a take with the knob turned writes nothing.
+        app.transport(Transport::AutomationArm);
+        assert!(!app.settings.automation_arm);
+        app.selected_target = Target::Track(1);
+        app.transport(Transport::Record);
+        run(&mut app, 0.5);
+        sweep(&mut app, &mut run, 40);
+        app.transport(Transport::Record);
+        run(&mut app, 0.5);
+        assert!(lane(&app).is_empty(), "nothing recorded with Automation Arm off");
+
+        // On halfway through a take (with a button linked to it): only what follows.
+        app.transport(Transport::Record);
+        run(&mut app, 0.5);
+        sweep(&mut app, &mut run, 20);
+        let turned_on = app.audio.position();
+        app.apply_cc(20, 127);
+        assert!(app.settings.automation_arm);
+        run(&mut app, 0.25);
+        sweep(&mut app, &mut run, 60);
+        // Off again before the take ends: what was recorded stays.
+        app.transport(Transport::AutomationArm);
+        let points = lane(&app);
+        assert!(!points.is_empty(), "kept when turned off");
+        assert!(points.first().unwrap().beat >= turned_on - 0.1, "nothing from before it was on: {:?} vs {turned_on}", points.first());
+        let count = points.len();
+        sweep(&mut app, &mut run, 90);
+        app.transport(Transport::Record);
+        run(&mut app, 0.5);
+        assert_eq!(lane(&app).len(), count, "nothing after it was turned off");
+    }
 }

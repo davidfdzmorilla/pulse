@@ -34,12 +34,19 @@ pub struct Sampler {
     voices: [SamplerVoice; SAMPLER_VOICES],
     sample_rate: f32,
     counter: u64,
+    /// Pitch bend and vibrato, as a playback-rate ratio.
+    pitch: f32,
 }
 
 impl Sampler {
     pub fn new(params: SamplerParams, sample_rate: f32) -> Self {
         let voice = SamplerVoice { gate: Gate::OFF, env: Adsr::IDLE, position: 0.0, rate: 1.0, filters: [Svf::default(); 2] };
-        Self { params, voices: [voice; SAMPLER_VOICES], sample_rate, counter: 0 }
+        Self { params, voices: [voice; SAMPLER_VOICES], sample_rate, counter: 0, pitch: 1.0 }
+    }
+
+    /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
+    pub fn set_pitch(&mut self, ratio: f32) {
+        self.pitch = ratio;
     }
 
     pub fn params(&self) -> SamplerParams {
@@ -99,6 +106,7 @@ impl Sampler {
         let g = svf_g(p.cutoff, sr);
         let k = 2.0 - 1.95 * p.resonance.clamp(0.0, 1.0);
         let filtered = p.cutoff < 19_000.0;
+        let pitch = self.pitch as f64;
         for voice in self.voices.iter_mut().filter(|v| v.env.stage != Stage::Idle) {
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.gate.tick() {
@@ -117,7 +125,7 @@ impl Sampler {
                     break;
                 }
                 let (mut l, mut r) = sample.read(voice.position);
-                voice.position += voice.rate;
+                voice.position += voice.rate * pitch;
                 if filtered {
                     l = voice.filters[0].tick(l, g, k).0;
                     r = voice.filters[1].tick(r, g, k).0;

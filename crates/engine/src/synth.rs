@@ -100,6 +100,8 @@ pub struct PolySynth {
     voices: [Voice; MAX_VOICES],
     sample_rate: f32,
     note_counter: u64,
+    /// Pitch bend and vibrato, as a frequency ratio.
+    pitch: f32,
 }
 
 impl PolySynth {
@@ -109,7 +111,13 @@ impl PolySynth {
             voices: [Voice::IDLE; MAX_VOICES],
             sample_rate,
             note_counter: 0,
+            pitch: 1.0,
         }
+    }
+
+    /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
+    pub fn set_pitch(&mut self, ratio: f32) {
+        self.pitch = ratio;
     }
 
     pub fn params(&self) -> SynthParams {
@@ -188,6 +196,7 @@ impl PolySynth {
         let cutoff = p.cutoff.clamp(20.0, sr * 0.45);
         let g = (PI * cutoff / sr).tan();
         let k = 2.0 - 1.98 * p.resonance.clamp(0.0, 1.0);
+        let pitch = self.pitch;
 
         for v in self.voices.iter_mut().filter(|v| v.stage != Stage::Idle) {
             for sample in out.iter_mut() {
@@ -227,7 +236,7 @@ impl PolySynth {
                 }
 
                 let t = v.phase;
-                let dt = v.phase_inc;
+                let dt = v.phase_inc * pitch;
                 let osc = match p.waveform {
                     Waveform::Sine => (t * TAU).sin(),
                     Waveform::Triangle => 1.0 - 4.0 * (t - 0.5).abs(),

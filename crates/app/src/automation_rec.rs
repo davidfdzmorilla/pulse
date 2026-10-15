@@ -6,9 +6,12 @@
 //! When the take ends, each moved parameter's lane gets the recorded points,
 //! replacing the ones that were in that span (like touch automation in Live),
 //! and plays again from the arrangement.
+//!
+//! Recording a clip in the session works the same for its track's controls,
+//! but the moves become the clip's envelopes, in clip time (clip automation).
 
 use crate::app::PulseApp;
-use engine::model::{AutomationPoint, Param};
+use engine::model::{AutomationLane, AutomationPoint, Param};
 use engine::{Target, NUM_RETURNS};
 use std::collections::HashMap;
 
@@ -17,10 +20,21 @@ const MIN_GAP: f64 = 1.0 / 64.0;
 
 #[derive(Default)]
 pub struct AutomationTake {
+    /// Only this channel's controls (a session clip's track), or all.
+    only: Option<Target>,
+    /// Beat 0 of the recorded points (a session clip's start).
+    origin: f64,
     /// Each parameter's value on the last frame.
     last: HashMap<(Target, Param), f32>,
     /// The points recorded per parameter, in time order.
     points: HashMap<(Target, Param), Vec<AutomationPoint>>,
+}
+
+/// The controls moved while recording a session clip, for its envelopes.
+pub struct ClipAutomationTake {
+    pub track: usize,
+    pub slot: usize,
+    take: AutomationTake,
 }
 
 impl PulseApp {
@@ -28,9 +42,10 @@ impl PulseApp {
         (0..self.project.tracks.len()).map(Target::Track).chain((0..NUM_RETURNS).map(Target::Return)).chain([Target::Master])
     }
 
-    /// Every parameter's value now.
-    fn param_values(&self) -> HashMap<(Target, Param), f32> {
+    /// Every parameter's value now (of one channel, or all).
+    fn param_values(&self, only: Option<Target>) -> HashMap<(Target, Param), f32> {
         self.all_targets()
+            .filter(|&target| only.is_none_or(|o| o == target))
             .flat_map(|target| self.automatable(target).into_iter().map(move |param| (target, param)))
             .map(|(target, param)| ((target, param), self.param_value(target, param)))
             .collect()
@@ -52,15 +67,60 @@ impl PulseApp {
         self.status = Some(if armed { "Armar automatización: encendido" } else { "Armar automatización: apagado" }.into());
     }
 
+    fn new_take(&self, only: Option<Target>, origin: f64) -> AutomationTake {
+        AutomationTake { only, origin, last: self.param_values(only), points: HashMap::new() }
+    }
+
     /// Recording starts: remembers where every control is.
     pub fn start_automation_take(&mut self) {
-        self.automation_take = Some(AutomationTake { last: self.param_values(), points: HashMap::new() });
+        self.automation_take = Some(self.new_take(None, 0.0));
     }
 
     /// Once a frame while recording: writes down what moved at `beat`.
     pub fn record_automation(&mut self, beat: f64) {
         let Some(mut take) = self.automation_take.take() else { return };
-        let now = self.param_values();
+        self.record_into(&mut take, beat);
+        self.automation_take = Some(take);
+    }
+
+    /// Once a frame: follows the session clips being recorded (with Automation Arm
+    /// on), writing down their track's moves in clip time.
+    pub fn record_clip_automation(&mut self, beat: f64, recording: &[(usize, usize, f64)]) {
+        let mut takes = std::mem::take(&mut self.clip_automation);
+        takes.retain(|t| recording.iter().any(|&(track, slot, _)| (track, slot) == (t.track, t.slot)) || !t.take.points.is_empty());
+        for &(track, slot, start) in recording {
+            match takes.iter_mut().find(|t| (t.track, t.slot) == (track, slot)) {
+                Some(clip) => self.record_into(&mut clip.take, beat),
+                None if self.settings.automation_arm => {
+                    takes.push(ClipAutomationTake { track, slot, take: self.new_take(Some(Target::Track(track)), start) });
+                }
+                None => {}
+            }
+        }
+        self.clip_automation = takes;
+    }
+
+    /// The envelopes recorded for a session clip that just ended, `length` beats long.
+    pub fn take_clip_envelopes(&mut self, track: usize, slot: usize, length: f64) -> Vec<AutomationLane> {
+        let Some(i) = self.clip_automation.iter().position(|t| (t.track, t.slot) == (track, slot)) else { return Vec::new() };
+        let take = self.clip_automation.swap_remove(i).take;
+        let mut lanes: Vec<AutomationLane> = take
+            .points
+            .into_iter()
+            .map(|((_, param), mut points)| {
+                points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+                points.retain(|p| p.beat <= length);
+                AutomationLane { param, points }
+            })
+            .filter(|lane| !lane.points.is_empty())
+            .collect();
+        lanes.sort_by_key(|l| format!("{:?}", l.param));
+        lanes
+    }
+
+    fn record_into(&self, take: &mut AutomationTake, beat: f64) {
+        let now = self.param_values(take.only);
+        let beat = beat - take.origin;
         for (&key, &value) in &now {
             let (target, param) = key;
             let Some(&before) = take.last.get(&key) else { continue };
@@ -84,7 +144,6 @@ impl PulseApp {
             }
         }
         take.last = now;
-        self.automation_take = Some(take);
     }
 
     /// Recording ended: the recorded moves replace the automation in their span.

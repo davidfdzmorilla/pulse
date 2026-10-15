@@ -18,11 +18,15 @@ pub struct MidiClip {
     pub length: f64,
     pub notes: Vec<Note>,
     pub color: [u8; 3],
+    /// Clip automation: parameter lanes in clip time, looping with the clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub envelopes: Vec<AutomationLane>,
 }
 
 impl MidiClip {
     pub fn new(name: impl Into<String>, length: f64, color: [u8; 3]) -> Self {
         Self {
+            envelopes: Vec::new(),
             name: name.into(),
             length,
             notes: Vec::new(),
@@ -70,6 +74,9 @@ pub struct AudioClip {
     pub gain_db: f32,
     /// Semitones; applies in Stretch mode.
     pub transpose: f32,
+    /// Clip automation: parameter lanes in clip time, looping with the clip.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub envelopes: Vec<AutomationLane>,
 }
 
 /// A session or arrangement clip. Serialized untagged so projects saved before
@@ -100,6 +107,21 @@ impl Clip {
         match self {
             Clip::Midi(c) => c.color,
             Clip::Audio(c) => c.color,
+        }
+    }
+
+    /// The clip's own automation (see [`MidiClip::envelopes`]).
+    pub fn envelopes(&self) -> &[AutomationLane] {
+        match self {
+            Clip::Midi(c) => &c.envelopes,
+            Clip::Audio(c) => &c.envelopes,
+        }
+    }
+
+    pub fn envelopes_mut(&mut self) -> &mut Vec<AutomationLane> {
+        match self {
+            Clip::Midi(c) => &mut c.envelopes,
+            Clip::Audio(c) => &mut c.envelopes,
         }
     }
 

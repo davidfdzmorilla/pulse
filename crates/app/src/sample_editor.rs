@@ -7,12 +7,16 @@ use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use crate::slicing::SliceMode;
 use engine::model::{Clip, WarpMode};
 
+const ENVELOPE_H: f32 = 60.0;
+
 fn label(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).color(TEXT_DIM).size(10.5));
 }
 
 /// `playhead` is the position inside the clip in beats, when it is playing.
-pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: Option<f64>) {
+/// `envelope`: the clip envelope the lane at the bottom shows (its parameter, what
+/// it is and its own value), if not the velocities (audio clips have none).
+pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: Option<f64>, envelope: Option<(engine::model::Param, engine::model::ParamInfo, f32)>) {
     let tempo = app.project.tempo;
     let Some(Clip::Audio(before)) = app.clip(clip_ref).cloned() else { return };
     let sample = app.sample(&before.sample);
@@ -110,7 +114,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
 
         // Waveform of the whole file with the clip's region highlighted.
         let width = ui.available_width().max(200.0);
-        let height = ui.available_height().clamp(80.0, 200.0);
+        // Room below for the clip's envelopes.
+        let height = (ui.available_height() - ENVELOPE_H - 30.0).clamp(80.0, 200.0);
         let (rect, response) = ui.allocate_exact_size(vec2(width, height), Sense::click_and_drag());
         let painter = ui.painter_at(rect);
         painter.rect_filled(rect, 2.0, theme::SLOT);
@@ -152,6 +157,26 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         }
         response.on_hover_text("Clic o arrastra para mover el inicio del clip");
     });
+
+    // The clip's envelopes, across the clip's length.
+    ui.add_space(4.0);
+    let choice = &mut app.piano_roll.lane;
+    crate::clip_envelope::header(ui, choice, &mut clip.envelopes);
+    let (lane, _) = ui.allocate_exact_size(vec2(ui.available_width(), ENVELOPE_H), Sense::hover());
+    match envelope {
+        Some((param, info, value)) => {
+            let (left, beat_w) = (lane.left() + 8.0, (lane.width() - 16.0) / clip.length.max(0.25) as f32);
+            let x_of = |beat: f64| left + beat as f32 * beat_w;
+            let beat_of = |x: f32| ((x - left) / beat_w) as f64;
+            let length = clip.length;
+            crate::clip_envelope::lane(ui, choice, &mut clip.envelopes, length, param, &info, value, lane, left, &x_of, &beat_of, 0.25, theme::METER_RED)
+                .on_hover_text("Clic: añadir un punto · arrastrar: moverlo · doble clic: borrarlo");
+        }
+        None => {
+            ui.painter().rect_filled(lane, 2.0, theme::SLOT);
+            ui.painter().text(lane.center(), Align2::CENTER_CENTER, "Elige arriba un parámetro para ver o dibujar su envolvente en el clip", theme::small(), TEXT_DIM);
+        }
+    }
 
     if clip != before {
         let new = Clip::Audio(clip);

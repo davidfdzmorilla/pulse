@@ -894,7 +894,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = true;
     let mut actions = Vec::new();
     let title = format!("Modular Synth · {}", app.project.tracks[t].name);
-    egui::Window::new(title).id(egui::Id::new(("modular_window", t))).open(&mut open).resizable(false).collapsible(false).default_pos(pos2(40.0, 40.0)).show(ctx, |ui| {
+    widgets::editor_window(ctx, title, egui::Id::new(("modular_window", t)), &mut open, pos2(40.0, 40.0), |ui| {
         ui.set_width(STACK_WIDTH + 3.0 * (LANE_WIDTH + 18.0) + 16.0);
         let app: &PulseApp = app;
         // Top: presets and the eight macros.

@@ -59,7 +59,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let playing = app.audio.is_playing();
     let position = app.audio.position();
 
-    ui.horizontal(|ui| {
+    // Wraps onto a second row when the window is too narrow for everything.
+    ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing.x = 4.0;
 
         // Tempo and launch settings.
@@ -171,6 +172,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             app.toggle_learn();
         }
 
+        // The view switch and meter at the right edge, if they fit after the rest
+        // of the row; otherwise they follow on the next one.
+        let right = 300.0 + if app.has_menu_bar() { 0.0 } else { 320.0 };
+        // (In a wrapping row, what is left is up to the row's right edge.)
+        if ui.max_rect().right() - ui.cursor().min.x < right {
+            ui.end_row();
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             widgets::horizontal_meter(ui, vec2(70.0, 8.0), app.meters.master);
@@ -181,15 +189,6 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
             if widgets::flat_button(ui, "Session", !arrangement, vec2(68.0, 22.0)).on_hover_text("Tab").clicked() {
                 app.view = View::Session;
-            }
-            ui.add_space(8.0);
-            let redo = ui.add_enabled(app.can_redo(), egui::Button::new("Rehacer")).on_hover_text("⌘⇧Z");
-            if redo.clicked() {
-                app.redo();
-            }
-            let undo = ui.add_enabled(app.can_undo(), egui::Button::new("Deshacer")).on_hover_text("⌘Z");
-            if undo.clicked() {
-                app.undo();
             }
             ui.add_space(8.0);
             // Without a system menu bar, the same menus inside the window.

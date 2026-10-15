@@ -232,7 +232,7 @@ pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, as_param: 
             actions.push(Action::OpenPlugin(PluginWindow::Params(id)));
         }
     });
-    ui.spacing_mut().item_spacing.x = 0.0;
+    ui.spacing_mut().item_spacing.x = 4.0;
     // Automated parameters first, then the plugin's first ones.
     let automated: Vec<u32> = app.automation(target).iter().filter(|l| !l.points.is_empty()).filter_map(|l| app.plugin_param(target, l.param)).filter(|&(p, _)| p == id).map(|(_, param)| param).collect();
     let first = handle.params().iter().filter(|p| p.automatable).map(|p| p.id);
@@ -249,14 +249,43 @@ pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, as_param: 
         let Some(param) = handle.param(param_id) else { continue };
         let channel_param = as_param(param_id);
         let mut value = app.display_value(target, channel_param);
-        let label: String = param.name.chars().take(10).collect();
-        let knob = crate::widgets::Knob::new(&mut value, 0.0..=1.0, param.default as f32, &label).diameter(30.0).format(|x| handle.display(param_id, x as f64));
+        let label = short(&param.name, 8);
+        let knob = crate::widgets::Knob::new(&mut value, 0.0..=1.0, param.default as f32, &label).diameter(30.0).format(|x| short_value(&handle.display(param_id, x as f64)));
         let response = knob.show(ui).on_hover_text(&param.name);
         crate::widgets::automation_dot(ui.painter(), response.rect.right_top() + egui::vec2(-4.0, 6.0), app.automation_state(target, channel_param));
         if response.changed() {
             actions.push(Action::Param(channel_param, value));
         }
     }
+}
+
+/// `text` in at most `max` characters, with "…" when cut (plugin names are long;
+/// the knob's tooltip has the whole of it).
+fn short(text: &str, max: usize) -> String {
+    let text = text.trim();
+    if text.chars().count() <= max {
+        text.to_string()
+    } else {
+        format!("{}…", text.chars().take(max - 1).collect::<String>().trim_end())
+    }
+}
+
+/// A plugin's value text made to fit under a knob: numbers with many decimals
+/// keep two ("0.000000" → "0.00"), and long texts are cut.
+fn short_value(text: &str) -> String {
+    let text = text.trim();
+    let number_end = text.find(|c: char| !(c.is_ascii_digit() || c == '.' || c == '-' || c == '+')).unwrap_or(text.len());
+    let (number, rest) = text.split_at(number_end);
+    let text = match (number.parse::<f64>(), number.split_once('.')) {
+        (Ok(value), Some((_, decimals))) if decimals.len() > 2 => format!("{value:.2}{rest}"),
+        _ => text.to_string(),
+    };
+    // Units after a space stay ("250.00 ms"); a note in brackets goes ("0.00 % (Stereo)").
+    let text = match text.find(" (") {
+        Some(i) => text[..i].to_string(),
+        None => text,
+    };
+    short(&text, 10)
 }
 
 /// The window with every parameter of the plugin it was opened for.
@@ -369,6 +398,20 @@ pub(crate) mod tests {
                 bundle
             })
             .clone()
+    }
+
+    #[test]
+    fn plugin_names_and_values_fit_under_a_knob() {
+        assert_eq!(short("Delay Time", 8), "Delay T…");
+        assert_eq!(short("Gain", 8), "Gain");
+        assert_eq!(short("Feedback/EQ", 8), "Feedbac…");
+        assert_eq!(short_value("0.000000"), "0.00");
+        assert_eq!(short_value("-2.0312 dB"), "-2.03 dB");
+        assert_eq!(short_value("250.00 ms"), "250.00 ms");
+        assert_eq!(short_value("0.00 % (Stereo)"), "0.00 %");
+        assert_eq!(short_value("C4"), "C4");
+        assert_eq!(short_value("Single"), "Single");
+        assert_eq!(short_value("A very long value text"), "A very lo…");
     }
 
     #[test]

@@ -184,8 +184,18 @@ fn param_knob(ui: &mut egui::Ui, handle: &engine::plugin::PluginHandle, param: &
     response.changed().then_some(value as f64)
 }
 
-/// The body of a plugin's device: its first parameters as knobs and a button for all of them.
-pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, id: PluginId, knobs: usize) -> Option<PluginId> {
+/// A window a plugin device asks to open.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PluginWindow {
+    /// The plugin's own interface.
+    Editor(PluginId),
+    /// The list of all its parameters.
+    Params(PluginId),
+}
+
+/// The body of a plugin's device: buttons for its editor and its parameter list, and
+/// its first parameters as knobs.
+pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, id: PluginId, knobs: usize) -> Option<PluginWindow> {
     let mut open = None;
     let Some(handle) = app.samples.plugins.get(&id) else {
         ui.label(egui::RichText::new("No se pudo cargar el plugin.\nComprueba que sigue instalado.").color(TEXT_DIM).size(10.5));
@@ -195,8 +205,12 @@ pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, id: PluginId, knobs: usize
         if let Some(plugin) = app.project.plugin(id) {
             ui.label(egui::RichText::new(&plugin.vendor).color(TEXT_DIM).size(10.5));
         }
-        if ui.button("Parámetros…").on_hover_text("Todos los parámetros del plugin").clicked() {
-            open = Some(id);
+        let editor = if app.editors.is_open(id) { "Editor ✓" } else { "Editor" };
+        if ui.button(editor).on_hover_text("La ventana del propio plugin").clicked() {
+            open = Some(PluginWindow::Editor(id));
+        }
+        if ui.button("Parámetros…").on_hover_text("Todos los parámetros del plugin, en una lista").clicked() {
+            open = Some(PluginWindow::Params(id));
         }
     });
     ui.spacing_mut().item_spacing.x = 0.0;
@@ -440,6 +454,25 @@ pub(crate) mod tests {
         if volume.is_some() {
             assert!(after < before * 0.9, "the saved volume came back");
         }
+    }
+
+    #[test]
+    fn editors_explain_why_they_do_not_open() {
+        let mut app = app();
+        let synth = app.plugin_library.found[0].clone();
+        app.set_plugin_instrument(3, &synth);
+        let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!() };
+        app.open_editor(id);
+        assert!(!app.editors.is_open(id));
+        let status = app.status.clone().unwrap_or_default();
+        // Tests do not run on the main thread; the test plugin has no editor anyway.
+        assert!(status.contains("ventana principal") || status.contains("no tiene editor"), "{status}");
+        app.open_editor(PluginId(999));
+        assert!(app.status.as_deref().is_some_and(|s| s.contains("no está cargado")));
+        // Rebuilding the engine forgets nothing it should not.
+        app.sync_all();
+        app.poll_editors();
+        assert!(!app.editors.is_open(id));
     }
 
     #[test]

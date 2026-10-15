@@ -191,6 +191,8 @@ pub struct PulseApp {
     pub modular_window: Option<usize>,
     /// The VST3 plugins found on this computer, and the parameter window.
     pub plugin_library: crate::plugins::Library,
+    /// The plugins' own editor windows.
+    pub editors: crate::editor::Editors,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
@@ -267,6 +269,7 @@ impl PulseApp {
             poly_window: None,
             modular_window: None,
             plugin_library: Default::default(),
+            editors: Default::default(),
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -283,6 +286,7 @@ impl PulseApp {
     pub fn sync_all(&mut self) {
         // Plugins are loaded again from their state: take it from the running ones first.
         self.capture_plugins();
+        self.suspend_editors();
         self.samples.plugins.clear();
         let sample_rate = self.audio.sample_rate();
         let commands = sync::project_commands(&self.project, &mut self.samples, sample_rate, &self.overridden);
@@ -1833,6 +1837,7 @@ impl eframe::App for PulseApp {
         crate::table_editor::window(self, &ctx);
 
         crate::plugins::window(self, &ctx);
+        self.poll_editors();
 
         let interacting = ctx.input(|i| i.pointer.any_down());
         self.history.commit(&self.project, interacting);

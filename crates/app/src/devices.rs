@@ -70,8 +70,8 @@ pub(crate) enum Action {
     /// Opens a file dialog for the wavetable of oscillator `n`.
     LoadWavetable(usize),
     ExportKick,
-    /// Opens the parameter window of a plugin.
-    OpenPlugin(engine::model::PluginId),
+    /// Opens a plugin's editor or its parameter window.
+    OpenPlugin(crate::plugins::PluginWindow),
 }
 
 /// Plugin parameters shown as knobs on its device; the rest are in its window.
@@ -307,7 +307,8 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
                     app.choose_wavetable(t, osc);
                 }
             }
-            Action::OpenPlugin(id) => app.plugin_library.window = Some(id),
+            Action::OpenPlugin(crate::plugins::PluginWindow::Params(id)) => app.plugin_library.window = Some(id),
+            Action::OpenPlugin(crate::plugins::PluginWindow::Editor(id)) => app.open_editor(id),
             Action::ExportKick => {
                 if let Target::Track(t) = target {
                     crate::kick_ui::export(app, t);

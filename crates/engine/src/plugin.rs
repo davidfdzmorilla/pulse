@@ -816,9 +816,112 @@ impl PluginHandle {
         state
     }
 
-    /// The plugin's own editor window, if it has one (opened in a later phase).
-    pub fn has_editor(&self) -> bool {
-        false
+    /// The plugin's own editor, if it has one. The host puts it in a window of its
+    /// own (see [`PluginView::attach`]). UI thread only.
+    pub fn editor(&self) -> Option<PluginView> {
+        let controller = self.instance.controller.as_ref()?;
+        let view = unsafe { ComPtr::from_raw(controller.createView(ViewType::kEditor)) }?;
+        let frame = ComWrapper::new(PlugFrame { resize: std::cell::RefCell::new(None) });
+        Some(PluginView { view, frame, attached: false, _instance: self.instance.clone() })
+    }
+}
+
+/// The platform's kind of native view, as VST3 names it.
+pub const PLATFORM_VIEW: &str = if cfg!(target_os = "macos") {
+    "NSView"
+} else if cfg!(target_os = "windows") {
+    "HWND"
+} else {
+    "X11EmbedWindowID"
+};
+
+/// Lets a plugin's editor ask for another size.
+struct PlugFrame {
+    resize: std::cell::RefCell<Option<Box<dyn Fn(i32, i32)>>>,
+}
+
+impl Class for PlugFrame {
+    type Interfaces = (IPlugFrame,);
+}
+
+impl IPlugFrameTrait for PlugFrame {
+    unsafe fn resizeView(&self, view: *mut IPlugView, size: *mut ViewRect) -> tresult {
+        if view.is_null() || size.is_null() {
+            return kInvalidArgument;
+        }
+        let rect = unsafe { *size };
+        if let Some(resize) = self.resize.borrow().as_ref() {
+            resize(rect.right - rect.left, rect.bottom - rect.top);
+        }
+        // The window has the new size: tell the view.
+        unsafe { ((*(*view).vtbl).onSize)(view, size) };
+        kResultTrue
+    }
+}
+
+/// A plugin's editor. Dropping it takes it out of its window.
+pub struct PluginView {
+    view: ComPtr<IPlugView>,
+    frame: ComWrapper<PlugFrame>,
+    attached: bool,
+    _instance: Arc<Instance>,
+}
+
+impl PluginView {
+    /// Whether it can show itself in a native view of `platform` (see [`PLATFORM_VIEW`]).
+    pub fn supports(&self, platform: &str) -> bool {
+        let Ok(name) = std::ffi::CString::new(platform) else { return false };
+        unsafe { self.view.isPlatformTypeSupported(name.as_ptr()) == kResultTrue }
+    }
+
+    /// Its size in points.
+    pub fn size(&self) -> (i32, i32) {
+        let mut rect = ViewRect { left: 0, top: 0, right: 0, bottom: 0 };
+        if unsafe { self.view.getSize(&mut rect) } == kResultOk { (rect.right - rect.left, rect.bottom - rect.top) } else { (0, 0) }
+    }
+
+    pub fn can_resize(&self) -> bool {
+        unsafe { self.view.canResize() == kResultTrue }
+    }
+
+    /// Called with the size the editor asks for; the window must take it.
+    pub fn on_resize(&self, resize: impl Fn(i32, i32) + 'static) {
+        *self.frame.resize.borrow_mut() = Some(Box::new(resize));
+    }
+
+    /// Puts the editor in `parent`, a native view of [`PLATFORM_VIEW`].
+    ///
+    /// # Safety
+    /// `parent` must be a live view of that kind, and outlive this editor.
+    pub unsafe fn attach(&mut self, parent: *mut c_void) -> bool {
+        let Ok(platform) = std::ffi::CString::new(PLATFORM_VIEW) else { return false };
+        if let Some(frame) = self.frame.to_com_ptr::<IPlugFrame>() {
+            unsafe { self.view.setFrame(frame.as_ptr()) };
+        }
+        self.attached = unsafe { self.view.attached(parent, platform.as_ptr()) } == kResultOk;
+        self.attached
+    }
+
+    /// The window was resized by the user to `width` × `height`: the editor follows,
+    /// or answers with the nearest size it accepts.
+    pub fn set_size(&self, width: i32, height: i32) -> (i32, i32) {
+        let mut rect = ViewRect { left: 0, top: 0, right: width, bottom: height };
+        unsafe {
+            self.view.checkSizeConstraint(&mut rect);
+            self.view.onSize(&mut rect);
+        }
+        (rect.right - rect.left, rect.bottom - rect.top)
+    }
+}
+
+impl Drop for PluginView {
+    fn drop(&mut self) {
+        unsafe {
+            if self.attached {
+                self.view.removed();
+            }
+            self.view.setFrame(std::ptr::null_mut());
+        }
     }
 }
 
@@ -1409,6 +1512,13 @@ pub(crate) mod tests {
             }
             std::fs::write(path, bytes).unwrap();
         }
+    }
+
+    #[test]
+    fn plugins_without_an_editor_say_so() {
+        let info = synth();
+        let (_, handle) = instantiate(&info.path, &info.cid, 48_000.0, None).unwrap();
+        assert!(handle.editor().is_none());
     }
 
     #[test]

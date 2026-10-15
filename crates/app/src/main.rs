@@ -5,6 +5,7 @@ mod browser;
 mod capture;
 mod detail;
 mod devices;
+mod editor;
 mod export;
 mod history;
 mod input;
@@ -43,6 +44,13 @@ fn main() -> eframe::Result {
                 eprintln!("{error}");
                 std::process::exit(1);
             }
+        }
+        return Ok(());
+    }
+
+    if args.get(1).map(String::as_str) == Some("--check-editors") {
+        for line in editor::check_installed() {
+            println!("{line}");
         }
         return Ok(());
     }

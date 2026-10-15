@@ -357,10 +357,6 @@ fn paint_clip(
                 return;
             };
             // One waveform column per pixel, mapping beats to file time like the engine does.
-            let reference_bpm = match audio.warp {
-                engine::model::WarpMode::Off => tempo,
-                _ => audio.original_bpm.max(1.0),
-            };
             let mid = body.center().y;
             let half = body.height() * 0.5;
             let wave = theme::shade(color, 1.25);
@@ -371,11 +367,11 @@ fn paint_clip(
                 let local = beat.rem_euclid(audio.length.max(0.0001));
                 let next_local = local + (1.0 / ppb) as f64;
                 // Before the file's start (a clip starting on the bar line before its first downbeat): silence.
-                if audio.offset + local * 60.0 / reference_bpm < 0.0 {
+                if audio.source_seconds(local, tempo) < 0.0 {
                     x += 1.0;
                     continue;
                 }
-                let to_block = |b: f64| ((audio.offset + b * 60.0 / reference_bpm) * sample.sample_rate as f64) as usize / PEAK_BLOCK;
+                let to_block = |b: f64| (audio.source_seconds(b, tempo) * sample.sample_rate as f64) as usize / PEAK_BLOCK;
                 let (a, b) = (to_block(local), to_block(next_local).max(to_block(local) + 1));
                 let (lo, hi) = sample.peaks.get(a..b.min(sample.peaks.len())).unwrap_or(&[]).iter().fold((0f32, 0f32), |(lo, hi), &(l, h)| (lo.min(l), hi.max(h)));
                 if hi > lo {
@@ -1126,6 +1122,7 @@ mod tests {
             offset: 0.0,
             warp: engine::model::WarpMode::Off,
             original_bpm: 120.0,
+            warp_markers: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

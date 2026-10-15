@@ -10,7 +10,7 @@
 
 use crate::project::{Mixer, Project, Track, PALETTE};
 use engine::model::{
-    rack_pad, ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, RackParams, SamplerParams, SynthParams, WarpMode, RACK_FIRST_NOTE,
+    rack_pad, ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, RackParams, SamplerParams, SynthParams, WarpMarker, WarpMode, RACK_FIRST_NOTE,
 };
 use engine::{MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
 use roxmltree::{Document, Node};
@@ -434,8 +434,9 @@ fn arrangement_clip(clip: Node, track_color: [u8; 3]) -> Option<ArrangementClip>
     })
 }
 
-/// Tempo implied by a clip's warp markers: (bpm, seconds, beats) of the first marker.
-fn warp_reference(clip: Node) -> Option<(f64, f64, f64)> {
+/// Tempo implied by a clip's warp markers: (bpm, seconds, beats) of the first
+/// marker, and the markers themselves when there are more than two (an uneven warp).
+fn warp_reference(clip: Node) -> Option<(f64, f64, f64, Vec<WarpMarker>)> {
     let mut markers: Vec<(f64, f64)> = path(clip, &["WarpMarkers"])?
         .children()
         .filter(|n| n.has_tag_name("WarpMarker"))
@@ -443,9 +444,11 @@ fn warp_reference(clip: Node) -> Option<(f64, f64, f64)> {
         .collect();
     markers.sort_by(|a, b| a.1.total_cmp(&b.1));
     let (&(first_sec, first_beat), &(last_sec, last_beat)) = (markers.first()?, markers.last()?);
-    // Several markers can warp unevenly; Pulse uses the average tempo between the outer ones.
+    // The average tempo between the outer ones; between them each stretch keeps its own.
+    let rising = markers.windows(2).all(|w| w[1].0 > w[0].0 && w[1].1 > w[0].1);
+    let warp = if markers.len() > 2 && rising { markers.iter().map(|&(seconds, beat)| WarpMarker { beat, seconds }).collect() } else { Vec::new() };
     (last_beat > first_beat && last_sec > first_sec)
-        .then(|| ((last_beat - first_beat) / (last_sec - first_sec) * 60.0, first_sec, first_beat))
+        .then(|| ((last_beat - first_beat) / (last_sec - first_sec) * 60.0, first_sec, first_beat, warp))
 }
 
 /// `timeline_length` is the clip's span on the arrangement, if it is placed there.
@@ -459,29 +462,30 @@ fn audio_clip(clip: Node, track_color: [u8; 3], timeline_length: Option<f64>, ct
     let looping = flag(clip, &["Loop", "LoopOn"]).unwrap_or(true);
     let warped = flag(clip, &["IsWarped"]).unwrap_or(true);
 
-    let (warp, original_bpm, offset, length) = if warped {
-        let (bpm, first_sec, first_beat) = warp_reference(clip).unwrap_or((ctx.tempo, 0.0, 0.0));
+    let (warp, original_bpm, offset, length, warp_markers) = if warped {
+        let (bpm, first_sec, first_beat, markers) = warp_reference(clip).unwrap_or((ctx.tempo, 0.0, 0.0, Vec::new()));
         let length = match (looping, timeline_length) {
             (false, Some(span)) => span,
             _ => loop_end - loop_start,
         };
         let mode = if number(clip, &["WarpMode"]) == Some(3.0) { WarpMode::Repitch } else { WarpMode::Stretch };
+        // With uneven markers, set from them below.
         let offset = first_sec + (loop_start - first_beat) * 60.0 / bpm;
-        (mode, bpm, offset, length)
+        (mode, bpm, offset, length, markers)
     } else {
         // Unwarped clips keep their start and loop markers in seconds.
         let seconds = match (looping, timeline_length) {
             (false, Some(span)) => span * 60.0 / ctx.tempo,
             _ => loop_end - loop_start,
         };
-        (WarpMode::Off, ctx.tempo, loop_start, seconds * ctx.tempo / 60.0)
+        (WarpMode::Off, ctx.tempo, loop_start, seconds * ctx.tempo / 60.0, Vec::new())
     };
 
     let volume = number(clip, &["SampleVolume"]).unwrap_or(1.0);
     let name = clip_name(clip)
         .or_else(|| sample.file_stem().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "Audio".into());
-    AudioClip {
+    let mut audio = AudioClip {
         envelopes: Vec::new(),
         name,
         color: clip_color(clip, track_color),
@@ -490,9 +494,14 @@ fn audio_clip(clip: Node, track_color: [u8; 3], timeline_length: Option<f64>, ct
         offset: offset.max(0.0),
         warp,
         original_bpm,
+        warp_markers,
         gain_db: if volume > 0.0 { (20.0 * volume.log10()) as f32 } else { -70.0 },
         transpose: number(clip, &["PitchCoarse"]).unwrap_or(0.0) as f32,
+    };
+    if audio.has_markers() {
+        audio.offset = audio.file_seconds(loop_start).max(0.0);
     }
+    audio
 }
 
 /// Finds a clip's audio file: its absolute path, its path relative to the set
@@ -758,6 +767,20 @@ mod tests {
         assert!((clip.gain_db + 6.02).abs() < 0.01);
         assert_eq!(report.audio_tracks, 1);
         assert_eq!(report.missing_samples, 2);
+    }
+
+    #[test]
+    fn uneven_warp_markers_are_kept() {
+        let set = audio_set("/nowhere/break.wav").replace(
+            r#"<WarpMarker SecTime="8" BeatTime="16"/>"#,
+            r#"<WarpMarker SecTime="1" BeatTime="4"/><WarpMarker SecTime="8" BeatTime="16"/>"#,
+        );
+        let (project, _) = parse(&set).unwrap();
+        let Some(Clip::Audio(clip)) = &project.tracks[0].clips[0] else { panic!("expected an audio clip") };
+        assert_eq!(clip.warp_markers.len(), 3);
+        // The loop starts on beat 4: 1 s into the file, where its marker is.
+        assert_eq!(clip.offset, 1.0);
+        assert!((clip.source_seconds(6.0, 120.0) - (1.0 + 7.0 / 12.0 * 6.0)).abs() < 1e-9);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 
 use crate::app::{ClipRef, PulseApp};
 use beats::Grid;
-use engine::model::{AudioClip, Clip, WarpMode};
+use engine::model::{AudioClip, Clip, WarpMarker, WarpMode};
 use engine::Sample;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -35,11 +35,25 @@ impl Tempo {
     }
 }
 
-/// A clip set to follow the tempo with `grid`, for a file `duration` seconds long.
+/// A clip set to follow the tempo with `grid`, for a file `duration` seconds long:
+/// from the bar line at or before the file's start, whole bars long, between
+/// warp markers on every bar if its tempo varies.
 pub fn warped(clip: &AudioClip, grid: &Grid, duration: f64) -> AudioClip {
-    let start = grid.start();
-    let bars = ((duration - start) / grid.bar_seconds() - 0.02).ceil().max(1.0);
-    AudioClip { warp: WarpMode::Stretch, original_bpm: grid.bpm, offset: start, length: bars * beats::BEATS_PER_BAR, ..clip.clone() }
+    let mut new = AudioClip { warp: WarpMode::Stretch, original_bpm: grid.bpm, warp_markers: Vec::new(), ..clip.clone() };
+    if grid.markers.len() < 2 {
+        let start = grid.start();
+        let bars = ((duration - start) / grid.bar_seconds() - 0.02).ceil().max(1.0);
+        return AudioClip { offset: start, length: bars * beats::BEATS_PER_BAR, ..new };
+    }
+    new.warp_markers = grid.markers.iter().map(|&(beat, seconds)| WarpMarker { beat, seconds }).collect();
+    let bar = beats::BEATS_PER_BAR;
+    // The file's start, in beats from its first downbeat (≤ 0).
+    let before = new.file_beat(0.0);
+    let start_beat = if grid.start() == 0.0 { before } else { -(-before / bar - 1e-6).ceil().max(0.0) * bar };
+    new.offset = new.file_seconds(start_beat);
+    let bars = ((new.file_beat(duration) - start_beat) / bar - 0.02).ceil().max(1.0);
+    new.length = bars * bar;
+    new
 }
 
 impl PulseApp {
@@ -172,20 +186,49 @@ mod tests {
             offset: 0.0,
             warp: WarpMode::Off,
             original_bpm: 120.0,
+            warp_markers: Vec::new(),
             gain_db: -2.0,
             transpose: 0.0,
             envelopes: Vec::new(),
         };
         // 124 BPM, the first downbeat 0.3 s in, 60 s long.
-        let grid = Grid { bpm: 124.0, downbeat: 0.3, beats: 120 };
+        let grid = Grid { bpm: 124.0, downbeat: 0.3, beats: 120, markers: Vec::new() };
         let w = warped(&clip, &grid, 60.0);
         let bar = 4.0 * 60.0 / 124.0;
         assert_eq!((w.warp, w.original_bpm, w.gain_db), (WarpMode::Stretch, 124.0, -2.0));
         assert!((w.offset - (0.3 - bar)).abs() < 1e-9, "the bar line before the downbeat: {}", w.offset);
         assert_eq!(w.length, ((60.0 - w.offset) / bar).ceil() * 4.0);
         // A loop of exactly 4 bars on the beat: 16 beats from the start.
-        let w = warped(&clip, &Grid { bpm: 120.0, downbeat: 0.01, beats: 16 }, 8.0);
+        let w = warped(&clip, &Grid { bpm: 120.0, downbeat: 0.01, beats: 16, markers: Vec::new() }, 8.0);
         assert_eq!((w.offset, w.length), (0.0, 16.0));
+    }
+
+    #[test]
+    fn a_varying_tempo_is_warped_bar_by_bar() {
+        let clip = AudioClip {
+            name: "x".into(),
+            color: [0; 3],
+            sample: "/x.wav".into(),
+            length: 10.0,
+            offset: 0.0,
+            warp: WarpMode::Off,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+        };
+        // Bars of 2 s then 2.4 s, the first downbeat 1.1 s in; 10 s long.
+        let markers = vec![(0.0, 1.1), (4.0, 3.1), (8.0, 5.5)];
+        let grid = Grid { bpm: 110.0, downbeat: 1.1, beats: 12, markers };
+        let w = warped(&clip, &grid, 10.0);
+        assert_eq!((w.warp, w.warp_markers.len()), (WarpMode::Stretch, 3));
+        // The bar line before the file: beat -4, 0.9 s before it (at the first bar's tempo).
+        assert!((w.offset + 0.9).abs() < 1e-9, "{}", w.offset);
+        assert!((w.source_seconds(4.0, 100.0) - 1.1).abs() < 1e-9, "the first downbeat on the clip's bar 2");
+        assert!((w.source_seconds(12.0, 100.0) - 5.5).abs() < 1e-9);
+        // 10 s is beat 8 + 4.5 / 0.6 = 15.5, 19.5 from the bar line before: 5 bars.
+        assert_eq!(w.length, 20.0);
     }
 
     /// The real thing: Pulse's demo song (120 BPM) imported into a 100 BPM project.
@@ -260,5 +303,79 @@ mod tests {
         let off = grid.downbeat / beat;
         assert!((off - off.round()).abs() < 0.08 && (off.round() as i64) % 4 == 0, "downbeat {} s: {off} beats", grid.downbeat);
     }
-}
 
+    /// A drummer speeding up, from 108 to 128 BPM over 48 bars: imported into a
+    /// 120 BPM project it gets a marker on every bar, and rendered it plays at a
+    /// steady 120 BPM with every bar on the project's.
+    #[test]
+    fn a_varying_tempo_plays_steady_with_the_project() {
+        let rate = 44_100u32;
+        let bars = 48;
+        let mut times = Vec::new();
+        let mut t = 0.7;
+        for i in 0..bars * 4 {
+            times.push(t);
+            t += 60.0 / (108.0 + 20.0 * i as f64 / (bars * 4) as f64);
+        }
+        let mut x = vec![0f32; ((t + 1.0) * rate as f64) as usize];
+        for (i, &at) in times.iter().enumerate() {
+            let at = (at * rate as f64) as usize;
+            for j in 0..4000 {
+                let (env, sec) = ((-(j as f32) / 300.0).exp(), j as f32 / rate as f32);
+                let tone = if i % 4 == 0 { 1600.0 } else { 800.0 };
+                x[at + j] += 0.5 * env * (std::f32::consts::TAU * tone * sec).sin();
+                if i % 2 == 0 {
+                    x[at + j] += 0.8 * (-(j as f32) / 900.0).exp() * (std::f32::consts::TAU * (60.0 + 80.0 * (-(j as f32) / 200.0).exp()) * sec).sin();
+                }
+            }
+        }
+        let dir = std::env::temp_dir().join(format!("pulse-warp-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("drummer.wav");
+        let mut writer = hound::WavWriter::create(&path, hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float }).unwrap();
+        for v in &x {
+            writer.write_sample(*v).unwrap();
+        }
+        writer.finalize().unwrap();
+
+        let mut app = PulseApp::headless(Project::demo());
+        app.project.tempo = 120.0;
+        for track in &mut app.project.tracks {
+            track.mixer.active = false;
+        }
+        let track = app.add_audio_track().unwrap();
+        app.add_samples(vec![path], Placement::Arrangement { track, start: 8.0 });
+        let ctx = eframe::egui::Context::default();
+        while app.tempo.busy() {
+            app.follow_tempo(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let Clip::Audio(audio) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
+        assert!(audio.warp_markers.len() >= 40, "{} markers ({:?})", audio.warp_markers.len(), app.status);
+
+        let out = 48_000.0;
+        let mut renderer = engine::OfflineRenderer::new(out);
+        let mut samples = crate::sync::SampleCache::default();
+        for command in crate::sync::project_commands(&app.project, &mut samples, out, &Default::default()) {
+            renderer.send(command);
+        }
+        renderer.send(engine::Command::SetPosition(8.0));
+        renderer.send(engine::Command::Play);
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        renderer.render((audio.length * 0.5 * out as f64) as usize, &mut l, &mut r);
+        std::fs::remove_dir_all(&dir).ok();
+        let (beats, downbeats) = beats::detect(&l, &r, out).unwrap();
+        let grid = beats::fit(&beats, &downbeats).expect("beats in the render");
+        assert!((grid.bpm - 120.0).abs() < 0.3, "{grid:?}");
+        assert!(grid.markers.is_empty(), "steady now");
+        println!("{grid:?}");
+        // Every beat from the music's first on the project's beats (0.5 s apart from
+        // the clip's start), give or take the detector's 20 ms steps. (Before it, in
+        // the silence of the bar before the file, the detector makes some up.)
+        let worst = beats.iter().filter(|&&b| b > grid.downbeat - 0.1).map(|&b| ((b / 0.5) - (b / 0.5).round()).abs() * 0.5).fold(0.0, f64::max);
+        println!("the furthest beat {:.1} ms off", worst * 1000.0);
+        assert!(worst < 0.03, "a beat {worst} s off the grid");
+        let off = grid.downbeat / 0.5;
+        assert!((off - off.round()).abs() < 0.08 && (off.round() as i64) % 4 == 0, "downbeat {} s", grid.downbeat);
+    }
+}

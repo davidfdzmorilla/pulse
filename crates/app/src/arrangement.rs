@@ -1093,4 +1093,49 @@ mod tests {
         screen.menu(&mut app, header(1), "Eliminar pista");
         assert_eq!(app.project.tracks.len(), tracks - 1);
     }
+
+    /// The user's case: the demo project plus an audio track with a song on the
+    /// arrangement, right-click → «Separar en stems…», four tracks come out.
+    #[test]
+    #[ignore = "needs PULSE_STEMS_MODEL"]
+    fn separating_from_the_arrangement_menu() {
+        let mut app = app();
+        let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let t = app.add_audio_track().unwrap();
+        let sample = app.sample(&song.to_string_lossy());
+        let audio = engine::model::AudioClip {
+            name: "Canción".into(),
+            color: [1, 2, 3],
+            sample: song.to_string_lossy().into_owned(),
+            length: (sample.duration() * 2.0).floor(),
+            offset: 0.0,
+            warp: engine::model::WarpMode::Off,
+            original_bpm: 120.0,
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+        };
+        app.project.tracks[t].arrangement.push(ArrangementClip { start: 8.0, length: audio.length, clip: Clip::Audio(audio) });
+        app.sync_arrangement(t);
+        let mut screen = Screen::new();
+        let clip = at(&app, t, 10.0);
+        screen.menu(&mut app, clip, "Separar en stems…");
+        assert!(app.stems.is_some(), "it started: {:?}", app.notice);
+        let started = std::time::Instant::now();
+        while app.stems.is_some() {
+            let _ = screen.ctx.run_ui(Default::default(), |ui| app.follow_stems(ui.ctx()));
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            assert!(started.elapsed().as_secs() < 300);
+        }
+        assert_eq!(app.project.tracks.len(), t + 5, "{:?} {:?}", app.status, app.notice);
+        for i in 0..4 {
+            let placed = &app.project.tracks[t + 1 + i].arrangement[0];
+            assert_eq!(placed.start, 8.0);
+            if let Clip::Audio(stem) = &placed.clip {
+                let _ = std::fs::remove_file(&stem.sample);
+            }
+        }
+        assert!(!app.project.tracks[t].mixer.active);
+    }
 }
+

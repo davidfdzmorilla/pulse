@@ -21,7 +21,7 @@ use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
-pub const MAX_TRACKS: usize = 8;
+pub const MAX_TRACKS: usize = 64;
 pub const NUM_SCENES: usize = 8;
 pub const NUM_RETURNS: usize = 2;
 /// Devices per chain; insertions beyond this are rejected so the chain never reallocates.
@@ -1827,6 +1827,19 @@ mod tests {
         h.send(Command::ReorderTracks(back));
         h.run_beats(0.25);
         assert_eq!((h.playing(0), h.playing(1)), (1, 0));
+    }
+
+    /// How long the engine takes for 10 s of audio with one clip playing (the
+    /// other tracks idle), to see what each possible track costs.
+    #[test]
+    #[ignore = "timing"]
+    fn ten_seconds_of_audio() {
+        let mut h = Harness::new();
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        let started = std::time::Instant::now();
+        h.run_beats(20.0);
+        println!("{MAX_TRACKS} pistas: 10 s de audio en {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
     }
 
     #[test]

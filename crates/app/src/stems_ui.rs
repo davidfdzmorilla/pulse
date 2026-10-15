@@ -60,12 +60,12 @@ impl PulseApp {
     /// Starts separating the audio clip `clip`.
     pub fn separate_stems(&mut self, clip: ClipRef) {
         if self.stems.is_some() {
-            self.status = Some("Ya hay una separación en marcha".into());
+            self.notify("Separar en stems", "Ya hay una separación en marcha: espera a que termine.");
             return;
         }
         let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { return };
         if self.project.tracks.len() + NAMES.len() > MAX_TRACKS {
-            self.status = Some(format!("Hacen falta {} pistas libres para los stems (el máximo es {MAX_TRACKS}): elimina alguna", NAMES.len()));
+            self.notify("Separar en stems", &format!("Hacen falta {} pistas libres para los stems y el máximo es {MAX_TRACKS}. Elimina alguna pista y vuelve a intentarlo.", NAMES.len()));
             return;
         }
         let stage = Arc::new(Mutex::new(Stage::Separate(0.0)));
@@ -88,7 +88,8 @@ impl PulseApp {
             let job = self.stems.take().expect("checked above");
             match result {
                 Ok(paths) => self.place_stems(job.clip, &job.audio, &paths),
-                Err(e) => self.status = Some(e),
+                Err(e) if e == CANCELLED => self.status = Some(e),
+                Err(e) => self.notify("No se pudo separar en stems", &e),
             }
             return;
         }
@@ -116,7 +117,8 @@ impl PulseApp {
         // The clip may have moved meanwhile: then the stems go at the end.
         let still_there = matches!(self.clip(clip), Some(Clip::Audio(a)) if a.sample == audio.sample);
         if self.project.tracks.len() + NAMES.len() > MAX_TRACKS {
-            self.status = Some(format!("Los stems están en {}, pero no caben más pistas (máximo {MAX_TRACKS})", paths[0].parent().map_or(String::new(), |p| p.display().to_string())));
+            let folder = paths[0].parent().map_or(String::new(), |p| p.display().to_string());
+            self.notify("Separar en stems", &format!("Los stems están en {folder}, pero no caben más pistas (el máximo es {MAX_TRACKS})."));
             return;
         }
         let first = self.project.tracks.len();
@@ -158,6 +160,8 @@ impl PulseApp {
     }
 }
 
+const CANCELLED: &str = "Separación cancelada";
+
 /// The thread's work: model, decoding, separation, files.
 fn separate(source: &Path, out_dir: &Path, base: &str, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Result<[PathBuf; 4], String> {
     let model = model_path();
@@ -171,10 +175,12 @@ fn separate(source: &Path, out_dir: &Path, base: &str, stage: &Mutex<Stage>, can
         right: stems::resample(&sample.right, sample.sample_rate, stems::SAMPLE_RATE as f32),
     };
     let mut separator = stems::Separator::load(&model)?;
-    let separated = separator.separate(&mix, |fraction| {
-        set(stage, Stage::Separate(fraction * 0.97));
-        !cancel.load(Ordering::Relaxed)
-    })?;
+    let separated = separator
+        .separate(&mix, |fraction| {
+            set(stage, Stage::Separate(fraction * 0.97));
+            !cancel.load(Ordering::Relaxed)
+        })
+        .map_err(|e| if cancel.load(Ordering::Relaxed) { CANCELLED.to_string() } else { e })?;
     std::fs::create_dir_all(out_dir).map_err(|e| format!("No se pudo crear {}: {e}", out_dir.display()))?;
     let mut paths: [PathBuf; 4] = Default::default();
     for (i, stem) in separated.iter().enumerate() {
@@ -210,7 +216,7 @@ fn download_model(dest: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Res
             let _ = child.kill();
             let _ = child.wait();
             let _ = std::fs::remove_file(&partial);
-            return Err("Descarga cancelada".into());
+            return Err(CANCELLED.into());
         }
         if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
             break status;
@@ -316,7 +322,7 @@ mod tests {
         app.set_clip(t, 0, Some(Clip::Audio(audio_clip("/x/song.wav"))));
         app.separate_stems(ClipRef::Session { track: t, slot: 0 });
         assert!(app.stems.is_none());
-        assert!(app.status.as_deref().unwrap_or("").contains("pistas libres"), "{:?}", app.status);
+        assert!(app.notice.as_ref().is_some_and(|(_, text)| text.contains("pistas libres")), "{:?}", app.notice);
     }
 
     #[test]
@@ -358,3 +364,4 @@ mod tests {
         }
     }
 }
+

@@ -96,6 +96,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Run(C::Record, "Grabar en el Arrangement  (F9)", ""),
             Run(C::Loop, "Loop", ""),
             Run(C::Metronome, "Metrónomo", ""),
+            Run(C::AutomationArm, "Armar automatización", ""),
             Separator,
             Run(C::ComputerKeyboard, "Teclado del ordenador  (M)", ""),
             Run(C::MidiAssign, "Asignar controles MIDI", ""),

@@ -19,7 +19,9 @@ const FADER_H: f32 = 120.0;
 
 enum Action {
     Launch(usize, usize),
-    Select(ClipRef),
+    ClickClip(ClipRef, egui::Modifiers),
+    StartMove(usize, usize, egui::Modifiers),
+    StartMarquee(egui::Pos2, egui::Modifiers),
     SelectTarget(Target),
     Create(usize, usize),
     Delete(usize, usize),
@@ -51,6 +53,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let blink = (ui.input(|i| i.time) * 3.0).fract() < 0.5;
     let mut actions = Vec::new();
     let mut headers = Vec::new();
+    let mut slots = Vec::new();
 
     egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
         ui.horizontal_top(|ui| {
@@ -81,7 +84,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     ui.set_width(COL_W);
                     headers.push(track_header(app, ui, t, &mut actions));
                     for slot in 0..NUM_SCENES {
-                        clip_slot(app, ui, t, slot, &play, blink, &mut actions);
+                        slots.push((t, slot, clip_slot(app, ui, t, slot, &play, blink, &mut actions)));
                     }
                     let stop_queued = play.queued == QUEUED_STOP && blink;
                     if stop_cell(ui, stop_queued, "Parar pista").clicked() {
@@ -142,6 +145,19 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         apply(app, action);
     }
     app.finish_track_drag(ui, &headers, false);
+    let clips: Vec<(ClipRef, Rect)> = slots
+        .iter()
+        .filter(|&&(t, slot, _)| app.project.tracks.get(t).is_some_and(|track| track.clips[slot].is_some()))
+        .map(|&(track, slot, rect)| (ClipRef::Session { track, slot }, rect))
+        .collect();
+    let mut lanes: Vec<(usize, Rect)> = Vec::new();
+    for &(t, _, rect) in &slots {
+        match lanes.last_mut() {
+            Some((last, column)) if *last == t => *column = column.union(rect),
+            _ => lanes.push((t, rect)),
+        }
+    }
+    app.update_clip_gesture(ui, &clips, &lanes, &slots);
 }
 
 fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: Sense) -> egui::Response {
@@ -217,12 +233,12 @@ fn clip_slot(
     play: &TrackPlayState,
     blink: bool,
     actions: &mut Vec<Action>,
-) {
-    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
+) -> Rect {
+    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click_and_drag());
     let painter = ui.painter();
     let launch = Rect::from_min_size(rect.min, vec2(LAUNCH_W, SLOT_H));
     let clip = app.project.tracks[t].clips[slot].as_ref();
-    let selected = app.selected_clip == Some(ClipRef::Session { track: t, slot });
+    let selected = app.is_clip_selected(ClipRef::Session { track: t, slot });
     let on_launch = response.hover_pos().is_some_and(|p| launch.contains(p));
     let is_playing = play.playing == slot as i32;
     let record_queued = play.queued_record && play.queued == slot as i32;
@@ -287,6 +303,15 @@ fn clip_slot(
     }
 
     let clicked_launch = response.interact_pointer_pos().is_some_and(|p| launch.contains(p));
+    let modifiers = ui.input(|i| i.modifiers);
+    if response.drag_started() {
+        let origin = ui.input(|i| i.pointer.press_origin()).unwrap_or(rect.center());
+        if clip.is_some() && !launch.contains(origin) {
+            actions.push(Action::StartMove(t, slot, modifiers));
+        } else if clip.is_none() {
+            actions.push(Action::StartMarquee(origin, modifiers));
+        }
+    }
     if (is_recording || record_queued) && response.clicked() {
         actions.push(Action::StopRecording(t));
     } else if response.double_clicked() && clip.is_none() {
@@ -297,16 +322,16 @@ fn clip_slot(
         } else if clicked_launch {
             actions.push(Action::Launch(t, slot));
         } else if clip.is_some() {
-            actions.push(Action::Select(ClipRef::Session { track: t, slot }));
+            actions.push(Action::ClickClip(ClipRef::Session { track: t, slot }, modifiers));
         } else {
             actions.push(Action::SelectTarget(Target::Track(t)));
         }
     }
 
     let hint = match (clip.is_some(), app.project.tracks[t].is_audio()) {
-        (true, _) => "▶ lanza · clic: editar · clic derecho: más opciones",
+        (true, _) => "▶ lanza · clic: editar · ⌘ clic: añadir a la selección · arrastrar: mover (⌥ copia) · clic derecho: más opciones",
         (false, false) if armed => "● graba un clip nuevo · doble clic: clip MIDI vacío",
-        (false, false) => "Doble clic: nuevo clip MIDI",
+        (false, false) => "Doble clic: nuevo clip MIDI · arrastrar: seleccionar con un recuadro",
         (false, true) => "Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)",
     };
     let response = response.on_hover_text(hint);
@@ -321,11 +346,13 @@ fn clip_slot(
                 actions.push(Action::ToArrangement(t, slot));
                 ui.close();
             }
-            if ui.button("Duplicar   ⌘D").clicked() {
+            let several = app.is_clip_selected(ClipRef::Session { track: t, slot }) && app.clip_selection().len() > 1;
+            let count = app.clip_selection().len();
+            if ui.button(if several { format!("Duplicar {count} clips   ⌘D") } else { "Duplicar   ⌘D".into() }).clicked() {
                 actions.push(Action::Duplicate(t, slot));
                 ui.close();
             }
-            if ui.button("Eliminar   Supr").clicked() {
+            if ui.button(if several { format!("Eliminar {count} clips   Supr") } else { "Eliminar   Supr".into() }).clicked() {
                 actions.push(Action::Delete(t, slot));
                 ui.close();
             }
@@ -335,6 +362,7 @@ fn clip_slot(
             }
         });
     }
+    rect
 }
 
 fn stop_cell(ui: &mut egui::Ui, highlighted: bool, hint: &str) -> egui::Response {
@@ -484,7 +512,9 @@ fn apply(app: &mut PulseApp, action: Action) {
             app.selected_target = Target::Track(t);
             app.audio.send(Command::LaunchClip { track: t, slot });
         }
-        Action::Select(clip) => app.select_clip(clip),
+        Action::ClickClip(clip, modifiers) => app.click_clip(clip, modifiers),
+        Action::StartMove(t, slot, modifiers) => app.start_session_move(t, slot, modifiers),
+        Action::StartMarquee(anchor, modifiers) => app.start_marquee(anchor, modifiers),
         Action::SelectTarget(target) => app.selected_target = target,
         Action::Create(t, slot) => {
             if app.project.tracks[t].is_audio() {
@@ -495,6 +525,7 @@ fn apply(app: &mut PulseApp, action: Action) {
                 app.select_clip(ClipRef::Session { track: t, slot });
             }
         }
+        Action::Delete(t, slot) if app.is_clip_selected(ClipRef::Session { track: t, slot }) => app.delete_selected_clip(),
         Action::Delete(t, slot) => app.set_clip(t, slot, None),
         Action::Duplicate(t, slot) => {
             app.selected_clip = Some(ClipRef::Session { track: t, slot });

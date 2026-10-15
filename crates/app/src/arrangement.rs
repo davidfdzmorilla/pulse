@@ -24,9 +24,12 @@ const EDGE_GRAB: f32 = 6.0;
 const AUTO_H: f32 = 64.0;
 const POINT_GRAB: f32 = 6.0;
 
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 enum Drag {
-    Move { track: usize, index: usize, grab: f64 },
+    /// The selected clips, grabbed at `grab` (beat) on `grab_track`. They are laid
+    /// out again from `snapshot` (every lane before the drag) each time the offset
+    /// changes; `applied` is the offset in place (beats, tracks).
+    Move { grab_track: usize, grab: f64, moved: Vec<(usize, usize)>, primary: usize, snapshot: Vec<Vec<ArrangementClip>>, copy: bool, applied: (f64, isize) },
     Resize { track: usize, index: usize },
     Loop { anchor: f64 },
     Scrub,
@@ -125,7 +128,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.add(egui::Slider::new(&mut app.arrangement.pixels_per_beat, 3.0..=60.0).logarithmic(true).show_value(false));
         ui.checkbox(&mut app.arrangement.follow, "Seguir cursor");
         ui.label(
-            egui::RichText::new("Doble clic: nuevo clip · arrastra: mover · borde derecho: longitud · franja superior: loop")
+            egui::RichText::new("Doble clic: nuevo clip · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop")
                 .color(TEXT_DIM)
                 .size(10.5),
         );
@@ -146,6 +149,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let layout = Layout::new(app);
     let lanes_height = LOOP_H + RULER_H + layout.height;
     let mut headers = Vec::new();
+    let mut clip_rects = Vec::new();
+    let mut lane_rects = Vec::new();
 
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
@@ -182,6 +187,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             painter.rect_filled(rect, 0.0, theme::BG);
             for t in 0..tracks {
                 painter.rect_filled(lane_rect(t), 0.0, theme::SLOT);
+                lane_rects.push((t, lane_rect(t)));
             }
             let label_every = if ppb < 6.0 { 4 } else if ppb < 10.0 { 2 } else { 1 };
             for beat in 0..=total_beats as i64 {
@@ -227,7 +233,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         pos2(x_at(placed.start), lane.top() + 1.0),
                         pos2(x_at(placed.end()), lane.bottom() - 1.0),
                     );
-                    let selected = app.selected_clip == Some(ClipRef::Arrangement { track: t, index });
+                    let selected = app.is_clip_selected(ClipRef::Arrangement { track: t, index });
+                    clip_rects.push((ClipRef::Arrangement { track: t, index }, clip_rect));
                     let sample = match &placed.clip {
                         Clip::Audio(audio) => app.loaded_sample(&audio.sample).map(|s| s.as_ref()),
                         Clip::Midi(_) => None,
@@ -267,6 +274,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         });
     });
     app.finish_track_drag(ui, &headers, true);
+    app.update_clip_gesture(ui, &clip_rects, &lane_rects, &[]);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -497,6 +505,33 @@ fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usiz
     }
 }
 
+/// Lays the lanes out again from `snapshot` with the `moved` clips shifted by
+/// `beats` and `tracks` (or copied there, the originals staying), and returns the
+/// moved clips' new places, the grabbed one first.
+fn place_clips(app: &mut PulseApp, snapshot: &[Vec<ArrangementClip>], moved: &[(usize, usize)], primary: usize, beats: f64, tracks: isize, copy: bool) -> Vec<ClipRef> {
+    let mut lanes: Vec<Vec<ArrangementClip>> = snapshot
+        .iter()
+        .enumerate()
+        .map(|(t, lane)| lane.iter().enumerate().filter(|&(i, _)| copy || !moved.contains(&(t, i))).map(|(_, c)| c.clone()).collect())
+        .collect();
+    let mut placed = Vec::new();
+    for &(t, i) in moved {
+        let to = (t as isize + tracks) as usize;
+        let mut clip = snapshot[t][i].clone();
+        clip.start = (clip.start + beats).max(0.0);
+        lanes[to].push(clip);
+        placed.push(ClipRef::Arrangement { track: to, index: lanes[to].len() - 1 });
+    }
+    for (t, lane) in lanes.into_iter().enumerate() {
+        if app.project.tracks[t].arrangement != lane {
+            app.project.tracks[t].arrangement = lane;
+            app.sync_arrangement(t);
+        }
+    }
+    placed.swap(0, primary);
+    placed
+}
+
 /// Hit-tests a pointer position against the clips of a lane.
 fn clip_at(app: &PulseApp, track: usize, beat: f64, x: f32, ppb: f32, origin_x: f32) -> Option<(usize, bool)> {
     app.project.tracks[track]
@@ -555,24 +590,55 @@ fn handle_pointer(
             app.audio.send(Command::SetPosition(snap(beat, unit)));
             Some(Drag::Scrub)
         } else if let Some(t) = lane {
+            let modifiers = ui.input(|i| i.modifiers);
             match clip_at(app, t, beat, pos.x, ppb, origin_x) {
-                Some((index, edge)) => {
+                Some((index, _)) if modifiers.command || modifiers.shift => {
+                    app.click_clip(ClipRef::Arrangement { track: t, index }, modifiers);
+                    None
+                }
+                Some((index, true)) => {
                     app.select_clip(ClipRef::Arrangement { track: t, index });
-                    let start = app.project.tracks[t].arrangement[index].start;
-                    Some(if edge {
-                        Drag::Resize { track: t, index }
+                    Some(Drag::Resize { track: t, index })
+                }
+                Some((index, false)) => {
+                    let grabbed = ClipRef::Arrangement { track: t, index };
+                    if !app.is_clip_selected(grabbed) {
+                        app.select_clip(grabbed);
                     } else {
-                        Drag::Move { track: t, index, grab: beat - start }
-                    })
+                        // Keep the selection; the grabbed clip goes to the editor.
+                        app.selected_clip = Some(grabbed);
+                    }
+                    let moved: Vec<(usize, usize)> = app
+                        .clip_selection()
+                        .iter()
+                        .filter_map(|c| match *c {
+                            ClipRef::Arrangement { track, index } => Some((track, index)),
+                            ClipRef::Session { .. } => None,
+                        })
+                        .collect();
+                    let primary = moved.iter().position(|&m| m == (t, index)).unwrap_or(0);
+                    let snapshot = app.project.tracks.iter().map(|t| t.arrangement.clone()).collect();
+                    Some(Drag::Move { grab_track: t, grab: beat, moved, primary, snapshot, copy: modifiers.alt, applied: (0.0, 0) })
                 }
                 None => {
                     app.selected_target = Target::Track(t);
+                    app.start_marquee(pos, modifiers);
                     None
                 }
             }
         } else {
             None
         };
+    }
+
+    // A plain clic on one of several selected clips leaves only that one.
+    if response.clicked() && !ui.input(|i| i.modifiers.command || i.modifiers.shift) {
+        if let Some((index, _)) = lane.and_then(|t| clip_at(app, t, beat, pos.x, ppb, origin_x)) {
+            let clip = ClipRef::Arrangement { track: lane.unwrap_or(0), index };
+            if app.clip_selection().len() > 1 {
+                app.select_clip(clip);
+            }
+        }
     }
 
     if response.double_clicked() && automation.is_none() {
@@ -597,25 +663,27 @@ fn handle_pointer(
     }
 
     if response.dragged() {
-        match app.arrangement.drag {
-            Some(Drag::Move { track, index, grab }) => {
-                let start = snap(beat - grab, unit).max(0.0);
-                let mut current = (track, index);
-                // Moving vertically hands the clip over to another track.
-                if let Some(target) = lane.filter(|&l| l != track) {
-                    let placed = app.project.tracks[track].arrangement.remove(index);
-                    app.project.tracks[target].arrangement.push(placed);
-                    let new_index = app.project.tracks[target].arrangement.len() - 1;
-                    app.sync_arrangement(track);
-                    current = (target, new_index);
-                    app.arrangement.drag = Some(Drag::Move { track: target, index: new_index, grab });
-                    app.select_clip(ClipRef::Arrangement { track: target, index: new_index });
-                }
-                let (t, i) = current;
-                let placed = &mut app.project.tracks[t].arrangement[i];
-                if placed.start != start || current != (track, index) {
-                    placed.start = start;
-                    app.sync_arrangement(t);
+        match app.arrangement.drag.clone() {
+            Some(Drag::Move { grab_track, grab, moved, primary, snapshot, copy, applied }) => {
+                let Some(&(pt, pi)) = moved.get(primary) else { return };
+                // The grabbed clip snaps to the grid; the others keep their distance to it.
+                let original = snapshot[pt][pi].start;
+                let earliest = moved.iter().map(|&(t, i)| snapshot[t][i].start).fold(f64::INFINITY, f64::min);
+                let beats = (snap(original + beat - grab, unit) - original).max(-earliest);
+                let wanted = lane.map_or(applied.1, |l| l as isize - grab_track as isize);
+                let fits = |dt: isize| {
+                    moved.iter().all(|&(t, i)| {
+                        let to = t as isize + dt;
+                        to >= 0
+                            && (to as usize) < app.project.tracks.len()
+                            && matches!(snapshot[t][i].clip, Clip::Audio(_)) == app.project.tracks[to as usize].is_audio()
+                    })
+                };
+                let tracks = if fits(wanted) { wanted } else { applied.1 };
+                if (beats, tracks) != applied {
+                    let selection = place_clips(app, &snapshot, &moved, primary, beats, tracks, copy);
+                    app.set_clip_selection(selection);
+                    app.arrangement.drag = Some(Drag::Move { grab_track, grab, moved, primary, snapshot, copy, applied: (beats, tracks) });
                 }
             }
             Some(Drag::Resize { track, index }) => {
@@ -659,7 +727,7 @@ fn handle_automation(
     lane: Option<(usize, Param, Rect)>,
 ) -> bool {
     // Clip, loop and scrub drags keep going when they pass over an automation lane.
-    if app.arrangement.drag.is_some_and(|d| !matches!(d, Drag::Point { .. })) {
+    if app.arrangement.drag.as_ref().is_some_and(|d| !matches!(d, Drag::Point { .. })) {
         return false;
     }
     let ppb = app.arrangement.pixels_per_beat;

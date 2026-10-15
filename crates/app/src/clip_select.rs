@@ -1,0 +1,467 @@
+//! Several clips at once: ⌘ clic adds or removes one, a rectangle drawn from an
+//! empty place selects the clips and tracks it touches (in both views), and
+//! session clips dragged together land in other slots (⌥ copies them).
+
+use crate::app::{ClipRef, PulseApp};
+use engine::model::Clip;
+use crate::theme;
+use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
+use engine::Target;
+
+/// Moves less than this (in points) are clics, not rectangles.
+const MARQUEE_MIN: f32 = 4.0;
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum Gesture {
+    /// A selection rectangle from `anchor`. With ⌘ or ⇧ held at the start, it adds
+    /// to the selection there was (`base`).
+    Marquee { anchor: Pos2, base: Vec<ClipRef>, base_tracks: Vec<usize>, add: bool },
+    /// Session clips being dragged, grabbed at slot `from`; `to` is the slot under
+    /// the pointer.
+    SessionMove { from: (usize, usize), to: Option<(usize, usize)>, copy: bool },
+}
+
+impl PulseApp {
+    /// The selected clips. The selected one is always among them.
+    pub fn clip_selection(&self) -> Vec<ClipRef> {
+        let Some(primary) = self.selected_clip.filter(|&c| self.clip(c).is_some()) else { return Vec::new() };
+        if self.selected_clips.contains(&primary) {
+            self.selected_clips.iter().copied().filter(|&c| self.clip(c).is_some()).collect()
+        } else {
+            vec![primary]
+        }
+    }
+
+    pub fn is_clip_selected(&self, clip: ClipRef) -> bool {
+        match self.selected_clip {
+            Some(primary) if self.selected_clips.contains(&primary) => self.selected_clips.contains(&clip),
+            primary => primary == Some(clip),
+        }
+    }
+
+    /// Selects these clips (the first is the one the editor shows) and their tracks.
+    pub fn set_clip_selection(&mut self, clips: Vec<ClipRef>) {
+        let Some(&first) = clips.first() else {
+            self.selected_clip = None;
+            self.selected_clips.clear();
+            return;
+        };
+        self.select_clip(first);
+        let mut tracks: Vec<usize> = clips.iter().map(|c| c.track()).collect();
+        tracks.sort_unstable();
+        tracks.dedup();
+        self.selected_tracks = tracks;
+        self.selected_clips = clips;
+    }
+
+    /// A clic on a clip: alone, or with ⌘ or ⇧ to add it to (or take it out of) the selection.
+    pub fn click_clip(&mut self, clip: ClipRef, modifiers: egui::Modifiers) {
+        if !(modifiers.command || modifiers.shift) {
+            return self.select_clip(clip);
+        }
+        let mut clips = self.clip_selection();
+        if let Some(i) = clips.iter().position(|&c| c == clip) {
+            if clips.len() > 1 {
+                clips.remove(i);
+            }
+        } else {
+            // The clip clicked becomes the one the editor shows.
+            clips.insert(0, clip);
+        }
+        self.set_clip_selection(clips);
+    }
+
+    /// Deletes these clips, from both views.
+    pub fn delete_clips(&mut self, clips: &[ClipRef]) {
+        let mut arrangement: Vec<(usize, usize)> = Vec::new();
+        for &clip in clips {
+            match clip {
+                ClipRef::Session { track, slot } => {
+                    if self.project.tracks.get(track).is_some_and(|t| t.clips[slot].is_some()) {
+                        self.set_clip(track, slot, None);
+                    }
+                }
+                ClipRef::Arrangement { track, index } => arrangement.push((track, index)),
+            }
+        }
+        // Later indices first, so the earlier ones stay put.
+        arrangement.sort_unstable_by(|a, b| b.cmp(a));
+        arrangement.dedup();
+        for &(track, index) in &arrangement {
+            if let Some(lane) = self.project.tracks.get_mut(track).map(|t| &mut t.arrangement) {
+                if index < lane.len() {
+                    lane.remove(index);
+                }
+            }
+        }
+        let mut tracks: Vec<usize> = arrangement.iter().map(|&(t, _)| t).collect();
+        tracks.dedup();
+        for t in tracks {
+            self.sync_arrangement(t);
+        }
+        if self.selected_clip.is_some_and(|c| clips.contains(&c) || self.clip(c).is_none()) {
+            self.selected_clip = None;
+        }
+        self.selected_clips.clear();
+    }
+
+    /// Moves (or copies) session clips by `tracks` columns and `slots` rows. Nothing
+    /// happens unless every clip lands in a slot that is free (or being emptied by
+    /// the move) on a track of its kind. Returns whether they moved.
+    pub fn move_session_clips(&mut self, clips: &[(usize, usize)], tracks: isize, slots: isize, copy: bool) -> bool {
+        if clips.is_empty() || (tracks == 0 && slots == 0) {
+            return false;
+        }
+        let Some(to) = self.session_destinations(clips, tracks, slots, copy) else {
+            self.status = Some("Los clips no caben ahí".into());
+            return false;
+        };
+        let taken: Vec<Option<Clip>> = clips
+            .iter()
+            .map(|&(t, s)| if copy { self.project.tracks[t].clips[s].clone() } else { self.project.tracks[t].clips[s].take() })
+            .collect();
+        for (&(t, s), clip) in to.iter().zip(taken) {
+            self.project.tracks[t].clips[s] = clip;
+        }
+        for &(t, s) in clips.iter().chain(&to) {
+            self.sync_clip(t, s);
+        }
+        let primary = self.selected_clip;
+        let moved: Vec<ClipRef> = to.iter().map(|&(track, slot)| ClipRef::Session { track, slot }).collect();
+        // The clip that was shown in the editor stays first.
+        let first = clips.iter().position(|&(track, slot)| primary == Some(ClipRef::Session { track, slot })).unwrap_or(0);
+        let mut selection = moved.clone();
+        selection.swap(0, first);
+        self.set_clip_selection(selection);
+        self.status = Some(match (clips.len(), copy) {
+            (1, false) => "Clip movido".to_string(),
+            (1, true) => "Clip copiado".to_string(),
+            (n, false) => format!("{n} clips movidos"),
+            (n, true) => format!("{n} clips copiados"),
+        });
+        true
+    }
+
+    /// Where session clips would land, if they all fit.
+    fn session_destinations(&self, clips: &[(usize, usize)], tracks: isize, slots: isize, copy: bool) -> Option<Vec<(usize, usize)>> {
+        let n = self.project.tracks.len() as isize;
+        clips
+            .iter()
+            .map(|&(t, s)| {
+                let (nt, ns) = (t as isize + tracks, s as isize + slots);
+                if nt < 0 || nt >= n || ns < 0 || ns >= engine::NUM_SCENES as isize {
+                    return None;
+                }
+                let (nt, ns) = (nt as usize, ns as usize);
+                let clip = self.project.tracks[t].clips[s].as_ref()?;
+                let track = &self.project.tracks[nt];
+                let fits = matches!(clip, Clip::Audio(_)) == track.is_audio();
+                let free = track.clips[ns].is_none() || (!copy && clips.contains(&(nt, ns)));
+                (fits && free).then_some((nt, ns))
+            })
+            .collect()
+    }
+
+    /// Starts a selection rectangle at `anchor`.
+    pub fn start_marquee(&mut self, anchor: Pos2, modifiers: egui::Modifiers) {
+        self.clip_gesture = Some(Gesture::Marquee {
+            anchor,
+            base: self.clip_selection(),
+            base_tracks: self.track_selection(),
+            add: modifiers.command || modifiers.shift,
+        });
+    }
+
+    /// Starts dragging the session clip at `slot` of `track` (and the others selected).
+    pub fn start_session_move(&mut self, track: usize, slot: usize, modifiers: egui::Modifiers) {
+        let clip = ClipRef::Session { track, slot };
+        if !self.is_clip_selected(clip) {
+            self.select_clip(clip);
+        }
+        self.clip_gesture = Some(Gesture::SessionMove { from: (track, slot), to: None, copy: modifiers.alt });
+    }
+
+    /// Each frame after the clips are drawn: follows the rectangle or the dragged
+    /// session clips, draws them, and finishes when the button is released.
+    /// `clips` are the clips on screen with their rects, `lanes` each track's area
+    /// and `slots` the session slots (empty in the arrangement).
+    pub fn update_clip_gesture(&mut self, ui: &egui::Ui, clips: &[(ClipRef, Rect)], lanes: &[(usize, Rect)], slots: &[(usize, usize, Rect)]) {
+        let Some(gesture) = self.clip_gesture.clone() else { return };
+        let Some(pos) = ui.ctx().pointer_latest_pos() else { return };
+        let released = !ui.input(|i| i.pointer.any_down());
+        let painter = ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("clip_gesture")));
+        match gesture {
+            Gesture::Marquee { anchor, base, base_tracks, add } => {
+                let area = Rect::from_two_pos(anchor, pos);
+                if area.width() >= MARQUEE_MIN || area.height() >= MARQUEE_MIN {
+                    painter.rect_filled(area, 0.0, Color32::from_rgba_unmultiplied(120, 170, 255, 28));
+                    painter.rect_stroke(area, 0.0, Stroke::new(1.0, theme::SELECT), egui::StrokeKind::Inside);
+                    let mut selection: Vec<ClipRef> = if add { base.clone() } else { Vec::new() };
+                    for &(clip, rect) in clips {
+                        if rect.intersects(area) && !selection.contains(&clip) {
+                            selection.push(clip);
+                        }
+                    }
+                    let mut tracks: Vec<usize> = if add { base_tracks.clone() } else { Vec::new() };
+                    tracks.extend(lanes.iter().filter(|(_, r)| r.intersects(area)).map(|&(t, _)| t));
+                    tracks.extend(selection.iter().map(|c| c.track()));
+                    tracks.sort_unstable();
+                    tracks.dedup();
+                    if selection.is_empty() {
+                        self.selected_clip = None;
+                        self.selected_clips.clear();
+                    } else if selection != self.clip_selection() {
+                        let detail = self.detail;
+                        self.set_clip_selection(selection.clone());
+                        // Drawing a rectangle does not switch the bottom panel.
+                        self.detail = detail;
+                    }
+                    if let Some(&first) = tracks.first() {
+                        let anchor_track = selection.first().map_or(first, |c| c.track());
+                        self.selected_target = Target::Track(anchor_track);
+                        self.selected_tracks = tracks;
+                    }
+                }
+            }
+            Gesture::SessionMove { from, copy, .. } => {
+                let to = slots.iter().find(|(_, _, r)| r.contains(pos)).map(|&(t, s, _)| (t, s));
+                let moving: Vec<(usize, usize)> = self
+                    .clip_selection()
+                    .iter()
+                    .filter_map(|c| match *c {
+                        ClipRef::Session { track, slot } => Some((track, slot)),
+                        ClipRef::Arrangement { .. } => None,
+                    })
+                    .collect();
+                let delta = to.map(|(t, s)| (t as isize - from.0 as isize, s as isize - from.1 as isize));
+                if let Some((dt, ds)) = delta.filter(|&d| d != (0, 0)) {
+                    let fits = self.session_destinations(&moving, dt, ds, copy).is_some();
+                    let color = if fits { theme::SELECT } else { theme::METER_RED };
+                    for &(t, s) in &moving {
+                        let target = ((t as isize + dt) as usize, (s as isize + ds) as usize);
+                        if let Some(&(_, _, r)) = slots.iter().find(|&&(st, ss, _)| (st, ss) == target) {
+                            painter.rect_stroke(r.shrink(1.0), 2.0, Stroke::new(2.0, color), egui::StrokeKind::Inside);
+                        }
+                    }
+                    ui.ctx().set_cursor_icon(if copy { egui::CursorIcon::Copy } else { egui::CursorIcon::Grabbing });
+                }
+                if released {
+                    if let Some((dt, ds)) = delta {
+                        self.move_session_clips(&moving, dt, ds, copy);
+                    }
+                } else {
+                    self.clip_gesture = Some(Gesture::SessionMove { from, to, copy });
+                }
+            }
+        }
+        if released {
+            self.clip_gesture = None;
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::Project;
+    use egui::Modifiers;
+
+    fn session_clips(app: &PulseApp) -> Vec<(usize, usize)> {
+        let mut found = Vec::new();
+        for (t, track) in app.project.tracks.iter().enumerate() {
+            for (s, clip) in track.clips.iter().enumerate() {
+                if clip.is_some() {
+                    found.push((t, s));
+                }
+            }
+        }
+        found
+    }
+
+    #[test]
+    fn command_clic_builds_a_selection_of_clips() {
+        let mut app = PulseApp::headless(Project::demo());
+        let clips = session_clips(&app);
+        assert!(clips.len() >= 3, "{clips:?}");
+        let refs: Vec<ClipRef> = clips.iter().map(|&(track, slot)| ClipRef::Session { track, slot }).collect();
+        app.click_clip(refs[0], Modifiers::NONE);
+        app.click_clip(refs[1], Modifiers::COMMAND);
+        app.click_clip(refs[2], Modifiers::SHIFT);
+        assert_eq!(app.clip_selection(), vec![refs[2], refs[1], refs[0]]);
+        assert_eq!(app.selected_clip, Some(refs[2]), "the editor shows the last one clicked");
+        assert!(app.is_clip_selected(refs[0]));
+        app.click_clip(refs[2], Modifiers::COMMAND);
+        assert_eq!(app.clip_selection(), vec![refs[1], refs[0]]);
+        app.click_clip(refs[0], Modifiers::NONE);
+        assert_eq!(app.clip_selection(), vec![refs[0]]);
+        assert!(!app.is_clip_selected(refs[1]));
+    }
+
+    #[test]
+    fn session_clips_move_and_copy_together_only_where_they_fit() {
+        let mut app = PulseApp::headless(Project::demo());
+        // Two clips on the first two tracks, in the first slot.
+        for t in 0..2 {
+            for s in 0..engine::NUM_SCENES {
+                app.set_clip(t, s, None);
+            }
+            let color = app.project.tracks[t].color;
+            app.set_clip(t, 0, Some(Clip::Midi(engine::model::MidiClip::new(&format!("c{t}"), 4.0, color))));
+        }
+        let audio = app.add_audio_track().unwrap();
+        app.set_clip_selection(vec![ClipRef::Session { track: 1, slot: 0 }, ClipRef::Session { track: 0, slot: 0 }]);
+        let name = |app: &PulseApp, t: usize, s: usize| app.project.tracks[t].clips[s].as_ref().map(|c| c.name().to_string());
+
+        assert!(app.move_session_clips(&[(0, 0), (1, 0)], 0, 2, false));
+        assert_eq!((name(&app, 0, 0), name(&app, 0, 2), name(&app, 1, 2)), (None, Some("c0".into()), Some("c1".into())));
+        assert_eq!(app.selected_clip, Some(ClipRef::Session { track: 1, slot: 2 }), "the shown clip stays shown");
+        assert_eq!(app.clip_selection().len(), 2);
+        // Overlapping their own old places is fine.
+        assert!(app.move_session_clips(&[(0, 2), (1, 2)], 0, 1, false));
+        assert_eq!((name(&app, 0, 2), name(&app, 0, 3), name(&app, 1, 3)), (None, Some("c0".into()), Some("c1".into())));
+        // Off the grid, or a MIDI clip onto an audio track: nothing moves.
+        let before = session_clips(&app);
+        assert!(!app.move_session_clips(&before, 0, -5, false));
+        let last = before.iter().map(|&(t, _)| t).max().unwrap();
+        assert!(!app.move_session_clips(&before, (audio - last) as isize, 0, false));
+        assert_eq!(session_clips(&app), before);
+        // ⌥: copies, the originals stay.
+        assert!(app.move_session_clips(&[(0, 3), (1, 3)], 0, 1, true));
+        assert_eq!(session_clips(&app).len(), before.len() + 2);
+        assert_eq!((name(&app, 0, 3), name(&app, 0, 4)), (Some("c0".into()), Some("c0".into())));
+        // A copy can't land on a clip, not even its own original.
+        assert!(!app.move_session_clips(&[(0, 3), (1, 3)], 0, 1, true));
+        assert!(!app.move_session_clips(&[(0, 3)], 0, 0, true));
+    }
+
+    #[test]
+    fn deleting_and_duplicating_several_clips() {
+        let mut app = PulseApp::headless(Project::demo());
+        let color = app.project.tracks[0].color;
+        let lane = &mut app.project.tracks[0].arrangement;
+        lane.clear();
+        for start in [0.0, 8.0, 16.0] {
+            lane.push(engine::model::ArrangementClip { start, length: 4.0, clip: Clip::Midi(engine::model::MidiClip::new("a", 4.0, color)) });
+        }
+        app.sync_arrangement(0);
+        let session = session_clips(&app);
+        let (t, s) = session[0];
+        app.set_clip_selection(vec![
+            ClipRef::Arrangement { track: 0, index: 0 },
+            ClipRef::Arrangement { track: 0, index: 2 },
+            ClipRef::Session { track: t, slot: s },
+        ]);
+        app.duplicate_selected_clip();
+        assert_eq!(app.project.tracks[0].arrangement.len(), 5);
+        assert_eq!(app.clip_selection().len(), 3, "the copies are selected");
+        assert_eq!(session_clips(&app).len(), session.len() + 1);
+        app.delete_selected_clip();
+        assert_eq!(app.project.tracks[0].arrangement.len(), 3);
+        assert_eq!(session_clips(&app), session);
+        assert!(app.clip_selection().is_empty());
+        app.set_clip_selection(vec![ClipRef::Arrangement { track: 0, index: 0 }, ClipRef::Arrangement { track: 0, index: 2 }]);
+        app.delete_selected_clip();
+        let starts: Vec<f64> = app.project.tracks[0].arrangement.iter().map(|c| c.start).collect();
+        assert_eq!(starts, vec![8.0]);
+    }
+
+    use crate::tracks::tests::{click, drag};
+    use egui::pos2;
+
+    /// Four MIDI tracks with no clips.
+    fn empty_tracks() -> PulseApp {
+        let mut app = PulseApp::headless(Project::demo());
+        app.project.tracks.truncate(4);
+        for track in &mut app.project.tracks {
+            track.clips = Default::default();
+            track.arrangement.clear();
+        }
+        app.sync_all();
+        app
+    }
+
+    fn midi(app: &PulseApp, name: &str) -> Clip {
+        Clip::Midi(engine::model::MidiClip::new(name, 4.0, app.project.tracks[0].color))
+    }
+
+    #[test]
+    fn session_clips_are_selected_and_dragged_with_the_mouse() {
+        let view = crate::session::show as fn(&mut PulseApp, &mut egui::Ui);
+        // Middle of a slot's name area (past the launch button).
+        let slot = |t: usize, s: usize| pos2(t as f32 * 109.0 + 70.0, 23.0 + s as f32 * 23.0 + 11.0);
+        let mut app = empty_tracks();
+        for t in 0..2 {
+            let clip = midi(&app, &format!("c{t}"));
+            app.set_clip(t, 0, Some(clip));
+        }
+        click(&mut app, view, slot(0, 0), Modifiers::NONE);
+        click(&mut app, view, slot(1, 0), Modifiers::COMMAND);
+        assert_eq!(app.clip_selection().len(), 2);
+        // Drag both two slots down.
+        drag(&mut app, view, slot(0, 0), slot(0, 2), Modifiers::NONE);
+        assert_eq!(session_clips(&app), vec![(0, 2), (1, 2)]);
+        assert_eq!(app.clip_selection().len(), 2, "they stay selected");
+        // ⌥ drag of both one track to the right: the first would land on the
+        // second's original, so nothing happens.
+        drag(&mut app, view, slot(1, 2), slot(2, 2), Modifiers::ALT);
+        assert_eq!(session_clips(&app), vec![(0, 2), (1, 2)]);
+        // Only one selected: it is copied.
+        click(&mut app, view, slot(1, 2), Modifiers::NONE);
+        drag(&mut app, view, slot(1, 2), slot(2, 2), Modifiers::ALT);
+        assert_eq!(session_clips(&app), vec![(0, 2), (1, 2), (2, 2)]);
+        // A rectangle from an empty slot selects the clips and tracks it covers.
+        click(&mut app, view, slot(3, 6), Modifiers::NONE);
+        drag(&mut app, view, slot(3, 6), slot(1, 1), Modifiers::NONE);
+        assert!(app.clip_gesture.is_none());
+        let mut selected: Vec<(usize, usize)> = app.clip_selection().iter().map(|c| (c.track(), match c { ClipRef::Session { slot, .. } => *slot, _ => 99 })).collect();
+        selected.sort_unstable();
+        assert_eq!(selected, vec![(1, 2), (2, 2)]);
+        assert_eq!(app.track_selection(), vec![1, 2, 3]);
+        // A plain clic on one of them leaves only that one.
+        click(&mut app, view, slot(2, 2), Modifiers::NONE);
+        assert_eq!(app.clip_selection(), vec![ClipRef::Session { track: 2, slot: 2 }]);
+    }
+
+    #[test]
+    fn arrangement_clips_are_selected_and_dragged_with_the_mouse() {
+        let view = crate::arrangement::show as fn(&mut PulseApp, &mut egui::Ui);
+        let ppb = PulseApp::headless(Project::demo()).arrangement.pixels_per_beat;
+        let at = |t: usize, beat: f64| pos2(150.0 + beat as f32 * ppb, 81.0 + t as f32 * 53.0);
+        let mut app = empty_tracks();
+        for (t, start) in [(0, 0.0), (1, 8.0)] {
+            let clip = midi(&app, &format!("c{t}"));
+            app.project.tracks[t].arrangement.push(engine::model::ArrangementClip { start, length: 4.0, clip });
+            app.sync_arrangement(t);
+        }
+        let starts = |app: &PulseApp| -> Vec<(usize, f64)> {
+            app.project.tracks.iter().enumerate().flat_map(|(t, track)| track.arrangement.iter().map(move |c| (t, c.start))).collect()
+        };
+        click(&mut app, view, at(0, 1.0), Modifiers::NONE);
+        click(&mut app, view, at(1, 9.0), Modifiers::COMMAND);
+        assert_eq!(app.clip_selection().len(), 2);
+        // Both four beats later and one track down.
+        drag(&mut app, view, at(0, 1.0), at(1, 5.0), Modifiers::NONE);
+        assert_eq!(starts(&app), vec![(1, 4.0), (2, 12.0)]);
+        assert_eq!(app.clip_selection().len(), 2);
+        assert_eq!(app.selected_clip.map(|c| c.track()), Some(1), "the grabbed clip is shown");
+        // ⌥ copies them back to the start, the moved ones stay.
+        drag(&mut app, view, at(1, 5.0), at(1, 1.0), Modifiers::ALT);
+        assert_eq!(starts(&app), vec![(1, 4.0), (1, 0.0), (2, 12.0), (2, 8.0)]);
+        // A rectangle over empty space at the right of track 3 up to track 1 at beat 6.
+        drag(&mut app, view, at(3, 30.0), at(1, 6.0), Modifiers::NONE);
+        let mut selected: Vec<(usize, f64)> = app
+            .clip_selection()
+            .iter()
+            .map(|c| match *c {
+                ClipRef::Arrangement { track, index } => (track, app.project.tracks[track].arrangement[index].start),
+                ClipRef::Session { .. } => (99, 0.0),
+            })
+            .collect();
+        selected.sort_by(|a, b| a.partial_cmp(b).unwrap());
+        assert_eq!(selected, vec![(1, 4.0), (2, 8.0), (2, 12.0)]);
+        assert_eq!(app.track_selection(), vec![1, 2, 3]);
+        // ⌫ (the menu's Delete) deletes the three.
+        app.delete_selected_clip();
+        assert_eq!(starts(&app), vec![(1, 0.0)]);
+    }
+}

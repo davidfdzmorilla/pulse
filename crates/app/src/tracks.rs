@@ -105,10 +105,12 @@ impl PulseApp {
         self.selected_target = track(self.selected_target);
         self.selected_tracks = self.selected_tracks.iter().map(|&t| new(t)).collect();
         self.selected_tracks.sort_unstable();
-        self.selected_clip = self.selected_clip.map(|clip| match clip {
+        let clip = |clip: ClipRef| match clip {
             ClipRef::Session { track, slot } => ClipRef::Session { track: new(track), slot },
             ClipRef::Arrangement { track, index } => ClipRef::Arrangement { track: new(track), index },
-        });
+        };
+        self.selected_clip = self.selected_clip.map(clip);
+        self.selected_clips = self.selected_clips.iter().map(|&c| clip(c)).collect();
         self.arrangement.automation = self.arrangement.automation.drain().map(|(t, p)| (new(t), p)).collect();
         self.overridden = self.overridden.drain().map(|(target, p)| (track(target), p)).collect();
         let control = |control: &mut Control| {
@@ -229,7 +231,7 @@ impl PulseApp {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::project::Project;
     use egui::Modifiers;
@@ -358,7 +360,7 @@ mod tests {
     }
 
     /// Presses at `from`, moves in steps to `to` and releases, drawing `view` each frame.
-    fn drag(app: &mut PulseApp, view: fn(&mut PulseApp, &mut egui::Ui), from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers) {
+    pub(crate) fn drag(app: &mut PulseApp, view: fn(&mut PulseApp, &mut egui::Ui), from: egui::Pos2, to: egui::Pos2, modifiers: Modifiers) {
         let ctx = egui::Context::default();
         let mut time = 0.0;
         let mut frame = |app: &mut PulseApp, events: Vec<egui::Event>| {
@@ -381,7 +383,7 @@ mod tests {
         frame(app, vec![egui::Event::PointerGone]);
     }
 
-    fn click(app: &mut PulseApp, view: fn(&mut PulseApp, &mut egui::Ui), at: egui::Pos2, modifiers: Modifiers) {
+    pub(crate) fn click(app: &mut PulseApp, view: fn(&mut PulseApp, &mut egui::Ui), at: egui::Pos2, modifiers: Modifiers) {
         drag(app, view, at, at, modifiers);
     }
 

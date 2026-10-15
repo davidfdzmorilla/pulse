@@ -5,7 +5,7 @@
 //! UI can line recorded audio up with the beat it was played on.
 
 use crate::engine::SharedState;
-use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
 use std::sync::atomic::{AtomicU32, Ordering};
@@ -44,14 +44,14 @@ impl InputHandle {
 }
 
 pub fn start_input(state: Arc<SharedState>) -> Result<(AudioInput, InputHandle), String> {
-    let host = cpal::default_host();
-    let device = host.default_input_device().ok_or("No hay ningún dispositivo de entrada de audio")?;
-    let device_name = device.id().map(|id| id.to_string()).unwrap_or_else(|_| "entrada".into());
-    let supported = device
-        .default_input_config()
-        .map_err(|e| format!("No se puede leer la configuración de entrada: {e}"))?;
-    let format = supported.sample_format();
-    let config: StreamConfig = supported.into();
+    start_input_with(state, &crate::audio::AudioSettings::default())
+}
+
+/// Opens the input the settings choose (at their sample rate if it supports it).
+pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioSettings) -> Result<(AudioInput, InputHandle), String> {
+    let device = crate::audio::find_device(settings.input.as_deref(), false).ok_or("No hay ningún dispositivo de entrada de audio")?;
+    let device_name = device.description().map(|d| d.name().to_string()).unwrap_or_else(|_| "entrada".into());
+    let (format, config) = crate::audio::stream_config(&device, &crate::audio::AudioSettings { buffer: None, ..settings.clone() }, false)?;
     let channels = config.channels as usize;
     let sample_rate = config.sample_rate as f32;
 

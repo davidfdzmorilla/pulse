@@ -24,6 +24,7 @@ mod project;
 mod recording;
 mod sample_editor;
 mod session;
+mod settings;
 mod shape_edit;
 mod slicing;
 mod sync;

@@ -49,6 +49,7 @@ pub enum Command {
     MidiAssign,
     Shortcuts,
     About,
+    Settings,
 }
 
 /// How the question about unsaved changes was answered.
@@ -73,13 +74,14 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 24] = [
+pub const SHORTCUTS: [(&str, &str); 25] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
     ("⌘I", "Importar set de Live"),
     ("⇧⌘R", "Exportar audio"),
     ("⌘Q", "Salir"),
+    ("⌘,", "Ajustes (audio, MIDI, plugins)"),
     ("⌘Z / ⇧⌘Z", "Deshacer / Rehacer"),
     ("⌘X / ⌘C / ⌘V", "Cortar / Copiar / Pegar (clips, o notas en el editor de clips)"),
     ("⌘D", "Duplicar"),
@@ -236,6 +238,7 @@ impl PulseApp {
             Command::MidiAssign => self.toggle_learn(),
             Command::Shortcuts => self.show_shortcuts = true,
             Command::About => crate::native_menu::about(),
+            Command::Settings => self.open_settings(),
         }
     }
 
@@ -431,6 +434,38 @@ mod tests {
         app.answers.push_back(Answer::Discard);
         app.run(Command::Quit, &ctx());
         assert!(app.quitting);
+    }
+
+    #[test]
+    fn dropping_a_project_on_the_window_asks_first() {
+        let mut app = app();
+        let file = std::env::temp_dir().join(format!("pulse-drop-{}.pulse", std::process::id()));
+        let mut other = Project::empty();
+        other.tempo = 77.0;
+        other.save(&file).unwrap();
+        app.project.tempo = 99.0;
+        let drop = |app: &mut PulseApp| {
+            let ctx = ctx();
+            #[derive(Debug)]
+            struct Dropped(PathBuf);
+            impl egui::DroppedFile for Dropped {
+                fn path(&self) -> &Path {
+                    &self.0
+                }
+                fn bytes(&self) -> Result<Vec<u8>, String> {
+                    std::fs::read(&self.0).map_err(|e| e.to_string())
+                }
+            }
+            let input = egui::RawInput { dropped_files: vec![std::sync::Arc::new(Dropped(file.clone()))], ..Default::default() };
+            let _ = ctx.run_ui(input, |ui| app.handle_dropped_files(ui.ctx()));
+        };
+        app.answers.push_back(Answer::Cancel);
+        drop(&mut app);
+        assert_eq!(app.project.tempo, 99.0, "kept");
+        app.answers.push_back(Answer::Discard);
+        drop(&mut app);
+        assert_eq!(app.project.tempo, 77.0, "opened");
+        let _ = std::fs::remove_file(&file);
     }
 
     #[test]

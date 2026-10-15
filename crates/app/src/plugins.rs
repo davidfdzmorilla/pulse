@@ -311,7 +311,7 @@ pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::U
         Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
         _ => None,
     };
-    let folders = engine::plugin::default_folders();
+    let folders = app.plugin_folders();
     let hint = format!("Busca plugins VST3 en {}", folders.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", "));
     let search = if app.plugin_library.searched { "Volver a buscar plugins" } else { "Buscar plugins VST3" };
     if item(ui, "⟳", search, &hint) {

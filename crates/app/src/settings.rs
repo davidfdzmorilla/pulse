@@ -1,0 +1,257 @@
+//! Preferences (⌘,): the audio devices, sample rate and buffer, the MIDI inputs,
+//! extra plugin folders, and whether to reopen the last project at start. Kept for
+//! the next time Pulse starts (Application Support/Pulse/settings.json).
+
+use crate::app::PulseApp;
+use crate::theme::TEXT_DIM;
+use eframe::egui;
+use engine::{AudioSettings, DeviceInfo};
+use serde::{Deserialize, Serialize};
+use std::path::PathBuf;
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Settings {
+    #[serde(default)]
+    pub audio: AudioSettings,
+    #[serde(default = "yes")]
+    pub reopen_last: bool,
+    /// Folders to look for plugins in, besides the system's.
+    #[serde(default)]
+    pub plugin_folders: Vec<PathBuf>,
+}
+
+fn yes() -> bool {
+    true
+}
+
+impl Default for Settings {
+    fn default() -> Self {
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new() }
+    }
+}
+
+fn path() -> PathBuf {
+    crate::kits::kits_dir().with_file_name("settings.json")
+}
+
+impl Settings {
+    pub fn load() -> Settings {
+        std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+    }
+
+    fn save(&self) {
+        if let Ok(text) = serde_json::to_string_pretty(self) {
+            let path = path();
+            let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
+            let _ = std::fs::write(path, text);
+        }
+    }
+}
+
+/// The devices shown in the window, read when it opens (listing them takes a moment).
+#[derive(Default)]
+pub struct Devices {
+    pub outputs: Vec<DeviceInfo>,
+    pub inputs: Vec<DeviceInfo>,
+}
+
+impl PulseApp {
+    /// Where plugins are searched for: the system's folders and the user's own.
+    pub fn plugin_folders(&self) -> Vec<PathBuf> {
+        let mut folders = engine::plugin::default_folders();
+        folders.extend(self.settings.plugin_folders.iter().cloned());
+        folders
+    }
+
+    pub fn open_settings(&mut self) {
+        self.show_settings = true;
+        self.devices = Devices { outputs: engine::output_devices(), inputs: engine::input_devices() };
+    }
+
+    /// Changes the settings: saves them and restarts the audio if it changed.
+    pub fn set_settings(&mut self, settings: Settings) {
+        let audio_changed = settings.audio != self.settings.audio;
+        self.settings = settings;
+        if self.interactive {
+            self.settings.save();
+        }
+        if audio_changed {
+            self.restart_audio();
+        }
+    }
+
+    /// Restarts the engine with the audio settings, and everything that hangs on it.
+    pub fn restart_audio(&mut self) {
+        if !self.interactive {
+            return;
+        }
+        // The old stream goes first, so the device is free.
+        self.capture_plugins();
+        self.audio = crate::app::Audio::none();
+        self.audio = crate::app::Audio::start(&self.settings.audio);
+        self.capture = None;
+        self.sync_all();
+        self.rescan_midi();
+        self.status = Some(match &self.audio.error {
+            Some(error) => format!("Audio: {error}"),
+            None => self.audio_summary(),
+        });
+    }
+
+    /// The device, rate and buffer in use, e.g. "Altavoces · 48 kHz · 256 (5,3 ms)".
+    pub fn audio_summary(&self) -> String {
+        let (device, rate, buffer) = self.audio.info();
+        let buffer = buffer.map_or_else(|| "búfer por defecto".to_string(), |b| format!("{b} muestras ({:.1} ms)", b as f32 / rate * 1000.0));
+        format!("{device} · {:.1} kHz · {buffer}", rate / 1000.0)
+    }
+}
+
+/// The preferences window.
+pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
+    if !app.show_settings {
+        return;
+    }
+    let mut open = true;
+    let mut next = app.settings.clone();
+    let mut rescan_midi = false;
+    let mut refresh = false;
+    let mut search_plugins = false;
+    egui::Window::new("Ajustes").open(&mut open).resizable(false).collapsible(false).default_width(460.0).show(ctx, |ui| {
+        ui.heading("Audio");
+        ui.label(egui::RichText::new(format!("En uso: {}", app.audio_summary())).color(TEXT_DIM).size(10.5));
+        if let Some(error) = &app.audio.error {
+            ui.colored_label(egui::Color32::LIGHT_RED, error);
+        }
+        let default = "Predeterminado del sistema";
+        egui::Grid::new("audio_settings").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
+            ui.label("Salida");
+            device_combo(ui, "audio_output", &mut next.audio.output, &app.devices.outputs, default);
+            ui.end_row();
+            ui.label("Entrada (grabar audio)");
+            device_combo(ui, "audio_input", &mut next.audio.input, &app.devices.inputs, default);
+            ui.end_row();
+            let output = app.devices.outputs.iter().find(|d| Some(&d.name) == next.audio.output.as_ref()).or(app.devices.outputs.first());
+            let rates = output.map(|d| d.rates.clone()).unwrap_or_default();
+            let buffers = output.map(|d| d.buffers.clone()).unwrap_or_default();
+            ui.label("Frecuencia de muestreo");
+            let label = |r: Option<u32>| r.map_or("Predeterminada".to_string(), |r| format!("{:.1} kHz", r as f32 / 1000.0));
+            egui::ComboBox::from_id_salt("audio_rate").selected_text(label(next.audio.sample_rate)).width(200.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut next.audio.sample_rate, None, label(None));
+                for r in &rates {
+                    ui.selectable_value(&mut next.audio.sample_rate, Some(*r), label(Some(*r)));
+                }
+            });
+            ui.end_row();
+            ui.label("Tamaño del búfer");
+            let rate = next.audio.sample_rate.unwrap_or(48_000) as f32;
+            let label = |b: Option<u32>| b.map_or("Predeterminado".to_string(), |b| format!("{b} muestras · {:.1} ms", b as f32 / rate * 1000.0));
+            egui::ComboBox::from_id_salt("audio_buffer").selected_text(label(next.audio.buffer)).width(200.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut next.audio.buffer, None, label(None));
+                for b in &buffers {
+                    ui.selectable_value(&mut next.audio.buffer, Some(*b), label(Some(*b)));
+                }
+            });
+            ui.end_row();
+        });
+        ui.label(egui::RichText::new("Un búfer menor responde antes al tocar; si oyes cortes, súbelo.").color(TEXT_DIM).size(10.5));
+        refresh = ui.small_button("Volver a buscar dispositivos").clicked();
+
+        ui.separator();
+        ui.heading("MIDI");
+        if app.midi.names.is_empty() {
+            ui.label(egui::RichText::new("Ningún dispositivo MIDI conectado").color(TEXT_DIM));
+        }
+        for name in &app.midi.names {
+            ui.label(format!("● {name}"));
+        }
+        rescan_midi = ui.small_button("Volver a buscar dispositivos MIDI").clicked();
+
+        ui.separator();
+        ui.heading("Plugins");
+        for folder in engine::plugin::default_folders() {
+            ui.label(egui::RichText::new(folder.display().to_string()).color(TEXT_DIM).size(10.5));
+        }
+        let mut remove = None;
+        for (i, folder) in next.plugin_folders.iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new(folder.display().to_string()).size(10.5));
+                if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+                    remove = Some(i);
+                }
+            });
+        }
+        if let Some(i) = remove {
+            next.plugin_folders.remove(i);
+        }
+        ui.horizontal(|ui| {
+            if ui.button("Añadir carpeta…").clicked() {
+                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                    next.plugin_folders.push(folder);
+                }
+            }
+            search_plugins = ui.button("Buscar plugins").clicked();
+        });
+
+        ui.separator();
+        ui.heading("Proyectos");
+        ui.checkbox(&mut next.reopen_last, "Abrir el último proyecto al arrancar");
+    });
+    if next != app.settings {
+        app.set_settings(next);
+    }
+    if refresh {
+        app.open_settings();
+    }
+    if rescan_midi {
+        app.rescan_midi();
+    }
+    if search_plugins {
+        let folders = app.plugin_folders();
+        app.plugin_library.search(&folders);
+        app.plugin_library.remember();
+        app.status = Some(format!("{} plugins encontrados", app.plugin_library.found.len()));
+    }
+    if !open {
+        app.show_settings = false;
+    }
+}
+
+fn device_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<String>, devices: &[DeviceInfo], default: &str) {
+    egui::ComboBox::from_id_salt(id).selected_text(value.clone().unwrap_or_else(|| default.into())).width(200.0).show_ui(ui, |ui| {
+        ui.selectable_value(value, None, default);
+        for d in devices {
+            ui.selectable_value(value, Some(d.name.clone()), &d.name);
+        }
+    });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_load_from_older_files_and_round_trip() {
+        let settings: Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(settings, Settings::default());
+        assert!(settings.reopen_last);
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")] };
+        let text = serde_json::to_string(&custom).unwrap();
+        assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
+    }
+
+    #[test]
+    fn the_window_draws_and_changes_apply() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        app.show_settings = true;
+        app.devices = Devices { outputs: vec![DeviceInfo { name: "Altavoces".into(), rates: vec![44_100, 48_000], buffers: vec![128, 256] }], inputs: Vec::new() };
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| window(&mut app, ui.ctx()));
+        assert!(app.show_settings);
+        assert_eq!(app.settings, Settings::default(), "drawing changes nothing");
+        // Headless apps neither save nor restart the audio.
+        app.set_settings(Settings { reopen_last: false, ..Settings::default() });
+        assert!(!app.settings.reopen_last);
+        assert!(app.plugin_folders().len() >= 2);
+        assert!(app.audio_summary().contains("kHz"));
+    }
+}

@@ -1,6 +1,6 @@
 //! Buffers audio input on the UI thread and cuts recorded takes out of it.
 
-use engine::{start_input, AudioInput, InputHandle, Marker, SharedState};
+use engine::{start_input_with, AudioInput, InputHandle, Marker, SharedState};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -18,8 +18,8 @@ pub struct InputCapture {
 }
 
 impl InputCapture {
-    pub fn open(state: Arc<SharedState>) -> Result<Self, String> {
-        let (input, handle) = start_input(state)?;
+    pub fn open(state: Arc<SharedState>, settings: &engine::AudioSettings) -> Result<Self, String> {
+        let (input, handle) = start_input_with(state, settings)?;
         Ok(Self {
             _input: input,
             handle,

@@ -155,9 +155,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     },
                     |ui| {
                         if let Effect::Plugin(id) = *effect {
-                            if let Some(id) = crate::plugins::device_body(app, ui, id, PLUGIN_KNOBS) {
-                                actions.push(Action::OpenPlugin(id));
-                            }
+                            let as_param = |param: u32| Param::Device { device: index, param: param as usize };
+                            crate::plugins::device_body(app, ui, target, &as_param, id, PLUGIN_KNOBS, &mut actions);
                             return;
                         }
                         discrete_controls(ui, effect, index);
@@ -411,9 +410,8 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             let title = app.plugin_name(id);
             let width = PLUGIN_KNOBS as f32 * 52.0 + 130.0;
             device_frame(ui, &title, width, None, |_| {}, |ui| {
-                if let Some(id) = crate::plugins::device_body(app, ui, id, PLUGIN_KNOBS) {
-                    actions.push(Action::OpenPlugin(id));
-                }
+                let as_param = |param: u32| Param::Instrument(param as usize);
+                crate::plugins::device_body(app, ui, target, &as_param, id, PLUGIN_KNOBS, actions);
             });
         }
         InstrumentKind::Synth(base) => {

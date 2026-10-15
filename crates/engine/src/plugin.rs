@@ -729,10 +729,39 @@ pub struct PluginHandle {
     instance: Arc<Instance>,
     queue: ParamQueue,
     pub name: String,
+    /// The parameters, read once (plugins can have thousands), and their index by id.
+    params: OnceLock<(Vec<PluginParam>, HashMap<u32, usize>)>,
 }
 
 impl PluginHandle {
-    pub fn params(&self) -> Vec<PluginParam> {
+    /// The parameters the host may set, in the plugin's order.
+    pub fn params(&self) -> &[PluginParam] {
+        &self.cached().0
+    }
+
+    /// Parameter `id`, if the host may set it.
+    pub fn param(&self, id: u32) -> Option<&PluginParam> {
+        let (params, index) = self.cached();
+        index.get(&id).map(|&i| &params[i])
+    }
+
+    fn cached(&self) -> &(Vec<PluginParam>, HashMap<u32, usize>) {
+        self.params.get_or_init(|| {
+            let params = self.read_params();
+            let index = params.iter().enumerate().map(|(i, p)| (p.id, i)).collect();
+            (params, index)
+        })
+    }
+
+    /// Shows `value` for parameter `id` in the plugin's own editor, without sending it
+    /// to the processor (automation reaches the processor from the engine).
+    pub fn show(&self, id: u32, value: f64) {
+        if let Some(controller) = &self.instance.controller {
+            unsafe { controller.setParamNormalized(id, value.clamp(0.0, 1.0)) };
+        }
+    }
+
+    fn read_params(&self) -> Vec<PluginParam> {
         let Some(controller) = &self.instance.controller else { return Vec::new() };
         let mut params = Vec::new();
         for i in 0..unsafe { controller.getParameterCount() } {
@@ -992,6 +1021,16 @@ impl PluginProcessor {
         }
     }
 
+    /// Sets parameter `id` (normalized) from the next block on: automation.
+    pub fn set_normalized(&mut self, id: u32, value: f64) {
+        let value = value.clamp(0.0, 1.0);
+        if let Some(slot) = self.controls.iter_mut().find(|(p, _)| *p == id) {
+            slot.1 = value;
+        } else if self.controls.len() < self.controls.capacity() {
+            self.controls.push((id, value));
+        }
+    }
+
     /// A MIDI controller moved: CC, pitch bend (-1..1) or pressure (0..1).
     pub fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
         let (number, normalized) = match controller {
@@ -1010,13 +1049,7 @@ impl PluginProcessor {
             }
         };
         let Some(id) = self.midi_map[number] else { return };
-        let value = normalized.clamp(0.0, 1.0);
-        // The latest value per parameter; the list never grows past its capacity.
-        if let Some(slot) = self.controls.iter_mut().find(|(p, _)| *p == id) {
-            slot.1 = value;
-        } else if self.controls.len() < self.controls.capacity() {
-            self.controls.push((id, value));
-        }
+        self.set_normalized(id, normalized);
     }
 
     pub fn note_off(&mut self, pitch: u8) {
@@ -1343,11 +1376,11 @@ pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u
             pending: Vec::with_capacity(MAX_PENDING),
             held: [false; 128],
             midi_map,
-            controls: Vec::with_capacity(MIDI_CONTROLLERS),
+            controls: Vec::with_capacity(MAX_CHANGES),
             sample_rate,
             instrument: n_events > 0,
         };
-        Ok((processor, PluginHandle { instance, queue, name }))
+        Ok((processor, PluginHandle { instance, queue, name, params: OnceLock::new() }))
     }
 }
 

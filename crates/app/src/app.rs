@@ -556,7 +556,28 @@ impl PulseApp {
         &mut lanes[index]
     }
 
+    /// The plugin and plugin parameter behind `param`, if it is one: a plugin's
+    /// parameters are its instrument or device parameters, numbered by their ids.
+    pub fn plugin_param(&self, target: Target, param: Param) -> Option<(PluginId, u32)> {
+        let id = match param {
+            Param::Instrument(i) => match (target, self.project.tracks.get(target_track(target)?)?.instrument) {
+                (Target::Track(_), InstrumentKind::Plugin(id)) => return Some((id, i as u32)),
+                _ => return None,
+            },
+            Param::Device { device, param } => match self.devices(target).get(device)?.effect {
+                Effect::Plugin(id) => (id, param as u32),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        Some(id)
+    }
+
     pub fn param_info(&self, target: Target, param: Param) -> Option<ParamInfo> {
+        if let Some((id, p)) = self.plugin_param(target, param) {
+            let default = self.samples.plugins.get(&id)?.param(p)?.default as f32;
+            return Some(ParamInfo::linear("Plugin", 0.0, 1.0, default, engine::model::Unit::Percent));
+        }
         match param {
             Param::Volume => Some(VOLUME_PARAM),
             Param::Pan => Some(PAN_PARAM),
@@ -570,6 +591,10 @@ impl PulseApp {
     }
 
     pub fn param_name(&self, target: Target, param: Param) -> String {
+        if let Some((id, p)) = self.plugin_param(target, param) {
+            let name = self.samples.plugins.get(&id).and_then(|h| h.param(p)).map_or_else(|| format!("parámetro {p}"), |p| p.name.clone());
+            return format!("{}: {name}", self.plugin_name(id));
+        }
         let info = self.param_info(target, param).map_or("?", |i| i.name);
         match param {
             Param::Volume => "Volumen".into(),
@@ -595,16 +620,30 @@ impl PulseApp {
                 let instrument = &self.project.tracks[t].instrument;
                 // Only settings that exist now (a modular synth's lane effects come and go).
                 params.extend((0..instrument.params().len()).filter(|&i| instrument.param_info(i).is_some()).map(Param::Instrument));
+                if let InstrumentKind::Plugin(id) = *instrument {
+                    params.extend(self.plugin_params(id).map(|p| Param::Instrument(p as usize)));
+                }
             }
         }
         for (device, d) in self.devices(target).iter().enumerate() {
             params.extend((0..d.effect.params().len()).map(|param| Param::Device { device, param }));
+            if let Effect::Plugin(id) = d.effect {
+                params.extend(self.plugin_params(id).map(|param| Param::Device { device, param: param as usize }));
+            }
         }
         params
     }
 
+    /// The automatable parameter ids of a loaded plugin.
+    fn plugin_params(&self, id: PluginId) -> impl Iterator<Item = u32> + '_ {
+        self.samples.plugins.get(&id).into_iter().flat_map(|h| h.params().iter().filter(|p| p.automatable).map(|p| p.id))
+    }
+
     /// The value set by hand (what plays where there is no automation).
     pub fn param_value(&self, target: Target, param: Param) -> f32 {
+        if let Some((id, p)) = self.plugin_param(target, param) {
+            return self.samples.plugins.get(&id).map_or(0.0, |h| h.value(p) as f32);
+        }
         let mixer = self.mixer(target);
         match param {
             Param::Volume => mixer.gain,
@@ -644,6 +683,15 @@ impl PulseApp {
         // Picking a control for MIDI learn sets it to itself: not a move (it would
         // override its automation).
         if self.learn.on && self.param_value(target, param) == value {
+            return;
+        }
+        if let Some((id, p)) = self.plugin_param(target, param) {
+            if let Some(handle) = self.samples.plugins.get(&id) {
+                handle.set(p, value as f64);
+            }
+            if self.automation_state(target, param) == Some(false) && self.overridden.insert((target, param)) {
+                self.sync_automation(target);
+            }
             return;
         }
         match param {
@@ -1854,6 +1902,7 @@ impl eframe::App for PulseApp {
 
         crate::plugins::window(self, &ctx);
         self.poll_editors();
+        self.show_plugin_automation();
         self.poll_midi_map();
         crate::midi_map::window(self, &ctx);
 
@@ -1865,5 +1914,13 @@ impl eframe::App for PulseApp {
         self.debug_screenshot(&ctx);
         // Meters and playheads animate continuously.
         ctx.request_repaint();
+    }
+}
+
+/// The track of a target, if it is one.
+fn target_track(target: Target) -> Option<usize> {
+    match target {
+        Target::Track(t) => Some(t),
+        _ => None,
     }
 }

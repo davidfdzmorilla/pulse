@@ -114,7 +114,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             press(app, Transport::Stop);
         }
         let recording = app.is_arrangement_recording();
-        if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas; si no hay ninguna, arma las seleccionadas (F9)").clicked() {
+        if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (si no hay ninguna, arma las seleccionadas) y los controles que muevas como automatización (F9)").clicked() {
             press(app, Transport::Record);
         }
         if icon_button(ui, "⟲", app.project.loop_enabled, ACCENT, "Loop del Arrangement").clicked() {

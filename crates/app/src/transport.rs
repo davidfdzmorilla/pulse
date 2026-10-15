@@ -1,6 +1,7 @@
 //! Top control bar and bottom status bar.
 
 use crate::app::{PulseApp, View};
+use crate::midi_map::{Control, Transport};
 use crate::theme::{self, ACCENT, PLAY, TEXT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, vec2, Align2, Color32, RichText, Sense};
@@ -76,8 +77,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         ui.label(RichText::new("BPM").color(TEXT_DIM).size(10.5));
         if icon_button(ui, "●", app.project.metronome, ACCENT, "Metrónomo").clicked() {
-            app.project.metronome = !app.project.metronome;
-            app.audio.send(Command::SetMetronome(app.project.metronome));
+            press(app, Transport::Metronome);
         }
         let current = QUANTIZE_OPTIONS
             .iter()
@@ -104,18 +104,21 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         // Transport.
         readout(ui, &format_position(position), 84.0);
         if icon_button(ui, "play", playing, PLAY, "Reproducir (Espacio)").clicked() {
-            app.audio.send(Command::Play);
+            if app.learn.on {
+                app.touched(Control::Transport(Transport::Play));
+            } else {
+                app.audio.send(Command::Play);
+            }
         }
         if icon_button(ui, "stop", false, ACCENT, "Parar (Espacio)").clicked() {
-            app.audio.send(Command::Stop);
+            press(app, Transport::Stop);
         }
         let recording = app.is_arrangement_recording();
         if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (F9)").clicked() {
-            app.toggle_arrangement_record();
+            press(app, Transport::Record);
         }
         if icon_button(ui, "⟲", app.project.loop_enabled, ACCENT, "Loop del Arrangement").clicked() {
-            app.project.loop_enabled = !app.project.loop_enabled;
-            app.sync_loop();
+            press(app, Transport::Loop);
         }
         readout(ui, &format_position(app.project.loop_start), 84.0);
         readout(ui, &format!("{} c.", (app.project.loop_end - app.project.loop_start) / 4.0), 54.0);
@@ -153,6 +156,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         };
         if widgets::toggle(ui, devices > 0, "MIDI", theme::PLAY, vec2(40.0, 22.0)).on_hover_text(midi_hint).clicked() {
             app.rescan_midi();
+        }
+        let learn_hint = "Asignar controles MIDI: toca un control de Pulse y mueve un knob o pulsa un botón del teclado MIDI";
+        if widgets::toggle(ui, app.learn.on, "Asignar", ACCENT, vec2(60.0, 22.0)).on_hover_text(learn_hint).clicked() {
+            app.toggle_learn();
         }
 
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -270,4 +277,13 @@ pub fn status_bar(app: &mut PulseApp, ui: &mut egui::Ui) {
         };
         ui.label(text.size(10.5));
     });
+}
+
+/// A transport button: picked for MIDI learn while assigning, otherwise pressed.
+fn press(app: &mut PulseApp, action: Transport) {
+    if app.learn.on {
+        app.touched(Control::Transport(action));
+    } else {
+        app.transport(action);
+    }
 }

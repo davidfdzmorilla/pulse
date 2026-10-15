@@ -14,7 +14,7 @@ pub struct MidiInputs {
 }
 
 impl MidiInputs {
-    pub fn connect(live: Option<LiveInput>) -> Self {
+    pub fn connect(live: Option<LiveInput>, shared: crate::midi_map::Shared) -> Self {
         let mut inputs = Self::default();
         let Some(live) = live else { return inputs };
         let count = match MidiInput::new("Pulse") {
@@ -30,6 +30,7 @@ impl MidiInputs {
             let Some(port) = input.ports().get(index).cloned() else { continue };
             let name = input.port_name(&port).unwrap_or_else(|_| format!("Puerto {}", index + 1));
             let live = live.clone();
+            let shared = shared.clone();
             // PULSE_MIDI_LOG=1 prints every packet and what it was read as.
             let log = std::env::var_os("PULSE_MIDI_LOG").is_some();
             let port_name = name.clone();
@@ -41,7 +42,7 @@ impl MidiInputs {
                     if log {
                         eprintln!("[midi]   → {}", describe(message));
                     }
-                    forward(message, &live)
+                    forward(message, &live, &shared)
                 })
             };
             match input.connect(&port, "Pulse input", read, MidiParser::default()) {
@@ -133,7 +134,7 @@ fn describe(message: &[u8]) -> String {
 }
 
 /// Forwards notes, controllers, pitch bend and pressure on any channel.
-fn forward(message: &[u8], live: &LiveInput) {
+fn forward(message: &[u8], live: &LiveInput, shared: &crate::midi_map::Shared) {
     match *message {
         [status, pressure] if status & 0xF0 == 0xD0 => live.send(LiveNote::control(Controller::Pressure, 0, pressure as f32 / 127.0)),
         [status, a, b] => match status & 0xF0 {
@@ -141,6 +142,8 @@ fn forward(message: &[u8], live: &LiveInput) {
             0x90 => live.send(LiveNote::note(a, b as f32 / 127.0)),
             0x80 => live.send(LiveNote::note(a, 0.0)),
             0xA0 => live.send(LiveNote::control(Controller::PolyPressure, a, b as f32 / 127.0)),
+            // Controllers linked to Pulse's controls (or any, while learning) go to the UI.
+            0xB0 if shared.take(a, b) => {}
             0xB0 => live.send(LiveNote::control(Controller::Cc(a), 0, b as f32 / 127.0)),
             0xE0 => {
                 let bend = ((b as i32) << 7 | a as i32) - 8192;

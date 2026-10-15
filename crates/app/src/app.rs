@@ -193,6 +193,10 @@ pub struct PulseApp {
     pub plugin_library: crate::plugins::Library,
     /// The plugins' own editor windows.
     pub editors: crate::editor::Editors,
+    /// MIDI learn, and the controllers linked to controls.
+    pub learn: crate::midi_map::Learn,
+    /// The control the user touched this frame (for MIDI learn).
+    pub touched_control: std::cell::Cell<Option<crate::midi_map::Control>>,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
@@ -215,8 +219,10 @@ impl PulseApp {
         theme::apply(&cc.egui_ctx);
         let mut app = Self::with_audio(Project::demo(), Audio::start());
         app.plugin_library = crate::plugins::Library::load_cache();
+        app.learn = crate::midi_map::Learn::load();
         app.sync_all();
-        app.midi = MidiInputs::connect(app.audio.live());
+        app.midi = MidiInputs::connect(app.audio.live(), app.learn.shared.clone());
+        app.sync_midi_map();
         if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
             app.view = View::Arrangement;
         }
@@ -270,6 +276,8 @@ impl PulseApp {
             modular_window: None,
             plugin_library: Default::default(),
             editors: Default::default(),
+            learn: Default::default(),
+            touched_control: Default::default(),
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -293,6 +301,7 @@ impl PulseApp {
         for command in commands {
             self.audio.send(command);
         }
+        self.sync_midi_map();
         self.show_sample_errors();
     }
 
@@ -631,6 +640,7 @@ impl PulseApp {
 
     /// Sets a parameter by hand. Moving an automated parameter overrides its automation.
     pub fn set_param(&mut self, target: Target, param: Param, value: f32) {
+        self.touched(crate::midi_map::Control::Param { target, param });
         match param {
             Param::Volume => self.mixer_mut(target).gain = value.max(0.0),
             Param::Pan => self.mixer_mut(target).pan = value.clamp(-1.0, 1.0),
@@ -1259,7 +1269,7 @@ impl PulseApp {
 
     pub fn rescan_midi(&mut self) {
         self.midi = MidiInputs::default();
-        self.midi = MidiInputs::connect(self.audio.live());
+        self.midi = MidiInputs::connect(self.audio.live(), self.learn.shared.clone());
         self.status = Some(match self.midi.names.len() {
             0 => "No hay dispositivos MIDI conectados".into(),
             n => format!("{n} dispositivo(s) MIDI: {}", self.midi.names.join(", ")),
@@ -1838,8 +1848,11 @@ impl eframe::App for PulseApp {
 
         crate::plugins::window(self, &ctx);
         self.poll_editors();
+        self.poll_midi_map();
+        crate::midi_map::window(self, &ctx);
 
-        let interacting = ctx.input(|i| i.pointer.any_down());
+        // A sweep of a controller is one undo step, like a drag.
+        let interacting = ctx.input(|i| i.pointer.any_down()) || self.learn.moving();
         self.history.commit(&self.project, interacting);
         self.update_title(&ctx);
         crate::export::window(self, &ctx);

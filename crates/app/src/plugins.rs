@@ -50,7 +50,7 @@ impl Library {
         }
     }
 
-    /// Looks through `folders` for plugins (loading each bundle once) and remembers the list.
+    /// Looks through `folders` for plugins (loading each bundle once). See [`Library::remember`].
     pub fn search(&mut self, folders: &[PathBuf]) {
         self.found.clear();
         self.failed.clear();
@@ -64,6 +64,11 @@ impl Library {
         }
         self.found.sort_by_key(|p| (!p.instrument, p.name.to_lowercase()));
         self.searched = true;
+    }
+
+    /// Saves the list for the next time Pulse starts (only for the system's folders:
+    /// a search anywhere else, as in tests, must not replace it).
+    pub fn remember(&self) {
         let cached: Vec<Cached> = self
             .found
             .iter()
@@ -278,6 +283,7 @@ pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::U
     let search = if app.plugin_library.searched { "Volver a buscar plugins" } else { "Buscar plugins VST3" };
     if item(ui, "⟳", search, &hint) {
         app.plugin_library.search(&folders);
+        app.plugin_library.remember();
         let (found, failed) = (app.plugin_library.found.len(), app.plugin_library.failed.len());
         app.status = Some(match (found, failed) {
             (0, 0) => "No hay plugins VST3 instalados".to_string(),

@@ -787,11 +787,9 @@ fn render_audio_clip(
     if sample.frames() == 0 || clip.length <= 0.0 {
         return;
     }
-    // Beats inside the clip map to file time at this reference tempo.
-    let reference_bpm = match clip.warp {
-        WarpMode::Off => tempo,
-        WarpMode::Repitch | WarpMode::Stretch => clip.original_bpm.max(1.0),
-    };
+    // Warped, beats inside the clip map to file time through its warp markers (or
+    // at its original tempo): the clip starts at this beat of the file's.
+    let first_beat = clip.file_beat(clip.offset);
     let rate = sample.sample_rate as f64;
     let gain = db_to_gain(clip.gain_db);
     let fade = EDGE_FADE * tempo / 60.0;
@@ -807,10 +805,8 @@ fn render_audio_clip(
         let remaining = (clip.length - local).min(limit - b);
         let envelope = ((local / fade).min(1.0) * (remaining / fade).min(1.0)) as f32;
         let (l, r) = match clip.warp {
-            WarpMode::Off | WarpMode::Repitch => {
-                let seconds = clip.offset + local * 60.0 / reference_bpm;
-                sample.read(seconds * rate)
-            }
+            WarpMode::Off => sample.read((clip.offset + local * 60.0 / tempo) * rate),
+            WarpMode::Repitch => sample.read(clip.file_seconds(first_beat + local) * rate),
             WarpMode::Stretch => {
                 // Two overlapping Hann-windowed grains read the file at its own speed
                 // (times the transposition) from positions that follow the tempo.
@@ -821,7 +817,7 @@ fn render_audio_clip(
                     let grain_start = grain * hop;
                     let phase = (t - grain_start) / GRAIN;
                     let window = (0.5 - 0.5 * (std::f64::consts::TAU * phase).cos()) as f32;
-                    let source = clip.offset + grain_start * tempo / reference_bpm + (t - grain_start) * pitch;
+                    let source = clip.file_seconds(first_beat + grain_start * tempo / 60.0) + (t - grain_start) * pitch;
                     let (gl, gr) = sample.read(source * rate);
                     l += gl * window;
                     r += gr * window;
@@ -1725,7 +1721,7 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{AudioClip, Device, Effect, InstrumentKind, MidiClip, Note, WarpMode};
+    use crate::model::{AudioClip, Device, Effect, InstrumentKind, MidiClip, Note, WarpMarker, WarpMode};
     use crate::model::AutomationLane;
     use rtrb::RingBuffer;
 
@@ -1922,6 +1918,7 @@ mod tests {
             offset: 0.0,
             warp,
             original_bpm: 120.0,
+            warp_markers: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
         }
@@ -2305,6 +2302,38 @@ mod tests {
         let stretch = pitch_at_double_tempo(WarpMode::Stretch);
         assert!((repitch - 880.0).abs() < 20.0, "Re-Pitch at double tempo should sound an octave up, got {repitch} Hz");
         assert!((stretch - 440.0).abs() < 20.0, "Stretch should keep 440 Hz, got {stretch} Hz");
+    }
+
+    /// Between warp markers the file plays at each stretch's own speed.
+    #[test]
+    fn warp_markers_set_the_speed_of_each_stretch() {
+        // At 120 BPM a beat is 0.5 s: the first beat plays 0.8 s of the file (×1.6),
+        // the second 0.2 s (×0.4).
+        let mut clip = audio_clip(WarpMode::Repitch);
+        clip.warp_markers = [(0.0, 0.0), (1.0, 0.8), (2.0, 1.0)].map(|(beat, seconds)| WarpMarker { beat, seconds }).to_vec();
+        let mut h = Harness::new();
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(clip.clone(), sine_sample()))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(0.1);
+        let first = crossings(&left_channel(&h.run_beats(0.8))) as f64 / 0.4;
+        h.run_beats(0.2);
+        let second = crossings(&left_channel(&h.run_beats(0.8))) as f64 / 0.4;
+        assert!((first - 704.0).abs() < 20.0, "{first} Hz");
+        assert!((second - 176.0).abs() < 20.0, "{second} Hz");
+
+        // In Stretch the pitch stays and the file's point at 0.8 s lands on beat 1.
+        let mut click: Vec<f32> = vec![0.0; 48_000];
+        for (i, s) in click[38_400..39_400].iter_mut().enumerate() {
+            *s = (i as f32 * 0.3).sin() * 0.8;
+        }
+        let sample = Arc::new(Sample::from_channels(click.clone(), click, 48_000.0));
+        clip.warp = WarpMode::Stretch;
+        let mut h = Harness::new();
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(clip, sample))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        let audio = left_channel(&h.run_beats(2.0));
+        let onset = audio.iter().position(|s| s.abs() > 0.05).expect("the click");
+        assert!((onset as i64 - 24_000).abs() < 1_500, "on beat 1 (24000), got {onset}");
     }
 
     #[test]

@@ -491,6 +491,7 @@ impl PulseApp {
             offset: 0.0,
             warp,
             original_bpm,
+            warp_markers: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
         }
@@ -1371,8 +1372,10 @@ impl PulseApp {
             self.status = Some("No se encuentra la muestra del clip".into());
             return;
         }
-        let bpm = if audio.warp == WarpMode::Off { self.project.tempo } else { audio.original_bpm };
-        let region = (audio.offset, audio.length * 60.0 / bpm);
+        let tempo = self.project.tempo;
+        let region = (audio.offset, audio.source_seconds(audio.length, tempo) - audio.offset);
+        // The slices' grid at the region's average tempo.
+        let bpm = audio.length * 60.0 / region.1.max(1e-6);
         let mode = self.slice_mode;
         let dir = Self::slices_dir(&audio.name);
         let (mut sliced, grid) = match crate::slicing::slice(&sample, region, bpm, mode, &audio.name, &dir, audio.color) {
@@ -1592,6 +1595,7 @@ impl PulseApp {
             // Recorded at the project tempo; Stretch keeps the pitch if the tempo changes later.
             warp: WarpMode::Stretch,
             original_bpm: tempo,
+            warp_markers: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
         })

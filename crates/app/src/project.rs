@@ -191,6 +191,9 @@ pub struct Project {
     /// The VST3 plugins the instruments and devices refer to by id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginRef>,
+    /// MIDI controllers linked to the project's controls (see `midi_map`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_map: Vec<crate::midi_map::Mapping>,
 }
 
 /// A plugin instance: which plugin, and its saved state.
@@ -264,6 +267,7 @@ impl Project {
             },
             scene_names: (1..=NUM_SCENES).map(|i| i.to_string()).collect(),
             plugins: Vec::new(),
+            midi_map: Vec::new(),
         }
     }
 

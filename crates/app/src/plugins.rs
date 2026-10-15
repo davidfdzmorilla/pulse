@@ -222,6 +222,7 @@ pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, id: PluginId, knobs: usize
     for param in handle.params().iter().filter(|p| p.automatable).take(knobs) {
         if let Some(v) = param_knob(ui, handle, param, 30.0) {
             handle.set(param.id, v);
+            app.touched(crate::midi_map::Control::Plugin { id, param: param.id });
         }
     }
     open
@@ -255,6 +256,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     let slider = if param.steps > 0 { slider.step_by(1.0 / param.steps as f64) } else { slider };
                     if ui.add(slider).changed() {
                         handle.set(param.id, value);
+                        app.touched(crate::midi_map::Control::Plugin { id, param: param.id });
                     }
                     ui.label(egui::RichText::new(handle.display(param.id, value)).color(theme::TEXT));
                     ui.end_row();
@@ -460,6 +462,27 @@ pub(crate) mod tests {
         if volume.is_some() {
             assert!(after < before * 0.9, "the saved volume came back");
         }
+    }
+
+    #[test]
+    fn a_controller_learns_a_plugin_parameter() {
+        let mut app = app();
+        let synth = app.plugin_library.found[0].clone();
+        app.set_plugin_instrument(3, &synth);
+        let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!() };
+        app.selected_target = Target::Track(3);
+        app.toggle_learn();
+        // Turning the Level knob on the device arms it…
+        app.touched(crate::midi_map::Control::Plugin { id, param: 0 });
+        app.poll_midi_map();
+        // …and knob CC 71 takes it.
+        assert!(app.learn.shared.take(71, 0));
+        app.poll_midi_map();
+        app.toggle_learn();
+        assert!(app.learn.shared.take(71, 127));
+        app.poll_midi_map();
+        assert_eq!(app.samples.plugins[&id].value(0), 1.0);
+        assert!(app.control_name(app.project.midi_map[0].control).contains("Level"));
     }
 
     #[test]

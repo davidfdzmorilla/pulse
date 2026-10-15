@@ -34,7 +34,7 @@ pub const QUEUED_STOP: i32 = -2;
 pub const NONE: i32 = -1;
 
 /// A mixer channel: a track, a return track or the master.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum Target {
     Track(usize),
     Return(usize),

@@ -11,6 +11,7 @@ mod history;
 mod input;
 mod kick_ui;
 mod kits;
+mod midi_map;
 mod modular_ui;
 mod note_edit;
 mod piano_roll;

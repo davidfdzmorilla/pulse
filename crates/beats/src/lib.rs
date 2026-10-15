@@ -23,6 +23,10 @@ pub struct Grid {
     pub downbeat: f64,
     /// How many beats were found (a measure of how sure the grid is).
     pub beats: usize,
+    /// When the tempo varies (a live take, a drummer without a click): where each
+    /// bar starts, as (beat, seconds), beat 0 being the first downbeat. Empty when
+    /// one tempo fits the whole piece.
+    pub markers: Vec<(f64, f64)>,
 }
 
 impl Grid {
@@ -85,7 +89,8 @@ fn models() -> Result<(PathBuf, PathBuf), String> {
 /// downbeats among the beats. Each beat is numbered from the one before it (one
 /// beat on, two after a missed one, none for an extra one), since the detector's
 /// times come in 20 ms steps and numbering by a rounded beat length would drift.
-/// Two passes: the second leaves out beats far from the first line. None with
+/// Two passes: the second leaves out beats far from the first line. When the
+/// beats stray from any one tempo, a marker on every bar follows them. None with
 /// too few beats.
 pub fn fit(beats: &[f64], downbeats: &[f64]) -> Option<Grid> {
     if beats.len() < 8 {
@@ -119,18 +124,52 @@ pub fn fit(beats: &[f64], downbeats: &[f64]) -> Option<Grid> {
         period = whole;
         bpm = bpm.round();
     }
-    let index = |t: f64| ((t - origin) / period).round() as i64;
-    // Downbeats vote for which beat of four starts the bar; without any, the first beat.
-    let k0 = index(beats[0]);
+    // Downbeats vote for which beat of four starts the bar (counted as the beats
+    // are, so a varying tempo doesn't confuse them); without any, the first beat.
     let mut votes = [0usize; 4];
     for &d in downbeats {
-        votes[index(d).rem_euclid(4) as usize] += 1;
+        let i = numbered.partition_point(|&(_, t)| t < d);
+        let nearest = [i.checked_sub(1), Some(i)].into_iter().flatten().filter_map(|i| numbered.get(i)).min_by(|a, b| (a.1 - d).abs().total_cmp(&(b.1 - d).abs()));
+        if let Some(&(k, _)) = nearest.filter(|&&(_, t)| (t - d).abs() < 0.1) {
+            votes[k.rem_euclid(4) as usize] += 1;
+        }
     }
     let best = votes.iter().copied().max().unwrap_or(0);
-    let phase = if best == 0 { k0.rem_euclid(4) } else { votes.iter().position(|&v| v == best).unwrap_or(0) as i64 };
-    // The first downbeat at or after the first detected beat.
-    let k = k0 + (phase - k0).rem_euclid(4);
-    Some(Grid { bpm, downbeat: origin + k as f64 * period, beats: beats.len() })
+    // The first downbeat: the first beat counted on that phase.
+    let first = if best == 0 { 0 } else { votes.iter().position(|&v| v == best).unwrap_or(0) as i64 };
+    let markers = bar_markers(&numbered, first, origin, period);
+    let downbeat = markers.first().map_or(origin + first as f64 * period, |&(_, t)| t);
+    Some(Grid { bpm, downbeat, beats: beats.len(), markers })
+}
+
+/// Where each bar starts from the first downbeat (beat `first` of `numbered`), if
+/// the beats stray from the steady line `origin + k · period`: each one from a
+/// line through the beats of the bar before and after it, so the detector's
+/// 20 ms steps don't make the tempo wobble. Empty when the line fits.
+fn bar_markers(numbered: &[(i64, f64)], first: i64, origin: f64, period: f64) -> Vec<(f64, f64)> {
+    let last = numbered.last().map_or(0, |&(k, _)| k);
+    let mut markers: Vec<(f64, f64)> = Vec::new();
+    let mut k = first;
+    while k <= last {
+        let from = numbered.partition_point(|&(j, _)| j < k - 4);
+        let to = numbered.partition_point(|&(j, _)| j <= k + 4);
+        let around = &numbered[from..to];
+        if around.len() >= 3 {
+            if let Some((o, p)) = line(around) {
+                let t = o + k as f64 * p;
+                if markers.last().is_none_or(|&(_, before)| t > before + 0.05) {
+                    markers.push(((k - first) as f64, t));
+                }
+            }
+        }
+        k += 4;
+    }
+    // Steady: no bar more than 35 ms off the line, but for a few stray ones.
+    let off = markers.iter().filter(|&&(b, t)| (t - (origin + (b + first as f64) * period)).abs() > 0.035).count();
+    if markers.len() < 2 || off * 10 <= markers.len() {
+        markers.clear();
+    }
+    markers
 }
 
 /// Least squares t = origin + k · period.
@@ -188,10 +227,34 @@ mod tests {
 
     #[test]
     fn a_loop_cut_on_the_beat_starts_at_once() {
-        let grid = Grid { bpm: 120.0, downbeat: 0.02, beats: 32 };
+        let grid = Grid { bpm: 120.0, downbeat: 0.02, beats: 32, markers: Vec::new() };
         assert_eq!(grid.start(), 0.0);
-        let grid = Grid { bpm: 120.0, downbeat: 0.5, beats: 32 };
+        let grid = Grid { bpm: 120.0, downbeat: 0.5, beats: 32, markers: Vec::new() };
         assert!((grid.start() + 1.5).abs() < 1e-9, "the bar line before: {}", grid.start());
+    }
+
+    #[test]
+    fn a_varying_tempo_gets_a_marker_on_every_bar() {
+        // A drummer speeding up from 110 to 130 BPM over 64 bars, in 20 ms steps.
+        let mut b = Vec::new();
+        let mut t = 0.4;
+        for i in 0..256 {
+            b.push((t * 50.0f64).round() / 50.0);
+            t += 60.0 / (110.0 + 20.0 * i as f64 / 256.0);
+        }
+        let downbeats: Vec<f64> = b.iter().skip(2).step_by(4).copied().collect();
+        let grid = fit(&b, &downbeats).unwrap();
+        assert!(grid.markers.len() >= 60, "{} markers", grid.markers.len());
+        assert_eq!(grid.downbeat, grid.markers[0].1);
+        for &(beat, seconds) in &grid.markers {
+            assert_eq!(beat % 4.0, 0.0, "on bars");
+            // On the real beats (the third one starts the bars).
+            let real = b[beat as usize + 2];
+            assert!((seconds - real).abs() < 0.015, "beat {beat}: {seconds} vs {real}");
+        }
+        // A steady piece needs none.
+        let steady = fit(&beats(124.0, 0.31, 400), &[]).unwrap();
+        assert!(steady.markers.is_empty());
     }
 
     #[test]

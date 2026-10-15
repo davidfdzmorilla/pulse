@@ -77,6 +77,78 @@ pub struct AudioClip {
     /// Clip automation: parameter lanes in clip time, looping with the clip.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub envelopes: Vec<AutomationLane>,
+    /// Warp markers: which point of the file plays on which beat, for files whose
+    /// tempo varies. Sorted, both beats and seconds rising. With fewer than two the
+    /// file follows `original_bpm` throughout.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub warp_markers: Vec<WarpMarker>,
+}
+
+/// A point of an audio file (`seconds`) pinned to a beat of the file's own beat
+/// time (`beat`); between two markers the file plays evenly.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct WarpMarker {
+    pub beat: f64,
+    pub seconds: f64,
+}
+
+impl AudioClip {
+    /// Whether the clip plays between warp markers.
+    pub fn has_markers(&self) -> bool {
+        self.warp_markers.len() >= 2
+    }
+
+    /// The file's time at a beat of its own beat time: between the markers around
+    /// it, or past the outer ones at the tempo of the nearest stretch. Without
+    /// markers, at `original_bpm` from beat 0 at the file's start.
+    pub fn file_seconds(&self, beat: f64) -> f64 {
+        let m = &self.warp_markers;
+        if m.len() < 2 {
+            return beat * 60.0 / self.original_bpm.max(1.0);
+        }
+        let i = m.partition_point(|x| x.beat <= beat).clamp(1, m.len() - 1);
+        let (a, b) = (m[i - 1], m[i]);
+        a.seconds + (beat - a.beat) * (b.seconds - a.seconds) / (b.beat - a.beat).max(1e-9)
+    }
+
+    /// The beat (of the file's own beat time) at a time of the file; the inverse
+    /// of [`AudioClip::file_seconds`].
+    pub fn file_beat(&self, seconds: f64) -> f64 {
+        let m = &self.warp_markers;
+        if m.len() < 2 {
+            return seconds * self.original_bpm.max(1.0) / 60.0;
+        }
+        let i = m.partition_point(|x| x.seconds <= seconds).clamp(1, m.len() - 1);
+        let (a, b) = (m[i - 1], m[i]);
+        a.beat + (seconds - a.seconds) * (b.beat - a.beat) / (b.seconds - a.seconds).max(1e-9)
+    }
+
+    /// Where in the file (seconds) the clip is `local` beats after its start, at
+    /// project `tempo` (which only matters with warp off).
+    pub fn source_seconds(&self, local: f64, tempo: f64) -> f64 {
+        match self.warp {
+            WarpMode::Off => self.offset + local * 60.0 / tempo.max(1.0),
+            _ => self.file_seconds(self.file_beat(self.offset) + local),
+        }
+    }
+
+    /// How many beats of the clip the file has from its start to `seconds`.
+    pub fn beats_until(&self, seconds: f64, tempo: f64) -> f64 {
+        match self.warp {
+            WarpMode::Off => (seconds - self.offset) * tempo / 60.0,
+            _ => self.file_beat(seconds) - self.file_beat(self.offset),
+        }
+    }
+
+    /// Sets the original tempo; with markers, the file's beats are counted again
+    /// at it (twice the tempo: twice the beats), so the markers keep their points.
+    pub fn set_original_bpm(&mut self, bpm: f64) {
+        let ratio = bpm / self.original_bpm.max(1.0);
+        for m in &mut self.warp_markers {
+            m.beat *= ratio;
+        }
+        self.original_bpm = bpm;
+    }
 }
 
 /// A session or arrangement clip. Serialized untagged so projects saved before
@@ -6193,6 +6265,43 @@ pub const MODULAR_PARAMS: [ParamInfo; MOD_PARAM_COUNT] = [
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn warp_markers_map_beats_to_the_file_and_back() {
+        let mut clip = AudioClip {
+            name: "x".into(),
+            color: [0; 3],
+            sample: "x.wav".into(),
+            length: 8.0,
+            offset: 0.3,
+            warp: WarpMode::Stretch,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+        };
+        // Without markers: the original tempo.
+        assert!((clip.source_seconds(2.0, 90.0) - 1.3).abs() < 1e-12);
+        clip.warp_markers = [(0.0, 0.5), (4.0, 2.5), (8.0, 4.0)].map(|(beat, seconds)| WarpMarker { beat, seconds }).to_vec();
+        assert!((clip.file_seconds(2.0) - 1.5).abs() < 1e-12);
+        assert!((clip.file_seconds(6.0) - 3.25).abs() < 1e-12);
+        // Past the outer markers, at the nearest stretch's tempo.
+        assert!((clip.file_seconds(-1.0) - 0.0).abs() < 1e-12);
+        assert!((clip.file_seconds(10.0) - 4.75).abs() < 1e-12);
+        for beat in [-1.0, 0.0, 1.3, 4.0, 7.9, 12.0] {
+            assert!((clip.file_beat(clip.file_seconds(beat)) - beat).abs() < 1e-9);
+        }
+        // The clip starts 0.3 s in, beat -0.4 of the file.
+        assert!((clip.source_seconds(4.4, 90.0) - 2.5).abs() < 1e-9);
+        assert!((clip.beats_until(2.5, 90.0) - 4.4).abs() < 1e-9);
+        // Twice the original tempo: twice the beats, the same points.
+        clip.set_original_bpm(240.0);
+        assert!((clip.file_seconds(8.0) - 2.5).abs() < 1e-12);
+        // Warp off: the project's tempo.
+        clip.warp = WarpMode::Off;
+        assert!((clip.source_seconds(3.0, 90.0) - 2.3).abs() < 1e-12);
+    }
 
     #[test]
     fn lanes_interpolate_and_hold_their_ends() {

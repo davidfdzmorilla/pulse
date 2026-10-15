@@ -203,15 +203,26 @@ impl PulseApp {
 
     /// Once a frame: links or applies the controllers that came in.
     pub fn poll_midi_map(&mut self) {
+        let log = std::env::var_os("PULSE_MIDI_LOG").is_some();
         if let Some(control) = self.touched_control.take() {
+            if log {
+                eprintln!("[asignar] elegido: {}", self.control_name(control));
+            }
             self.learn.armed = Some(control);
             self.status = Some(format!("Mueve un knob o pulsa un botón del teclado para «{}»", self.control_name(control)));
         }
         let incoming: Vec<(u8, u8)> = self.learn.shared.incoming.lock().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default();
         for (cc, value) in incoming {
             if self.learn.on {
-                if let Some(control) = self.learn.armed.take() {
-                    self.assign(cc, control);
+                match self.learn.armed.take() {
+                    Some(control) => {
+                        if log {
+                            eprintln!("[asignar] CC {cc} → {}", self.control_name(control));
+                        }
+                        self.assign(cc, control);
+                    }
+                    None if log => eprintln!("[asignar] CC {cc}: ningún control de Pulse elegido todavía"),
+                    None => {}
                 }
                 continue;
             }
@@ -389,6 +400,51 @@ mod tests {
         assert!(reopened.learn.shared.take(10, 0));
         reopened.poll_midi_map();
         assert_eq!(reopened.project.tracks[0].mixer.pan, -1.0);
+    }
+
+    #[test]
+    fn a_click_picks_a_knob_or_fader_while_learning() {
+        use eframe::egui::{Event, PointerButton, Pos2, RawInput, Rect};
+        let info = engine::model::VOLUME_PARAM;
+        let click = |learning: bool| {
+            let ctx = egui::Context::default();
+            let mut picked = (false, false);
+            let mut rects = (Rect::NOTHING, Rect::NOTHING);
+            let press = |pos: Pos2, pressed: bool| Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Default::default() };
+            for frame in 0..8 {
+                let events = match frame {
+                    1 => vec![Event::PointerMoved(rects.0.center())],
+                    2 => vec![press(rects.0.center(), true)],
+                    3 => vec![press(rects.0.center(), false)],
+                    4 => vec![Event::PointerMoved(rects.1.center())],
+                    5 => vec![press(rects.1.center(), true)],
+                    6 => vec![press(rects.1.center(), false)],
+                    _ => vec![],
+                };
+                let input = RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::vec2(400.0, 400.0))), events, time: Some(frame as f64 * 0.1), ..Default::default() };
+                let _ = ctx.run_ui(input, |ui| {
+                    crate::widgets::set_learning(ui.ctx(), learning);
+                    let (changed, response) = crate::widgets::param_knob_response(ui, &info, 0.5, "Vol", 30.0, None);
+                    rects.0 = response.rect;
+                    picked.0 |= changed.is_some();
+                    let mut gain = 0.5;
+                    let fader = crate::widgets::fader_with_meter(ui, &mut gain, 0.0, 100.0);
+                    rects.1 = fader.rect;
+                    picked.1 |= fader.changed();
+                });
+            }
+            picked
+        };
+        assert_eq!(click(true), (true, true), "a click picks them while learning");
+        assert_eq!(click(false), (false, false), "and does nothing otherwise");
+        // Picking does not move the control.
+        let mut app = app();
+        app.toggle_learn();
+        let gain = app.project.tracks[0].mixer.gain;
+        app.set_param(Target::Track(0), Param::Volume, gain);
+        app.poll_midi_map();
+        assert_eq!(app.learn.armed, Some(Control::Param { target: Target::Track(0), param: Param::Volume }));
+        assert!(app.overridden.is_empty(), "no automation overridden by picking");
     }
 
     #[test]

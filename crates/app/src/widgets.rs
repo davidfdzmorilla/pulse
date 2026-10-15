@@ -80,6 +80,7 @@ impl<'a> Knob<'a> {
         let d = self.diameter;
         let width = (d + 22.0).max(46.0);
         let (rect, mut response) = ui.allocate_exact_size(vec2(width, d + 28.0), Sense::click_and_drag());
+        learn_target(ui, &mut response);
 
         if response.dragged() {
             let fine = ui.input(|i| i.modifiers.shift);
@@ -146,6 +147,32 @@ impl<'a> Knob<'a> {
     }
 }
 
+fn learn_id() -> egui::Id {
+    egui::Id::new("pulse_midi_learn")
+}
+
+/// Tells the widgets whether MIDI learn is on (once a frame).
+pub fn set_learning(ctx: &egui::Context, on: bool) {
+    ctx.data_mut(|d| d.insert_temp(learn_id(), on));
+}
+
+pub fn learning(ui: &Ui) -> bool {
+    ui.ctx().data(|d| d.get_temp(learn_id())).unwrap_or(false)
+}
+
+/// While MIDI learn is on, knobs and faders show they can be linked, and a click picks
+/// one (it reports a change of its value to itself, which tells the app which it is).
+fn learn_target(ui: &Ui, response: &mut Response) {
+    if !learning(ui) {
+        return;
+    }
+    let color = if response.hovered() { ACCENT } else { ACCENT.gamma_multiply(0.45) };
+    ui.painter().rect_stroke(response.rect.shrink(1.0), 3.0, Stroke::new(1.5, color), egui::StrokeKind::Inside);
+    if response.clicked() || response.drag_started() {
+        response.mark_changed();
+    }
+}
+
 /// Fader taper: unity gain at about 80% of travel, +6 dB at the top.
 pub fn gain_to_fader(gain: f32) -> f32 {
     (gain / 2.0).max(0.0).cbrt()
@@ -203,6 +230,7 @@ pub fn horizontal_meter(ui: &mut Ui, size: egui::Vec2, peak: f32) {
 /// Vertical volume fader with a level meter next to it. `gain` is linear.
 pub fn fader_with_meter(ui: &mut Ui, gain: &mut f32, peak: f32, height: f32) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, height + 16.0), Sense::click_and_drag());
+    learn_target(ui, &mut response);
     let track = Rect::from_min_size(pos2(rect.left() + 6.0, rect.top() + 4.0), vec2(4.0, height - 8.0));
     let meter = Rect::from_min_size(pos2(rect.left() + 18.0, rect.top()), vec2(8.0, height));
 

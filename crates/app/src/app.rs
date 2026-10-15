@@ -641,6 +641,11 @@ impl PulseApp {
     /// Sets a parameter by hand. Moving an automated parameter overrides its automation.
     pub fn set_param(&mut self, target: Target, param: Param, value: f32) {
         self.touched(crate::midi_map::Control::Param { target, param });
+        // Picking a control for MIDI learn sets it to itself: not a move (it would
+        // override its automation).
+        if self.learn.on && self.param_value(target, param) == value {
+            return;
+        }
         match param {
             Param::Volume => self.mixer_mut(target).gain = value.max(0.0),
             Param::Pan => self.mixer_mut(target).pan = value.clamp(-1.0, 1.0),
@@ -1803,6 +1808,7 @@ impl PulseApp {
 impl eframe::App for PulseApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
+        crate::widgets::set_learning(&ctx, self.learn.on);
         self.audio.collect_garbage();
         if let Some(state) = self.audio.state() {
             self.meters.update(&state);

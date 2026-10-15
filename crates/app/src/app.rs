@@ -243,6 +243,8 @@ pub struct PulseApp {
     /// Preferences, the window for them and the devices it shows.
     pub settings: crate::settings::Settings,
     pub show_settings: bool,
+    /// New versions from GitHub (see `updates`).
+    pub updates: crate::updates::Updates,
     pub devices: crate::settings::Devices,
     /// A text field has the keyboard: editing shortcuts are its.
     pub text_focus: bool,
@@ -267,10 +269,14 @@ impl PulseApp {
         app.interactive = true;
         app.recent = crate::commands::load_recent();
         app.menu_bar = crate::native_menu::MenuBar::install();
-        // A project given on the command line, else the last one (if wanted).
-        let argument = std::env::args().nth(1).map(PathBuf::from).filter(|p| p.extension().is_some_and(|e| e == "pulse" || e == "als"));
+        // A project opened from Finder or given on the command line, else the
+        // last one (if wanted).
+        crate::open_files::set_context(&cc.egui_ctx);
+        let project = |p: &PathBuf| p.extension().is_some_and(|e| e == "pulse" || e == "als");
+        let from_finder = crate::open_files::take().into_iter().find(project);
+        let argument = std::env::args().nth(1).map(PathBuf::from).filter(project);
         let last = app.settings.reopen_last.then(|| app.recent.first().cloned()).flatten();
-        if let Some(path) = argument.or(last) {
+        if let Some(path) = from_finder.or(argument).or(last) {
             if path.extension().is_some_and(|e| e == "als") {
                 app.import_live_set_from(&path);
             } else {
@@ -278,6 +284,7 @@ impl PulseApp {
             }
         }
         app.sync_all();
+        app.check_updates_on_start();
         app.midi = MidiInputs::connect(app.audio.live(), app.learn.shared.clone());
         app.sync_midi_map();
         if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
@@ -352,6 +359,7 @@ impl PulseApp {
             show_shortcuts: false,
             settings: Default::default(),
             show_settings: false,
+            updates: Default::default(),
             devices: Default::default(),
             text_focus: false,
             menu_bar: None,
@@ -1767,7 +1775,13 @@ impl PulseApp {
                 None => self.add_samples(audio, Placement::Auto),
             }
         }
-        for path in other {
+        self.open_documents(other);
+    }
+
+    /// Opens projects (dropped on the window or sent by Finder), asking first about
+    /// unsaved changes.
+    pub(crate) fn open_documents(&mut self, paths: Vec<PathBuf>) {
+        for path in paths {
             match path.extension().and_then(|e| e.to_str()).map(str::to_ascii_lowercase).as_deref() {
                 Some("als") if self.may_discard() => self.import_live_set_from(&path),
                 Some("pulse") if self.may_discard() => self.open_from(&path),
@@ -1965,6 +1979,12 @@ impl eframe::App for PulseApp {
         }
         self.handle_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
+        // Sent by Finder or the Dock: projects open, audio files land as samples.
+        let (audio, opened): (Vec<PathBuf>, Vec<PathBuf>) = crate::open_files::take().into_iter().partition(|p| is_audio_file(p));
+        if !audio.is_empty() {
+            self.add_samples(audio, Placement::Auto);
+        }
+        self.open_documents(opened);
         self.sample_drop_zones.clear();
         let live = self.audio.live();
         self.keyboard.handle(&ctx, live.as_ref());
@@ -2009,6 +2029,7 @@ impl eframe::App for PulseApp {
         crate::midi_map::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
         crate::settings::window(self, &ctx);
+        crate::updates::window(self, &ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         if let Some(mut bar) = self.menu_bar.take() {
             bar.update(|c| self.command_enabled(c), &self.recent);

@@ -1,0 +1,1551 @@
+{
+  "format": 1,
+  "loop_enabled": false,
+  "loop_end": 32.0,
+  "loop_start": 0.0,
+  "master": {
+    "automation": [],
+    "devices": [
+      {
+        "effect": {
+          "Limiter": {
+            "ceiling_db": -0.30000001192092896,
+            "gain_db": 0.0,
+            "release_ms": 120.0
+          }
+        },
+        "enabled": true
+      }
+    ],
+    "mixer": {
+      "active": true,
+      "gain": 1.0,
+      "pan": 0.0
+    }
+  },
+  "metronome": false,
+  "quantize": 4.0,
+  "record_quantize": null,
+  "returns": [
+    {
+      "automation": [],
+      "color": [
+        139,
+        197,
+        255
+      ],
+      "devices": [
+        {
+          "effect": {
+            "Reverb": {
+              "damping": 0.5,
+              "mix": 1.0,
+              "size": 0.75,
+              "width": 1.0
+            }
+          },
+          "enabled": true
+        }
+      ],
+      "mixer": {
+        "active": true,
+        "gain": 0.699999988079071,
+        "pan": 0.0
+      },
+      "name": "A Reverb"
+    },
+    {
+      "automation": [],
+      "color": [
+        247,
+        244,
+        124
+      ],
+      "devices": [
+        {
+          "effect": {
+            "Delay": {
+              "feedback": 0.4000000059604645,
+              "filter_hz": 5000.0,
+              "mix": 1.0,
+              "ping_pong": true,
+              "time_beats": 0.75
+            }
+          },
+          "enabled": true
+        }
+      ],
+      "mixer": {
+        "active": true,
+        "gain": 0.699999988079071,
+        "pan": 0.0
+      },
+      "name": "B Delay"
+    }
+  ],
+  "scene_names": [
+    "Intro",
+    "Drop",
+    "3",
+    "4",
+    "5",
+    "6",
+    "7",
+    "8"
+  ],
+  "swing": 0.0,
+  "swing_grid": 0.25,
+  "tempo": 120.0,
+  "tracks": [
+    {
+      "armed": false,
+      "arrangement": [
+        {
+          "clip": {
+            "color": [
+              255,
+              165,
+              41
+            ],
+            "length": 4.0,
+            "name": "Four on the floor",
+            "notes": [
+              {
+                "length": 0.25,
+                "pitch": 36,
+                "start": 0.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 0.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.25,
+                "pitch": 36,
+                "start": 1.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 1.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.25,
+                "pitch": 39,
+                "start": 1.0,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.25,
+                "pitch": 36,
+                "start": 2.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 2.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.25,
+                "pitch": 36,
+                "start": 3.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 3.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.25,
+                "pitch": 39,
+                "start": 3.0,
+                "velocity": 0.8999999761581421
+              }
+            ]
+          },
+          "length": 16.0,
+          "start": 0.0
+        },
+        {
+          "clip": {
+            "color": [
+              255,
+              165,
+              41
+            ],
+            "length": 4.0,
+            "name": "Breakbeat",
+            "notes": [
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 0.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 0.25,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 0.5,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 0.75,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 1.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 1.25,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 1.5,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 1.75,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 2.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 2.25,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 2.5,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 2.75,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 3.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 3.25,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 3.5,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.25,
+                "pitch": 42,
+                "start": 3.75,
+                "velocity": 0.3499999940395355
+              },
+              {
+                "length": 0.25,
+                "pitch": 36,
+                "start": 0.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.25,
+                "pitch": 38,
+                "start": 1.0,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.25,
+                "pitch": 36,
+                "start": 1.75,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.25,
+                "pitch": 36,
+                "start": 2.5,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.25,
+                "pitch": 38,
+                "start": 3.0,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.25,
+                "pitch": 46,
+                "start": 3.5,
+                "velocity": 0.5
+              }
+            ]
+          },
+          "length": 16.0,
+          "start": 16.0
+        }
+      ],
+      "automation": [],
+      "clips": [
+        {
+          "color": [
+            255,
+            165,
+            41
+          ],
+          "length": 4.0,
+          "name": "Four on the floor",
+          "notes": [
+            {
+              "length": 0.25,
+              "pitch": 36,
+              "start": 0.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 0.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.25,
+              "pitch": 36,
+              "start": 1.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 1.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.25,
+              "pitch": 39,
+              "start": 1.0,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.25,
+              "pitch": 36,
+              "start": 2.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 2.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.25,
+              "pitch": 36,
+              "start": 3.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 3.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.25,
+              "pitch": 39,
+              "start": 3.0,
+              "velocity": 0.8999999761581421
+            }
+          ]
+        },
+        {
+          "color": [
+            255,
+            165,
+            41
+          ],
+          "length": 4.0,
+          "name": "Breakbeat",
+          "notes": [
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 0.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 0.25,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 0.5,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 0.75,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 1.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 1.25,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 1.5,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 1.75,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 2.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 2.25,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 2.5,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 2.75,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 3.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 3.25,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 3.5,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.25,
+              "pitch": 42,
+              "start": 3.75,
+              "velocity": 0.3499999940395355
+            },
+            {
+              "length": 0.25,
+              "pitch": 36,
+              "start": 0.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.25,
+              "pitch": 38,
+              "start": 1.0,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.25,
+              "pitch": 36,
+              "start": 1.75,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.25,
+              "pitch": 36,
+              "start": 2.5,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.25,
+              "pitch": 38,
+              "start": 3.0,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.25,
+              "pitch": 46,
+              "start": 3.5,
+              "velocity": 0.5
+            }
+          ]
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "color": [
+        255,
+        165,
+        41
+      ],
+      "devices": [
+        {
+          "effect": {
+            "Compressor": {
+              "attack_ms": 8.0,
+              "makeup_db": 1.5,
+              "ratio": 3.0,
+              "release_ms": 90.0,
+              "threshold_db": -14.0
+            }
+          },
+          "enabled": true
+        }
+      ],
+      "instrument": {
+        "DrumMachine": {
+          "decay": [
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0,
+            1.0
+          ],
+          "level": [
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929,
+            0.800000011920929
+          ],
+          "tune": [
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0,
+            0.0
+          ]
+        }
+      },
+      "kind": "Midi",
+      "mixer": {
+        "active": true,
+        "gain": 0.699999988079071,
+        "pan": 0.0
+      },
+      "name": "Drums",
+      "sends": [
+        0.0,
+        0.0
+      ],
+      "solo": false
+    },
+    {
+      "armed": false,
+      "arrangement": [
+        {
+          "clip": {
+            "color": [
+              84,
+              128,
+              228
+            ],
+            "length": 16.0,
+            "name": "Acid Line",
+            "notes": [
+              {
+                "length": 0.2,
+                "pitch": 45,
+                "start": 0.5,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.2,
+                "pitch": 57,
+                "start": 1.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.2,
+                "pitch": 45,
+                "start": 1.5,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.2,
+                "pitch": 45,
+                "start": 2.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.2,
+                "pitch": 57,
+                "start": 2.75,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.6,
+                "pitch": 57,
+                "start": 3.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.3,
+                "pitch": 52,
+                "start": 3.5,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.2,
+                "pitch": 41,
+                "start": 4.5,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.2,
+                "pitch": 53,
+                "start": 5.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.2,
+                "pitch": 41,
+                "start": 5.5,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.2,
+                "pitch": 41,
+                "start": 6.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.2,
+                "pitch": 53,
+                "start": 6.75,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.6,
+                "pitch": 53,
+                "start": 7.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.3,
+                "pitch": 48,
+                "start": 7.5,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.2,
+                "pitch": 48,
+                "start": 8.5,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.2,
+                "pitch": 60,
+                "start": 9.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.2,
+                "pitch": 48,
+                "start": 9.5,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.2,
+                "pitch": 48,
+                "start": 10.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.2,
+                "pitch": 60,
+                "start": 10.75,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.6,
+                "pitch": 60,
+                "start": 11.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.3,
+                "pitch": 55,
+                "start": 11.5,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.2,
+                "pitch": 43,
+                "start": 12.5,
+                "velocity": 0.8999999761581421
+              },
+              {
+                "length": 0.2,
+                "pitch": 55,
+                "start": 13.0,
+                "velocity": 0.6000000238418579
+              },
+              {
+                "length": 0.2,
+                "pitch": 43,
+                "start": 13.5,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.2,
+                "pitch": 43,
+                "start": 14.5,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.2,
+                "pitch": 55,
+                "start": 14.75,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 0.6,
+                "pitch": 55,
+                "start": 15.0,
+                "velocity": 1.0
+              },
+              {
+                "length": 0.3,
+                "pitch": 50,
+                "start": 15.5,
+                "velocity": 0.800000011920929
+              }
+            ]
+          },
+          "length": 16.0,
+          "start": 16.0
+        }
+      ],
+      "automation": [],
+      "clips": [
+        {
+          "color": [
+            84,
+            128,
+            228
+          ],
+          "length": 16.0,
+          "name": "Acid Line",
+          "notes": [
+            {
+              "length": 0.2,
+              "pitch": 45,
+              "start": 0.5,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.2,
+              "pitch": 57,
+              "start": 1.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.2,
+              "pitch": 45,
+              "start": 1.5,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.2,
+              "pitch": 45,
+              "start": 2.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.2,
+              "pitch": 57,
+              "start": 2.75,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.6,
+              "pitch": 57,
+              "start": 3.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.3,
+              "pitch": 52,
+              "start": 3.5,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.2,
+              "pitch": 41,
+              "start": 4.5,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.2,
+              "pitch": 53,
+              "start": 5.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.2,
+              "pitch": 41,
+              "start": 5.5,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.2,
+              "pitch": 41,
+              "start": 6.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.2,
+              "pitch": 53,
+              "start": 6.75,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.6,
+              "pitch": 53,
+              "start": 7.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.3,
+              "pitch": 48,
+              "start": 7.5,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.2,
+              "pitch": 48,
+              "start": 8.5,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.2,
+              "pitch": 60,
+              "start": 9.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.2,
+              "pitch": 48,
+              "start": 9.5,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.2,
+              "pitch": 48,
+              "start": 10.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.2,
+              "pitch": 60,
+              "start": 10.75,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.6,
+              "pitch": 60,
+              "start": 11.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.3,
+              "pitch": 55,
+              "start": 11.5,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.2,
+              "pitch": 43,
+              "start": 12.5,
+              "velocity": 0.8999999761581421
+            },
+            {
+              "length": 0.2,
+              "pitch": 55,
+              "start": 13.0,
+              "velocity": 0.6000000238418579
+            },
+            {
+              "length": 0.2,
+              "pitch": 43,
+              "start": 13.5,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.2,
+              "pitch": 43,
+              "start": 14.5,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.2,
+              "pitch": 55,
+              "start": 14.75,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 0.6,
+              "pitch": 55,
+              "start": 15.0,
+              "velocity": 1.0
+            },
+            {
+              "length": 0.3,
+              "pitch": 50,
+              "start": 15.5,
+              "velocity": 0.800000011920929
+            }
+          ]
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "color": [
+        84,
+        128,
+        228
+      ],
+      "devices": [],
+      "instrument": {
+        "Acid": {
+          "accent": 0.6000000238418579,
+          "cutoff": 400.0,
+          "decay": 0.30000001192092896,
+          "drive": 0.30000001192092896,
+          "env_mod": 0.6000000238418579,
+          "gain": 0.5,
+          "glide_ms": 60.0,
+          "resonance": 0.75,
+          "square": false
+        }
+      },
+      "kind": "Midi",
+      "mixer": {
+        "active": true,
+        "gain": 0.699999988079071,
+        "pan": 0.0
+      },
+      "name": "Bass",
+      "sends": [
+        0.0,
+        0.0
+      ],
+      "solo": false
+    },
+    {
+      "armed": false,
+      "arrangement": [
+        {
+          "clip": {
+            "color": [
+              37,
+              255,
+              168
+            ],
+            "length": 16.0,
+            "name": "Am F C G",
+            "notes": [
+              {
+                "length": 3.8,
+                "pitch": 57,
+                "start": 0.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 60,
+                "start": 0.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 64,
+                "start": 0.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 53,
+                "start": 4.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 57,
+                "start": 4.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 60,
+                "start": 4.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 55,
+                "start": 8.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 60,
+                "start": 8.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 64,
+                "start": 8.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 55,
+                "start": 12.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 59,
+                "start": 12.0,
+                "velocity": 0.699999988079071
+              },
+              {
+                "length": 3.8,
+                "pitch": 62,
+                "start": 12.0,
+                "velocity": 0.699999988079071
+              }
+            ]
+          },
+          "length": 32.0,
+          "start": 0.0
+        }
+      ],
+      "automation": [
+        {
+          "param": {
+            "Device": {
+              "device": 0,
+              "param": 0
+            }
+          },
+          "points": [
+            {
+              "beat": 0.0,
+              "value": 300.0
+            },
+            {
+              "beat": 28.0,
+              "value": 6000.0
+            },
+            {
+              "beat": 32.0,
+              "value": 1200.0
+            }
+          ]
+        }
+      ],
+      "clips": [
+        {
+          "color": [
+            37,
+            255,
+            168
+          ],
+          "length": 16.0,
+          "name": "Am F C G",
+          "notes": [
+            {
+              "length": 3.8,
+              "pitch": 57,
+              "start": 0.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 60,
+              "start": 0.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 64,
+              "start": 0.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 53,
+              "start": 4.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 57,
+              "start": 4.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 60,
+              "start": 4.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 55,
+              "start": 8.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 60,
+              "start": 8.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 64,
+              "start": 8.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 55,
+              "start": 12.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 59,
+              "start": 12.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 62,
+              "start": 12.0,
+              "velocity": 0.699999988079071
+            }
+          ]
+        },
+        {
+          "color": [
+            37,
+            255,
+            168
+          ],
+          "length": 16.0,
+          "name": "Am F C G",
+          "notes": [
+            {
+              "length": 3.8,
+              "pitch": 57,
+              "start": 0.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 60,
+              "start": 0.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 64,
+              "start": 0.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 53,
+              "start": 4.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 57,
+              "start": 4.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 60,
+              "start": 4.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 55,
+              "start": 8.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 60,
+              "start": 8.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 64,
+              "start": 8.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 55,
+              "start": 12.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 59,
+              "start": 12.0,
+              "velocity": 0.699999988079071
+            },
+            {
+              "length": 3.8,
+              "pitch": 62,
+              "start": 12.0,
+              "velocity": 0.699999988079071
+            }
+          ]
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "color": [
+        37,
+        255,
+        168
+      ],
+      "devices": [
+        {
+          "effect": {
+            "AutoFilter": {
+              "cutoff": 1200.0,
+              "lfo_amount": 1.5,
+              "lfo_beats": 8.0,
+              "mode": "LowPass",
+              "resonance": 0.4000000059604645
+            }
+          },
+          "enabled": true
+        },
+        {
+          "effect": {
+            "Ducker": {
+              "depth": 0.699999988079071,
+              "rate_beats": 1.0,
+              "release": 0.6000000238418579
+            }
+          },
+          "enabled": true
+        }
+      ],
+      "instrument": {
+        "SuperSaw": {
+          "attack": 0.009999999776482582,
+          "cutoff": 3000.0,
+          "decay": 0.5,
+          "detune": 0.30000001192092896,
+          "env_amount": 0.0,
+          "gain": 0.30000001192092896,
+          "release": 0.4000000059604645,
+          "resonance": 0.10000000149011612,
+          "spread": 0.8999999761581421,
+          "sustain": 0.800000011920929,
+          "voices": 7.0
+        }
+      },
+      "kind": "Midi",
+      "mixer": {
+        "active": true,
+        "gain": 0.699999988079071,
+        "pan": 0.0
+      },
+      "name": "Chords",
+      "sends": [
+        0.3499999940395355,
+        0.0
+      ],
+      "solo": false
+    },
+    {
+      "armed": false,
+      "arrangement": [
+        {
+          "clip": {
+            "color": [
+              216,
+              108,
+              228
+            ],
+            "length": 8.0,
+            "name": "Melody",
+            "notes": [
+              {
+                "length": 0.5,
+                "pitch": 76,
+                "start": 0.0,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.5,
+                "pitch": 74,
+                "start": 0.5,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 1.0,
+                "pitch": 72,
+                "start": 1.0,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.5,
+                "pitch": 69,
+                "start": 2.0,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 1.5,
+                "pitch": 72,
+                "start": 2.5,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.5,
+                "pitch": 74,
+                "start": 4.0,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 0.5,
+                "pitch": 72,
+                "start": 4.5,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 1.0,
+                "pitch": 71,
+                "start": 5.0,
+                "velocity": 0.800000011920929
+              },
+              {
+                "length": 2.0,
+                "pitch": 67,
+                "start": 6.0,
+                "velocity": 0.800000011920929
+              }
+            ]
+          },
+          "length": 16.0,
+          "start": 16.0
+        }
+      ],
+      "automation": [],
+      "clips": [
+        null,
+        {
+          "color": [
+            216,
+            108,
+            228
+          ],
+          "length": 8.0,
+          "name": "Melody",
+          "notes": [
+            {
+              "length": 0.5,
+              "pitch": 76,
+              "start": 0.0,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.5,
+              "pitch": 74,
+              "start": 0.5,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 1.0,
+              "pitch": 72,
+              "start": 1.0,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.5,
+              "pitch": 69,
+              "start": 2.0,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 1.5,
+              "pitch": 72,
+              "start": 2.5,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.5,
+              "pitch": 74,
+              "start": 4.0,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 0.5,
+              "pitch": 72,
+              "start": 4.5,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 1.0,
+              "pitch": 71,
+              "start": 5.0,
+              "velocity": 0.800000011920929
+            },
+            {
+              "length": 2.0,
+              "pitch": 67,
+              "start": 6.0,
+              "velocity": 0.800000011920929
+            }
+          ]
+        },
+        null,
+        null,
+        null,
+        null,
+        null,
+        null
+      ],
+      "color": [
+        216,
+        108,
+        228
+      ],
+      "devices": [],
+      "instrument": {
+        "Fm": {
+          "attack": 0.0020000000949949026,
+          "decay": 1.5,
+          "feedback": 0.10000000149011612,
+          "gain": 0.20000000298023224,
+          "index": 4.0,
+          "mod_decay": 0.4000000059604645,
+          "mod_sustain": 0.10000000149011612,
+          "ratio": 3.5,
+          "release": 0.800000011920929,
+          "sustain": 0.0
+        }
+      },
+      "kind": "Midi",
+      "mixer": {
+        "active": true,
+        "gain": 0.699999988079071,
+        "pan": 0.0
+      },
+      "name": "Lead",
+      "sends": [
+        0.30000001192092896,
+        0.25
+      ],
+      "solo": false
+    }
+  ]
+}

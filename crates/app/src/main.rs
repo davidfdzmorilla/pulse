@@ -17,6 +17,7 @@ mod midi_map;
 mod modular_ui;
 mod native_menu;
 mod note_edit;
+mod open_files;
 mod piano_roll;
 mod plugins;
 mod poly_ui;
@@ -32,6 +33,7 @@ mod sync;
 mod table_editor;
 mod theme;
 mod tracks;
+mod updates;
 mod transport;
 mod wave_ui;
 mod widgets;
@@ -79,6 +81,7 @@ fn main() -> eframe::Result {
             .with_min_inner_size([1000.0, 640.0]),
         ..Default::default()
     };
+    open_files::listen();
     eframe::run_native(
         "Pulse",
         options,

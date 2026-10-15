@@ -50,6 +50,7 @@ pub enum Command {
     Shortcuts,
     About,
     Settings,
+    CheckUpdates,
 }
 
 /// How the question about unsaved changes was answered.
@@ -257,6 +258,10 @@ impl PulseApp {
             Command::Shortcuts => self.show_shortcuts = true,
             Command::About => crate::native_menu::about(),
             Command::Settings => self.open_settings(),
+            Command::CheckUpdates => {
+                self.updates.show = true;
+                self.check_updates();
+            }
         }
     }
 

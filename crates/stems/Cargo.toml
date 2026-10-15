@@ -1,0 +1,9 @@
+[package]
+name = "stems"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# ONNX Runtime, linked in (the build downloads it once).
+ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "download-binaries", "tls-native", "api-31"] }
+rustfft = "6.4"

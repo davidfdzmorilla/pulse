@@ -406,6 +406,42 @@ pub(crate) mod tests {
         assert_eq!(app.project.tracks[3].devices.last().unwrap().effect, Effect::Plugin(id));
     }
 
+    /// The first instrument installed on this computer, through the whole app: found,
+    /// put on a track, changed, saved, opened again and rendered.
+    #[test]
+    #[ignore = "diagnostic: uses the plugins installed on this computer"]
+    fn an_installed_instrument_in_a_project() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        app.plugin_library.search(&engine::plugin::default_folders());
+        let Some(info) = app.plugin_library.found.iter().find(|p| p.instrument).cloned() else {
+            println!("no hay instrumentos instalados");
+            return;
+        };
+        for (t, track) in app.project.tracks.iter_mut().enumerate() {
+            track.mixer.gain = if t == 3 { 1.0 } else { 0.0 };
+        }
+        app.set_plugin_instrument(3, &info);
+        let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!("{:?}", app.status) };
+        let before = rms(&render(&mut app));
+        // Half the volume, if it has a parameter called that.
+        let handle = &app.samples.plugins[&id];
+        let volume = handle.params().into_iter().find(|p| p.name.to_lowercase().contains("volume"));
+        if let Some(v) = &volume {
+            println!("{}: {} = {} → {}", info.name, v.name, handle.display(v.id, handle.value(v.id)), handle.display(v.id, handle.value(v.id) * 0.5));
+            handle.set(v.id, handle.value(v.id) * 0.5);
+        }
+        let file = std::env::temp_dir().join(format!("pulse-installed-{}.pulse", std::process::id()));
+        app.save_to_path(&file);
+        let mut reopened = PulseApp::headless(crate::project::Project::load(&file).unwrap());
+        let _ = std::fs::remove_file(&file);
+        let after = rms(&render(&mut reopened));
+        println!("{}: nivel {before:.4} → {after:.4} tras guardar y abrir", info.name);
+        assert!(before > 0.001 && after > 0.0);
+        if volume.is_some() {
+            assert!(after < before * 0.9, "the saved volume came back");
+        }
+    }
+
     #[test]
     fn missing_plugins_leave_a_silent_slot_and_say_so() {
         let mut project = crate::project::Project::demo();

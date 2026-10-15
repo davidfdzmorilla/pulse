@@ -184,12 +184,19 @@ pub struct SuperSaw {
     sample_rate: f32,
     counter: u64,
     seed: u32,
+    /// Pitch bend and vibrato, as a frequency ratio.
+    pitch: f32,
 }
 
 impl SuperSaw {
     pub fn new(params: SuperSawParams, sample_rate: f32) -> Self {
         let voice = SawVoice { gate: Gate::OFF, env: Adsr::IDLE, phases: [0.0; UNISON], filters: [Svf::default(); 2] };
-        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491 }
+        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0 }
+    }
+
+    /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
+    pub fn set_pitch(&mut self, ratio: f32) {
+        self.pitch = ratio;
     }
 
     pub fn params(&self) -> SuperSawParams {
@@ -243,8 +250,9 @@ impl SuperSaw {
         let count = (p.voices.round() as usize).clamp(1, UNISON);
         let norm = 1.0 / (count as f32).sqrt();
         let k = 2.0 - 1.95 * p.resonance.clamp(0.0, 1.0);
+        let pitch = self.pitch;
         for voice in self.voices.iter_mut().filter(|v| v.env.stage != Stage::Idle) {
-            let freq = midi_to_freq(voice.gate.pitch);
+            let freq = midi_to_freq(voice.gate.pitch) * pitch;
             // Saws spread symmetrically in pitch (up to ±50 cents) and across the stereo field.
             let mut incs = [0f32; UNISON];
             let mut gains = [(0f32, 0f32); UNISON];
@@ -298,6 +306,8 @@ pub struct AcidBass {
     filter_env: f32,
     accent: f32,
     ladder: [f32; 4],
+    /// Pitch bend and vibrato, as a frequency ratio.
+    pitch: f32,
 }
 
 impl AcidBass {
@@ -314,7 +324,13 @@ impl AcidBass {
             filter_env: 0.0,
             accent: 0.0,
             ladder: [0.0; 4],
+            pitch: 1.0,
         }
+    }
+
+    /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
+    pub fn set_pitch(&mut self, ratio: f32) {
+        self.pitch = ratio;
     }
 
     pub fn params(&self) -> AcidParams {
@@ -369,7 +385,7 @@ impl AcidBass {
             let target_amp = if self.gate_open { 1.0 } else { 0.0 };
             self.amp += (target_amp - self.amp) * if self.gate_open { attack } else { release };
             self.freq += (self.target - self.freq) * glide;
-            let inc = self.freq / sr;
+            let inc = self.freq * self.pitch / sr;
             let osc = if p.square { square(self.phase, inc) } else { saw(self.phase, inc) };
             self.phase = (self.phase + inc) % 1.0;
 
@@ -410,12 +426,19 @@ pub struct FmSynth {
     voices: [FmVoice; FM_VOICES],
     sample_rate: f32,
     counter: u64,
+    /// Pitch bend and vibrato, as a frequency ratio.
+    pitch: f32,
 }
 
 impl FmSynth {
     pub fn new(params: FmParams, sample_rate: f32) -> Self {
         let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, mod_env: 0.0 };
-        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0 }
+        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0 }
+    }
+
+    /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
+    pub fn set_pitch(&mut self, ratio: f32) {
+        self.pitch = ratio;
     }
 
     pub fn params(&self) -> FmParams {
@@ -454,8 +477,9 @@ impl FmSynth {
         let p = self.params;
         let sr = self.sample_rate;
         let mod_decay = decay_coef(p.mod_decay, sr);
+        let pitch = self.pitch;
         for voice in self.voices.iter_mut().filter(|v| v.env.stage != Stage::Idle) {
-            let freq = midi_to_freq(voice.gate.pitch);
+            let freq = midi_to_freq(voice.gate.pitch) * pitch;
             let (carrier_inc, mod_inc) = (freq / sr, freq * p.ratio / sr);
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.gate.tick() {

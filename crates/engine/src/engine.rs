@@ -526,6 +526,21 @@ impl Instrument {
         }
     }
 
+    /// Bends the built-in pitched instruments by `ratio`. False for the ones that take
+    /// pitch bend themselves (modular synth, plugins) or play drums.
+    fn set_pitch(&mut self, ratio: f32) -> bool {
+        match self {
+            Self::Synth(s) => s.set_pitch(ratio),
+            Self::SuperSaw(s) => s.set_pitch(ratio),
+            Self::Acid(a) => a.set_pitch(ratio),
+            Self::Fm(f) => f.set_pitch(ratio),
+            Self::Sampler(s) => s.set_pitch(ratio),
+            Self::Wavetable(w, _) => w.set_pitch(ratio),
+            Self::Drums(_) | Self::Rack(_) | Self::Kick(_) | Self::Modular(_) | Self::Plugin(..) => return false,
+        }
+        true
+    }
+
     /// The modular synth and plugins follow controllers.
     fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
         match self {
@@ -571,6 +586,60 @@ impl Instrument {
             Self::Modular(m) => m.render(samples, tables, left, right),
             Self::Plugin(_, Some(p)) => p.render(left, right),
             Self::Plugin(_, None) => {}
+        }
+    }
+}
+
+/// Pitch bend range of the built-in instruments, in semitones.
+const BEND_SEMITONES: f32 = 2.0;
+/// The modulation wheel's vibrato: its rate, its depth at full wheel (semitones) and how
+/// often its pitch is updated (frames).
+const VIBRATO_HZ: f32 = 5.5;
+const VIBRATO_SEMITONES: f32 = 0.5;
+const VIBRATO_STEP: usize = 64;
+
+/// What the pitch bend and the modulation wheel do to a track's built-in instrument:
+/// bend it up to two semitones either way, and add vibrato. (The modular synth and
+/// plugins take the controllers themselves.)
+#[derive(Clone, Copy, Debug, Default)]
+struct Expression {
+    /// -1..1.
+    bend: f32,
+    /// 0..1.
+    wheel: f32,
+    /// The vibrato's phase, 0..1.
+    phase: f32,
+}
+
+impl Expression {
+    fn control(&mut self, controller: Controller, value: f32) {
+        match controller {
+            Controller::PitchBend => self.bend = value.clamp(-1.0, 1.0),
+            Controller::Cc(1) => self.wheel = value.clamp(0.0, 1.0),
+            // All notes off and reset controllers bring the wheels back.
+            Controller::Cc(121) => *self = Expression { phase: self.phase, ..Default::default() },
+            _ => {}
+        }
+    }
+
+    /// The frequency ratio now.
+    fn ratio(&self) -> f32 {
+        let vibrato = (self.phase * std::f32::consts::TAU).sin() * self.wheel * VIBRATO_SEMITONES;
+        2f32.powf((self.bend * BEND_SEMITONES + vibrato) / 12.0)
+    }
+
+    /// Renders `instrument`, bent and with vibrato, updating the pitch every few frames.
+    fn render(&mut self, instrument: &mut Instrument, sr: f32, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
+        if !instrument.set_pitch(1.0) {
+            instrument.render(samples, tables, left, right);
+            self.phase = (self.phase + left.len() as f32 * VIBRATO_HZ / sr).fract();
+            return;
+        }
+        let step = if self.wheel > 0.0 { VIBRATO_STEP } else { left.len().max(1) };
+        for (l, r) in left.chunks_mut(step).zip(right.chunks_mut(step)) {
+            instrument.set_pitch(self.ratio());
+            instrument.render(samples, tables, l, r);
+            self.phase = (self.phase + l.len() as f32 * VIBRATO_HZ / sr).fract();
         }
     }
 }
@@ -847,6 +916,8 @@ struct Track {
     audio_left: Vec<f32>,
     audio_right: Vec<f32>,
     events: EventQueue,
+    /// Pitch bend and modulation wheel for the built-in instruments.
+    expression: Expression,
     armed: bool,
     /// Session slot being recorded into.
     recording: Option<usize>,
@@ -885,6 +956,7 @@ impl Track {
             audio_left: vec![0.0; MAX_BLOCK],
             audio_right: vec![0.0; MAX_BLOCK],
             events: Vec::with_capacity(MAX_EVENTS),
+            expression: Expression::default(),
             armed: false,
             recording: None,
             record_start: 0.0,
@@ -1358,6 +1430,7 @@ impl Engine {
         }
 
         let any_solo = self.tracks.iter().any(|t| t.solo);
+        let sr = self.sample_rate;
         for (index, track) in self.tracks.iter_mut().enumerate() {
             let (left, right) = (&mut track.buffer[..n], &mut track.buffer_right[..n]);
             left.fill(0.0);
@@ -1368,17 +1441,20 @@ impl Engine {
             for &(frame, _, event) in &track.events {
                 let frame = frame.min(n - 1);
                 if frame > cursor {
-                    track.instrument.render(&track.samples, &track.tables, &mut left[cursor..frame], &mut right[cursor..frame]);
+                    track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..frame], &mut right[cursor..frame]);
                     cursor = frame;
                 }
                 match event {
                     Event::AllNotesOff => track.instrument.all_notes_off(),
                     Event::NoteOff { pitch } => track.instrument.note_off(pitch),
                     Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(&track.samples, pitch, velocity, gate),
-                    Event::Control { controller, pitch, value } => track.instrument.control(controller, pitch, value),
+                    Event::Control { controller, pitch, value } => {
+                        track.expression.control(controller, value);
+                        track.instrument.control(controller, pitch, value);
+                    }
                 }
             }
-            track.instrument.render(&track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
+            track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
             track.events.clear();
 
             let channel = &mut track.channel;
@@ -1807,6 +1883,94 @@ mod tests {
         h.run_beats(0.5);
         let halved = h.shared.tracks[2].peak.take();
         assert!((halved / plain - 0.5).abs() < 0.02, "{halved} vs {plain}");
+    }
+
+    /// The fundamental of `x` (one channel), by autocorrelation between 200 and 1000 Hz.
+    fn pitch_of(x: &[f32]) -> f32 {
+        let (shortest, longest) = ((SR / 1000.0) as usize, (SR / 200.0) as usize);
+        let n = x.len() - longest - 1;
+        let correlation = |lag: usize| -> f32 { (0..n).map(|i| x[i] * x[i + lag]).sum() };
+        let values: Vec<f32> = (shortest..=longest).map(correlation).collect();
+        let max = values.iter().copied().fold(f32::MIN, f32::max);
+        // The first peak near the highest: later ones are whole multiples of the period.
+        let k = (1..values.len() - 1).find(|&k| values[k] >= 0.9 * max && values[k] >= values[k - 1] && values[k] >= values[k + 1]).unwrap_or(0);
+        let best = shortest + k;
+        // Parabolic interpolation around the peak.
+        let (a, b, c) = (correlation(best - 1), correlation(best), correlation(best + 1));
+        let offset = 0.5 * (a - c) / (a - 2.0 * b + c);
+        SR / (best as f32 + offset)
+    }
+
+    #[test]
+    fn pitch_bend_and_the_wheel_bend_and_vibrate_the_built_in_instruments() {
+        use crate::model::{AcidParams, FmParams, SuperSawParams, SynthParams, WaveParams};
+        let instruments = [
+            ("Pulse Synth", InstrumentKind::Synth(SynthParams { cutoff: 8000.0, ..Default::default() })),
+            ("Super Saw", InstrumentKind::SuperSaw(SuperSawParams { voices: 1.0, ..Default::default() })),
+            ("Acid Bass", InstrumentKind::Acid(AcidParams { cutoff: 3000.0, env_mod: 0.0, resonance: 0.0, ..Default::default() })),
+            ("FM Synth", InstrumentKind::Fm(FmParams { index: 0.0, feedback: 0.0, sustain: 1.0, ..Default::default() })),
+            ("Wavetable", InstrumentKind::Wavetable(WaveParams::default())),
+            ("Polychrome", InstrumentKind::Polychrome(WaveParams::polychrome())),
+        ];
+        for (name, kind) in instruments {
+            let mut h = Harness::new();
+            h.send(Command::set_instrument(2, kind, SR));
+            let table = Arc::new(crate::wavetable::builtin(0));
+            h.send(Command::SetWavetables { track: 2, tables: Box::new(vec![table.clone(), table]) });
+            h.send(Command::SetInputTrack(Some(2)));
+            h.play_note(69, 1.0);
+            let left = |out: &[f32]| out.iter().step_by(2).copied().collect::<Vec<f32>>();
+            let plain = pitch_of(&left(&h.run_beats(0.5))[4800..]);
+            assert!((plain - 440.0).abs() < 4.0, "{name}: {plain} Hz");
+            assert!(h.live.push(LiveNote::control(Controller::PitchBend, 0, 1.0)).is_ok());
+            let bent = pitch_of(&left(&h.run_beats(0.5))[2400..]);
+            assert!((bent - 493.9).abs() < 4.0, "{name}: bent up to B4, {bent} Hz");
+            assert!(h.live.push(LiveNote::control(Controller::PitchBend, 0, -1.0)).is_ok());
+            let down = pitch_of(&left(&h.run_beats(0.5))[2400..]);
+            assert!((down - 392.0).abs() < 4.0, "{name}: bent down to G4, {down} Hz");
+            // Back to the middle, then the wheel all the way: the pitch wavers ±half a semitone.
+            assert!(h.live.push(LiveNote::control(Controller::PitchBend, 0, 0.0)).is_ok());
+            assert!(h.live.push(LiveNote::control(Controller::Cc(1), 0, 1.0)).is_ok());
+            let out = left(&h.run_beats(1.0));
+            let pitches: Vec<f32> = out[4800..].chunks(1200).filter(|c| c.len() == 1200).map(pitch_of).collect();
+            let (low, high) = pitches.iter().fold((f32::MAX, 0f32), |(lo, hi), &p| (lo.min(p), hi.max(p)));
+            assert!(low < 440.0 * 0.985 && high > 440.0 * 1.015, "{name}: vibrato {low}..{high} Hz");
+            assert!(high < 440.0 * 1.04 && low > 440.0 * 0.96, "{name}: not more than half a semitone: {low}..{high}");
+        }
+    }
+
+    #[test]
+    fn the_sampler_bends_too() {
+        use crate::model::SamplerParams;
+        // Five seconds of a C4 sine, played as A4.
+        let c4 = 261.63f32;
+        let sine: Vec<f32> = (0..240_000).map(|i| (i as f32 * c4 / SR * std::f32::consts::TAU).sin() * 0.5).collect();
+        let mut h = Harness::new();
+        h.send(Command::set_instrument(2, InstrumentKind::Sampler(SamplerParams::default()), SR));
+        h.send(Command::SetSamples { track: 2, samples: Box::new(vec![Arc::new(Sample::from_channels(sine.clone(), sine, SR))]) });
+        h.send(Command::SetInputTrack(Some(2)));
+        h.play_note(69, 1.0);
+        let left = |out: &[f32]| out.iter().step_by(2).copied().collect::<Vec<f32>>();
+        let plain = pitch_of(&left(&h.run_beats(0.5))[4800..]);
+        assert!((plain - 440.0).abs() < 4.0, "{plain}");
+        assert!(h.live.push(LiveNote::control(Controller::PitchBend, 0, 1.0)).is_ok());
+        let bent = pitch_of(&left(&h.run_beats(0.5))[2400..]);
+        assert!((bent - 493.9).abs() < 4.0, "{bent}");
+    }
+
+    #[test]
+    fn drums_ignore_pitch_bend() {
+        let mut h = Harness::new();
+        h.send(Command::set_instrument(2, InstrumentKind::DrumMachine(Default::default()), SR));
+        h.send(Command::SetInputTrack(Some(2)));
+        h.play_note(36, 1.0);
+        let plain = h.run_beats(0.5);
+        let mut h2 = Harness::new();
+        h2.send(Command::set_instrument(2, InstrumentKind::DrumMachine(Default::default()), SR));
+        h2.send(Command::SetInputTrack(Some(2)));
+        assert!(h2.live.push(LiveNote::control(Controller::PitchBend, 0, 1.0)).is_ok());
+        h2.play_note(36, 1.0);
+        assert_eq!(h2.run_beats(0.5), plain);
     }
 
     #[test]

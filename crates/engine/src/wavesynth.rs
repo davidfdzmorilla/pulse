@@ -452,6 +452,8 @@ pub struct WaveSynth {
     sine: Vec<f32>,
     /// The voice the last note started on (for sequencer slides).
     last_voice: usize,
+    /// Pitch bend and vibrato, as a frequency ratio.
+    pitch: f32,
 }
 
 /// Step sequencer state.
@@ -497,6 +499,7 @@ impl WaveSynth {
             seq: Seq { keys: [(0, 0.0); 16], count: 0, step: 0, wait: 0.0, value: 0.0, sliding: false },
             sine: (0..HARMONIC_TABLE).map(|i| (i as f32 / HARMONIC_TABLE as f32 * TAU).sin()).collect(),
             last_voice: 0,
+            pitch: 1.0,
         }
     }
 
@@ -817,6 +820,11 @@ impl WaveSynth {
         }
     }
 
+    /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
+    pub fn set_pitch(&mut self, ratio: f32) {
+        self.pitch = ratio;
+    }
+
     pub fn render(&mut self, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
         let mut base = [0f32; PARAMS];
         let mut params = self.params;
@@ -867,6 +875,7 @@ impl WaveSynth {
     #[allow(clippy::too_many_arguments)]
     fn render_voice(&mut self, v: usize, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], base: &[f32; PARAMS], amounts: &[f32; WAVE_SLOTS], left: &mut [f32], right: &mut [f32]) {
         let p = self.params;
+        let pitch = self.pitch;
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
         let block = left.len() as f32 * dt;
@@ -925,7 +934,7 @@ impl WaveSynth {
         } else {
             voice.note = voice.target;
         }
-        let freq = note_freq(voice.note);
+        let freq = note_freq(voice.note) * pitch;
 
         let mut oscs: [Option<OscBlock>; 2] = [None, None];
         for (o, slot) in oscs.iter_mut().enumerate() {

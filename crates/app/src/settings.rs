@@ -187,7 +187,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         for (i, folder) in next.plugin_folders.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(folder.display().to_string()).size(10.5));
-                if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+                if ui.small_button("×").on_hover_text("Quitar").clicked() {
                     remove = Some(i);
                 }
             });
@@ -197,7 +197,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         }
         ui.horizontal(|ui| {
             if ui.button("Añadir carpeta…").clicked() {
-                if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                if let Some(folder) = crate::files::pick_folder(rfd::FileDialog::new()) {
                     next.plugin_folders.push(folder);
                 }
             }

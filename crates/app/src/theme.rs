@@ -62,6 +62,13 @@ fn install_fonts(ctx: &egui::Context) {
         let family = if name == "system" { FontFamily::Proportional } else { FontFamily::Monospace };
         fonts.families.entry(family).or_default().insert(0, name.into());
     }
+    // Symbols neither has (✎ ⤢ ✔ ⬆ …), from the system's symbol font, last.
+    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/Apple Symbols.ttf") {
+        fonts.font_data.insert("symbols".into(), Arc::new(FontData::from_owned(bytes)));
+        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+            fonts.families.entry(family).or_default().push("symbols".into());
+        }
+    }
     ctx.set_fonts(fonts);
 }
 
@@ -113,4 +120,38 @@ pub fn apply(ctx: &egui::Context) {
         v.widgets.hovered.fg_stroke.color = Color32::WHITE;
         v.widgets.active.fg_stroke.color = Color32::WHITE;
     });
+}
+
+#[cfg(test)]
+mod glyph_tests {
+    use super::*;
+
+    /// Every symbol in the interface's texts (string literals of the app's sources)
+    /// is in its fonts: a missing one shows as an empty box.
+    #[test]
+    fn the_fonts_have_every_symbol_the_interface_uses() {
+        let ctx = egui::Context::default();
+        apply(&ctx);
+        let _ = ctx.run_ui(Default::default(), |_| {});
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut used = std::collections::BTreeMap::<char, String>::new();
+        for entry in std::fs::read_dir(&dir).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            for line in text.lines().filter(|l| !l.trim_start().starts_with("//")) {
+                // The parts between quotes.
+                for (i, part) in line.split('"').enumerate() {
+                    if i % 2 == 1 {
+                        for c in part.chars().filter(|c| !c.is_ascii()) {
+                            used.entry(c).or_insert_with(|| format!("{}: {}", path.file_name().unwrap().to_string_lossy(), line.trim()));
+                        }
+                    }
+                }
+            }
+        }
+        let missing: Vec<String> = ctx.fonts_mut(|f| {
+            used.iter().filter(|(c, _)| !f.has_glyph(&body(), **c)).map(|(c, at)| format!("{c} (U+{:04X}) en {at}", *c as u32)).collect()
+        });
+        assert!(missing.is_empty(), "{} símbolos sin glifo:\n{}", missing.len(), missing.join("\n"));
+    }
 }

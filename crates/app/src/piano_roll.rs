@@ -532,7 +532,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
         combo(ui, "grid", &mut state.grid, &GRIDS);
         label(ui, "Nota");
         combo(ui, "note_length", &mut state.note_length, &NOTE_LENGTHS);
-        if widgets::flat_button(ui, "✎ Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
+        if widgets::flat_button(ui, "Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
             state.draw_mode = !state.draw_mode;
         }
         ui.separator();

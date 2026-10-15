@@ -81,6 +81,8 @@ impl<'a> Knob<'a> {
         let width = (d + 22.0).max(46.0);
         let (rect, mut response) = ui.allocate_exact_size(vec2(width, d + 28.0), Sense::click_and_drag());
         learn_target(ui, &mut response);
+        let (enabled, value) = (response.enabled(), *self.value as f64);
+        response.widget_info(|| egui::WidgetInfo::slider(enabled, value, self.label));
 
         if response.dragged() {
             let fine = ui.input(|i| i.modifiers.shift);
@@ -231,6 +233,8 @@ pub fn horizontal_meter(ui: &mut Ui, size: egui::Vec2, peak: f32) {
 pub fn fader_with_meter(ui: &mut Ui, gain: &mut f32, peak: f32, height: f32) -> Response {
     let (rect, mut response) = ui.allocate_exact_size(vec2(34.0, height + 16.0), Sense::click_and_drag());
     learn_target(ui, &mut response);
+    let (enabled, value) = (response.enabled(), *gain as f64);
+    response.widget_info(|| egui::WidgetInfo::slider(enabled, value, "Volumen"));
     let track = Rect::from_min_size(pos2(rect.left() + 6.0, rect.top() + 4.0), vec2(4.0, height - 8.0));
     let meter = Rect::from_min_size(pos2(rect.left() + 18.0, rect.top()), vec2(8.0, height));
 
@@ -270,9 +274,32 @@ pub fn fader_with_meter(ui: &mut Ui, gain: &mut f32, peak: f32, height: f32) -> 
     response.on_hover_text("Volumen · doble clic = 0 dB · Shift = fino")
 }
 
+/// A right-click menu with fields in it (names, amounts): egui's own closes on any
+/// click, even in a text field, so this one closes only on a click outside it (and
+/// its buttons close it themselves).
+pub fn edit_menu<R>(response: &Response, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<egui::InnerResponse<R>> {
+    egui::Popup::context_menu(response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(add_contents)
+}
+
+/// A menu button whose menu has fields (a name to type, sliders), which egui's own
+/// menus close on the first click in them: this one closes on a click outside it
+/// (its buttons close it themselves).
+pub fn field_menu_button<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let config = egui::containers::menu::MenuConfig::find(ui).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+    egui::containers::menu::MenuButton::new(label).config(config).ui(ui, add_contents).1.map(|r| r.inner)
+}
+
+/// Names a hand-drawn widget for accessibility (VoiceOver, and test scripts).
+pub fn name(response: &Response, typ: egui::WidgetType, label: impl Into<String>) {
+    let (enabled, label) = (response.enabled(), label.into());
+    response.widget_info(|| egui::WidgetInfo::labeled(typ, enabled, &label));
+}
+
 /// Small square toggle like a mixer's activator or solo button.
 pub fn toggle(ui: &mut Ui, on: bool, label: &str, on_color: Color32, size: egui::Vec2) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    let (enabled, text) = (response.enabled(), label.to_string());
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, enabled, on, &text));
     let fill = if on {
         on_color
     } else if response.hovered() {
@@ -295,6 +322,7 @@ pub fn toggle(ui: &mut Ui, on: bool, label: &str, on_color: Color32, size: egui:
 /// A flat button styled like the transport controls.
 pub fn flat_button(ui: &mut Ui, label: &str, active: bool, size: egui::Vec2) -> Response {
     let (rect, response) = ui.allocate_exact_size(size, Sense::click());
+    name(&response, egui::WidgetType::Button, label);
     let fill = if active {
         ACCENT
     } else if response.hovered() {

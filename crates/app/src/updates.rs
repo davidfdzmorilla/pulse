@@ -448,7 +448,7 @@ impl PulseApp {
     pub fn update_badge(&mut self, ui: &mut egui::Ui) {
         let label = match self.updates.state() {
             State::Available(release) if self.settings.skipped_version.as_deref() != Some(release.version()) => {
-                format!("⬆ Pulse {} disponible", release.version())
+                format!("↑ Pulse {} disponible", release.version())
             }
             State::Installed(version) => format!("↻ Reinicia para usar Pulse {version}"),
             _ => return,
@@ -482,7 +482,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 });
             }
             State::UpToDate => {
-                ui.label("✔ Tienes la última versión.");
+                ui.label("✓ Tienes la última versión.");
             }
             State::Available(release) => {
                 ui.heading(format!("Pulse {} disponible", release.version()));
@@ -517,7 +517,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 });
             }
             State::Installed(version) => {
-                ui.label(format!("✔ Pulse {version} está instalado. Se usará al reiniciar."));
+                ui.label(format!("✓ Pulse {version} está instalado. Se usará al reiniciar."));
                 if ui.button("Reiniciar ahora").clicked() {
                     action = Some(Action::Restart);
                 }

@@ -306,7 +306,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             for m in &mappings {
                 ui.label(format!("CC {}", m.cc));
                 ui.label(app.control_name(m.control));
-                if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+                if ui.small_button("×").on_hover_text("Quitar").clicked() {
                     remove = Some(m.cc);
                 }
                 ui.end_row();

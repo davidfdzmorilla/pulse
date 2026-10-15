@@ -152,6 +152,18 @@ impl PulseApp {
         }
     }
 
+    /// A file's tempo: found before, or now (it takes a moment: about a second a
+    /// minute of audio). None without a clear beat.
+    pub fn file_bpm(&mut self, path: &str) -> Option<f64> {
+        if let Some(grid) = self.tempo.grids.get(path) {
+            return grid.as_ref().map(|g| g.bpm);
+        }
+        let sample = self.sample(path);
+        let grid = beats::analyze(&sample.left, &sample.right, sample.sample_rate).ok().flatten();
+        self.tempo.grids.insert(path.to_string(), grid.clone());
+        grid.map(|g| g.bpm)
+    }
+
     /// Sets the project's tempo to the clip's own (its original tempo).
     pub fn use_clip_tempo(&mut self, clip: ClipRef) {
         let Some(Clip::Audio(audio)) = self.clip(clip) else { return };

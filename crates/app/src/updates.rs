@@ -122,7 +122,7 @@ pub fn newer(candidate: &str, current: &str) -> bool {
 // ----- GitHub ----------------------------------------------------------------------
 
 /// A token for the GitHub API: the GitHub CLI's, else the one kept in the keychain.
-fn token() -> Option<String> {
+pub(crate) fn token() -> Option<String> {
     let gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"].into_iter().find(|p| Path::new(p).exists());
     let from_gh = gh.and_then(|gh| output(Command::new(gh).args(["auth", "token"])));
     from_gh.or_else(|| output(Command::new("/usr/bin/security").args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])))
@@ -143,11 +143,11 @@ fn output(command: &mut Command) -> Option<String> {
     (out.status.success() && !text.is_empty()).then_some(text)
 }
 
-/// Runs curl with the token in its configuration (read from stdin, so it never
-/// shows in the process list). Returns the body, or writes it to `to`.
-fn curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<Vec<u8>, String> {
+/// Starts curl with the token in its configuration (read from stdin, so it never
+/// shows in the process list), writing the body to `to` if given.
+pub(crate) fn spawn_curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<std::process::Child, String> {
     let mut command = Command::new("/usr/bin/curl");
-    command.args(["--silent", "--show-error", "--fail", "--location", "--max-time", "600", "--config", "-"]);
+    command.args(["--silent", "--show-error", "--fail", "--location", "--max-time", "3600", "--config", "-"]);
     if let Some(path) = to {
         command.arg("--output").arg(path);
     }
@@ -165,20 +165,30 @@ fn curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<Vec<u
         );
         stdin.write_all(config.as_bytes()).map_err(|e| e.to_string())?;
     }
+    Ok(child)
+}
+
+/// Runs curl (see [`spawn_curl`]). Returns the body, or writes it to `to`.
+fn curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<Vec<u8>, String> {
+    let child = spawn_curl(url, token, accept, to)?;
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     if out.status.success() {
         Ok(out.stdout)
     } else {
-        let error = String::from_utf8_lossy(&out.stderr);
-        Err(if error.contains("404") {
-            format!("No se encontraron versiones publicadas en {REPOSITORY} (o el token no tiene acceso)")
-        } else if error.contains("401") || error.contains("403") {
-            "GitHub no acepta el token: inicia sesión con «gh auth login» o pega uno nuevo".to_string()
-        } else if error.contains("resolve host") || error.contains("connect") {
-            "Sin conexión con GitHub".to_string()
-        } else {
-            format!("Error al hablar con GitHub: {}", error.trim())
-        })
+        Err(curl_error(&String::from_utf8_lossy(&out.stderr)))
+    }
+}
+
+/// curl's error, in words.
+pub(crate) fn curl_error(error: &str) -> String {
+    if error.contains("404") {
+        format!("No se encontró en {REPOSITORY} (o el token no tiene acceso)")
+    } else if error.contains("401") || error.contains("403") {
+        "GitHub no acepta el token: inicia sesión con «gh auth login» o pega uno nuevo".to_string()
+    } else if error.contains("resolve host") || error.contains("connect") {
+        "Sin conexión con GitHub".to_string()
+    } else {
+        format!("Error al hablar con GitHub: {}", error.trim())
     }
 }
 
@@ -187,7 +197,7 @@ fn latest_release(token: &str) -> Result<Release, String> {
 }
 
 /// `which`: "latest" or "tags/v1.2.3".
-fn release_at(token: &str, which: &str) -> Result<Release, String> {
+pub(crate) fn release_at(token: &str, which: &str) -> Result<Release, String> {
     let body = curl(&format!("https://api.github.com/repos/{REPOSITORY}/releases/{which}"), token, "application/vnd.github+json", None)?;
     serde_json::from_slice(&body).map_err(|e| format!("Respuesta de GitHub no válida: {e}"))
 }

@@ -22,6 +22,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let sample = app.sample(&before.sample);
     let mut clip = before.clone();
     let mut slice = false;
+    let mut separate = false;
 
     ui.horizontal(|ui| {
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
@@ -85,6 +86,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 slice = ui
                     .button("A Drum Rack")
                     .on_hover_text("Corta la región del clip en golpes, uno por pad, en una pista MIDI nueva con un clip que los toca en orden")
+                    .clicked();
+            });
+            ui.horizontal(|ui| {
+                label(ui, "Stems");
+                separate = ui
+                    .add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems"))
+                    .on_hover_text("Batería, bajo, resto y voz, cada uno en una pista de audio nueva bajo esta; esta queda desactivada")
                     .clicked();
             });
             ui.label(
@@ -188,5 +196,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     }
     if slice {
         app.slice_clip(clip_ref);
+    }
+    if separate {
+        app.separate_stems(clip_ref);
     }
 }

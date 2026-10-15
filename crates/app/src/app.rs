@@ -200,6 +200,8 @@ pub struct PulseApp {
     pub midi: MidiInputs,
     pub keyboard: ComputerKeyboard,
     pub recorder: Recorder,
+    /// Controls moved while recording onto the arrangement (see `automation_rec`).
+    pub automation_take: Option<crate::automation_rec::AutomationTake>,
     /// Audio input, opened when an audio track is armed.
     pub capture: Option<InputCapture>,
     pub export: crate::export::Dialog,
@@ -340,6 +342,7 @@ impl PulseApp {
             midi: MidiInputs::default(),
             keyboard: ComputerKeyboard::default(),
             recorder: Recorder::default(),
+            automation_take: None,
             capture: None,
             overridden: HashSet::new(),
             selected_pad: 0,
@@ -659,6 +662,22 @@ impl PulseApp {
             _ => return None,
         };
         Some(id)
+    }
+
+    /// Where a plugin's parameter is automated: its track (or return) and parameter.
+    pub fn plugin_target_param(&self, id: PluginId, param: u32) -> Option<(Target, Param)> {
+        for (t, track) in self.project.tracks.iter().enumerate() {
+            if track.instrument == InstrumentKind::Plugin(id) {
+                return Some((Target::Track(t), Param::Instrument(param as usize)));
+            }
+        }
+        let targets = (0..self.project.tracks.len()).map(Target::Track).chain((0..NUM_RETURNS).map(Target::Return)).chain([Target::Master]);
+        for target in targets {
+            if let Some(device) = self.devices(target).iter().position(|d| d.effect == Effect::Plugin(id)) {
+                return Some((target, Param::Device { device, param: param as usize }));
+            }
+        }
+        None
     }
 
     pub fn param_info(&self, target: Target, param: Param) -> Option<ParamInfo> {
@@ -1567,6 +1586,7 @@ impl PulseApp {
             return;
         }
         self.recorder.start_arrangement(self.audio.position());
+        self.start_automation_take();
         self.audio.send(Command::SetArrangementRecord(true));
         self.audio.send(Command::Play);
     }
@@ -1600,6 +1620,9 @@ impl PulseApp {
     pub(crate) fn update_recording(&mut self) {
         let Some(state) = self.audio.state() else { return };
         self.pump_capture();
+        if self.automation_take.is_some() && state.arrangement_recording.load(Ordering::Relaxed) {
+            self.record_automation(state.position());
+        }
         let notes = self.audio.take_recorded();
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
         for take in self.recorder.update(notes, &state, &armed) {
@@ -1637,6 +1660,13 @@ impl PulseApp {
                     self.status = Some(format!("Grabadas {count} notas en el Arrangement"));
                 }
                 Finished::ArrangementEnded { start, end } => {
+                    let moved = self.finish_automation_take();
+                    if moved > 0 {
+                        self.status = Some(match moved {
+                            1 => "Grabada la automatización de 1 control".to_string(),
+                            n => format!("Grabada la automatización de {n} controles"),
+                        });
+                    }
                     let beats = ((end - start) * 4.0).round() / 4.0;
                     if beats <= 0.0 {
                         continue;

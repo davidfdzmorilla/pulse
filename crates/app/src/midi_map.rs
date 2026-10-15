@@ -249,6 +249,13 @@ impl PulseApp {
                 if let Some(handle) = self.samples.plugins.get(&id) {
                     handle.set(param, normalized as f64);
                 }
+                // Moved by hand: its automation stops playing (and the move can be recorded).
+                if let Some((target, p)) = self.plugin_target_param(id, param) {
+                    if self.automation_state(target, p) == Some(false) && self.overridden.insert((target, p)) {
+                        self.sync_automation(target);
+                    }
+                }
+                self.learn.last_move = Some(now);
             }
             Control::Transport(action) if pressed => self.transport(action),
             Control::Transport(_) => {}

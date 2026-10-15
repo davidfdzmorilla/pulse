@@ -1314,6 +1314,103 @@ pub(crate) mod tests {
         assert_eq!(handle.display(0, 0.25), "0.50x");
     }
 
+    /// Every plugin installed on this computer: loads, plays a chord (or processes a
+    /// chord from the test synth), saves and restores its state. Writes the audio to
+    /// `$PULSE_OUT` if set.
+    #[test]
+    #[ignore = "diagnostic: runs the plugins installed on this computer"]
+    fn installed_plugins() {
+        let sr = 48_000.0;
+        let mut out = Vec::new();
+        for bundle in default_folders().iter().flat_map(|f| bundles(f)) {
+            let list = match scan(&bundle) {
+                Ok(list) => list,
+                Err(e) => {
+                    println!("{}: {e}", bundle.display());
+                    continue;
+                }
+            };
+            for info in list {
+                let start = std::time::Instant::now();
+                let (mut p, handle) = match instantiate(&info.path, &info.cid, sr, None) {
+                    Ok(x) => x,
+                    Err(e) => {
+                        println!("{}: {e}", info.name);
+                        continue;
+                    }
+                };
+                let loaded = start.elapsed();
+                let (mut l, mut r) = (vec![0f32; 96_000], vec![0f32; 96_000]);
+                if p.instrument {
+                    for pitch in [60, 64, 67] {
+                        p.note_on(pitch, 0.8, 48_000);
+                    }
+                    for (a, b) in l.chunks_mut(512).zip(r.chunks_mut(512)) {
+                        p.render(a, b);
+                    }
+                } else {
+                    let synth = scan(&test_bundle()).unwrap().into_iter().find(|p| p.instrument).unwrap();
+                    let (mut source, _) = instantiate(&synth.path, &synth.cid, sr, None).unwrap();
+                    for pitch in [60, 64, 67] {
+                        source.note_on(pitch, 0.3, 48_000);
+                    }
+                    for (a, b) in l.chunks_mut(512).zip(r.chunks_mut(512)) {
+                        source.render(a, b);
+                        p.process(a, b);
+                    }
+                }
+                let start = std::time::Instant::now();
+                for (a, b) in l.chunks(512).zip(r.chunks(512)) {
+                    let (mut a, mut b) = (a.to_vec(), b.to_vec());
+                    if p.instrument {
+                        p.render(&mut a, &mut b);
+                    } else {
+                        p.process(&mut a, &mut b);
+                    }
+                }
+                let cpu = start.elapsed().as_secs_f64() / 2.0 * 100.0;
+                let peak = l.iter().chain(&r).fold(0f32, |m, s| m.max(s.abs()));
+                let params = handle.params();
+                let state = handle.state();
+                let restored = instantiate(&info.path, &info.cid, sr, Some(&state)).map(|(_, h)| h.state().len());
+                println!(
+                    "{} ({}, {}): cargado en {:.0} ms, {} parámetros, pico {:.1} dBFS, {:.1} % de un núcleo, estado {} bytes, restaurado {:?}",
+                    info.name,
+                    info.vendor,
+                    info.category,
+                    loaded.as_secs_f64() * 1000.0,
+                    params.len(),
+                    20.0 * peak.max(1e-9).log10(),
+                    cpu,
+                    state.len(),
+                    restored
+                );
+                assert!(l.iter().chain(&r).all(|s| s.is_finite()), "{}", info.name);
+                out.extend(l.iter().zip(&r).flat_map(|(a, b)| [*a, *b]));
+            }
+        }
+        if let Ok(path) = std::env::var("PULSE_OUT") {
+            let mut bytes = Vec::new();
+            let data = out.len() * 4;
+            bytes.extend_from_slice(b"RIFF");
+            bytes.extend_from_slice(&(36 + data as u32).to_le_bytes());
+            bytes.extend_from_slice(b"WAVEfmt ");
+            bytes.extend_from_slice(&16u32.to_le_bytes());
+            bytes.extend_from_slice(&3u16.to_le_bytes());
+            bytes.extend_from_slice(&2u16.to_le_bytes());
+            bytes.extend_from_slice(&48_000u32.to_le_bytes());
+            bytes.extend_from_slice(&(48_000u32 * 8).to_le_bytes());
+            bytes.extend_from_slice(&8u16.to_le_bytes());
+            bytes.extend_from_slice(&32u16.to_le_bytes());
+            bytes.extend_from_slice(b"data");
+            bytes.extend_from_slice(&(data as u32).to_le_bytes());
+            for s in out {
+                bytes.extend_from_slice(&s.to_le_bytes());
+            }
+            std::fs::write(path, bytes).unwrap();
+        }
+    }
+
     #[test]
     fn missing_plugins_fail_cleanly() {
         assert!(scan(Path::new("/nowhere/Nothing.vst3")).is_err());

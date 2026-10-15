@@ -360,4 +360,53 @@ mod tests {
         run(&mut app, 0.5);
         assert_eq!(lane(&app).len(), count, "nothing after it was turned off");
     }
+
+    /// Recording a session clip while a linked knob turns: the moves become the
+    /// clip's envelope (in clip time), not the track's automation, and play with it.
+    #[test]
+    fn a_knob_turned_while_recording_a_session_clip_becomes_its_envelope() {
+        use crate::midi_map::{Control, Mapping};
+        use engine::model::Param;
+        use engine::Target;
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+            track.automation.clear();
+            track.clips = Default::default();
+        }
+        app.project.tempo = 120.0;
+        app.project.midi_map.push(Mapping { cc: 74, control: Control::Param { target: Target::Track(1), param: Param::Volume } });
+        app.sync_all();
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).ceil() as usize {
+                engine.process(&mut buffer, 2);
+                app.update_recording();
+            }
+        };
+        app.toggle_arm(1);
+        app.record_slot(1, 0);
+        run(&mut app, 0.5);
+        let start = app.recorder.session.first().and_then(|t| t.start).expect("the take started");
+        // Turn the knob over two beats, a beat into the take.
+        run(&mut app, 1.0);
+        for step in 0..=16 {
+            app.apply_cc(74, 20 + step * 6);
+            run(&mut app, 0.125);
+        }
+        run(&mut app, 0.5);
+        app.stop_session_recording(1);
+        run(&mut app, 4.5);
+        let Some(engine::model::Clip::Midi(clip)) = &app.project.tracks[1].clips[0] else { panic!("a recorded clip") };
+        let envelope = clip.envelopes.iter().find(|l| l.param == Param::Volume).expect("a volume envelope in the clip");
+        let (first, last) = (envelope.points.first().unwrap(), envelope.points.last().unwrap());
+        assert!(first.beat > 0.5 && first.beat < 2.0, "in clip time (the take started at {start}): {first:?}");
+        assert!(last.beat > 2.5 && last.beat < 4.0 && last.beat <= clip.length, "{last:?} in {}", clip.length);
+        assert!(last.value > first.value);
+        assert!(app.automation(Target::Track(1)).iter().all(|l| l.points.is_empty()), "not the track's automation");
+        assert!(app.status.as_deref().unwrap_or("").contains("automatización"), "{:?}", app.status);
+        assert!(app.clip_automation.is_empty());
+    }
 }

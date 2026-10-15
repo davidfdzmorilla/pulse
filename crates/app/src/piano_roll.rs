@@ -18,7 +18,8 @@ use std::sync::atomic::Ordering;
 
 const KEY_W: f32 = 64.0;
 const RULER_H: f32 = 16.0;
-const VELOCITY_H: f32 = 54.0;
+const VELOCITY_H: f32 = 60.0;
+const LANE_HEADER_H: f32 = 22.0;
 const EDGE_GRAB: f32 = 5.0;
 
 const GRIDS: [(f64, &str); 6] = [
@@ -66,6 +67,8 @@ pub struct State {
     quantize_ends: bool,
     /// Clip whose initial scroll position has already been applied.
     scrolled: Option<ClipRef>,
+    /// What the lane under the notes shows: velocities or a clip envelope.
+    pub(crate) lane: crate::clip_envelope::LaneChoice,
     scroll_x: f32,
 }
 
@@ -84,6 +87,7 @@ impl Default for State {
             quantize_strength: 1.0,
             quantize_ends: false,
             scrolled: None,
+            lane: Default::default(),
             scroll_x: 0.0,
         }
     }
@@ -148,8 +152,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     };
     let t = clip_ref.track();
     let playhead = playhead(app, clip_ref);
+    // The parameters the lane under the notes can show as clip envelopes.
+    let target = engine::Target::Track(t);
+    let params = app.automatable(target);
+    let names = app.piano_roll.lane.stale(t, params.len()).then(|| params.iter().map(|&p| (p, app.param_name(target, p))).collect());
+    app.piano_roll.lane.refresh(t, &params, names);
+    let envelope = app.piano_roll.lane.shown.and_then(|p| app.param_info(target, p).map(|info| (p, info, app.param_value(target, p))));
     if matches!(app.clip(clip_ref), Some(Clip::Audio(_))) {
-        crate::sample_editor::show(app, ui, clip_ref, playhead);
+        crate::sample_editor::show(app, ui, clip_ref, playhead, envelope);
         return;
     }
     let is_drums = app.project.tracks[t].is_drums();
@@ -188,7 +198,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let grid_w = clip.length as f32 * beat_w;
     let base = theme::rgb(clip.color);
 
-    let lane_height = (ui.available_height() - VELOCITY_H - 6.0).max(60.0);
+    let lane_height = (ui.available_height() - VELOCITY_H - LANE_HEADER_H - 8.0).max(60.0);
     let mut scroll = egui::ScrollArea::both()
         .id_salt(("piano_roll", format!("{clip_ref:?}")))
         .auto_shrink(false)
@@ -431,58 +441,69 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     });
     state.scroll_x = output.state.offset.x;
 
-    // ----- Velocity lane ---------------------------------------------------------------
-    let (lane, response) = ui.allocate_exact_size(vec2(ui.available_width(), VELOCITY_H), Sense::click_and_drag());
-    let painter = ui.painter_at(lane);
-    painter.rect_filled(lane, 2.0, theme::SLOT);
-    painter.text(lane.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, "Velocidad", theme::small(), TEXT_DIM);
-    let origin_x = lane.left() + KEY_W - state.scroll_x;
-    let bar_area = Rect::from_min_max(pos2(lane.left() + KEY_W, lane.top() + 4.0), lane.max - vec2(0.0, 3.0));
-    let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
-    for (i, n) in clip.notes.iter().enumerate() {
-        let x = x_of(n.start);
-        if x < bar_area.left() || x > bar_area.right() {
-            continue;
-        }
-        let y = bar_area.bottom() - bar_area.height() * n.velocity;
-        let color = if state.selection.contains(&i) { Color32::WHITE } else { theme::shade(base, 1.1) };
-        painter.line_segment([pos2(x + 1.0, bar_area.bottom()), pos2(x + 1.0, y)], Stroke::new(2.0, color));
-        painter.circle_filled(pos2(x + 1.0, y), 2.5, color);
-    }
-    if let Some(pos) = response.interact_pointer_pos() {
-        if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
-            // The note whose stem is nearest the pointer; selected notes win ties.
-            let nearest = clip
-                .notes
-                .iter()
-                .enumerate()
-                .map(|(i, n)| (i, (x_of(n.start) - pos.x).abs() - if state.selection.contains(&i) { 0.5 } else { 0.0 }))
-                .filter(|&(_, d)| d < 6.0)
-                .min_by(|a, b| a.1.total_cmp(&b.1))
-                .map(|(i, _)| i);
-            if let Some(i) = nearest {
-                if !state.selection.contains(&i) {
-                    state.selection = Selection::from([i]);
-                }
-                let snapshot = state.selection.iter().filter_map(|&j| clip.notes.get(j).map(|n| (j, n.clone()))).collect();
-                state.drag = Some(Drag::Velocity { origin_y: pos.y, snapshot });
+    // ----- The lane under the notes: a clip envelope or the velocities ----------------
+    crate::clip_envelope::header(ui, &mut state.lane, &mut clip.envelopes);
+    if let Some((param, info, value)) = envelope {
+        let (lane, _) = ui.allocate_exact_size(vec2(ui.available_width(), VELOCITY_H), Sense::hover());
+        let origin_x = lane.left() + KEY_W - state.scroll_x;
+        let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
+        let beat_of = |x: f32| ((x - origin_x) / beat_w) as f64;
+        crate::clip_envelope::lane(ui, &mut state.lane, &mut clip.envelopes, clip.length, param, &info, value, lane, lane.left() + KEY_W, &x_of, &beat_of, state.grid, theme::METER_RED)
+            .on_hover_text("Clic: añadir un punto · arrastrar: moverlo · doble clic: borrarlo");
+    } else {
+        let (lane, response) = ui.allocate_exact_size(vec2(ui.available_width(), VELOCITY_H), Sense::click_and_drag());
+        let painter = ui.painter_at(lane);
+        painter.rect_filled(lane, 2.0, theme::SLOT);
+        painter.text(lane.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, "Velocidad", theme::small(), TEXT_DIM);
+        let origin_x = lane.left() + KEY_W - state.scroll_x;
+        let bar_area = Rect::from_min_max(pos2(lane.left() + KEY_W, lane.top() + 4.0), lane.max - vec2(0.0, 3.0));
+        let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
+        for (i, n) in clip.notes.iter().enumerate() {
+            let x = x_of(n.start);
+            if x < bar_area.left() || x > bar_area.right() {
+                continue;
             }
+            let y = bar_area.bottom() - bar_area.height() * n.velocity;
+            let color = if state.selection.contains(&i) { Color32::WHITE } else { theme::shade(base, 1.1) };
+            painter.line_segment([pos2(x + 1.0, bar_area.bottom()), pos2(x + 1.0, y)], Stroke::new(2.0, color));
+            painter.circle_filled(pos2(x + 1.0, y), 2.5, color);
         }
-        if response.dragged() {
-            if let Some(Drag::Velocity { origin_y, snapshot }) = &state.drag {
-                let delta = (origin_y - pos.y) / bar_area.height();
-                for (i, original) in snapshot {
-                    if let Some(n) = clip.notes.get_mut(*i) {
-                        n.velocity = (original.velocity + delta).clamp(0.01, 1.0);
+        if let Some(pos) = response.interact_pointer_pos() {
+            if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
+                // The note whose stem is nearest the pointer; selected notes win ties.
+                let nearest = clip
+                    .notes
+                    .iter()
+                    .enumerate()
+                    .map(|(i, n)| (i, (x_of(n.start) - pos.x).abs() - if state.selection.contains(&i) { 0.5 } else { 0.0 }))
+                    .filter(|&(_, d)| d < 6.0)
+                    .min_by(|a, b| a.1.total_cmp(&b.1))
+                    .map(|(i, _)| i);
+                if let Some(i) = nearest {
+                    if !state.selection.contains(&i) {
+                        state.selection = Selection::from([i]);
+                    }
+                    let snapshot = state.selection.iter().filter_map(|&j| clip.notes.get(j).map(|n| (j, n.clone()))).collect();
+                    state.drag = Some(Drag::Velocity { origin_y: pos.y, snapshot });
+                }
+            }
+            if response.dragged() {
+                if let Some(Drag::Velocity { origin_y, snapshot }) = &state.drag {
+                    let delta = (origin_y - pos.y) / bar_area.height();
+                    for (i, original) in snapshot {
+                        if let Some(n) = clip.notes.get_mut(*i) {
+                            n.velocity = (original.velocity + delta).clamp(0.01, 1.0);
+                        }
                     }
                 }
             }
+            if ui.input(|i| i.pointer.primary_released()) {
+                state.drag = None;
+            }
         }
-        if ui.input(|i| i.pointer.primary_released()) {
-            state.drag = None;
-        }
+        response.on_hover_text("Arrastra arriba o abajo para cambiar la velocidad de las notas seleccionadas");
+
     }
-    response.on_hover_text("Arrastra arriba o abajo para cambiar la velocidad de las notas seleccionadas");
 
     let changed = *clip != before;
     for pitch in previews {

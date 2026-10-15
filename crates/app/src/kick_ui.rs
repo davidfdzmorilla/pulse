@@ -105,11 +105,13 @@ pub fn editor(
     let step_ms = [1.0, 2.0, 5.0, 10.0, 20.0, 50.0, 100.0, 200.0, 500.0].into_iter().find(|s| span_ms / s <= 12.0).unwrap_or(1000.0);
     let big = size.y > 120.0;
     let mut ms = step_ms;
+    // Time labels go on top of the curve, at the end.
+    let mut time_labels = Vec::new();
     while ms < span_ms {
         let x = x_of_ms(ms);
         painter.line_segment([pos2(x, top), pos2(x, bottom)], Stroke::new(1.0, Color32::from_gray(34)));
         if big {
-            painter.text(pos2(x + 2.0, bottom - 2.0), Align2::LEFT_BOTTOM, format!("{ms:.0}"), theme::small(), Color32::from_gray(90));
+            time_labels.push((pos2(x + 2.0, bottom - 2.0), format!("{ms:.0}")));
         }
         ms += step_ms;
     }
@@ -166,6 +168,9 @@ pub fn editor(
     };
     for i in 1..points.len() {
         painter.circle_stroke(bend_pos(i), 2.5, Stroke::new(1.0, theme::shade(ACCENT, 0.8)));
+    }
+    for (pos, label) in time_labels {
+        widgets::backdrop_text(&painter, pos, Align2::LEFT_BOTTOM, label, theme::small(), Color32::from_gray(120));
     }
     let pointer = response.hover_pos();
     for i in 0..points.len() {
@@ -310,9 +315,8 @@ fn spectrum_view(ui: &mut egui::Ui, hit: &[f32], p: &KickParams, size: egui::Vec
     for hz in [50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0] {
         let x = x_of(hz);
         painter.line_segment([pos2(x, rect.top() + 14.0), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::from_gray(34)));
-        let label = if hz >= 1000.0 { format!("{}k", hz / 1000.0) } else { format!("{hz}") };
-        painter.text(pos2(x + 2.0, rect.bottom() - 2.0), Align2::LEFT_BOTTOM, label, theme::small(), Color32::from_gray(90));
     }
+    let mut fundamental_label = None;
     let bins = spectrum(hit);
     let mut columns = vec![-90f32; rect.width() as usize + 1];
     for &(hz, db) in &bins {
@@ -337,12 +341,19 @@ fn spectrum_view(ui: &mut egui::Ui, hit: &[f32], p: &KickParams, size: egui::Vec
         let x = x_of(hz);
         painter.line_segment([pos2(x, rect.top() + 14.0), pos2(x, rect.bottom())], Stroke::new(1.0, ACCENT));
         let note = 69.0 + 12.0 * (hz / 440.0).log2();
-        let text = format!("Fundamental {hz:.0} Hz ≈ {}", crate::project::note_name(note.round().clamp(0.0, 127.0) as u8));
-        painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, text, theme::small(), theme::TEXT);
+        fundamental_label = Some(format!("Fundamental {hz:.0} Hz ≈ {}", crate::project::note_name(note.round().clamp(0.0, 127.0) as u8)));
     }
     if !p.key_follow {
         let x = x_of(note_freq(p.tune));
         painter.circle_filled(pos2(x, rect.top() + 18.0), 3.0, ACCENT);
+    }
+    // Labels last, over the curve.
+    for hz in [50.0, 100.0, 200.0, 500.0, 1000.0, 2000.0] {
+        let label = if hz >= 1000.0 { format!("{}k", hz / 1000.0) } else { format!("{hz}") };
+        widgets::backdrop_text(&painter, pos2(x_of(hz) + 2.0, rect.bottom() - 2.0), Align2::LEFT_BOTTOM, label, theme::small(), Color32::from_gray(120));
+    }
+    if let Some(text) = fundamental_label {
+        widgets::backdrop_text(&painter, rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, text, theme::small(), theme::TEXT);
     }
 }
 
@@ -394,13 +405,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let shown = shown(app, t, base);
     let tempo = app.project.tempo;
     let click = app.project.tracks[t].sample(0).and_then(|path| app.loaded_sample(path)).cloned();
-    egui::Window::new(title)
-        .id(egui::Id::new(("kick_window", t)))
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .default_pos(pos2(120.0, 90.0))
-        .show(ctx, |ui| {
+    widgets::editor_window(ctx, title, egui::Id::new(("kick_window", t)), &mut open, pos2(120.0, 90.0), |ui| {
             ui.set_width(930.0);
             let app_ref: &PulseApp = app;
             // Top bar.

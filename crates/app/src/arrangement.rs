@@ -127,11 +127,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("Zoom").color(TEXT_DIM).size(10.5));
         ui.add(egui::Slider::new(&mut app.arrangement.pixels_per_beat, 3.0..=60.0).logarithmic(true).show_value(false));
         ui.checkbox(&mut app.arrangement.follow, "Seguir cursor");
-        ui.label(
-            egui::RichText::new("Doble clic: nuevo clip · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop")
-                .color(TEXT_DIM)
-                .size(10.5),
-        );
+        let hint = "Doble clic: nuevo clip · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop";
+        // Cut with "…" in a narrow window; the tooltip has all of it.
+        ui.add(egui::Label::new(egui::RichText::new(hint).color(TEXT_DIM).size(10.5)).truncate()).on_hover_text(hint);
     });
     ui.add_space(2.0);
 

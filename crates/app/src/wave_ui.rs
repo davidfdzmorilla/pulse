@@ -837,13 +837,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut actions = Vec::new();
     let title = format!("Wavetable Synth · {}", app.project.tracks[t].name);
     let shown = shown(app, t, base);
-    egui::Window::new(title)
-        .id(egui::Id::new(("wave_window", t)))
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .default_pos(pos2(60.0, 60.0))
-        .show(ctx, |ui| {
+    widgets::editor_window(ctx, title, egui::Id::new(("wave_window", t)), &mut open, pos2(60.0, 60.0), |ui| {
             ui.set_width(1100.0);
             let app: &PulseApp = app;
             ui.horizontal(|ui| {

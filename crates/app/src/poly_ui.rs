@@ -64,7 +64,7 @@ fn routing_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, 
                 knob(app, ui, t, WAVE_BALANCE, "Balance", 28.0, actions);
             });
         });
-        ui.label(egui::RichText::new("Las entradas se eligen en el filtro 1").color(TEXT_DIM).size(10.0));
+        ui.label(egui::RichText::new("Entradas: en el filtro 1").color(TEXT_DIM).size(10.0));
     });
 }
 
@@ -273,13 +273,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut actions = Vec::new();
     let title = format!("Polychrome Synth · {}", app.project.tracks[t].name);
     let shown = wave_ui::shown(app, t, base);
-    egui::Window::new(title)
-        .id(egui::Id::new(("poly_window", t)))
-        .open(&mut open)
-        .resizable(false)
-        .collapsible(false)
-        .default_pos(pos2(50.0, 50.0))
-        .show(ctx, |ui| {
+    crate::widgets::editor_window(ctx, title, egui::Id::new(("poly_window", t)), &mut open, pos2(50.0, 50.0), |ui| {
             ui.set_width(1120.0);
             let app: &PulseApp = app;
             ui.horizontal(|ui| {

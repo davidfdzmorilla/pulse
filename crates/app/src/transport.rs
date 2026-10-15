@@ -253,6 +253,7 @@ pub fn status_bar(app: &mut PulseApp, ui: &mut egui::Ui) {
             .color(TEXT_DIM),
         };
         ui.label(text.size(10.5));
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| app.update_badge(ui));
     });
 }
 

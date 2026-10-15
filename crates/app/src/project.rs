@@ -167,6 +167,17 @@ pub struct MasterTrack {
     pub automation: Vec<AutomationLane>,
 }
 
+/// The project file format. Raise it when a change needs old files converted
+/// (in [`migrate`]); fields added with a default don't need it.
+pub const FORMAT: u32 = 1;
+const FORMAT_KEY: &str = "format";
+
+/// Converts a project file from `format` to the current one.
+fn migrate(_value: &mut serde_json::Value, format: u64) {
+    // Format 0 (no number) and 1 are the same: the number was added in 1.
+    if format < 1 {}
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Project {
     pub tempo: f64,
@@ -273,16 +284,45 @@ impl Project {
 
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("No se pudo leer: {e}"))?;
-        let mut project: Project = serde_json::from_str(&text).map_err(|e| format!("Archivo no válido: {e}"))?;
+        Self::from_json(&text)
+    }
+
+    /// Reads a saved project, bringing files from older versions of Pulse up to date.
+    pub fn from_json(text: &str) -> Result<Self, String> {
+        let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("Archivo no válido: {e}"))?;
+        // Files from before the format number are format 0.
+        let format = value.get(FORMAT_KEY).and_then(|f| f.as_u64()).unwrap_or(0);
+        if format > FORMAT as u64 {
+            return Err("Este proyecto se guardó con una versión más nueva de Pulse. Actualiza Pulse para abrirlo.".into());
+        }
+        if let Some(object) = value.as_object_mut() {
+            object.remove(FORMAT_KEY);
+        }
+        migrate(&mut value, format);
+        let mut project: Project = serde_json::from_value(value).map_err(|e| format!("Archivo no válido: {e}"))?;
         for track in &mut project.tracks {
             track.instrument = track.instrument.upgraded();
         }
         Ok(project)
     }
 
+    pub fn to_json(&self) -> Result<String, String> {
+        let mut value = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        if let Some(object) = value.as_object_mut() {
+            object.insert(FORMAT_KEY.into(), FORMAT.into());
+        }
+        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+    }
+
+    /// Saves through a temporary file, so a failed save never leaves half a project.
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        std::fs::write(path, text).map_err(|e| format!("No se pudo guardar: {e}"))
+        let text = self.to_json()?;
+        let temporary = path.with_extension("pulse-tmp");
+        std::fs::write(&temporary, text).map_err(|e| format!("No se pudo guardar: {e}"))?;
+        std::fs::rename(&temporary, path).map_err(|e| {
+            let _ = std::fs::remove_file(&temporary);
+            format!("No se pudo guardar: {e}")
+        })
     }
 
     /// A small A-minor demo set so the app makes sound right away.
@@ -512,6 +552,41 @@ mod tests {
         let loaded = Project::load(&path).unwrap();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(project, loaded);
+    }
+
+    /// Projects saved by earlier versions, kept in the repository: every new
+    /// version must still open them. Add one each time the format changes.
+    const FIXTURES: [(&str, &str); 2] = [
+        ("format 0 (antes del número de formato)", include_str!("../fixtures/format0-demo.pulse")),
+        ("format 1", include_str!("../fixtures/format1-demo.pulse")),
+    ];
+
+    #[test]
+    fn projects_from_every_earlier_format_still_open() {
+        for (name, text) in FIXTURES {
+            let project = Project::from_json(text).unwrap_or_else(|e| panic!("{name}: {e}"));
+            assert_eq!(project.tracks.len(), 4, "{name}");
+            assert!(project.tracks.iter().any(|t| !t.arrangement.is_empty() || t.clips.iter().any(|c| c.is_some())), "{name}");
+            // And they save in the current format.
+            assert!(project.to_json().unwrap().contains(&format!("\"format\": {FORMAT}")));
+        }
+    }
+
+    #[test]
+    fn projects_from_a_newer_pulse_are_refused_with_a_clear_message() {
+        let mut value = serde_json::to_value(Project::demo()).unwrap();
+        value["format"] = (FORMAT + 1).into();
+        let error = Project::from_json(&value.to_string()).unwrap_err();
+        assert!(error.contains("versión más nueva"), "{error}");
+    }
+
+    /// Writes the fixture for the current format (run once when it changes).
+    #[test]
+    #[ignore = "writes crates/app/fixtures/format<N>-demo.pulse"]
+    fn write_fixture() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join(format!("fixtures/format{FORMAT}-demo.pulse"));
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, Project::demo().to_json().unwrap()).unwrap();
     }
 
     #[test]

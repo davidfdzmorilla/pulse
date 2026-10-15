@@ -26,6 +26,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         "Pulse",
         &[
             Run(C::About, "Acerca de Pulse", ""),
+            Run(C::CheckUpdates, "Buscar actualizaciones…", ""),
             Separator,
             Run(C::Settings, "Ajustes…", ","),
             Separator,

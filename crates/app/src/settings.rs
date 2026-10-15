@@ -18,6 +18,9 @@ pub struct Settings {
     /// Folders to look for plugins in, besides the system's.
     #[serde(default)]
     pub plugin_folders: Vec<PathBuf>,
+    /// Look for a new version when Pulse starts (see `updates`).
+    #[serde(default = "yes")]
+    pub check_updates: bool,
 }
 
 fn yes() -> bool {
@@ -26,7 +29,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new() }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true }
     }
 }
 
@@ -195,6 +198,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.separator();
         ui.heading("Proyectos");
         ui.checkbox(&mut next.reopen_last, "Abrir el último proyecto al arrancar");
+        ui.checkbox(&mut next.check_updates, "Buscar actualizaciones al arrancar");
     });
     if next != app.settings {
         app.set_settings(next);
@@ -234,7 +238,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")] };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

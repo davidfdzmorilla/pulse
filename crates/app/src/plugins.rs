@@ -2,10 +2,11 @@
 //! and chains, their parameter window and keeping their state in the project.
 
 use crate::app::{Detail, PulseApp};
+use crate::devices::Action;
 use crate::project::PluginRef;
 use crate::theme::{self, TEXT_DIM};
 use eframe::egui;
-use engine::model::{Device, Effect, InstrumentKind, PluginId};
+use engine::model::{Device, Effect, InstrumentKind, Param, PluginId};
 use engine::plugin::PluginInfo;
 use engine::{ChainSlot, Command, Target};
 use std::path::{Path, PathBuf};
@@ -174,19 +175,31 @@ impl PulseApp {
         }
     }
 
+    /// While playing, shows automated plugin parameters moving in the plugins' own
+    /// editors (the engine sends the values to the processors).
+    pub fn show_plugin_automation(&self) {
+        if !self.audio.is_playing() {
+            return;
+        }
+        let position = self.audio.position();
+        let targets = (0..self.project.tracks.len()).map(Target::Track).chain((0..self.project.returns.len()).map(Target::Return)).chain([Target::Master]);
+        for target in targets {
+            for lane in self.automation(target).iter().filter(|l| !l.points.is_empty()) {
+                if self.overridden.contains(&(target, lane.param)) {
+                    continue;
+                }
+                let (Some((id, param)), Some(value)) = (self.plugin_param(target, lane.param), lane.value_at(position)) else { continue };
+                if let Some(handle) = self.samples.plugins.get(&id) {
+                    handle.show(param, value as f64);
+                }
+            }
+        }
+    }
+
     /// The plugin instance's name, for titles.
     pub fn plugin_name(&self, id: PluginId) -> String {
         self.project.plugin(id).map_or_else(|| "Plugin".into(), |p| p.name.clone())
     }
-}
-
-/// A plugin parameter knob: normalized values, shown the way the plugin shows them.
-fn param_knob(ui: &mut egui::Ui, handle: &engine::plugin::PluginHandle, param: &engine::plugin::PluginParam, diameter: f32) -> Option<f64> {
-    let mut value = handle.value(param.id) as f32;
-    let label: String = param.name.chars().take(10).collect();
-    let knob = crate::widgets::Knob::new(&mut value, 0.0..=1.0, param.default as f32, &label).diameter(diameter).format(|x| handle.display(param.id, x as f64));
-    let response = knob.show(ui).on_hover_text(&param.name);
-    response.changed().then_some(value as f64)
 }
 
 /// A window a plugin device asks to open.
@@ -199,12 +212,13 @@ pub enum PluginWindow {
 }
 
 /// The body of a plugin's device: buttons for its editor and its parameter list, and
-/// its first parameters as knobs.
-pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, id: PluginId, knobs: usize) -> Option<PluginWindow> {
-    let mut open = None;
+/// its first parameters as knobs. The knobs are the channel's parameters `as_param`
+/// gives (instrument or device ones), so they show and override automation and can be
+/// linked to MIDI controllers like any other.
+pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, as_param: &dyn Fn(u32) -> Param, id: PluginId, knobs: usize, actions: &mut Vec<Action>) {
     let Some(handle) = app.samples.plugins.get(&id) else {
         ui.label(egui::RichText::new("No se pudo cargar el plugin.\nComprueba que sigue instalado.").color(TEXT_DIM).size(10.5));
-        return None;
+        return;
     };
     ui.vertical(|ui| {
         if let Some(plugin) = app.project.plugin(id) {
@@ -212,20 +226,37 @@ pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, id: PluginId, knobs: usize
         }
         let editor = if app.editors.is_open(id) { "Editor ✓" } else { "Editor" };
         if ui.button(editor).on_hover_text("La ventana del propio plugin").clicked() {
-            open = Some(PluginWindow::Editor(id));
+            actions.push(Action::OpenPlugin(PluginWindow::Editor(id)));
         }
         if ui.button("Parámetros…").on_hover_text("Todos los parámetros del plugin, en una lista").clicked() {
-            open = Some(PluginWindow::Params(id));
+            actions.push(Action::OpenPlugin(PluginWindow::Params(id)));
         }
     });
     ui.spacing_mut().item_spacing.x = 0.0;
-    for param in handle.params().iter().filter(|p| p.automatable).take(knobs) {
-        if let Some(v) = param_knob(ui, handle, param, 30.0) {
-            handle.set(param.id, v);
-            app.touched(crate::midi_map::Control::Plugin { id, param: param.id });
+    // Automated parameters first, then the plugin's first ones.
+    let automated: Vec<u32> = app.automation(target).iter().filter(|l| !l.points.is_empty()).filter_map(|l| app.plugin_param(target, l.param)).filter(|&(p, _)| p == id).map(|(_, param)| param).collect();
+    let first = handle.params().iter().filter(|p| p.automatable).map(|p| p.id);
+    let mut shown: Vec<u32> = Vec::new();
+    for param in automated.into_iter().chain(first) {
+        if shown.len() == knobs {
+            break;
+        }
+        if !shown.contains(&param) {
+            shown.push(param);
         }
     }
-    open
+    for param_id in shown {
+        let Some(param) = handle.param(param_id) else { continue };
+        let channel_param = as_param(param_id);
+        let mut value = app.display_value(target, channel_param);
+        let label: String = param.name.chars().take(10).collect();
+        let knob = crate::widgets::Knob::new(&mut value, 0.0..=1.0, param.default as f32, &label).diameter(30.0).format(|x| handle.display(param_id, x as f64));
+        let response = knob.show(ui).on_hover_text(&param.name);
+        crate::widgets::automation_dot(ui.painter(), response.rect.right_top() + egui::vec2(-4.0, 6.0), app.automation_state(target, channel_param));
+        if response.changed() {
+            actions.push(Action::Param(channel_param, value));
+        }
+    }
 }
 
 /// The window with every parameter of the plugin it was opened for.
@@ -447,7 +478,7 @@ pub(crate) mod tests {
         let before = rms(&render(&mut app));
         // Half the volume, if it has a parameter called that.
         let handle = &app.samples.plugins[&id];
-        let volume = handle.params().into_iter().find(|p| p.name.to_lowercase().contains("volume"));
+        let volume = handle.params().iter().find(|p| p.name.to_lowercase().contains("volume")).cloned();
         if let Some(v) = &volume {
             println!("{}: {} = {} → {}", info.name, v.name, handle.display(v.id, handle.value(v.id)), handle.display(v.id, handle.value(v.id) * 0.5));
             handle.set(v.id, handle.value(v.id) * 0.5);
@@ -462,6 +493,52 @@ pub(crate) mod tests {
         if volume.is_some() {
             assert!(after < before * 0.9, "the saved volume came back");
         }
+    }
+
+    #[test]
+    fn plugin_parameters_are_automated_like_any_other() {
+        use engine::model::{AutomationLane, AutomationPoint};
+        let mut app = app();
+        for (t, track) in app.project.tracks.iter_mut().enumerate() {
+            track.mixer.gain = if t == 3 { 1.0 } else { 0.0 };
+        }
+        let (synth, gain) = (app.plugin_library.found[0].clone(), app.plugin_library.found[1].clone());
+        app.set_plugin_instrument(3, &synth);
+        app.add_plugin_effect(Target::Track(3), &gain);
+        let target = Target::Track(3);
+        let device = app.project.tracks[3].devices.len() - 1;
+
+        // Both plugins' parameters can be automated, by name.
+        let params = app.automatable(target);
+        let level = Param::Instrument(0);
+        let gain_param = Param::Device { device, param: 0 };
+        assert!(params.contains(&level) && params.contains(&gain_param));
+        assert_eq!(app.param_name(target, level), "Pulse Test Synth: Level");
+        assert_eq!(app.param_name(target, gain_param), "Pulse Test Gain: Gain");
+        assert_eq!(app.param_info(target, level).map(|i| (i.min, i.max, i.default)), Some((0.0, 1.0, 0.5)));
+
+        // The synth's level falls from full to nothing over the bar.
+        let ramp = |from: f32, to: f32, param: Param| AutomationLane { param, points: vec![AutomationPoint { beat: 0.0, value: from }, AutomationPoint { beat: 4.0, value: to }] };
+        app.project.tracks[3].automation = vec![ramp(1.0, 0.0, level)];
+        let out = render(&mut app);
+        let (start, end) = (rms(&out[2400..24_000]), rms(&out[72_000..93_600]));
+        assert!(start > end * 3.0, "the level follows its automation: {start} → {end}");
+
+        // The effect's gain: held at 0.25 (0.5×) by a flat lane.
+        app.project.tracks[3].automation = vec![ramp(0.25, 0.25, gain_param)];
+        let halved = rms(&render(&mut app)[2400..]);
+        app.project.tracks[3].automation.clear();
+        let plain = rms(&render(&mut app)[2400..]);
+        assert!((halved / plain - 0.5).abs() < 0.03, "{halved} / {plain}");
+
+        // The device knob shows the automation and moving it overrides it.
+        app.project.tracks[3].automation = vec![ramp(0.25, 0.25, gain_param)];
+        app.sync_automation(target);
+        assert_eq!(app.automation_state(target, gain_param), Some(false));
+        app.set_param(target, gain_param, 0.75);
+        assert_eq!(app.automation_state(target, gain_param), Some(true), "overridden by hand");
+        let Effect::Plugin(id) = app.project.tracks[3].devices[device].effect else { panic!() };
+        assert_eq!(app.samples.plugins[&id].value(0), 0.75);
     }
 
     #[test]

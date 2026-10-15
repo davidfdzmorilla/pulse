@@ -194,7 +194,7 @@ impl PulseApp {
         match control {
             Control::Param { target, param } => format!("{} · {}", self.target_name(target), self.param_name(target, param)),
             Control::Plugin { id, param } => {
-                let name = self.samples.plugins.get(&id).and_then(|h| h.params().into_iter().find(|p| p.id == param)).map_or_else(|| format!("parámetro {param}"), |p| p.name);
+                let name = self.samples.plugins.get(&id).and_then(|h| h.param(param)).map_or_else(|| format!("parámetro {param}"), |p| p.name.clone());
                 format!("{} · {name}", self.plugin_name(id))
             }
             Control::Transport(t) => t.label().into(),

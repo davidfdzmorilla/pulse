@@ -488,6 +488,13 @@ impl Instrument {
     }
 
     fn set_param(&mut self, index: usize, value: f32) {
+        // A plugin's parameters are its own ids, normalized.
+        if let Self::Plugin(_, plugin) = self {
+            if let Some(p) = plugin {
+                p.set_normalized(index as u32, value as f64);
+            }
+            return;
+        }
         let mut kind = self.kind();
         kind.set(index, value);
         self.update(kind);

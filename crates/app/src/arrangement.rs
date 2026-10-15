@@ -40,6 +40,8 @@ pub struct State {
     drag: Option<Drag>,
     /// Tracks showing an automation lane, and the parameter it shows.
     pub automation: HashMap<usize, Param>,
+    /// What the automation parameter list is filtered by (long lists: plugins).
+    pub automation_filter: String,
 }
 
 impl Default for State {
@@ -49,6 +51,7 @@ impl Default for State {
             follow: false,
             drag: None,
             automation: HashMap::new(),
+            automation_filter: String::new(),
         }
     }
 }
@@ -408,14 +411,35 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     egui::ComboBox::from_id_salt(("automation", t))
         .selected_text(app.param_name(target, param))
         .width(HEADER_W - 22.0)
+        .height(420.0)
         .show_ui(&mut child, |ui| {
-            for candidate in app.automatable(target) {
+            let candidates = app.automatable(target);
+            // Plugins can have thousands of parameters: a search box and the matches.
+            let long = candidates.len() > 60;
+            let mut filter = app.arrangement.automation_filter.clone();
+            if long {
+                ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Buscar parámetro…").desired_width(HEADER_W - 40.0)).request_focus();
+            }
+            let wanted = filter.to_lowercase();
+            let mut shown = 0;
+            for candidate in candidates {
+                let automated = app.automation_state(target, candidate).is_some();
                 let mut label = app.param_name(target, candidate);
-                if app.automation_state(target, candidate).is_some() {
+                // Automated ones always show; the rest when they match.
+                if long && !automated && !label.to_lowercase().contains(&wanted) {
+                    continue;
+                }
+                if long && shown >= 300 {
+                    ui.label(egui::RichText::new("…escribe para ver más").color(TEXT_DIM).size(10.5));
+                    break;
+                }
+                shown += 1;
+                if automated {
                     label.push_str("  ●");
                 }
                 ui.selectable_value(&mut chosen, candidate, label);
             }
+            app.arrangement.automation_filter = filter;
         });
     if chosen != param {
         app.arrangement.automation.insert(t, chosen);

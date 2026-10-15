@@ -73,6 +73,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         }
 
+        heading(ui, "PLUGINS VST3");
+        crate::plugins::browser(app, ui, |ui, icon, label, hint| item(ui, icon, label, hint));
+
         heading(ui, "MUESTRAS");
         if item(ui, "♪", "Añadir muestra…", "Elige archivos de audio (WAV, AIFF, FLAC, MP3…). También puedes arrastrarlos a la ventana") {
             app.choose_samples(crate::app::Placement::Auto);

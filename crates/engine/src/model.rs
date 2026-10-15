@@ -215,7 +215,13 @@ pub enum InstrumentKind {
     Polychrome(WaveParams),
     /// Free-form synth: generators with modifier chains, effect lanes and modulators.
     Modular(ModularParams),
+    /// A VST3 plugin: which one, and its state, is in the project's plugin list.
+    Plugin(PluginId),
 }
+
+/// A plugin instance in the project (see `Project::plugins` in the app).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PluginId(pub u64);
 
 /// How the kick designer distorts its body.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1072,6 +1078,8 @@ pub enum Effect {
     Ducker(DuckerParams),
     Limiter(LimiterParams),
     Utility(UtilityParams),
+    /// A VST3 effect plugin (see [`InstrumentKind::Plugin`]).
+    Plugin(PluginId),
 }
 
 impl Effect {
@@ -1107,6 +1115,7 @@ impl Effect {
             Effect::Ducker(_) => "Ducker",
             Effect::Limiter(_) => "Limiter",
             Effect::Utility(_) => "Utility",
+            Effect::Plugin(_) => "Plugin",
         }
     }
 }
@@ -1436,6 +1445,7 @@ impl InstrumentKind {
             InstrumentKind::Wavetable(_) => "Wavetable Synth",
             InstrumentKind::Polychrome(_) => "Polychrome Synth",
             InstrumentKind::Modular(_) => "Modular Synth",
+            InstrumentKind::Plugin(_) => "Plugin",
         }
     }
 
@@ -1455,6 +1465,7 @@ impl InstrumentKind {
                 layout(a) != layout(b)
             }
             (InstrumentKind::Modular(a), InstrumentKind::Modular(b)) => a.layout_differs(b),
+            (InstrumentKind::Plugin(a), InstrumentKind::Plugin(b)) => a != b,
             _ => false,
         }
     }
@@ -1491,7 +1502,7 @@ impl InstrumentKind {
     pub fn params(&self) -> &'static [ParamInfo] {
         match self {
             InstrumentKind::Synth(_) => &SYNTH_PARAMS,
-            InstrumentKind::Drums => &[],
+            InstrumentKind::Drums | InstrumentKind::Plugin(_) => &[],
             InstrumentKind::DrumMachine(_) => &DRUM_PARAMS,
             InstrumentKind::SuperSaw(_) => &SUPERSAW_PARAMS,
             InstrumentKind::Acid(_) => &ACID_PARAMS,
@@ -1507,7 +1518,7 @@ impl InstrumentKind {
     fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
         Some(match self {
             InstrumentKind::Synth(p) => return p.param_mut(index),
-            InstrumentKind::Drums => return None,
+            InstrumentKind::Drums | InstrumentKind::Plugin(_) => return None,
             InstrumentKind::DrumMachine(p) => match index % 3 {
                 0 => p.tune.get_mut(index / 3)?,
                 1 => p.decay.get_mut(index / 3)?,
@@ -1650,6 +1661,7 @@ impl Effect {
             Effect::Ducker(_) => &DUCKER_PARAMS,
             Effect::Limiter(_) => &LIMITER_PARAMS,
             Effect::Utility(_) => &UTILITY_PARAMS,
+            Effect::Plugin(_) => &[],
         }
     }
 

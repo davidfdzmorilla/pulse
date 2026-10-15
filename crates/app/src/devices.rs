@@ -70,7 +70,12 @@ pub(crate) enum Action {
     /// Opens a file dialog for the wavetable of oscillator `n`.
     LoadWavetable(usize),
     ExportKick,
+    /// Opens the parameter window of a plugin.
+    OpenPlugin(engine::model::PluginId),
 }
+
+/// Plugin parameters shown as knobs on its device; the rest are in its window.
+const PLUGIN_KNOBS: usize = 6;
 
 /// Draws a device frame with a title bar and returns the body's UI result.
 fn device_frame<R>(
@@ -124,7 +129,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             for index in 0..count {
                 let before = app.devices(target)[index];
                 let mut device = before;
-                let title = device.effect.label();
+                let plugin_title = match device.effect {
+                    Effect::Plugin(id) => Some(app.plugin_name(id)),
+                    _ => None,
+                };
+                let title = plugin_title.as_deref().unwrap_or(device.effect.label());
                 let width = effect_width(&device.effect);
                 let Device { effect, enabled } = &mut device;
                 let mut header_actions = Vec::new();
@@ -145,6 +154,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         }
                     },
                     |ui| {
+                        if let Effect::Plugin(id) = *effect {
+                            if let Some(id) = crate::plugins::device_body(app, ui, id, PLUGIN_KNOBS) {
+                                actions.push(Action::OpenPlugin(id));
+                            }
+                            return;
+                        }
                         discrete_controls(ui, effect, index);
                         for (param, info) in effect.params().iter().enumerate() {
                             let id = Param::Device { device: index, param };
@@ -292,6 +307,7 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
                     app.choose_wavetable(t, osc);
                 }
             }
+            Action::OpenPlugin(id) => app.plugin_library.window = Some(id),
             Action::ExportKick => {
                 if let Target::Track(t) = target {
                     crate::kick_ui::export(app, t);
@@ -316,6 +332,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Ducker(_) => (2, 1),
         Effect::Limiter(_) => (3, 0),
         Effect::Utility(_) => (2, 0),
+        Effect::Plugin(_) => (PLUGIN_KNOBS, 1),
     };
     knobs as f32 * 52.0 + columns as f32 * 100.0 + 24.0
 }
@@ -367,7 +384,8 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         | Effect::Phaser(_)
         | Effect::Bitcrusher(_)
         | Effect::Limiter(_)
-        | Effect::Utility(_) => {}
+        | Effect::Utility(_)
+        | Effect::Plugin(_) => {}
     }
 }
 
@@ -388,6 +406,15 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
     // Actions from the title bar (presets and the like).
     let mut head = Vec::new();
     match kind {
+        InstrumentKind::Plugin(id) => {
+            let title = app.plugin_name(id);
+            let width = PLUGIN_KNOBS as f32 * 52.0 + 130.0;
+            device_frame(ui, &title, width, None, |_| {}, |ui| {
+                if let Some(id) = crate::plugins::device_body(app, ui, id, PLUGIN_KNOBS) {
+                    actions.push(Action::OpenPlugin(id));
+                }
+            });
+        }
         InstrumentKind::Synth(base) => {
             device_frame(ui, kind.label(), 470.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 let mut waveform = base.waveform;

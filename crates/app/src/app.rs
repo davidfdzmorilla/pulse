@@ -9,7 +9,7 @@ use crate::sync::{self, SampleCache};
 use crate::{arrangement, browser, detail, piano_roll, session, theme, transport};
 use eframe::egui;
 use engine::model::{
-    ArrangementClip, AudioClip, AutomationLane, Clip, Device, InstrumentKind, MidiClip, Param, ParamInfo, SynthParams, WarpMode,
+    ArrangementClip, AudioClip, AutomationLane, Clip, Device, Effect, InstrumentKind, MidiClip, Param, ParamInfo, PluginId, SynthParams, WarpMode,
     PAN_PARAM, RACK_PADS, SEND_PARAM, VOLUME_PARAM,
 };
 use engine::{
@@ -189,6 +189,8 @@ pub struct PulseApp {
     pub poly_window: Option<usize>,
     /// Track whose modular synth editor window is open.
     pub modular_window: Option<usize>,
+    /// The VST3 plugins found on this computer, and the parameter window.
+    pub plugin_library: crate::plugins::Library,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
@@ -210,6 +212,7 @@ impl PulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
         let mut app = Self::with_audio(Project::demo(), Audio::start());
+        app.plugin_library = crate::plugins::Library::load_cache();
         app.sync_all();
         app.midi = MidiInputs::connect(app.audio.live());
         if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
@@ -263,6 +266,7 @@ impl PulseApp {
             table_editor: None,
             poly_window: None,
             modular_window: None,
+            plugin_library: Default::default(),
             sample_drop_zones: Vec::new(),
             export: Default::default(),
             input_track: None,
@@ -277,6 +281,9 @@ impl PulseApp {
 
     /// Pushes the whole project to the engine (after loading or undo).
     pub fn sync_all(&mut self) {
+        // Plugins are loaded again from their state: take it from the running ones first.
+        self.capture_plugins();
+        self.samples.plugins.clear();
         let sample_rate = self.audio.sample_rate();
         let commands = sync::project_commands(&self.project, &mut self.samples, sample_rate, &self.overridden);
         for command in commands {
@@ -731,6 +738,10 @@ impl PulseApp {
 
     pub fn remove_device(&mut self, target: Target, index: usize) {
         if index < self.devices(target).len() {
+            if let Effect::Plugin(id) = self.devices(target)[index].effect {
+                self.capture_plugins();
+                self.samples.plugins.remove(&id);
+            }
             self.devices_mut(target).remove(index);
             self.audio.send(Command::RemoveDevice { target, index });
             // Lanes follow their device: drop the removed one's, shift the ones after it.
@@ -773,6 +784,24 @@ impl PulseApp {
 
     pub fn set_instrument(&mut self, track: usize, kind: InstrumentKind) {
         let previous = std::mem::replace(&mut self.project.tracks[track].instrument, kind);
+        // A plugin replaced by something else: its instance goes (its state stays in the
+        // project, for undo).
+        if let InstrumentKind::Plugin(id) = previous {
+            if kind != previous {
+                self.capture_plugins();
+                self.samples.plugins.remove(&id);
+            }
+        }
+        if let InstrumentKind::Plugin(_) = kind {
+            if kind != previous {
+                // A plugin comes back (undo, presets): load it from its state.
+                let sample_rate = self.audio.sample_rate();
+                let command = sync::instrument_command(&self.project, track, kind, &mut self.samples, sample_rate);
+                self.audio.send(command);
+                self.show_sample_errors();
+            }
+            return;
+        }
         if !previous.needs_rebuild(&kind) {
             self.audio.send(Command::update_instrument(track, kind));
         } else {
@@ -1181,6 +1210,24 @@ impl PulseApp {
         }
         let mut copy = self.project.tracks[track].clone();
         copy.name = format!("{} copia", copy.name);
+        // The copy gets plugin instances of its own, starting from the same state.
+        self.capture_plugins();
+        let fresh = |project: &mut Project, id: PluginId| -> PluginId {
+            let new = project.new_plugin_id();
+            if let Some(mut plugin) = project.plugin(id).cloned() {
+                plugin.id = new;
+                project.plugins.push(plugin);
+            }
+            new
+        };
+        if let InstrumentKind::Plugin(id) = copy.instrument {
+            copy.instrument = InstrumentKind::Plugin(fresh(&mut self.project, id));
+        }
+        for device in &mut copy.devices {
+            if let Effect::Plugin(id) = device.effect {
+                device.effect = Effect::Plugin(fresh(&mut self.project, id));
+            }
+        }
         self.project.tracks.insert(track + 1, copy);
         self.selected_target = Target::Track(track + 1);
         self.sync_all();
@@ -1584,7 +1631,18 @@ impl PulseApp {
         }
     }
 
+    #[cfg(test)]
+    pub fn save_to_path(&mut self, path: &Path) {
+        self.save_to(path.to_path_buf());
+    }
+
+    #[cfg(test)]
+    pub fn commit_history(&mut self) {
+        self.history.commit(&self.project, false);
+    }
+
     fn save_to(&mut self, path: PathBuf) {
+        self.capture_plugins();
         match self.project.save(&path) {
             Ok(()) => {
                 self.saved = self.project.clone();
@@ -1773,6 +1831,8 @@ impl eframe::App for PulseApp {
         crate::poly_ui::window(self, &ctx);
         crate::modular_ui::window(self, &ctx);
         crate::table_editor::window(self, &ctx);
+
+        crate::plugins::window(self, &ctx);
 
         let interacting = ctx.input(|i| i.pointer.any_down());
         self.history.commit(&self.project, interacting);

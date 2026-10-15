@@ -1,9 +1,10 @@
 //! Translating a project into engine commands, for live playback and offline rendering.
 
 use crate::project::{Project, Track};
-use engine::model::{AutomationLane, Clip, InstrumentKind, Param, SynthParams};
+use engine::model::{AutomationLane, Clip, Device, Effect, InstrumentKind, Param, PluginId, SynthParams};
+use engine::plugin::{PluginHandle, PluginProcessor};
 use engine::wavetable::Wavetable;
-use engine::{build_chain, Command, PlacedClip, PlayClip, Sample, Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
+use engine::{build_chain, ChainSlot, Command, PlacedClip, PlayClip, Sample, Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -17,6 +18,8 @@ pub struct SampleCache {
     tables: HashMap<String, Arc<Wavetable>>,
     /// Load errors not yet shown to the user.
     pub errors: Vec<String>,
+    /// The UI-thread side of the plugins loaded for the project, by id.
+    pub plugins: HashMap<PluginId, PluginHandle>,
 }
 
 impl SampleCache {
@@ -187,6 +190,49 @@ fn mixer_commands(target: Target, mixer: &crate::project::Mixer) -> [Command; 3]
 }
 
 /// Every command needed to make an engine play `project` from scratch.
+/// Starts plugin `id` of the project from its saved state, keeping its UI half in
+/// `samples.plugins`. None (with an error to show) if it cannot be loaded.
+pub fn load_plugin(project: &Project, id: PluginId, samples: &mut SampleCache, sample_rate: f32) -> Option<PluginProcessor> {
+    let Some(plugin) = project.plugin(id) else {
+        samples.errors.push(format!("Falta el plugin {}", id.0));
+        return None;
+    };
+    let state = crate::plugins::decode(&plugin.state);
+    match engine::plugin::instantiate(Path::new(&plugin.path), &plugin.cid, sample_rate, state.as_deref().filter(|s| !s.is_empty())) {
+        Ok((processor, handle)) => {
+            samples.plugins.insert(id, handle);
+            Some(processor)
+        }
+        Err(error) => {
+            samples.errors.push(format!("{}: {error}", plugin.name));
+            None
+        }
+    }
+}
+
+/// The command that puts a track's instrument in place, loading it if it is a plugin.
+pub fn instrument_command(project: &Project, track: usize, kind: InstrumentKind, samples: &mut SampleCache, sample_rate: f32) -> Command {
+    if let InstrumentKind::Plugin(id) = kind {
+        if let Some(processor) = load_plugin(project, id, samples, sample_rate) {
+            return Command::set_plugin(track, id, processor);
+        }
+    }
+    Command::set_instrument(track, kind, sample_rate)
+}
+
+/// A chain ready to run, with its plugin effects loaded.
+pub fn chain(project: &Project, devices: &[Device], samples: &mut SampleCache, sample_rate: f32) -> Box<Vec<ChainSlot>> {
+    let mut chain = build_chain(devices, sample_rate);
+    for (slot, device) in chain.iter_mut().zip(devices) {
+        if let Effect::Plugin(id) = device.effect {
+            if let Some(processor) = load_plugin(project, id, samples, sample_rate) {
+                *slot = ChainSlot::plugin(device, processor);
+            }
+        }
+    }
+    chain
+}
+
 pub fn project_commands(
     project: &Project,
     samples: &mut SampleCache,
@@ -205,12 +251,12 @@ pub fn project_commands(
         let track = project.tracks.get(t).unwrap_or(&empty);
         let target = Target::Track(t);
         commands.extend([
-            Command::set_instrument(t, track.instrument, sample_rate),
+            instrument_command(project, t, track.instrument, samples, sample_rate),
             Command::SetSamples { track: t, samples: instrument_samples(track, samples) },
             Command::SetWavetables { track: t, tables: instrument_tables(track, samples) },
             Command::SetSolo { track: t, solo: track.solo },
             Command::SetArm { track: t, armed: track.armed },
-            Command::ReplaceChain { target, chain: build_chain(&track.devices, sample_rate) },
+            Command::ReplaceChain { target, chain: chain(project, &track.devices, samples, sample_rate) },
             Command::SetArrangement { track: t, clips: placed_clips(track, samples) },
             Command::SetAutomation { target, lanes: active_lanes(&track.automation, target, overridden) },
         ]);
@@ -225,12 +271,12 @@ pub fn project_commands(
     }
     for (r, ret) in project.returns.iter().enumerate().take(NUM_RETURNS) {
         let target = Target::Return(r);
-        commands.push(Command::ReplaceChain { target, chain: build_chain(&ret.devices, sample_rate) });
+        commands.push(Command::ReplaceChain { target, chain: chain(project, &ret.devices, samples, sample_rate) });
         commands.push(Command::SetAutomation { target, lanes: active_lanes(&ret.automation, target, overridden) });
         commands.extend(mixer_commands(target, &ret.mixer));
     }
     let master = &project.master;
-    commands.push(Command::ReplaceChain { target: Target::Master, chain: build_chain(&master.devices, sample_rate) });
+    commands.push(Command::ReplaceChain { target: Target::Master, chain: chain(project, &master.devices, samples, sample_rate) });
     commands.push(Command::SetAutomation {
         target: Target::Master,
         lanes: active_lanes(&master.automation, Target::Master, overridden),

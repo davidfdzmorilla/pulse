@@ -9,6 +9,7 @@ mod instruments;
 mod kick;
 mod offline;
 pub mod model;
+pub mod plugin;
 mod sample;
 mod sampler;
 mod synth;

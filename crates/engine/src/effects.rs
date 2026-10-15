@@ -3,8 +3,9 @@
 
 use crate::model::{
     db_to_gain, AutoFilterParams, BitcrusherParams, ChorusParams, CompressorParams, DelayParams, DuckerParams, Effect,
-    Eq3Params, FilterMode, LimiterParams, PhaserParams, ReverbParams, SaturatorParams, UtilityParams,
+    Eq3Params, FilterMode, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
+use crate::plugin::PluginProcessor;
 use std::f32::consts::{PI, TAU};
 
 /// Timing information effects may need (tempo-synced delay, LFOs).
@@ -536,6 +537,8 @@ pub enum EffectProcessor {
     Ducker(Ducker),
     Limiter(Limiter),
     Utility(Utility),
+    /// A VST3 effect; None until the app loads it (it then passes the signal through).
+    Plugin(PluginId, Option<Box<PluginProcessor>>),
 }
 
 impl EffectProcessor {
@@ -569,6 +572,7 @@ impl EffectProcessor {
             Effect::Ducker(params) => Self::Ducker(Ducker { params }),
             Effect::Limiter(params) => Self::Limiter(Limiter::new(params, sample_rate)),
             Effect::Utility(params) => Self::Utility(Utility { params }),
+            Effect::Plugin(id) => Self::Plugin(id, None),
         }
     }
 
@@ -587,6 +591,7 @@ impl EffectProcessor {
             (Self::Ducker(fx), Effect::Ducker(p)) => fx.params = p,
             (Self::Limiter(fx), Effect::Limiter(p)) => fx.params = p,
             (Self::Utility(fx), Effect::Utility(p)) => fx.params = p,
+            (Self::Plugin(id, _), Effect::Plugin(other)) => return *id == other,
             _ => return false,
         }
         true
@@ -607,6 +612,7 @@ impl EffectProcessor {
             Self::Ducker(fx) => Effect::Ducker(fx.params),
             Self::Limiter(fx) => Effect::Limiter(fx.params),
             Self::Utility(fx) => Effect::Utility(fx.params),
+            Self::Plugin(id, _) => Effect::Plugin(*id),
         }
     }
 
@@ -662,7 +668,7 @@ impl EffectProcessor {
                 fx.position = 0;
                 fx.gain = 1.0;
             }
-            Self::Saturator(_) | Self::Ducker(_) | Self::Utility(_) => {}
+            Self::Saturator(_) | Self::Ducker(_) | Self::Utility(_) | Self::Plugin(..) => {}
         }
     }
 
@@ -680,6 +686,11 @@ impl EffectProcessor {
             Self::Ducker(fx) => fx.process(l, r, ctx),
             Self::Limiter(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Utility(fx) => fx.process(l, r),
+            Self::Plugin(_, Some(plugin)) => {
+                plugin.set_tempo(ctx.tempo);
+                plugin.process(l, r);
+            }
+            Self::Plugin(_, None) => {}
         }
     }
 }

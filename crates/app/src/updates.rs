@@ -1,8 +1,9 @@
 //! Updates from the project's private GitHub repository. Each release there has a
 //! `Pulse-<version>.zip` with the signed Pulse.app (see `scripts/release.sh`).
 //!
-//! Pulse looks for the latest release when it starts (at most once a day) and from
-//! Pulse → Buscar actualizaciones…; the window shows what's new and installs it:
+//! Pulse looks for the latest release every time it starts, every few hours while
+//! it runs, and from Pulse → Buscar actualizaciones…. A new version (unless the
+//! user skipped it) opens the window, which shows what's new and installs it:
 //! it downloads the zip, checks that the app inside is that version and signed
 //! like this one, keeps this version as "Pulse (anterior).app" next to it, puts
 //! the new one in its place and restarts. "Volver a la versión anterior" swaps
@@ -22,8 +23,8 @@ pub const REPOSITORY: &str = "davidfdzmorilla/pulse";
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
 const KEYCHAIN_SERVICE: &str = "Pulse GitHub";
 const PREVIOUS: &str = "Pulse (anterior).app";
-/// Automatic checks happen at most this often.
-const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(24 * 3600);
+/// While Pulse stays open, it looks again this often.
+const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
@@ -34,6 +35,8 @@ pub enum State {
     Downloading(Release),
     /// Installed: restart to use it.
     Installed(String),
+    /// The first start of a new version: its notes.
+    WhatsNew(Release),
     Failed(String),
 }
 
@@ -71,11 +74,14 @@ pub struct Updates {
     pub show: bool,
     /// A token typed in the window.
     pub token_input: String,
+    /// An automatic check is under way: open the window if it finds something.
+    pub announce: bool,
+    pub last_check: Option<std::time::Instant>,
 }
 
 impl Default for Updates {
     fn default() -> Self {
-        Self { state: Arc::new(Mutex::new(State::Idle)), show: false, token_input: String::new() }
+        Self { state: Arc::new(Mutex::new(State::Idle)), show: false, token_input: String::new(), announce: false, last_check: None }
     }
 }
 
@@ -172,7 +178,12 @@ fn curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<Vec<u
 }
 
 fn latest_release(token: &str) -> Result<Release, String> {
-    let body = curl(&format!("https://api.github.com/repos/{REPOSITORY}/releases/latest"), token, "application/vnd.github+json", None)?;
+    release_at(token, "latest")
+}
+
+/// `which`: "latest" or "tags/v1.2.3".
+fn release_at(token: &str, which: &str) -> Result<Release, String> {
+    let body = curl(&format!("https://api.github.com/repos/{REPOSITORY}/releases/{which}"), token, "application/vnd.github+json", None)?;
     serde_json::from_slice(&body).map_err(|e| format!("Respuesta de GitHub no válida: {e}"))
 }
 
@@ -309,18 +320,56 @@ fn relaunch(bundle: &Path) -> Result<(), String> {
 
 // ----- In the app --------------------------------------------------------------------
 
-fn last_check_path() -> PathBuf {
-    crate::kits::kits_dir().with_file_name("last-update-check")
-}
-
 impl PulseApp {
-    /// At start: looks for a new version in the background, if it's time.
+    /// At start: the notes of a version started for the first time, else a look
+    /// for a newer one (both in the background; the window opens if there's news).
     pub fn check_updates_on_start(&mut self) {
-        if !self.interactive || !self.settings.check_updates || running_bundle().is_none() {
+        if !self.interactive || running_bundle().is_none() {
             return;
         }
-        let recent = std::fs::metadata(last_check_path()).and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok()).is_some_and(|age| age < CHECK_EVERY);
-        if !recent {
+        if self.settings.last_version.as_deref() != Some(VERSION) {
+            let settings = crate::settings::Settings { last_version: Some(VERSION.to_string()), ..self.settings.clone() };
+            self.set_settings(settings);
+            self.show_whats_new();
+        } else if self.settings.check_updates {
+            self.updates.announce = true;
+            self.check_updates();
+        }
+    }
+
+    /// Fetches this version's notes, to show them.
+    fn show_whats_new(&mut self) {
+        self.updates.announce = true;
+        let shared = self.updates.state.clone();
+        std::thread::spawn(move || {
+            if let Some(release) = token().and_then(|token| release_at(&token, &format!("tags/v{VERSION}")).ok()) {
+                set(&shared, State::WhatsNew(release));
+            }
+        });
+    }
+
+    /// Every frame: opens the window when an automatic check finds a version not
+    /// skipped (or the notes arrive), and looks again every few hours.
+    pub fn follow_updates(&mut self) {
+        let state = self.updates.state();
+        if self.updates.announce {
+            match &state {
+                State::Checking | State::Idle => {}
+                State::Available(release) if self.settings.skipped_version.as_deref() != Some(release.version()) => {
+                    self.updates.show = true;
+                    self.updates.announce = false;
+                }
+                State::WhatsNew(_) => {
+                    self.updates.show = true;
+                    self.updates.announce = false;
+                }
+                _ => self.updates.announce = false,
+            }
+        }
+        let due = self.updates.last_check.is_some_and(|t| t.elapsed() >= CHECK_EVERY);
+        let quiet = matches!(state, State::Idle | State::UpToDate | State::Failed(_) | State::WhatsNew(_));
+        if due && quiet && self.interactive && self.settings.check_updates && running_bundle().is_some() {
+            self.updates.announce = true;
             self.check_updates();
         }
     }
@@ -331,8 +380,8 @@ impl PulseApp {
             return;
         }
         self.updates.set(State::Checking);
+        self.updates.last_check = Some(std::time::Instant::now());
         let shared = self.updates.state.clone();
-        let interactive = self.interactive;
         std::thread::spawn(move || {
             let state = match token() {
                 None => State::Failed("Falta el acceso a GitHub: inicia sesión con «gh auth login» o pega un token aquí".into()),
@@ -342,9 +391,6 @@ impl PulseApp {
                     Err(e) => State::Failed(e),
                 },
             };
-            if interactive {
-                let _ = std::fs::write(last_check_path(), VERSION);
-            }
             set(&shared, state);
         });
     }
@@ -386,7 +432,9 @@ impl PulseApp {
     /// The little notice in the transport bar when a new version is out.
     pub fn update_badge(&mut self, ui: &mut egui::Ui) {
         let label = match self.updates.state() {
-            State::Available(release) => format!("⬆ Pulse {} disponible", release.version()),
+            State::Available(release) if self.settings.skipped_version.as_deref() != Some(release.version()) => {
+                format!("⬆ Pulse {} disponible", release.version())
+            }
             State::Installed(version) => format!("↻ Reinicia para usar Pulse {version}"),
             _ => return,
         };
@@ -410,7 +458,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.separator();
         match &state {
             State::Idle => {
-                ui.label("Pulse busca versiones nuevas al arrancar, como mucho una vez al día.");
+                ui.label("Pulse busca versiones nuevas cada vez que arranca, y cada 6 horas si sigue abierto.");
             }
             State::Checking => {
                 ui.horizontal(|ui| {
@@ -431,9 +479,17 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     ui.label(release.body.as_deref().filter(|b| !b.trim().is_empty()).unwrap_or("(sin notas)"));
                 });
                 if running_bundle().is_some() {
-                    if ui.button("Descargar e instalar").clicked() {
-                        action = Some(Action::Install(release.clone()));
-                    }
+                    ui.horizontal(|ui| {
+                        if ui.button("Descargar e instalar").clicked() {
+                            action = Some(Action::Install(release.clone()));
+                        }
+                        if ui.button("Más tarde").clicked() {
+                            action = Some(Action::Later);
+                        }
+                        if ui.button("Omitir esta versión").on_hover_text("No volver a avisar de esta versión (sí de las siguientes)").clicked() {
+                            action = Some(Action::Skip(release.version().to_string()));
+                        }
+                    });
                     ui.label(egui::RichText::new("Esta versión se guarda como «Pulse (anterior)» para poder volver a ella.").color(TEXT_DIM).size(10.5));
                 } else {
                     ui.label(egui::RichText::new("Pulse se está ejecutando fuera de Pulse.app (desde el terminal): no se puede instalar desde aquí.").color(TEXT_DIM).size(10.5));
@@ -449,6 +505,15 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 ui.label(format!("✔ Pulse {version} está instalado. Se usará al reiniciar."));
                 if ui.button("Reiniciar ahora").clicked() {
                     action = Some(Action::Restart);
+                }
+            }
+            State::WhatsNew(release) => {
+                ui.heading(format!("Novedades de Pulse {}", release.version()));
+                egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
+                    ui.label(release.body.as_deref().filter(|b| !b.trim().is_empty()).unwrap_or("(sin notas)"));
+                });
+                if ui.button("Cerrar").clicked() {
+                    action = Some(Action::Later);
                 }
             }
             State::Failed(error) => {
@@ -486,6 +551,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     });
     match action {
         Some(Action::Check) => app.check_updates(),
+        Some(Action::Later) => app.updates.show = false,
+        Some(Action::Skip(version)) => {
+            let settings = crate::settings::Settings { skipped_version: Some(version), ..app.settings.clone() };
+            app.set_settings(settings);
+            app.updates.show = false;
+        }
         Some(Action::CheckOnStart(check)) => {
             let settings = crate::settings::Settings { check_updates: check, ..app.settings.clone() };
             app.set_settings(settings);
@@ -519,6 +590,8 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 
 enum Action {
     Check,
+    Later,
+    Skip(String),
     CheckOnStart(bool),
     Install(Release),
     Restart,
@@ -585,6 +658,55 @@ mod tests {
         assert!(swap_back(&current).is_err());
     }
 
+    #[test]
+    fn new_versions_open_the_window_unless_skipped() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let release = |v: &str| Release { tag_name: format!("v{v}"), body: None, assets: Vec::new() };
+        // An automatic check that finds a version opens the window, once.
+        app.updates.announce = true;
+        app.updates.set(State::Checking);
+        app.follow_updates();
+        assert!(!app.updates.show, "still looking");
+        app.updates.set(State::Available(release("9.0.0")));
+        app.follow_updates();
+        assert!(app.updates.show && !app.updates.announce);
+        // Skipped: neither the window nor the badge.
+        app.updates.show = false;
+        app.settings.skipped_version = Some("9.0.0".into());
+        app.updates.announce = true;
+        app.follow_updates();
+        assert!(!app.updates.show && !app.updates.announce);
+        let ctx = egui::Context::default();
+        let mut badge = false;
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            let before = ui.min_rect();
+            app.update_badge(ui);
+            badge = ui.min_rect() != before;
+        });
+        assert!(!badge, "no badge for a skipped version");
+        // A later one is announced again.
+        app.updates.set(State::Available(release("9.0.1")));
+        app.updates.announce = true;
+        app.follow_updates();
+        assert!(app.updates.show);
+        // Nothing found: the window stays closed.
+        app.updates.show = false;
+        app.updates.set(State::UpToDate);
+        app.updates.announce = true;
+        app.follow_updates();
+        assert!(!app.updates.show && !app.updates.announce);
+        // The notes of a new version open it too.
+        app.updates.set(State::WhatsNew(release("0.1.3")));
+        app.updates.announce = true;
+        app.follow_updates();
+        assert!(app.updates.show);
+        // Headless apps never look by themselves.
+        app.updates.last_check = Some(std::time::Instant::now() - CHECK_EVERY);
+        app.updates.set(State::Idle);
+        app.follow_updates();
+        assert_eq!(app.updates.state(), State::Idle);
+    }
+
     /// Who signed the installed Pulse and a downloaded release (set PULSE_DOWNLOADED
     /// to an unzipped Pulse.app).
     #[test]
@@ -636,7 +758,16 @@ mod tests {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         app.updates.show = true;
         let release = Release { tag_name: "v9.0.0".into(), body: Some("- Nuevo".into()), assets: Vec::new() };
-        for state in [State::Idle, State::Checking, State::UpToDate, State::Available(release.clone()), State::Downloading(release), State::Installed("9.0.0".into()), State::Failed("x".into())] {
+        for state in [
+            State::Idle,
+            State::Checking,
+            State::UpToDate,
+            State::Available(release.clone()),
+            State::Downloading(release.clone()),
+            State::Installed("9.0.0".into()),
+            State::WhatsNew(release),
+            State::Failed("x".into()),
+        ] {
             app.updates.set(state.clone());
             let ctx = egui::Context::default();
             let _ = ctx.run_ui(Default::default(), |ui| {

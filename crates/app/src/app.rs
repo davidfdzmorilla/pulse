@@ -2029,6 +2029,7 @@ impl eframe::App for PulseApp {
         crate::midi_map::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
         crate::settings::window(self, &ctx);
+        self.follow_updates();
         crate::updates::window(self, &ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         if let Some(mut bar) = self.menu_bar.take() {

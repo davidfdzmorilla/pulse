@@ -148,11 +148,16 @@ pub enum Placement {
     Arrangement { track: usize, start: f64 },
 }
 
-#[derive(Default)]
 pub struct Meters {
     pub tracks: [f32; MAX_TRACKS],
     pub returns: [f32; NUM_RETURNS],
     pub master: f32,
+}
+
+impl Default for Meters {
+    fn default() -> Self {
+        Self { tracks: [0.0; MAX_TRACKS], returns: [0.0; NUM_RETURNS], master: 0.0 }
+    }
 }
 
 impl Meters {
@@ -258,6 +263,8 @@ pub struct PulseApp {
     pub updates: crate::updates::Updates,
     /// A clip being separated into stems (see `stems_ui`).
     pub stems: Option<crate::stems_ui::StemJob>,
+    /// Something the user must see (title, text), in a window until dismissed.
+    pub notice: Option<(String, String)>,
     pub devices: crate::settings::Devices,
     /// A text field has the keyboard: editing shortcuts are its.
     pub text_focus: bool,
@@ -381,6 +388,7 @@ impl PulseApp {
             show_settings: false,
             updates: Default::default(),
             stems: None,
+            notice: None,
             devices: Default::default(),
             text_focus: false,
             menu_bar: None,
@@ -844,6 +852,27 @@ impl PulseApp {
         }
         if self.automation_state(target, param) == Some(false) && self.overridden.insert((target, param)) {
             self.sync_automation(target);
+        }
+    }
+
+    /// Tells the user something in a window (a problem they must know about, not
+    /// just a line in the status bar), and in the status bar too.
+    pub fn notify(&mut self, title: &str, text: &str) {
+        self.status = Some(text.to_string());
+        self.notice = Some((title.to_string(), text.to_string()));
+    }
+
+    fn show_notice(&mut self, ctx: &egui::Context) {
+        let Some((title, text)) = &self.notice else { return };
+        let mut close = false;
+        egui::Window::new(title.as_str()).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+            ui.set_max_width(420.0);
+            ui.label(text.as_str());
+            ui.add_space(6.0);
+            close = ui.button("Aceptar").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+        });
+        if close {
+            self.notice = None;
         }
     }
 
@@ -2112,6 +2141,7 @@ impl eframe::App for PulseApp {
         crate::settings::window(self, &ctx);
         self.follow_updates();
         self.follow_stems(&ctx);
+        self.show_notice(&ctx);
         crate::updates::window(self, &ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         if let Some(mut bar) = self.menu_bar.take() {

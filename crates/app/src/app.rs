@@ -57,6 +57,13 @@ impl Audio {
         }
     }
 
+    /// Audio from an engine the caller runs by hand (tests).
+    #[cfg(test)]
+    pub(crate) fn detached() -> (Self, engine::Engine) {
+        let (engine, handle) = engine::detached(48_000.0);
+        (Self { _output: None, handle: Some(handle), error: None }, engine)
+    }
+
     pub fn send(&mut self, command: Command) {
         if let Some(handle) = &mut self.handle {
             if !handle.send(command) {
@@ -1545,9 +1552,16 @@ impl PulseApp {
             self.audio.send(Command::SetArrangementRecord(false));
             return;
         }
+        // Nothing armed: the selected tracks are, as in Live.
         if !self.project.tracks.iter().any(|t| t.armed) {
-            self.status = Some("Arma una pista (botón ●) para grabar en ella".into());
-            return;
+            let selection = self.track_selection();
+            if selection.is_empty() {
+                self.status = Some("Selecciona una pista (o ármala con su botón ●) para grabar en ella".into());
+                return;
+            }
+            for t in selection {
+                self.toggle_arm(t);
+            }
         }
         if self.project.tracks.iter().any(|t| t.armed && t.is_audio()) && !self.ensure_capture() {
             return;
@@ -1583,7 +1597,7 @@ impl PulseApp {
         }
     }
 
-    fn update_recording(&mut self) {
+    pub(crate) fn update_recording(&mut self) {
         let Some(state) = self.audio.state() else { return };
         self.pump_capture();
         let notes = self.audio.take_recorded();

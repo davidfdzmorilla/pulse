@@ -1,0 +1,11 @@
+#!/bin/bash
+# Nothing is pushed straight to main: work goes on a branch and into main through
+# a pull request on GitHub (squash merge). Version tags (v1.2.3) may be pushed.
+# Active in this clone with: git config core.hooksPath .githooks
+while read -r local_ref local_sha remote_ref remote_sha; do
+    if [ "$remote_ref" = "refs/heads/main" ]; then
+        echo "No se sube directamente a main: crea una rama y abre un pull request." >&2
+        exit 1
+    fi
+done
+exit 0

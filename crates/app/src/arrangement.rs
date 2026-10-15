@@ -190,8 +190,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             scroll = scroll.horizontal_scroll_offset((x - view * 0.3).max(0.0));
         }
         scroll.show(ui, |ui| {
+            // At least as wide as the view: zoomed out, the timeline still fills it.
+            let total_beats = total_beats.max((ui.available_width() / ppb / 16.0).ceil() as f64 * 16.0);
             let size = vec2(total_beats as f32 * ppb, lanes_height.max(ui.available_height()));
             let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
+            crate::widgets::name(&response, egui::WidgetType::Other, "Línea de tiempo");
             let painter = ui.painter_at(rect);
             let x_at = |beat: f64| rect.left() + beat as f32 * ppb;
             let lanes_top = rect.top() + LOOP_H + RULER_H;
@@ -564,7 +567,7 @@ fn place_clips(app: &mut PulseApp, snapshot: &[Vec<ArrangementClip>], moved: &[(
 /// A track header's menu: name, colour, automation lane, duplicate and delete (the
 /// selected tracks, if it is one of them).
 fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automation_shown: bool) {
-    response.context_menu(|ui| {
+    crate::widgets::edit_menu(response, |ui| {
         let several = app.is_track_selected(t) && app.track_selection().len() > 1;
         let count = app.track_selection().len();
         let track = &mut app.project.tracks[t];
@@ -598,7 +601,7 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
 /// The right-click menu of the timeline: for a clip, an empty place on a track,
 /// or an automation lane.
 fn context_menu(app: &mut PulseApp, response: &egui::Response) {
-    response.context_menu(|ui| {
+    crate::widgets::edit_menu(response, |ui| {
         let Some(menu) = app.arrangement.menu else {
             ui.close();
             return;

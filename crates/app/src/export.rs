@@ -345,7 +345,7 @@ impl PulseApp {
         };
         let name = format!("{}.wav", self.file_name());
         let dialog = rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_file_name(&name);
-        let Some(destination) = dialog.save_file() else { return };
+        let Some(destination) = crate::files::save_file(dialog) else { return };
         self.capture_plugins();
         // The renders load plugin instances of their own; the live ones stay as they are.
         let live = std::mem::take(&mut self.samples.plugins);

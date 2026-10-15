@@ -252,7 +252,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         };
         let drag_id = strip_response.id.with("dragging");
         if strip_response.drag_started() {
-            let grabbed = strip_response.interact_pointer_pos().and_then(|pos| near(pos, &clip));
+            // Where the button went down: by the time a drag starts the pointer has moved.
+            let origin = ui.input(|i| i.pointer.press_origin()).or(strip_response.interact_pointer_pos());
+            let grabbed = origin.and_then(|pos| near(pos, &clip));
             ui.data_mut(|d| d.insert_temp(drag_id, grabbed));
         }
         let dragging: Option<usize> = ui.data(|d| d.get_temp(drag_id)).flatten();

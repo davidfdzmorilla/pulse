@@ -100,6 +100,8 @@ fn device_frame<R>(
     child.spacing_mut().item_spacing.x = 4.0;
     if let Some(enabled) = enabled {
         let (dot, response) = child.allocate_exact_size(vec2(12.0, 12.0), Sense::click());
+        let on = *enabled;
+        response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, "Activar"));
         child.painter().circle_filled(dot.center(), 5.0, if *enabled { ACCENT } else { theme::BG });
         child.painter().circle_stroke(dot.center(), 5.0, Stroke::new(1.0, TEXT_DIM));
         if response.on_hover_text("Activar / desactivar").clicked() {
@@ -153,7 +155,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     width,
                     Some(enabled),
                     |ui| {
-                        if ui.small_button("✕").on_hover_text("Eliminar").clicked() {
+                        if ui.small_button("×").on_hover_text("Eliminar").clicked() {
                             header_actions.push(Action::Remove(index));
                         }
                         if index + 1 < count && ui.small_button("▶").on_hover_text("Mover a la derecha").clicked() {
@@ -506,7 +508,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         if ui.small_button("Cargar…").on_hover_text("También puedes arrastrar un archivo de audio aquí").clicked() {
                             actions.push(Action::LoadSamples(0));
                         }
-                        if app.project.tracks[t].sample(0).is_some() && ui.small_button("✕").on_hover_text("Quitar la muestra").clicked() {
+                        if app.project.tracks[t].sample(0).is_some() && ui.small_button("×").on_hover_text("Quitar la muestra").clicked() {
                             actions.push(Action::ClearSample(0));
                         }
                         if ui.small_button("▶").on_hover_text("Escuchar en la nota raíz").clicked() {
@@ -562,7 +564,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         if ui.small_button("Cargar…").on_hover_text("Varios archivos llenan los pads siguientes").clicked() {
                             body_actions.push(Action::LoadSamples(pad));
                         }
-                        if track.sample(pad).is_some() && ui.small_button("✕").on_hover_text("Vaciar el pad").clicked() {
+                        if track.sample(pad).is_some() && ui.small_button("×").on_hover_text("Vaciar el pad").clicked() {
                             body_actions.push(Action::ClearSample(pad));
                         }
                         let mut choke = base.choke[pad];
@@ -750,6 +752,7 @@ fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, action
         zones.push((rect, t, pad));
         let response = ui.interact(rect, ui.id().with(("pad", pad)), Sense::click());
         let name = track.sample_name(pad);
+        widgets::name(&response, egui::WidgetType::Button, format!("Pad {}", pad + 1));
         let fill = match (pad == selected, name.is_some(), response.hovered()) {
             (true, ..) => theme::CONTROL_HOVER,
             (_, true, true) => theme::SLOT_HOVER,
@@ -804,7 +807,7 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
                     actions.push(Action::ApplyPreset(preset.clone()));
                     ui.close();
                 }
-                if ui.small_button("✕").on_hover_text("Borrar el preset").clicked() {
+                if ui.small_button("×").on_hover_text("Borrar el preset").clicked() {
                     actions.push(Action::DeletePreset(preset.clone()));
                 }
             });
@@ -844,7 +847,7 @@ pub(crate) fn click_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &
         if response.on_hover_text("Clic o arrastra una muestra para usarla como click").clicked() {
             actions.push(Action::LoadSamples(0));
         }
-        if track.sample(0).is_some() && ui.small_button("✕").on_hover_text("Volver al click sintetizado").clicked() {
+        if track.sample(0).is_some() && ui.small_button("×").on_hover_text("Volver al click sintetizado").clicked() {
             actions.push(Action::ClearSample(0));
         }
     });

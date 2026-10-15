@@ -187,6 +187,8 @@ pub struct PulseApp {
     pub view: View,
     pub detail: Detail,
     pub selected_clip: Option<ClipRef>,
+    /// The empty session slot clicked last (with no clip selected): where pasting goes.
+    pub paste_slot: Option<(usize, usize)>,
     /// Clips selected together with the selected one (⌘ clic, recuadro); see `clip_select`.
     pub selected_clips: Vec<ClipRef>,
     /// A selection rectangle or session clips being dragged.
@@ -278,6 +280,8 @@ pub struct PulseApp {
     /// its own window after a few seconds and quits. `PULSE_VIEW=arrangement`
     /// opens the arrangement view and `PULSE_PLAY=1` starts playback.
     screenshot: Option<(String, u32)>,
+    /// A test script driving the app (`PULSE_SCRIPT`).
+    pub script: Option<crate::script::Script>,
 }
 
 impl PulseApp {
@@ -289,7 +293,9 @@ impl PulseApp {
         app.plugin_library = crate::plugins::Library::load_cache();
         app.learn = crate::midi_map::Learn::load();
         // Screenshots (a debug aid) leave the user's settings and recent projects alone.
-        let screenshot = std::env::var_os("PULSE_SCREENSHOT").is_some();
+        // So do test scripts.
+        app.script = crate::script::Script::from_env();
+        let screenshot = std::env::var_os("PULSE_SCREENSHOT").is_some() || app.script.is_some();
         app.interactive = !screenshot;
         app.recent = crate::commands::load_recent();
         app.menu_bar = crate::native_menu::MenuBar::install();
@@ -299,8 +305,9 @@ impl PulseApp {
         let project = |p: &PathBuf| p.extension().is_some_and(|e| e == "pulse" || e == "als");
         let from_finder = crate::open_files::take().into_iter().find(project);
         let argument = std::env::args().nth(1).map(PathBuf::from).filter(project);
-        let last = app.settings.reopen_last.then(|| app.recent.first().cloned()).flatten();
-        if let Some(path) = from_finder.or(argument).or(last).filter(|_| !screenshot) {
+        // Screenshots and scripts open the project they're given, not the last one.
+        let last = app.settings.reopen_last.then(|| app.recent.first().cloned()).flatten().filter(|_| !screenshot);
+        if let Some(path) = from_finder.or(argument).or(last) {
             if path.extension().is_some_and(|e| e == "als") {
                 app.import_live_set_from(&path);
             } else {
@@ -347,6 +354,7 @@ impl PulseApp {
             view: View::Session,
             detail: Detail::Devices,
             selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
+            paste_slot: None,
             selected_clips: Vec::new(),
             clip_gesture: None,
             selected_target: Target::Track(0),
@@ -398,6 +406,7 @@ impl PulseApp {
             status: None,
             title: String::new(),
             screenshot: std::env::var("PULSE_SCREENSHOT").ok().map(|path| (path, 0)),
+            script: None,
         }
     }
 
@@ -499,7 +508,7 @@ impl PulseApp {
 
     pub fn choose_samples(&mut self, placement: Placement) {
         let dialog = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS);
-        if let Some(paths) = dialog.pick_files() {
+        if let Some(paths) = crate::files::pick_files(dialog) {
             self.add_samples(paths, placement);
         }
     }
@@ -893,6 +902,7 @@ impl PulseApp {
     // ----- Edits ------------------------------------------------------------------
 
     pub fn select_clip(&mut self, clip: ClipRef) {
+        self.paste_slot = None;
         self.selected_clip = Some(clip);
         self.selected_clips.clear();
         self.selected_target = Target::Track(clip.track());
@@ -1092,7 +1102,7 @@ impl PulseApp {
 
     /// Loads a wavetable file into oscillator `osc` of a wavetable synth.
     pub fn choose_wavetable(&mut self, track: usize, osc: usize) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Wavetable", &AUDIO_EXTENSIONS).pick_file() else { return };
+        let Some(path) = crate::files::pick_file(rfd::FileDialog::new().add_filter("Wavetable", &AUDIO_EXTENSIONS)) else { return };
         let path = path.to_string_lossy().into_owned();
         let table = self.samples.table(&path);
         if table.frames() == 0 || self.samples.errors.last().is_some() {
@@ -1189,7 +1199,7 @@ impl PulseApp {
 
     /// Loads the audio or wavetable file a modular generator plays.
     pub fn choose_gen_file(&mut self, track: usize, g: usize) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS).pick_file() else { return };
+        let Some(path) = crate::files::pick_file(rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS)) else { return };
         let path = path.to_string_lossy().into_owned();
         if self.sample(&path).frames() == 0 {
             return;
@@ -1225,7 +1235,7 @@ impl PulseApp {
 
     /// Loads the audio file oscillator `osc` plays in sample, granular or spectral mode.
     pub fn choose_osc_sample(&mut self, track: usize, osc: usize) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS).pick_file() else { return };
+        let Some(path) = crate::files::pick_file(rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS)) else { return };
         let path = path.to_string_lossy().into_owned();
         if self.sample(&path).frames() == 0 {
             return;
@@ -1273,8 +1283,8 @@ impl PulseApp {
     pub fn choose_instrument_samples(&mut self, track: usize, slot: usize) {
         let dialog = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS);
         let paths = match self.project.tracks[track].instrument {
-            InstrumentKind::DrumRack(_) => dialog.pick_files(),
-            _ => dialog.pick_file().map(|p| vec![p]),
+            InstrumentKind::DrumRack(_) => crate::files::pick_files(dialog),
+            _ => crate::files::pick_file(dialog).map(|p| vec![p]),
         };
         if let Some(paths) = paths {
             self.set_instrument_samples(track, slot, paths);
@@ -1324,7 +1334,7 @@ impl PulseApp {
 
     /// A new folder for the slices of `name`, next to the kits.
     fn slices_dir(name: &str) -> PathBuf {
-        let base = crate::kits::kits_dir().with_file_name("Slices");
+        let base = crate::script::out_dir().map_or_else(|| crate::kits::kits_dir().with_file_name("Slices"), |dir| dir.join("Slices"));
         let clean: String = name.chars().map(|c| if c == '/' || c == ':' { '-' } else { c }).collect();
         (1..)
             .map(|n| base.join(if n == 1 { clean.clone() } else { format!("{clean} {n}") }))
@@ -1335,7 +1345,7 @@ impl PulseApp {
     /// Slices a whole file into the drum rack on `track`, replacing its pads, and
     /// puts the clip that replays it in the first free session slot.
     pub fn slice_file_into(&mut self, track: usize) {
-        let Some(path) = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS).pick_file() else { return };
+        let Some(path) = crate::files::pick_file(rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS)) else { return };
         let sample = self.sample(&path.to_string_lossy());
         if sample.frames() == 0 {
             return;
@@ -1385,6 +1395,9 @@ impl PulseApp {
                 return;
             }
         };
+        // As long as the audio clip, so the two loop together (the file may end
+        // before the clip's last bar).
+        sliced.clip.length = audio.length;
         sliced.params.tune = [audio.transpose; RACK_PADS];
         sliced.params.level = [engine::model::db_to_gain(audio.gain_db).min(1.0); RACK_PADS];
         let pads = sliced.clip.notes.len();
@@ -1555,6 +1568,7 @@ impl PulseApp {
     pub(crate) fn recordings_dir(&self) -> PathBuf {
         let base = match &self.file {
             Some(file) => file.parent().map(Path::to_path_buf).unwrap_or_default(),
+            None if crate::script::out_dir().is_some() => crate::script::out_dir().unwrap_or_default(),
             None => std::env::var_os("HOME").map_or_else(PathBuf::new, |home| PathBuf::from(home).join("Music/Pulse")),
         };
         base.join("Recordings")
@@ -1827,14 +1841,14 @@ impl PulseApp {
     }
 
     pub fn open(&mut self) {
-        if let Some(path) = rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"]).pick_file() {
+        if let Some(path) = crate::files::pick_file(rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"])) {
             self.open_from(&path);
         }
     }
 
     pub fn import_live_set(&mut self) {
         let dialog = rfd::FileDialog::new().add_filter("Set de Ableton Live", &["als"]);
-        if let Some(path) = dialog.pick_file() {
+        if let Some(path) = crate::files::pick_file(dialog) {
             self.import_live_set_from(&path);
         }
     }
@@ -1925,7 +1939,7 @@ impl PulseApp {
         let dialog = rfd::FileDialog::new()
             .add_filter("Proyecto Pulse", &["pulse"])
             .set_file_name("Sin título.pulse");
-        if let Some(path) = dialog.save_file() {
+        if let Some(path) = crate::files::save_file(dialog) {
             self.save_to(path);
         }
     }
@@ -2091,6 +2105,10 @@ impl PulseApp {
 }
 
 impl eframe::App for PulseApp {
+    fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
+        self.script_input(ctx, raw_input);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
         crate::widgets::set_learning(&ctx, self.learn.on);
@@ -2173,6 +2191,7 @@ impl eframe::App for PulseApp {
         self.update_title(&ctx);
         crate::export::window(self, &ctx);
         self.debug_screenshot(&ctx);
+        self.script_output(&ctx);
         // Meters and playheads animate continuously.
         ctx.request_repaint();
     }

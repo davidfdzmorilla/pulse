@@ -34,6 +34,7 @@ fn readout(ui: &mut egui::Ui, text: &str, width: f32) {
 
 fn icon_button(ui: &mut egui::Ui, icon: &str, active: bool, active_color: Color32, hint: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(28.0, 22.0), Sense::click());
+    crate::widgets::name(&response, egui::WidgetType::Button, hint.split(" (").next().unwrap_or(hint));
     let fill = if active {
         active_color
     } else if response.hovered() {

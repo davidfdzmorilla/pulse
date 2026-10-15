@@ -109,9 +109,11 @@ impl PulseApp {
             Some(ClipRef::Session { .. }) => false,
             None => self.view == View::Arrangement,
         };
-        let first_track = match (self.selected_clip, self.selected_target) {
-            (Some(c), _) => c.track(),
-            (None, Target::Track(t)) => t,
+        let slot = self.paste_slot.filter(|_| self.selected_clip.is_none() && !to_arrangement);
+        let first_track = match (self.selected_clip, slot, self.selected_target) {
+            (Some(c), _, _) => c.track(),
+            (None, Some((t, _)), _) => t,
+            (None, None, Target::Track(t)) => t,
             _ => 0,
         };
         self.paste_into(to_arrangement, first_track, None);
@@ -153,8 +155,9 @@ impl PulseApp {
                 self.sync_arrangement(t);
             }
         } else {
-            let first_slot = match self.selected_clip {
-                Some(ClipRef::Session { slot, .. }) => slot,
+            let first_slot = match (self.selected_clip, self.paste_slot) {
+                (Some(ClipRef::Session { slot, .. }), _) => slot,
+                (None, Some((_, slot))) => slot,
                 _ => 0,
             };
             let place = |down: usize| -> Option<Vec<(usize, usize)>> {
@@ -624,6 +627,27 @@ mod tests {
         // ⌫ (the menu's Delete) deletes the three.
         app.delete_selected_clip();
         assert_eq!(starts(&app), vec![(1, 0.0)]);
+    }
+
+    /// As in Live: a clip copied, an empty slot clicked, ⌘V puts it there.
+    #[test]
+    fn a_clip_is_pasted_in_the_empty_slot_clicked() {
+        let mut app = empty_tracks();
+        let a = midi(&app, "a");
+        app.set_clip(0, 0, Some(a));
+        app.select_clip(ClipRef::Session { track: 0, slot: 0 });
+        app.copy_clips();
+        // What clicking slot 6 of track 2 does (session::Action::SelectSlot).
+        app.set_clip_selection(Vec::new());
+        app.selected_target = Target::Track(1);
+        app.paste_slot = Some((1, 5));
+        app.paste_clips();
+        assert_eq!(session_clips(&app), vec![(0, 0), (1, 5)]);
+        assert_eq!(app.clip_selection(), vec![ClipRef::Session { track: 1, slot: 5 }], "the pasted clip is selected");
+        assert_eq!(app.paste_slot, None, "selecting it forgets the slot");
+        // Again: below it, the next free slot.
+        app.paste_clips();
+        assert_eq!(session_clips(&app), vec![(0, 0), (1, 5), (1, 6)]);
     }
 
     #[test]

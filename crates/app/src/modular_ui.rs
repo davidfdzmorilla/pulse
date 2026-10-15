@@ -2,7 +2,7 @@
 //! Mix/Aux and outputs) on the left, the effect lanes on the right and the
 //! modulators along the bottom. Drag a module's ⟿ handle onto a generator's
 //! Phase, Harmonic, Shift, Level or Semi knob (or an Aux) for audio-rate
-//! modulation; drag a modulator's ✥ handle onto any knob for control-rate
+//! modulation; drag a modulator's ✚ handle onto any knob for control-rate
 //! modulation, including another modulator's knobs (drawn in yellow).
 //! Right-click a modulated knob to switch, bend, bound or remove each connection.
 
@@ -125,14 +125,14 @@ fn modulation_overlay(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, n: 
     }
     let connected = p.modulators.iter().filter(|md| md.kind != ModulatorKind::Off).any(|md| md.targets.iter().any(|tg| tg.dest as usize == i));
     if connected {
-        response.context_menu(|ui| {
+        crate::widgets::edit_menu(&response, |ui| {
             for (m, modulator) in p.modulators.iter().enumerate().filter(|(_, md)| md.kind != ModulatorKind::Off) {
                 for (s, target) in modulator.targets.iter().enumerate().filter(|(_, tg)| tg.dest as usize == i) {
                     ui.horizontal(|ui| {
                         ui.label(egui::RichText::new(modulator_name(&p, m)).color(modulator_color(modulator.kind)));
                         let mut edited = *target;
                         connection_editor(ui, &mut edited, modulator.range());
-                        let remove = ui.small_button("✕").clicked();
+                        let remove = ui.small_button("×").clicked();
                         if edited != *target || remove {
                             let mut next = p;
                             next.modulators[m].targets[s] = if remove { ModTarget::NONE } else { edited };
@@ -271,7 +271,7 @@ fn stack_buttons(ui: &mut egui::Ui, t: usize, i: usize, actions: &mut Vec<Action
     if ui.small_button("⧉").on_hover_text("Duplicar").clicked() {
         actions.push(Action::StackEdit(StackEdit::Duplicate(i)));
     }
-    if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+    if ui.small_button("×").on_hover_text("Quitar").clicked() {
         actions.push(Action::StackEdit(StackEdit::Remove(i)));
     }
     insert_menu(ui, ("modular_insert", t, i), Some(i), "+", actions);
@@ -434,7 +434,7 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                 if ui.add(egui::Slider::new(&mut amount, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
                     actions.push(Action::Param(id, amount / 100.0));
                 }
-                if ui.small_button("✕").clicked() {
+                if ui.small_button("×").clicked() {
                     let mut params = p;
                     params.audio[c] = AudioMod::NONE;
                     set(actions, params);
@@ -495,7 +495,7 @@ fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularP
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut edited.enabled, egui::RichText::new(device.effect.label()).size(11.0));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+                            if ui.small_button("×").on_hover_text("Quitar").clicked() {
                                 next.remove_lane_fx(l, slot);
                             }
                             if slot + 1 < used && ui.small_button("▼").on_hover_text("Bajar").clicked() {
@@ -586,7 +586,7 @@ fn connection_editor(ui: &mut egui::Ui, target: &mut ModTarget, range: OutputRan
     if ui.add(egui::Slider::new(&mut depth, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
         target.depth = depth / 100.0;
     }
-    ui.menu_button("⋯", |ui| {
+    crate::widgets::field_menu_button(ui, "⋯", |ui| {
         ui.label(egui::RichText::new("Curva").size(10.5).color(TEXT_DIM));
         ui.add(egui::Slider::new(&mut target.curve, -1.0..=1.0).fixed_decimals(2));
         ui.label(egui::RichText::new("Límites (en % del recorrido del knob)").size(10.5).color(TEXT_DIM));
@@ -623,7 +623,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
         let mut removed = false;
         ui.horizontal(|ui| {
             ui.dnd_drag_source(egui::Id::new(("modular_source", t, i)), ModulatorRef(i), |ui| {
-                ui.label(egui::RichText::new(format!("✥ {}", modulator_name(&p, i))).size(11.0).color(Color32::BLACK).background_color(color));
+                ui.label(egui::RichText::new(format!("✚ {}", modulator_name(&p, i))).size(11.0).color(Color32::BLACK).background_color(color));
             })
             .response
             .on_hover_text("Arrástralo a cualquier knob para modularlo, también a los de otro modulador");
@@ -635,7 +635,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
             });
             next.set_range(range);
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                removed = ui.small_button("✕").clicked();
+                removed = ui.small_button("×").clicked();
             });
         });
         if kind.triggered() {
@@ -799,7 +799,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
         });
         let targets: Vec<(usize, ModTarget)> = modulator.targets.iter().copied().enumerate().filter(|(_, tg)| (tg.dest as usize) < MODULAR_PARAMS.len()).collect();
         if targets.is_empty() {
-            ui.label(egui::RichText::new("Sin destinos: arrastra ✥ a un knob").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new("Sin destinos: arrastra ✚ a un knob").color(TEXT_DIM).size(10.5));
         }
         for (s, target) in targets {
             ui.horizontal(|ui| {
@@ -810,7 +810,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
             ui.horizontal(|ui| {
                 let range = next.range();
                 connection_editor(ui, &mut next.targets[s], range);
-                if ui.small_button("✕").clicked() {
+                if ui.small_button("×").clicked() {
                     next.targets[s] = ModTarget::NONE;
                 }
             });

@@ -23,6 +23,8 @@ enum Action {
     StartMove(usize, usize, egui::Modifiers),
     StartMarquee(egui::Pos2, egui::Modifiers),
     SelectTarget(Target),
+    /// An empty slot clicked: its track selected, no clip, pasting goes there.
+    SelectSlot(usize, usize),
     Create(usize, usize),
     Delete(usize, usize),
     Duplicate(usize, usize),
@@ -100,6 +102,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
             ui.vertical(|ui| {
                 let (rect, response) = ui.allocate_exact_size(vec2(26.0, HEADER_H), Sense::click());
+                widgets::name(&response, egui::WidgetType::Button, "Nueva pista MIDI");
                 let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
                 ui.painter().rect_filled(rect, 2.0, fill);
                 ui.painter().text(rect.center(), Align2::CENTER_CENTER, "+", theme::body(), TEXT);
@@ -165,6 +168,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
 fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: Sense) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(COL_W, HEADER_H), sense);
+    widgets::name(&response, egui::WidgetType::Button, format!("Pista {name}"));
     let painter = ui.painter();
     painter.rect_filled(rect, 2.0, if selected { color } else { theme::shade(color, 0.72) });
     painter.text(
@@ -188,7 +192,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     app.track_header_input(t, &response);
     let several = app.is_track_selected(t) && app.track_selection().len() > 1;
     let count = app.track_selection().len();
-    response.context_menu(|ui| {
+    widgets::edit_menu(&response, |ui| {
         let track = &mut app.project.tracks[t];
         ui.label("Nombre");
         ui.text_edit_singleline(&mut track.name);
@@ -241,6 +245,10 @@ fn clip_slot(
     let painter = ui.painter();
     let launch = Rect::from_min_size(rect.min, vec2(LAUNCH_W, SLOT_H));
     let clip = app.project.tracks[t].clips[slot].as_ref();
+    widgets::name(&response, egui::WidgetType::Button, match clip {
+        Some(c) => format!("Clip {} · {}", t + 1, c.name()),
+        None => format!("Slot {}:{}", t + 1, slot + 1),
+    });
     let selected = app.is_clip_selected(ClipRef::Session { track: t, slot });
     let on_launch = response.hover_pos().is_some_and(|p| launch.contains(p));
     let is_playing = play.playing == slot as i32;
@@ -327,7 +335,7 @@ fn clip_slot(
         } else if clip.is_some() {
             actions.push(Action::ClickClip(ClipRef::Session { track: t, slot }, modifiers));
         } else {
-            actions.push(Action::SelectTarget(Target::Track(t)));
+            actions.push(Action::SelectSlot(t, slot));
         }
     }
 
@@ -384,6 +392,7 @@ fn clip_slot(
 
 fn stop_cell(ui: &mut egui::Ui, highlighted: bool, hint: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
+    widgets::name(&response, egui::WidgetType::Button, hint);
     let painter = ui.painter();
     painter.rect_filled(rect, 2.0, theme::shade(SLOT, 0.85));
     let square = Rect::from_center_size(rect.center(), vec2(9.0, 9.0));
@@ -400,6 +409,7 @@ fn stop_cell(ui: &mut egui::Ui, highlighted: bool, hint: &str) -> egui::Response
 
 fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut Vec<Action>) {
     let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
+    widgets::name(&response, egui::WidgetType::Button, format!("Escena {}", slot + 1));
     let painter = ui.painter();
     painter.rect_filled(rect, 2.0, if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL });
     let launch = Rect::from_min_size(rect.min, vec2(LAUNCH_W, SLOT_H));
@@ -414,7 +424,7 @@ fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut 
     if response.clicked() {
         actions.push(Action::LaunchScene(slot));
     }
-    response.on_hover_text("Lanzar escena · clic derecho: renombrar").context_menu(|ui| {
+    widgets::edit_menu(&response.on_hover_text("Lanzar escena · clic derecho: renombrar"), |ui| {
         ui.label("Nombre de la escena");
         ui.text_edit_singleline(&mut app.project.scene_names[slot]);
     });
@@ -533,6 +543,11 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::StartMove(t, slot, modifiers) => app.start_session_move(t, slot, modifiers),
         Action::StartMarquee(anchor, modifiers) => app.start_marquee(anchor, modifiers),
         Action::SelectTarget(target) => app.selected_target = target,
+        Action::SelectSlot(t, slot) => {
+            app.set_clip_selection(Vec::new());
+            app.selected_target = Target::Track(t);
+            app.paste_slot = Some((t, slot));
+        }
         Action::Create(t, slot) => {
             if app.project.tracks[t].is_audio() {
                 app.choose_samples(Placement::Session { track: t, slot });

@@ -16,6 +16,7 @@ fn heading(ui: &mut egui::Ui, text: &str) {
 fn item(ui: &mut egui::Ui, icon: &str, label: &str, hint: &str) -> bool {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
+    crate::widgets::name(&response, egui::WidgetType::Button, label);
     if response.hovered() {
         ui.painter().rect_filled(rect, 2.0, theme::CONTROL);
     }

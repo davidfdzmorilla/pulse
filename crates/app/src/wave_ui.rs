@@ -40,7 +40,7 @@ pub(crate) fn source_color(source: ModSource) -> Color32 {
 pub(crate) fn source_badge(ui: &mut egui::Ui, source: ModSource) {
     let id = egui::Id::new(("mod_source", source.label()));
     ui.dnd_drag_source(id, source, |ui| {
-        let text = egui::RichText::new(format!("✥ {}", source.label())).size(10.5).color(Color32::BLACK).background_color(source_color(source));
+        let text = egui::RichText::new(format!("✚ {}", source.label())).size(10.5).color(Color32::BLACK).background_color(source_color(source));
         ui.label(text);
     })
     .response
@@ -76,7 +76,7 @@ pub(crate) fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label:
         actions.push(Action::AddModulation(*source, i));
     }
     if !mods.is_empty() {
-        response.context_menu(|ui| {
+        crate::widgets::edit_menu(&response, |ui| {
             ui.label(egui::RichText::new(format!("Modulaciones de {}", info.name)).color(TEXT_DIM).size(10.5));
             for (s, slot) in &mods {
                 ui.horizontal(|ui| {
@@ -86,7 +86,7 @@ pub(crate) fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label:
                     if ui.add(egui::Slider::new(&mut amount, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
                         actions.push(Action::Param(id, amount / 100.0));
                     }
-                    if ui.small_button("✕").on_hover_text("Quitar").clicked() {
+                    if ui.small_button("×").on_hover_text("Quitar").clicked() {
                         let mut p = base;
                         p.matrix[*s] = ModSlot::EMPTY;
                         set(actions, p);
@@ -692,7 +692,7 @@ pub(crate) fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &m
                                 if slot + 1 < WAVE_FX && base.fx[slot + 1].is_some() && ui.small_button("▶").clicked() {
                                     swap = Some(slot + 1);
                                 }
-                                remove = ui.small_button("✕").clicked();
+                                remove = ui.small_button("×").clicked();
                             });
                             ui.horizontal(|ui| {
                                 devices::discrete_controls(ui, &mut edited.effect, 100 + slot);
@@ -770,7 +770,7 @@ pub(crate) fn matrix_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: Wav
             });
             let mut bipolar = slot.bipolar;
             ui.checkbox(&mut bipolar, "");
-            let clear = ui.small_button("✕").on_hover_text("Vaciar").clicked();
+            let clear = ui.small_button("×").on_hover_text("Vaciar").clicked();
             if source != slot.source || dest != slot.dest || bipolar != slot.bipolar || clear {
                 let mut p = base;
                 p.matrix[s] = if clear { ModSlot::EMPTY } else { ModSlot { source, dest, bipolar, ..slot } };

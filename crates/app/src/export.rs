@@ -242,6 +242,19 @@ pub fn write(path: &Path, left: &[f32], right: &[f32], sample_rate: u32, bits: B
     Ok(clipped)
 }
 
+/// Adds `frames` of silence at the end of a WAV written by [`write`].
+fn pad(path: &Path, frames: usize, bits: BitDepth) -> Result<(), String> {
+    let mut writer = hound::WavWriter::append(path).map_err(|e| format!("No se pudo alargar {}: {e}", path.display()))?;
+    for _ in 0..frames * 2 {
+        match bits {
+            BitDepth::Float32 => writer.write_sample(0f32),
+            BitDepth::Int16 | BitDepth::Int24 => writer.write_sample(0i32),
+        }
+        .map_err(|e| e.to_string())?;
+    }
+    writer.finalize().map_err(|e| e.to_string())
+}
+
 /// A running export.
 pub struct Job {
     progress: Arc<AtomicU32>,
@@ -287,6 +300,7 @@ fn run(
     let count = renders.len().max(1);
     let mut report = Report::default();
     let mut peak_overall = 0f32;
+    let mut lengths = Vec::new();
     for (index, Render { path, commands }) in renders.into_iter().enumerate() {
         let step = |p: f32| progress.store(((index as f32 + p) / count as f32).to_bits(), Ordering::Relaxed);
         let Some((left, right)) = render(commands, range, tempo, settings.sample_rate as f32, cancel, &step) else {
@@ -301,7 +315,16 @@ fn run(
         };
         report.clipped += write(&path, &left, &right, settings.sample_rate, settings.bits, gain)?;
         report.seconds = report.seconds.max(left.len() as f64 / settings.sample_rate as f64);
+        lengths.push(left.len());
         report.files.push(path);
+    }
+    // Stems as long as the longest (each ends with its own tail), so they line up
+    // end to end too in another program.
+    let longest = lengths.iter().copied().max().unwrap_or(0);
+    for (path, &frames) in report.files.iter().zip(&lengths) {
+        if frames < longest {
+            pad(path, longest - frames, settings.bits)?;
+        }
     }
     report.peak_db = db(peak_overall);
     progress.store(1f32.to_bits(), Ordering::Relaxed);
@@ -345,7 +368,7 @@ impl PulseApp {
         };
         let name = format!("{}.wav", self.file_name());
         let dialog = rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_file_name(&name);
-        let Some(destination) = dialog.save_file() else { return };
+        let Some(destination) = crate::files::save_file(dialog) else { return };
         self.capture_plugins();
         // The renders load plugin instances of their own; the live ones stay as they are.
         let live = std::mem::take(&mut self.samples.plugins);
@@ -488,6 +511,24 @@ mod tests {
         }
         let peak = peak(&left, &right);
         assert!(peak > 0.1 && peak < 4.0, "unexpected peak {peak}");
+    }
+
+    /// Each stem ends with its own tail; written, they all last as long as the longest.
+    #[test]
+    fn stems_are_written_all_the_same_length() {
+        let dir = std::env::temp_dir().join(format!("pulse-stem-export-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let settings = Settings { stems: true, range: Range::Loop, bits: BitDepth::Int16, ..Default::default() };
+        let project = Project::demo();
+        let mut samples = SampleCache::default();
+        let range = beat_range(&project, settings.range).unwrap();
+        let renders = plan(&project, &mut samples, &settings, &dir.join("demo.wav"));
+        let report = run(renders, range, project.tempo, settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let lengths: Vec<u32> = report.files.iter().map(|f| hound::WavReader::open(f).unwrap().duration()).collect();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(lengths.len(), 4);
+        assert!(lengths.iter().all(|&n| n == lengths[0]), "{lengths:?}");
+        assert!(lengths[0] as f64 >= (range.1 - range.0) * 60.0 / project.tempo * 48_000.0);
     }
 
     #[test]

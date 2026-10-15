@@ -183,3 +183,19 @@ Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas,
 5. Sintes del motor de wavetables: multisample, efectos modulables desde la matriz, buses de efectos en
    paralelo, polirritmos en el secuenciador, lectura de presets de otros sintes.
 6. Plugins VST3 / CLAP.
+
+## Cómo se trabaja en el repositorio
+
+- `main` siempre está lista para publicar: solo recibe trabajo terminado y
+  probado, a través de pull requests. No se sube nada directamente a `main`
+  (lo impide `.githooks/pre-push`; actívalo en cada copia del repositorio con
+  `git config core.hooksPath .githooks`).
+- Cada tarea va en su rama: `funcion/<tema>` para algo nuevo, `arreglo/<tema>`
+  para corregir un fallo. En la rama, los commits que hagan falta.
+- Al terminar, un pull request con lo que cambia y cómo se ha probado. Lo revisa
+  y lo fusiona el dueño del repositorio, aplastando los commits en uno: el
+  título del pull request (en español) es una línea de las novedades.
+- Publicar: `scripts/release.sh [patch|minor|major]` desde `main` al día. La
+  versión sale de la última etiqueta (`v1.2.3`); el script pasa las pruebas,
+  firma Pulse.app, crea la etiqueta y la publica en GitHub, de donde la app se
+  actualiza.

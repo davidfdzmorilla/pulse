@@ -1586,7 +1586,9 @@ impl PulseApp {
             return;
         }
         self.recorder.start_arrangement(self.audio.position());
-        self.start_automation_take();
+        if self.settings.automation_arm {
+            self.start_automation_take();
+        }
         self.audio.send(Command::SetArrangementRecord(true));
         self.audio.send(Command::Play);
     }

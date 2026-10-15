@@ -114,8 +114,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             press(app, Transport::Stop);
         }
         let recording = app.is_arrangement_recording();
-        if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (si no hay ninguna, arma las seleccionadas) y los controles que muevas como automatización (F9)").clicked() {
+        if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (si no hay ninguna, arma las seleccionadas) y, con «A» encendido, los controles que muevas como automatización (F9)").clicked() {
             press(app, Transport::Record);
+        }
+        let armed = app.settings.automation_arm;
+        let hint = if armed {
+            "Armar automatización: encendido, al grabar se graban los controles que muevas. Clic para apagarlo"
+        } else {
+            "Armar automatización: apagado, al grabar no se graban los controles. Clic para encenderlo"
+        };
+        if icon_button(ui, "A", armed, theme::METER_RED, hint).clicked() {
+            press(app, Transport::AutomationArm);
         }
         if icon_button(ui, "⟲", app.project.loop_enabled, ACCENT, "Loop del Arrangement").clicked() {
             press(app, Transport::Loop);

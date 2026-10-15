@@ -206,7 +206,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     response.rect
 }
 
-fn color_picker(ui: &mut egui::Ui, color: &mut [u8; 3]) -> bool {
+pub(crate) fn color_picker(ui: &mut egui::Ui, color: &mut [u8; 3]) -> bool {
     let mut changed = false;
     ui.horizontal_wrapped(|ui| {
         ui.spacing_mut().item_spacing = vec2(2.0, 2.0);

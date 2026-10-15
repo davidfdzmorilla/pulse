@@ -104,7 +104,6 @@ impl PulseApp {
     /// selected clips, or at the bar of the playhead if none is selected. The first
     /// track is the selected one.
     pub fn paste_clips(&mut self) {
-        let Some(board) = self.clip_clipboard.clone() else { return };
         let to_arrangement = match self.selected_clip {
             Some(ClipRef::Arrangement { .. }) => true,
             Some(ClipRef::Session { .. }) => false,
@@ -115,6 +114,16 @@ impl PulseApp {
             (None, Target::Track(t)) => t,
             _ => 0,
         };
+        self.paste_into(to_arrangement, first_track, None);
+    }
+
+    /// Pastes the copied clips on the arrangement, the first on `track` at `start`.
+    pub fn paste_clips_at(&mut self, track: usize, start: f64) {
+        self.paste_into(true, track, Some(start));
+    }
+
+    fn paste_into(&mut self, to_arrangement: bool, first_track: usize, at: Option<f64>) {
+        let Some(board) = self.clip_clipboard.clone() else { return };
         let tracks = self.project.tracks.len();
         let fits = |app: &PulseApp, item: &CopiedClip| {
             let t = first_track + item.track;
@@ -127,7 +136,11 @@ impl PulseApp {
         let mut pasted = Vec::new();
         if to_arrangement {
             let selected_end = self.clip_selection().iter().filter_map(|&c| self.placed(c).map(|p| p.end())).fold(f64::NEG_INFINITY, f64::max);
-            let start = if selected_end.is_finite() { selected_end } else { (self.audio.position() / 4.0).floor() * 4.0 };
+            let start = match at {
+                Some(start) => start,
+                None if selected_end.is_finite() => selected_end,
+                None => (self.audio.position() / 4.0).floor() * 4.0,
+            };
             for item in &board.items {
                 let t = first_track + item.track;
                 let lane = &mut self.project.tracks[t].arrangement;

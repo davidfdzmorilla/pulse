@@ -2,7 +2,7 @@
 
 use crate::app::PulseApp;
 use crate::theme::{self, ACCENT, TEXT, TEXT_DIM};
-use eframe::egui::{self, vec2, Align2, RichText, Sense};
+use eframe::egui::{self, pos2, vec2, Align2, RichText, Sense};
 use engine::model::{Device, Effect, InstrumentKind};
 use engine::Target;
 
@@ -26,7 +26,13 @@ fn item(ui: &mut egui::Ui, icon: &str, label: &str, hint: &str) -> bool {
         theme::small(),
         ACCENT,
     );
-    ui.painter().text(rect.left_center() + vec2(22.0, 0.0), Align2::LEFT_CENTER, label, theme::body(), TEXT);
+    // Cut with "…" at the panel's edge (the tooltip has the whole name).
+    let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), theme::body(), TEXT);
+    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 26.0);
+    let galley = ui.painter().layout_job(job);
+    let cut = galley.elided;
+    ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, TEXT);
+    let hint = if cut { format!("{label}\n{hint}") } else { hint.to_string() };
     response.on_hover_text(hint).clicked()
 }
 

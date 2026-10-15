@@ -2014,7 +2014,9 @@ impl PulseApp {
     fn debug_screenshot(&mut self, ctx: &egui::Context) {
         let Some((path, frames)) = &mut self.screenshot else { return };
         *frames += 1;
-        if *frames == 240 {
+        // Frames come one after another, not only on input.
+        ctx.request_repaint();
+        if *frames == 60 {
             ctx.send_viewport_cmd(egui::ViewportCommand::Screenshot(Default::default()));
         }
         let image = ctx.input(|i| {
@@ -2032,6 +2034,8 @@ impl PulseApp {
             if let Err(e) = std::fs::write(&*path, ppm) {
                 eprintln!("cannot write screenshot: {e}");
             }
+            // Nothing to save: the scene's changes are throwaway.
+            self.quitting = true;
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }

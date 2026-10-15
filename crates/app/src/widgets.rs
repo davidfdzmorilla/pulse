@@ -341,6 +341,8 @@ pub fn format_param(info: &engine::model::ParamInfo, value: f32) -> String {
         Unit::Decibels if info.min <= -40.0 && value <= -39.9 => "-inf dB".into(),
         Unit::Decibels => format!("{value:+.1} dB"),
         Unit::Hertz if value >= 1000.0 => format!("{:.2} kHz", value / 1000.0),
+        Unit::Hertz if value < 10.0 => format!("{value:.2} Hz"),
+        Unit::Hertz if value < 100.0 => format!("{value:.1} Hz"),
         Unit::Hertz => format!("{value:.0} Hz"),
         Unit::Percent => format!("{:.0} %", value * 100.0),
         Unit::Seconds if value < 1.0 => format!("{:.0} ms", value * 1000.0),
@@ -374,6 +376,39 @@ pub fn automation_dot(painter: &egui::Painter, at: egui::Pos2, overridden: Optio
         }
         None => {}
     }
+}
+
+/// An instrument's editor window: sized to its contents when it fits on screen;
+/// otherwise as big as the screen allows, with scroll bars. (Its full size is
+/// measured while it fits, or on the first frame.)
+pub fn editor_window<R>(ctx: &egui::Context, title: impl Into<egui::WidgetText>, id: egui::Id, open: &mut bool, pos: egui::Pos2, contents: impl FnOnce(&mut Ui) -> R) -> Option<R> {
+    let screen = ctx.content_rect().size();
+    let full_id = id.with("full_size");
+    let full: Option<egui::Vec2> = ctx.data(|d| d.get_temp(full_id));
+    let fits = full.is_none_or(|f| f.x <= screen.x - 16.0 && f.y <= screen.y - 16.0);
+    let mut window = egui::Window::new(title).id(id).open(open).collapsible(false).resizable(false).default_pos(pos);
+    if !fits {
+        // The contents' area: the screen less the title bar and margins.
+        window = window.scroll(true).fixed_size(screen - vec2(40.0, 72.0));
+    }
+    let response = window.show(ctx, contents)?;
+    if fits {
+        let size = response.response.rect.size().ceil();
+        if full.is_none_or(|f| (f - size).length() > 1.0) {
+            ctx.data_mut(|d| d.insert_temp(full_id, size));
+            ctx.request_repaint();
+        }
+    }
+    response.inner
+}
+
+/// Text over a graph: on a dark backdrop, so lines and curves drawn before it
+/// don't run through it.
+pub fn backdrop_text(painter: &egui::Painter, pos: egui::Pos2, align: Align2, text: impl ToString, font: egui::FontId, color: Color32) {
+    let galley = painter.layout_no_wrap(text.to_string(), font, color);
+    let rect = align.anchor_size(pos, galley.size());
+    painter.rect_filled(rect.expand2(vec2(2.0, 0.5)), 2.0, Color32::from_black_alpha(190));
+    painter.galley(rect.min, galley, color);
 }
 
 /// Knob for a described parameter. Returns the new value when the user moves it.

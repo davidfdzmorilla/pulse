@@ -86,6 +86,10 @@ fn device_frame<R>(
     header_extra: impl FnOnce(&mut egui::Ui),
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> R {
+    // At least as wide as its controls were last frame, so none is cut off.
+    let id = ui.id().with(("device_width", title, ui.next_auto_id()));
+    let needed: f32 = ui.ctx().data(|d| d.get_temp(id)).unwrap_or(0.0);
+    let width = width.max(needed);
     let (rect, _) = ui.allocate_exact_size(vec2(width, DEVICE_HEIGHT), Sense::hover());
     let painter = ui.painter();
     painter.rect_filled(rect, 3.0, SURFACE);
@@ -108,7 +112,13 @@ fn device_frame<R>(
     let body_rect = Rect::from_min_max(pos2(rect.left() + 8.0, title_rect.bottom() + 6.0), rect.max - vec2(8.0, 6.0));
     let mut body_ui = ui.new_child(egui::UiBuilder::new().max_rect(body_rect).layout(egui::Layout::left_to_right(egui::Align::Min)));
     body_ui.spacing_mut().item_spacing = vec2(4.0, 4.0);
-    body(&mut body_ui)
+    let result = body(&mut body_ui);
+    let used = (body_ui.min_rect().right() - rect.left() + 8.0).ceil();
+    if (used - needed).abs() > 0.5 && used > width - 0.5 {
+        ui.ctx().data_mut(|d| d.insert_temp(id, used));
+        ui.ctx().request_repaint();
+    }
+    result
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {

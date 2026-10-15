@@ -20,7 +20,12 @@ use std::sync::{Arc, Mutex};
 
 /// The repository releases come from.
 pub const REPOSITORY: &str = "davidfdzmorilla/pulse";
-pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+/// This build's version: the release's (scripts/release.sh sets PULSE_VERSION from
+/// the new tag), or Cargo's for builds of our own.
+pub const VERSION: &str = match option_env!("PULSE_VERSION") {
+    Some(version) => version,
+    None => env!("CARGO_PKG_VERSION"),
+};
 const KEYCHAIN_SERVICE: &str = "Pulse GitHub";
 const PREVIOUS: &str = "Pulse (anterior).app";
 /// While Pulse stays open, it looks again this often.

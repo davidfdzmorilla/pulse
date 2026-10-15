@@ -286,20 +286,6 @@ mod mac {
         }
     }
 
-    fn objc2_app_kit_active() -> bool {
-        // NSApplication is not among the features used; ask through the runtime.
-        unsafe {
-            let class = objc2::runtime::AnyClass::get(c"NSApplication");
-            let Some(class) = class else { return true };
-            let app: *mut objc2::runtime::AnyObject = objc2::msg_send![class, sharedApplication];
-            if app.is_null() {
-                return true;
-            }
-            let active: bool = objc2::msg_send![app, isActive];
-            active
-        }
-    }
-
     impl Drop for Editor {
         fn drop(&mut self) {
             self.view.take();

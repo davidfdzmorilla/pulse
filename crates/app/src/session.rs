@@ -37,6 +37,8 @@ enum Action {
     DeleteTrack(usize),
     DuplicateTrack(usize),
     SeparateStems(usize, usize),
+    DetectTempo(usize, usize),
+    UseClipTempo(usize, usize),
 }
 
 struct TrackPlayState {
@@ -351,6 +353,16 @@ fn clip_slot(
                 actions.push(Action::SeparateStems(t, slot));
                 ui.close();
             }
+            if matches!(clip, Clip::Audio(_)) {
+                if ui.button("Detectar tempo").on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
+                    actions.push(Action::DetectTempo(t, slot));
+                    ui.close();
+                }
+                if ui.button("Usar el tempo de este clip en el proyecto").clicked() {
+                    actions.push(Action::UseClipTempo(t, slot));
+                    ui.close();
+                }
+            }
             let several = app.is_clip_selected(ClipRef::Session { track: t, slot }) && app.clip_selection().len() > 1;
             let count = app.clip_selection().len();
             if ui.button(if several { format!("Duplicar {count} clips   ⌘D") } else { "Duplicar   ⌘D".into() }).clicked() {
@@ -554,5 +566,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::DuplicateTrack(t) if app.is_track_selected(t) => app.duplicate_selected_tracks(),
         Action::DuplicateTrack(t) => app.duplicate_track(t),
         Action::SeparateStems(t, slot) => app.separate_stems(ClipRef::Session { track: t, slot }),
+        Action::DetectTempo(t, slot) => app.detect_tempo(vec![ClipRef::Session { track: t, slot }], true),
+        Action::UseClipTempo(t, slot) => app.use_clip_tempo(ClipRef::Session { track: t, slot }),
     }
 }

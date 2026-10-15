@@ -370,6 +370,11 @@ fn paint_clip(
                 let beat = ((x - rect.left()) / ppb) as f64;
                 let local = beat.rem_euclid(audio.length.max(0.0001));
                 let next_local = local + (1.0 / ppb) as f64;
+                // Before the file's start (a clip starting on the bar line before its first downbeat): silence.
+                if audio.offset + local * 60.0 / reference_bpm < 0.0 {
+                    x += 1.0;
+                    continue;
+                }
                 let to_block = |b: f64| ((audio.offset + b * 60.0 / reference_bpm) * sample.sample_rate as f64) as usize / PEAK_BLOCK;
                 let (a, b) = (to_block(local), to_block(next_local).max(to_block(local) + 1));
                 let (lo, hi) = sample.peaks.get(a..b.min(sample.peaks.len())).unwrap_or(&[]).iter().fold((0f32, 0f32), |(lo, hi), &(l, h)| (lo.min(l), hi.max(h)));
@@ -654,6 +659,16 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef) {
     if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems…")).on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
         app.separate_stems(clip);
         ui.close();
+    }
+    if audio && count == 1 {
+        if ui.button("Detectar tempo").on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
+            app.detect_tempo(vec![clip], true);
+            ui.close();
+        }
+        if ui.button("Usar el tempo de este clip en el proyecto").clicked() {
+            app.use_clip_tempo(clip);
+            ui.close();
+        }
     }
     if ui.button(label("Copiar")).clicked() {
         app.copy_clips();

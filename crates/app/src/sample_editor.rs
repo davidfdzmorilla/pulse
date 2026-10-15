@@ -23,6 +23,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let mut clip = before.clone();
     let mut slice = false;
     let mut separate = false;
+    let (mut detect, mut use_tempo) = (false, false);
 
     ui.horizontal(|ui| {
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
@@ -71,7 +72,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             });
             ui.horizontal(|ui| {
                 label(ui, "Inicio");
-                ui.add(egui::DragValue::new(&mut clip.offset).range(0.0..=sample.duration().max(0.0)).speed(0.005).suffix(" s").fixed_decimals(3));
+                // Below 0: the clip starts before the file (a bar line before its first downbeat).
+                ui.add(egui::DragValue::new(&mut clip.offset).range(-8.0..=sample.duration().max(0.0)).speed(0.005).suffix(" s").fixed_decimals(3));
             });
             ui.horizontal(|ui| {
                 label(ui, "Trocear");
@@ -87,6 +89,15 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     .button("A Drum Rack")
                     .on_hover_text("Corta la región del clip en golpes, uno por pad, en una pista MIDI nueva con un clip que los toca en orden")
                     .clicked();
+            });
+            ui.horizontal(|ui| {
+                label(ui, "Tempo");
+                if ui.add_enabled(!app.tempo.busy(), egui::Button::new("Detectar")).on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
+                    detect = true;
+                }
+                if ui.add_enabled(clip.warp != WarpMode::Off, egui::Button::new("Usar en el proyecto")).on_hover_text("Pone el proyecto al tempo de este clip").clicked() {
+                    use_tempo = true;
+                }
             });
             ui.horizontal(|ui| {
                 label(ui, "Stems");
@@ -199,5 +210,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     }
     if separate {
         app.separate_stems(clip_ref);
+    }
+    if detect {
+        app.detect_tempo(vec![clip_ref], true);
+    }
+    if use_tempo {
+        app.use_clip_tempo(clip_ref);
     }
 }

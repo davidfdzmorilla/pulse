@@ -30,6 +30,7 @@ mod sample_editor;
 mod session;
 mod scene;
 mod settings;
+mod stems_ui;
 mod shape_edit;
 mod slicing;
 mod sync;

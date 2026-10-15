@@ -36,6 +36,7 @@ enum Action {
     StopRecording(usize),
     DeleteTrack(usize),
     DuplicateTrack(usize),
+    SeparateStems(usize, usize),
 }
 
 struct TrackPlayState {
@@ -346,6 +347,10 @@ fn clip_slot(
                 actions.push(Action::ToArrangement(t, slot));
                 ui.close();
             }
+            if matches!(clip, Clip::Audio(_)) && ui.button("Separar en stems…").on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
+                actions.push(Action::SeparateStems(t, slot));
+                ui.close();
+            }
             let several = app.is_clip_selected(ClipRef::Session { track: t, slot }) && app.clip_selection().len() > 1;
             let count = app.clip_selection().len();
             if ui.button(if several { format!("Duplicar {count} clips   ⌘D") } else { "Duplicar   ⌘D".into() }).clicked() {
@@ -548,5 +553,6 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::StopRecording(t) => app.stop_session_recording(t),
         Action::DuplicateTrack(t) if app.is_track_selected(t) => app.duplicate_selected_tracks(),
         Action::DuplicateTrack(t) => app.duplicate_track(t),
+        Action::SeparateStems(t, slot) => app.separate_stems(ClipRef::Session { track: t, slot }),
     }
 }

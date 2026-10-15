@@ -256,6 +256,8 @@ pub struct PulseApp {
     pub show_settings: bool,
     /// New versions from GitHub (see `updates`).
     pub updates: crate::updates::Updates,
+    /// A clip being separated into stems (see `stems_ui`).
+    pub stems: Option<crate::stems_ui::StemJob>,
     pub devices: crate::settings::Devices,
     /// A text field has the keyboard: editing shortcuts are its.
     pub text_focus: bool,
@@ -378,6 +380,7 @@ impl PulseApp {
             settings: Default::default(),
             show_settings: false,
             updates: Default::default(),
+            stems: None,
             devices: Default::default(),
             text_focus: false,
             menu_bar: None,
@@ -1504,7 +1507,7 @@ impl PulseApp {
     }
 
     /// Folder for recorded takes: next to the project, or in ~/Music/Pulse.
-    fn recordings_dir(&self) -> PathBuf {
+    pub(crate) fn recordings_dir(&self) -> PathBuf {
         let base = match &self.file {
             Some(file) => file.parent().map(Path::to_path_buf).unwrap_or_default(),
             None => std::env::var_os("HOME").map_or_else(PathBuf::new, |home| PathBuf::from(home).join("Music/Pulse")),
@@ -2108,6 +2111,7 @@ impl eframe::App for PulseApp {
         crate::commands::shortcuts_window(self, &ctx);
         crate::settings::window(self, &ctx);
         self.follow_updates();
+        self.follow_stems(&ctx);
         crate::updates::window(self, &ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         if let Some(mut bar) = self.menu_bar.take() {

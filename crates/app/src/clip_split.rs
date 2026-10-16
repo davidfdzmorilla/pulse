@@ -1,4 +1,5 @@
-//! Splitting arrangement clips in two (⌘E) and joining MIDI clips into one (⌘J).
+//! Splitting arrangement clips in two (⌘E) and joining clips into one (⌘J: MIDI
+//! notes laid out, audio rendered into a file of its own, see `consolidate`).
 //!
 //! A placed clip plays its content from the start, looping. The part after a split
 //! must go on where it was, so its content is turned round to start there: MIDI
@@ -196,8 +197,19 @@ impl PulseApp {
         }
         let lane = &self.project.tracks[track].arrangement;
         let parts: Vec<ArrangementClip> = selected.iter().filter_map(|&(_, i)| lane.get(i).cloned()).collect();
-        let Some(joined) = join(&parts) else {
-            self.status = Some("Solo se pueden unir clips MIDI".into());
+        // MIDI clips join their notes; audio ones render into one file.
+        let joined = if parts.iter().all(|p| matches!(p.clip, Clip::Audio(_))) {
+            match self.join_audio(&parts) {
+                Ok(joined) => joined,
+                Err(error) => {
+                    self.status = Some(error);
+                    return;
+                }
+            }
+        } else if let Some(joined) = join(&parts) {
+            joined
+        } else {
+            self.status = Some("Solo se unen clips del mismo tipo: todos MIDI o todos audio".into());
             return;
         };
         let mut indices: Vec<usize> = selected.iter().map(|&(_, i)| i).collect();

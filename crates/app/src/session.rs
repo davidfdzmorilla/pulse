@@ -23,6 +23,7 @@ enum Action {
     StartMove(usize, usize, egui::Modifiers),
     StartMarquee(egui::Pos2, egui::Modifiers),
     SelectTarget(Target),
+    Consolidate(usize, usize),
     /// An empty slot clicked: its track selected, no clip, pasting goes there.
     SelectSlot(usize, usize),
     Create(usize, usize),
@@ -362,6 +363,10 @@ fn clip_slot(
                 actions.push(Action::SeparateStems(t, slot));
                 ui.close();
             }
+            if matches!(clip, Clip::Audio(_)) && ui.button("Consolidar").on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
+                actions.push(Action::Consolidate(t, slot));
+                ui.close();
+            }
             if matches!(clip, Clip::Audio(_)) {
                 if ui.button("Detectar tempo").on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
                     actions.push(Action::DetectTempo(t, slot));
@@ -544,6 +549,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::StartMove(t, slot, modifiers) => app.start_session_move(t, slot, modifiers),
         Action::StartMarquee(anchor, modifiers) => app.start_marquee(anchor, modifiers),
         Action::SelectTarget(target) => app.selected_target = target,
+        Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),
         Action::SelectSlot(t, slot) => {
             app.set_clip_selection(Vec::new());
             app.selected_target = Target::Track(t);

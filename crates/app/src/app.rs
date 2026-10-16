@@ -197,6 +197,8 @@ pub struct PulseApp {
     pub selected_clip: Option<ClipRef>,
     /// The empty session slot clicked last (with no clip selected): where pasting goes.
     pub paste_slot: Option<(usize, usize)>,
+    /// The audio clip editor shows the whole file (else just the clip's part).
+    pub sample_view_whole: bool,
     /// Clips selected together with the selected one (⌘ clic, recuadro); see `clip_select`.
     pub selected_clips: Vec<ClipRef>,
     /// A selection rectangle or session clips being dragged.
@@ -368,6 +370,7 @@ impl PulseApp {
             detail: Detail::Devices,
             selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
             paste_slot: None,
+            sample_view_whole: false,
             selected_clips: Vec::new(),
             clip_gesture: None,
             selected_target: Target::Track(0),

@@ -36,6 +36,13 @@ pub struct Settings {
     /// Pulse's folder, if not ~/Music/Pulse (see `library`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub library: Option<PathBuf>,
+    /// Bars the metronome counts before recording starts the transport.
+    #[serde(default)]
+    pub count_in_bars: u32,
+    /// Milliseconds recorded audio is moved earlier, on top of the latency the
+    /// devices report (negative: later).
+    #[serde(default)]
+    pub record_offset_ms: f32,
 }
 
 fn yes() -> bool {
@@ -44,7 +51,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0 }
     }
 }
 
@@ -93,7 +100,11 @@ impl PulseApp {
             crate::library::set_root(settings.library.clone());
             crate::library::prepare();
         }
+        let count_in = settings.count_in_bars != self.settings.count_in_bars;
         self.settings = settings;
+        if count_in {
+            self.audio.send(engine::Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+        }
         if self.interactive {
             self.settings.save();
         }
@@ -178,6 +189,18 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             ui.end_row();
         });
         ui.label(egui::RichText::new("Un búfer menor responde antes al tocar; si oyes cortes, súbelo.").color(TEXT_DIM).size(10.5));
+        ui.add_space(4.0);
+        let (input, output) = app.latencies();
+        ui.label(format!(
+            "Latencia: entrada {} · salida {:.1} ms. Pulse la descuenta al grabar para que las tomas caigan a tempo.",
+            input.map_or("— (sin abrir)".to_string(), |s| format!("{:.1} ms", s * 1000.0)),
+            output * 1000.0
+        ));
+        ui.horizontal(|ui| {
+            ui.label("Ajuste fino de la grabación");
+            ui.add(egui::DragValue::new(&mut next.record_offset_ms).range(-200.0..=200.0).speed(0.2).fixed_decimals(1).suffix(" ms"))
+                .on_hover_text("Si las tomas de audio quedan tarde, súbelo (las adelanta); si quedan pronto, bájalo");
+        });
         refresh = ui.small_button("Volver a buscar dispositivos").clicked();
 
         ui.separator();
@@ -286,7 +309,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()) };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5 };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

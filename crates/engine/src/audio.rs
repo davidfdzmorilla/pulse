@@ -210,7 +210,10 @@ where
     device
         .build_output_stream(
             config,
-            move |data: &mut [T], _: &cpal::OutputCallbackInfo| {
+            move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+                // What is rendered now is heard this much later (buffer, device, safety offset).
+                let time = info.timestamp();
+                engine.shared().set_output_latency(time.playback.duration_since(time.callback).as_secs_f64());
                 for chunk in data.chunks_mut(scratch.len()) {
                     let buffer = &mut scratch[..chunk.len()];
                     engine.process(buffer, channels);

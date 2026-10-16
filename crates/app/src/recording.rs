@@ -51,6 +51,9 @@ fn bars(length: f64) -> f64 {
     ((length / 4.0).ceil() * 4.0).max(4.0)
 }
 
+/// How early, in beats, a note may come and still belong to a take.
+const EARLY: f64 = 0.125;
+
 fn local_notes(notes: &[RecordedNote], start: f64, length: f64) -> Vec<Note> {
     let mut local: Vec<Note> = notes
         .iter()
@@ -60,7 +63,8 @@ fn local_notes(notes: &[RecordedNote], start: f64, length: f64) -> Vec<Note> {
             pitch: n.pitch,
             velocity: n.velocity,
         })
-        .filter(|n| n.start >= -1e-6 && n.start < length)
+        // A note played a hair early (the downbeat, or after latency compensation) is its first.
+        .filter(|n| n.start >= -EARLY && n.start < length)
         .map(|mut n| {
             n.start = n.start.max(0.0);
             n.length = n.length.min(length - n.start);

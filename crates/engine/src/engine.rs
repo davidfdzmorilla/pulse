@@ -303,6 +303,8 @@ pub enum Command {
     StopRecording(usize),
     /// Records armed tracks onto the arrangement while the transport runs.
     SetArrangementRecord(bool),
+    /// Beats the metronome counts before a recording starts the transport (0: none).
+    SetCountIn(f64),
     /// Plays an audio file once over the output (the browser's preview), or stops
     /// the one playing.
     PreviewSample(Option<Arc<Sample>>),
@@ -375,6 +377,10 @@ pub struct SharedState {
     pub tracks: [TrackStatus; MAX_TRACKS],
     pub returns: [Peak; NUM_RETURNS],
     pub master: Peak,
+    /// Beats of count-in left before the transport starts (0: not counting in).
+    count_in: AtomicF64,
+    /// Seconds from rendering a sample to hearing it (the output device's latency).
+    output_latency: AtomicF64,
 }
 
 impl SharedState {
@@ -395,7 +401,23 @@ impl SharedState {
             }),
             returns: Default::default(),
             master: Peak::default(),
+            count_in: AtomicF64::default(),
+            output_latency: AtomicF64::default(),
         }
+    }
+
+    /// Beats of count-in left before recording starts (0: none).
+    pub fn count_in(&self) -> f64 {
+        self.count_in.load()
+    }
+
+    /// Seconds between rendering audio and hearing it.
+    pub fn output_latency(&self) -> f64 {
+        self.output_latency.load()
+    }
+
+    pub fn set_output_latency(&self, seconds: f64) {
+        self.output_latency.store(seconds);
     }
 
     /// Transport position in beats.
@@ -1097,6 +1119,9 @@ pub struct Engine {
     loop_start: f64,
     loop_end: f64,
     metronome: bool,
+    count_in_beats: f64,
+    /// Beats counted in so far, while counting in.
+    counting: Option<f64>,
     click: Click,
     click_buffer: Vec<f32>,
     input_track: Option<usize>,
@@ -1140,6 +1165,8 @@ impl Engine {
             loop_start: 0.0,
             loop_end: 16.0,
             metronome: false,
+            count_in_beats: 0.0,
+            counting: None,
             click: Click::new(sample_rate),
             click_buffer: vec![0.0; MAX_BLOCK],
             preview: None,
@@ -1218,6 +1245,10 @@ impl Engine {
         }
     }
 
+    pub fn shared(&self) -> &SharedState {
+        &self.shared
+    }
+
     /// Hands something back to the UI thread so it is freed there.
     fn discard(&mut self, garbage: Garbage) {
         // If the queue is full it is freed here; rare, and only costs a free().
@@ -1233,9 +1264,40 @@ impl Engine {
     }
 
     fn start_transport(&mut self) {
-        if !self.playing {
+        // A count-in in progress starts it when it ends.
+        if !self.playing && self.counting.is_none() {
             self.playing = true;
             self.position = self.start_marker;
+        }
+    }
+
+    /// Starts the transport for a recording: after the count-in, if there is one.
+    fn start_recording_transport(&mut self) {
+        if self.playing || self.counting.is_some() {
+            return;
+        }
+        if self.count_in_beats > 0.0 {
+            self.counting = Some(0.0);
+        } else {
+            self.start_transport();
+        }
+    }
+
+    /// The count-in's clicks in a block of `n` frames; the transport starts right
+    /// after it (`process` ends the block where the count-in does).
+    fn count_in(&mut self, n: usize, beats_per_sample: f64) {
+        let Some(done) = self.counting else { return };
+        let end = done + n as f64 * beats_per_sample;
+        let beat = (done - 1e-9).ceil();
+        if beat < end && beat < self.count_in_beats - 1e-9 {
+            let frame = ((beat - done) / beats_per_sample).round() as usize;
+            self.click.trigger((beat as i64).rem_euclid(4) == 0, frame.min(n - 1));
+        }
+        if end >= self.count_in_beats - 1e-9 {
+            self.counting = None;
+            self.start_transport();
+        } else {
+            self.counting = Some(end);
         }
     }
 
@@ -1251,6 +1313,7 @@ impl Engine {
                 }
                 self.arrangement_record = false;
                 self.playing = false;
+                self.counting = None;
                 self.position = self.start_marker;
             }
             Command::SetPosition(beat) => {
@@ -1473,7 +1536,7 @@ impl Engine {
                 if let Some(t) = self.tracks.get_mut(track) {
                     if slot < NUM_SCENES && t.slots[slot].is_none() {
                         t.queued = Queued::Record(slot);
-                        self.start_transport();
+                        self.start_recording_transport();
                     }
                 }
             }
@@ -1498,7 +1561,11 @@ impl Engine {
                     }
                 }
                 self.arrangement_record = on;
+                if on {
+                    self.start_recording_transport();
+                }
             }
+            Command::SetCountIn(beats) => self.count_in_beats = beats.max(0.0),
             Command::PreviewSample(sample) => {
                 if let Some((old, _)) = self.preview.take() {
                     self.discard(Garbage::Samples(Box::new(vec![old])));
@@ -1566,7 +1633,13 @@ impl Engine {
         let frames = out.len() / channels;
         let mut done = 0;
         while done < frames {
-            let n = (frames - done).min(MAX_BLOCK);
+            let mut n = (frames - done).min(MAX_BLOCK);
+            // A count-in ends a block where it ends, so the transport starts on time.
+            if let Some(counted) = self.counting {
+                let bps = self.tempo / 60.0 / self.sample_rate as f64;
+                let left = ((self.count_in_beats - counted) / bps).ceil() as usize;
+                n = n.min(left.max(1));
+            }
             self.render_block(n);
             let (left, right) = (&self.master.left, &self.master.right);
             for i in 0..n {
@@ -1597,7 +1670,10 @@ impl Engine {
             track.audio_left[..n].fill(0.0);
             track.audio_right[..n].fill(0.0);
         }
-        if self.playing {
+        // A transport the count-in starts at the end of this block plays from the next.
+        let playing = self.playing;
+        self.count_in(n, beats_per_sample);
+        if playing {
             self.apply_automation();
             self.sequence(n, beats_per_sample);
         }
@@ -1844,6 +1920,7 @@ impl Engine {
         let s = &self.shared;
         s.playing.store(self.playing, Ordering::Relaxed);
         s.arrangement_recording.store(self.arrangement_record, Ordering::Relaxed);
+        s.count_in.store(self.counting.map_or(0.0, |done| (self.count_in_beats - done).max(0.0)));
         s.position.store(self.position);
         for (track, status) in self.tracks.iter().zip(&s.tracks) {
             let queued = match track.queued {
@@ -2299,6 +2376,45 @@ mod tests {
         assert!(tail.iter().fold(0f32, |m, v| m.max(v.abs())) > 0.4, "the tone comes through");
         let gaps = tail.windows(4).filter(|w| w.iter().all(|v| v.abs() < 0.01)).count();
         assert_eq!(gaps, 0, "no dropouts");
+    }
+
+    #[test]
+    fn recording_counts_in_before_the_transport_starts() {
+        let mut h = Harness::new();
+        h.send(Command::SetCountIn(4.0));
+        h.send(Command::SetPosition(8.0));
+        h.send(Command::SetArm { track: 0, armed: true });
+        h.send(Command::SetArrangementRecord(true));
+        h.send(Command::Play);
+        // One bar at 120 BPM is two seconds: the clicks, and the transport still.
+        let count = h.run_beats(3.9);
+        assert!(!h.shared.playing.load(Ordering::Relaxed));
+        assert_eq!(h.shared.position(), 8.0);
+        assert!(h.shared.count_in() > 0.0 && h.shared.count_in() <= 0.2, "{}", h.shared.count_in());
+        let clicks = count.chunks(2).map(|f| f[0]).collect::<Vec<_>>();
+        let starts = (0..4).filter(|&b| energy(&clicks[b * 24_000..b * 24_000 + 2400]) > 0.5).count();
+        assert_eq!(starts, 4, "a click on each beat");
+        // Then it plays and records from where it was.
+        h.run_beats(0.2);
+        assert!(h.shared.playing.load(Ordering::Relaxed));
+        assert_eq!(h.shared.count_in(), 0.0);
+        let beat = h.shared.position();
+        assert!(beat > 8.0 && beat < 8.2, "{beat}");
+
+        // Play alone does not count in, and Stop cancels a count-in.
+        h.send(Command::Stop);
+        h.send(Command::SetArrangementRecord(false));
+        h.send(Command::Play);
+        h.run_beats(0.1);
+        assert!(h.shared.playing.load(Ordering::Relaxed));
+        h.send(Command::Stop);
+        h.send(Command::RecordClip { track: 0, slot: 3 });
+        h.run_beats(1.0);
+        assert!(!h.shared.playing.load(Ordering::Relaxed), "a session take counts in too");
+        h.send(Command::Stop);
+        h.run_beats(4.0);
+        assert!(!h.shared.playing.load(Ordering::Relaxed));
+        assert_eq!(h.shared.count_in(), 0.0);
     }
 
     #[test]

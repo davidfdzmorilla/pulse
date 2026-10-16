@@ -89,12 +89,18 @@ impl Shared {
     }
 }
 
+/// How long a controller moved first waits for a control to be touched.
+const PENDING_FOR: Duration = Duration::from_secs(10);
+
 /// The MIDI learn state of the app.
 #[derive(Default)]
 pub struct Learn {
     pub on: bool,
     /// The control touched last, waiting for a controller.
     pub armed: Option<Control>,
+    /// A free controller moved before any control was touched, waiting for one
+    /// (either order links them).
+    pub pending: Option<(u8, Instant)>,
     /// Transport assignments, kept across projects.
     pub transport: Vec<Mapping>,
     pub shared: Shared,
@@ -142,10 +148,11 @@ impl PulseApp {
     pub fn toggle_learn(&mut self) {
         self.learn.on = !self.learn.on;
         self.learn.armed = None;
+        self.learn.pending = None;
         self.touched_control.set(None);
         self.learn.shared.learning.store(self.learn.on, Ordering::Relaxed);
         self.status = Some(if self.learn.on {
-            "Asignar MIDI: toca un control de Pulse y después mueve un knob o pulsa un botón del teclado".into()
+            "Asignar MIDI: toca un control de Pulse y mueve un knob o pulsa un botón del teclado (en cualquier orden)".into()
         } else {
             format!("{} asignaciones MIDI", self.mappings().len())
         });
@@ -210,8 +217,18 @@ impl PulseApp {
             if log {
                 eprintln!("[asignar] elegido: {}", self.control_name(control));
             }
-            self.learn.armed = Some(control);
-            self.status = Some(format!("Mueve un knob o pulsa un botón del teclado para «{}»", self.control_name(control)));
+            match self.learn.pending.take().filter(|&(_, t)| t.elapsed() < PENDING_FOR) {
+                Some((cc, _)) => {
+                    if log {
+                        eprintln!("[asignar] CC {cc} (movido antes) → {}", self.control_name(control));
+                    }
+                    self.assign(cc, control);
+                }
+                None => {
+                    self.learn.armed = Some(control);
+                    self.status = Some(format!("Mueve un knob o pulsa un botón del teclado para «{}»", self.control_name(control)));
+                }
+            }
         }
         let incoming: Vec<(u8, u8)> = self.learn.shared.incoming.lock().map(|mut i| std::mem::take(&mut *i)).unwrap_or_default();
         for (cc, value) in incoming {
@@ -223,7 +240,14 @@ impl PulseApp {
                         }
                         self.assign(cc, control);
                     }
-                    None if log => eprintln!("[asignar] CC {cc}: ningún control de Pulse elegido todavía"),
+                    // A free controller: it waits for the control touched next.
+                    None if !self.mappings().iter().any(|m| m.cc == cc) => {
+                        if log && self.learn.pending.is_none_or(|(c, _)| c != cc) {
+                            eprintln!("[asignar] CC {cc}: esperando a que toques un control de Pulse");
+                        }
+                        self.learn.pending = Some((cc, Instant::now()));
+                        self.status = Some(format!("CC {cc}: ahora toca el control de Pulse que quieres que mueva"));
+                    }
                     None => {}
                 }
                 continue;
@@ -293,9 +317,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut remove = None;
     let mut close = false;
     egui::Window::new("Asignar MIDI").default_pos([980.0, 80.0]).resizable(false).show(ctx, |ui| {
-        ui.label(egui::RichText::new("1. Toca un control de Pulse (knob, fader, parámetro de plugin o botón de transporte).\n2. Mueve un knob o pulsa un botón del teclado MIDI.").color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new("Toca un control de Pulse (knob, fader, parámetro de plugin o botón de transporte) y mueve un knob o pulsa un botón del teclado MIDI, en cualquier orden.").color(TEXT_DIM).size(10.5));
         if let Some(control) = app.learn.armed {
             ui.label(egui::RichText::new(format!("Esperando un control para «{}»…", app.control_name(control))).strong());
+        } else if let Some((cc, _)) = app.learn.pending {
+            ui.label(egui::RichText::new(format!("CC {cc}: toca el control de Pulse que quieres que mueva…")).strong());
         }
         ui.separator();
         let mappings = app.mappings();
@@ -378,6 +404,30 @@ mod tests {
         app.unassign(74);
         app.toggle_learn();
         assert!(!cc(&mut app, 74, 3));
+    }
+
+    #[test]
+    fn moving_a_knob_then_touching_a_control_links_them_too() {
+        let mut app = app();
+        app.toggle_learn();
+        // The knob first: it waits for a control…
+        cc(&mut app, 10, 40);
+        cc(&mut app, 10, 45);
+        assert!(app.project.midi_map.is_empty());
+        assert_eq!(app.learn.pending.map(|(c, _)| c), Some(10));
+        // …and the control touched next takes it.
+        let pan = Control::Param { target: Target::Track(1), param: Param::Pan };
+        app.set_param(Target::Track(1), Param::Pan, app.param_value(Target::Track(1), Param::Pan));
+        app.poll_midi_map();
+        assert_eq!(app.project.midi_map, [Mapping { cc: 10, control: pan }]);
+        assert_eq!(app.learn.armed, None);
+        // Turning the linked knob on does not steal the next control touched.
+        cc(&mut app, 10, 50);
+        assert_eq!(app.learn.pending, None);
+        app.set_param(Target::Master, Param::Volume, app.param_value(Target::Master, Param::Volume));
+        app.poll_midi_map();
+        assert_eq!(app.project.midi_map, [Mapping { cc: 10, control: pan }]);
+        assert_eq!(app.learn.armed, Some(Control::Param { target: Target::Master, param: Param::Volume }));
     }
 
     #[test]

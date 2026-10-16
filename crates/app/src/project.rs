@@ -72,6 +72,9 @@ pub struct Track {
     /// Empty strings are empty pads.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub samples: Vec<String>,
+    /// Its instrument and effects rendered to audio, which it plays instead (see `freeze`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frozen: Option<crate::freeze::Frozen>,
 }
 
 impl Track {
@@ -90,6 +93,7 @@ impl Track {
             arrangement: Vec::new(),
             automation: Vec::new(),
             samples: Vec::new(),
+            frozen: None,
         }
     }
 

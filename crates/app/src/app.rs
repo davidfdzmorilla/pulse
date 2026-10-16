@@ -215,6 +215,8 @@ pub struct PulseApp {
     pub selected_clip: Option<ClipRef>,
     /// The empty session slot clicked last (with no clip selected): where pasting goes.
     pub paste_slot: Option<(usize, usize)>,
+    /// A track being frozen.
+    pub freeze_job: Option<crate::freeze::FreezeJob>,
     /// The audio clip editor shows the whole file (else just the clip's part).
     pub sample_view_whole: bool,
     /// Clips selected together with the selected one (⌘ clic, recuadro); see `clip_select`.
@@ -388,6 +390,7 @@ impl PulseApp {
             detail: Detail::Devices,
             selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
             paste_slot: None,
+            freeze_job: None,
             sample_view_whole: false,
             selected_clips: Vec::new(),
             clip_gesture: None,
@@ -2302,7 +2305,10 @@ impl eframe::App for PulseApp {
 
         // A sweep of a controller is one undo step, like a drag.
         let interacting = ctx.input(|i| i.pointer.any_down()) || self.learn.moving();
-        self.history.commit(&self.project, interacting);
+        if self.history.commit(&self.project, interacting) {
+            self.check_frozen();
+        }
+        self.follow_freeze(&ctx);
         self.update_title(&ctx);
         crate::export::window(self, &ctx);
         self.follow_browser_drag(&ctx);

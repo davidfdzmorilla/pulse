@@ -28,9 +28,10 @@ impl History {
         *self = Self::new(project);
     }
 
-    pub fn commit(&mut self, project: &Project, interacting: bool) {
+    /// Records a step if the project changed (and isn't being dragged); true then.
+    pub fn commit(&mut self, project: &Project, interacting: bool) -> bool {
         if interacting || *project == self.baseline {
-            return;
+            return false;
         }
         let previous = std::mem::replace(&mut self.baseline, project.clone());
         self.undo.push(previous);
@@ -38,6 +39,7 @@ impl History {
             self.undo.remove(0);
         }
         self.redo.clear();
+        true
     }
 
     pub fn can_undo(&self) -> bool {

@@ -131,12 +131,20 @@ impl PulseApp {
             match clip {
                 ClipRef::Session { track, slot } => self.set_clip(track, slot, Some(Clip::Audio(new))),
                 ClipRef::Arrangement { track, index } => {
-                    let placed = &mut self.project.tracks[track].arrangement[index];
-                    // Its length on the timeline follows, unless the user changed it.
+                    let lane = &mut self.project.tracks[track].arrangement;
+                    let placed = &mut lane[index];
+                    // Its length on the timeline follows, unless the user changed it;
+                    // the clips placed right after it (files imported together) move
+                    // with its end, so there are no gaps or overlaps.
                     if (placed.length - audio.length).abs() < 1e-9 {
+                        let old_end = placed.end();
                         placed.length = new.length;
+                        let shift = placed.end() - old_end;
+                        placed.clip = Clip::Audio(new);
+                        follow_end(lane, index, old_end, shift);
+                    } else {
+                        placed.clip = Clip::Audio(new);
                     }
-                    placed.clip = Clip::Audio(new);
                     self.sync_arrangement(track);
                 }
             }
@@ -175,6 +183,21 @@ impl PulseApp {
         self.project.tempo = bpm;
         self.audio.send(engine::Command::SetTempo(bpm));
         self.status = Some(format!("Tempo del proyecto: {} BPM", bpm_text(bpm)));
+    }
+}
+
+/// Moves by `shift` the clips that start where clip `index` used to end, and those
+/// right after them, in a chain (the files of one import, one after the other).
+fn follow_end(lane: &mut [engine::model::ArrangementClip], index: usize, old_end: f64, shift: f64) {
+    if shift.abs() < 1e-9 {
+        return;
+    }
+    let mut end = old_end;
+    let mut moved = vec![index];
+    while let Some(next) = (0..lane.len()).find(|i| !moved.contains(i) && (lane[*i].start - end).abs() < 1e-6) {
+        end = lane[next].end();
+        lane[next].start += shift;
+        moved.push(next);
     }
 }
 
@@ -316,39 +339,43 @@ mod tests {
         assert!((off - off.round()).abs() < 0.08 && (off.round() as i64) % 4 == 0, "downbeat {} s: {off} beats", grid.downbeat);
     }
 
-    /// A drummer speeding up, from 108 to 128 BPM over 48 bars: imported into a
-    /// 120 BPM project it gets a marker on every bar, and rendered it plays at a
-    /// steady 120 BPM with every bar on the project's.
-    #[test]
-    fn a_varying_tempo_plays_steady_with_the_project() {
+    /// A drummer speeding up from 108 to 128 BPM over `bars` bars, 0.7 s in.
+    fn write_drummer(path: &std::path::Path, bars: usize) {
         let rate = 44_100u32;
-        let bars = 48;
         let mut times = Vec::new();
         let mut t = 0.7;
         for i in 0..bars * 4 {
             times.push(t);
             t += 60.0 / (108.0 + 20.0 * i as f64 / (bars * 4) as f64);
-        }
-        let mut x = vec![0f32; ((t + 1.0) * rate as f64) as usize];
-        for (i, &at) in times.iter().enumerate() {
-            let at = (at * rate as f64) as usize;
-            for j in 0..4000 {
-                let (env, sec) = ((-(j as f32) / 300.0).exp(), j as f32 / rate as f32);
-                let tone = if i % 4 == 0 { 1600.0 } else { 800.0 };
-                x[at + j] += 0.5 * env * (std::f32::consts::TAU * tone * sec).sin();
-                if i % 2 == 0 {
-                    x[at + j] += 0.8 * (-(j as f32) / 900.0).exp() * (std::f32::consts::TAU * (60.0 + 80.0 * (-(j as f32) / 200.0).exp()) * sec).sin();
-                }
+    }
+    let mut x = vec![0f32; ((t + 1.0) * rate as f64) as usize];
+    for (i, &at) in times.iter().enumerate() {
+        let at = (at * rate as f64) as usize;
+        for j in 0..4000 {
+            let (env, sec) = ((-(j as f32) / 300.0).exp(), j as f32 / rate as f32);
+            let tone = if i % 4 == 0 { 1600.0 } else { 800.0 };
+            x[at + j] += 0.5 * env * (std::f32::consts::TAU * tone * sec).sin();
+            if i % 2 == 0 {
+                x[at + j] += 0.8 * (-(j as f32) / 900.0).exp() * (std::f32::consts::TAU * (60.0 + 80.0 * (-(j as f32) / 200.0).exp()) * sec).sin();
             }
         }
+    }
+    let mut writer = hound::WavWriter::create(path, hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float }).unwrap();
+    for v in &x {
+        writer.write_sample(*v).unwrap();
+    }
+    writer.finalize().unwrap();
+    }
+
+    /// A drummer speeding up, from 108 to 128 BPM over 48 bars: imported into a
+    /// 120 BPM project it gets a marker on every bar, and rendered it plays at a
+    /// steady 120 BPM with every bar on the project's.
+    #[test]
+    fn a_varying_tempo_plays_steady_with_the_project() {
         let dir = std::env::temp_dir().join(format!("pulse-warp-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("drummer.wav");
-        let mut writer = hound::WavWriter::create(&path, hound::WavSpec { channels: 1, sample_rate: rate, bits_per_sample: 32, sample_format: hound::SampleFormat::Float }).unwrap();
-        for v in &x {
-            writer.write_sample(*v).unwrap();
-        }
-        writer.finalize().unwrap();
+        write_drummer(&path, 48);
 
         let mut app = PulseApp::headless(Project::demo());
         app.project.tempo = 120.0;
@@ -389,5 +416,50 @@ mod tests {
         assert!(worst < 0.03, "a beat {worst} s off the grid");
         let off = grid.downbeat / 0.5;
         assert!((off - off.round()).abs() < 0.08 && (off.round() as i64) % 4 == 0, "downbeat {} s", grid.downbeat);
+    }
+
+    /// Files imported together sit one after the other; when the analysis changes
+    /// one's length the next ones move with it.
+    #[test]
+    fn clips_imported_together_stay_end_to_end() {
+        use engine::model::ArrangementClip;
+        let clip = |start: f64, length: f64| ArrangementClip { start, length, clip: Clip::Midi(engine::model::MidiClip::new("x", length, [0; 3])) };
+        // Three in a row from beat 0, and one the user put further on.
+        let mut lane = vec![clip(0.0, 8.0), clip(8.0, 4.0), clip(12.0, 4.0), clip(40.0, 4.0)];
+        lane[0].length = 10.0;
+        follow_end(&mut lane, 0, 8.0, 2.0);
+        let starts: Vec<f64> = lane.iter().map(|c| c.start).collect();
+        assert_eq!(starts, vec![0.0, 10.0, 14.0, 40.0]);
+        // Shorter: they come back.
+        lane[1].length = 2.0;
+        follow_end(&mut lane, 1, 14.0, -2.0);
+        let starts: Vec<f64> = lane.iter().map(|c| c.start).collect();
+        assert_eq!(starts, vec![0.0, 10.0, 12.0, 40.0]);
+    }
+
+    /// The real thing: two songs imported at once onto the arrangement end up end to end.
+    #[test]
+    fn two_songs_imported_at_once_end_to_end() {
+        // Files whose length changes once their tempo is found (the import's first
+        // guess, by their duration, isn't whole bars of it).
+        let dir = std::env::temp_dir().join(format!("pulse-two-songs-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let (song, other) = (dir.join("una.wav"), dir.join("otra.wav"));
+        write_drummer(&song, 12);
+        write_drummer(&other, 9);
+        let mut app = PulseApp::headless(Project::demo());
+        let track = app.add_audio_track().unwrap();
+        app.add_samples(vec![song, other], Placement::Arrangement { track, start: 0.0 });
+        let ctx = eframe::egui::Context::default();
+        while app.tempo.busy() {
+            app.follow_tempo(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        let lane = &app.project.tracks[track].arrangement;
+        assert_eq!(lane.len(), 2);
+        assert!(lane.iter().all(|c| matches!(&c.clip, Clip::Audio(a) if a.warp == WarpMode::Stretch)), "both analysed");
+        assert_eq!(lane[0].start, 0.0);
+        assert!((lane[1].start - lane[0].end()).abs() < 1e-9, "{} vs {}", lane[1].start, lane[0].end());
     }
 }

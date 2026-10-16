@@ -296,6 +296,7 @@ impl PulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
         let settings = crate::settings::Settings::load();
+        crate::library::set_root(settings.library.clone());
         let mut app = Self::with_audio(Project::demo(), Audio::start(&settings.audio));
         app.settings = settings;
         app.plugin_library = crate::plugins::Library::load_cache();
@@ -306,6 +307,7 @@ impl PulseApp {
         let screenshot = std::env::var_os("PULSE_SCREENSHOT").is_some() || app.script.is_some();
         app.interactive = !screenshot;
         app.recent = crate::commands::load_recent();
+        crate::library::prepare();
         app.menu_bar = crate::native_menu::MenuBar::install();
         // A project opened from Finder or given on the command line, else the
         // last one (if wanted).
@@ -1340,9 +1342,9 @@ impl PulseApp {
         });
     }
 
-    /// A new folder for the slices of `name`, next to the kits.
-    fn slices_dir(name: &str) -> PathBuf {
-        let base = crate::script::out_dir().map_or_else(|| crate::kits::kits_dir().with_file_name("Slices"), |dir| dir.join("Slices"));
+    /// A new folder for the slices of `name`, with the project's media.
+    fn slices_dir(&self, name: &str) -> PathBuf {
+        let base = self.media_dir(crate::library::SLICES);
         let clean: String = name.chars().map(|c| if c == '/' || c == ':' { '-' } else { c }).collect();
         (1..)
             .map(|n| base.join(if n == 1 { clean.clone() } else { format!("{clean} {n}") }))
@@ -1366,7 +1368,7 @@ impl PulseApp {
             .unwrap_or(self.project.tempo);
         let color = self.project.tracks[track].color;
         let region = (0.0, sample.duration());
-        match crate::slicing::slice(&sample, region, bpm, self.slice_mode, &name, &Self::slices_dir(&name), color) {
+        match crate::slicing::slice(&sample, region, bpm, self.slice_mode, &name, &self.slices_dir(&name), color) {
             Ok((sliced, _)) => {
                 let pads = sliced.clip.notes.len();
                 self.set_instrument(track, InstrumentKind::DrumRack(sliced.params));
@@ -1399,7 +1401,7 @@ impl PulseApp {
         // The slices' grid at the region's average tempo.
         let bpm = audio.length * 60.0 / region.1.max(1e-6);
         let mode = self.slice_mode;
-        let dir = Self::slices_dir(&audio.name);
+        let dir = self.slices_dir(&audio.name);
         let (mut sliced, grid) = match crate::slicing::slice(&sample, region, bpm, mode, &audio.name, &dir, audio.color) {
             Ok(result) => result,
             Err(error) => {
@@ -1576,14 +1578,15 @@ impl PulseApp {
         }
     }
 
-    /// Folder for recorded takes: next to the project, or in ~/Music/Pulse.
+    /// Where the project keeps media of `kind` (see `library`): its folder's
+    /// `Samples/`, or Pulse's `Sin guardar/` until it is saved.
+    pub(crate) fn media_dir(&self, kind: &str) -> PathBuf {
+        crate::library::media_dir(self.file.as_deref(), kind)
+    }
+
+    /// Folder for recorded takes.
     pub(crate) fn recordings_dir(&self) -> PathBuf {
-        let base = match &self.file {
-            Some(file) => file.parent().map(Path::to_path_buf).unwrap_or_default(),
-            None if crate::script::out_dir().is_some() => crate::script::out_dir().unwrap_or_default(),
-            None => std::env::var_os("HOME").map_or_else(PathBuf::new, |home| PathBuf::from(home).join("Music/Pulse")),
-        };
-        base.join("Recordings")
+        self.media_dir(crate::library::RECORDINGS)
     }
 
     /// Cuts `beats` of input starting at `start` (transport beats) into a new audio clip.
@@ -1853,7 +1856,8 @@ impl PulseApp {
     }
 
     pub fn open(&mut self) {
-        if let Some(path) = crate::files::pick_file(rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"])) {
+        let dialog = rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"]).set_directory(crate::library::folder(crate::library::PROJECTS));
+        if let Some(path) = crate::files::pick_file(dialog) {
             self.open_from(&path);
         }
     }
@@ -1947,12 +1951,15 @@ impl PulseApp {
         }
     }
 
+    /// Saves under a new name: in Pulse's Proyectos folder unless another is
+    /// chosen, and always in a folder of the project's own (see `library`).
     pub fn save_as(&mut self) {
         let dialog = rfd::FileDialog::new()
             .add_filter("Proyecto Pulse", &["pulse"])
-            .set_file_name("Sin título.pulse");
+            .set_directory(crate::library::folder(crate::library::PROJECTS))
+            .set_file_name(format!("{}.pulse", self.file_name()));
         if let Some(path) = crate::files::save_file(dialog) {
-            self.save_to(path);
+            self.save_to(crate::library::project_file(&path));
         }
     }
 
@@ -1968,10 +1975,33 @@ impl PulseApp {
 
     fn save_to(&mut self, path: PathBuf) {
         self.capture_plugins();
+        // Every audio file it uses goes into its folder (a lone .pulse from before
+        // stays as it was: "Guardar como…" gives it a folder).
+        let collected = match path.parent().filter(|_| crate::library::in_own_folder(&path)) {
+            Some(dir) => {
+                let before = self.project.clone();
+                let collected = crate::library::collect(&mut self.project, dir);
+                if self.project != before {
+                    self.history.commit(&self.project, false);
+                    self.sync_all();
+                }
+                Some(collected)
+            }
+            None => None,
+        };
         match self.project.save(&path) {
             Ok(()) => {
                 self.saved = self.project.clone();
-                self.status = Some(format!("Guardado en {}", path.display()));
+                let mut status = format!("Guardado en {}", path.display());
+                match collected {
+                    Some(c) if c.copied + c.moved > 0 => status += &format!(" · {} audio(s) traídos a su carpeta", c.copied + c.moved),
+                    None => status += " · usa «Guardar como…» para darle su propia carpeta con sus audios",
+                    _ => {}
+                }
+                if let Some(c) = collected.filter(|c| c.missing > 0) {
+                    status += &format!(" · {} audio(s) no encontrados", c.missing);
+                }
+                self.status = Some(status);
                 self.remember_recent(&path);
                 self.file = Some(path);
             }

@@ -23,6 +23,7 @@ pub enum Command {
     ImportLive,
     ImportAudio,
     Export,
+    ShowFolder,
     Quit,
     Undo,
     Redo,
@@ -260,6 +261,13 @@ impl PulseApp {
             Command::Shortcuts => self.show_shortcuts = true,
             Command::About => crate::native_menu::about(),
             Command::Settings => self.open_settings(),
+            Command::ShowFolder => {
+                let folder = crate::library::root();
+                let _ = std::fs::create_dir_all(&folder);
+                if let Err(e) = std::process::Command::new("open").arg(&folder).spawn() {
+                    self.status = Some(format!("No se pudo abrir {}: {e}", folder.display()));
+                }
+            }
             Command::CheckUpdates => {
                 self.updates.show = true;
                 self.check_updates();

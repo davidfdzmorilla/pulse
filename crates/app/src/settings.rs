@@ -30,6 +30,9 @@ pub struct Settings {
     /// Record the controls moved while recording as automation ("Automation Arm").
     #[serde(default = "yes")]
     pub automation_arm: bool,
+    /// Pulse's folder, if not ~/Music/Pulse (see `library`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub library: Option<PathBuf>,
 }
 
 fn yes() -> bool {
@@ -38,7 +41,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, library: None }
     }
 }
 
@@ -83,6 +86,10 @@ impl PulseApp {
     /// Changes the settings: saves them and restarts the audio if it changed.
     pub fn set_settings(&mut self, settings: Settings) {
         let audio_changed = settings.audio != self.settings.audio;
+        if settings.library != self.settings.library {
+            crate::library::set_root(settings.library.clone());
+            crate::library::prepare();
+        }
         self.settings = settings;
         if self.interactive {
             self.settings.save();
@@ -128,6 +135,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut rescan_midi = false;
     let mut refresh = false;
     let mut search_plugins = false;
+    let mut show_folder = false;
     egui::Window::new("Ajustes").open(&mut open).resizable(false).collapsible(false).default_width(460.0).show(ctx, |ui| {
         ui.heading("Audio");
         ui.label(egui::RichText::new(format!("En uso: {}", app.audio_summary())).color(TEXT_DIM).size(10.5));
@@ -205,6 +213,30 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         });
 
         ui.separator();
+        ui.heading("Carpeta de Pulse");
+        ui.label(egui::RichText::new("Proyectos (cada uno en su carpeta, con sus audios), exportaciones, presets, wavetables y muestras").color(TEXT_DIM).size(10.5));
+        // ~ for the home folder, and cut with "…" if long (the tooltip has it all).
+        let root = crate::library::root().display().to_string();
+        let shown = match std::env::var("HOME") {
+            Ok(home) if root.starts_with(&home) => format!("~{}", &root[home.len()..]),
+            _ => root.clone(),
+        };
+        ui.add(egui::Label::new(shown).truncate()).on_hover_text(root);
+        ui.horizontal(|ui| {
+            if ui.button("Cambiar…").on_hover_text("Lo que ya hay no se mueve: los proyectos se abren desde donde estén").clicked() {
+                if let Some(folder) = crate::files::pick_folder(rfd::FileDialog::new().set_directory(crate::library::root())) {
+                    next.library = (folder != crate::library::default_root()).then_some(folder);
+                }
+            }
+            if next.library.is_some() && ui.button("Volver a Música/Pulse").clicked() {
+                next.library = None;
+            }
+            if ui.button("Mostrar en Finder").clicked() {
+                show_folder = true;
+            }
+        });
+
+        ui.separator();
         ui.heading("Proyectos");
         ui.checkbox(&mut next.reopen_last, "Abrir el último proyecto al arrancar");
         ui.checkbox(&mut next.check_updates, "Buscar actualizaciones al arrancar");
@@ -217,6 +249,9 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     }
     if rescan_midi {
         app.rescan_midi();
+    }
+    if show_folder {
+        app.run(crate::commands::Command::ShowFolder, ctx);
     }
     if search_plugins {
         let folders = app.plugin_folders();
@@ -247,7 +282,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, library: Some("/Volumes/Musica/Pulse".into()) };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

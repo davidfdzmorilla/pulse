@@ -544,7 +544,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 /// Renders one hit of the track's kick to a WAV file the user picks.
 pub fn export(app: &mut PulseApp, t: usize) {
     let Some(InstrumentKind::Kick(params)) = app.project.tracks.get(t).map(|track| track.instrument) else { return };
-    let Some(path) = crate::files::save_file(rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_file_name("Kick.wav")) else { return };
+    let Some(path) = crate::files::save_file(rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_directory(crate::library::folder(crate::library::SAMPLES)).set_file_name("Kick.wav")) else { return };
     let click = app.project.tracks[t].sample(0).and_then(|p| app.loaded_sample(p)).cloned();
     let hit = engine::render_kick(params, click, 48_000.0, app.project.tempo);
     app.status = Some(match crate::capture::write_wav(&path, &hit, &hit, 48_000.0) {

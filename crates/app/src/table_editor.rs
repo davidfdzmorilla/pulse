@@ -101,7 +101,7 @@ pub fn write_table(path: &Path, frames: &[Vec<f32>]) -> Result<(), String> {
 }
 
 fn tables_dir() -> PathBuf {
-    crate::kits::kits_dir().with_file_name("Wavetables")
+    crate::library::folder(crate::library::WAVETABLES)
 }
 
 fn save_and_use(app: &mut PulseApp) {
@@ -273,7 +273,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 preview(ui, &editor.keys);
                 ui.label(egui::RichText::new(format!("{} fotogramas, morph entre las claves", if editor.keys.len() == 1 { 1 } else { TABLE_FRAMES })).color(TEXT_DIM).size(10.5));
                 ui.add_space(8.0);
-                save = ui.button("Guardar y usar en el oscilador").on_hover_text("Se guarda como WAV de wavetable en Application Support/Pulse/Wavetables").clicked();
+                save = ui.button("Guardar y usar en el oscilador").on_hover_text("Se guarda como WAV de wavetable en la carpeta Wavetables de Pulse").clicked();
             });
         });
     });

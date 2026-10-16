@@ -70,7 +70,7 @@ impl PulseApp {
         }
         let stage = Arc::new(Mutex::new(Stage::Separate(0.0)));
         let cancel = Arc::new(AtomicBool::new(false));
-        let (source, out_dir) = (PathBuf::from(&audio.sample), self.recordings_dir().join("Stems"));
+        let (source, out_dir) = (PathBuf::from(&audio.sample), self.media_dir(crate::library::STEMS));
         let base = source.file_stem().map_or_else(|| audio.name.clone(), |s| s.to_string_lossy().into_owned());
         let (shared, stop) = (stage.clone(), cancel.clone());
         std::thread::spawn(move || {

@@ -547,6 +547,7 @@ impl PulseApp {
             warp,
             original_bpm,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
         }
@@ -1683,16 +1684,33 @@ impl PulseApp {
 
     /// Cuts `beats` of input starting at `start` (transport beats) into a new audio clip.
     fn audio_take(&mut self, track: usize, start: f64, beats: f64) -> Option<AudioClip> {
-        let tempo = self.project.tempo;
+        let (left, right, _) = self.take_audio(start, beats, 0)?;
+        self.save_take(track, left, right, beats)
+    }
+
+    /// The input played while `beats` from `start` were heard, from input frame
+    /// `after` on, and the frame (before latency) where `start` was rendered.
+    fn take_audio(&self, start: f64, beats: f64, after: u64) -> Option<(Vec<f32>, Vec<f32>, u64)> {
         let capture = self.capture.as_ref()?;
         let rate = capture.sample_rate();
         // The take is what was played while `start` was heard: the input got it this
         // much later than the engine rendered that beat.
         let latency = self.audio.state().map_or(0.0, |s| s.output_latency()) + capture.latency() + self.settings.record_offset_ms as f64 / 1000.0;
-        let first = (capture.frame_at_beat(start)? as i64 + (latency * rate as f64).round() as i64).max(0) as u64;
-        let frames = (beats * 60.0 / tempo * rate as f64).round() as usize;
-        let (left, right) = capture.extract(first, frames);
+        let rendered = capture.frame_at_beat_after(start, after)?;
+        let first = (rendered as i64 + (latency * rate as f64).round() as i64).max(0) as u64;
+        let (left, right) = capture.extract(first, self.take_frames(beats));
+        Some((left, right, rendered))
+    }
 
+    fn take_frames(&self, beats: f64) -> usize {
+        let rate = self.capture.as_ref().map_or(48_000.0, |c| c.sample_rate());
+        (beats * 60.0 / self.project.tempo * rate as f64).round() as usize
+    }
+
+    /// Writes a take to the recordings folder and makes it a clip of `beats`.
+    fn save_take(&mut self, track: usize, left: Vec<f32>, right: Vec<f32>, beats: f64) -> Option<AudioClip> {
+        let tempo = self.project.tempo;
+        let rate = self.capture.as_ref()?.sample_rate();
         let dir = self.recordings_dir();
         if let Err(e) = std::fs::create_dir_all(&dir) {
             self.status = Some(format!("No se pudo crear {}: {e}", dir.display()));
@@ -1701,8 +1719,13 @@ impl PulseApp {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        let name = format!("{} {stamp}", self.project.tracks[track].name);
-        let path = dir.join(format!("{name}.wav"));
+        // Takes of one loop recording are written in the same second.
+        let base = format!("{} {stamp}", self.project.tracks[track].name);
+        let (name, path) = (1..)
+            .map(|n| if n == 1 { base.clone() } else { format!("{base} {n}") })
+            .map(|name| (name.clone(), dir.join(format!("{name}.wav"))))
+            .find(|(_, path)| !path.exists())
+            .expect("a free name");
         if let Err(error) = write_wav(&path, &left, &right, rate) {
             self.status = Some(error);
             return None;
@@ -1720,9 +1743,70 @@ impl PulseApp {
             warp: WarpMode::Stretch,
             original_bpm: tempo,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
         })
+    }
+
+    /// Plays take `k` of a loop recording's clip.
+    pub fn choose_take(&mut self, track: usize, index: usize, k: usize) {
+        let Some(placed) = self.project.tracks.get_mut(track).and_then(|t| t.arrangement.get_mut(index)) else { return };
+        let Clip::Audio(audio) = &mut placed.clip else { return };
+        let Some(take) = audio.takes.get(k).cloned() else { return };
+        audio.sample = take;
+        audio.name = format!("Toma {}", k + 1);
+        self.sync_arrangement(track);
+        self.status = Some(format!("Suena la toma {}", k + 1));
+    }
+
+    /// The clips of an audio recording over the loop: each pass is a take of the
+    /// loop (silent where the pass did not play), the last one playing; what was
+    /// played before the loop is a clip of its own.
+    fn loop_takes(&mut self, track: usize, passes: &[(f64, f64)], (loop_start, loop_end): (f64, f64)) -> Vec<ArrangementClip> {
+        let mut clips = Vec::new();
+        let mut takes: Vec<AudioClip> = Vec::new();
+        let mut after = 0;
+        for &(from, to) in passes {
+            if to - from <= 1e-6 {
+                continue;
+            }
+            let Some((left, right, rendered)) = self.take_audio(from, to - from, after) else { continue };
+            // The next pass is looked for from where this one ended (the markers
+            // across the wrap don't count, so landing a block off is harmless).
+            after = rendered + self.take_frames(to - from) as u64;
+            let mut skip = 0;
+            if from < loop_start - 1e-6 {
+                skip = self.take_frames(loop_start - from).min(left.len());
+                let beats = loop_start - from;
+                if let Some(clip) = self.save_take(track, left[..skip].to_vec(), right[..skip].to_vec(), beats) {
+                    clips.push(ArrangementClip { start: from, length: beats, clip: Clip::Audio(clip) });
+                }
+            }
+            let begin = from.max(loop_start);
+            // Too little of the loop to be a take (stopped right after it wrapped).
+            if to - begin < 0.5 {
+                continue;
+            }
+            let frames = self.take_frames(loop_end - loop_start);
+            let offset = self.take_frames(begin - loop_start).min(frames);
+            let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+            let n = (left.len() - skip).min(frames - offset);
+            l[offset..offset + n].copy_from_slice(&left[skip..skip + n]);
+            r[offset..offset + n].copy_from_slice(&right[skip..skip + n]);
+            if let Some(clip) = self.save_take(track, l, r, loop_end - loop_start) {
+                takes.push(clip);
+            }
+        }
+        if let Some(mut last) = takes.pop() {
+            if !takes.is_empty() {
+                takes.push(last.clone());
+                last.takes = takes.iter().map(|t| t.sample.clone()).collect();
+                last.name = format!("Toma {}", last.takes.len());
+            }
+            clips.push(ArrangementClip { start: loop_start, length: loop_end - loop_start, clip: Clip::Audio(last) });
+        }
+        clips
     }
 
     /// Records a new clip into an empty session slot, starting at the next launch boundary.
@@ -1812,7 +1896,8 @@ impl PulseApp {
         let lag = state.output_latency() * self.project.tempo / 60.0;
         let notes: Vec<_> = self.audio.take_recorded().into_iter().map(|n| engine::RecordedNote { start: (n.start - lag).max(0.0), ..n }).collect();
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
-        let finished = self.recorder.update(notes, &state, &armed);
+        let looped = self.project.loop_enabled.then_some((self.project.loop_start, self.project.loop_end));
+        let finished = self.recorder.update(notes, &state, &armed, looped);
         let recording: Vec<(usize, usize, f64)> = self
             .recorder
             .session
@@ -1864,7 +1949,8 @@ impl PulseApp {
                     self.select_clip(ClipRef::Arrangement { track, index });
                     self.status = Some(format!("Grabadas {count} notas en el Arrangement"));
                 }
-                Finished::ArrangementEnded { start, end } => {
+                Finished::ArrangementEnded { passes } => {
+                    let (start, end) = (passes[0].0, passes[passes.len() - 1].1);
                     let moved = self.finish_automation_take();
                     if moved > 0 {
                         self.status = Some(match moved {
@@ -1873,20 +1959,32 @@ impl PulseApp {
                         });
                     }
                     let beats = ((end - start) * 4.0).round() / 4.0;
-                    if beats <= 0.0 {
+                    if passes.len() == 1 && beats <= 0.0 {
                         continue;
                     }
                     let tracks: Vec<usize> = (0..self.project.tracks.len())
                         .filter(|&t| self.project.tracks[t].armed && self.project.tracks[t].is_audio())
                         .collect();
                     for track in tracks {
-                        let Some(clip) = self.audio_take(track, start, beats) else { continue };
+                        let clips = match looped {
+                            Some(region) if passes.len() > 1 => self.loop_takes(track, &passes, region),
+                            _ => self.audio_take(track, start, beats).map(|clip| ArrangementClip { start, length: beats, clip: Clip::Audio(clip) }).into_iter().collect(),
+                        };
+                        let Some(last) = clips.last() else { continue };
+                        let takes = match &last.clip {
+                            Clip::Audio(a) => a.takes.len(),
+                            Clip::Midi(_) => 0,
+                        };
                         let lane = &mut self.project.tracks[track].arrangement;
-                        lane.push(ArrangementClip { start, length: beats, clip: Clip::Audio(clip) });
+                        lane.extend(clips);
                         let index = lane.len() - 1;
                         self.sync_arrangement(track);
                         self.select_clip(ClipRef::Arrangement { track, index });
-                        self.status = Some(format!("Toma de audio guardada en {}", self.recordings_dir().display()));
+                        self.status = Some(if takes > 1 {
+                            format!("{takes} tomas grabadas en el loop: clic derecho en el clip para elegir otra")
+                        } else {
+                            format!("Toma de audio guardada en {}", self.recordings_dir().display())
+                        });
                     }
                 }
                 Finished::Cancelled => {}

@@ -82,6 +82,10 @@ pub struct AudioClip {
     /// file follows `original_bpm` throughout.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub warp_markers: Vec<WarpMarker>,
+    /// The other takes of a loop recording (files like `sample`, which is the one
+    /// playing); the clip's menu swaps them.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub takes: Vec<String>,
 }
 
 /// A point of an audio file (`seconds`) pinned to a beat of the file's own beat
@@ -6277,6 +6281,7 @@ mod tests {
             warp: WarpMode::Stretch,
             original_bpm: 120.0,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

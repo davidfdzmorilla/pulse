@@ -129,11 +129,13 @@ fn files_mut(project: &mut Project) -> Vec<&mut String> {
         for clip in track.clips.iter_mut().flatten() {
             if let engine::model::Clip::Audio(audio) = clip {
                 files.push(&mut audio.sample);
+                files.extend(audio.takes.iter_mut());
             }
         }
         for placed in &mut track.arrangement {
             if let engine::model::Clip::Audio(audio) = &mut placed.clip {
                 files.push(&mut audio.sample);
+                files.extend(audio.takes.iter_mut());
             }
         }
         files.extend(track.samples.iter_mut());
@@ -261,6 +263,7 @@ mod tests {
             warp: WarpMode::Off,
             original_bpm: 120.0,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

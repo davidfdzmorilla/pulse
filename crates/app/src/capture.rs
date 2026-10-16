@@ -38,6 +38,11 @@ impl InputCapture {
         self.handle.sample_rate
     }
 
+    /// The input for the engine to monitor (once).
+    pub fn take_monitor(&mut self) -> Option<engine::MonitorInput> {
+        self.handle.monitor.take()
+    }
+
     /// Moves new input into the buffer. Unless `keep_all`, only the last few seconds are kept.
     pub fn pump(&mut self, keep_all: bool) {
         while let Ok(marker) = self.handle.markers.pop() {

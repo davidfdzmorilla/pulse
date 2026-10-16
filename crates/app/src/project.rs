@@ -49,6 +49,41 @@ pub enum TrackKind {
     Audio,
 }
 
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+/// When an audio track plays its input (instead of its clips), as in Live.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Monitor {
+    /// While armed.
+    #[default]
+    Auto,
+    /// Always.
+    In,
+    Off,
+}
+
+impl Monitor {
+    pub const ALL: [Monitor; 3] = [Monitor::In, Monitor::Auto, Monitor::Off];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Monitor::Auto => "Auto",
+            Monitor::In => "In",
+            Monitor::Off => "Off",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            Monitor::Auto => "Monitorizar en Auto: oyes la entrada de audio mientras la pista está armada",
+            Monitor::In => "Monitorizar siempre: oyes la entrada de audio en vez de los clips",
+            Monitor::Off => "Sin monitorizar: no oyes la entrada (usa la del micrófono o la interfaz)",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Track {
     /// Defaults to MIDI so projects saved before audio tracks existed still load.
@@ -62,6 +97,9 @@ pub struct Track {
     /// Armed tracks receive live input and record.
     #[serde(default)]
     pub armed: bool,
+    /// When an audio track plays its audio input.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub monitor: Monitor,
     pub sends: [f32; NUM_RETURNS],
     pub devices: Vec<Device>,
     pub clips: [Option<Clip>; NUM_SCENES],
@@ -87,6 +125,7 @@ impl Track {
             mixer: Mixer::default(),
             solo: false,
             armed: false,
+            monitor: Monitor::Auto,
             sends: [0.0; NUM_RETURNS],
             devices: Vec::new(),
             clips: Default::default(),
@@ -106,6 +145,16 @@ impl Track {
 
     pub fn is_audio(&self) -> bool {
         self.kind == TrackKind::Audio
+    }
+
+    /// Whether it plays the audio input now.
+    pub fn monitors(&self) -> bool {
+        self.is_audio()
+            && match self.monitor {
+                Monitor::In => true,
+                Monitor::Auto => self.armed,
+                Monitor::Off => false,
+            }
     }
 
     pub fn is_drums(&self) -> bool {
@@ -553,6 +602,30 @@ pub fn is_black_key(pitch: u8) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn audio_tracks_monitor_as_their_mode_says() {
+        let mut audio = Track::new_audio("Voz", [0, 0, 0]);
+        assert_eq!(audio.monitor, Monitor::Auto);
+        assert!(!audio.monitors(), "Auto: only while armed");
+        audio.armed = true;
+        assert!(audio.monitors());
+        audio.monitor = Monitor::Off;
+        assert!(!audio.monitors());
+        audio.armed = false;
+        audio.monitor = Monitor::In;
+        assert!(audio.monitors(), "In: always");
+        let mut midi = Track::new("Synth", [0, 0, 0], InstrumentKind::Synth(SynthParams::default()));
+        midi.armed = true;
+        midi.monitor = Monitor::In;
+        assert!(!midi.monitors(), "MIDI tracks have no audio input");
+
+        // Saved only when it is not the default; older projects load as Auto.
+        let json = serde_json::to_string(&Track::new_audio("Voz", [0, 0, 0])).unwrap();
+        assert!(!json.contains("monitor"));
+        let loaded: Track = serde_json::from_str(&serde_json::to_string(&audio).unwrap()).unwrap();
+        assert_eq!(loaded.monitor, Monitor::In);
+    }
 
     #[test]
     fn projects_round_trip_through_json() {

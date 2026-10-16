@@ -72,14 +72,14 @@ impl PulseApp {
                     }
                 }
                 "window" => match value {
-                    "kick" => self.kick_window = Some(track),
-                    "wave" => self.wave_window = Some(track),
-                    "poly" => self.poly_window = Some(track),
-                    "modular" => self.modular_window = Some(track),
+                    "kick" => self.open_instrument_editor(crate::app::InstrumentEditor::Kick, track),
+                    "wave" => self.open_instrument_editor(crate::app::InstrumentEditor::Wave, track),
+                    "poly" => self.open_instrument_editor(crate::app::InstrumentEditor::Poly, track),
+                    "modular" => self.open_instrument_editor(crate::app::InstrumentEditor::Modular, track),
                     "settings" => self.open_settings(),
-                    "shortcuts" => self.show_shortcuts = true,
-                    "updates" => self.updates.show = true,
-                    "export" => self.export.open = true,
+                    "shortcuts" => self.open_panel(crate::app::Panel::Shortcuts),
+                    "updates" => self.open_panel(crate::app::Panel::Updates),
+                    "export" => self.open_panel(crate::app::Panel::Export),
                     "tables" => crate::table_editor::open(self, track, 0),
                     "params" => {
                         let id = match self.project.tracks[track].instrument {

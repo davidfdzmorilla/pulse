@@ -9,7 +9,7 @@ use engine::model::{AudioClip, Clip, WarpMarker, WarpMode};
 
 const ENVELOPE_H: f32 = 60.0;
 /// Warp markers on the waveform, and the strip below it where they're handled.
-const MARKER: Color32 = Color32::from_rgb(240, 200, 80);
+pub(crate) const MARKER: Color32 = Color32::from_rgb(240, 200, 80);
 const MARKER_H: f32 = 14.0;
 
 /// Changes the clip's warp markers with `change`, keeping the clip starting on the

@@ -104,7 +104,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.add_space(16.0);
 
         // Transport.
-        readout(ui, &format_position(position), 84.0);
+        // While counting in, the beats left instead of the position.
+        let count_in = app.audio.state().map_or(0.0, |s| s.count_in());
+        let shown = if count_in > 0.0 { format!("Cuenta {}", count_in.ceil() as u32) } else { format_position(position) };
+        readout(ui, &shown, 84.0);
         if icon_button(ui, "play", playing, PLAY, "Reproducir (Espacio)").clicked() {
             if app.learn.on {
                 app.touched(Control::Transport(Transport::Play));
@@ -118,6 +121,24 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let recording = app.is_arrangement_recording();
         if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (si no hay ninguna, arma las seleccionadas) y, con «A» encendido, los controles que muevas como automatización (F9)").clicked() {
             press(app, Transport::Record);
+        }
+        let bars = app.settings.count_in_bars;
+        let label = |b: u32| if b == 0 { "Sin cuenta".to_string() } else { format!("Cuenta {b} c.") };
+        let mut chosen = bars;
+        egui::ComboBox::from_id_salt("count_in")
+            .selected_text(label(bars))
+            .width(84.0)
+            .show_ui(ui, |ui| {
+                for b in [0, 1, 2, 4] {
+                    ui.selectable_value(&mut chosen, b, label(b));
+                }
+            })
+            .response
+            .on_hover_text("Cuenta atrás: compases que suena el metrónomo antes de empezar a grabar");
+        if chosen != bars {
+            let mut next = app.settings.clone();
+            next.count_in_bars = chosen;
+            app.set_settings(next);
         }
         let armed = app.settings.automation_arm;
         let hint = if armed {

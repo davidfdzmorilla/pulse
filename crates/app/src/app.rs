@@ -465,6 +465,7 @@ impl PulseApp {
         for command in commands {
             self.audio.send(command);
         }
+        self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
         self.sync_midi_map();
         self.show_sample_errors();
     }
@@ -1682,7 +1683,10 @@ impl PulseApp {
         let tempo = self.project.tempo;
         let capture = self.capture.as_ref()?;
         let rate = capture.sample_rate();
-        let first = capture.frame_at_beat(start)?;
+        // The take is what was played while `start` was heard: the input got it this
+        // much later than the engine rendered that beat.
+        let latency = self.audio.state().map_or(0.0, |s| s.output_latency()) + capture.latency() + self.settings.record_offset_ms as f64 / 1000.0;
+        let first = (capture.frame_at_beat(start)? as i64 + (latency * rate as f64).round() as i64).max(0) as u64;
         let frames = (beats * 60.0 / tempo * rate as f64).round() as usize;
         let (left, right) = capture.extract(first, frames);
 
@@ -1801,7 +1805,9 @@ impl PulseApp {
         if self.automation_take.is_some() && state.arrangement_recording.load(Ordering::Relaxed) {
             self.record_automation(state.position());
         }
-        let notes = self.audio.take_recorded();
+        // Notes were played while hearing what the engine rendered a moment before.
+        let lag = state.output_latency() * self.project.tempo / 60.0;
+        let notes: Vec<_> = self.audio.take_recorded().into_iter().map(|n| engine::RecordedNote { start: (n.start - lag).max(0.0), ..n }).collect();
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
         let finished = self.recorder.update(notes, &state, &armed);
         let recording: Vec<(usize, usize, f64)> = self
@@ -2109,6 +2115,12 @@ impl PulseApp {
             .as_ref()
             .and_then(|p| p.file_stem())
             .map_or("Sin título".into(), |s| s.to_string_lossy().into_owned())
+    }
+
+    /// The input's latency (if it is open) and the output's, in seconds.
+    pub fn latencies(&self) -> (Option<f64>, f64) {
+        let output = self.audio.state().map_or(0.0, |s| s.output_latency());
+        (self.capture.as_ref().map(|c| c.latency()), output)
     }
 
     // ----- Frame ------------------------------------------------------------------

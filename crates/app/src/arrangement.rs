@@ -430,6 +430,9 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     painter.rect_filled(body, 2.0, if selected { theme::CONTROL_HOVER } else { theme::SURFACE });
     painter.rect_filled(Rect::from_min_size(body.min, vec2(5.0, LANE_H)), 2.0, color);
     painter.text(body.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, &track.name, theme::body(), TEXT);
+    if track.frozen.is_some() {
+        crate::freeze::mark(painter, body);
+    }
     let (active, solo) = (track.mixer.active, track.solo);
 
     let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(110.0, 18.0));
@@ -616,6 +619,15 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
         if ui.button(label("Eliminar")).clicked() {
             app.arrangement.track_action = Some((TrackAction::Delete, t, several));
             ui.close();
+        }
+        let (frozen, freezing) = (app.is_frozen(t), app.freeze_job.is_some());
+        let mut chosen = None;
+        crate::session::freeze_items(ui, frozen, freezing, |action| chosen = Some(action), t);
+        match chosen {
+            Some(crate::session::Action::Freeze(t)) => app.freeze(t),
+            Some(crate::session::Action::Unfreeze(t)) => app.unfreeze(t),
+            Some(crate::session::Action::Flatten(t)) => app.flatten(t),
+            _ => {}
         }
     });
 }

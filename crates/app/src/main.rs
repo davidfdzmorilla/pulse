@@ -14,6 +14,7 @@ mod devices;
 mod editor;
 mod export;
 mod files;
+mod freeze;
 mod history;
 mod input;
 mod kick_ui;

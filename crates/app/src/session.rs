@@ -17,13 +17,16 @@ const SENDS_H: f32 = 56.0;
 const PAN_H: f32 = 58.0;
 const FADER_H: f32 = 120.0;
 
-enum Action {
+pub(crate) enum Action {
     Launch(usize, usize),
     ClickClip(ClipRef, egui::Modifiers),
     StartMove(usize, usize, egui::Modifiers),
     StartMarquee(egui::Pos2, egui::Modifiers),
     SelectTarget(Target),
     Consolidate(usize, usize),
+    Freeze(usize),
+    Unfreeze(usize),
+    Flatten(usize),
     /// An empty slot clicked: its track selected, no clip, pasting goes there.
     SelectSlot(usize, usize),
     Create(usize, usize),
@@ -186,6 +189,28 @@ fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: 
     response
 }
 
+/// Freeze, unfreeze and flatten in a track's menu.
+pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut act: impl FnMut(Action), t: usize) {
+    ui.separator();
+    if frozen {
+        if ui.button("Descongelar pista").on_hover_text("Vuelven a sonar su instrumento y sus efectos").clicked() {
+            act(Action::Unfreeze(t));
+            ui.close();
+        }
+        if ui.button("Convertir en audio").on_hover_text("Pasa a ser una pista de audio con lo congelado (su instrumento y efectos se quitan)").clicked() {
+            act(Action::Flatten(t));
+            ui.close();
+        }
+    } else if ui
+        .add_enabled(!freezing, egui::Button::new("Congelar pista"))
+        .on_hover_text("Renderiza su instrumento y efectos a audio y suena eso: deja de gastar CPU. El volumen, el paneo y los envíos siguen en vivo")
+        .clicked()
+    {
+        act(Action::Freeze(t));
+        ui.close();
+    }
+}
+
 /// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
 fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) -> egui::Rect {
     let track = &app.project.tracks[t];
@@ -194,6 +219,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     app.track_header_input(t, &response);
     let several = app.is_track_selected(t) && app.track_selection().len() > 1;
     let count = app.track_selection().len();
+    let (frozen, freezing) = (app.is_frozen(t), app.freeze_job.is_some());
     widgets::edit_menu(&response, |ui| {
         let track = &mut app.project.tracks[t];
         ui.label("Nombre");
@@ -210,7 +236,11 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
             actions.push(Action::DeleteTrack(t));
             ui.close();
         }
+        freeze_items(ui, frozen, freezing, |action| actions.push(action), t);
     });
+    if frozen {
+        crate::freeze::mark(ui.painter(), response.rect);
+    }
     response.rect
 }
 
@@ -549,6 +579,9 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::StartMove(t, slot, modifiers) => app.start_session_move(t, slot, modifiers),
         Action::StartMarquee(anchor, modifiers) => app.start_marquee(anchor, modifiers),
         Action::SelectTarget(target) => app.selected_target = target,
+        Action::Freeze(t) => app.freeze(t),
+        Action::Unfreeze(t) => app.unfreeze(t),
+        Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),
         Action::SelectSlot(t, slot) => {
             app.set_clip_selection(Vec::new());

@@ -248,7 +248,9 @@ pub fn project_commands(
     ];
     let empty = Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default()));
     for t in 0..MAX_TRACKS {
-        let track = project.tracks.get(t).unwrap_or(&empty);
+        // A frozen track plays its frozen audio, through no instrument or effects.
+        let track = crate::freeze::playing(project.tracks.get(t).unwrap_or(&empty));
+        let track = track.as_ref();
         let target = Target::Track(t);
         commands.extend([
             instrument_command(project, t, track.instrument, samples, sample_rate),

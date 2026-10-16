@@ -194,7 +194,7 @@ impl PulseApp {
                 }
             }
             Command::ImportAudio => self.choose_samples(crate::app::Placement::Auto),
-            Command::Export => self.export.open = true,
+            Command::Export => self.open_panel(crate::app::Panel::Export),
             Command::Quit => {
                 if self.may_discard() {
                     self.quitting = true;
@@ -264,7 +264,7 @@ impl PulseApp {
             Command::AutomationArm => self.toggle_automation_arm(),
             Command::ComputerKeyboard => self.toggle_keyboard(),
             Command::MidiAssign => self.toggle_learn(),
-            Command::Shortcuts => self.show_shortcuts = true,
+            Command::Shortcuts => self.open_panel(crate::app::Panel::Shortcuts),
             Command::About => crate::native_menu::about(),
             Command::Settings => self.open_settings(),
             Command::ShowFolder => {
@@ -275,7 +275,7 @@ impl PulseApp {
                 }
             }
             Command::CheckUpdates => {
-                self.updates.show = true;
+                self.open_panel(crate::app::Panel::Updates);
                 self.check_updates();
             }
         }
@@ -377,7 +377,7 @@ impl PulseApp {
 /// The help window with every keyboard shortcut.
 pub fn shortcuts_window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = app.show_shortcuts;
-    egui::Window::new("Atajos de teclado").open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+    egui::Window::new("Atajos de teclado").open(&mut open).resizable(false).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
         egui::Grid::new("shortcuts").num_columns(2).striped(true).show(ui, |ui| {
             for (keys, what) in SHORTCUTS {
                 ui.label(egui::RichText::new(keys).strong());

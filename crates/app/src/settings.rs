@@ -82,7 +82,7 @@ impl PulseApp {
     }
 
     pub fn open_settings(&mut self) {
-        self.show_settings = true;
+        self.open_panel(crate::app::Panel::Settings);
         self.devices = Devices { outputs: engine::output_devices(), inputs: engine::input_devices() };
     }
 
@@ -139,7 +139,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut refresh = false;
     let mut search_plugins = false;
     let mut show_folder = false;
-    egui::Window::new("Ajustes").open(&mut open).resizable(false).collapsible(false).default_width(460.0).show(ctx, |ui| {
+    egui::Window::new("Ajustes").open(&mut open).resizable(false).collapsible(false).default_width(460.0).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
         ui.heading("Audio");
         ui.label(egui::RichText::new(format!("En uso: {}", app.audio_summary())).color(TEXT_DIM).size(10.5));
         if let Some(error) = &app.audio.error {

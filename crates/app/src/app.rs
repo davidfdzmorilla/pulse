@@ -139,6 +139,24 @@ pub fn is_audio_file(path: &Path) -> bool {
         .is_some_and(|e| AUDIO_EXTENSIONS.contains(&e.to_ascii_lowercase().as_str()))
 }
 
+/// The instruments with an editor window of their own.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InstrumentEditor {
+    Kick,
+    Wave,
+    Poly,
+    Modular,
+}
+
+/// The app's own windows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Panel {
+    Settings,
+    Shortcuts,
+    Updates,
+    Export,
+}
+
 /// Where newly added samples go.
 #[derive(Clone, Copy)]
 pub enum Placement {
@@ -918,6 +936,31 @@ impl PulseApp {
     }
 
     // ----- Edits ------------------------------------------------------------------
+
+    /// Opens an instrument's editor window, closing any other one (they would
+    /// stack on top of each other).
+    pub fn open_instrument_editor(&mut self, editor: InstrumentEditor, track: usize) {
+        self.kick_window = None;
+        self.wave_window = None;
+        self.poly_window = None;
+        self.modular_window = None;
+        let slot = match editor {
+            InstrumentEditor::Kick => &mut self.kick_window,
+            InstrumentEditor::Wave => &mut self.wave_window,
+            InstrumentEditor::Poly => &mut self.poly_window,
+            InstrumentEditor::Modular => &mut self.modular_window,
+        };
+        *slot = Some(track);
+    }
+
+    /// Opens one of the app's windows (settings, shortcuts, updates, export),
+    /// closing the others: one at a time, in the middle.
+    pub fn open_panel(&mut self, panel: Panel) {
+        self.show_settings = panel == Panel::Settings;
+        self.show_shortcuts = panel == Panel::Shortcuts;
+        self.updates.show = panel == Panel::Updates;
+        self.export.open = panel == Panel::Export;
+    }
 
     pub fn select_clip(&mut self, clip: ClipRef) {
         self.paste_slot = None;
@@ -2056,7 +2099,7 @@ impl PulseApp {
         let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record] =
             input;
         if export {
-            self.export.open = true;
+            self.open_panel(Panel::Export);
         }
         if keyboard {
             self.toggle_keyboard();
@@ -2279,5 +2322,23 @@ fn target_track(target: Target) -> Option<usize> {
     match target {
         Target::Track(t) => Some(t),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::*;
+
+    /// One instrument editor and one of the app's windows at a time: they don't stack.
+    #[test]
+    fn windows_open_one_at_a_time() {
+        let mut app = PulseApp::headless(Project::demo());
+        app.open_instrument_editor(InstrumentEditor::Kick, 0);
+        app.open_instrument_editor(InstrumentEditor::Wave, 1);
+        assert_eq!((app.kick_window, app.wave_window, app.poly_window, app.modular_window), (None, Some(1), None, None));
+        app.open_panel(Panel::Settings);
+        app.open_panel(Panel::Shortcuts);
+        assert!(app.show_shortcuts && !app.show_settings && !app.updates.show && !app.export.open);
+        assert_eq!(app.wave_window, Some(1), "an editor and a window can be open together");
     }
 }

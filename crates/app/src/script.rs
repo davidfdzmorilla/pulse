@@ -13,6 +13,7 @@
 //!
 //! - `click|rclick|dclick|hover [mods] <target>`
 //! - `drag [mods] <target> -> <target>`; `scroll <target> dx,dy`
+//! - `dropfile <path>[|<path>…] -> <target>`: files dropped from Finder there
 //! - `key [mods+]<Key>` (egui key names: Space, Enter, Escape, Delete, A, …);
 //!   `down <Key>` / `up <Key>` (held: a note on the computer keyboard); `type <text>`
 //! - `wait <frames>`; `sleep <ms>` (wall time: playback, analyses)
@@ -64,6 +65,20 @@ fn log_line(line: &str) {
     eprintln!("[guion] {line}");
 }
 
+/// A file the script drops on the window.
+#[derive(Debug)]
+struct ScriptFile(PathBuf);
+
+impl egui::DroppedFile for ScriptFile {
+    fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
+    fn bytes(&self) -> Result<Vec<u8>, String> {
+        std::fs::read(&self.0).map_err(|e| e.to_string())
+    }
+}
+
 /// A widget on screen: what it shows and where.
 #[derive(Clone, Debug)]
 struct Widget {
@@ -87,6 +102,8 @@ pub struct Script {
     widgets: Vec<Widget>,
     pointer: Pos2,
     last_click: Option<Instant>,
+    /// Files to drop on the window once the pointer has moved.
+    drop: Option<Vec<PathBuf>>,
     /// Modifiers held down by the last input.
     held: Modifiers,
     status: Option<String>,
@@ -126,6 +143,7 @@ impl Script {
             pointer: pos2(-10.0, -10.0),
             held: Modifiers::NONE,
             last_click: None,
+            drop: None,
             status: None,
             started: Instant::now(),
             done: false,
@@ -193,6 +211,11 @@ impl Script {
             raw.events.push(Event::ModifiersChanged(modifiers));
             raw.events.extend(events);
             self.held = modifiers;
+            return;
+        }
+        // Files dropped from "Finder", once the pointer is there.
+        if let Some(paths) = self.drop.take() {
+            raw.dropped_files = paths.into_iter().map(|path| std::sync::Arc::new(ScriptFile(path)) as std::sync::Arc<dyn egui::DroppedFile + Send + Sync>).collect();
             return;
         }
         if self.held != Modifiers::NONE {
@@ -278,6 +301,12 @@ impl Script {
                 }
                 self.frames.push_back((vec![Event::PointerButton { pos: to, button: PointerButton::Primary, pressed: false, modifiers: mods }], mods));
                 self.pointer = to;
+            }
+            "dropfile" => {
+                let (paths, target) = rest.split_once("->").ok_or("dropfile <ruta>[|ruta] -> <destino>")?;
+                let at = self.target(target.trim())?;
+                self.move_to(at, Modifiers::NONE);
+                self.drop = Some(paths.split('|').map(|p| PathBuf::from(p.trim())).collect());
             }
             "scroll" => {
                 let (target, delta) = rest.rsplit_once(' ').ok_or("scroll <target> dx,dy")?;

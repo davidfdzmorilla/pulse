@@ -1977,9 +1977,16 @@ impl PulseApp {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         let (audio, other): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| is_audio_file(p));
         if !audio.is_empty() {
-            match self.instrument_drop_slot(ctx) {
-                Some((track, slot)) => self.set_instrument_samples(track, slot, audio),
-                None => self.add_samples(audio, Placement::Auto),
+            // Where the mouse is (macOS knows; the drop doesn't say): the slot, lane
+            // or pad under it, as when dragging from the browser.
+            let pos = if self.script.is_some() { ctx.pointer_latest_pos() } else { crate::open_files::pointer_in_window() };
+            if pos.is_some_and(|p| self.drop_files(audio.clone(), p)) {
+                // Placed.
+            } else {
+                match self.instrument_drop_slot(ctx) {
+                    Some((track, slot)) => self.set_instrument_samples(track, slot, audio),
+                    None => self.add_samples(audio, Placement::Auto),
+                }
             }
         }
         self.open_documents(other);

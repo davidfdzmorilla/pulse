@@ -65,9 +65,39 @@ pub fn split(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(Arrange
     if beat <= placed.start + MIN_PART || beat >= placed.end() - MIN_PART {
         return None;
     }
-    let left = ArrangementClip { length: beat - placed.start, ..placed.clone() };
-    let right = ArrangementClip { start: beat, length: placed.end() - beat, clip: from(&placed.clip, beat - placed.start, tempo) };
+    let d = beat - placed.start;
+    let mut left = ArrangementClip { length: d, ..placed.clone() };
+    let mut right = ArrangementClip { start: beat, length: placed.end() - beat, clip: from(&placed.clip, d, tempo) };
+    // Not looping: each part is only its piece (the clip editor shows just that).
+    // A loop keeps its loop.
+    let loop_length = match &placed.clip {
+        Clip::Midi(m) => m.length,
+        Clip::Audio(a) => a.length,
+    };
+    if placed.length <= loop_length + 1e-9 {
+        trim(&mut left.clip, d);
+        trim(&mut right.clip, placed.length - d);
+    }
     Some((left, right))
+}
+
+/// Cuts a clip's content to its first `length` beats.
+fn trim(clip: &mut Clip, length: f64) {
+    match clip {
+        Clip::Midi(midi) => {
+            midi.length = length;
+            midi.notes.retain(|n| n.start < length);
+            for lane in &mut midi.envelopes {
+                lane.points.retain(|p| p.beat <= length);
+            }
+        }
+        Clip::Audio(audio) => {
+            audio.length = length;
+            for lane in &mut audio.envelopes {
+                lane.points.retain(|p| p.beat <= length);
+            }
+        }
+    }
 }
 
 /// The notes a placed MIDI clip plays, its loops laid out, from its start.
@@ -326,5 +356,40 @@ mod tests {
         let worst = whole.iter().zip(&split).enumerate().filter(|(i, _)| i.abs_diff(cut) > near).map(|(_, (a, b))| (a - b).abs()).fold(0f32, f32::max);
         assert!(whole.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.1, "the song plays");
         assert!(worst < 1e-4, "away from the cut they match: {worst}");
+    }
+
+    /// A clip that doesn't loop splits into two that are only their pieces (what
+    /// the clip editor shows); a looping one keeps its loop.
+    #[test]
+    fn the_parts_of_a_clip_are_only_their_pieces() {
+        let audio = AudioClip {
+            name: "a".into(),
+            color: [0; 3],
+            sample: "/a.wav".into(),
+            length: 40.0,
+            offset: 0.0,
+            warp: WarpMode::Stretch,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+        };
+        let placed = ArrangementClip { start: 4.0, length: 40.0, clip: Clip::Audio(audio) };
+        let (left, right) = split(&placed, 10.0, 120.0).unwrap();
+        let (Clip::Audio(l), Clip::Audio(r)) = (&left.clip, &right.clip) else { panic!() };
+        assert_eq!((l.offset, l.length), (0.0, 6.0), "the first 6 beats");
+        assert_eq!((r.offset, r.length), (3.0, 34.0), "from 3 s, the rest");
+        let notes = vec![note(0.0, 60), note(5.0, 62)];
+        let placed = ArrangementClip { start: 0.0, length: 8.0, clip: midi(notes.clone(), 8.0) };
+        let (left, right) = split(&placed, 4.0, 120.0).unwrap();
+        let (Clip::Midi(l), Clip::Midi(r)) = (&left.clip, &right.clip) else { panic!() };
+        assert_eq!((l.length, l.notes.len()), (4.0, 1));
+        assert_eq!((r.length, r.notes.iter().map(|n| n.start).collect::<Vec<_>>()), (4.0, vec![1.0]));
+        // Looping (a 4-beat loop placed for 8): both keep the 4-beat loop.
+        let placed = ArrangementClip { start: 0.0, length: 8.0, clip: midi(notes, 4.0) };
+        let (left, right) = split(&placed, 6.0, 120.0).unwrap();
+        let (Clip::Midi(l), Clip::Midi(r)) = (&left.clip, &right.clip) else { panic!() };
+        assert_eq!((l.length, r.length), (4.0, 4.0));
     }
 }

@@ -1,0 +1,330 @@
+//! Splitting arrangement clips in two (⌘E) and joining MIDI clips into one (⌘J).
+//!
+//! A placed clip plays its content from the start, looping. The part after a split
+//! must go on where it was, so its content is turned round to start there: MIDI
+//! notes and clip envelopes rotate within the loop; audio starts later in the file.
+
+use crate::app::{ClipRef, PulseApp};
+use engine::model::{ArrangementClip, AudioClip, AutomationLane, AutomationPoint, Clip, MidiClip, Note};
+
+/// The shortest part a split leaves.
+const MIN_PART: f64 = 1.0 / 16.0;
+
+/// Envelope lanes turned round to start `d` beats into a loop of `length`, with a
+/// point at the new start so the value there stays.
+fn rotate_lanes(lanes: &[AutomationLane], d: f64, length: f64) -> Vec<AutomationLane> {
+    lanes
+        .iter()
+        .map(|lane| {
+            let mut points: Vec<AutomationPoint> = lane.points.iter().map(|p| AutomationPoint { beat: (p.beat - d).rem_euclid(length), ..*p }).collect();
+            if let Some(value) = lane.value_at(d) {
+                points.retain(|p| p.beat > 1e-9);
+                points.push(AutomationPoint { beat: 0.0, value });
+            }
+            points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+            AutomationLane { param: lane.param, points }
+        })
+        .collect()
+}
+
+/// The content of a clip as heard from `d` beats into it (within its loop).
+fn from(clip: &Clip, d: f64, tempo: f64) -> Clip {
+    match clip {
+        Clip::Midi(midi) => {
+            let length = midi.length.max(MIN_PART);
+            let d = d.rem_euclid(length);
+            let notes = midi.notes.iter().map(|n| Note { start: (n.start - d).rem_euclid(length), ..n.clone() }).collect();
+            Clip::Midi(MidiClip { notes, envelopes: rotate_lanes(&midi.envelopes, d, length), ..midi.clone() })
+        }
+        Clip::Audio(audio) => {
+            let length = audio.length.max(MIN_PART);
+            let d = d.rem_euclid(length);
+            // Later in the file, by what the clip plays in `d` beats (warp markers too).
+            let offset = audio.source_seconds(d, tempo);
+            let envelopes = audio
+                .envelopes
+                .iter()
+                .map(|lane| {
+                    let mut points: Vec<AutomationPoint> = lane.points.iter().filter(|p| p.beat > d).map(|p| AutomationPoint { beat: p.beat - d, ..*p }).collect();
+                    if let Some(value) = lane.value_at(d) {
+                        points.insert(0, AutomationPoint { beat: 0.0, value });
+                    }
+                    AutomationLane { param: lane.param, points }
+                })
+                .collect();
+            let audio = AudioClip { offset, length: (length - d).max(MIN_PART), envelopes, ..audio.clone() };
+            // With warp markers the start is a point of the file, as `source_seconds` gives.
+            Clip::Audio(audio)
+        }
+    }
+}
+
+/// The two parts of `placed` split at `beat` (timeline), or None if `beat` isn't
+/// inside it.
+pub fn split(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(ArrangementClip, ArrangementClip)> {
+    if beat <= placed.start + MIN_PART || beat >= placed.end() - MIN_PART {
+        return None;
+    }
+    let left = ArrangementClip { length: beat - placed.start, ..placed.clone() };
+    let right = ArrangementClip { start: beat, length: placed.end() - beat, clip: from(&placed.clip, beat - placed.start, tempo) };
+    Some((left, right))
+}
+
+/// The notes a placed MIDI clip plays, its loops laid out, from its start.
+fn laid_out(placed: &ArrangementClip, midi: &MidiClip) -> Vec<Note> {
+    let length = midi.length.max(MIN_PART);
+    let mut notes = Vec::new();
+    let mut lap = 0.0;
+    while lap < placed.length {
+        for n in midi.notes.iter().filter(|n| n.start < length) {
+            let start = lap + n.start;
+            if start < placed.length {
+                notes.push(Note { start, length: n.length.min(placed.length - start).min(length - n.start), ..n.clone() });
+            }
+        }
+        lap += length;
+    }
+    notes
+}
+
+/// One MIDI clip from several on a track, from the first's start to the last's end.
+pub fn join(parts: &[ArrangementClip]) -> Option<ArrangementClip> {
+    let start = parts.iter().map(|p| p.start).fold(f64::INFINITY, f64::min);
+    let end = parts.iter().map(|p| p.end()).fold(f64::NEG_INFINITY, f64::max);
+    let first = parts.iter().min_by(|a, b| a.start.total_cmp(&b.start))?;
+    let Clip::Midi(base) = &first.clip else { return None };
+    let mut notes = Vec::new();
+    for part in parts {
+        let Clip::Midi(midi) = &part.clip else { return None };
+        notes.extend(laid_out(part, midi).into_iter().map(|n| Note { start: n.start + part.start - start, ..n }));
+    }
+    notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
+    let length = end - start;
+    Some(ArrangementClip { start, length, clip: Clip::Midi(MidiClip { notes, length, envelopes: Vec::new(), ..base.clone() }) })
+}
+
+impl PulseApp {
+    /// Splits an arrangement clip at `beat`; both parts end up selected.
+    pub fn split_clip_at(&mut self, track: usize, index: usize, beat: f64) -> bool {
+        let tempo = self.project.tempo;
+        let Some(placed) = self.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) else { return false };
+        let Some((left, right)) = split(placed, beat, tempo) else { return false };
+        let lane = &mut self.project.tracks[track].arrangement;
+        lane[index] = left;
+        lane.push(right);
+        let right = lane.len() - 1;
+        self.sync_arrangement(track);
+        self.set_clip_selection(vec![ClipRef::Arrangement { track, index }, ClipRef::Arrangement { track, index: right }]);
+        true
+    }
+
+    /// ⌘E: the selected arrangement clips split at the playhead.
+    pub fn split_selected(&mut self) {
+        let beat = self.audio.position();
+        let selected: Vec<(usize, usize)> = self
+            .clip_selection()
+            .into_iter()
+            .filter_map(|c| match c {
+                ClipRef::Arrangement { track, index } => Some((track, index)),
+                ClipRef::Session { .. } => None,
+            })
+            .collect();
+        if selected.is_empty() {
+            self.status = Some("Selecciona clips del Arrangement para dividirlos".into());
+            return;
+        }
+        let mut parts = Vec::new();
+        for (track, index) in selected {
+            if self.split_clip_at(track, index, beat) {
+                parts.extend(self.clip_selection());
+            }
+        }
+        if parts.is_empty() {
+            self.status = Some("El cursor no está dentro de los clips seleccionados: colócalo donde quieras cortar".into());
+        } else {
+            self.set_clip_selection(parts);
+        }
+    }
+
+    /// ⌘J: the selected MIDI clips of one track become one.
+    pub fn join_selected(&mut self) {
+        let selected: Vec<(usize, usize)> = self
+            .clip_selection()
+            .into_iter()
+            .filter_map(|c| match c {
+                ClipRef::Arrangement { track, index } => Some((track, index)),
+                ClipRef::Session { .. } => None,
+            })
+            .collect();
+        let Some(&(track, _)) = selected.first() else {
+            self.status = Some("Selecciona dos o más clips MIDI de una pista del Arrangement para unirlos".into());
+            return;
+        };
+        if selected.len() < 2 || selected.iter().any(|&(t, _)| t != track) {
+            self.status = Some("Selecciona dos o más clips MIDI de la misma pista para unirlos".into());
+            return;
+        }
+        let lane = &self.project.tracks[track].arrangement;
+        let parts: Vec<ArrangementClip> = selected.iter().filter_map(|&(_, i)| lane.get(i).cloned()).collect();
+        let Some(joined) = join(&parts) else {
+            self.status = Some("Solo se pueden unir clips MIDI".into());
+            return;
+        };
+        let mut indices: Vec<usize> = selected.iter().map(|&(_, i)| i).collect();
+        indices.sort_unstable();
+        let lane = &mut self.project.tracks[track].arrangement;
+        for i in indices.into_iter().rev() {
+            lane.remove(i);
+        }
+        lane.push(joined);
+        let index = lane.len() - 1;
+        self.sync_arrangement(track);
+        self.select_clip(ClipRef::Arrangement { track, index });
+        self.status = Some(format!("{} clips unidos en uno", parts.len()));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::model::{Param, WarpMarker, WarpMode};
+
+    fn note(start: f64, pitch: u8) -> Note {
+        Note { start, length: 0.5, pitch, velocity: 0.8 }
+    }
+
+    fn midi(notes: Vec<Note>, length: f64) -> Clip {
+        Clip::Midi(MidiClip { notes, ..MidiClip::new("m", length, [0; 3]) })
+    }
+
+    #[test]
+    fn a_looping_midi_clip_splits_where_it_was() {
+        // A 4-beat loop placed for 12 beats, split at beat 6 of the timeline (start 2):
+        // 4 beats in, so the right part starts at the loop's start again.
+        let placed = ArrangementClip { start: 2.0, length: 12.0, clip: midi(vec![note(0.0, 60), note(1.0, 62), note(3.0, 64)], 4.0) };
+        let (left, right) = split(&placed, 6.0, 120.0).unwrap();
+        assert_eq!((left.start, left.length), (2.0, 4.0));
+        assert_eq!((right.start, right.length), (6.0, 8.0));
+        // At beat 7 of the timeline (1 beat into the loop): what played there plays first.
+        let (_, right) = split(&placed, 7.0, 120.0).unwrap();
+        let Clip::Midi(m) = &right.clip else { panic!() };
+        let mut starts: Vec<(f64, u8)> = m.notes.iter().map(|n| (n.start, n.pitch)).collect();
+        starts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(starts, vec![(0.0, 62), (2.0, 64), (3.0, 60)]);
+        // Not inside: no split.
+        assert!(split(&placed, 2.0, 120.0).is_none());
+        assert!(split(&placed, 14.0, 120.0).is_none());
+    }
+
+    #[test]
+    fn an_audio_clip_split_starts_later_in_its_file() {
+        let audio = AudioClip {
+            name: "a".into(),
+            color: [0; 3],
+            sample: "/a.wav".into(),
+            length: 16.0,
+            offset: 0.5,
+            warp: WarpMode::Stretch,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.0 }, AutomationPoint { beat: 8.0, value: 1.0 }] }],
+        };
+        let placed = ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(audio.clone()) };
+        let (_, right) = split(&placed, 4.0, 100.0).unwrap();
+        let Clip::Audio(r) = &right.clip else { panic!() };
+        // 4 beats at its original 120 BPM: 2 s later.
+        assert!((r.offset - 2.5).abs() < 1e-9);
+        assert_eq!(r.length, 12.0);
+        // The fade goes on from where it was (halfway).
+        assert_eq!(r.envelopes[0].points[0].beat, 0.0);
+        assert!((r.envelopes[0].points[0].value - 0.5).abs() < 1e-6);
+        assert_eq!(r.envelopes[0].points[1].beat, 4.0);
+        // With warp markers, the point of the file the clip had reached.
+        let warped = AudioClip { warp_markers: [(0.0, 0.0), (4.0, 1.0), (8.0, 3.0)].map(|(beat, seconds)| WarpMarker { beat, seconds }).to_vec(), offset: 0.0, ..audio };
+        let placed = ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(warped) };
+        let (_, right) = split(&placed, 6.0, 100.0).unwrap();
+        let Clip::Audio(r) = &right.clip else { panic!() };
+        assert!((r.offset - 2.0).abs() < 1e-9, "{}", r.offset);
+    }
+
+    #[test]
+    fn midi_clips_join_with_their_loops_laid_out() {
+        let a = ArrangementClip { start: 0.0, length: 8.0, clip: midi(vec![note(0.0, 60)], 4.0) };
+        let b = ArrangementClip { start: 12.0, length: 2.0, clip: midi(vec![note(1.0, 67), note(3.0, 69)], 4.0) };
+        let joined = join(&[b, a]).unwrap();
+        assert_eq!((joined.start, joined.length), (0.0, 14.0));
+        let Clip::Midi(m) = &joined.clip else { panic!() };
+        assert_eq!(m.length, 14.0);
+        let starts: Vec<(f64, u8)> = m.notes.iter().map(|n| (n.start, n.pitch)).collect();
+        // The loop twice, then the second clip's notes inside its 2 beats.
+        assert_eq!(starts, vec![(0.0, 60), (4.0, 60), (13.0, 67)]);
+        assert!(join(&[]).is_none());
+    }
+
+    #[test]
+    fn split_and_join_from_the_app() {
+        let mut app = PulseApp::headless(crate::project::Project::empty());
+        app.project.tracks[0].arrangement.push(ArrangementClip { start: 0.0, length: 8.0, clip: midi(vec![note(0.0, 60), note(5.0, 62)], 8.0) });
+        app.select_clip(ClipRef::Arrangement { track: 0, index: 0 });
+        assert!(app.split_clip_at(0, 0, 4.0));
+        assert_eq!(app.clip_selection().len(), 2, "both parts selected");
+        let spans: Vec<(f64, f64)> = app.project.tracks[0].arrangement.iter().map(|c| (c.start, c.length)).collect();
+        assert_eq!(spans, vec![(0.0, 4.0), (4.0, 4.0)]);
+        app.join_selected();
+        let lane = &app.project.tracks[0].arrangement;
+        assert_eq!(lane.len(), 1);
+        let Clip::Midi(m) = &lane[0].clip else { panic!() };
+        let starts: Vec<f64> = m.notes.iter().map(|n| n.start).collect();
+        assert_eq!(starts, vec![0.0, 5.0], "as it was");
+    }
+
+    /// Heard, not just set: the demo song as an audio clip renders the same split
+    /// in two as whole, but for the few milliseconds of the cut's fades.
+    #[test]
+    fn a_split_clip_sounds_the_same() {
+        let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let render = |split_at: Option<f64>| {
+            let mut app = PulseApp::headless(crate::project::Project::empty());
+            for track in &mut app.project.tracks {
+                track.mixer.active = false;
+            }
+            let track = app.add_audio_track().unwrap();
+            let audio = AudioClip {
+                name: "demo".into(),
+                color: [0; 3],
+                sample: song.to_string_lossy().into_owned(),
+                length: 32.0,
+                offset: 0.0,
+                warp: WarpMode::Repitch,
+                original_bpm: 120.0,
+                warp_markers: Vec::new(),
+                gain_db: 0.0,
+                transpose: 0.0,
+                envelopes: Vec::new(),
+            };
+            app.project.tracks[track].arrangement.push(ArrangementClip { start: 4.0, length: 32.0, clip: Clip::Audio(audio) });
+            if let Some(beat) = split_at {
+                assert!(app.split_clip_at(track, 0, beat));
+            }
+            let rate = 48_000.0;
+            let mut renderer = engine::OfflineRenderer::new(rate);
+            let mut samples = crate::sync::SampleCache::default();
+            for command in crate::sync::project_commands(&app.project, &mut samples, rate, &Default::default()) {
+                renderer.send(command);
+            }
+            renderer.send(engine::Command::Play);
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            renderer.render((40.0 * 0.5 * rate as f64) as usize, &mut l, &mut r);
+            l
+        };
+        let whole = render(None);
+        let split = render(Some(14.5));
+        let cut = (14.5 * 0.5 * 48_000.0) as usize;
+        let near = 48_000 / 50;
+        let worst = whole.iter().zip(&split).enumerate().filter(|(i, _)| i.abs_diff(cut) > near).map(|(_, (a, b))| (a - b).abs()).fold(0f32, f32::max);
+        assert!(whole.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.1, "the song plays");
+        assert!(worst < 1e-4, "away from the cut they match: {worst}");
+    }
+}

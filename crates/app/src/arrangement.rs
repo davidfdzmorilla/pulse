@@ -210,6 +210,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             for t in 0..tracks {
                 painter.rect_filled(lane_rect(t), 0.0, theme::SLOT);
                 lane_rects.push((t, lane_rect(t)));
+                app.drop_targets.lanes.push((t, lane_rect(t).intersect(ui.clip_rect()), rect.left(), ppb));
             }
             let label_every = if ppb < 6.0 { 4 } else if ppb < 10.0 { 2 } else { 1 };
             for beat in 0..=total_beats as i64 {

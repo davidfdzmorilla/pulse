@@ -248,6 +248,9 @@ pub struct PulseApp {
     pub slice_mode: crate::slicing::SliceMode,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
     pub sample_drop_zones: Vec<(egui::Rect, usize, usize)>,
+    /// The library browser's state, and where what it drags can land.
+    pub browser: crate::browser::State,
+    pub drop_targets: crate::browser::DropTargets,
     /// Input track last sent to the engine.
     pub(crate) input_track: Option<Option<usize>>,
     history: History,
@@ -394,6 +397,8 @@ impl PulseApp {
             learn: Default::default(),
             touched_control: Default::default(),
             sample_drop_zones: Vec::new(),
+            browser: Default::default(),
+            drop_targets: Default::default(),
             export: Default::default(),
             input_track: None,
             file: None,
@@ -2108,6 +2113,23 @@ impl PulseApp {
         }
     }
 
+    /// A file dragged from the browser: its name follows the pointer, and it lands
+    /// where the button is let go.
+    fn follow_browser_drag(&mut self, ctx: &egui::Context) {
+        let Some(dragged) = egui::DragAndDrop::payload::<crate::browser::Dragged>(ctx) else { return };
+        let Some(pos) = ctx.pointer_latest_pos() else { return };
+        let name = dragged.0.file_stem().map_or(String::new(), |n| n.to_string_lossy().into_owned());
+        let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Tooltip, egui::Id::new("browser_drag")));
+        let text = painter.layout_no_wrap(format!("♪ {name}"), theme::body(), theme::TEXT);
+        let rect = egui::Rect::from_min_size(pos + egui::vec2(12.0, 8.0), text.size() + egui::vec2(10.0, 4.0));
+        painter.rect_filled(rect, 3.0, theme::CONTROL);
+        painter.galley(rect.min + egui::vec2(5.0, 2.0), text, theme::TEXT);
+        if ctx.input(|i| i.pointer.any_released()) {
+            egui::DragAndDrop::clear_payload(ctx);
+            self.drop_from_browser((*dragged).clone(), pos);
+        }
+    }
+
     fn update_title(&mut self, ctx: &egui::Context) {
         let title = format!("{}{} — Pulse", self.file_name(), if self.is_dirty() { " *" } else { "" });
         if title != self.title {
@@ -2174,6 +2196,7 @@ impl eframe::App for PulseApp {
         }
         self.open_documents(opened);
         self.sample_drop_zones.clear();
+        self.drop_targets = Default::default();
         let live = self.audio.live();
         self.keyboard.handle(&ctx, live.as_ref());
         self.update_input_track();
@@ -2200,9 +2223,12 @@ impl eframe::App for PulseApp {
             .min_size(200.0)
             .show(ui, |ui| detail::show(self, ui));
         let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(6));
-        egui::CentralPanel::default().frame(frame).show(ui, |ui| match self.view {
-            View::Session => session::show(self, ui),
-            View::Arrangement => arrangement::show(self, ui),
+        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+            self.drop_targets.view = Some(ui.max_rect());
+            match self.view {
+                View::Session => session::show(self, ui),
+                View::Arrangement => arrangement::show(self, ui),
+            }
         });
         crate::kick_ui::window(self, &ctx);
         crate::wave_ui::window(self, &ctx);
@@ -2233,6 +2259,7 @@ impl eframe::App for PulseApp {
         self.history.commit(&self.project, interacting);
         self.update_title(&ctx);
         crate::export::window(self, &ctx);
+        self.follow_browser_drag(&ctx);
         self.debug_screenshot(&ctx);
         self.script_output(&ctx);
         // Meters and playheads move while anything plays or sounds (60 frames a

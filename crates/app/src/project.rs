@@ -284,7 +284,10 @@ impl Project {
 
     pub fn load(path: &Path) -> Result<Self, String> {
         let text = std::fs::read_to_string(path).map_err(|e| format!("No se pudo leer: {e}"))?;
-        Self::from_json(&text)
+        let mut project = Self::from_json(&text)?;
+        // Files in its folder are saved relative to it (it can be moved).
+        crate::library::resolve(&mut project, path.parent().unwrap_or(Path::new(".")));
+        Ok(project)
     }
 
     /// Reads a saved project, bringing files from older versions of Pulse up to date.
@@ -316,7 +319,11 @@ impl Project {
 
     /// Saves through a temporary file, so a failed save never leaves half a project.
     pub fn save(&self, path: &Path) -> Result<(), String> {
-        let text = self.to_json()?;
+        let dir = path.parent().unwrap_or(Path::new("."));
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| format!("No se pudo crear {}: {e}", parent.display()))?;
+        }
+        let text = crate::library::relative(self, dir).to_json()?;
         let temporary = path.with_extension("pulse-tmp");
         std::fs::write(&temporary, text).map_err(|e| format!("No se pudo guardar: {e}"))?;
         std::fs::rename(&temporary, path).map_err(|e| {

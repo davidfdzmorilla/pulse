@@ -16,6 +16,7 @@ mod history;
 mod input;
 mod kick_ui;
 mod kits;
+mod library;
 mod midi_map;
 mod modular_ui;
 mod native_menu;

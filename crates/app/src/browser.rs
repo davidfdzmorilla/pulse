@@ -391,9 +391,16 @@ impl PulseApp {
     /// audio track).
     pub fn drop_from_browser(&mut self, Dragged(path): Dragged, pos: egui::Pos2) {
         self.preview(None);
+        self.drop_files(vec![path], pos);
+    }
+
+    /// Audio files dropped at `pos` (from the browser or Finder): on a pad or the
+    /// sampler, a session slot, an arrangement lane, or empty space in the view (a
+    /// new audio track). False if `pos` is none of these.
+    pub fn drop_files(&mut self, paths: Vec<PathBuf>, pos: egui::Pos2) -> bool {
         if let Some(&(_, track, slot)) = self.sample_drop_zones.iter().find(|(rect, ..)| rect.contains(pos)) {
-            self.set_instrument_samples(track, slot, vec![path]);
-            return;
+            self.set_instrument_samples(track, slot, paths);
+            return true;
         }
         let targets = &self.drop_targets;
         let place = if let Some(&(track, slot, _)) = targets.slots.iter().find(|(.., r)| r.contains(pos)) {
@@ -409,12 +416,16 @@ impl PulseApp {
                 if let Placement::Session { slot, .. } = placement {
                     if self.project.tracks[track].clips[slot].is_some() {
                         self.status = Some("Ese slot ya tiene un clip".into());
-                        return;
+                        return true;
                     }
                 }
-                self.add_samples(vec![path], placement);
+                self.add_samples(paths, placement);
+                true
             }
-            Some(_) => self.status = Some("Suelta el audio en una pista de audio, o en un hueco vacío para crear una".into()),
+            Some(_) => {
+                self.status = Some("Suelta el audio en una pista de audio, o en un hueco vacío para crear una".into());
+                true
+            }
             None if targets.view.is_some_and(|v| v.contains(pos)) => {
                 // Empty space: a new audio track.
                 let lanes_end = targets.lanes.first().map(|&(_, _, left, ppb)| (((pos.x - left) / ppb) as f64).max(0.0).floor());
@@ -423,10 +434,11 @@ impl PulseApp {
                         (crate::app::View::Arrangement, Some(start)) => Placement::Arrangement { track, start },
                         _ => Placement::Session { track, slot: 0 },
                     };
-                    self.add_samples(vec![path], placement);
+                    self.add_samples(paths, placement);
                 }
+                true
             }
-            None => {}
+            None => false
         }
     }
 }

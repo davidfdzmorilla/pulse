@@ -35,6 +35,26 @@ pub use mac::listen;
 #[cfg(not(target_os = "macos"))]
 pub fn listen() {}
 
+/// Where the mouse is over Pulse's window (in its points, from the top left), asked
+/// of macOS: a drag from Finder brings no pointer events, and the files dropped
+/// come without a place.
+#[cfg(target_os = "macos")]
+pub fn pointer_in_window() -> Option<eframe::egui::Pos2> {
+    use objc2_app_kit::{NSApplication, NSEvent};
+    let mtm = objc2::MainThreadMarker::new()?;
+    let app = NSApplication::sharedApplication(mtm);
+    // Plugin editors are windows too: Pulse's is the one titled "… — Pulse".
+    let window = app.windows().iter().find(|w| w.title().to_string().ends_with("Pulse")).or_else(|| app.mainWindow())?;
+    let point = NSEvent::mouseLocation();
+    let content = window.contentRectForFrameRect(window.frame());
+    Some(eframe::egui::pos2((point.x - content.origin.x) as f32, (content.origin.y + content.size.height - point.y) as f32))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn pointer_in_window() -> Option<eframe::egui::Pos2> {
+    None
+}
+
 #[cfg(target_os = "macos")]
 mod mac {
     use objc2::rc::Retained;

@@ -60,7 +60,8 @@ enum TrackAction {
 /// What a right-click landed on.
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Menu {
-    Clip(ClipRef),
+    /// A clip, and the beat clicked (snapped), where «Dividir aquí» cuts.
+    Clip(ClipRef, f64),
     /// An empty place on a track, at a beat (snapped to the grid).
     Lane { track: usize, beat: f64 },
     Automation { track: usize, param: Param },
@@ -608,7 +609,7 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
             return;
         };
         match menu {
-            Menu::Clip(clip) => clip_menu(app, ui, clip),
+            Menu::Clip(clip, beat) => clip_menu(app, ui, clip, beat),
             Menu::Lane { track, beat } => {
                 let Some(t) = app.project.tracks.get(track) else { return ui.close() };
                 let audio = t.is_audio();
@@ -650,7 +651,7 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
 }
 
 /// A clip's menu: what acts on the selected clips, and the clip's name and colour.
-fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef) {
+fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     let ClipRef::Arrangement { track, index } = clip else { return };
     let Some(placed) = app.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) else { return ui.close() };
     let audio = matches!(placed.clip, Clip::Audio(_));
@@ -669,6 +670,14 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef) {
             app.use_clip_tempo(clip);
             ui.close();
         }
+    }
+    if count == 1 && ui.button("Dividir aquí   ⌘E").on_hover_text("Corta el clip en dos donde hiciste clic derecho (⌘E corta en el cursor)").clicked() {
+        app.split_clip_at(track, index, beat);
+        ui.close();
+    }
+    if count > 1 && ui.button(format!("Unir {count} clips   ⌘J")).on_hover_text("Clips MIDI de una pista en uno solo, de principio a fin").clicked() {
+        app.join_selected();
+        ui.close();
     }
     if ui.button(label("Copiar")).clicked() {
         app.copy_clips();
@@ -748,7 +757,7 @@ fn handle_pointer(
                     if !app.is_clip_selected(clip) {
                         app.select_clip(clip);
                     }
-                    Menu::Clip(clip)
+                    Menu::Clip(clip, snap(beat, unit))
                 }
                 None => {
                     app.selected_target = Target::Track(t);

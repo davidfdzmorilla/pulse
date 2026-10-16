@@ -357,6 +357,14 @@ impl PulseApp {
         match gesture {
             Gesture::Marquee { anchor, base, base_tracks, add } => {
                 let area = Rect::from_two_pos(anchor, pos);
+                // A plain clic on empty space, not a rectangle: no clip selected
+                // any more (the clip editor doesn't keep showing one).
+                if released && !add && area.width() < MARQUEE_MIN && area.height() < MARQUEE_MIN {
+                    let detail = self.detail;
+                    self.selected_clip = None;
+                    self.selected_clips.clear();
+                    self.detail = detail;
+                }
                 if area.width() >= MARQUEE_MIN || area.height() >= MARQUEE_MIN {
                     painter.rect_filled(area, 0.0, Color32::from_rgba_unmultiplied(120, 170, 255, 28));
                     painter.rect_stroke(area, 0.0, Stroke::new(1.0, theme::SELECT), egui::StrokeKind::Inside);

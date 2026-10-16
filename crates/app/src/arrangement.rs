@@ -846,6 +846,8 @@ fn handle_pointer(
                 }
             }
         } else {
+            // Below the tracks: a rectangle too (a clic there deselects).
+            app.start_marquee(pos, ui.input(|i| i.modifiers));
             None
         };
     }

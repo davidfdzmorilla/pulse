@@ -16,6 +16,7 @@ const LAUNCH_W: f32 = 18.0;
 const SENDS_H: f32 = 56.0;
 const PAN_H: f32 = 58.0;
 const FADER_H: f32 = 120.0;
+const MONITOR_H: f32 = 16.0;
 
 pub(crate) enum Action {
     Launch(usize, usize),
@@ -474,6 +475,25 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
     };
     let mut commands = Vec::new();
     let mut arm = None;
+
+    // When an audio track plays its input.
+    // The same height on every strip, so the faders line up.
+    let (row, _) = ui.allocate_exact_size(vec2(COL_W, MONITOR_H), Sense::hover());
+    if let Target::Track(t) = target {
+        if app.project.tracks[t].is_audio() {
+            let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
+            child.spacing_mut().item_spacing.x = 2.0;
+            let current = app.project.tracks[t].monitor;
+            for mode in crate::project::Monitor::ALL {
+                if widgets::toggle(&mut child, current == mode, mode.label(), theme::MONITOR, vec2((COL_W - 4.0) / 3.0, MONITOR_H))
+                    .on_hover_text(mode.hint())
+                    .clicked()
+                {
+                    app.set_monitor(t, mode);
+                }
+            }
+        }
+    }
 
     // Sends, pan and fader go through the parameter helpers so they follow automation.
     let mut changes: Vec<(Param, f32)> = Vec::new();

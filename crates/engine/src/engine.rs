@@ -16,6 +16,7 @@ use crate::sampler::{DrumRack, Sampler};
 use crate::modsynth::ModSynth;
 use crate::wavesynth::WaveSynth;
 use crate::wavetable::Wavetable;
+use crate::input::MonitorInput;
 use crate::synth::{Click, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
@@ -167,6 +168,7 @@ pub enum Garbage {
     Samples(Box<Vec<Arc<Sample>>>),
     Wavetables(Box<Vec<Arc<Wavetable>>>),
     Instrument(Box<PreparedInstrument>),
+    Monitor(Box<MonitorInput>),
 }
 
 /// An instrument built off the audio thread, ready to replace a track's one.
@@ -285,6 +287,13 @@ pub enum Command {
     },
     /// Track that plays live notes when no track is armed (the selected one).
     SetInputTrack(Option<usize>),
+    /// The audio input monitored tracks play (none: silence).
+    SetMonitorInput(Option<Box<MonitorInput>>),
+    /// Whether an audio track plays the audio input instead of its clips.
+    SetMonitor {
+        track: usize,
+        on: bool,
+    },
     /// Starts recording a new clip into an empty slot at the next quantization boundary.
     RecordClip {
         track: usize,
@@ -774,6 +783,10 @@ fn schedule_notes(
 const EDGE_FADE: f64 = 0.003;
 /// Grain length of the Stretch warp mode, in seconds.
 const GRAIN: f64 = 0.06;
+/// Monitoring: input frames queued beyond a block that count as late, and how many
+/// are kept when the rest is skipped.
+const MONITOR_SLACK: usize = 1024;
+const MONITOR_CUSHION: usize = 256;
 
 /// What an audio clip sounds like over its first `beats` (looping), at `tempo`,
 /// as audio at `rate`: its warp, transposition and gain applied, as playback does
@@ -964,6 +977,8 @@ struct Track {
     /// Pitch bend and modulation wheel for the built-in instruments.
     expression: Expression,
     armed: bool,
+    /// Plays the audio input instead of its clips.
+    monitor: bool,
     /// Session slot being recorded into.
     recording: Option<usize>,
     record_start: f64,
@@ -1008,6 +1023,7 @@ impl Track {
             events: Vec::with_capacity(MAX_EVENTS),
             expression: Expression::default(),
             armed: false,
+            monitor: false,
             recording: None,
             record_start: 0.0,
             held: [None; 128],
@@ -1090,6 +1106,10 @@ pub struct Engine {
     /// The file the browser is previewing, and where in it (frames of the file).
     preview: Option<(Arc<Sample>, f64)>,
     preview_buffer: Vec<f32>,
+    monitor_input: Option<Box<MonitorInput>>,
+    /// This block of input, as stereo, for the monitored tracks.
+    monitor_left: Vec<f32>,
+    monitor_right: Vec<f32>,
 }
 
 impl Engine {
@@ -1124,12 +1144,78 @@ impl Engine {
             click_buffer: vec![0.0; MAX_BLOCK],
             preview: None,
             preview_buffer: vec![0.0; 2 * MAX_BLOCK],
+            monitor_input: None,
+            monitor_left: vec![0.0; MAX_BLOCK],
+            monitor_right: vec![0.0; MAX_BLOCK],
             input_track: None,
             arrangement_record: false,
             limit_output: true,
             swing: (0.25, 0.0),
         };
         (engine, shared)
+    }
+
+    /// Monitored tracks play this block of the audio input instead of their clips,
+    /// resampled to the output's rate if the input runs at another.
+    fn monitor(&mut self, n: usize) {
+        let (left, right) = (&mut self.monitor_left[..n], &mut self.monitor_right[..n]);
+        left.fill(0.0);
+        right.fill(0.0);
+        let Some(input) = self.monitor_input.as_mut() else { return };
+        let channels = input.channels.max(1);
+        let ratio = (input.sample_rate / self.sample_rate) as f64;
+        let wanted = (n as f64 * ratio).ceil() as usize;
+        let queued = input.samples.slots() / channels + input.pending.len();
+        // Input that piled up while nothing listened (or the devices drifted apart)
+        // would be heard late: keep only a small cushion against callback jitter.
+        if queued > wanted + MONITOR_SLACK {
+            let mut skip = queued - wanted - MONITOR_CUSHION;
+            let from_pending = skip.min(input.pending.len());
+            input.pending.drain(..from_pending);
+            skip -= from_pending;
+            if let Ok(chunk) = input.samples.read_chunk(skip * channels) {
+                chunk.commit_all();
+            }
+        }
+        if !self.tracks.iter().any(|t| t.monitor) {
+            return;
+        }
+        // Frames this block reads: up to the one after its last position.
+        let needed = (input.position + n as f64 * ratio).floor() as usize + 2;
+        let missing = needed.saturating_sub(input.pending.len()).min(input.pending.capacity() - input.pending.len());
+        let take = missing.min(input.samples.slots() / channels);
+        if let Ok(chunk) = input.samples.read_chunk(take * channels) {
+            let (a, b) = chunk.as_slices();
+            let mut frame = (0.0, 0.0);
+            for (k, &value) in a.iter().chain(b).enumerate() {
+                match k % channels {
+                    0 => frame = (value, value),
+                    1 => frame.1 = value,
+                    _ => {}
+                }
+                if k % channels == channels - 1 {
+                    input.pending.push(frame);
+                }
+            }
+            chunk.commit_all();
+        }
+        let pending = &input.pending;
+        for i in 0..n {
+            let x = input.position + i as f64 * ratio;
+            let j = x as usize;
+            let t = (x - j as f64) as f32;
+            let (Some(&(l0, r0)), Some(&(l1, r1))) = (pending.get(j), pending.get(j + 1).or(pending.get(j))) else { break };
+            left[i] = l0 + (l1 - l0) * t;
+            right[i] = r0 + (r1 - r0) * t;
+        }
+        let advanced = input.position + n as f64 * ratio;
+        let used = (advanced.floor() as usize).min(input.pending.len());
+        input.pending.drain(..used);
+        input.position = if used < advanced.floor() as usize { 0.0 } else { advanced - used as f64 };
+        for track in self.tracks.iter_mut().filter(|t| t.monitor) {
+            track.audio_left[..n].copy_from_slice(left);
+            track.audio_right[..n].copy_from_slice(right);
+        }
     }
 
     /// Hands something back to the UI thread so it is freed there.
@@ -1372,6 +1458,17 @@ impl Engine {
                 }
             }
             Command::SetInputTrack(track) => self.input_track = track,
+            Command::SetMonitorInput(mut input) => {
+                std::mem::swap(&mut self.monitor_input, &mut input);
+                if let Some(old) = input {
+                    self.discard(Garbage::Monitor(old));
+                }
+            }
+            Command::SetMonitor { track, on } => {
+                if let Some(t) = self.tracks.get_mut(track) {
+                    t.monitor = on;
+                }
+            }
             Command::RecordClip { track, slot } => {
                 if let Some(t) = self.tracks.get_mut(track) {
                     if slot < NUM_SCENES && t.slots[slot].is_none() {
@@ -1504,6 +1601,7 @@ impl Engine {
             self.apply_automation();
             self.sequence(n, beats_per_sample);
         }
+        self.monitor(n);
 
         for channel in self.returns.iter_mut().chain([&mut self.master]) {
             channel.left[..n].fill(0.0);
@@ -2134,6 +2232,73 @@ mod tests {
         assert!(h2.live.push(LiveNote::control(Controller::PitchBend, 0, 1.0)).is_ok());
         h2.play_note(36, 1.0);
         assert_eq!(h2.run_beats(0.5), plain);
+    }
+
+    /// Audio input as the input callback would deliver it, for monitoring.
+    fn monitor_input(channels: usize) -> (Producer<f32>, Box<MonitorInput>) {
+        let (tx, rx) = RingBuffer::new(SR as usize * channels);
+        (tx, Box::new(MonitorInput::new(rx, channels, SR)))
+    }
+
+    #[test]
+    fn monitored_tracks_play_the_audio_input_with_little_delay() {
+        let mut h = Harness::new();
+        let (mut input, monitor) = monitor_input(2);
+        h.send(Command::SetMonitorInput(Some(monitor)));
+        // Input that piled up before anything monitored is not heard late.
+        for _ in 0..10_000 * 2 {
+            input.push(0.9).unwrap();
+        }
+        h.run_beats(0.02);
+        assert!(input.slots() > SR as usize * 2 - (MONITOR_CUSHION + 512) * 2, "stale input skipped");
+        assert_eq!(energy(&h.run_beats(0.02)), 0.0, "nothing monitors yet");
+
+        h.send(Command::SetMonitor { track: 0, on: true });
+        let mut heard = Vec::new();
+        for _ in 0..20 {
+            for _ in 0..512 {
+                input.push(0.25).unwrap();
+                input.push(-0.25).unwrap();
+            }
+            heard.extend(h.run_beats(512.0 / (0.5 * SR as f64)));
+        }
+        // Once the fader has faded in, left and right come out as they went in.
+        let last = &heard[heard.len() - 2..];
+        assert!((last[0] - 0.25).abs() < 0.05 && (last[1] + 0.25).abs() < 0.05, "{last:?}");
+
+        h.send(Command::SetMonitor { track: 0, on: false });
+        h.run_beats(0.05);
+        for _ in 0..512 * 2 {
+            input.push(0.25).unwrap();
+        }
+        assert!(energy(&h.run_beats(0.05)) < 1e-6, "monitoring off: silent");
+    }
+
+    #[test]
+    fn monitoring_resamples_an_input_at_another_rate() {
+        let mut h = Harness::new();
+        let (tx, rx) = RingBuffer::new(SR as usize);
+        let mut input = tx;
+        h.send(Command::SetMonitorInput(Some(Box::new(MonitorInput::new(rx, 1, 44_100.0)))));
+        h.send(Command::SetMonitor { track: 0, on: true });
+        // A second of a 1 kHz tone from a 44.1 kHz microphone, as its callbacks deliver it.
+        let mut heard = Vec::new();
+        let mut k = 0usize;
+        for _ in 0..(SR as usize / 512) {
+            for _ in 0..470 {
+                let _ = input.push((std::f64::consts::TAU * 1000.0 * k as f64 / 44_100.0).sin() as f32 * 0.5);
+                k += 1;
+            }
+            heard.extend(h.run_beats(512.0 / (0.5 * SR as f64)).chunks(2).map(|f| f[0]));
+        }
+        // Past the fade-in, a 1 kHz tone at 48 kHz: 2000 zero crossings a second.
+        let tail = &heard[heard.len() / 2..];
+        let crossings = tail.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count() as f32;
+        let seconds = tail.len() as f32 / SR;
+        assert!((crossings / seconds - 2000.0).abs() < 40.0, "{} crossings a second", crossings / seconds);
+        assert!(tail.iter().fold(0f32, |m, v| m.max(v.abs())) > 0.4, "the tone comes through");
+        let gaps = tail.windows(4).filter(|w| w.iter().all(|v| v.abs() < 0.01)).count();
+        assert_eq!(gaps, 0, "no dropouts");
     }
 
     #[test]

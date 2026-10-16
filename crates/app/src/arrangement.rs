@@ -435,7 +435,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     }
     let (active, solo) = (track.mixer.active, track.solo);
 
-    let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(110.0, 18.0));
+    let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(150.0, 18.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::left_to_right(egui::Align::Center)));
     child.spacing_mut().item_spacing.x = 2.0;
     if widgets::toggle(&mut child, active, &(t + 1).to_string(), ACCENT, vec2(24.0, 16.0)).clicked() {
@@ -452,6 +452,16 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
         .clicked()
     {
         app.toggle_arm(t);
+    }
+    if app.project.tracks[t].is_audio() {
+        // One button that steps through the modes (the header has no room for three).
+        let mode = app.project.tracks[t].monitor;
+        let hint = format!("{}\nClic: cambiar (In · Auto · Off)", mode.hint());
+        if widgets::toggle(&mut child, mode != crate::project::Monitor::Off, mode.label(), theme::MONITOR, vec2(34.0, 16.0)).on_hover_text(hint).clicked() {
+            let all = crate::project::Monitor::ALL;
+            let next = all[(all.iter().position(|&m| m == mode).unwrap_or(0) + 1) % all.len()];
+            app.set_monitor(t, next);
+        }
     }
     let target = Target::Track(t);
     if widgets::toggle(&mut child, shown.is_some(), "A", theme::METER_RED, vec2(24.0, 16.0))

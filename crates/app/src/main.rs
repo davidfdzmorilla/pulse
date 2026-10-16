@@ -6,6 +6,7 @@ mod browser;
 mod capture;
 mod clip_envelope;
 mod clip_select;
+mod clip_split;
 mod commands;
 mod detail;
 mod devices;

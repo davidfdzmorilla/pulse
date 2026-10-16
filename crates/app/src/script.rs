@@ -459,7 +459,7 @@ fn widgets(ctx: &egui::Context) -> Vec<Widget> {
     })
 }
 
-const COMMANDS: [Command; 40] = [
+const COMMANDS: [Command; 42] = [
     Command::New,
     Command::Open,
     Command::ClearRecent,
@@ -477,6 +477,8 @@ const COMMANDS: [Command; 40] = [
     Command::Copy,
     Command::Paste,
     Command::Duplicate,
+    Command::Split,
+    Command::Join,
     Command::Delete,
     Command::SelectAll,
     Command::NewMidiTrack,

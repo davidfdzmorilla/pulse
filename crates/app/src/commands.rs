@@ -31,6 +31,8 @@ pub enum Command {
     Copy,
     Paste,
     Duplicate,
+    Split,
+    Join,
     Delete,
     SelectAll,
     NewMidiTrack,
@@ -77,7 +79,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 29] = [
+pub const SHORTCUTS: [(&str, &str); 30] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -88,6 +90,7 @@ pub const SHORTCUTS: [(&str, &str); 29] = [
     ("⌘Z / ⇧⌘Z", "Deshacer / Rehacer"),
     ("⌘X / ⌘C / ⌘V", "Cortar / Copiar / Pegar los clips seleccionados (o las notas seleccionadas en el editor)"),
     ("⌘D", "Duplicar"),
+    ("⌘E / ⌘J", "Dividir el clip en el cursor / unir clips (Arrangement)"),
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),
     ("⌘T / ⇧⌘T", "Nueva pista MIDI / de audio"),
@@ -127,6 +130,7 @@ impl PulseApp {
             Command::OpenRecent(i) => i < self.recent.len(),
             Command::ClearRecent => !self.recent.is_empty(),
             Command::Cut | Command::Copy | Command::Duplicate | Command::Delete => clip_selected || editing_notes,
+            Command::Split | Command::Join => matches!(self.selected_clip, Some(crate::app::ClipRef::Arrangement { .. })),
             Command::Paste => self.clip_clipboard.is_some() || editing_notes,
             Command::SelectAll => editing_notes,
             Command::DuplicateTrack | Command::DeleteTrack => track,
@@ -230,6 +234,8 @@ impl PulseApp {
             }
             Command::Paste => self.paste_clips(),
             Command::Duplicate => self.duplicate_selected_clip(),
+            Command::Split => self.split_selected(),
+            Command::Join => self.join_selected(),
             Command::Delete => self.delete_selected_clip(),
             Command::SelectAll => {}
             Command::NewMidiTrack => self.add_track(),

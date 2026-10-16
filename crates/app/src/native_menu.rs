@@ -65,6 +65,8 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Run(C::Copy, "Copiar", "c"),
             Run(C::Paste, "Pegar", "v"),
             Run(C::Duplicate, "Duplicar", "d"),
+            Run(C::Split, "Dividir clip", "e"),
+            Run(C::Join, "Unir clips", "j"),
             Run(C::Delete, "Eliminar  (⌫)", ""),
             Separator,
             Run(C::SelectAll, "Seleccionar todas las notas", "a"),

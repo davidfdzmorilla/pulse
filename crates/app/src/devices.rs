@@ -254,12 +254,12 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             }
             Action::OpenKickWindow => {
                 if let Target::Track(t) = target {
-                    app.kick_window = Some(t);
+                    app.open_instrument_editor(crate::app::InstrumentEditor::Kick, t);
                 }
             }
             Action::OpenModularWindow => {
                 if let Target::Track(t) = target {
-                    app.modular_window = Some(t);
+                    app.open_instrument_editor(crate::app::InstrumentEditor::Modular, t);
                 }
             }
             Action::LoadGenFile(g) => {
@@ -284,7 +284,7 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             }
             Action::OpenPolyWindow => {
                 if let Target::Track(t) = target {
-                    app.poly_window = Some(t);
+                    app.open_instrument_editor(crate::app::InstrumentEditor::Poly, t);
                 }
             }
             Action::Wave(params) => {
@@ -295,7 +295,7 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             }
             Action::OpenWaveWindow => {
                 if let Target::Track(t) = target {
-                    app.wave_window = Some(t);
+                    app.open_instrument_editor(crate::app::InstrumentEditor::Wave, t);
                 }
             }
             Action::LoadOscSample(osc) => {

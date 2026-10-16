@@ -371,11 +371,11 @@ impl PulseApp {
             match &state {
                 State::Checking | State::Idle => {}
                 State::Available(release) if self.settings.skipped_version.as_deref() != Some(release.version()) => {
-                    self.updates.show = true;
+                    self.open_panel(crate::app::Panel::Updates);
                     self.updates.announce = false;
                 }
                 State::WhatsNew(_) => {
-                    self.updates.show = true;
+                    self.open_panel(crate::app::Panel::Updates);
                     self.updates.announce = false;
                 }
                 _ => self.updates.announce = false,
@@ -454,7 +454,7 @@ impl PulseApp {
             _ => return,
         };
         if ui.small_button(label).clicked() {
-            self.updates.show = true;
+            self.open_panel(crate::app::Panel::Updates);
         }
     }
 }
@@ -467,7 +467,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = true;
     let state = app.updates.state();
     let mut action = None;
-    egui::Window::new("Actualizaciones").open(&mut open).resizable(false).collapsible(false).default_width(460.0).show(ctx, |ui| {
+    egui::Window::new("Actualizaciones").open(&mut open).resizable(false).collapsible(false).default_width(460.0).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
         ui.label(format!("Versión instalada: Pulse {VERSION}"));
         ui.label(egui::RichText::new(format!("Las versiones se publican en github.com/{REPOSITORY}")).color(TEXT_DIM).size(10.5));
         ui.separator();

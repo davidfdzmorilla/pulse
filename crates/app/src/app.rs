@@ -245,6 +245,8 @@ pub struct PulseApp {
     pub capture: Option<InputCapture>,
     /// The input could not be opened: not retried every frame.
     pub capture_failed: bool,
+    /// Tab pressed this frame (with shift?), kept from egui's focus navigation.
+    tab_pressed: Option<bool>,
     pub export: crate::export::Dialog,
     /// Automated parameters the user moved by hand; their automation is
     /// suspended until "Back to Arrangement", as in Live.
@@ -411,6 +413,7 @@ impl PulseApp {
             clip_automation: Vec::new(),
             capture: None,
             capture_failed: false,
+            tab_pressed: None,
             overridden: HashSet::new(),
             selected_pad: 0,
             slice_mode: crate::slicing::SliceMode::Transients,
@@ -2115,6 +2118,7 @@ impl PulseApp {
 
     fn handle_shortcuts(&mut self, ctx: &egui::Context) {
         if ctx.egui_wants_keyboard_input() {
+            self.tab_pressed = None;
             return;
         }
         let input = ctx.input(|i| {
@@ -2122,8 +2126,8 @@ impl PulseApp {
             let shift = i.modifiers.shift;
             [
                 i.key_pressed(egui::Key::Space),
-                i.key_pressed(egui::Key::Tab) && !shift,
-                i.key_pressed(egui::Key::Tab) && shift,
+                self.tab_pressed == Some(false),
+                self.tab_pressed == Some(true),
                 i.key_pressed(egui::Key::Delete) || i.key_pressed(egui::Key::Backspace),
                 cmd && i.key_pressed(egui::Key::D),
                 cmd && !shift && i.key_pressed(egui::Key::Z),
@@ -2142,6 +2146,7 @@ impl PulseApp {
         });
         let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record] =
             input;
+        self.tab_pressed = None;
         if export {
             self.open_panel(Panel::Export);
         }
@@ -2261,6 +2266,20 @@ impl PulseApp {
 impl eframe::App for PulseApp {
     fn raw_input_hook(&mut self, ctx: &egui::Context, raw_input: &mut egui::RawInput) {
         self.script_input(ctx, raw_input);
+        // Tab is Pulse's (Session/Arrangement, Clip/Devices), not egui's focus
+        // navigation: that would leave the tempo field focused, and the shortcuts
+        // off until a click elsewhere. Inside a text field it stays egui's.
+        if !ctx.egui_wants_keyboard_input() {
+            raw_input.events.retain(|event| match event {
+                egui::Event::Key { key: egui::Key::Tab, pressed, modifiers, .. } => {
+                    if *pressed {
+                        self.tab_pressed = Some(modifiers.shift);
+                    }
+                    false
+                }
+                _ => true,
+            });
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

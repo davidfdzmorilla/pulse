@@ -100,6 +100,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 }
             });
             ui.horizontal(|ui| {
+                label(ui, "Ver");
+                ui.selectable_value(&mut app.sample_view_whole, false, "El clip").on_hover_text("Solo lo que suena el clip");
+                ui.selectable_value(&mut app.sample_view_whole, true, "Archivo entero").on_hover_text("Todo el audio, con el trozo del clip resaltado");
+            });
+            ui.horizontal(|ui| {
                 label(ui, "Inicio");
                 // Below 0: the clip starts before the file (a bar line before its first downbeat).
                 ui.add(egui::DragValue::new(&mut clip.offset).range(-8.0..=sample.duration().max(0.0)).speed(0.005).suffix(" s").fixed_decimals(3));
@@ -172,7 +177,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         });
         ui.add_space(8.0);
 
-        // Waveform of the whole file with the clip's region highlighted.
+        // The waveform: the clip's part of the file (what it plays), or the whole
+        // file with that part highlighted.
         let width = ui.available_width().max(200.0);
         // Room below for the clip's envelopes.
         let height = (ui.available_height() - ENVELOPE_H - 30.0).clamp(80.0, 200.0);
@@ -188,18 +194,33 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             painter.text(rect.center(), Align2::CENTER_CENTER, "Muestra no encontrada", theme::body(), TEXT_DIM);
             return;
         }
-        let x_of = |seconds: f64| rect.left() + (seconds / duration) as f32 * rect.width();
-        let seconds_at = |x: f32| ((x - rect.left()) / rect.width()) as f64 * duration;
-        let region_end = clip.source_seconds(clip.length, tempo).min(duration);
-        let region = Rect::from_min_max(pos2(x_of(clip.offset), rect.top()), pos2(x_of(region_end), rect.bottom()));
+        let whole = app.sample_view_whole;
+        let region_end = clip.source_seconds(clip.length, tempo);
+        let shown = if whole { (clip.offset.min(0.0), duration.max(region_end)) } else { (clip.offset, region_end.max(clip.offset + 0.01)) };
+        // While a marker is dragged the view stays put (the part changes under it).
+        let view_id = response.id.with("view");
+        let (v0, v1) = if strip_response.dragged() {
+            ui.data(|d| d.get_temp(view_id)).unwrap_or(shown)
+        } else {
+            ui.data_mut(|d| d.insert_temp(view_id, shown));
+            shown
+        };
+        let x_of = |seconds: f64| rect.left() + ((seconds - v0) / (v1 - v0)) as f32 * rect.width();
+        let seconds_at = |x: f32| v0 + ((x - rect.left()) / rect.width()) as f64 * (v1 - v0);
+        let region = Rect::from_min_max(pos2(x_of(clip.offset).max(rect.left()), rect.top()), pos2(x_of(region_end.min(duration)).min(rect.right()), rect.bottom()));
         painter.rect_filled(region, 0.0, theme::shade(theme::rgb(clip.color), 0.35));
 
-        let blocks = sample.peaks.len().max(1) as f32;
         let (mid, half) = (rect.center().y, rect.height() * 0.45);
+        let block = |seconds: f64| (seconds.max(0.0) * sample.sample_rate as f64) as usize / engine::PEAK_BLOCK;
         for px in 0..rect.width() as usize {
-            let a = (px as f32 / rect.width() * blocks) as usize;
-            let b = (((px + 1) as f32 / rect.width() * blocks) as usize).max(a + 1).min(sample.peaks.len());
-            let (lo, hi) = sample.peaks[a.min(sample.peaks.len() - 1)..b]
+            let (from, to) = (seconds_at(rect.left() + px as f32), seconds_at(rect.left() + px as f32 + 1.0));
+            // Before the file (a clip starting on the bar line before it) or after it: nothing.
+            if to <= 0.0 || from >= duration {
+                continue;
+            }
+            let a = block(from).min(sample.peaks.len().saturating_sub(1));
+            let b = block(to).max(a + 1).min(sample.peaks.len());
+            let (lo, hi) = sample.peaks[a..b]
                 .iter()
                 .fold((0f32, 0f32), |(lo, hi), &(l, h)| (lo.min(l), hi.max(h)));
             let x = rect.left() + px as f32 + 0.5;
@@ -291,8 +312,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             }
         }
         if let Some(pos) = response.interact_pointer_pos() {
-            if response.clicked() || response.dragged() {
-                // Clicking the waveform moves the clip start there.
+            if whole && (response.clicked() || response.dragged()) {
+                // Seeing the whole file, a clic moves the clip's start there.
                 clip.offset = seconds_at(pos.x).clamp(0.0, duration);
             }
         }
@@ -304,7 +325,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         if warped {
             strip_response.on_hover_text("Marcadores de warp · doble clic: añadir uno o quitarlo · arrastrar: que ese punto del audio caiga en su tiempo");
         }
-        response.on_hover_text("Clic o arrastra para mover el inicio del clip");
+        response.on_hover_text(if whole { "Clic o arrastra para mover el inicio del clip" } else { "Lo que suena el clip. «Archivo entero» muestra el resto del audio (y ahí un clic mueve el inicio)" });
     });
 
     // The clip's envelopes, across the clip's length.

@@ -2,7 +2,8 @@
 //! default; Settings can move it):
 //!
 //! - `Proyectos/<name>/<name>.pulse`, each project in a folder of its own with
-//!   every audio file it uses in `Samples/` (imported, recorded, stems, slices),
+//!   every audio file it uses in `Samples/` (imported, recorded, stems, slices,
+//!   consolidated),
 //!   so it can be moved or copied to another Mac whole;
 //! - `Exportaciones/`, `Presets/`, `Wavetables/` and `Samples/` (the user's own);
 //! - `Sin guardar/`: what a project not saved yet records or makes; saving moves
@@ -28,6 +29,7 @@ pub const IMPORTED: &str = "Importados";
 pub const RECORDINGS: &str = "Grabaciones";
 pub const STEMS: &str = "Stems";
 pub const SLICES: &str = "Trozos";
+pub const CONSOLIDATED: &str = "Consolidados";
 
 /// The folder chosen in Settings, if not the default.
 static CHOSEN: RwLock<Option<PathBuf>> = RwLock::new(None);
@@ -205,7 +207,7 @@ pub fn collect(project: &mut Project, dir: &Path) -> Collected {
 }
 
 /// `path`, or `path 2`, `path 3`… if taken.
-fn unique(path: &Path) -> PathBuf {
+pub fn unique(path: &Path) -> PathBuf {
     if !path.exists() {
         return path.to_path_buf();
     }

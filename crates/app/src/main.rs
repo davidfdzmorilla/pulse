@@ -8,6 +8,7 @@ mod clip_envelope;
 mod clip_select;
 mod clip_split;
 mod commands;
+mod consolidate;
 mod detail;
 mod devices;
 mod editor;

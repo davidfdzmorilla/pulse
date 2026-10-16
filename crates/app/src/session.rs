@@ -163,6 +163,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             _ => lanes.push((t, rect)),
         }
     }
+    app.drop_targets.slots = slots.iter().map(|&(t, s, r)| (t, s, r.intersect(ui.clip_rect()))).collect();
     app.update_clip_gesture(ui, &clips, &lanes, &slots);
 }
 

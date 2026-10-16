@@ -1980,8 +1980,11 @@ impl PulseApp {
                         let index = lane.len() - 1;
                         self.sync_arrangement(track);
                         self.select_clip(ClipRef::Arrangement { track, index });
+                        if takes > 1 {
+                            self.arrangement.takes.insert(track);
+                        }
                         self.status = Some(if takes > 1 {
-                            format!("{takes} tomas grabadas en el loop: clic derecho en el clip para elegir otra")
+                            format!("{takes} tomas grabadas en el loop: arrastra en sus filas para quedarte con lo mejor de cada una")
                         } else {
                             format!("Toma de audio guardada en {}", self.recordings_dir().display())
                         });

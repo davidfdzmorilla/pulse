@@ -505,6 +505,7 @@ mod tests {
         assert_eq!(looped.takes.len(), 4, "three passes and the half one");
         assert_eq!(looped.sample, looped.takes[3], "the last take plays");
         assert_eq!(looped.name, "Toma 4");
+        assert!(app.arrangement.takes.contains(&voice), "its take lanes open");
         let mut first = |path: &str| app.samples.get(path).read(0.0).0;
         // Before the loop: from the moment recording started.
         assert!((first(&before.sample) - started).abs() < 0.02, "{} vs {started}", first(&before.sample));

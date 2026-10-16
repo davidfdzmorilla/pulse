@@ -152,6 +152,9 @@ pub struct RecordedNote {
     pub length: f64,
 }
 
+/// Level of the browser's preview (-6 dB).
+const PREVIEW_GAIN: f32 = 0.5;
+
 /// Things the audio thread no longer needs; the UI thread drops them.
 /// The fields are only held so they are freed off the audio thread.
 #[allow(dead_code)]
@@ -291,6 +294,9 @@ pub enum Command {
     StopRecording(usize),
     /// Records armed tracks onto the arrangement while the transport runs.
     SetArrangementRecord(bool),
+    /// Plays an audio file once over the output (the browser's preview), or stops
+    /// the one playing.
+    PreviewSample(Option<Arc<Sample>>),
     /// Audition a note on a track, e.g. while editing in the piano roll.
     PreviewNote {
         track: usize,
@@ -1070,6 +1076,9 @@ pub struct Engine {
     arrangement_record: bool,
     limit_output: bool,
     swing: (f64, f32),
+    /// The file the browser is previewing, and where in it (frames of the file).
+    preview: Option<(Arc<Sample>, f64)>,
+    preview_buffer: Vec<f32>,
 }
 
 impl Engine {
@@ -1102,6 +1111,8 @@ impl Engine {
             metronome: false,
             click: Click::new(sample_rate),
             click_buffer: vec![0.0; MAX_BLOCK],
+            preview: None,
+            preview_buffer: vec![0.0; 2 * MAX_BLOCK],
             input_track: None,
             arrangement_record: false,
             limit_output: true,
@@ -1380,6 +1391,12 @@ impl Engine {
                 }
                 self.arrangement_record = on;
             }
+            Command::PreviewSample(sample) => {
+                if let Some((old, _)) = self.preview.take() {
+                    self.discard(Garbage::Samples(Box::new(vec![old])));
+                }
+                self.preview = sample.map(|s| (s, 0.0));
+            }
             Command::PreviewNote {
                 track,
                 pitch,
@@ -1539,6 +1556,27 @@ impl Engine {
             self.shared.returns[index].publish(peak);
         }
 
+        // The browser's preview, at the file's own speed, after the master's
+        // settings (it is a preview, not part of the song).
+        let preview = &mut self.preview_buffer[..2 * n];
+        preview.fill(0.0);
+        let mut finished = false;
+        if let Some((sample, position)) = &mut self.preview {
+            let step = sample.sample_rate as f64 / self.sample_rate as f64;
+            for i in 0..n {
+                let (l, r) = sample.read(*position);
+                preview[2 * i] = l * PREVIEW_GAIN;
+                preview[2 * i + 1] = r * PREVIEW_GAIN;
+                *position += step;
+            }
+            finished = *position >= sample.frames() as f64;
+        }
+        if finished {
+            if let Some((old, _)) = self.preview.take() {
+                self.discard(Garbage::Samples(Box::new(vec![old])));
+            }
+        }
+
         let master = &mut self.master;
         master.run_chain(n, &ctx);
         let (gl, gr) = master.pan_gains(master.gain);
@@ -1547,11 +1585,12 @@ impl Engine {
         let click = &mut self.click_buffer[..n];
         click.fill(0.0);
         self.click.render(click);
+        let preview = &self.preview_buffer;
         let mut peak = 0f32;
         for i in 0..n {
             let t = (i + 1) as f32 / n as f32;
-            let l = master.left[i] * (l0 + (gl - l0) * t) + click[i];
-            let r = master.right[i] * (r0 + (gr - r0) * t) + click[i];
+            let l = master.left[i] * (l0 + (gl - l0) * t) + click[i] + preview[2 * i];
+            let r = master.right[i] * (r0 + (gr - r0) * t) + click[i] + preview[2 * i + 1];
             peak = peak.max(l.abs()).max(r.abs());
             // Safety limit only; the meter shows the real level.
             let (l, r) = if self.limit_output { (l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0)) } else { (l, r) };
@@ -2302,6 +2341,25 @@ mod tests {
         let stretch = pitch_at_double_tempo(WarpMode::Stretch);
         assert!((repitch - 880.0).abs() < 20.0, "Re-Pitch at double tempo should sound an octave up, got {repitch} Hz");
         assert!((stretch - 440.0).abs() < 20.0, "Stretch should keep 440 Hz, got {stretch} Hz");
+    }
+
+    /// The browser's preview plays a file once, transport stopped, then is silent.
+    #[test]
+    fn a_previewed_file_plays_once() {
+        let mut h = Harness::new();
+        h.send(Command::PreviewSample(Some(sine_sample())));
+        // The 1 s sine: 2 beats at 120 BPM.
+        let during = left_channel(&h.run_beats(1.6));
+        h.run_beats(0.6);
+        let after = h.run_beats(1.0);
+        assert!((crossings(&during) as f64 / 0.8 - 440.0).abs() < 10.0, "at its own pitch");
+        assert!(energy(&during) > 100.0);
+        assert!(energy(&after) < 1e-6, "once, not looping");
+        // Stopped halfway.
+        h.send(Command::PreviewSample(Some(sine_sample())));
+        h.run_beats(0.5);
+        h.send(Command::PreviewSample(None));
+        assert!(energy(&h.run_beats(0.5)) < 1e-6);
     }
 
     /// Between warp markers the file plays at each stretch's own speed.

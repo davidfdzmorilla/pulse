@@ -8,7 +8,7 @@ use crate::engine::SharedState;
 use cpal::traits::{DeviceTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
 use rtrb::{Consumer, Producer, RingBuffer};
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 /// Seconds of audio the ring can hold if the UI stalls.
@@ -36,12 +36,19 @@ pub struct InputHandle {
     pub sample_rate: f32,
     pub device_name: String,
     peak: Arc<AtomicU32>,
+    /// Seconds from the sound reaching the input to its callback (f64 bits).
+    latency: Arc<AtomicU64>,
 }
 
 impl InputHandle {
     /// Input peak since the last call.
     pub fn take_peak(&self) -> f32 {
         f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+
+    /// Seconds between a sound reaching the input and Pulse getting it.
+    pub fn latency(&self) -> f64 {
+        f64::from_bits(self.latency.load(Ordering::Relaxed))
     }
 }
 
@@ -60,6 +67,7 @@ pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioS
     let (sample_tx, samples) = RingBuffer::new(RING_SECONDS * sample_rate as usize * channels);
     let (marker_tx, markers) = RingBuffer::new(RING_SECONDS * 1000);
     let peak = Arc::new(AtomicU32::new(0));
+    let latency = Arc::new(AtomicU64::new(0));
     // A second of input is plenty: the engine keeps only a block or two of it.
     let (monitor_tx, monitor_rx) = RingBuffer::new(sample_rate as usize * channels);
     let capture = Capture {
@@ -68,6 +76,7 @@ pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioS
         markers: marker_tx,
         state,
         peak: peak.clone(),
+        latency: latency.clone(),
         channels,
         frame: 0,
     };
@@ -89,6 +98,7 @@ pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioS
             sample_rate,
             device_name,
             peak,
+            latency,
         },
     ))
 }
@@ -117,12 +127,13 @@ struct Capture {
     markers: Producer<Marker>,
     state: Arc<SharedState>,
     peak: Arc<AtomicU32>,
+    latency: Arc<AtomicU64>,
     channels: usize,
     frame: u64,
 }
 
 impl Capture {
-    fn push<T>(&mut self, data: &[T])
+    fn push<T>(&mut self, data: &[T], latency: f64)
     where
         T: SizedSample,
         f32: FromSample<T>,
@@ -143,6 +154,7 @@ impl Capture {
             let _ = self.monitor.push(value);
         }
         self.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
+        self.latency.store(latency.to_bits(), Ordering::Relaxed);
         self.frame += (data.len() / self.channels.max(1)) as u64;
     }
 }
@@ -155,7 +167,10 @@ where
     device
         .build_input_stream(
             config,
-            move |data: &[T], _: &cpal::InputCallbackInfo| capture.push(data),
+            move |data: &[T], info: &cpal::InputCallbackInfo| {
+                let time = info.timestamp();
+                capture.push(data, time.callback.duration_since(time.capture).as_secs_f64())
+            },
             |err| eprintln!("audio input error: {err}"),
             None,
         )

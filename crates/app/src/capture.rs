@@ -38,6 +38,11 @@ impl InputCapture {
         self.handle.sample_rate
     }
 
+    /// Seconds between a sound reaching the input and Pulse getting it.
+    pub fn latency(&self) -> f64 {
+        self.handle.latency()
+    }
+
     /// The input for the engine to monitor (once).
     pub fn take_monitor(&mut self) -> Option<engine::MonitorInput> {
         self.handle.monitor.take()

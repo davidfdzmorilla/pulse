@@ -20,14 +20,25 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.painter().rect_filled(rect, 2.0, app.target_color(target));
         ui.label(RichText::new(app.target_name(target)).strong());
         ui.label(RichText::new("⇧Tab cambia de vista").color(TEXT_DIM).size(10.5));
+        // A frozen track's instrument, effects and clips can't be edited.
+        if let engine::Target::Track(t) = target {
+            if app.is_frozen(t) {
+                ui.add_space(12.0);
+                ui.label(RichText::new("✱ Pista congelada: suena su audio renderizado").color(theme::FROZEN));
+                if ui.button("Descongelar").on_hover_text("Vuelve a sonar su instrumento y sus efectos, y se pueden editar").clicked() {
+                    app.unfreeze(t);
+                }
+            }
+        }
     });
     ui.add_space(4.0);
     let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(4)).corner_radius(2);
     frame.show(ui, |ui| {
         ui.set_min_size(ui.available_size());
-        match app.detail {
+        let frozen = matches!(app.selected_target, engine::Target::Track(t) if app.is_frozen(t));
+        ui.add_enabled_ui(!frozen, |ui| match app.detail {
             Detail::Clip => piano_roll::show(app, ui),
             Detail::Devices => devices::show(app, ui),
-        }
+        });
     });
 }

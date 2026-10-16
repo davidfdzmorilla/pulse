@@ -30,6 +30,7 @@ pub const RECORDINGS: &str = "Grabaciones";
 pub const STEMS: &str = "Stems";
 pub const SLICES: &str = "Trozos";
 pub const CONSOLIDATED: &str = "Consolidados";
+pub const FROZEN: &str = "Congelados";
 
 /// The folder chosen in Settings, if not the default.
 static CHOSEN: RwLock<Option<PathBuf>> = RwLock::new(None);
@@ -136,6 +137,14 @@ fn files_mut(project: &mut Project) -> Vec<&mut String> {
             }
         }
         files.extend(track.samples.iter_mut());
+        if let Some(frozen) = &mut track.frozen {
+            for placed in &mut frozen.arrangement {
+                if let engine::model::Clip::Audio(audio) = &mut placed.clip {
+                    files.push(&mut audio.sample);
+                }
+            }
+            files.extend(frozen.clips.iter_mut().flatten().map(|a| &mut a.sample));
+        }
     }
     files.retain(|f| !f.is_empty());
     files

@@ -384,6 +384,26 @@ fn paint_clip(
                 }
                 x += 1.0;
             }
+            // Warp markers, where they fall in each lap of the clip.
+            if audio.warp != engine::model::WarpMode::Off {
+                let first = audio.file_beat(audio.offset);
+                for lap in 0..laps {
+                    for m in &audio.warp_markers {
+                        let local = m.beat - first;
+                        let at = lap as f64 * content_length + local;
+                        if local < 0.0 || local >= audio.length || at >= placed.length {
+                            continue;
+                        }
+                        let x = rect.left() + at as f32 * ppb;
+                        clipped.line_segment([pos2(x, body.top()), pos2(x, body.bottom())], Stroke::new(1.0, crate::sample_editor::MARKER.gamma_multiply(0.6)));
+                        clipped.add(egui::Shape::convex_polygon(
+                            vec![pos2(x - 3.0, body.bottom()), pos2(x + 3.0, body.bottom()), pos2(x, body.bottom() - 5.0)],
+                            crate::sample_editor::MARKER,
+                            Stroke::NONE,
+                        ));
+                    }
+                }
+            }
         }
         Clip::Midi(_) => {}
     }

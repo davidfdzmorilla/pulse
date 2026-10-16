@@ -243,6 +243,8 @@ pub struct PulseApp {
     pub clip_automation: Vec<crate::automation_rec::ClipAutomationTake>,
     /// Audio input, opened when an audio track is armed.
     pub capture: Option<InputCapture>,
+    /// The input could not be opened: not retried every frame.
+    pub capture_failed: bool,
     pub export: crate::export::Dialog,
     /// Automated parameters the user moved by hand; their automation is
     /// suspended until "Back to Arrangement", as in Live.
@@ -408,6 +410,7 @@ impl PulseApp {
             automation_take: None,
             clip_automation: Vec::new(),
             capture: None,
+            capture_failed: false,
             overridden: HashSet::new(),
             selected_pad: 0,
             slice_mode: crate::slicing::SliceMode::Transients,
@@ -1595,8 +1598,28 @@ impl PulseApp {
         let (armed, audio) = (t.armed, t.is_audio());
         self.audio.send(Command::SetArm { track, armed });
         if armed && audio {
+            self.capture_failed = false;
             self.ensure_capture();
         }
+        self.sync_monitor(track);
+    }
+
+    /// Sets when an audio track plays its input.
+    pub fn set_monitor(&mut self, track: usize, monitor: crate::project::Monitor) {
+        let Some(t) = self.project.tracks.get_mut(track) else { return };
+        t.monitor = monitor;
+        self.status = Some(monitor.hint().into());
+        if t.monitors() {
+            self.capture_failed = false;
+            self.ensure_capture();
+        }
+        self.sync_monitor(track);
+    }
+
+    fn sync_monitor(&mut self, track: usize) {
+        let Some(t) = self.project.tracks.get(track) else { return };
+        let on = t.monitors() && t.frozen.is_none();
+        self.audio.send(Command::SetMonitor { track, on });
     }
 
     /// Opens the audio input (macOS asks for microphone permission the first time).
@@ -1606,13 +1629,18 @@ impl PulseApp {
         }
         let Some(state) = self.audio.state() else { return false };
         match InputCapture::open(state, &self.settings.audio) {
-            Ok(capture) => {
+            Ok(mut capture) => {
                 self.status = Some(format!("Entrada de audio: {}", capture.device_name()));
+                // The engine resamples it if the input runs at another rate than the output.
+                if let Some(monitor) = capture.take_monitor() {
+                    self.audio.send(Command::SetMonitorInput(Some(Box::new(monitor))));
+                }
                 self.capture = Some(capture);
                 true
             }
             Err(error) => {
                 self.status = Some(format!("No se pudo abrir la entrada de audio: {error}"));
+                self.capture_failed = true;
                 false
             }
         }
@@ -1620,11 +1648,17 @@ impl PulseApp {
 
     /// Keeps the input flowing while audio tracks are armed; closes it otherwise.
     fn pump_capture(&mut self) {
-        let wanted = self.project.tracks.iter().any(|t| t.armed && t.is_audio())
+        let wanted = self.project.tracks.iter().any(|t| (t.armed && t.is_audio()) || t.monitors())
             || self.recorder.session.iter().any(|take| self.project.tracks.get(take.track).is_some_and(|t| t.is_audio()));
         if !wanted {
-            self.capture = None;
+            if self.capture.take().is_some() {
+                self.audio.send(Command::SetMonitorInput(None));
+            }
             return;
+        }
+        // A project opened with tracks that monitor: open the input for them (once).
+        if self.capture.is_none() && !self.capture_failed && self.project.tracks.iter().any(|t| t.monitors()) {
+            self.ensure_capture();
         }
         let keep_all = !self.recorder.session.is_empty() || self.recorder.arrangement.is_some();
         if let Some(capture) = &mut self.capture {

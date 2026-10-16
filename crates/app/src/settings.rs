@@ -112,6 +112,7 @@ impl PulseApp {
         self.audio = crate::app::Audio::none();
         self.audio = crate::app::Audio::start(&self.settings.audio);
         self.capture = None;
+        self.capture_failed = false;
         self.sync_all();
         self.rescan_midi();
         self.status = Some(match &self.audio.error {

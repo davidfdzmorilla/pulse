@@ -258,6 +258,8 @@ pub fn project_commands(
             Command::SetWavetables { track: t, tables: instrument_tables(track, samples) },
             Command::SetSolo { track: t, solo: track.solo },
             Command::SetArm { track: t, armed: track.armed },
+            // A frozen track has no effects left to monitor through.
+            Command::SetMonitor { track: t, on: track.monitors() && project.tracks.get(t).is_some_and(|t| t.frozen.is_none()) },
             Command::ReplaceChain { target, chain: chain(project, &track.devices, samples, sample_rate) },
             Command::SetArrangement { track: t, clips: placed_clips(track, samples) },
             Command::SetAutomation { target, lanes: active_lanes(&track.automation, target, overridden) },

@@ -29,6 +29,8 @@ pub struct AudioInput {
 
 pub struct InputHandle {
     pub samples: Consumer<f32>,
+    /// The same input for the engine to play back as it comes (monitoring); taken once.
+    pub monitor: Option<MonitorInput>,
     pub markers: Consumer<Marker>,
     pub channels: usize,
     pub sample_rate: f32,
@@ -58,8 +60,11 @@ pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioS
     let (sample_tx, samples) = RingBuffer::new(RING_SECONDS * sample_rate as usize * channels);
     let (marker_tx, markers) = RingBuffer::new(RING_SECONDS * 1000);
     let peak = Arc::new(AtomicU32::new(0));
+    // A second of input is plenty: the engine keeps only a block or two of it.
+    let (monitor_tx, monitor_rx) = RingBuffer::new(sample_rate as usize * channels);
     let capture = Capture {
         samples: sample_tx,
+        monitor: monitor_tx,
         markers: marker_tx,
         state,
         peak: peak.clone(),
@@ -76,12 +81,39 @@ pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioS
     stream.play().map_err(|e| format!("No se puede abrir la entrada: {e}"))?;
     Ok((
         AudioInput { _stream: stream },
-        InputHandle { samples, markers, channels, sample_rate, device_name, peak },
+        InputHandle {
+            samples,
+            monitor: Some(MonitorInput::new(monitor_rx, channels, sample_rate)),
+            markers,
+            channels,
+            sample_rate,
+            device_name,
+            peak,
+        },
     ))
+}
+
+/// Live input for monitoring: interleaved samples as the input callback delivers them.
+pub struct MonitorInput {
+    pub(crate) samples: Consumer<f32>,
+    pub(crate) channels: usize,
+    pub sample_rate: f32,
+    /// Stereo input frames taken from the ring, not yet played (resampling reads
+    /// between them); allocated here, off the audio thread.
+    pub(crate) pending: Vec<(f32, f32)>,
+    /// Where the next output frame reads, in frames of `pending`.
+    pub(crate) position: f64,
+}
+
+impl MonitorInput {
+    pub(crate) fn new(samples: Consumer<f32>, channels: usize, sample_rate: f32) -> Self {
+        Self { samples, channels, sample_rate, pending: Vec::with_capacity(8192), position: 0.0 }
+    }
 }
 
 struct Capture {
     samples: Producer<f32>,
+    monitor: Producer<f32>,
     markers: Producer<Marker>,
     state: Arc<SharedState>,
     peak: Arc<AtomicU32>,
@@ -107,6 +139,8 @@ impl Capture {
             peak = peak.max(value.abs());
             // A full ring means the UI stalled for RING_SECONDS; dropping is all we can do.
             let _ = self.samples.push(value);
+            // Full when nothing monitors (the engine drains it otherwise).
+            let _ = self.monitor.push(value);
         }
         self.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
         self.frame += (data.len() / self.channels.max(1)) as u64;

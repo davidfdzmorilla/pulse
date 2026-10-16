@@ -8,7 +8,8 @@ use std::sync::Arc;
 const IDLE_SECONDS: usize = 4;
 
 pub struct InputCapture {
-    _input: AudioInput,
+    /// The stream (none for an input fed by hand).
+    _input: Option<AudioInput>,
     handle: InputHandle,
     /// Interleaved samples; `buffer[0]` is input frame `first_frame`.
     buffer: Vec<f32>,
@@ -20,14 +21,18 @@ pub struct InputCapture {
 impl InputCapture {
     pub fn open(state: Arc<SharedState>, settings: &engine::AudioSettings) -> Result<Self, String> {
         let (input, handle) = start_input_with(state, settings)?;
-        Ok(Self {
+        Ok(Self::with_handle(Some(input), handle))
+    }
+
+    pub fn with_handle(input: Option<AudioInput>, handle: InputHandle) -> Self {
+        Self {
             _input: input,
             handle,
             buffer: Vec::new(),
             first_frame: 0,
             markers: Vec::new(),
             level: 0.0,
-        })
+        }
     }
 
     pub fn device_name(&self) -> &str {
@@ -76,8 +81,10 @@ impl InputCapture {
         }
     }
 
-    pub fn frame_at_beat(&self, beat: f64) -> Option<u64> {
-        frame_at_beat(&self.markers, beat)
+    /// Input frame captured when the transport was at `beat`, from input frame
+    /// `after` on (a loop plays the same beats again on each pass).
+    pub fn frame_at_beat_after(&self, beat: f64, after: u64) -> Option<u64> {
+        frame_at_beat(&self.markers, beat, after)
     }
 
     /// Stereo copy of `frames` input frames from `start`; missing input is silence.
@@ -98,11 +105,11 @@ impl InputCapture {
 /// Input frame that was captured when the transport was at `beat`, interpolated
 /// between the markers around it (or extrapolated back from the first ones, for
 /// takes that start exactly when the transport does).
-pub fn frame_at_beat(markers: &[Marker], beat: f64) -> Option<u64> {
+pub fn frame_at_beat(markers: &[Marker], beat: f64, after: u64) -> Option<u64> {
     let mut first = None;
     for pair in markers.windows(2) {
         let (a, b) = (pair[0], pair[1]);
-        if !(a.playing && b.playing && b.beat > a.beat && b.frame > a.frame) {
+        if !(a.playing && b.playing && b.beat > a.beat && b.frame > a.frame && a.frame >= after) {
             continue;
         }
         first.get_or_insert((a, b));
@@ -147,20 +154,20 @@ mod tests {
     fn beats_map_to_input_frames() {
         // 512-frame callbacks at 48 kHz and 120 BPM: 0.02133 beats each.
         let markers: Vec<Marker> = (0..100).map(|i| marker(1000 + i * 512, 2.0 + i as f64 * 512.0 / 24_000.0)).collect();
-        assert_eq!(frame_at_beat(&markers, 2.0), Some(1000));
+        assert_eq!(frame_at_beat(&markers, 2.0, 0), Some(1000));
         // Half a beat later is 12 000 frames later.
-        assert_eq!(frame_at_beat(&markers, 2.5), Some(13_000));
+        assert_eq!(frame_at_beat(&markers, 2.5, 0), Some(13_000));
         // Before the transport started: extrapolated backwards.
-        assert_eq!(frame_at_beat(&markers, 1.99), Some(760));
+        assert_eq!(frame_at_beat(&markers, 1.99, 0), Some(760));
         // Beyond what has been captured.
-        assert_eq!(frame_at_beat(&markers, 100.0), None);
+        assert_eq!(frame_at_beat(&markers, 100.0, 0), None);
     }
 
     #[test]
     fn stopped_transport_markers_are_ignored() {
         let mut markers = vec![Marker { frame: 0, beat: 0.0, playing: false }, Marker { frame: 512, beat: 0.0, playing: false }];
         markers.extend([marker(1024, 0.0), marker(1536, 512.0 / 24_000.0)]);
-        assert_eq!(frame_at_beat(&markers, 0.0), Some(1024));
+        assert_eq!(frame_at_beat(&markers, 0.0, 0), Some(1024));
     }
 
     #[test]

@@ -257,6 +257,7 @@ mod tests {
             warp: engine::model::WarpMode::Off,
             original_bpm: 120.0,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

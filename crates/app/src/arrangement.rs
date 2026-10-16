@@ -691,11 +691,16 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             ui.close();
         }
     }
+    let all_audio = app.clip_selection().iter().all(|&c| matches!(app.clip(c), Some(Clip::Audio(_))));
+    if audio && all_audio && ui.button(label("Consolidar")).on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
+        app.consolidate(app.clip_selection());
+        ui.close();
+    }
     if count == 1 && ui.button("Dividir aquí   ⌘E").on_hover_text("Corta el clip en dos donde hiciste clic derecho (⌘E corta en el cursor)").clicked() {
         app.split_clip_at(track, index, beat);
         ui.close();
     }
-    if count > 1 && ui.button(format!("Unir {count} clips   ⌘J")).on_hover_text("Clips MIDI de una pista en uno solo, de principio a fin").clicked() {
+    if count > 1 && ui.button(format!("Unir {count} clips   ⌘J")).on_hover_text("Clips de una pista en uno solo, de principio a fin (los de audio, en un archivo nuevo)").clicked() {
         app.join_selected();
         ui.close();
     }

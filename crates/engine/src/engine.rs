@@ -775,6 +775,17 @@ const EDGE_FADE: f64 = 0.003;
 /// Grain length of the Stretch warp mode, in seconds.
 const GRAIN: f64 = 0.06;
 
+/// What an audio clip sounds like over its first `beats` (looping), at `tempo`,
+/// as audio at `rate`: its warp, transposition and gain applied, as playback does
+/// (consolidating a clip into a file of its own).
+pub fn render_audio(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, rate: f32) -> (Vec<f32>, Vec<f32>) {
+    let frames = (beats * 60.0 / tempo * rate as f64).round() as usize;
+    let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
+    let beats_per_sample = tempo / 60.0 / rate as f64;
+    render_audio_clip(clip, sample, 0.0, beats, (0, frames), 0.0, beats_per_sample, tempo, &mut left, &mut right);
+    (left, right)
+}
+
 /// Adds an audio clip (looping, local time 0 at `origin`, silent from `limit`) to
 /// `left`/`right` over frames `[from, to)`; `beat` is the transport position at `from`.
 #[allow(clippy::too_many_arguments)]

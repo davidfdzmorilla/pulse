@@ -202,6 +202,25 @@ mod tests {
     }
 
     #[test]
+    fn comping_in_the_app_selects_the_piece_and_undoes() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let track = app.add_audio_track().unwrap();
+        app.project.tracks[track].arrangement = vec![recording()];
+        app.project.tempo = 120.0;
+        app.commit_history();
+        app.comp_takes(track, 0, 5.0, 6.0);
+        let lane = &app.project.tracks[track].arrangement;
+        assert_eq!(lane.len(), 3);
+        let selected = app.clip_selection();
+        assert_eq!(selected.len(), 1);
+        let ClipRef::Arrangement { index, .. } = selected[0] else { panic!() };
+        assert_eq!((lane[index].start, lane[index].clip.name()), (5.0, "Toma 1"));
+        app.commit_history();
+        app.undo();
+        assert_eq!(app.project.tracks[track].arrangement, vec![recording()]);
+    }
+
+    #[test]
     fn clips_without_that_take_stay_as_they_are() {
         let mut other = recording();
         other.start = 8.0;

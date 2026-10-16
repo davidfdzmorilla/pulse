@@ -699,6 +699,25 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     let audio = matches!(placed.clip, Clip::Audio(_));
     let count = app.clip_selection().len();
     let label = |verb: &str| if count > 1 { format!("{verb} {count} clips") } else { verb.to_string() };
+    // The takes of a loop recording: the one that plays is ticked.
+    if let (Clip::Audio(a), 1) = (&placed.clip, count) {
+        if a.takes.len() > 1 {
+            ui.label(egui::RichText::new("Tomas").color(theme::TEXT_DIM).size(10.5));
+            let playing = a.takes.iter().position(|t| *t == a.sample);
+            let mut chosen = None;
+            for k in 0..a.takes.len() {
+                let mark = if playing == Some(k) { "✓ " } else { "    " };
+                if ui.button(format!("{mark}Toma {}", k + 1)).clicked() {
+                    chosen = Some(k);
+                }
+            }
+            if let Some(k) = chosen {
+                app.choose_take(track, index, k);
+                ui.close();
+            }
+            ui.separator();
+        }
+    }
     if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems…")).on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
         app.separate_stems(clip);
         ui.close();
@@ -1185,6 +1204,7 @@ mod tests {
             warp: engine::model::WarpMode::Off,
             original_bpm: 120.0,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

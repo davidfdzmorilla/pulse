@@ -121,6 +121,25 @@ impl MonitorInput {
     }
 }
 
+/// An input with no device: whoever holds the producers feeds it samples and
+/// markers by hand (tests).
+pub fn detached_input(sample_rate: f32, channels: usize) -> (Producer<f32>, Producer<Marker>, InputHandle) {
+    let (samples_tx, samples) = RingBuffer::new(RING_SECONDS * sample_rate as usize * channels);
+    let (markers_tx, markers) = RingBuffer::new(RING_SECONDS * 1000);
+    let (_, monitor) = RingBuffer::new(1);
+    let handle = InputHandle {
+        samples,
+        monitor: Some(MonitorInput::new(monitor, channels, sample_rate)),
+        markers,
+        channels,
+        sample_rate,
+        device_name: "Sin dispositivo".into(),
+        peak: Arc::default(),
+        latency: Arc::default(),
+    };
+    (samples_tx, markers_tx, handle)
+}
+
 struct Capture {
     samples: Producer<f32>,
     monitor: Producer<f32>,

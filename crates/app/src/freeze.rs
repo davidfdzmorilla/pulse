@@ -204,6 +204,7 @@ impl PulseApp {
             warp: WarpMode::Stretch,
             original_bpm: tempo,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
             envelopes,

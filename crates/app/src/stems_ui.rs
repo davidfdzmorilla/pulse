@@ -263,6 +263,7 @@ mod tests {
             warp: engine::model::WarpMode::Stretch,
             original_bpm: 124.0,
             warp_markers: Vec::new(),
+            takes: Vec::new(),
             gain_db: -3.0,
             transpose: 0.0,
             envelopes: Vec::new(),

@@ -495,6 +495,7 @@ fn audio_clip(clip: Node, track_color: [u8; 3], timeline_length: Option<f64>, ct
         warp,
         original_bpm,
         warp_markers,
+        takes: Vec::new(),
         gain_db: if volume > 0.0 { (20.0 * volume.log10()) as f32 } else { -70.0 },
         transpose: number(clip, &["PitchCoarse"]).unwrap_or(0.0) as f32,
     };

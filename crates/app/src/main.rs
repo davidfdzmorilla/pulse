@@ -35,6 +35,7 @@ mod project;
 mod recording;
 mod sample_editor;
 mod session;
+mod session_rec;
 mod scene;
 mod script;
 mod settings;

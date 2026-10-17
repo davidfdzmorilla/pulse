@@ -297,6 +297,8 @@ pub struct PulseApp {
     pub quitting: bool,
     pub show_shortcuts: bool,
     pub guide: crate::guide::Guide,
+    /// The session clips playing while recording onto the arrangement.
+    pub session_capture: Option<crate::session_rec::SessionCapture>,
     /// Preferences, the window for them and the devices it shows.
     pub settings: crate::settings::Settings,
     pub show_settings: bool,
@@ -442,6 +444,7 @@ impl PulseApp {
             quitting: false,
             show_shortcuts: false,
             guide: Default::default(),
+            session_capture: None,
             settings: Default::default(),
             show_settings: false,
             updates: Default::default(),
@@ -1842,8 +1845,10 @@ impl PulseApp {
             self.audio.send(Command::SetArrangementRecord(false));
             return;
         }
-        // Nothing armed: the selected tracks are, as in Live.
-        if !self.project.tracks.iter().any(|t| t.armed) {
+        // Nothing armed: the selected tracks are, as in Live (unless session clips
+        // are playing: recording them onto the arrangement is enough).
+        let session_playing = self.audio.state().is_some_and(|s| (0..self.project.tracks.len()).any(|t| s.tracks[t].playing.load(Ordering::Relaxed) != engine::NONE));
+        if !self.project.tracks.iter().any(|t| t.armed) && !session_playing {
             let selection = self.track_selection();
             if selection.is_empty() {
                 self.status = Some("Selecciona una pista (o ármala con su botón ●) para grabar en ella".into());
@@ -1857,6 +1862,7 @@ impl PulseApp {
             return;
         }
         self.recorder.start_arrangement(self.audio.position());
+        self.start_session_capture(self.audio.position());
         if self.settings.automation_arm {
             self.start_automation_take();
         }
@@ -1919,6 +1925,9 @@ impl PulseApp {
         let notes: Vec<_> = self.audio.take_recorded().into_iter().map(|n| engine::RecordedNote { start: (n.start - lag).max(0.0), ..n }).collect();
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
         let looped = self.project.loop_enabled.then_some((self.project.loop_start, self.project.loop_end));
+        if state.arrangement_recording.load(Ordering::Relaxed) {
+            self.follow_session_capture(&state);
+        }
         let finished = self.recorder.update(notes, &state, &armed, looped, punch);
         let recording: Vec<(usize, usize, f64)> = self
             .recorder
@@ -1972,6 +1981,13 @@ impl PulseApp {
                     self.status = Some(format!("Grabadas {count} notas en el Arrangement"));
                 }
                 Finished::ArrangementEnded { passes } => {
+                    let clips = self.finish_session_capture();
+                    if clips > 0 {
+                        self.status = Some(match clips {
+                            1 => "Grabado 1 clip de Session en el Arrangement".to_string(),
+                            n => format!("Grabados {n} clips de Session en el Arrangement"),
+                        });
+                    }
                     let moved = self.finish_automation_take();
                     if moved > 0 {
                         self.status = Some(match moved {

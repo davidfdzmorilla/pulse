@@ -172,6 +172,16 @@ Las **armadas** (●). Si pulsas grabar sin ninguna armada, se arman las selecci
 - Con **A** (Armar automatización) encendido, también se graban los controles que muevas.
 - Lo nuevo se pone encima: los clips que ya había no se borran ni se recortan.
 
+### Grabar la Session en el Arrangement
+
+Mientras grabas en el Arrangement (F9), los clips de Session que suenan quedan escritos en el Arrangement, en su pista y en el momento exacto en que sonaron. Da igual que los lances uno a uno, con escenas o que ya estuvieran sonando antes de grabar (en ese caso, desde donde empezó la grabación).
+
+- Así puedes improvisar una canción lanzando clips y escenas, y que quede montada en el Arrangement.
+- Si solo hay clips de Session sonando, grabar no arma ninguna pista.
+- Lo que hubiera en el Arrangement de esa pista en ese tramo se sustituye (como en Live).
+- Cuando terminas, las pistas siguen tocando la Session: pulsa **▶ Arrangement** para escuchar lo grabado.
+- Con el loop activado, cada clip se escribe una sola vez. El punch in/out también se aplica.
+
 ### Punch in / out
 
 Para regrabar solo un trozo sin tocar lo de alrededor. Marca el trozo con la región del loop (franja de arriba del Arrangement) y enciende los botones del transporte:

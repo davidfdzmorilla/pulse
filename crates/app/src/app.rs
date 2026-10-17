@@ -273,6 +273,9 @@ pub struct PulseApp {
     pub touched_control: std::cell::Cell<Option<crate::midi_map::Control>>,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
+    /// Shows where a clip will be sliced, to move, add or remove cuts by hand.
+    pub show_cuts: bool,
+    pub slice_cuts: Option<crate::slicing::SliceCuts>,
     /// Sample slots drawn this frame, where dropped files can land: (area, track, slot).
     pub sample_drop_zones: Vec<(egui::Rect, usize, usize)>,
     /// The library browser's state, and where what it drags can land.
@@ -421,6 +424,8 @@ impl PulseApp {
             overridden: HashSet::new(),
             selected_pad: 0,
             slice_mode: crate::slicing::SliceMode::Transients,
+            show_cuts: false,
+            slice_cuts: None,
             kick_window: None,
             wave_window: None,
             table_editor: None,
@@ -1476,13 +1481,16 @@ impl PulseApp {
             self.status = Some("No se encuentra la muestra del clip".into());
             return;
         }
-        let tempo = self.project.tempo;
-        let region = (audio.offset, audio.source_seconds(audio.length, tempo) - audio.offset);
-        // The slices' grid at the region's average tempo.
-        let bpm = audio.length * 60.0 / region.1.max(1e-6);
+        let (region, bpm) = crate::slicing::clip_region(&audio, self.project.tempo);
         let mode = self.slice_mode;
         let dir = self.slices_dir(&audio.name);
-        let (mut sliced, grid) = match crate::slicing::slice(&sample, region, bpm, mode, &audio.name, &dir, audio.color) {
+        // The cuts edited by hand, if they are shown for this clip.
+        let edited = self.show_cuts.then(|| self.cuts_for(clip_ref)).flatten();
+        let result = match &edited {
+            Some(cuts) => crate::slicing::slice_at(&sample, region, bpm, cuts, &audio.name, &dir, audio.color).map(|s| (s, 0.0)),
+            None => crate::slicing::slice(&sample, region, bpm, mode, &audio.name, &dir, audio.color),
+        };
+        let (mut sliced, grid) = match result {
             Ok(result) => result,
             Err(error) => {
                 self.status = Some(error);

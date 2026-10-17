@@ -158,28 +158,51 @@ pub struct Sliced {
     pub clip: MidiClip,
 }
 
-/// Slices `seconds` of `sample` from `offset`, whose tempo is `bpm`, into files in `dir`.
-pub fn slice(
-    sample: &Sample,
-    (offset, seconds): (f64, f64),
-    bpm: f64,
-    mode: SliceMode,
-    name: &str,
-    dir: &Path,
-    color: [u8; 3],
-) -> Result<(Sliced, f64), String> {
+/// The frames of `sample` from `offset` for `seconds` (clamped to the file), if
+/// long enough to slice.
+fn region(sample: &Sample, (offset, seconds): (f64, f64)) -> Result<(usize, usize), String> {
     let rate = sample.sample_rate as f64;
-    let first = ((offset * rate) as usize).min(sample.frames());
+    let first = ((offset.max(0.0) * rate) as usize).min(sample.frames());
     let last = (((offset + seconds) * rate) as usize).clamp(first, sample.frames());
     if last - first < 64 {
         return Err("La región es demasiado corta para trocearla".into());
     }
+    Ok((first, last))
+}
+
+/// Where `mode` cuts `seconds` of `sample` from `offset` (tempo `bpm`): points of
+/// the file in seconds, and the grid actually used (0 for transients).
+pub fn find_cuts(sample: &Sample, (offset, seconds): (f64, f64), bpm: f64, mode: SliceMode) -> Result<(Vec<f64>, f64), String> {
+    let (first, last) = region(sample, (offset, seconds))?;
+    let rate = sample.sample_rate as f64;
     let (left, right) = (&sample.left[first..last], &sample.right[first..last]);
-    let frames_per_beat = rate * 60.0 / bpm;
     let (starts, used) = match mode {
         SliceMode::Transients => (transients(left, right, sample.sample_rate, RACK_PADS), 0.0),
-        SliceMode::Grid(beats) => grid(left.len(), frames_per_beat, beats, RACK_PADS),
+        SliceMode::Grid(beats) => grid(left.len(), rate * 60.0 / bpm, beats, RACK_PADS),
     };
+    Ok((starts.into_iter().map(|f| (first + f) as f64 / rate).collect(), used))
+}
+
+/// Slices `seconds` of `sample` from `offset`, whose tempo is `bpm`, into files in `dir`.
+pub fn slice(sample: &Sample, region: (f64, f64), bpm: f64, mode: SliceMode, name: &str, dir: &Path, color: [u8; 3]) -> Result<(Sliced, f64), String> {
+    let (cuts, used) = find_cuts(sample, region, bpm, mode)?;
+    Ok((slice_at(sample, region, bpm, &cuts, name, dir, color)?, used))
+}
+
+/// Slices `seconds` of `sample` from `offset` at `cuts` (points of the file, in
+/// seconds; at most one per pad), each slice up to the next cut.
+pub fn slice_at(sample: &Sample, (offset, seconds): (f64, f64), bpm: f64, cuts: &[f64], name: &str, dir: &Path, color: [u8; 3]) -> Result<Sliced, String> {
+    let (first, last) = region(sample, (offset, seconds))?;
+    let rate = sample.sample_rate as f64;
+    let (left, right) = (&sample.left[first..last], &sample.right[first..last]);
+    let frames_per_beat = rate * 60.0 / bpm;
+    let mut starts: Vec<usize> = cuts.iter().map(|&c| ((c * rate) as usize).saturating_sub(first)).filter(|&f| f < left.len()).collect();
+    starts.sort_unstable();
+    starts.dedup();
+    starts.truncate(RACK_PADS);
+    if starts.is_empty() {
+        return Err("No hay ningún corte dentro de la región del clip".into());
+    }
 
     std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
     let fade = (rate * 0.003) as usize;
@@ -210,7 +233,46 @@ pub fn slice(
     // Slices are one voice: a new hit cuts the previous one, like the loop itself.
     params.choke = [1; RACK_PADS];
     params.level = [1.0; RACK_PADS];
-    Ok((Sliced { files, params, clip }, used))
+    Ok(Sliced { files, params, clip })
+}
+
+/// The cuts shown (and edited by hand) for a clip: points of its file, in
+/// seconds. `key` is what they were found for (the file, its region, the mode):
+/// when it changes they are found again.
+pub struct SliceCuts {
+    pub clip: crate::app::ClipRef,
+    key: (String, u64, u64, &'static str),
+    pub seconds: Vec<f64>,
+}
+
+/// The part of the file an audio clip plays (offset, seconds) and its average tempo.
+pub fn clip_region(audio: &engine::model::AudioClip, tempo: f64) -> ((f64, f64), f64) {
+    let region = (audio.offset, audio.source_seconds(audio.length, tempo) - audio.offset);
+    (region, audio.length * 60.0 / region.1.max(1e-6))
+}
+
+impl crate::app::PulseApp {
+    /// Where the clip will be sliced: found by the slicing mode, or as edited.
+    pub fn cuts_for(&mut self, clip_ref: crate::app::ClipRef) -> Option<Vec<f64>> {
+        let Some(engine::model::Clip::Audio(audio)) = self.clip(clip_ref).cloned() else { return None };
+        let (region, bpm) = clip_region(&audio, self.project.tempo);
+        let key = (audio.sample.clone(), region.0.to_bits(), region.1.to_bits(), self.slice_mode.label());
+        if let Some(cuts) = self.slice_cuts.as_ref().filter(|c| c.clip == clip_ref && c.key == key) {
+            return Some(cuts.seconds.clone());
+        }
+        let sample = self.sample(&audio.sample);
+        let (seconds, _) = find_cuts(&sample, region, bpm, self.slice_mode).ok()?;
+        self.slice_cuts = Some(SliceCuts { clip: clip_ref, key, seconds: seconds.clone() });
+        Some(seconds)
+    }
+
+    /// The clip's cuts as edited by hand.
+    pub fn set_cuts(&mut self, clip_ref: crate::app::ClipRef, mut seconds: Vec<f64>) {
+        seconds.sort_by(f64::total_cmp);
+        if let Some(cuts) = self.slice_cuts.as_mut().filter(|c| c.clip == clip_ref) {
+            cuts.seconds = seconds;
+        }
+    }
 }
 
 #[cfg(test)]
@@ -309,5 +371,50 @@ mod tests {
         for (&frame, step) in found.iter().zip(0..) {
             assert!((frame as i64 - step * eighth as i64).abs() < 200, "step {step} at {frame}");
         }
+    }
+
+    /// Cuts edited by hand: one taken out, one moved; slicing then follows them.
+    #[test]
+    fn hand_edited_cuts_decide_the_slices() {
+        use crate::app::{ClipRef, PulseApp};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let audio = hits(&[0.0, 0.5, 1.0, 1.5], 2.0);
+        let dir = std::env::temp_dir().join(format!("pulse-cuts-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Break.wav");
+        write_wav(&path, &audio, &audio, SR).unwrap();
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        app.project.tempo = 120.0;
+        let t = app.add_audio_track().unwrap();
+        app.project.tracks[t].clips[0] = Some(Clip::Audio(AudioClip {
+            name: "Break".into(),
+            color: [1, 2, 3],
+            sample: path.to_string_lossy().into_owned(),
+            length: 4.0,
+            offset: 0.0,
+            warp: WarpMode::Repitch,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            takes: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+        }));
+        let clip = ClipRef::Session { track: t, slot: 0 };
+        app.show_cuts = true;
+        let found = app.cuts_for(clip).unwrap();
+        assert_eq!(found.len(), 4, "{found:?}");
+        // Without the second hit, and the third a quarter of a second later.
+        app.set_cuts(clip, vec![found[0], found[2] + 0.25, found[3]]);
+        assert_eq!(app.cuts_for(clip).unwrap().len(), 3, "the edit is kept");
+        app.slice_clip(clip);
+        let rack = app.project.tracks.len() - 1;
+        let Some(Clip::Midi(midi)) = &app.project.tracks[rack].clips[0] else { panic!("{:?}", app.status) };
+        let starts: Vec<f64> = midi.notes.iter().map(|n| (n.start * 4.0).round() / 4.0).collect();
+        assert_eq!(starts, vec![0.0, 2.5, 3.0], "beats at 120 BPM");
+        // Another mode finds its own cuts again.
+        app.slice_mode = SliceMode::Grid(1.0);
+        assert_eq!(app.cuts_for(clip).unwrap().len(), 4);
+        std::fs::remove_dir_all(&dir).ok();
     }
 }

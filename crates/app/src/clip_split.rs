@@ -9,7 +9,7 @@ use crate::app::{ClipRef, PulseApp};
 use engine::model::{ArrangementClip, AudioClip, AutomationLane, AutomationPoint, Clip, MidiClip, Note};
 
 /// The shortest part a split leaves.
-const MIN_PART: f64 = 1.0 / 16.0;
+pub const MIN_PART: f64 = 1.0 / 16.0;
 
 /// Envelope lanes turned round to start `d` beats into a loop of `length`, with a
 /// point at the new start so the value there stays.

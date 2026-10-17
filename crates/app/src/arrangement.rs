@@ -5,13 +5,15 @@
 //!   tracks), drag its right edge to resize it. Clip contents loop when it is longer.
 //! - The "A" button of a track shows an automation lane below it: click to add a
 //!   breakpoint, drag to move it, double-click to delete it.
+//! - A loop recording shows a lane per take below its track: drag across one to
+//!   have that take play there (comping), click it for the whole clip.
 
 use crate::app::{ClipRef, Placement, PulseApp};
 use crate::theme::{self, ACCENT, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::{ArrangementClip, AutomationPoint, Clip, MidiClip, Param};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use engine::{Sample, PEAK_BLOCK};
 use engine::{Command, Target};
 use std::sync::atomic::Ordering;
@@ -23,6 +25,7 @@ const LANE_H: f32 = 52.0;
 const EDGE_GRAB: f32 = 6.0;
 const AUTO_H: f32 = 64.0;
 const POINT_GRAB: f32 = 6.0;
+const TAKE_H: f32 = 24.0;
 
 #[derive(Clone, Debug)]
 enum Drag {
@@ -35,6 +38,8 @@ enum Drag {
     Scrub,
     /// Dragging a breakpoint; `lane` is the lane's rectangle when the drag began.
     Point { track: usize, param: Param, index: usize, lane: Rect },
+    /// Choosing a take over a stretch: from `anchor` to `to` (beats) in its lane.
+    Comp { track: usize, take: usize, anchor: f64, to: f64 },
 }
 
 pub struct State {
@@ -43,6 +48,8 @@ pub struct State {
     drag: Option<Drag>,
     /// Tracks showing an automation lane, and the parameter it shows.
     pub automation: HashMap<usize, Param>,
+    /// Tracks showing a lane per take of their loop recordings.
+    pub takes: HashSet<usize>,
     /// What the automation parameter list is filtered by (long lists: plugins).
     pub automation_filter: String,
     /// What was right-clicked, for its menu.
@@ -74,6 +81,7 @@ impl Default for State {
             follow: false,
             drag: None,
             automation: HashMap::new(),
+            takes: HashSet::new(),
             automation_filter: String::new(),
             menu: None,
             track_action: None,
@@ -102,9 +110,10 @@ fn point_unit(pixels_per_beat: f32) -> f64 {
     }
 }
 
-/// Vertical position of each track row (relative to the first lane) and its automation lane, if shown.
+/// Vertical position of each track row (relative to the first lane), its
+/// automation lane, if shown, and how many take lanes it shows.
 struct Layout {
-    rows: Vec<(f32, Option<Param>)>,
+    rows: Vec<(f32, Option<Param>, usize)>,
     height: f32,
 }
 
@@ -114,29 +123,43 @@ impl Layout {
         let mut y = 0.0;
         for t in 0..app.project.tracks.len() {
             let shown = app.arrangement.automation.get(&t).copied();
-            rows.push((y, shown));
-            y += row_height(shown.is_some());
+            let takes = if app.arrangement.takes.contains(&t) { crate::comping::take_count(app, t) } else { 0 };
+            rows.push((y, shown, takes));
+            y += row_height(shown.is_some(), takes);
         }
         Self { rows, height: y }
     }
 
     /// Track under `y` (relative to the first lane) and whether it is in its automation lane.
     fn hit(&self, y: f32) -> Option<(usize, bool)> {
-        self.rows.iter().enumerate().find_map(|(t, &(top, shown))| {
+        self.rows.iter().enumerate().find_map(|(t, &(top, shown, takes))| {
             let clips_end = top + LANE_H + 1.0;
+            let auto_top = clips_end + takes_height(takes);
             if y >= top && y < clips_end {
                 Some((t, false))
-            } else if shown.is_some() && y >= clips_end && y < clips_end + AUTO_H + 1.0 {
+            } else if shown.is_some() && y >= auto_top && y < auto_top + AUTO_H + 1.0 {
                 Some((t, true))
             } else {
                 None
             }
         })
     }
+
+    /// The track and take of the take lane under `y`.
+    fn take_hit(&self, y: f32) -> Option<(usize, usize)> {
+        self.rows.iter().enumerate().find_map(|(t, &(top, _, takes))| {
+            let below = y - (top + LANE_H + 1.0);
+            (below >= 0.0 && below < takes_height(takes)).then(|| (t, (below / (TAKE_H + 1.0)) as usize))
+        })
+    }
 }
 
-fn row_height(automation: bool) -> f32 {
-    LANE_H + 1.0 + if automation { AUTO_H + 1.0 } else { 0.0 }
+fn takes_height(takes: usize) -> f32 {
+    takes as f32 * (TAKE_H + 1.0)
+}
+
+fn row_height(automation: bool, takes: usize) -> f32 {
+    LANE_H + 1.0 + takes_height(takes) + if automation { AUTO_H + 1.0 } else { 0.0 }
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
@@ -166,6 +189,24 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         .fold(app.project.loop_end, f64::max);
     let total_beats = ((content_end + 64.0) / 16.0).ceil() * 16.0;
     app.arrangement.automation.retain(|&t, _| t < tracks);
+    app.arrangement.takes.retain(|&t| t < tracks);
+    // The takes shown are drawn from their files: decoded now if they weren't yet.
+    let shown_takes: Vec<String> = app
+        .arrangement
+        .takes
+        .iter()
+        .flat_map(|&t| app.project.tracks[t].arrangement.iter())
+        .filter_map(|c| match &c.clip {
+            Clip::Audio(audio) => Some(audio.takes.iter().cloned()),
+            Clip::Midi(_) => None,
+        })
+        .flatten()
+        .collect();
+    for path in shown_takes {
+        if app.loaded_sample(&path).is_none() {
+            app.sample(&path);
+        }
+    }
     let layout = Layout::new(app);
     let lanes_height = LOOP_H + RULER_H + layout.height;
     let mut headers = Vec::new();
@@ -180,7 +221,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.set_width(HEADER_W);
             ui.add_space(LOOP_H + RULER_H);
             for t in 0..tracks {
-                headers.push(track_header(app, ui, t, layout.rows[t].1));
+                headers.push(track_header(app, ui, t, layout.rows[t].1, layout.rows[t].2));
             }
         });
 
@@ -203,7 +244,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 Rect::from_min_size(pos2(rect.left(), lanes_top + layout.rows[t].0), vec2(rect.width(), LANE_H))
             };
             let auto_rect = |t: usize| {
-                Rect::from_min_size(pos2(rect.left(), lanes_top + layout.rows[t].0 + LANE_H + 1.0), vec2(rect.width(), AUTO_H))
+                let (top, _, takes) = layout.rows[t];
+                Rect::from_min_size(pos2(rect.left(), lanes_top + top + LANE_H + 1.0 + takes_height(takes)), vec2(rect.width(), AUTO_H))
+            };
+            let take_rect = |t: usize, k: usize| {
+                let top = lanes_top + layout.rows[t].0 + LANE_H + 1.0 + k as f32 * (TAKE_H + 1.0);
+                Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), TAKE_H))
             };
 
             // Background, lanes and grid.
@@ -264,6 +310,38 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         Clip::Midi(_) => None,
                     };
                     paint_clip(&painter, clip_rect, placed, sample, selected, ppb, app.project.tempo);
+                }
+            }
+
+            // Take lanes: each take of the loop recordings, bright where it plays.
+            for t in 0..tracks {
+                for k in 0..layout.rows[t].2 {
+                    let lane = take_rect(t, k);
+                    painter.rect_filled(lane, 0.0, theme::shade(theme::SLOT, 0.8));
+                    for placed in &app.project.tracks[t].arrangement {
+                        let Clip::Audio(audio) = &placed.clip else { continue };
+                        let Some(path) = audio.takes.get(k) else { continue };
+                        let piece = Rect::from_min_max(pos2(x_at(placed.start), lane.top() + 1.0), pos2(x_at(placed.end()), lane.bottom() - 1.0));
+                        let playing = audio.sample == *path;
+                        let color = theme::rgb(audio.color);
+                        painter.rect_filled(piece, 2.0, theme::shade(color, if playing { 0.45 } else { 0.18 }));
+                        if let Some(sample) = app.loaded_sample(path).filter(|s| s.frames() > 0) {
+                            let clipped = painter.with_clip_rect(piece.intersect(painter.clip_rect()));
+                            let take = engine::model::AudioClip { sample: path.clone(), ..audio.clone() };
+                            paint_wave(&clipped, piece, piece.shrink2(vec2(0.0, 2.0)), &take, sample, ppb, app.project.tempo, theme::shade(color, if playing { 1.25 } else { 0.6 }));
+                        }
+                        if playing {
+                            widgets::outline(&painter, piece, theme::shade(color, 1.1));
+                        }
+                    }
+                }
+            }
+            if let Some(Drag::Comp { track, take, anchor, to }) = app.arrangement.drag {
+                if take < layout.rows.get(track).map_or(0, |r| r.2) {
+                    let lane = take_rect(track, take);
+                    let (a, b) = (anchor.min(to), anchor.max(to));
+                    let stretch = Rect::from_min_max(pos2(x_at(a), lane.top()), pos2(x_at(b).max(x_at(a) + 1.0), lane.bottom()));
+                    painter.rect_filled(stretch, 2.0, Color32::from_white_alpha(40));
                 }
             }
 
@@ -361,29 +439,7 @@ fn paint_clip(
                 clipped.text(body.center(), Align2::CENTER_CENTER, "Muestra no encontrada", theme::small(), TEXT);
                 return;
             };
-            // One waveform column per pixel, mapping beats to file time like the engine does.
-            let mid = body.center().y;
-            let half = body.height() * 0.5;
-            let wave = theme::shade(color, 1.25);
-            let x_end = rect.right().min(painter.clip_rect().right());
-            let mut x = rect.left().max(painter.clip_rect().left());
-            while x < x_end {
-                let beat = ((x - rect.left()) / ppb) as f64;
-                let local = beat.rem_euclid(audio.length.max(0.0001));
-                let next_local = local + (1.0 / ppb) as f64;
-                // Before the file's start (a clip starting on the bar line before its first downbeat): silence.
-                if audio.source_seconds(local, tempo) < 0.0 {
-                    x += 1.0;
-                    continue;
-                }
-                let to_block = |b: f64| (audio.source_seconds(b, tempo) * sample.sample_rate as f64) as usize / PEAK_BLOCK;
-                let (a, b) = (to_block(local), to_block(next_local).max(to_block(local) + 1));
-                let (lo, hi) = sample.peaks.get(a..b.min(sample.peaks.len())).unwrap_or(&[]).iter().fold((0f32, 0f32), |(lo, hi), &(l, h)| (lo.min(l), hi.max(h)));
-                if hi > lo {
-                    clipped.line_segment([pos2(x, mid - hi * half), pos2(x, mid - lo * half)], Stroke::new(1.0, wave));
-                }
-                x += 1.0;
-            }
+            paint_wave(&clipped, rect, body, audio, sample, ppb, tempo, theme::shade(color, 1.25));
             // Warp markers, where they fall in each lap of the clip.
             if audio.warp != engine::model::WarpMode::Off {
                 let first = audio.file_beat(audio.offset);
@@ -416,9 +472,36 @@ fn paint_clip(
     }
 }
 
+/// An audio clip's waveform in `body`, one column per pixel, mapping beats to file
+/// time like the engine does (`rect` is where the clip starts).
+#[allow(clippy::too_many_arguments)]
+fn paint_wave(clipped: &egui::Painter, rect: Rect, body: Rect, audio: &engine::model::AudioClip, sample: &Sample, ppb: f32, tempo: f64, wave: Color32) {
+    let mid = body.center().y;
+    let half = body.height() * 0.5;
+    let x_end = rect.right().min(clipped.clip_rect().right());
+    let mut x = rect.left().max(clipped.clip_rect().left());
+    while x < x_end {
+        let beat = ((x - rect.left()) / ppb) as f64;
+        let local = beat.rem_euclid(audio.length.max(0.0001));
+        let next_local = local + (1.0 / ppb) as f64;
+        // Before the file's start (a clip starting on the bar line before its first downbeat): silence.
+        if audio.source_seconds(local, tempo) < 0.0 {
+            x += 1.0;
+            continue;
+        }
+        let to_block = |b: f64| (audio.source_seconds(b, tempo) * sample.sample_rate as f64) as usize / PEAK_BLOCK;
+        let (a, b) = (to_block(local), to_block(next_local).max(to_block(local) + 1));
+        let (lo, hi) = sample.peaks.get(a..b.min(sample.peaks.len())).unwrap_or(&[]).iter().fold((0f32, 0f32), |(lo, hi), &(l, h)| (lo.min(l), hi.max(h)));
+        if hi > lo {
+            clipped.line_segment([pos2(x, mid - hi * half), pos2(x, mid - lo * half)], Stroke::new(1.0, wave));
+        }
+        x += 1.0;
+    }
+}
+
 /// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
-fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>) -> Rect {
-    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some())), Sense::click_and_drag());
+fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>, takes: usize) -> Rect {
+    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some(), takes)), Sense::click_and_drag());
     let response = response.on_hover_text("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover");
     app.track_header_input(t, &response);
     track_menu(app, &response, t, shown.is_some());
@@ -481,8 +564,22 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
         }
     }
 
+    // The take lanes' names, the one playing somewhere ticked.
+    for k in 0..takes {
+        let lane = Rect::from_min_size(rect.left_top() + vec2(0.0, LANE_H + 1.0 + k as f32 * (TAKE_H + 1.0)), vec2(HEADER_W - 4.0, TAKE_H));
+        let playing = app.project.tracks[t].arrangement.iter().any(|c| match &c.clip {
+            Clip::Audio(a) => a.takes.get(k) == Some(&a.sample),
+            Clip::Midi(_) => false,
+        });
+        let response = ui.interact(lane, ui.id().with(("take", t, k)), Sense::hover());
+        response.on_hover_text("Arrastra en esta fila para que suene esta toma en ese trozo · clic: en todo el clip");
+        ui.painter().rect_filled(lane, 2.0, theme::shade(theme::SURFACE, 0.8));
+        let mark = if playing { "✓ " } else { "" };
+        ui.painter().text(lane.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, format!("{mark}Toma {}", k + 1), theme::small(), if playing { TEXT } else { TEXT_DIM });
+    }
+
     let Some(param) = shown else { return rect };
-    let area = Rect::from_min_size(rect.left_top() + vec2(10.0, LANE_H + 6.0), vec2(HEADER_W - 18.0, AUTO_H - 8.0));
+    let area = Rect::from_min_size(rect.left_top() + vec2(10.0, LANE_H + 1.0 + takes_height(takes) + 5.0), vec2(HEADER_W - 18.0, AUTO_H - 8.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
     let mut chosen = param;
     egui::ComboBox::from_id_salt(("automation", t))
@@ -620,6 +717,13 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
             }
             ui.close();
         }
+        if crate::comping::take_count(app, t) > 1 {
+            let shown = app.arrangement.takes.contains(&t);
+            if ui.button(if shown { "Ocultar tomas" } else { "Mostrar tomas" }).on_hover_text("Una fila por toma de las grabaciones en bucle, para quedarte con lo mejor de cada una").clicked() {
+                app.toggle_take_lanes(t);
+                ui.close();
+            }
+        }
         let label = |verb: &str| if several { format!("{verb} {count} pistas") } else { format!("{verb} pista") };
         // After the view is drawn: the rest of it still reads this track.
         if ui.button(label("Duplicar")).clicked() {
@@ -713,6 +817,11 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             }
             if let Some(k) = chosen {
                 app.choose_take(track, index, k);
+                ui.close();
+            }
+            let shown = app.arrangement.takes.contains(&track);
+            if ui.button(if shown { "Ocultar las filas de tomas" } else { "Mostrar las tomas en filas…" }).on_hover_text("Arrastra en una fila para que suene esa toma en ese trozo").clicked() {
+                app.toggle_take_lanes(track);
                 ui.close();
             }
             ui.separator();
@@ -810,8 +919,9 @@ fn handle_pointer(
     let hit = if pos.y >= lanes_top { layout.hit(pos.y - lanes_top) } else { None };
     let lane = hit.filter(|&(_, automation)| !automation).map(|(t, _)| t);
     let automation = hit.filter(|&(_, automation)| automation).and_then(|(t, _)| {
-        let param = layout.rows[t].1?;
-        let top = lanes_top + layout.rows[t].0 + LANE_H + 1.0;
+        let (top, param, takes) = layout.rows[t];
+        let param = param?;
+        let top = lanes_top + top + LANE_H + 1.0 + takes_height(takes);
         Some((t, param, Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), AUTO_H))))
     });
     // A right-click picks what the menu is about (and selects a clip not selected).
@@ -833,6 +943,10 @@ fn handle_pointer(
             (None, Some((t, param, _))) => Some(Menu::Automation { track: t, param }),
             _ => None,
         };
+    }
+    let take_lane = if pos.y >= lanes_top { layout.take_hit(pos.y - lanes_top) } else { None };
+    if handle_takes(app, ui, response, beat, take_lane) {
+        return;
     }
     if handle_automation(app, ui, response, pos, beat, origin_x, automation) {
         return;
@@ -974,13 +1088,47 @@ fn handle_pointer(
             Some(Drag::Scrub) => {
                 app.audio.send(Command::SetPosition(snap(beat, unit)));
             }
-            Some(Drag::Point { .. }) | None => {}
+            Some(Drag::Point { .. } | Drag::Comp { .. }) | None => {}
         }
     }
 
     if ui.input(|i| i.pointer.primary_released()) {
         app.arrangement.drag = None;
     }
+}
+
+/// Comping in a take lane (`lane`: the track and take under the pointer): a drag
+/// has the take play over that stretch, a clic over the whole clip there.
+/// Returns true if the pointer was handled.
+fn handle_takes(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, beat: f64, lane: Option<(usize, usize)>) -> bool {
+    let ppb = app.arrangement.pixels_per_beat;
+    let unit = point_unit(ppb);
+    match app.arrangement.drag {
+        Some(Drag::Comp { .. }) => {}
+        Some(_) => return false,
+        None => {
+            let pressed = ui.input(|i| i.pointer.primary_pressed()) && response.hovered();
+            if let (true, Some((track, take))) = (pressed, lane) {
+                app.arrangement.drag = Some(Drag::Comp { track, take, anchor: beat, to: beat });
+            }
+            return lane.is_some();
+        }
+    }
+    let Some(Drag::Comp { track, take, anchor, .. }) = app.arrangement.drag else { return false };
+    app.arrangement.drag = Some(Drag::Comp { track, take, anchor, to: beat });
+    if ui.input(|i| i.pointer.primary_released()) {
+        app.arrangement.drag = None;
+        if (beat - anchor).abs() as f32 * ppb < 4.0 {
+            // A clic: the clip there, all of it.
+            let piece = app.project.tracks[track].arrangement.iter().find(|c| anchor >= c.start && anchor < c.end()).map(|c| (c.start, c.end()));
+            if let Some((a, b)) = piece {
+                app.comp_takes(track, take, a, b);
+            }
+        } else {
+            app.comp_takes(track, take, snap(anchor, unit), snap(beat, unit));
+        }
+    }
+    true
 }
 
 /// Breakpoint editing in an automation lane. Returns true if the pointer was handled.

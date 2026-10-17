@@ -345,7 +345,7 @@ Saca las notas de cualquier audio y las pone en una pista MIDI nueva, justo deba
 
 Se hace en este Mac, sin internet, en unos segundos; la barra de estado muestra el progreso. Las notas siguen el tempo del clip (su warp) y su fuerza pasa a la velocidad. Se combina bien con **Separar en stems**: separa una canción y convierte el bajo o la voz en MIDI.
 
-Las notas de la melodía y la armonía las encuentra Basic Pitch, un modelo de Spotify (licencia Apache 2.0) que va dentro de la app.
+La melodía sigue el tono de la voz fotograma a fotograma (pYIN, el método de las herramientas para transcribir canto), también con voces muy graves, y la corta en notas donde cambia de semitono o vuelves a atacar. La armonía la encuentra Basic Pitch, un modelo de Spotify (licencia Apache 2.0) que va dentro de la app.
 
 ## Mezclador
 

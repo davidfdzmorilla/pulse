@@ -7,7 +7,7 @@
 //! handed back to the UI thread as [`Garbage`] to be freed there.
 
 use crate::effects::{EffectProcessor, ProcessContext};
-use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, Effect, InstrumentKind, MidiClip, Param, PluginId, WarpMode};
+use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, Effect, Groove, InstrumentKind, MidiClip, Param, PluginId, WarpMode};
 use crate::plugin::PluginProcessor;
 use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
@@ -820,11 +820,17 @@ fn schedule_notes(
     let local_to = to - origin;
     let first_lap = (local_from / clip.length).floor() as i64;
     let last_lap = (local_to / clip.length).floor() as i64;
+    // The clip's own groove, or the project's swing.
+    let (grid, amount) = timing.swing;
+    let groove = clip.groove.unwrap_or(Groove { grid, swing: amount, accent: 0.0, humanize: 0.0 });
+    // Humanized notes may come a hair early: the next lap's first ones too.
+    let last_lap = if groove.humanize > 0.0 { last_lap + 1 } else { last_lap };
     for lap in first_lap..=last_lap {
         let lap_start = lap as f64 * clip.length;
-        for note in clip.notes.iter().filter(|n| n.start < clip.length) {
-            let (grid, amount) = timing.swing;
-            let t = lap_start + note.start + swing_offset(note.start, grid, amount);
+        for (index, note) in clip.notes.iter().enumerate().filter(|(_, n)| n.start < clip.length) {
+            let (shift, velocity) = groove.apply(index, lap, note.start, note.velocity);
+            // Never before the clip starts.
+            let t = (lap_start + note.start + shift).max(0.0);
             if t < local_from || t >= local_to {
                 continue;
             }
@@ -839,7 +845,7 @@ fn schedule_notes(
                 timing.frame(beat),
                 Event::NoteOn {
                     pitch: note.pitch,
-                    velocity: note.velocity,
+                    velocity,
                     gate,
                 },
             );
@@ -2693,6 +2699,32 @@ mod tests {
         // A sixteenth at 120 BPM is 6000 frames; full swing delays it by a third: 2000 frames.
         assert!((straight as i64 - 6000).abs() < 64, "straight onset at {straight}");
         assert!((swung as i64 - 8000).abs() < 64, "swung onset at {swung}");
+    }
+
+    /// A clip's own groove wins over the project's swing: it swings with none
+    /// set, and plays straight (its groove at 0) with the project's at full.
+    #[test]
+    fn a_clips_groove_overrides_the_projects_swing() {
+        use crate::model::{Groove, SynthParams};
+        let onset = |project: f32, groove: Option<Groove>| {
+            let mut h = Harness::new();
+            let params = SynthParams { waveform: crate::model::Waveform::Sine, attack: 0.0005, release: 0.002, ..Default::default() };
+            h.send(Command::update_instrument(0, InstrumentKind::Synth(params)));
+            h.send(Command::SetSwing { amount: project, grid: 0.25 });
+            let mut clip = MidiClip::new("blips", 4.0, [0, 0, 0]);
+            for start in [0.0, 0.25] {
+                clip.notes.push(Note { start, length: 0.05, pitch: 72, velocity: 1.0 });
+            }
+            clip.groove = groove;
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            let audio = left_channel(&h.run_beats(1.0));
+            3000 + audio[3000..].iter().position(|s| s.abs() > 0.001).expect("second note")
+        };
+        let swing = Groove { grid: 0.25, swing: 1.0, ..Default::default() };
+        assert!((onset(0.0, Some(swing)) as i64 - 8000).abs() < 64);
+        assert!((onset(1.0, Some(Groove::default())) as i64 - 6000).abs() < 64);
+        assert!((onset(1.0, None) as i64 - 8000).abs() < 64, "without one, the project's");
     }
 
     #[test]

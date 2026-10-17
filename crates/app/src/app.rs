@@ -1978,7 +1978,7 @@ impl PulseApp {
                     let count = notes.len();
                     let notes = self.quantize_take(notes, start, length);
                     let t = &self.project.tracks[track];
-                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes };
+                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes, groove: None };
                     self.set_clip(track, slot, Some(Clip::Midi(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
                     let automation = match moved {
@@ -1992,7 +1992,7 @@ impl PulseApp {
                     let notes = self.quantize_take(notes, start, length);
                     let Some(t) = self.project.tracks.get_mut(track) else { continue };
                     let count = notes.len();
-                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color, envelopes: Vec::new() };
+                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color, envelopes: Vec::new(), groove: None };
                     t.arrangement.push(ArrangementClip { start, length, clip: Clip::Midi(clip) });
                     let index = t.arrangement.len() - 1;
                     self.sync_arrangement(track);

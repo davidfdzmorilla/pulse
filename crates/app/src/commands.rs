@@ -52,6 +52,7 @@ pub enum Command {
     ComputerKeyboard,
     MidiAssign,
     Shortcuts,
+    Guide,
     About,
     Settings,
     CheckUpdates,
@@ -265,6 +266,7 @@ impl PulseApp {
             Command::ComputerKeyboard => self.toggle_keyboard(),
             Command::MidiAssign => self.toggle_learn(),
             Command::Shortcuts => self.open_panel(crate::app::Panel::Shortcuts),
+            Command::Guide => self.open_panel(crate::app::Panel::Guide),
             Command::About => crate::native_menu::about(),
             Command::Settings => self.open_settings(),
             Command::ShowFolder => {

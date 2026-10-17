@@ -1406,7 +1406,7 @@ mod tests {
         let points = &mut app.lane_mut(target, Param::Volume).points;
         points.push(AutomationPoint { beat: 0.0, value: info.denormalize(0.1), curve: 0.0 });
         points.push(AutomationPoint { beat: 40.0, value: info.denormalize(0.9), curve: 0.0 });
-        let mut screen = Screen::new();
+        let screen = Screen::new();
         let mut time = 0.0;
         let mut frame = |app: &mut PulseApp, events: Vec<egui::Event>| {
             time += 0.05;

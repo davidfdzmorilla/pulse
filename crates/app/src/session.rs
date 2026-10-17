@@ -25,6 +25,7 @@ pub(crate) enum Action {
     StartMarquee(egui::Pos2, egui::Modifiers),
     SelectTarget(Target),
     Consolidate(usize, usize),
+    ToMidi(usize, usize, crate::to_midi::ToMidi),
     Freeze(usize),
     Unfreeze(usize),
     Flatten(usize),
@@ -394,6 +395,16 @@ fn clip_slot(
                 actions.push(Action::SeparateStems(t, slot));
                 ui.close();
             }
+            if matches!(clip, Clip::Audio(_)) {
+                ui.menu_button("Convertir a MIDI", |ui| {
+                    for mode in crate::to_midi::ToMidi::ALL {
+                        if ui.button(mode.label()).on_hover_text(mode.hint()).clicked() {
+                            actions.push(Action::ToMidi(t, slot, mode));
+                            ui.close();
+                        }
+                    }
+                });
+            }
             if matches!(clip, Clip::Audio(_)) && ui.button("Consolidar").on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
                 actions.push(Action::Consolidate(t, slot));
                 ui.close();
@@ -603,6 +614,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::Unfreeze(t) => app.unfreeze(t),
         Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),
+        Action::ToMidi(t, slot, mode) => app.convert_to_midi(ClipRef::Session { track: t, slot }, mode),
         Action::SelectSlot(t, slot) => {
             app.set_clip_selection(Vec::new());
             app.selected_target = Target::Track(t);

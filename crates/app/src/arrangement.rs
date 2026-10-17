@@ -837,6 +837,16 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             ui.separator();
         }
     }
+    if audio && count == 1 {
+        ui.menu_button("Convertir a MIDI", |ui| {
+            for mode in crate::to_midi::ToMidi::ALL {
+                if ui.add_enabled(app.to_midi.is_none(), egui::Button::new(mode.label())).on_hover_text(mode.hint()).clicked() {
+                    app.convert_to_midi(clip, mode);
+                    ui.close();
+                }
+            }
+        });
+    }
     if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems…")).on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
         app.separate_stems(clip);
         ui.close();

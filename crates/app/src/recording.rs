@@ -32,6 +32,8 @@ pub struct ArrangementTake {
     /// current one began.
     passes: Vec<(f64, f64)>,
     pass_start: f64,
+    /// Past the punch-out: the engine has been told to stop recording.
+    pub punched_out: bool,
 }
 
 /// A finished take, ready to become a clip.
@@ -93,12 +95,14 @@ impl Recorder {
     }
 
     pub fn start_arrangement(&mut self, start: f64) {
-        self.arrangement = Some(ArrangementTake { start, last_position: start, seen: false, notes: Vec::new(), passes: Vec::new(), pass_start: start });
+        self.arrangement = Some(ArrangementTake { start, last_position: start, seen: false, notes: Vec::new(), passes: Vec::new(), pass_start: start, punched_out: false });
     }
 
     /// Distributes captured notes and returns the takes that ended this frame.
     /// `looped` is the arrangement loop, if it is on: passes wrap at its end.
-    pub fn update(&mut self, notes: Vec<RecordedNote>, state: &SharedState, armed: &[bool], looped: Option<(f64, f64)>) -> Vec<Finished> {
+    /// `punch` (in, out): an arrangement take keeps only what was played between
+    /// them.
+    pub fn update(&mut self, notes: Vec<RecordedNote>, state: &SharedState, armed: &[bool], looped: Option<(f64, f64)>, punch: (Option<f64>, Option<f64>)) -> Vec<Finished> {
         for note in notes {
             if let Some(take) = self.session.iter_mut().find(|t| t.track == note.track) {
                 take.notes.push(note);
@@ -163,12 +167,16 @@ impl Recorder {
                 let mut take = self.arrangement.take().expect("checked above");
                 take.passes.push((take.pass_start, take.last_position));
                 let wrapped = take.passes.len() > 1;
-                finished.push(Finished::ArrangementEnded { passes: take.passes.clone() });
+                let (punch_in, punch_out) = (punch.0.unwrap_or(f64::NEG_INFINITY), punch.1.unwrap_or(f64::INFINITY));
+                // Only what was played between the punch-in and the punch-out.
+                let passes: Vec<(f64, f64)> = take.passes.iter().map(|&(from, to)| (from.max(punch_in), to.min(punch_out))).filter(|(from, to)| to - from > 1e-6).collect();
+                finished.push(Finished::ArrangementEnded { passes });
                 // Looped, the notes of every pass land in the loop (overdubbed).
                 let start = match looped {
                     Some((loop_start, _)) if wrapped => take.start.min(loop_start).floor(),
                     _ => take.start.floor(),
                 };
+                let start = if start < punch_in { punch_in } else { start };
                 for (track, &is_armed) in armed.iter().enumerate() {
                     let notes: Vec<RecordedNote> = take.notes.iter().filter(|n| n.track == track).copied().collect();
                     if !is_armed || notes.is_empty() {
@@ -176,8 +184,12 @@ impl Recorder {
                     }
                     let length = match looped {
                         Some((_, loop_end)) if wrapped => loop_end - start,
+                        _ if punch.1.is_some() && take.last_position >= punch_out - 1e-6 => punch_out - start,
                         _ => bars(notes.iter().map(|n| n.start + n.length).fold(take.last_position, f64::max) - start),
                     };
+                    if length <= 0.0 {
+                        continue;
+                    }
                     finished.push(Finished::Arrangement {
                         track,
                         start,
@@ -529,5 +541,105 @@ mod tests {
         let Clip::Midi(clip) = &midi[0].clip else { panic!() };
         assert_eq!((midi[0].start, midi[0].length), (2.0, 6.0));
         assert_eq!(clip.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60, 64]);
+    }
+
+    /// Punch in and out on a real engine, with an input fed by hand: recording
+    /// from beat 2 with the loop off, only beats 4 to 8 are kept, and recording
+    /// stops by itself at 8 while playback goes on. With the loop on, what was
+    /// played before it is dropped.
+    #[test]
+    fn punch_in_and_out_keep_only_the_loop_span() {
+        use crate::midi_map::Transport;
+        use engine::model::Clip;
+        for looping in [false, true] {
+            let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+            let (audio, mut engine) = crate::app::Audio::detached();
+            app.audio = audio;
+            for track in &mut app.project.tracks {
+                track.armed = false;
+                track.arrangement.clear();
+            }
+            app.project.tracks.push(crate::project::Track::new_audio("Voz", [0, 0, 0]));
+            let voice = app.project.tracks.len() - 1;
+            app.project.tracks[voice].monitor = crate::project::Monitor::Off;
+            app.project.tempo = 120.0;
+            (app.project.loop_enabled, app.project.loop_start, app.project.loop_end) = (looping, 4.0, 8.0);
+            (app.project.punch_in, app.project.punch_out) = (true, true);
+            app.sync_all();
+            app.sync_loop();
+            let (mut samples, mut markers, handle) = engine::detached_input(48_000.0, 1);
+            app.capture = Some(crate::capture::InputCapture::with_handle(None, handle));
+            app.project.tracks[voice].armed = true;
+            app.project.tracks[1].armed = true;
+            app.audio.send(engine::Command::SetArm { track: voice, armed: true });
+            app.audio.send(engine::Command::SetArm { track: 1, armed: true });
+            app.audio.send(engine::Command::SetPosition(2.0));
+            let frame = std::cell::Cell::new(0u64);
+            let state = app.audio.state().unwrap();
+            let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+                let mut buffer = vec![0.0; 1024];
+                for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).round() as usize {
+                    let beat = state.position();
+                    let playing = state.playing.load(Ordering::Relaxed);
+                    engine.process(&mut buffer, 2);
+                    let _ = markers.push(engine::Marker { frame: frame.get(), beat, playing });
+                    for i in 0..512 {
+                        let _ = samples.push((frame.get() + i) as f32 / 48_000.0);
+                    }
+                    frame.set(frame.get() + 512);
+                    app.update_recording();
+                }
+            };
+            run(&mut app, 0.5);
+            let started = frame.get() as f32 / 48_000.0;
+            app.transport(Transport::Record);
+            assert!(app.status.as_deref().unwrap_or("").contains("Punch"), "{:?}", app.status);
+            // A note before the punch-in, one inside, one after the punch-out (or,
+            // looping, in the second pass).
+            let live = app.audio.live().unwrap();
+            run(&mut app, 1.0);
+            live.send(engine::LiveNote::note(60, 0.8));
+            run(&mut app, 0.5);
+            live.send(engine::LiveNote::note(60, 0.0));
+            run(&mut app, 1.5);
+            live.send(engine::LiveNote::note(62, 0.8));
+            run(&mut app, 0.5);
+            live.send(engine::LiveNote::note(62, 0.0));
+            run(&mut app, 3.5);
+            live.send(engine::LiveNote::note(64, 0.8));
+            run(&mut app, 0.5);
+            live.send(engine::LiveNote::note(64, 0.0));
+            run(&mut app, 0.5);
+            if looping {
+                assert!(app.is_arrangement_recording(), "looping, the punch-out never comes");
+                app.transport(Transport::Record);
+                run(&mut app, 0.5);
+            } else {
+                assert!(!app.is_arrangement_recording(), "it stopped at the punch-out");
+                assert!(state.playing.load(Ordering::Relaxed), "and playback went on");
+            }
+            assert!(!app.is_arrangement_recording());
+
+            // Audio: one clip from the punch-in, nothing from before.
+            let lane = app.project.tracks[voice].arrangement.clone();
+            assert_eq!(lane.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), vec![(4.0, 4.0)], "looping {looping}");
+            let Clip::Audio(clip) = &lane[0].clip else { panic!() };
+            // Looping, a take per pass (the second, half, plays); the first holds
+            // the first pass.
+            assert_eq!(clip.takes.len(), if looping { 2 } else { 0 });
+            let first_pass = clip.takes.first().unwrap_or(&clip.sample).clone();
+            let first = app.samples.get(&first_pass).read(0.0).0;
+            // Beat 4 came 2 beats (a second) after recording started.
+            assert!((first - (started + 1.0)).abs() < 0.02, "{first} vs {}", started + 1.0);
+            // MIDI: the punched span with the note inside it (looping, the second
+            // pass's note too: they are overdubbed).
+            let midi = &app.project.tracks[1].arrangement;
+            assert_eq!(midi.len(), 1, "looping {looping}");
+            assert_eq!((midi[0].start, midi[0].length), (4.0, 4.0));
+            let Clip::Midi(notes) = &midi[0].clip else { panic!() };
+            let mut pitches: Vec<u8> = notes.notes.iter().map(|n| n.pitch).collect();
+            pitches.sort_unstable();
+            assert_eq!(pitches, if looping { vec![62, 64] } else { vec![62] });
+        }
     }
 }

@@ -25,11 +25,10 @@ el mismo pull request.
 
 ## Hoja de ruta
 
-1. Punch in/out.
-2. Que unir y consolidar apliquen los efectos de la pista; dividir clips en Session.
-3. Editar los marcadores de tempo en el Arrangement; curvas entre puntos de automatización.
-4. Multisamples (zonas por tecla y velocidad) en el Sampler; marcadores de troceado editables a mano.
-5. Grabar la sesión en el Arrangement; grooves por clip.
+1. Que unir y consolidar apliquen los efectos de la pista; dividir clips en Session.
+2. Editar los marcadores de tempo en el Arrangement; curvas entre puntos de automatización.
+3. Multisamples (zonas por tecla y velocidad) en el Sampler; marcadores de troceado editables a mano.
+4. Grabar la sesión en el Arrangement; grooves por clip.
 
 ## Cómo se trabaja en el repositorio
 

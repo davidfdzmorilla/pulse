@@ -760,6 +760,9 @@ struct Timing {
     frames: usize,
     /// Swing grid (beats) and amount applied to MIDI notes.
     swing: (f64, f32),
+    /// Where the transport jumps back (the loop's end), if it does from here:
+    /// arrangement notes end there.
+    loop_end: f64,
 }
 
 impl Timing {
@@ -1122,7 +1125,9 @@ impl Track {
                 let PlayClip::Midi(clip) = &placed.clip else { continue };
                 let (start, end) = (from.max(placed.start), to.min(placed.end()));
                 if start < end {
-                    schedule_notes(clip, placed.start, start, end, placed.end(), timing, &mut self.events);
+                    // Cut at the loop's end, where the transport jumps back: they end by
+                    // themselves, and notes played live go on sounding across it.
+                    schedule_notes(clip, placed.start, start, end, placed.end().min(timing.loop_end), timing, &mut self.events);
                 }
             }
         }
@@ -1902,6 +1907,7 @@ impl Engine {
                 beats_per_sample,
                 frames: n,
                 swing: self.swing,
+                loop_end: if self.loop_enabled && start < self.loop_end { self.loop_end } else { f64::INFINITY },
             };
             self.sequence_segment(start, end, &timing);
             frame += frames;
@@ -1910,13 +1916,11 @@ impl Engine {
             if wraps {
                 let length = self.loop_end - self.loop_start;
                 self.position = self.loop_start;
-                let wrap_frame = timing.frame(end);
+                // Arrangement notes were cut at the loop's end; notes held on a
+                // keyboard keep sounding.
                 for track in &mut self.tracks {
                     // Session clips keep their phase across the jump.
                     track.launch_beat -= length;
-                    if track.playing.is_none() {
-                        push_event(&mut track.events, wrap_frame, Event::AllNotesOff);
-                    }
                 }
             }
         }
@@ -2819,6 +2823,47 @@ mod tests {
         h.run_beats(0.1);
         assert!(h.shared.tracks[0].follows_arrangement.load(Ordering::Relaxed));
         assert_eq!(h.playing(0), NONE);
+    }
+
+    /// A note held on a keyboard goes on sounding when the loop jumps back.
+    #[test]
+    fn a_held_live_note_sounds_across_the_loop_jump() {
+        let mut h = Harness::new();
+        h.send(Command::SetInputTrack(Some(2)));
+        h.send(Command::SetLoop { enabled: true, start: 0.0, end: 2.0 });
+        h.send(Command::Play);
+        h.play_note(60, 0.9);
+        h.run_beats(1.5);
+        h.shared.tracks[2].peak.take();
+        // Across the jump (at beat 2) and well after it (past any release), still held.
+        h.run_beats(1.5);
+        h.shared.tracks[2].peak.take();
+        h.run_beats(0.5);
+        assert!(h.shared.tracks[2].peak.take() > 0.05, "the held note was cut at the loop");
+        h.play_note(60, 0.0);
+        h.run_beats(1.0);
+        h.shared.tracks[2].peak.take();
+        h.run_beats(0.5);
+        assert_eq!(h.shared.tracks[2].peak.take(), 0.0, "and it stops on its note-off");
+    }
+
+    /// An arrangement note that goes past the loop's end stops there: nothing
+    /// hangs on after the jump.
+    #[test]
+    fn arrangement_notes_end_at_the_loop_jump() {
+        let mut h = Harness::new();
+        let mut clip = MidiClip::new("long", 16.0, [0, 0, 0]);
+        clip.notes.push(Note { start: 1.0, length: 8.0, pitch: 60, velocity: 1.0 });
+        h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(clip))]) });
+        h.send(Command::SetLoop { enabled: true, start: 0.0, end: 2.0 });
+        h.send(Command::Play);
+        h.run_beats(1.5);
+        assert!(h.shared.tracks[0].peak.take() > 0.05, "the note plays");
+        // After the jump, before it starts again at beat 1 (release tail aside).
+        h.run_beats(1.0);
+        h.shared.tracks[0].peak.take();
+        h.run_beats(0.3);
+        assert_eq!(h.shared.tracks[0].peak.take(), 0.0, "the note hung on past the loop's end");
     }
 
     #[test]

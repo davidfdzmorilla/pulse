@@ -88,6 +88,7 @@ La línea de tiempo. Arriba la **franja del loop**, debajo la **regla** con los 
 ### Loop y cursor
 
 - **Arrastra en la franja de arriba** para marcar el loop (y se activa). ⟲ en el transporte lo activa o desactiva.
+- Al dar la vuelta, las notas de los clips terminan en el final del loop; las que mantienes en el teclado siguen sonando.
 - **Clic en la regla**: mueve el cursor y el marcador de inicio. **Arrastrar en la regla**: recorre la canción.
 
 ### Clips

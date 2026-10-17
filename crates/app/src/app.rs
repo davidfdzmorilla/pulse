@@ -153,6 +153,7 @@ pub enum InstrumentEditor {
 pub enum Panel {
     Settings,
     Shortcuts,
+    Guide,
     Updates,
     Export,
 }
@@ -295,6 +296,7 @@ pub struct PulseApp {
     /// The window is closing (the user chose to quit).
     pub quitting: bool,
     pub show_shortcuts: bool,
+    pub guide: crate::guide::Guide,
     /// Preferences, the window for them and the devices it shows.
     pub settings: crate::settings::Settings,
     pub show_settings: bool,
@@ -439,6 +441,7 @@ impl PulseApp {
             interactive: false,
             quitting: false,
             show_shortcuts: false,
+            guide: Default::default(),
             settings: Default::default(),
             show_settings: false,
             updates: Default::default(),
@@ -969,6 +972,7 @@ impl PulseApp {
     pub fn open_panel(&mut self, panel: Panel) {
         self.show_settings = panel == Panel::Settings;
         self.show_shortcuts = panel == Panel::Shortcuts;
+        self.guide.open = panel == Panel::Guide;
         self.updates.show = panel == Panel::Updates;
         self.export.open = panel == Panel::Export;
     }
@@ -2464,6 +2468,7 @@ impl eframe::App for PulseApp {
         self.poll_midi_map();
         crate::midi_map::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
+        crate::guide::window(self, &ctx);
         crate::settings::window(self, &ctx);
         self.follow_updates();
         self.follow_stems(&ctx);

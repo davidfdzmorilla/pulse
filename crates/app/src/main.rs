@@ -15,6 +15,7 @@ mod devices;
 mod editor;
 mod export;
 mod files;
+mod guide;
 mod freeze;
 mod history;
 mod input;

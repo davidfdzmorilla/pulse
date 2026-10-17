@@ -225,6 +225,8 @@ const MOVE_FRAMES: usize = 8;
 const STRAY: f64 = 0.75;
 /// Notes shorter than this (seconds) are left out: slides and blips.
 const MIN_NOTE: f64 = 0.08;
+/// Within this (semitones) of a semitone, a note is in tune: it stays there.
+const IN_TUNE: f64 = 0.3;
 
 fn midi(f0: f64) -> f64 {
     69.0 + 12.0 * (f0 / 440.0).log2()
@@ -248,7 +250,15 @@ pub fn weights(track: &Track) -> [f64; 12] {
 pub fn notes(track: &Track, key: Option<Key>) -> Vec<NoteEvent> {
     let n = track.f0.len();
     let peak = track.rms.iter().copied().fold(0f32, f32::max).max(1e-9);
-    let nearest = |m: f64| -> u8 { key.map_or(m.round().clamp(0.0, 127.0) as u8, |k| k.snap(m)) };
+    // In tune (close to a semitone): that semitone, in the scale or not. Between
+    // two: the key's scale decides.
+    let nearest = |m: f64| -> u8 {
+        let semitone = m.round().clamp(0.0, 127.0);
+        match key {
+            Some(k) if (m - semitone).abs() > IN_TUNE => k.snap(m),
+            _ => semitone as u8,
+        }
+    };
     // The note the voice is on at a frame, given the one it was on.
     let heard = |m: f64, current: u8| -> u8 { if (m - current as f64).abs() <= STRAY { current } else { nearest(m) } };
     let mut notes = Vec::new();
@@ -314,7 +324,11 @@ pub fn notes(track: &Track, key: Option<Key>) -> Vec<NoteEvent> {
 /// sounds in the rest of the song) added. `snap`: to that key's scale.
 pub fn melody(mono: &[f32], rate: f32, context: [f64; 12], snap: bool) -> (Vec<NoteEvent>, Option<Key>) {
     let track = track(mono, rate);
-    let voice = weights(&track);
+    // The voice's own notes, each by how long and loud it is.
+    let mut voice = [0f64; 12];
+    for n in notes(&track, None) {
+        voice[n.pitch as usize % 12] += (n.end - n.start) * n.amplitude as f64;
+    }
     let total: f64 = voice.iter().sum::<f64>().max(1e-9);
     let context_total: f64 = context.iter().sum::<f64>();
     // The song and the voice count the same.
@@ -358,6 +372,17 @@ mod tests {
         }
     }
 
+    /// A note played in tune stays as it is even out of the key's scale; one
+    /// sung between two notes goes to the scale's.
+    #[test]
+    fn in_tune_notes_stay_and_wavering_ones_go_to_the_scale() {
+        let g_major = Key { tonic: 7, minor: false };
+        // An F in tune (not in G major), then a note 45 cents above F (between F and F#).
+        let audio = tone(44_100.0, &[(0.2, 0.5, 65.0), (0.9, 0.5, 65.45)]);
+        let found = notes(&track(&audio, 44_100.0), Some(g_major));
+        assert_eq!(found.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![65, 66], "{found:?}");
+    }
+
     #[test]
     fn the_same_note_sung_twice_is_two_notes() {
         let parts = [(0.2, 0.4, 57.0), (0.65, 0.4, 57.0)];
@@ -392,11 +417,12 @@ mod tests {
             text.push_str(&format!("{}\n", f.unwrap_or(0.0)));
         }
         std::fs::write(&output, text).unwrap();
-        let found = notes(&track, Key::detect(&weights(&track)));
-        eprintln!("key {:?}", Key::detect(&weights(&track)).map(|k| k.name()));
+        let (found, key) = melody(&mono, spec.sample_rate as f32, [0.0; 12], true);
+        eprintln!("key {:?}", key.map(|k| k.name()));
         eprintln!("{} frames in {took:?}; {} notes:", track.f0.len(), found.len());
         for n in &found {
-            eprintln!("  {:.2} {:.2} {}", n.start, n.end - n.start, n.pitch);
+            eprintln!("  {:.2} {:.2} {} amp {:.2}", n.start, n.end - n.start, n.pitch, n.amplitude);
         }
+        eprintln!("free: {:?}", notes(&track, None).iter().map(|n| (format!("{:.2}", n.start), n.pitch)).collect::<Vec<_>>());
     }
 }

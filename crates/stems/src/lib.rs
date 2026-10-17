@@ -8,6 +8,7 @@
 //! together. The steps follow `demucs.apply.apply_model` (without shifts) and
 //! `HTDemucs._spec` / `_ispec`; the tests compare each against PyTorch's results.
 
+pub mod key;
 pub mod pitch;
 pub mod transcribe;
 

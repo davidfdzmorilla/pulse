@@ -595,6 +595,7 @@ fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
 
 fn clip(name: &str, length: f64, color: [u8; 3], notes: Vec<Note>) -> Option<Clip> {
     Some(Clip::Midi(MidiClip {
+        groove: None,
         envelopes: Vec::new(),
         name: name.into(),
         length,

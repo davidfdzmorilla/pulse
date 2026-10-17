@@ -27,7 +27,6 @@ el mismo pull request.
 
 1. Que unir y consolidar apliquen los efectos de la pista; dividir clips en Session.
 2. Editar los marcadores de tempo en el Arrangement.
-3. Grooves por clip.
 
 ## Cómo se trabaja en el repositorio
 

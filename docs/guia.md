@@ -36,7 +36,7 @@ La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a do
 - **⟲ Loop** del Arrangement, con el inicio y la longitud del loop al lado (la región se elige en la franja de arriba del Arrangement).
 - **Punch in** y **punch out** (los dos botones rojos junto al loop): al grabar en el Arrangement, solo se graba desde el inicio del loop y/o hasta su final (ver «Grabar»).
 - **Rec Q**: cuantiza el inicio de las notas MIDI grabadas (Off, 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32).
-- **Swing** (0–100 %) y su rejilla (1/8 o 1/16): retrasa los contratiempos al reproducir, sin cambiar las notas. 100 % es un shuffle de tresillo. También se aplica al exportar.
+- **Swing** (0–100 %) y su rejilla (1/8 o 1/16): retrasa los contratiempos al reproducir, sin cambiar las notas. 100 % es un shuffle de tresillo. También se aplica al exportar. Vale para todos los clips MIDI, salvo los que tengan su propio groove (ver «Editor MIDI»).
 - **▶ Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
 - **Teclado**: el teclado del ordenador como teclado MIDI (M).
 - **MIDI**: encendido si hay teclados MIDI conectados. Clic para volver a buscarlos.
@@ -269,6 +269,7 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 
 - Nombre del clip, **Loop** (1, 2, 4, 8 o 16 compases), **Rejilla** (1/4 a 1/32, con tresillos), **Nota** (longitud de las notas nuevas).
 - **Dibujar** (B): modo lápiz.
+- **Groove**: el del proyecto (el swing del transporte) o **uno propio para este clip**, con **Swing** y su rejilla, **Acentos** (contratiempos más suaves) y **Humanizar** (pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta). Tiene grooves listos: Recto, Swing 1/16, MPC 1/16, Shuffle 1/8 y Humano. Se aplica al tocar: las notas no se mueven.
 - **Cuantizar** (⌘U) con su **intensidad** (%) y **finales** (cuantizar también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
 - **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom**.
 

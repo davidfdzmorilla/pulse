@@ -21,11 +21,68 @@ pub struct MidiClip {
     /// Clip automation: parameter lanes in clip time, looping with the clip.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub envelopes: Vec<AutomationLane>,
+    /// The clip's own groove; none: the project's swing.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub groove: Option<Groove>,
+}
+
+/// How a clip's notes are played off the grid, as Live's grooves: swing on the
+/// off-beats of `grid`, softer off-beats (`accent`) and small random shifts in
+/// time and velocity (`humanize`). Applied on playback; the notes stay as written.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct Groove {
+    /// Beats of the grid swung (0.5 eighths, 0.25 sixteenths).
+    pub grid: f64,
+    /// 0..1: how late the off-beats come (1: a triplet shuffle).
+    pub swing: f32,
+    /// 0..1: how much softer the off-beats are.
+    pub accent: f32,
+    /// 0..1: random shifts, up to a 32nd of a beat in time and 15 % in velocity.
+    pub humanize: f32,
+}
+
+impl Default for Groove {
+    fn default() -> Self {
+        Self { grid: 0.25, swing: 0.0, accent: 0.0, humanize: 0.0 }
+    }
+}
+
+/// A number in -1..1 that is always the same for `seed` (a note on a lap).
+fn jitter(seed: u64) -> f32 {
+    let mut z = seed.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    z ^= z >> 31;
+    (z >> 11) as f32 / (1u64 << 53) as f32 * 2.0 - 1.0
+}
+
+impl Groove {
+    /// Whether `start` falls on an off-beat of the grid (its 2nd, 4th… step).
+    fn off_beat(&self, start: f64) -> bool {
+        let step = start / self.grid.max(1.0 / 64.0);
+        let nearest = step.round();
+        (step - nearest).abs() < 1e-6 && (nearest as i64).rem_euclid(2) == 1
+    }
+
+    /// When note `index` (starting at `start` in the clip) plays on lap `lap`:
+    /// beats later (or earlier, humanized), and its velocity.
+    pub fn apply(&self, index: usize, lap: i64, start: f64, velocity: f32) -> (f64, f32) {
+        let off = self.off_beat(start);
+        let mut shift = if off { self.grid * self.swing.clamp(0.0, 1.0) as f64 / 3.0 } else { 0.0 };
+        let mut velocity = velocity * if off { 1.0 - 0.6 * self.accent.clamp(0.0, 1.0) } else { 1.0 };
+        if self.humanize > 0.0 {
+            let seed = (index as u64) << 32 ^ lap as u64;
+            shift += jitter(seed) as f64 * self.humanize as f64 / 32.0;
+            velocity *= 1.0 + 0.15 * self.humanize * jitter(seed ^ 0xA5A5_A5A5);
+        }
+        (shift, velocity.clamp(0.01, 1.0))
+    }
 }
 
 impl MidiClip {
     pub fn new(name: impl Into<String>, length: f64, color: [u8; 3]) -> Self {
         Self {
+            groove: None,
             envelopes: Vec::new(),
             name: name.into(),
             length,
@@ -6389,6 +6446,25 @@ mod tests {
         assert_eq!(lane.value_at(6.0), Some(0.5));
         assert_eq!(lane.value_at(8.0), Some(1.0));
         assert_eq!(lane.value_at(100.0), Some(1.0));
+    }
+
+    #[test]
+    fn grooves_swing_soften_and_humanize_the_off_beats() {
+        let groove = Groove { grid: 0.5, swing: 0.6, accent: 0.5, humanize: 0.0 };
+        assert_eq!(groove.apply(0, 0, 0.0, 1.0), (0.0, 1.0), "on the beat: as written");
+        let (shift, velocity) = groove.apply(1, 0, 0.5, 1.0);
+        assert!((shift - 0.5 * 0.6 / 3.0).abs() < 1e-6 && (velocity - 0.7).abs() < 1e-6, "{shift} {velocity}");
+        assert_eq!(groove.apply(2, 0, 0.6, 0.8), (0.0, 0.8), "off the grid: left alone");
+        // Humanized: small, different per note and lap, the same every time.
+        let human = Groove { humanize: 1.0, ..Groove::default() };
+        let a = human.apply(3, 0, 1.0, 0.8);
+        assert_eq!(a, human.apply(3, 0, 1.0, 0.8));
+        assert_ne!(a, human.apply(3, 1, 1.0, 0.8));
+        let shifts: Vec<f64> = (0..200).map(|i| human.apply(i, 0, 1.0, 0.8).0).collect();
+        assert!(shifts.iter().all(|s| s.abs() <= 1.0 / 32.0 + 1e-9));
+        assert!(shifts.iter().any(|&s| s > 0.01) && shifts.iter().any(|&s| s < -0.01), "both ways");
+        let json = serde_json::to_string(&MidiClip::new("a", 4.0, [0; 3])).unwrap();
+        assert!(!json.contains("groove"), "clips without one save as before");
     }
 
     #[test]

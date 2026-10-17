@@ -535,6 +535,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
         if widgets::flat_button(ui, "Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
             state.draw_mode = !state.draw_mode;
         }
+        groove_menu(ui, clip);
         ui.separator();
         let targets = note_edit::targets(&clip.notes, &state.selection);
         let scope = if state.selection.is_empty() { "todas las notas" } else { "las notas seleccionadas" };
@@ -562,6 +563,56 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
         ui.add(egui::Slider::new(&mut state.zoom, 0.5..=4.0).logarithmic(true).show_value(false));
     });
     ui.add_space(2.0);
+}
+
+/// «Groove»: the clip follows the project's swing, or has its own groove
+/// (swing, softer off-beats, humanize), with some ready-made ones.
+fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip) {
+    use engine::model::Groove;
+    let label = if clip.groove.is_some() { "Groove: propio" } else { "Groove: proyecto" };
+    widgets::field_menu_button(ui, label, |ui| {
+        ui.set_min_width(250.0);
+        let mut own = clip.groove.is_some();
+        ui.radio_value(&mut own, false, "El del proyecto").on_hover_text("El swing del transporte, como los demás clips");
+        ui.radio_value(&mut own, true, "Uno propio para este clip");
+        if own != clip.groove.is_some() {
+            clip.groove = own.then(Groove::default);
+        }
+        let Some(groove) = clip.groove.as_mut() else { return };
+        ui.separator();
+        ui.horizontal_wrapped(|ui| {
+            let presets = [
+                ("Recto", Groove::default()),
+                ("Swing 1/16", Groove { grid: 0.25, swing: 0.5, ..Groove::default() }),
+                ("MPC 1/16", Groove { grid: 0.25, swing: 0.36, accent: 0.3, ..Groove::default() }),
+                ("Shuffle 1/8", Groove { grid: 0.5, swing: 1.0, accent: 0.2, ..Groove::default() }),
+                ("Humano", Groove { grid: 0.25, swing: 0.15, accent: 0.25, humanize: 0.5 }),
+            ];
+            for (name, preset) in presets {
+                if ui.selectable_label(*groove == preset, name).clicked() {
+                    *groove = preset;
+                }
+            }
+        });
+        ui.horizontal(|ui| {
+            ui.label("Rejilla");
+            ui.selectable_value(&mut groove.grid, 0.5, "1/8");
+            ui.selectable_value(&mut groove.grid, 0.25, "1/16");
+        });
+        let percent = |ui: &mut egui::Ui, name: &str, value: &mut f32, hint: &str| {
+            let mut p = *value * 100.0;
+            ui.horizontal(|ui| {
+                ui.add_sized([70.0, 18.0], egui::Label::new(name));
+                if ui.add(egui::Slider::new(&mut p, 0.0..=100.0).suffix(" %").fixed_decimals(0)).on_hover_text(hint).changed() {
+                    *value = p / 100.0;
+                }
+            });
+        };
+        percent(ui, "Swing", &mut groove.swing, "Retrasa los contratiempos de la rejilla (100 % = shuffle de tresillo)");
+        percent(ui, "Acentos", &mut groove.accent, "Los contratiempos suenan más suaves");
+        percent(ui, "Humanizar", &mut groove.humanize, "Pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta");
+        ui.label(egui::RichText::new("Se aplica al tocar: las notas no se mueven.").color(theme::TEXT_DIM).size(10.5));
+    });
 }
 
 /// Prefix marking copied notes in the system clipboard.

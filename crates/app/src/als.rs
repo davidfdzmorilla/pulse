@@ -406,6 +406,7 @@ fn session_clip(clip: Node, track_color: [u8; 3]) -> MidiClip {
     };
     let (start, length) = content_window(clip, visible);
     MidiClip {
+        groove: None,
         envelopes: Vec::new(),
         name: clip_name(clip).unwrap_or_else(|| "MIDI".into()),
         length,

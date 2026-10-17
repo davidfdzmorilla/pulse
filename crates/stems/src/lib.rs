@@ -8,6 +8,8 @@
 //! together. The steps follow `demucs.apply.apply_model` (without shifts) and
 //! `HTDemucs._spec` / `_ispec`; the tests compare each against PyTorch's results.
 
+pub mod transcribe;
+
 use rustfft::num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
 use std::path::Path;

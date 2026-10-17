@@ -107,7 +107,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         ],
     ),
     ("Ventana", &[System("Minimizar", "performMiniaturize:", "m"), System("Zoom", "performZoom:", "")]),
-    ("Ayuda", &[Run(C::Shortcuts, "Atajos de teclado", "")]),
+    ("Ayuda", &[Run(C::Guide, "Guía de Pulse", ""), Run(C::Shortcuts, "Atajos de teclado", "")]),
 ];
 
 /// Every command in the menus, in order (a menu item's tag is its index here).

@@ -78,6 +78,7 @@ impl PulseApp {
                     "modular" => self.open_instrument_editor(crate::app::InstrumentEditor::Modular, track),
                     "settings" => self.open_settings(),
                     "shortcuts" => self.open_panel(crate::app::Panel::Shortcuts),
+                    "guide" => self.open_panel(crate::app::Panel::Guide),
                     "updates" => self.open_panel(crate::app::Panel::Updates),
                     "export" => self.open_panel(crate::app::Panel::Export),
                     "tables" => crate::table_editor::open(self, track, 0),

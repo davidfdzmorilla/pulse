@@ -715,6 +715,27 @@ impl KickParams {
     }
 }
 
+/// Most zones a multisampled sampler holds.
+pub const SAMPLER_ZONES: usize = 32;
+
+/// A zone of a multisampled sampler: which notes and velocities (1-127) play
+/// the track's sample of the same index, and the note it was recorded at.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Zone {
+    pub lo: u8,
+    pub hi: u8,
+    pub root: u8,
+    pub vel_lo: u8,
+    pub vel_hi: u8,
+}
+
+impl Zone {
+    pub fn plays(&self, pitch: u8, velocity: f32) -> bool {
+        let velocity = (velocity * 127.0).round().clamp(1.0, 127.0) as u8;
+        (self.lo..=self.hi).contains(&pitch) && (self.vel_lo..=self.vel_hi).contains(&velocity)
+    }
+}
+
 /// Parameters of the sampler. The sample itself lives on the track.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SamplerParams {
@@ -734,6 +755,28 @@ pub struct SamplerParams {
     pub cutoff: f32,
     pub resonance: f32,
     pub gain: f32,
+    /// Multisampled: the first `zone_count` zones map notes to the track's
+    /// samples (zone i plays sample i). None: sample 0 over the whole keyboard,
+    /// from `root`.
+    #[serde(default, skip_serializing_if = "no_zones")]
+    pub zones: [Zone; SAMPLER_ZONES],
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub zone_count: u8,
+}
+
+fn no_zones(zones: &[Zone; SAMPLER_ZONES]) -> bool {
+    zones.iter().all(|z| *z == Zone::default())
+}
+
+fn is_zero_u8(value: &u8) -> bool {
+    *value == 0
+}
+
+impl SamplerParams {
+    /// The zones in use.
+    pub fn zones(&self) -> &[Zone] {
+        &self.zones[..(self.zone_count as usize).min(SAMPLER_ZONES)]
+    }
 }
 
 impl Default for SamplerParams {
@@ -751,6 +794,8 @@ impl Default for SamplerParams {
             cutoff: 20000.0,
             resonance: 0.0,
             gain: 0.7,
+            zones: [Zone::default(); SAMPLER_ZONES],
+            zone_count: 0,
         }
     }
 }

@@ -24,6 +24,7 @@ mod kick_ui;
 mod kits;
 mod library;
 mod midi_map;
+mod multisample;
 mod modular_ui;
 mod native_menu;
 mod note_edit;

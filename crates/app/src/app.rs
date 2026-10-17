@@ -1333,6 +1333,17 @@ impl PulseApp {
 
     /// Loads files into consecutive sample slots of a sampler or drum rack, starting at `slot`.
     pub fn set_instrument_samples(&mut self, track: usize, slot: usize, paths: Vec<PathBuf>) {
+        // Several files on a sampler: spread over the keyboard.
+        if let InstrumentKind::Sampler(params) = self.project.tracks[track].instrument {
+            if paths.len() > 1 {
+                return self.load_multisample(track, paths);
+            }
+            if params.zone_count > 0 {
+                // One file: back to a single sample over the whole keyboard.
+                self.project.tracks[track].samples.clear();
+                self.set_instrument(track, InstrumentKind::Sampler(engine::model::SamplerParams { zone_count: 0, zones: Default::default(), ..params }));
+            }
+        }
         let slots = match self.project.tracks[track].instrument {
             InstrumentKind::Sampler(_) | InstrumentKind::Kick(_) => 1,
             InstrumentKind::DrumRack(_) => RACK_PADS,
@@ -1362,7 +1373,7 @@ impl PulseApp {
     pub fn choose_instrument_samples(&mut self, track: usize, slot: usize) {
         let dialog = rfd::FileDialog::new().add_filter("Audio", &AUDIO_EXTENSIONS);
         let paths = match self.project.tracks[track].instrument {
-            InstrumentKind::DrumRack(_) => crate::files::pick_files(dialog),
+            InstrumentKind::DrumRack(_) | InstrumentKind::Sampler(_) => crate::files::pick_files(dialog),
             _ => crate::files::pick_file(dialog).map(|p| vec![p]),
         };
         if let Some(paths) = paths {

@@ -378,6 +378,9 @@ Se eligen en el navegador (INSTRUMENTOS) con una pista MIDI seleccionada.
 - **Wavetable Synth**, **Polychrome Synth** y **Modular Synth**: ver sus temas.
 - **Kick Designer**: ver su tema.
 - **Sampler**: toca una muestra cromáticamente desde su nota raíz. Arrastra un audio a su zona o usa **Cargar…**. Modos **Clásico** (mientras mantienes la nota), **One-shot** (entera) y **Loop**. Root, Tune, Start, filtro y ADSR.
+  - **Multisample**: carga o arrastra **varias** muestras a la vez y se reparten por el teclado según la nota de su nombre («Piano C3», «Rhodes_F#2», «Strings Db4»; C3 es el do central). Cada una cubre las teclas hasta la mitad de camino de sus vecinas y suena tal cual en su nota. Varias de la misma nota son **capas de velocidad**: la más suave abajo. Las que no llevan nota van una por tecla desde C3.
+  - El mapa muestra las zonas sobre el teclado (arriba, las velocidades altas); clic en una tecla para oírla. **−12 / +12** mueven todo el mapa una octava (librerías que llaman C4 al do central). **Zonas…** permite ajustar a mano las notas, la raíz y las velocidades de cada muestra.
+  - Hasta 32 muestras. Cargar una sola vuelve al modo normal.
 - **Drum Machine**: 8 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tom, cencerro), cada uno con Tune, Decay y Level. Clic en un sonido para escucharlo.
 - **Drum Rack**: 16 pads de muestras (el 1 abajo a la izquierda, desde C1).
   - Clic en un pad lo escucha y lo selecciona. Arrastra uno o varios audios sobre los pads.

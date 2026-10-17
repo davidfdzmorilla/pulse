@@ -22,6 +22,8 @@ const SAMPLER_VOICES: usize = 16;
 
 #[derive(Clone, Copy)]
 struct SamplerVoice {
+    /// The track's sample it plays (its zone's).
+    slot: usize,
     gate: Gate,
     env: Adsr,
     position: f64,
@@ -40,7 +42,7 @@ pub struct Sampler {
 
 impl Sampler {
     pub fn new(params: SamplerParams, sample_rate: f32) -> Self {
-        let voice = SamplerVoice { gate: Gate::OFF, env: Adsr::IDLE, position: 0.0, rate: 1.0, filters: [Svf::default(); 2] };
+        let voice = SamplerVoice { slot: 0, gate: Gate::OFF, env: Adsr::IDLE, position: 0.0, rate: 1.0, filters: [Svf::default(); 2] };
         Self { params, voices: [voice; SAMPLER_VOICES], sample_rate, counter: 0, pitch: 1.0 }
     }
 
@@ -58,16 +60,31 @@ impl Sampler {
     }
 
     pub fn note_on(&mut self, samples: &[Arc<Sample>], pitch: u8, velocity: f32, gate: u32) {
-        let Some(sample) = samples.first().filter(|s| s.frames() > 0) else { return };
+        let p = self.params;
+        if p.zone_count == 0 {
+            self.start_voice(samples, 0, p.root, pitch, velocity, gate);
+            return;
+        }
+        // Every zone with this note and velocity sounds (layers too).
+        for (slot, zone) in p.zones().iter().enumerate() {
+            if zone.plays(pitch, velocity) {
+                self.start_voice(samples, slot, zone.root as f32, pitch, velocity, gate);
+            }
+        }
+    }
+
+    fn start_voice(&mut self, samples: &[Arc<Sample>], slot: usize, root: f32, pitch: u8, velocity: f32, gate: u32) {
+        let Some(sample) = samples.get(slot).filter(|s| s.frames() > 0) else { return };
         let p = self.params;
         self.counter += 1;
         let index = free_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.gate.age)));
         let voice = &mut self.voices[index];
         // One-shots ignore note length: they play until the sample (or the envelope) ends.
         let gate = if p.one_shot { HELD } else { gate };
+        voice.slot = slot;
         voice.gate = Gate::new(pitch, velocity, gate, self.counter);
         voice.position = (p.start.clamp(0.0, 0.99) as f64) * sample.frames() as f64;
-        voice.rate = playback_rate(sample, pitch as f32 - p.root + p.tune, self.sample_rate);
+        voice.rate = playback_rate(sample, pitch as f32 - root + p.tune, self.sample_rate);
         voice.filters = [Svf::default(); 2];
         voice.env = Adsr::IDLE;
         voice.env.trigger();
@@ -95,19 +112,18 @@ impl Sampler {
     pub fn render(&mut self, samples: &[Arc<Sample>], left: &mut [f32], right: &mut [f32]) {
         let p = self.params;
         let sr = self.sample_rate;
-        let Some(sample) = samples.first().filter(|s| s.frames() > 0) else {
-            for v in &mut self.voices {
-                v.env = Adsr::IDLE;
-            }
-            return;
-        };
-        let frames = sample.frames() as f64;
-        let loop_start = p.start.clamp(0.0, 0.99) as f64 * frames;
         let g = svf_g(p.cutoff, sr);
         let k = 2.0 - 1.95 * p.resonance.clamp(0.0, 1.0);
         let filtered = p.cutoff < 19_000.0;
         let pitch = self.pitch as f64;
         for voice in self.voices.iter_mut().filter(|v| v.env.stage != Stage::Idle) {
+            // Its sample gone (or swapped for an empty one): silent.
+            let Some(sample) = samples.get(voice.slot).filter(|s| s.frames() > 0) else {
+                voice.env = Adsr::IDLE;
+                continue;
+            };
+            let frames = sample.frames() as f64;
+            let loop_start = p.start.clamp(0.0, 0.99) as f64 * frames;
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.gate.tick() {
                     voice.env.release(p.release, sr);
@@ -322,6 +338,41 @@ mod tests {
         sampler.note_off(60);
         let (l, _) = render(20_000, |l, r| sampler.render(&samples, l, r));
         assert!(l[19_999] > 0.4);
+    }
+
+    /// Zones: each note plays its zone's sample from that zone's root, and
+    /// velocity picks the layer.
+    #[test]
+    fn zones_pick_the_sample_and_layer_for_each_note() {
+        use crate::model::Zone;
+        // Three files told apart by their level: low notes, high soft, high loud.
+        let samples = [constant(48_000, 0.1), constant(48_000, 0.2), constant(48_000, 0.4)];
+        let mut params = SamplerParams { gain: 1.0, attack: 0.0, ..Default::default() };
+        params.zones[0] = Zone { lo: 0, hi: 59, root: 48, vel_lo: 1, vel_hi: 127 };
+        params.zones[1] = Zone { lo: 60, hi: 127, root: 72, vel_lo: 1, vel_hi: 63 };
+        params.zones[2] = Zone { lo: 60, hi: 127, root: 72, vel_lo: 64, vel_hi: 127 };
+        params.zone_count = 3;
+        let level = |pitch: u8, velocity: f32| {
+            let mut sampler = Sampler::new(params, SR);
+            sampler.note_on(&samples, pitch, velocity, HELD);
+            let (l, _) = render(2000, |l, r| sampler.render(&samples, l, r));
+            l[1999] / velocity
+        };
+        assert!((level(50, 1.0) - 0.1).abs() < 0.01, "{}", level(50, 1.0));
+        assert!((level(70, 0.3) - 0.2).abs() < 0.01, "{}", level(70, 0.3));
+        assert!((level(70, 0.9) - 0.4).abs() < 0.01, "{}", level(70, 0.9));
+
+        // Each zone plays at its own root: a ramp at 72 in the upper zone reads at 1x.
+        let ramps = [ramp(SR), ramp(SR), ramp(SR)];
+        let mut sampler = Sampler::new(params, SR);
+        sampler.note_on(&ramps, 72, 1.0, HELD);
+        let (l, _) = render(1000, |l, r| sampler.render(&ramps, l, r));
+        assert!((l[999] - 1000.0 / SR).abs() < 0.002, "{}", l[999]);
+        // And 48 is the lower zone's root: 1x too, not two octaves down.
+        let mut sampler = Sampler::new(params, SR);
+        sampler.note_on(&ramps, 48, 1.0, HELD);
+        let (l, _) = render(1000, |l, r| sampler.render(&ramps, l, r));
+        assert!((l[999] - 1000.0 / SR).abs() < 0.002, "{}", l[999]);
     }
 
     #[test]

@@ -45,6 +45,10 @@ pub(crate) enum Action {
     /// Opens a file dialog for sample slot `n`.
     LoadSamples(usize),
     ClearSample(usize),
+    /// Moves a multisample's zones by these semitones.
+    ShiftZones(i32),
+    /// The sampler back to no samples (multisample or not).
+    ClearSampler,
     SelectPad(usize),
     BasicKit,
     SliceFile,
@@ -239,6 +243,16 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             Action::ClearSample(slot) => {
                 if let Target::Track(t) = target {
                     app.clear_instrument_sample(t, slot);
+                }
+            }
+            Action::ShiftZones(semitones) => {
+                if let Target::Track(t) = target {
+                    app.shift_zones(t, semitones);
+                }
+            }
+            Action::ClearSampler => {
+                if let Target::Track(t) = target {
+                    app.clear_sampler(t);
                 }
             }
             Action::SelectPad(pad) => app.selected_pad = pad,
@@ -502,16 +516,33 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         InstrumentKind::Sampler(base) => {
             device_frame(ui, kind.label(), 560.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 ui.vertical(|ui| {
+                    let multi = base.zone_count > 0;
                     let rect = sample_slot(app, ui, t, 0, vec2(220.0, 78.0), zones);
-                    waveform(app, ui, t, 0, rect, app.display_value(target, Param::Instrument(2)));
+                    if multi {
+                        if let Some(pitch) = keymap(app, ui, t, &base, rect) {
+                            actions.push(Action::Preview(pitch));
+                        }
+                    } else {
+                        waveform(app, ui, t, 0, rect, app.display_value(target, Param::Instrument(2)));
+                    }
                     ui.horizontal(|ui| {
-                        if ui.small_button("Cargar…").on_hover_text("También puedes arrastrar un archivo de audio aquí").clicked() {
+                        if ui.small_button("Cargar…").on_hover_text("Una muestra, o varias para repartirlas por el teclado según la nota de su nombre (Piano C3, Piano F#3…). También puedes arrastrarlas aquí").clicked() {
                             actions.push(Action::LoadSamples(0));
                         }
-                        if app.project.tracks[t].sample(0).is_some() && ui.small_button("×").on_hover_text("Quitar la muestra").clicked() {
-                            actions.push(Action::ClearSample(0));
+                        if app.project.tracks[t].sample(0).is_some() && ui.small_button("×").on_hover_text(if multi { "Quitar las muestras" } else { "Quitar la muestra" }).clicked() {
+                            actions.push(Action::ClearSampler);
                         }
-                        if ui.small_button("▶").on_hover_text("Escuchar en la nota raíz").clicked() {
+                        if multi {
+                            if ui.small_button("−12").on_hover_text("Mover el mapa una octava abajo (si los nombres van una octava desplazados)").clicked() {
+                                actions.push(Action::ShiftZones(-12));
+                            }
+                            if ui.small_button("+12").on_hover_text("Mover el mapa una octava arriba").clicked() {
+                                actions.push(Action::ShiftZones(12));
+                            }
+                            if let Some(params) = zone_menu(app, ui, t, &base) {
+                                actions.push(Action::Instrument(InstrumentKind::Sampler(params)));
+                            }
+                        } else if ui.small_button("▶").on_hover_text("Escuchar en la nota raíz").clicked() {
                             actions.push(Action::Preview(base.root.round() as u8));
                         }
                     });
@@ -531,7 +562,8 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                     for row in [[0, 1, 2, 7, 8], [3, 4, 5, 6, 9]] {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
-                            for i in row {
+                            // With zones, each has its own root.
+                            for i in row.into_iter().filter(|&i| i != 0 || base.zone_count == 0) {
                                 knob(ui, actions, i, kind.params()[i].name, 26.0);
                             }
                         });
@@ -713,6 +745,79 @@ fn sample_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, slot: usize, size: e
         painter.text(rect.center(), Align2::CENTER_CENTER, "Arrastra una muestra aquí", theme::small(), TEXT_DIM);
     }
     rect
+}
+
+/// A multisample's map in `rect`: the keyboard, each zone a block over its keys
+/// (velocity layers stacked). A clic plays the key under it.
+fn keymap(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams, rect: Rect) -> Option<u8> {
+    let painter = ui.painter_at(rect);
+    let key_w = rect.width() / 128.0;
+    let keys = Rect::from_min_max(pos2(rect.left(), rect.bottom() - 14.0), rect.max);
+    for pitch in 0..128u8 {
+        let x = rect.left() + pitch as f32 * key_w;
+        let color = if crate::project::is_black_key(pitch) { Color32::from_gray(40) } else { Color32::from_gray(190) };
+        painter.rect_filled(Rect::from_min_max(pos2(x, keys.top()), pos2(x + key_w, keys.bottom())), 0.0, color);
+    }
+    let area = Rect::from_min_max(rect.min + vec2(0.0, 14.0), pos2(rect.right(), keys.top() - 2.0));
+    let color = theme::rgb(app.project.tracks[t].color);
+    for zone in params.zones() {
+        let x0 = rect.left() + zone.lo as f32 * key_w;
+        let x1 = rect.left() + (zone.hi as f32 + 1.0) * key_w;
+        // Velocity: bottom is soft, top is loud.
+        let y = |v: u8| area.bottom() - area.height() * v as f32 / 127.0;
+        let block = Rect::from_min_max(pos2(x0, y(zone.vel_hi)), pos2(x1, y(zone.vel_lo.saturating_sub(1))));
+        painter.rect_filled(block.shrink(0.5), 1.0, theme::shade(color, 0.6));
+        painter.rect_stroke(block.shrink(0.5), 1.0, Stroke::new(1.0, color), egui::StrokeKind::Inside);
+        let root = rect.left() + (zone.root as f32 + 0.5) * key_w;
+        painter.line_segment([pos2(root, keys.top()), pos2(root, keys.bottom())], Stroke::new(2.0, ACCENT));
+    }
+    let count = params.zone_count;
+    painter.text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, format!("{count} zonas"), theme::small(), TEXT_DIM);
+    let response = ui.interact(rect, ui.id().with(("keymap", t)), Sense::click());
+    let pitch = response.hover_pos().map(|p| ((p.x - rect.left()) / key_w).clamp(0.0, 127.0) as u8);
+    if let Some(pitch) = pitch {
+        let track = &app.project.tracks[t];
+        let names: Vec<String> = params.zones().iter().enumerate().filter(|(_, z)| (z.lo..=z.hi).contains(&pitch)).map(|(i, z)| format!("{} ({}–{} · vel {}–{})", track.sample_name(i).unwrap_or_default(), crate::project::note_name(z.lo), crate::project::note_name(z.hi), z.vel_lo, z.vel_hi)).collect();
+        let text = format!("{}: {}\nClic: escucharla", crate::project::note_name(pitch), if names.is_empty() { "nada".to_string() } else { names.join(", ") });
+        response.clone().on_hover_text(text);
+    }
+    if response.clicked() { pitch } else { None }
+}
+
+/// «Zonas…»: each zone's keys, root and velocities, to set by hand. Returns the
+/// new settings if something changed.
+fn zone_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams) -> Option<SamplerParams> {
+    let mut edited = *params;
+    widgets::field_menu_button(ui, "Zonas…", |ui| {
+        let note = |ui: &mut egui::Ui, value: &mut u8| {
+            ui.add(egui::DragValue::new(value).range(0..=127).speed(0.2).custom_formatter(|n, _| crate::project::note_name(n as u8)).custom_parser(|text| crate::multisample::note_in_name(text).map(|n| n as f64)));
+        };
+        let velocity = |ui: &mut egui::Ui, value: &mut u8| {
+            ui.add(egui::DragValue::new(value).range(1..=127).speed(0.3));
+        };
+        egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
+            egui::Grid::new(("zones", t)).striped(true).show(ui, |ui| {
+                for header in ["Muestra", "Desde", "Hasta", "Raíz", "Vel. mín.", "Vel. máx."] {
+                    ui.label(egui::RichText::new(header).color(TEXT_DIM).size(10.5));
+                }
+                ui.end_row();
+                let count = edited.zone_count as usize;
+                for (i, zone) in edited.zones[..count].iter_mut().enumerate() {
+                    let name = app.project.tracks[t].sample_name(i).unwrap_or_default();
+                    ui.add_sized([170.0, 18.0], egui::Label::new(name).truncate()).on_hover_text("Las notas desde-hasta y las velocidades que la tocan; Raíz es la nota a la que suena tal cual");
+                    note(ui, &mut zone.lo);
+                    note(ui, &mut zone.hi);
+                    note(ui, &mut zone.root);
+                    velocity(ui, &mut zone.vel_lo);
+                    velocity(ui, &mut zone.vel_hi);
+                    zone.hi = zone.hi.max(zone.lo);
+                    zone.vel_hi = zone.vel_hi.max(zone.vel_lo);
+                    ui.end_row();
+                }
+            });
+        });
+    });
+    (edited != *params).then_some(edited)
 }
 
 /// Draws the sample in `slot` with its start point.

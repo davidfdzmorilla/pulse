@@ -102,11 +102,39 @@ pub struct PlacedClip {
     pub start: f64,
     pub length: f64,
     pub clip: PlayClip,
+    /// Audio clips that another one starts right where they end (before) or
+    /// begins right where they start (after) cross-fade with it there, playing on
+    /// into each other's side, instead of each fading to silence at the cut.
+    pub joined: (bool, bool),
 }
 
 impl PlacedClip {
+    pub fn new(start: f64, length: f64, clip: PlayClip) -> Self {
+        Self { start, length, clip, joined: (false, false) }
+    }
+
     fn end(&self) -> f64 {
         self.start + self.length
+    }
+
+    /// An audio clip that plays its content once (not looping), which can go on
+    /// past its edges into the file.
+    fn plays_once(&self) -> bool {
+        matches!(&self.clip, PlayClip::Audio(c, _) if self.length <= c.length + 1e-9)
+    }
+}
+
+/// Marks the audio clips of an arrangement that butt onto another one (pieces of
+/// a split clip, or of takes), so they cross-fade there.
+pub fn link_neighbours(clips: &mut [PlacedClip]) {
+    for i in 0..clips.len() {
+        let joined = if clips[i].plays_once() {
+            let touches = |at: f64, edge: fn(&PlacedClip) -> f64| (0..clips.len()).any(|j| j != i && clips[j].plays_once() && (edge(&clips[j]) - at).abs() < 1e-6);
+            (touches(clips[i].start, PlacedClip::end), touches(clips[i].end(), |c| c.start))
+        } else {
+            (false, false)
+        };
+        clips[i].joined = joined;
     }
 }
 
@@ -803,6 +831,8 @@ fn schedule_notes(
 
 /// Length of the fades applied at clip edges and loop points, in seconds.
 const EDGE_FADE: f64 = 0.003;
+/// Length of the cross-fade between two audio clips that follow on, in seconds.
+const CROSSFADE: f64 = 0.010;
 /// Grain length of the Stretch warp mode, in seconds.
 const GRAIN: f64 = 0.06;
 /// Monitoring: input frames queued beyond a block that count as late, and how many
@@ -817,18 +847,33 @@ pub fn render_audio(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, r
     let frames = (beats * 60.0 / tempo * rate as f64).round() as usize;
     let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
     let beats_per_sample = tempo / 60.0 / rate as f64;
-    render_audio_clip(clip, sample, 0.0, beats, (0, frames), 0.0, beats_per_sample, tempo, &mut left, &mut right);
+    render_audio_clip(clip, sample, 0.0, beats, (false, false), (0, frames), 0.0, beats_per_sample, tempo, &mut left, &mut right);
+    (left, right)
+}
+
+/// What an arrangement audio clip plays over `frames` frames from `beat`, at
+/// `tempo`, as audio at `rate`: silent outside it, cross-fading where it is
+/// joined (joining clips into one file).
+pub fn render_placed(placed: &PlacedClip, beat: f64, frames: usize, tempo: f64, rate: f32) -> (Vec<f32>, Vec<f32>) {
+    let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
+    if let PlayClip::Audio(clip, sample) = &placed.clip {
+        let beats_per_sample = tempo / 60.0 / rate as f64;
+        render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, (0, frames), beat, beats_per_sample, tempo, &mut left, &mut right);
+    }
     (left, right)
 }
 
 /// Adds an audio clip (looping, local time 0 at `origin`, silent from `limit`) to
 /// `left`/`right` over frames `[from, to)`; `beat` is the transport position at `from`.
+/// `joined` (start, end): the clip cross-fades with a neighbour there, playing on
+/// half the cross-fade past that edge (only for clips that play once).
 #[allow(clippy::too_many_arguments)]
 fn render_audio_clip(
     clip: &AudioClip,
     sample: &Sample,
     origin: f64,
     limit: f64,
+    joined: (bool, bool),
     (from, to): (usize, usize),
     beat: f64,
     beats_per_sample: f64,
@@ -845,17 +890,31 @@ fn render_audio_clip(
     let rate = sample.sample_rate as f64;
     let gain = db_to_gain(clip.gain_db);
     let fade = EDGE_FADE * tempo / 60.0;
+    let crossing = joined.0 || joined.1;
+    let half = CROSSFADE * tempo / 60.0 / 2.0;
+    let lo = if joined.0 { origin - half } else { origin };
+    let hi = if joined.1 { limit + half } else { limit };
     let pitch = 2f64.powf(clip.transpose as f64 / 12.0);
     let hop = GRAIN / 2.0;
 
     for k in from..to {
         let b = beat + (k - from) as f64 * beats_per_sample;
-        if b < origin || b >= limit {
+        if b < lo || b >= hi {
             continue;
         }
-        let local = (b - origin).rem_euclid(clip.length);
-        let remaining = (clip.length - local).min(limit - b);
-        let envelope = ((local / fade).min(1.0) * (remaining / fade).min(1.0)) as f32;
+        let envelope;
+        let local;
+        if crossing {
+            // Plays once: past an edge it reads on into the file.
+            local = b - origin;
+            let fade_in = if joined.0 { (local + half) / (2.0 * half) } else { local / fade };
+            let fade_out = if joined.1 { (limit + half - b) / (2.0 * half) } else { (limit - b) / fade };
+            envelope = (fade_in.clamp(0.0, 1.0) * fade_out.clamp(0.0, 1.0)) as f32;
+        } else {
+            local = (b - origin).rem_euclid(clip.length);
+            let remaining = (clip.length - local).min(limit - b);
+            envelope = ((local / fade).min(1.0) * (remaining / fade).min(1.0)) as f32;
+        }
         let (l, r) = match clip.warp {
             WarpMode::Off => sample.read((clip.offset + local * 60.0 / tempo) * rate),
             WarpMode::Repitch => sample.read(clip.file_seconds(first_beat + local) * rate),
@@ -1079,15 +1138,17 @@ impl Track {
         if let Some(slot) = self.playing {
             if let Some(PlayClip::Audio(clip, sample)) = self.slots[slot].as_deref() {
                 let frames = (from, to);
-                render_audio_clip(clip, sample, self.launch_beat, f64::INFINITY, frames, beat, beats_per_sample, tempo, left, right);
+                render_audio_clip(clip, sample, self.launch_beat, f64::INFINITY, (false, false), frames, beat, beats_per_sample, tempo, left, right);
             }
         } else if self.follows_arrangement {
             let end = beat + (to - from) as f64 * beats_per_sample;
+            // Half a cross-fade either side, for clips playing on past their edges.
+            let margin = CROSSFADE * tempo / 60.0;
             for placed in self.arrangement.iter() {
                 let PlayClip::Audio(clip, sample) = &placed.clip else { continue };
-                if placed.start < end && placed.end() > beat {
+                if placed.start - margin < end && placed.end() + margin > beat {
                     let frames = (from, to);
-                    render_audio_clip(clip, sample, placed.start, placed.end(), frames, beat, beats_per_sample, tempo, left, right);
+                    render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, frames, beat, beats_per_sample, tempo, left, right);
                 }
             }
         }
@@ -2124,7 +2185,7 @@ mod tests {
     fn arrangement_with_note_at(beat: f64) -> Box<Vec<PlacedClip>> {
         let mut clip = MidiClip::new("arr", 4.0, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0 });
-        Box::new(vec![PlacedClip { start: beat, length: 4.0, clip: PlayClip::Midi(clip) }])
+        Box::new(vec![PlacedClip::new(beat, 4.0, PlayClip::Midi(clip))])
     }
 
     /// One second of a 440 Hz sine at 48 kHz: two beats at 120 BPM.
@@ -2555,7 +2616,7 @@ mod tests {
 
         // On the arrangement, from where the clip is placed.
         let mut h = Harness::new();
-        let placed = PlacedClip { start: 8.0, length: 8.0, clip: PlayClip::Midi(clip) };
+        let placed = PlacedClip::new(8.0, 8.0, PlayClip::Midi(clip));
         h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![placed]) });
         h.send(Command::Play);
         h.run_beats(6.0);
@@ -2687,10 +2748,46 @@ mod tests {
         assert!((onset as i64 - 24_000).abs() < 1_500, "on beat 1 (24000), got {onset}");
     }
 
+    /// Two pieces that follow on cross-fade at the cut: no dip to silence there,
+    /// as each one fading out on its own would leave.
+    #[test]
+    fn butting_audio_clips_cross_fade_without_a_gap() {
+        let level = |v: f32| Arc::new(Sample::from_channels(vec![v; 96_000], vec![v; 96_000], 48_000.0));
+        let (first, second) = (level(0.5), level(0.5));
+        let mut clip = audio_clip(WarpMode::Off);
+        clip.length = 1.0;
+        let mut later = clip.clone();
+        later.offset = 0.5;
+        let mut clips = vec![
+            PlacedClip::new(0.0, 1.0, PlayClip::Audio(clip.clone(), first.clone())),
+            PlacedClip::new(1.0, 1.0, PlayClip::Audio(later.clone(), second.clone())),
+            // Looping: no cross-fade (it repeats, there's nothing to play on into).
+            PlacedClip::new(4.0, 2.0, PlayClip::Audio(clip.clone(), first.clone())),
+        ];
+        link_neighbours(&mut clips);
+        assert_eq!(clips.iter().map(|c| c.joined).collect::<Vec<_>>(), vec![(false, true), (true, false), (false, false)]);
+
+        let render = |joined: [(bool, bool); 2]| {
+            let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
+            let per_sample = 2.0 / 48_000.0;
+            render_audio_clip(&clip, &first, 0.0, 1.0, joined[0], (0, 48_000), 0.0, per_sample, 120.0, &mut l, &mut r);
+            render_audio_clip(&later, &second, 1.0, 2.0, joined[1], (0, 48_000), 0.0, per_sample, 120.0, &mut l, &mut r);
+            l
+        };
+        // Around the cut (beat 1 = frame 24000).
+        let lowest = |audio: &[f32]| audio[23_500..24_500].iter().copied().fold(f32::INFINITY, f32::min);
+        assert!(lowest(&render([(false, false); 2])) < 0.01, "each fading alone dips to silence");
+        let crossed = render([(false, true), (true, false)]);
+        assert!((lowest(&crossed) - 0.5).abs() < 1e-3, "{}", lowest(&crossed));
+        assert!(crossed[23_500..24_500].iter().all(|s| (s - 0.5).abs() < 1e-3), "and never goes above either");
+        // The outer edges still fade.
+        assert!(crossed[0].abs() < 0.01 && crossed[47_999].abs() < 0.01);
+    }
+
     #[test]
     fn arrangement_audio_clips_stop_at_their_end() {
         let mut h = Harness::new();
-        let placed = PlacedClip { start: 0.0, length: 1.0, clip: PlayClip::Audio(audio_clip(WarpMode::Repitch), sine_sample()) };
+        let placed = PlacedClip::new(0.0, 1.0, PlayClip::Audio(audio_clip(WarpMode::Repitch), sine_sample()));
         h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![placed]) });
         h.send(Command::Play);
         let during = h.run_beats(1.0);

@@ -340,12 +340,13 @@ Clic derecho en un clip de audio → **Separar en stems…** (o el botón del ed
 Saca las notas de cualquier audio y las pone en una pista MIDI nueva, justo debajo y en el mismo sitio (el mismo slot en Session, el mismo tramo en el Arrangement). Clic derecho en un clip de audio → **Convertir a MIDI**:
 
 - **Melodía**: una nota cada vez. Para una voz, un tarareo o un instrumento solista: canta una idea, conviértela y tócala con cualquier sinte.
+- **Melodía sin ajustar**: igual, pero cada nota al semitono más cercano en vez de a la escala de la canción. Para melodías con notas fuera de la tonalidad, o un instrumento bien afinado.
 - **Armonía**: todas las notas a la vez. Para acordes, piano o guitarra.
 - **Batería**: cada golpe pasa a bombo, caja o charles (según dónde tiene su energía), en una Drum Machine.
 
 Se hace en este Mac, sin internet, en unos segundos; la barra de estado muestra el progreso. Las notas siguen el tempo del clip (su warp) y su fuerza pasa a la velocidad. Se combina bien con **Separar en stems**: separa una canción y convierte el bajo o la voz en MIDI.
 
-La melodía sigue el tono de la voz fotograma a fotograma (pYIN, el método de las herramientas para transcribir canto), también con voces muy graves, y la corta en notas donde cambia de semitono o vuelves a atacar. La armonía la encuentra Basic Pitch, un modelo de Spotify (licencia Apache 2.0) que va dentro de la app.
+La melodía sigue el tono de la voz fotograma a fotograma (pYIN, el método de las herramientas para transcribir canto), también con voces muy graves, y la corta en notas donde se queda en otra nota o vuelves a atacar. En **Melodía**, cada nota va a la de la escala de la canción más cercana, para que cantar un poco alto o bajo no cambie la nota; la tonalidad sale de tu voz, de las notas MIDI del proyecto y de los audios con una tonalidad clara (las baterías no cuentan), y la barra de estado dice cuál ha usado. La armonía la encuentra Basic Pitch, un modelo de Spotify (licencia Apache 2.0) que va dentro de la app.
 
 ## Mezclador
 

@@ -1862,6 +1862,13 @@ impl PulseApp {
         }
         self.audio.send(Command::SetArrangementRecord(true));
         self.audio.send(Command::Play);
+        let bar = |beat: f64| beat / 4.0 + 1.0;
+        match self.project.punch() {
+            (Some(i), Some(o)) => self.status = Some(format!("Punch: graba del compás {} al {}", bar(i), bar(o))),
+            (Some(i), None) => self.status = Some(format!("Punch in: empieza a grabar en el compás {}", bar(i))),
+            (None, Some(o)) => self.status = Some(format!("Punch out: deja de grabar en el compás {}", bar(o))),
+            (None, None) => {}
+        }
     }
 
     /// Snaps recorded note starts to the record quantization grid, if one is set.
@@ -1893,15 +1900,26 @@ impl PulseApp {
     pub(crate) fn update_recording(&mut self) {
         let Some(state) = self.audio.state() else { return };
         self.pump_capture();
-        if self.automation_take.is_some() && state.arrangement_recording.load(Ordering::Relaxed) {
-            self.record_automation(state.position());
+        let punch = self.project.punch();
+        let position = state.position();
+        let inside = punch.0.is_none_or(|p| position >= p) && punch.1.is_none_or(|p| position < p);
+        if self.automation_take.is_some() && state.arrangement_recording.load(Ordering::Relaxed) && inside {
+            self.record_automation(position);
+        }
+        // Past the punch-out (the loop not playing, or it would have jumped back):
+        // recording stops, playback goes on.
+        if let (Some(out), Some(take)) = (punch.1, self.recorder.arrangement.as_mut()) {
+            if position >= out && !take.punched_out && !self.project.loop_enabled && state.arrangement_recording.load(Ordering::Relaxed) {
+                take.punched_out = true;
+                self.audio.send(Command::SetArrangementRecord(false));
+            }
         }
         // Notes were played while hearing what the engine rendered a moment before.
         let lag = state.output_latency() * self.project.tempo / 60.0;
         let notes: Vec<_> = self.audio.take_recorded().into_iter().map(|n| engine::RecordedNote { start: (n.start - lag).max(0.0), ..n }).collect();
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
         let looped = self.project.loop_enabled.then_some((self.project.loop_start, self.project.loop_end));
-        let finished = self.recorder.update(notes, &state, &armed, looped);
+        let finished = self.recorder.update(notes, &state, &armed, looped, punch);
         let recording: Vec<(usize, usize, f64)> = self
             .recorder
             .session
@@ -1954,7 +1972,6 @@ impl PulseApp {
                     self.status = Some(format!("Grabadas {count} notas en el Arrangement"));
                 }
                 Finished::ArrangementEnded { passes } => {
-                    let (start, end) = (passes[0].0, passes[passes.len() - 1].1);
                     let moved = self.finish_automation_take();
                     if moved > 0 {
                         self.status = Some(match moved {
@@ -1962,6 +1979,8 @@ impl PulseApp {
                             n => format!("Grabada la automatización de {n} controles"),
                         });
                     }
+                    // Nothing between the punch-in and the punch-out.
+                    let (Some(&(start, _)), Some(&(_, end))) = (passes.first(), passes.last()) else { continue };
                     let beats = ((end - start) * 4.0).round() / 4.0;
                     if passes.len() == 1 && beats <= 0.0 {
                         continue;

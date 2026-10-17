@@ -294,6 +294,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let overlay = Rect::from_min_max(pos2(loop_rect.left(), lanes_top), pos2(loop_rect.right(), rect.bottom()));
                 painter.rect_filled(overlay, 0.0, Color32::from_rgba_unmultiplied(255, 168, 36, 10));
             }
+            // Punch in / out: red lines where recording starts and stops.
+            for (on, beat) in [(app.project.punch_in, app.project.loop_start), (app.project.punch_out, app.project.loop_end)] {
+                if on {
+                    let x = x_at(beat);
+                    painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, theme::METER_RED.gamma_multiply(0.8)));
+                }
+            }
 
             // Clips.
             for t in 0..tracks {
@@ -363,7 +370,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             if let Some(take) = &app.recorder.arrangement {
                 for t in (0..tracks).filter(|&t| app.project.tracks[t].armed && !app.project.tracks[t].is_audio()) {
                     let lane = lane_rect(t);
-                    let region = Rect::from_min_max(pos2(x_at(take.start), lane.top()), pos2(x.max(x_at(take.start)), lane.bottom()));
+                    // From the punch-in, if it is later.
+                    let from = app.project.punch().0.map_or(take.start, |p| take.start.max(p));
+                    let region = Rect::from_min_max(pos2(x_at(from), lane.top()), pos2(x.max(x_at(from)), lane.bottom()));
                     painter.rect_filled(region, 2.0, Color32::from_rgba_unmultiplied(240, 82, 70, 60));
                 }
             }

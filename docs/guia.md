@@ -149,9 +149,10 @@ Las pistas que están tocando clips de Session se ven oscurecidas: **▶ Arrange
 
 ## Dividir, unir y consolidar
 
-- **⌘E — Dividir clip**: corta los clips seleccionados del Arrangement por el cursor. **Dividir aquí** (clic derecho) corta donde hiciste clic. Cada parte sigue sonando lo mismo que antes; no se tocan los archivos.
+- **⌘E — Dividir clip**: corta los clips seleccionados del Arrangement por el cursor. **Dividir aquí** (clic derecho) corta donde hiciste clic. Cada parte sigue sonando lo mismo que antes, también en el corte; no se tocan los archivos.
 - **⌘J — Unir clips**: dos o más clips de la misma pista en uno, del principio del primero al final del último. Los MIDI juntan sus notas; los de audio se renderizan a un archivo nuevo, con silencio en los huecos.
 - **Consolidar** (clic derecho en un clip de audio): lo que suena el clip (con su warp, transposición y ganancia) pasa a un archivo de audio nuevo solo con su trozo. Pierde sus tomas.
+- Dos clips de audio seguidos (sin hueco entre ellos, como las partes de un clip dividido o los trozos de tomas) se funden entre sí durante 10 ms en el corte, en vez de bajar cada uno a silencio. Al unirlos, el archivo nuevo conserva ese fundido.
 - Por ahora unir y consolidar no aplican los efectos de la pista.
 
 ## Grabar
@@ -218,7 +219,7 @@ Al terminar la grabación aparece **una fila por toma** debajo de la pista, con 
 - **Clic en una fila**: esa toma en todo el clip.
 - Los trozos contiguos que vuelven a sonar la misma toma se juntan solos.
 - Las filas se muestran u ocultan con **Mostrar tomas** (clic derecho en la cabecera) o **Mostrar las tomas en filas…** (clic derecho en el clip).
-- ⌘Z deshace. El paso de una toma a otra es un corte seco.
+- ⌘Z deshace. El paso de una toma a otra lleva un fundido cruzado corto, así que no se oye el corte.
 
 ## Automatización
 

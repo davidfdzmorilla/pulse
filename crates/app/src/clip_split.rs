@@ -365,11 +365,10 @@ mod tests {
         };
         let whole = render(None);
         let split = render(Some(14.5));
-        let cut = (14.5 * 0.5 * 48_000.0) as usize;
-        let near = 48_000 / 50;
-        let worst = whole.iter().zip(&split).enumerate().filter(|(i, _)| i.abs_diff(cut) > near).map(|(_, (a, b))| (a - b).abs()).fold(0f32, f32::max);
+        // The parts cross-fade at the cut, so it sounds the same there too.
+        let worst = whole.iter().zip(&split).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(whole.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.1, "the song plays");
-        assert!(worst < 1e-4, "away from the cut they match: {worst}");
+        assert!(worst < 1e-3, "they match, also at the cut: {worst}");
     }
 
     /// A clip that doesn't loop splits into two that are only their pieces (what

@@ -11,6 +11,8 @@ const ENVELOPE_H: f32 = 60.0;
 /// Warp markers on the waveform, and the strip below it where they're handled.
 pub(crate) const MARKER: Color32 = Color32::from_rgb(240, 200, 80);
 const MARKER_H: f32 = 14.0;
+/// Colour of the slicing cuts.
+const CUT: Color32 = Color32::from_rgb(90, 200, 255);
 
 /// Changes the clip's warp markers with `change`, keeping the clip starting on the
 /// same beat of the file (its start moves through the file instead), so the rest
@@ -49,6 +51,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let mut slice = false;
     let mut separate = false;
     let (mut detect, mut use_tempo) = (false, false);
+    // Where it will be sliced, while the cuts are shown to edit them.
+    let mut cuts = if app.show_cuts { app.cuts_for(clip_ref) } else { None };
+    let cuts_before = cuts.clone();
 
     ui.horizontal(|ui| {
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
@@ -137,6 +142,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     .clicked();
             });
             ui.horizontal(|ui| {
+                label(ui, "");
+                ui.checkbox(&mut app.show_cuts, "Editar cortes").on_hover_text("Muestra dónde se cortará, bajo la forma de onda: arrastra un corte para moverlo, doble clic para añadir o quitar uno (hasta 16, uno por pad)");
+            });
+            ui.horizontal(|ui| {
                 label(ui, "Tempo");
                 if ui.add_enabled(!app.tempo.busy(), egui::Button::new("Detectar")).on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
                     detect = true;
@@ -182,12 +191,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         let width = ui.available_width().max(200.0);
         // Room below for the clip's envelopes.
         let height = (ui.available_height() - ENVELOPE_H - 30.0).clamp(80.0, 200.0);
-        let (rect, response) = ui.allocate_exact_size(vec2(width, height - MARKER_H), Sense::click_and_drag());
-        // Below it, the warp markers' strip.
+        let strips = if cuts.is_some() { 2.0 } else { 1.0 };
+        let (rect, response) = ui.allocate_exact_size(vec2(width, height - MARKER_H * strips), Sense::click_and_drag());
+        // Below it, the warp markers' strip, and the cuts' one when they are shown.
         let strip = Rect::from_min_size(rect.left_bottom(), vec2(width, MARKER_H));
         let strip_response = ui.interact(strip, response.id.with("markers"), Sense::click_and_drag());
-        let painter = ui.painter_at(rect.union(strip));
+        let cut_strip = Rect::from_min_size(strip.left_bottom(), vec2(width, MARKER_H));
+        let cut_response = cuts.is_some().then(|| ui.interact(cut_strip, response.id.with("cuts"), Sense::click_and_drag()));
+        let painter = ui.painter_at(rect.union(strip).union(if cuts.is_some() { cut_strip } else { strip }));
         painter.rect_filled(strip, 0.0, theme::SURFACE);
+        if cuts.is_some() {
+            painter.rect_filled(cut_strip, 0.0, theme::shade(theme::SURFACE, 0.85));
+        }
         painter.rect_filled(rect, 2.0, theme::SLOT);
         let duration = sample.duration();
         if duration <= 0.0 {
@@ -199,7 +214,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         let shown = if whole { (clip.offset.min(0.0), duration.max(region_end)) } else { (clip.offset, region_end.max(clip.offset + 0.01)) };
         // While a marker is dragged the view stays put (the part changes under it).
         let view_id = response.id.with("view");
-        let (v0, v1) = if strip_response.dragged() {
+        let (v0, v1) = if strip_response.dragged() || cut_response.as_ref().is_some_and(|r| r.dragged()) {
             ui.data(|d| d.get_temp(view_id)).unwrap_or(shown)
         } else {
             ui.data_mut(|d| d.insert_temp(view_id, shown));
@@ -252,6 +267,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             }
             if clip.warp_markers.is_empty() {
                 painter.text(strip.center(), Align2::CENTER_CENTER, "Doble clic aquí: marcador de warp", theme::small(), TEXT_DIM);
+            }
+        }
+        // The cuts: where each pad's slice begins, numbered.
+        if let Some(cuts) = &cuts {
+            for (i, &seconds) in cuts.iter().enumerate() {
+                let x = x_of(seconds);
+                painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.0, CUT));
+                painter.add(egui::Shape::convex_polygon(vec![pos2(x - 4.0, cut_strip.top() + 2.0), pos2(x + 4.0, cut_strip.top() + 2.0), pos2(x, cut_strip.bottom() - 2.0)], CUT, Stroke::NONE));
+                painter.text(pos2(x + 3.0, rect.top() + 2.0), Align2::LEFT_TOP, (i + 1).to_string(), theme::small(), CUT);
+            }
+            if cuts.is_empty() {
+                painter.text(cut_strip.center(), Align2::CENTER_CENTER, "Doble clic aquí: un corte", theme::small(), TEXT_DIM);
             }
         }
         if let Some(beats) = playhead {
@@ -311,6 +338,37 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 });
             }
         }
+        // Editing the cuts: drag one, or double clic to add or remove one.
+        if let (Some(cut_response), Some(list)) = (&cut_response, cuts.as_mut()) {
+            let near = |pos: egui::Pos2, list: &[f64]| list.iter().enumerate().map(|(i, &s)| (i, (x_of(s) - pos.x).abs())).filter(|&(_, d)| d < 5.0).min_by(|a, b| a.1.total_cmp(&b.1)).map(|(i, _)| i);
+            let grab_id = cut_response.id.with("grabbed");
+            if cut_response.drag_started() {
+                let origin = ui.input(|i| i.pointer.press_origin()).or(cut_response.interact_pointer_pos());
+                let grabbed = origin.and_then(|pos| near(pos, list));
+                ui.data_mut(|d| d.insert_temp(grab_id, grabbed));
+            }
+            let grabbed: Option<usize> = ui.data(|d| d.get_temp(grab_id)).flatten();
+            let (start, end) = (clip.offset.max(0.0), region_end.min(duration));
+            if let Some(pos) = cut_response.interact_pointer_pos() {
+                if cut_response.double_clicked() {
+                    match near(pos, list) {
+                        Some(i) => {
+                            list.remove(i);
+                        }
+                        None if list.len() >= engine::model::RACK_PADS => app.status = Some(format!("Hasta {} cortes: uno por pad del Drum Rack", engine::model::RACK_PADS)),
+                        None => list.push(seconds_at(pos.x).clamp(start, end)),
+                    }
+                } else if let (Some(i), true) = (grabbed, cut_response.dragged()) {
+                    let lo = if i > 0 { list[i - 1] + 0.005 } else { start };
+                    let hi = list.get(i + 1).map_or(end, |n| n - 0.005);
+                    list[i] = seconds_at(pos.x).clamp(lo, hi.max(lo));
+                }
+            }
+            if cut_response.hover_pos().is_some_and(|pos| near(pos, list).is_some()) {
+                ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+            }
+            cut_response.clone().on_hover_text("Cortes: cada uno empieza el trozo de un pad · arrastrar: moverlo · doble clic: añadir o quitar uno");
+        }
         if let Some(pos) = response.interact_pointer_pos() {
             if whole && (response.clicked() || response.dragged()) {
                 // Seeing the whole file, a clic moves the clip's start there.
@@ -355,6 +413,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement[index].clip = new,
         }
         app.sync_clip_ref(clip_ref);
+    }
+    if cuts != cuts_before {
+        if let Some(cuts) = cuts {
+            app.set_cuts(clip_ref, cuts);
+        }
     }
     if slice {
         app.slice_clip(clip_ref);

@@ -324,6 +324,8 @@ Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadame
 
 En el editor de audio, **Trocear** (Transitorios, 1/16, 1/8 o 1/4) y **A Drum Rack**: corta el clip en golpes (hasta 16), cada uno en un pad de un Drum Rack en una pista nueva, con un clip MIDI que los toca en orden en el mismo sitio. Al cambiar el tempo el groove lo sigue sin estirar el audio, y puedes reordenar o repetir golpes en el editor MIDI. El Drum Rack también tiene **Trocear archivo…**.
 
+- **Editar cortes** (casilla bajo «Trocear»): muestra los cortes numerados sobre la forma de onda, con una franja debajo. **Arrastra** un corte para moverlo, **doble clic** en uno para quitarlo o en un hueco para añadir otro (hasta 16, uno por pad). **A Drum Rack** trocea entonces por tus cortes. Cambiar el modo (Transitorios, 1/16…) vuelve a buscar los cortes.
+
 ### Separar en stems
 
 Clic derecho en un clip de audio → **Separar en stems…** (o el botón del editor). Crea cuatro pistas nuevas debajo, **Batería**, **Bajo**, **Resto** y **Voz**, con el mismo clip en el mismo sitio, y desactiva la original para que suene igual.

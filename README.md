@@ -25,7 +25,7 @@ el mismo pull request.
 
 ## Hoja de ruta
 
-1. Fundidos automáticos en los cortes del comping; punch in/out.
+1. Punch in/out.
 2. Que unir y consolidar apliquen los efectos de la pista; dividir clips en Session.
 3. Editar los marcadores de tempo en el Arrangement; curvas entre puntos de automatización.
 4. Multisamples (zonas por tecla y velocidad) en el Sampler; marcadores de troceado editables a mano.

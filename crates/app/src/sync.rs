@@ -163,11 +163,8 @@ pub fn play_clip(clip: &Clip, samples: &mut SampleCache) -> PlayClip {
 }
 
 pub fn placed_clips(track: &Track, samples: &mut SampleCache) -> Box<Vec<PlacedClip>> {
-    let placed = track
-        .arrangement
-        .iter()
-        .map(|a| PlacedClip { start: a.start, length: a.length, clip: play_clip(&a.clip, samples) })
-        .collect();
+    let mut placed: Vec<PlacedClip> = track.arrangement.iter().map(|a| PlacedClip::new(a.start, a.length, play_clip(&a.clip, samples))).collect();
+    engine::link_neighbours(&mut placed);
     Box::new(placed)
 }
 

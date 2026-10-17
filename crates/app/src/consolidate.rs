@@ -111,16 +111,19 @@ impl PulseApp {
         let (tempo, rate) = (self.project.tempo, self.audio.sample_rate());
         let frames = ((end - start) * 60.0 / tempo * rate as f64).round() as usize;
         let (mut left, mut right) = (vec![0f32; frames], vec![0f32; frames]);
+        let mut placed = Vec::new();
         for part in parts {
             let Clip::Audio(audio) = &part.clip else { return Err("Solo se unen clips del mismo tipo".into()) };
             let sample = self.sample(&audio.sample);
-            let (l, r) = engine::render_audio(audio, &sample, part.length, tempo, rate);
-            let at = ((part.start - start) * 60.0 / tempo * rate as f64).round() as usize;
+            placed.push(engine::PlacedClip::new(part.start, part.length, engine::PlayClip::Audio(audio.clone(), sample)));
+        }
+        // Pieces that follow on (of a split clip, or of takes) cross-fade as they play.
+        engine::link_neighbours(&mut placed);
+        for part in &placed {
+            let (l, r) = engine::render_placed(part, start, frames, tempo, rate);
             for (i, (a, b)) in l.iter().zip(&r).enumerate() {
-                if let (Some(x), Some(y)) = (left.get_mut(at + i), right.get_mut(at + i)) {
-                    *x += a;
-                    *y += b;
-                }
+                left[i] += a;
+                right[i] += b;
             }
         }
         let path = self.write_consolidated(&base.name, &left, &right)?;
@@ -232,6 +235,25 @@ mod tests {
         // The rest sounds about the same (Stretch's grains, rendered twice, differ a little).
         let energy = |x: &[f32]| x.iter().map(|s| s * s).sum::<f32>();
         assert!((energy(&after) / energy(&before) - 1.0).abs() < 0.1, "{} vs {}", energy(&after), energy(&before));
+        let Clip::Audio(new) = &lane[0].clip else { panic!() };
+        std::fs::remove_file(&new.sample).ok();
+    }
+
+    /// Pieces of a split clip (or of takes) joined back cross-fade at the cut,
+    /// as they played: the file sounds like the clip did before it was split.
+    #[test]
+    fn joined_pieces_keep_their_cross_fade() {
+        let whole = ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(demo_clip(WarpMode::Repitch, 8.0, 2.0)) };
+        let (mut app, track) = app_with(vec![whole]);
+        let before = render(&app, 8.0);
+        assert!(app.split_clip_at(track, 0, 4.5));
+        app.join_selected();
+        let lane = &app.project.tracks[track].arrangement;
+        assert_eq!(lane.len(), 1, "{:?}", app.status);
+        let after = render(&app, 8.0);
+        let edge = 48_000 / 50;
+        let worst = before.iter().zip(&after).enumerate().filter(|(i, _)| *i > edge && *i + edge < before.len()).map(|(_, (a, b))| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-3, "also at the cut (beat 4.5): {worst}");
         let Clip::Audio(new) = &lane[0].clip else { panic!() };
         std::fs::remove_file(&new.sample).ok();
     }

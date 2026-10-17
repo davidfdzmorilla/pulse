@@ -20,7 +20,7 @@ fn rotate_lanes(lanes: &[AutomationLane], d: f64, length: f64) -> Vec<Automation
             let mut points: Vec<AutomationPoint> = lane.points.iter().map(|p| AutomationPoint { beat: (p.beat - d).rem_euclid(length), ..*p }).collect();
             if let Some(value) = lane.value_at(d) {
                 points.retain(|p| p.beat > 1e-9);
-                points.push(AutomationPoint { beat: 0.0, value });
+                points.push(AutomationPoint { beat: 0.0, value, curve: lane.curve_at(d) });
             }
             points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
             AutomationLane { param: lane.param, points }
@@ -48,7 +48,7 @@ fn from(clip: &Clip, d: f64, tempo: f64) -> Clip {
                 .map(|lane| {
                     let mut points: Vec<AutomationPoint> = lane.points.iter().filter(|p| p.beat > d).map(|p| AutomationPoint { beat: p.beat - d, ..*p }).collect();
                     if let Some(value) = lane.value_at(d) {
-                        points.insert(0, AutomationPoint { beat: 0.0, value });
+                        points.insert(0, AutomationPoint { beat: 0.0, value, curve: lane.curve_at(d) });
                     }
                     AutomationLane { param: lane.param, points }
                 })
@@ -272,7 +272,7 @@ mod tests {
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.0 }, AutomationPoint { beat: 8.0, value: 1.0 }] }],
+            envelopes: vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.0, curve: 0.0 }, AutomationPoint { beat: 8.0, value: 1.0, curve: 0.0 }] }],
         };
         let placed = ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(audio.clone()) };
         let (_, right) = split(&placed, 4.0, 100.0).unwrap();

@@ -38,6 +38,9 @@ enum Drag {
     Scrub,
     /// Dragging a breakpoint; `lane` is the lane's rectangle when the drag began.
     Point { track: usize, param: Param, index: usize, lane: Rect },
+    /// Bending the stretch that starts at point `index` (⌥ + drag): its bend and
+    /// the pointer's height when the drag began.
+    Bend { track: usize, param: Param, index: usize, start: f32, from_y: f32 },
     /// Choosing a take over a stretch: from `anchor` to `to` (beats) in its lane.
     Comp { track: usize, take: usize, anchor: f64, to: f64 },
 }
@@ -658,9 +661,7 @@ fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usiz
         }
         Some(lane) => {
             let y = |v: f32| value_y(rect, info.normalize(v));
-            let mut line = vec![pos2(rect.left(), y(lane.points[0].value))];
-            line.extend(lane.points.iter().map(|p| pos2(x_at(p.beat), y(p.value))));
-            line.push(pos2(rect.right(), y(lane.points[lane.points.len() - 1].value)));
+            let line = crate::curves::line(&lane.points, x_at, &y, rect.left(), rect.right());
             painter.add(egui::Shape::line(line, Stroke::new(1.5, color)));
             for p in &lane.points {
                 painter.circle_filled(pos2(x_at(p.beat), y(p.value)), 3.5, color);
@@ -1097,7 +1098,7 @@ fn handle_pointer(
             Some(Drag::Scrub) => {
                 app.audio.send(Command::SetPosition(snap(beat, unit)));
             }
-            Some(Drag::Point { .. } | Drag::Comp { .. }) | None => {}
+            Some(Drag::Point { .. } | Drag::Bend { .. } | Drag::Comp { .. }) | None => {}
         }
     }
 
@@ -1151,7 +1152,7 @@ fn handle_automation(
     lane: Option<(usize, Param, Rect)>,
 ) -> bool {
     // Clip, loop and scrub drags keep going when they pass over an automation lane.
-    if app.arrangement.drag.as_ref().is_some_and(|d| !matches!(d, Drag::Point { .. })) {
+    if app.arrangement.drag.as_ref().is_some_and(|d| !matches!(d, Drag::Point { .. } | Drag::Bend { .. })) {
         return false;
     }
     let ppb = app.arrangement.pixels_per_beat;
@@ -1179,9 +1180,36 @@ fn handle_automation(
         return true;
     }
 
+    // Bending a stretch, likewise.
+    if let Some(Drag::Bend { track, param, index, start, from_y }) = app.arrangement.drag {
+        // ⌥ + double clic: straight again.
+        if response.double_clicked() {
+            let target = Target::Track(track);
+            if let Some(point) = app.lane_mut(target, param).points.get_mut(index) {
+                point.curve = 0.0;
+            }
+            app.sync_automation(target);
+            app.arrangement.drag = None;
+            return true;
+        }
+        if response.dragged() {
+            let target = Target::Track(track);
+            let lane = app.lane_mut(target, param);
+            if let (Some(&from), Some(&to)) = (lane.points.get(index), lane.points.get(index + 1)) {
+                lane.points[index].curve = crate::curves::bent(start, pos.y - from_y, &from, &to);
+                app.sync_automation(target);
+            }
+        }
+        if ui.input(|i| i.pointer.primary_released()) {
+            app.arrangement.drag = None;
+        }
+        return true;
+    }
+
     let Some((track, param, rect)) = lane else { return false };
     let target = Target::Track(track);
     let Some(info) = app.param_info(target, param) else { return true };
+    let alt = ui.input(|i| i.modifiers.alt);
     let y_of = |v: f32| value_y(rect, info.normalize(v));
     let near = app
         .automation(target)
@@ -1193,21 +1221,35 @@ fn handle_automation(
                 .position(|p| (x_at(p.beat) - pos.x).abs() <= POINT_GRAB && (y_of(p.value) - pos.y).abs() <= POINT_GRAB)
         });
 
+    // ⌥ over a stretch: it bends.
+    let stretch = app.automation(target).iter().find(|l| l.param == param).and_then(|l| crate::curves::stretch_at(&l.points, pos.x, &x_at));
+    if alt && near.is_none() && stretch.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
     if response.double_clicked() {
         if let Some(index) = near {
             app.lane_mut(target, param).points.remove(index);
+            app.sync_automation(target);
+        } else if let (true, Some(index)) = (alt, stretch) {
+            // ⌥ + double clic: straight again.
+            app.lane_mut(target, param).points[index].curve = 0.0;
             app.sync_automation(target);
         }
         return true;
     }
     if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
         app.selected_target = target;
+        if let (true, None, Some(index)) = (alt, near, stretch) {
+            let start = app.lane_mut(target, param).points[index].curve;
+            app.arrangement.drag = Some(Drag::Bend { track, param, index, start, from_y: pos.y });
+            return true;
+        }
         let index = match near {
             Some(index) => index,
             None => {
                 let value = info.denormalize((rect.bottom() - 4.0 - pos.y) / (rect.height() - 8.0));
                 let lane = app.lane_mut(target, param);
-                let point = AutomationPoint { beat: snap(beat, unit), value };
+                let point = AutomationPoint { beat: snap(beat, unit), value, curve: 0.0 };
                 let index = lane.points.partition_point(|p| p.beat <= point.beat);
                 lane.points.insert(index, point);
                 app.sync_automation(target);
@@ -1332,7 +1374,7 @@ mod tests {
         screen.menu(&mut app, header(1), "Mostrar automatización");
         assert_eq!(app.arrangement.automation.get(&1), Some(&Param::Volume));
         // Points on the lane, then its menu (the lane is under track 1's clips).
-        app.lane_mut(Target::Track(1), Param::Volume).points.push(AutomationPoint { beat: 0.0, value: 0.5 });
+        app.lane_mut(Target::Track(1), Param::Volume).points.push(AutomationPoint { beat: 0.0, value: 0.5, curve: 0.0 });
         let lane = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 55.0 + 53.0 + 53.0 + 30.0);
         screen.menu(&mut app, lane, "Borrar automatización");
         assert!(app.automation(Target::Track(1)).iter().all(|l| l.param != Param::Volume || l.points.is_empty()));
@@ -1341,6 +1383,54 @@ mod tests {
         // Deleting a track from its own header, drawn as it goes.
         screen.menu(&mut app, header(1), "Eliminar pista");
         assert_eq!(app.project.tracks.len(), tracks - 1);
+    }
+
+    /// ⌥ + drag on a stretch of an automation lane bends it; ⌥ + double clic
+    /// straightens it.
+    #[test]
+    fn alt_dragging_a_stretch_bends_it() {
+        let mut app = app();
+        let target = Target::Track(1);
+        app.arrangement.automation.insert(1, Param::Volume);
+        let info = app.param_info(target, Param::Volume).unwrap();
+        let points = &mut app.lane_mut(target, Param::Volume).points;
+        points.push(AutomationPoint { beat: 0.0, value: info.denormalize(0.1), curve: 0.0 });
+        points.push(AutomationPoint { beat: 40.0, value: info.denormalize(0.9), curve: 0.0 });
+        let mut screen = Screen::new();
+        let mut time = 0.0;
+        let mut frame = |app: &mut PulseApp, events: Vec<egui::Event>| {
+            time += 0.05;
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1440.0, 900.0))),
+                time: Some(time),
+                events: [egui::Event::ModifiersChanged(Modifiers::ALT)].into_iter().chain(events).collect(),
+                ..Default::default()
+            };
+            let _ = screen.ctx.run_ui(input, |ui| show(app, ui));
+        };
+        // The middle of the stretch, in track 1's automation lane (under its clips).
+        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 55.0 + 53.0 + 53.0 + 40.0);
+        let to = from - vec2(0.0, 30.0);
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::ALT };
+        frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+        frame(&mut app, vec![button(from, true)]);
+        for i in 1..=6 {
+            frame(&mut app, vec![egui::Event::PointerMoved(from + (to - from) * (i as f32 / 6.0))]);
+        }
+        frame(&mut app, vec![button(to, false)]);
+        let lane = app.automation(target).iter().find(|l| l.param == Param::Volume).unwrap().clone();
+        assert_eq!(lane.points.len(), 2, "no point added");
+        assert!(lane.points[0].curve > 0.2, "dragged up, it bulges up: {}", lane.points[0].curve);
+        assert!(info.normalize(lane.value_at(20.0).unwrap()) > 0.6, "above the straight line's 0.5");
+        // ⌥ + double clic: straight again.
+        let middle = pos2(from.x, to.y);
+        frame(&mut app, vec![egui::Event::PointerMoved(middle)]);
+        for _ in 0..2 {
+            frame(&mut app, vec![button(middle, true)]);
+            frame(&mut app, vec![button(middle, false)]);
+        }
+        let lane = app.automation(target).iter().find(|l| l.param == Param::Volume).unwrap();
+        assert_eq!((lane.points.len(), lane.points[0].curve), (2, 0.0));
     }
 
     /// The user's case: the demo project plus an audio track with a song on the

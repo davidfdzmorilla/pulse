@@ -249,6 +249,7 @@ Al terminar la grabación aparece **una fila por toma** debajo de la pista, con 
 
 - El botón **A** de la cabecera muestra el carril de automatización de la pista. Elige el parámetro en el desplegable (volumen, panorama, envíos, cualquier knob del instrumento, de los efectos o de un plugin; con muchos parámetros aparece un buscador). Los que ya tienen automatización llevan ●.
 - **Clic**: añade un punto. **Arrastrar**: lo mueve. **Doble clic**: lo borra.
+- **⌥ + arrastrar** un tramo entre dos puntos lo **curva**: hacia arriba abomba la curva hacia arriba, hacia abajo la hunde. Sirve para fundidos y subidas más naturales. **⌥ + doble clic** en el tramo lo vuelve recto.
 - **Borrar automatización** (en la cabecera o con clic derecho en el carril) y **Ocultar carril**.
 - Los controles automatizados llevan un punto rojo y se mueven solos. Si mueves uno a mano, su automatización queda **anulada** (punto hueco, carril gris) hasta que pulses **▶ Arrangement**.
 
@@ -258,7 +259,7 @@ Con **A** (Armar automatización) encendido en el transporte, al grabar en el Ar
 
 ### Envolventes de clip
 
-En el editor de un clip, el desplegable **Carril** tiene **Velocidad** y **Envolventes del clip**: automatización dentro del clip, que se repite con él. Clic añade un punto, arrastrar lo mueve, doble clic lo borra. **Borrar envolvente** la quita.
+En el editor de un clip, el desplegable **Carril** tiene **Velocidad** y **Envolventes del clip**: automatización dentro del clip, que se repite con él. Clic añade un punto, arrastrar lo mueve, doble clic lo borra, y **⌥ + arrastrar** un tramo lo curva (⌥ + doble clic lo endereza). **Borrar envolvente** la quita.
 
 ## Editor MIDI
 

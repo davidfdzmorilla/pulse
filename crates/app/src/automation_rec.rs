@@ -134,13 +134,13 @@ impl PulseApp {
             let points = take.points.entry(key).or_default();
             if points.is_empty() {
                 // Holds the old value up to the first move.
-                points.push(AutomationPoint { beat: (beat - MIN_GAP).max(0.0), value: before });
+                points.push(AutomationPoint { beat: (beat - MIN_GAP).max(0.0), value: before, curve: 0.0 });
             }
             // The held old value (the first point) is never overwritten.
             let several = points.len() > 1;
             match points.last_mut() {
                 Some(last) if several && beat - last.beat < MIN_GAP => last.value = value,
-                _ => points.push(AutomationPoint { beat, value }),
+                _ => points.push(AutomationPoint { beat, value, curve: 0.0 }),
             }
         }
         take.last = now;
@@ -188,7 +188,7 @@ mod tests {
         // Existing automation: before, inside and after the span about to be recorded.
         let lane = app.lane_mut(volume.0, volume.1);
         for (beat, value) in [(0.0, 0.2), (5.05, 0.3), (12.0, 0.4)] {
-            lane.points.push(AutomationPoint { beat, value });
+            lane.points.push(AutomationPoint { beat, value, curve: 0.0 });
         }
         // It plays now; touching the knob overrides it (as set_param does).
         app.overridden.insert(volume);
@@ -225,7 +225,7 @@ mod tests {
     #[test]
     fn automation_that_plays_by_itself_is_not_recorded() {
         let mut app = PulseApp::headless(Project::demo());
-        app.lane_mut(Target::Track(0), Param::Pan).points.push(AutomationPoint { beat: 0.0, value: -1.0 });
+        app.lane_mut(Target::Track(0), Param::Pan).points.push(AutomationPoint { beat: 0.0, value: -1.0, curve: 0.0 });
         app.start_automation_take();
         // The pan changes, but its automation is playing (not overridden): not the user.
         app.project.tracks[0].mixer.pan = 0.7;

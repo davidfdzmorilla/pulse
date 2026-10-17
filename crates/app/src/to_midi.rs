@@ -18,16 +18,19 @@ use std::sync::{Arc, Mutex};
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ToMidi {
     Melody,
+    /// A melody without the key's scale: each note at its nearest semitone.
+    MelodyFree,
     Harmony,
     Drums,
 }
 
 impl ToMidi {
-    pub const ALL: [ToMidi; 3] = [ToMidi::Melody, ToMidi::Harmony, ToMidi::Drums];
+    pub const ALL: [ToMidi; 4] = [ToMidi::Melody, ToMidi::MelodyFree, ToMidi::Harmony, ToMidi::Drums];
 
     pub fn label(self) -> &'static str {
         match self {
             ToMidi::Melody => "Melodía",
+            ToMidi::MelodyFree => "Melodía sin ajustar",
             ToMidi::Harmony => "Armonía",
             ToMidi::Drums => "Batería",
         }
@@ -35,7 +38,8 @@ impl ToMidi {
 
     pub fn hint(self) -> &'static str {
         match self {
-            ToMidi::Melody => "Una nota cada vez: voz, tarareo, un instrumento solista",
+            ToMidi::Melody => "Una nota cada vez: voz, tarareo, un instrumento solista. Cada nota va a la de la escala de la canción más cercana, así que cantar un poco alto o bajo no cambia la nota",
+            ToMidi::MelodyFree => "Como Melodía, pero cada nota al semitono más cercano, sin la escala (para melodías con notas fuera de la tonalidad)",
             ToMidi::Harmony => "Todas las notas: acordes, piano, guitarra",
             ToMidi::Drums => "Cada golpe como bombo, caja o charles, en una Drum Machine",
         }
@@ -48,7 +52,43 @@ pub struct MidiJob {
     audio: AudioClip,
     mode: ToMidi,
     progress: Arc<Mutex<f32>>,
-    result: Arc<Mutex<Option<Result<Vec<NoteEvent>, String>>>>,
+    result: Arc<Mutex<Option<Result<Converted, String>>>>,
+}
+
+/// What a conversion found: the notes (seconds of the file) and, for a melody,
+/// the key it was heard in.
+type Converted = (Vec<NoteEvent>, Option<stems::key::Key>);
+
+/// How clearly a file must fit a key to count for the song's.
+const CLEAR_KEY: f64 = 0.6;
+
+/// What else sounds in the song, to find its key: the other audio files, and
+/// how much each pitch class plays in its MIDI clips (drums left out).
+struct Context {
+    audio: Vec<Arc<engine::Sample>>,
+    midi: [f64; 12],
+}
+
+impl Context {
+    fn weights(&self) -> [f64; 12] {
+        let normalized = |w: [f64; 12]| -> [f64; 12] {
+            let total: f64 = w.iter().sum();
+            if total > 0.0 { w.map(|x| x / total) } else { w }
+        };
+        let mut sum = normalized(self.midi);
+        for sample in &self.audio {
+            let mono: Vec<f32> = sample.left.iter().zip(&sample.right).map(|(l, r)| (l + r) * 0.5).collect();
+            let chroma = stems::key::chroma(&mono, sample.sample_rate);
+            // Only files with a clear key of their own: drums and ambiguous loops
+            // would only blur it.
+            if stems::key::Key::detect_clearly(&chroma).is_some_and(|(_, clarity)| clarity >= CLEAR_KEY) {
+                for (s, c) in sum.iter_mut().zip(normalized(chroma)) {
+                    *s += c;
+                }
+            }
+        }
+        sum
+    }
 }
 
 /// General MIDI notes the drum hits become.
@@ -116,7 +156,7 @@ pub fn clip_notes(events: &[NoteEvent], audio: &AudioClip, tempo: f64, drums: bo
 
 /// The thread's work: the clip's part of the file, mono, and its notes or hits
 /// (times in the file's seconds).
-fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi, progress: &Mutex<f32>) -> Result<Vec<NoteEvent>, String> {
+fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi, context: &Context, progress: &Mutex<f32>) -> Result<Converted, String> {
     let rate = sample.sample_rate;
     let from = audio.offset.max(0.0);
     let to = audio.source_seconds(audio.length, tempo).min(sample.duration());
@@ -125,10 +165,11 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
         return Err("El clip es demasiado corto para sacar notas".into());
     }
     let mono: Vec<f32> = sample.left[a..b].iter().zip(&sample.right[a..b]).map(|(l, r)| (l + r) * 0.5).collect();
-    let mut events = match mode {
-        ToMidi::Drums => drum_hits(&mono, rate),
-        // One voice: its pitch followed frame by frame (pYIN), cut into notes.
-        ToMidi::Melody => stems::pitch::melody(&mono, rate),
+    let (mut events, key) = match mode {
+        ToMidi::Drums => (drum_hits(&mono, rate), None),
+        // One voice: its pitch followed frame by frame (pYIN), cut into notes,
+        // heard in the song's key.
+        ToMidi::Melody | ToMidi::MelodyFree => stems::pitch::melody(&mono, rate, context.weights(), mode == ToMidi::Melody),
         ToMidi::Harmony => {
             let mut transcriber = stems::transcribe::Transcriber::load()?;
             let notes = transcriber.notes(&mono, rate, |f| {
@@ -137,14 +178,39 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
                 }
                 true
             })?;
-            notes
+            (notes, None)
         }
     };
     for e in &mut events {
         e.start += from;
         e.end += from;
     }
-    Ok(events)
+    Ok((events, key))
+}
+
+impl PulseApp {
+    /// The rest of the song, for finding its key (see [`Context`]).
+    fn key_context(&mut self, own: &str) -> Context {
+        let mut paths: Vec<String> = Vec::new();
+        let mut midi = [0f64; 12];
+        for track in &self.project.tracks {
+            let clips = track.clips.iter().flatten().chain(track.arrangement.iter().map(|a| &a.clip));
+            for clip in clips {
+                match clip {
+                    Clip::Audio(a) if a.sample != own && !paths.contains(&a.sample) => paths.push(a.sample.clone()),
+                    Clip::Midi(m) if !track.instrument.is_drums() => {
+                        for n in &m.notes {
+                            midi[n.pitch as usize % 12] += n.length;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+        // A dozen files are plenty to hear the key.
+        let audio = paths.into_iter().take(12).map(|p| self.sample(&p)).filter(|s| s.frames() > 0).collect();
+        Context { audio, midi }
+    }
 }
 
 impl PulseApp {
@@ -160,10 +226,11 @@ impl PulseApp {
             self.status = Some("No se encuentra el audio del clip".into());
             return;
         }
+        let context = if matches!(mode, ToMidi::Melody | ToMidi::MelodyFree) { self.key_context(&audio.sample) } else { Context { audio: Vec::new(), midi: [0.0; 12] } };
         let (progress, result) = (Arc::new(Mutex::new(0.0)), Arc::new(Mutex::new(None)));
         let (p, r, a, tempo) = (progress.clone(), result.clone(), audio.clone(), self.project.tempo);
         std::thread::spawn(move || {
-            let outcome = convert(&sample, &a, tempo, mode, &p);
+            let outcome = convert(&sample, &a, tempo, mode, &context, &p);
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
             }
@@ -186,7 +253,15 @@ impl PulseApp {
         };
         let job = self.to_midi.take().expect("checked above");
         match outcome {
-            Ok(events) => self.place_midi(job.clip, &job.audio, job.mode, &events),
+            Ok((events, key)) => {
+                self.place_midi(job.clip, &job.audio, job.mode, &events);
+                if let (Some(key), Some(status)) = (key, self.status.as_mut()) {
+                    status.push_str(&match job.mode {
+                        ToMidi::Melody => format!(", en {} (ajustadas a su escala)", key.name()),
+                        _ => format!(" (la canción parece estar en {})", key.name()),
+                    });
+                }
+            }
             Err(error) => self.status = Some(error),
         }
     }

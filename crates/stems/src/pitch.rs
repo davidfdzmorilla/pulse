@@ -5,6 +5,7 @@
 //! Made for singing and humming (what Basic Pitch, built for instruments and
 //! chords, gets wrong: low voices, vowels' formants taken for notes).
 
+use crate::key::Key;
 use crate::resample;
 use crate::transcribe::NoteEvent;
 use rustfft::num_complex::Complex32;
@@ -218,8 +219,10 @@ fn viterbi(observations: &[Vec<f64>], bins: usize) -> Vec<usize> {
     path
 }
 
-/// A semitone away from the note for this many frames (46 ms) starts another.
-const MOVE_FRAMES: usize = 4;
+/// Elsewhere for this many frames (93 ms) starts another note.
+const MOVE_FRAMES: usize = 8;
+/// How far (semitones) the voice may stray from its note and still be on it.
+const STRAY: f64 = 0.75;
 /// Notes shorter than this (seconds) are left out: slides and blips.
 const MIN_NOTE: f64 = 0.08;
 
@@ -227,64 +230,97 @@ fn midi(f0: f64) -> f64 {
     69.0 + 12.0 * (f0 / 440.0).log2()
 }
 
-/// The notes of a pitch track: each voiced stretch, cut where the pitch settles
-/// on another semitone or the voice comes in again louder; each at its median
-/// pitch.
-pub fn notes(track: &Track) -> Vec<NoteEvent> {
+/// How much each pitch class sounds in the track (voiced frames, by loudness).
+pub fn weights(track: &Track) -> [f64; 12] {
+    let mut w = [0f64; 12];
+    for (f0, level) in track.f0.iter().zip(&track.short) {
+        if let Some(f0) = f0 {
+            w[(midi(*f0).round() as i64).rem_euclid(12) as usize] += *level as f64;
+        }
+    }
+    w
+}
+
+/// The notes of a pitch track: each voiced stretch, cut where the voice settles
+/// on another note (for [`MOVE_FRAMES`]) or comes in again after a dip. With a
+/// `key`, the voice is heard as the scale note it is nearest to, so singing a bit
+/// sharp or flat doesn't jump to the next semitone; without, the nearest semitone.
+pub fn notes(track: &Track, key: Option<Key>) -> Vec<NoteEvent> {
     let n = track.f0.len();
     let peak = track.rms.iter().copied().fold(0f32, f32::max).max(1e-9);
+    let nearest = |m: f64| -> u8 { key.map_or(m.round().clamp(0.0, 127.0) as u8, |k| k.snap(m)) };
+    // The note the voice is on at a frame, given the one it was on.
+    let heard = |m: f64, current: u8| -> u8 { if (m - current as f64).abs() <= STRAY { current } else { nearest(m) } };
     let mut notes = Vec::new();
-    let mut close = |from: usize, to: usize, pitches: &[f64]| {
+    let mut close = |from: usize, to: usize, pitch: u8| {
         if to <= from || frame_time(to) - frame_time(from) < MIN_NOTE {
             return;
         }
-        let mut sorted = pitches.to_vec();
-        sorted.sort_by(f64::total_cmp);
-        let pitch = sorted[sorted.len() / 2].round().clamp(0.0, 127.0) as u8;
         let level = track.rms[from..to].iter().copied().fold(0f32, f32::max) / peak;
         notes.push(NoteEvent { start: frame_time(from), end: frame_time(to), pitch, amplitude: level.sqrt() });
     };
+    let level = &track.short;
     let mut i = 0;
     while i < n {
         if track.f0[i].is_none() {
             i += 1;
             continue;
         }
-        // A voiced stretch: [i, end).
         let mut end = i;
         while end < n && track.f0[end].is_some() {
             end += 1;
         }
-        let pitch: Vec<f64> = (i..end).map(|t| midi(track.f0[t].unwrap_or(FMIN))).collect();
-        let mut start = i;
+        let m: Vec<f64> = (i..end).map(|t| midi(track.f0[t].unwrap_or(FMIN))).collect();
+        // A note starts on what the next few frames mostly are.
+        let settle = |from: usize| -> u8 {
+            let mut votes = [0usize; 128];
+            for &x in &m[from - i..(from + MOVE_FRAMES).min(end) - i] {
+                votes[nearest(x) as usize] += 1;
+            }
+            (0..128).max_by_key(|&p| votes[p]).unwrap_or(0) as u8
+        };
+        let (mut start, mut current) = (i, settle(i));
+        let mut away = 0;
         let mut t = i;
         while t < end {
-            let here = &pitch[start - i..=t - i];
-            let mut sorted = here.to_vec();
-            sorted.sort_by(f64::total_cmp);
-            let centre = sorted[sorted.len() / 2];
-            // Settled a semitone or more away for a while: a new note from there.
-            let moved = (t..(t + MOVE_FRAMES).min(end)).all(|u| (pitch[u - i] - centre).abs() > 0.7) && t + MOVE_FRAMES <= end;
-            // Sung again: a dip in the level, and it comes back up.
-            let level = &track.short;
+            let here = heard(m[t - i], current);
+            away = if here != current { away + 1 } else { 0 };
             let before = level[start..t].iter().copied().fold(0f32, f32::max);
-            let after = level[t + 1..(t + 8).min(end)].iter().copied().fold(0f32, f32::max);
+            let after = level[(t + 1).min(end)..(t + 8).min(end)].iter().copied().fold(0f32, f32::max);
             let again = t > start + 3 && t + 1 < end && level[t] <= level[t - 1] && level[t] <= level[t + 1] && level[t] < 0.35 * before && after > 2.5 * level[t];
-            if (moved || again) && t > start {
-                close(start, t, &pitch[start - i..t - i]);
-                start = if again { t + 1 } else { t };
+            if away >= MOVE_FRAMES {
+                // On another note for a while: it began where it first went there.
+                let from = t + 1 - away;
+                close(start, from, current);
+                start = from;
+                current = settle(from);
+                away = 0;
+            } else if again {
+                close(start, t, current);
+                start = t + 1;
+                current = settle(start.min(end - 1));
+                away = 0;
             }
             t += 1;
         }
-        close(start, end, &pitch[start - i..end - i]);
+        close(start, end, current);
         i = end;
     }
     notes
 }
 
-/// The notes sung or played in `mono` (one at a time).
-pub fn melody(mono: &[f32], rate: f32) -> Vec<NoteEvent> {
-    notes(&track(mono, rate))
+/// The notes sung or played in `mono` (one at a time), and the key they were
+/// heard in: the voice's own, or with `context` (how much each pitch class
+/// sounds in the rest of the song) added. `snap`: to that key's scale.
+pub fn melody(mono: &[f32], rate: f32, context: [f64; 12], snap: bool) -> (Vec<NoteEvent>, Option<Key>) {
+    let track = track(mono, rate);
+    let voice = weights(&track);
+    let total: f64 = voice.iter().sum::<f64>().max(1e-9);
+    let context_total: f64 = context.iter().sum::<f64>();
+    // The song and the voice count the same.
+    let combined: [f64; 12] = std::array::from_fn(|i| voice[i] / total + if context_total > 0.0 { context[i] / context_total } else { 0.0 });
+    let key = Key::detect(&combined);
+    (notes(&track, key.filter(|_| snap)), key)
 }
 
 #[cfg(test)]
@@ -313,7 +349,7 @@ mod tests {
         // Low, like a deep voice humming: C#2 D2 E2 A2, then a held G#2.
         let parts = [(0.2, 0.4, 37.0), (0.7, 0.4, 38.0), (1.2, 0.3, 40.0), (1.6, 0.5, 45.0), (2.3, 1.0, 44.0)];
         let audio = tone(44_100.0, &parts);
-        let found = melody(&audio, 44_100.0);
+        let found = melody(&audio, 44_100.0, [0.0; 12], false).0;
         let got: Vec<(f64, u8)> = found.iter().map(|n| ((n.start * 20.0).round() / 20.0, n.pitch)).collect();
         assert_eq!(got.iter().map(|g| g.1).collect::<Vec<_>>(), vec![37, 38, 40, 45, 44], "{got:?}");
         for (note, part) in found.iter().zip(&parts) {
@@ -325,13 +361,13 @@ mod tests {
     #[test]
     fn the_same_note_sung_twice_is_two_notes() {
         let parts = [(0.2, 0.4, 57.0), (0.65, 0.4, 57.0)];
-        let found = melody(&tone(44_100.0, &parts), 44_100.0);
+        let found = melody(&tone(44_100.0, &parts), 44_100.0, [0.0; 12], false).0;
         assert_eq!(found.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![57, 57], "{found:?}");
     }
 
     #[test]
     fn silence_has_no_notes() {
-        assert!(melody(&vec![0.0; 44_100], 44_100.0).is_empty());
+        assert!(melody(&vec![0.0; 44_100], 44_100.0, [0.0; 12], true).0.is_empty());
     }
 
     /// Writes the track and notes of the file in PULSE_PITCH_IN to PULSE_PITCH_OUT
@@ -356,7 +392,8 @@ mod tests {
             text.push_str(&format!("{}\n", f.unwrap_or(0.0)));
         }
         std::fs::write(&output, text).unwrap();
-        let found = notes(&track);
+        let found = notes(&track, Key::detect(&weights(&track)));
+        eprintln!("key {:?}", Key::detect(&weights(&track)).map(|k| k.name()));
         eprintln!("{} frames in {took:?}; {} notes:", track.f0.len(), found.len());
         for n in &found {
             eprintln!("  {:.2} {:.2} {}", n.start, n.end - n.start, n.pitch);

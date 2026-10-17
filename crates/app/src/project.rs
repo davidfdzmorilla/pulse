@@ -248,6 +248,12 @@ pub struct Project {
     /// Grid recorded MIDI note starts snap to, if any.
     #[serde(default)]
     pub record_quantize: Option<f64>,
+    /// Punch in / out: recording onto the arrangement only from the loop's start
+    /// and/or up to its end (whether the loop plays or not), as in Live.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub punch_in: bool,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub punch_out: bool,
     pub tracks: Vec<Track>,
     pub returns: Vec<ReturnTrack>,
     pub master: MasterTrack,
@@ -300,6 +306,12 @@ fn default_swing_grid() -> f64 {
 }
 
 impl Project {
+    /// Where recording onto the arrangement may start and must stop (punch in
+    /// and out, at the loop's edges), if they are on.
+    pub fn punch(&self) -> (Option<f64>, Option<f64>) {
+        (self.punch_in.then_some(self.loop_start), self.punch_out.then_some(self.loop_end))
+    }
+
     pub fn empty() -> Self {
         Self {
             tempo: 120.0,
@@ -311,6 +323,8 @@ impl Project {
             swing: 0.0,
             swing_grid: default_swing_grid(),
             record_quantize: None,
+            punch_in: false,
+            punch_out: false,
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

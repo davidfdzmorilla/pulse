@@ -49,6 +49,14 @@ fn icon_button(ui: &mut egui::Ui, icon: &str, active: bool, active_color: Color3
         "stop" => {
             ui.painter().rect_filled(egui::Rect::from_center_size(rect.center(), vec2(9.0, 9.0)), 1.0, color);
         }
+        // A bar where recording starts (in) or stops (out), the recorded span beside it.
+        "punch in" | "punch out" => {
+            let c = rect.center();
+            let x = if icon == "punch in" { c.x - 5.0 } else { c.x + 5.0 };
+            ui.painter().line_segment([egui::pos2(x, c.y - 6.0), egui::pos2(x, c.y + 6.0)], egui::Stroke::new(2.0, color));
+            let span = if icon == "punch in" { egui::Rect::from_min_max(egui::pos2(x + 3.0, c.y - 3.0), egui::pos2(x + 10.0, c.y + 3.0)) } else { egui::Rect::from_min_max(egui::pos2(x - 10.0, c.y - 3.0), egui::pos2(x - 3.0, c.y + 3.0)) };
+            ui.painter().rect_filled(span, 1.0, color);
+        }
         other => {
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, other, theme::body(), color);
         }
@@ -154,6 +162,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         readout(ui, &format_position(app.project.loop_start), 84.0);
         readout(ui, &format!("{} c.", (app.project.loop_end - app.project.loop_start) / 4.0), 54.0);
+        if icon_button(ui, "punch in", app.project.punch_in, theme::METER_RED, "Punch in: al grabar en el Arrangement, empieza a grabar en el inicio del loop (lo de antes solo suena)").clicked() {
+            app.project.punch_in = !app.project.punch_in;
+        }
+        if icon_button(ui, "punch out", app.project.punch_out, theme::METER_RED, "Punch out: al grabar en el Arrangement, deja de grabar en el final del loop (y sigue sonando)").clicked() {
+            app.project.punch_out = !app.project.punch_out;
+        }
 
         ui.add_space(12.0);
         groove(app, ui);

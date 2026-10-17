@@ -34,6 +34,7 @@ La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a do
 - **Cuenta atrás**: Sin cuenta, 1, 2 o 4 compases de metrónomo antes de grabar.
 - **A — Armar automatización**: si está encendido, al grabar se graban los controles que muevas.
 - **⟲ Loop** del Arrangement, con el inicio y la longitud del loop al lado (la región se elige en la franja de arriba del Arrangement).
+- **Punch in** y **punch out** (los dos botones rojos junto al loop): al grabar en el Arrangement, solo se graba desde el inicio del loop y/o hasta su final (ver «Grabar»).
 - **Rec Q**: cuantiza el inicio de las notas MIDI grabadas (Off, 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32).
 - **Swing** (0–100 %) y su rejilla (1/8 o 1/16): retrasa los contratiempos al reproducir, sin cambiar las notas. 100 % es un shuffle de tresillo. También se aplica al exportar.
 - **▶ Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
@@ -170,6 +171,16 @@ Las **armadas** (●). Si pulsas grabar sin ninguna armada, se arman las selecci
 - **Audio**: un clip por pista de audio armada.
 - Con **A** (Armar automatización) encendido, también se graban los controles que muevas.
 - Lo nuevo se pone encima: los clips que ya había no se borran ni se recortan.
+
+### Punch in / out
+
+Para regrabar solo un trozo sin tocar lo de alrededor. Marca el trozo con la región del loop (franja de arriba del Arrangement) y enciende los botones del transporte:
+
+- **Punch in**: lo que suene antes del inicio del loop no se graba. Pon el cursor un poco antes y graba: oyes lo anterior para entrar a tempo, y la toma empieza justo en el inicio.
+- **Punch out**: la grabación se para sola al llegar al final del loop y la reproducción sigue.
+- Funcionan con el loop activado o no. Con el loop activado y punch in, la toma empieza en el inicio del loop (lo de antes no queda como clip aparte) y cada vuelta es una toma.
+- En el Arrangement, unas líneas rojas marcan dónde empieza y dónde acaba la grabación.
+- Valen para audio, MIDI y automatización. Se guardan con el proyecto.
 
 ### En Session
 

@@ -382,6 +382,8 @@ pub struct TrackStatus {
     record_start: AtomicF64,
     pub follows_arrangement: AtomicBool,
     clip_position: AtomicF64,
+    launch_beat: AtomicF64,
+    switch_beat: AtomicF64,
     pub peak: Peak,
 }
 
@@ -394,6 +396,17 @@ impl TrackStatus {
     /// Transport beat where the current session recording started.
     pub fn record_start(&self) -> f64 {
         self.record_start.load()
+    }
+
+    /// Transport beat where the playing session clip's beat 0 falls (it loops
+    /// from there).
+    pub fn launch_beat(&self) -> f64 {
+        self.launch_beat.load()
+    }
+
+    /// Transport beat where the session clip last changed (launched or stopped).
+    pub fn switch_beat(&self) -> f64 {
+        self.switch_beat.load()
     }
 }
 
@@ -425,6 +438,8 @@ impl SharedState {
                 record_start: AtomicF64::default(),
                 follows_arrangement: AtomicBool::new(true),
                 clip_position: AtomicF64::default(),
+                launch_beat: AtomicF64::default(),
+                switch_beat: AtomicF64::default(),
                 peak: Peak::default(),
             }),
             returns: Default::default(),
@@ -1042,6 +1057,8 @@ struct Track {
     slots: [Option<Box<PlayClip>>; NUM_SCENES],
     playing: Option<usize>,
     launch_beat: f64,
+    /// Transport beat of the last change of session clip (a launch or a stop).
+    switch_beat: f64,
     queued: Queued,
     instrument: Instrument,
     /// What the sampler or drum rack plays.
@@ -1092,6 +1109,7 @@ impl Track {
             slots: Default::default(),
             playing: None,
             launch_beat: 0.0,
+            switch_beat: 0.0,
             queued: Queued::Nothing,
             instrument: Instrument::new(InstrumentKind::Synth(Default::default()), sample_rate),
             samples: Box::default(),
@@ -1475,6 +1493,9 @@ impl Engine {
             }
             Command::BackToArrangement => {
                 for t in &mut self.tracks {
+                    if t.playing.is_some() {
+                        t.switch_beat = self.position;
+                    }
                     t.stop_session_clip();
                     t.follows_arrangement = true;
                 }
@@ -1951,6 +1972,7 @@ impl Engine {
             if track.recording.take().is_some() {
                 flush_held(track, index, boundary, &mut self.recorded);
             }
+            track.switch_beat = boundary;
             match track.queued {
                 Queued::Nothing => {}
                 Queued::Stop => track.playing = None,
@@ -2004,6 +2026,8 @@ impl Engine {
                 _ => 0.0,
             };
             status.clip_position.store(clip_position);
+            status.launch_beat.store(track.launch_beat);
+            status.switch_beat.store(track.switch_beat);
         }
     }
 }

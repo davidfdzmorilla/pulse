@@ -46,10 +46,13 @@ el mismo pull request.
 
 ## Audio a MIDI
 
-«Convertir a MIDI» (menú de un clip de audio) usa Basic Pitch (Spotify, licencia
+«Convertir a MIDI» (menú de un clip de audio) sigue el tono de una voz con pYIN
+(`crates/stems/src/pitch.rs`, igual que `librosa.pyin`) para las melodías, y usa Basic Pitch (Spotify, licencia
 Apache 2.0, ver `crates/stems/models/BASIC_PITCH_NOTICE`), un modelo ONNX de 230 KB
 que va dentro de la app y corre con ONNX Runtime en la CPU. El port a Rust está en
-`crates/stems/src/transcribe.rs`; su prueba compara las notas con las del original:
+`crates/stems/src/transcribe.rs`; su prueba compara las notas con las del original.
+Para comparar pYIN con librosa en un archivo: `PULSE_PITCH_IN=voz.wav PULSE_PITCH_OUT=f0.txt
+cargo test --release -p stems dump_track -- --ignored --nocapture`.
 
     python scripts/transcribe/make_reference.py   # (con `basic-pitch[onnx]`)
     cargo test --release -p stems transcribe

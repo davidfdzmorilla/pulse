@@ -5,7 +5,8 @@
 //! - Armonía: every note (chords, piano, guitar).
 //! - Batería: each hit as a kick, snare or hi-hat, by where its energy is.
 //!
-//! Pitched notes come from Basic Pitch (`stems::transcribe`); drum hits from the
+//! A melody's notes come from following the pitch of the voice (`stems::pitch`,
+//! pYIN); chords' from Basic Pitch (`stems::transcribe`); drum hits from the
 //! slicer's transient detection.
 
 use crate::app::{ClipRef, PulseApp};
@@ -94,26 +95,6 @@ pub fn drum_hits(mono: &[f32], rate: f32) -> Vec<NoteEvent> {
     hits
 }
 
-/// One note at a time: the strongest where notes overlap (the others are often
-/// a voice's harmonics), each cut where the next begins.
-pub fn melody(mut notes: Vec<NoteEvent>) -> Vec<NoteEvent> {
-    notes.sort_by(|a, b| b.amplitude.total_cmp(&a.amplitude));
-    let mut kept: Vec<NoteEvent> = Vec::new();
-    for note in notes {
-        let length = note.end - note.start;
-        let overlap: f64 = kept.iter().map(|k| (note.end.min(k.end) - note.start.max(k.start)).max(0.0)).sum();
-        if overlap < 0.3 * length {
-            kept.push(note);
-        }
-    }
-    kept.sort_by(|a, b| a.start.total_cmp(&b.start));
-    for i in 0..kept.len().saturating_sub(1) {
-        kept[i].end = kept[i].end.min(kept[i + 1].start);
-    }
-    kept.retain(|n| n.end - n.start > 0.05);
-    kept
-}
-
 /// `events` (seconds of the clip's file) as notes in the clip's beats, at `tempo`.
 pub fn clip_notes(events: &[NoteEvent], audio: &AudioClip, tempo: f64, drums: bool) -> Vec<Note> {
     let mut notes: Vec<Note> = events
@@ -146,7 +127,9 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
     let mono: Vec<f32> = sample.left[a..b].iter().zip(&sample.right[a..b]).map(|(l, r)| (l + r) * 0.5).collect();
     let mut events = match mode {
         ToMidi::Drums => drum_hits(&mono, rate),
-        _ => {
+        // One voice: its pitch followed frame by frame (pYIN), cut into notes.
+        ToMidi::Melody => stems::pitch::melody(&mono, rate),
+        ToMidi::Harmony => {
             let mut transcriber = stems::transcribe::Transcriber::load()?;
             let notes = transcriber.notes(&mono, rate, |f| {
                 if let Ok(mut p) = progress.lock() {
@@ -154,7 +137,7 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
                 }
                 true
             })?;
-            if mode == ToMidi::Melody { melody(notes) } else { notes }
+            notes
         }
     };
     for e in &mut events {
@@ -256,14 +239,6 @@ mod tests {
 
     fn note(start: f64, end: f64, pitch: u8, amplitude: f32) -> NoteEvent {
         NoteEvent { start, end, pitch, amplitude }
-    }
-
-    #[test]
-    fn a_melody_keeps_the_strongest_note_at_a_time() {
-        // A sung note with a weaker octave above, then the next note a bit early.
-        let notes = vec![note(0.0, 1.0, 60, 0.8), note(0.0, 0.9, 72, 0.3), note(0.9, 2.0, 62, 0.7), note(1.5, 1.52, 70, 0.9)];
-        let line: Vec<(f64, f64, u8)> = melody(notes).iter().map(|n| (n.start, n.end, n.pitch)).collect();
-        assert_eq!(line, vec![(0.0, 0.9, 60), (0.9, 1.5, 62)], "the octave goes, each note ends where the next begins, a blip under 50 ms goes");
     }
 
     #[test]

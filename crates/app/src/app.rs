@@ -309,6 +309,8 @@ pub struct PulseApp {
     pub updates: crate::updates::Updates,
     /// A clip being separated into stems (see `stems_ui`).
     pub stems: Option<crate::stems_ui::StemJob>,
+    /// An audio clip being turned into MIDI.
+    pub to_midi: Option<crate::to_midi::MidiJob>,
     /// Something the user must see (title, text), in a window until dismissed.
     pub notice: Option<(String, String)>,
     /// Imported audio's tempo, found in the background (see `tempo_ui`).
@@ -454,6 +456,7 @@ impl PulseApp {
             show_settings: false,
             updates: Default::default(),
             stems: None,
+            to_midi: None,
             notice: None,
             tempo: Default::default(),
             devices: Default::default(),
@@ -2526,6 +2529,7 @@ impl eframe::App for PulseApp {
         crate::settings::window(self, &ctx);
         self.follow_updates();
         self.follow_stems(&ctx);
+        self.follow_to_midi(&ctx);
         self.follow_tempo(&ctx);
         self.show_notice(&ctx);
         crate::updates::window(self, &ctx);

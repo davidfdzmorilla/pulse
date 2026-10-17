@@ -44,6 +44,16 @@ el mismo pull request.
   firma Pulse.app, crea la etiqueta y la publica en GitHub, de donde la app se
   actualiza.
 
+## Audio a MIDI
+
+«Convertir a MIDI» (menú de un clip de audio) usa Basic Pitch (Spotify, licencia
+Apache 2.0, ver `crates/stems/models/BASIC_PITCH_NOTICE`), un modelo ONNX de 230 KB
+que va dentro de la app y corre con ONNX Runtime en la CPU. El port a Rust está en
+`crates/stems/src/transcribe.rs`; su prueba compara las notas con las del original:
+
+    python scripts/transcribe/make_reference.py   # (con `basic-pitch[onnx]`)
+    cargo test --release -p stems transcribe
+
 ## Separación de stems
 
 «Separar en stems» (menú de un clip de audio, o el editor de clips de audio) usa

@@ -48,6 +48,7 @@ mod sync;
 mod table_editor;
 mod tempo_ui;
 mod theme;
+mod to_midi;
 mod tracks;
 mod updates;
 mod transport;

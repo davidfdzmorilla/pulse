@@ -335,6 +335,18 @@ Clic derecho en un clip de audio → **Separar en stems…** (o el botón del ed
 - La primera vez descarga el modelo (174 MB) de GitHub: hace falta acceso a GitHub (`gh auth login`).
 - Una separación a la vez, y hacen falta 4 pistas libres (máximo 64).
 
+## Audio a MIDI
+
+Saca las notas de cualquier audio y las pone en una pista MIDI nueva, justo debajo y en el mismo sitio (el mismo slot en Session, el mismo tramo en el Arrangement). Clic derecho en un clip de audio → **Convertir a MIDI**:
+
+- **Melodía**: una nota cada vez. Para una voz, un tarareo o un instrumento solista: canta una idea, conviértela y tócala con cualquier sinte.
+- **Armonía**: todas las notas a la vez. Para acordes, piano o guitarra.
+- **Batería**: cada golpe pasa a bombo, caja o charles (según dónde tiene su energía), en una Drum Machine.
+
+Se hace en este Mac, sin internet, en unos segundos; la barra de estado muestra el progreso. Las notas siguen el tempo del clip (su warp) y su fuerza pasa a la velocidad. Se combina bien con **Separar en stems**: separa una canción y convierte el bajo o la voz en MIDI.
+
+Las notas de la melodía y la armonía las encuentra Basic Pitch, un modelo de Spotify (licencia Apache 2.0) que va dentro de la app.
+
 ## Mezclador
 
 Está debajo de cada columna en Session.

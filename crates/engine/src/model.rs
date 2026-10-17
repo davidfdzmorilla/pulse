@@ -1876,6 +1876,26 @@ pub enum Param {
 pub struct AutomationPoint {
     pub beat: f64,
     pub value: f32,
+    /// How the stretch from this point to the next bends, -1..1: 0 is a straight
+    /// line; above, it moves quickly at first and settles; below, it starts slowly
+    /// and speeds up (as dragging a segment with ⌥ in Live).
+    #[serde(default, skip_serializing_if = "is_straight")]
+    pub curve: f32,
+}
+
+fn is_straight(curve: &f32) -> bool {
+    *curve == 0.0
+}
+
+/// Where a bent stretch is, `u` (0..1) of the way along it: see [`AutomationPoint::curve`].
+pub fn bend(u: f32, curve: f32) -> f32 {
+    let u = u.clamp(0.0, 1.0);
+    let power = 1.0 + curve.abs() * 5.0;
+    if curve >= 0.0 {
+        1.0 - (1.0 - u).powf(power)
+    } else {
+        u.powf(power)
+    }
 }
 
 /// Breakpoints for one parameter along the arrangement, kept sorted by beat.
@@ -1902,11 +1922,18 @@ impl AutomationLane {
         };
         let a = self.points[next - 1];
         let t = ((beat - a.beat) / (b.beat - a.beat).max(1e-9)) as f32;
-        Some(a.value + (b.value - a.value) * t)
+        Some(a.value + (b.value - a.value) * bend(t, a.curve))
     }
 
     pub fn sort(&mut self) {
         self.points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    }
+
+    /// The bend of the stretch at `beat` (for a point added there, so the rest of
+    /// the stretch keeps much of its shape).
+    pub fn curve_at(&self, beat: f64) -> f32 {
+        let next = self.points.partition_point(|p| p.beat <= beat);
+        next.checked_sub(1).and_then(|i| self.points.get(i)).filter(|_| next < self.points.len()).map_or(0.0, |p| p.curve)
     }
 }
 
@@ -6312,11 +6339,29 @@ mod tests {
     fn lanes_interpolate_and_hold_their_ends() {
         let mut lane = AutomationLane::new(Param::Volume);
         assert_eq!(lane.value_at(0.0), None);
-        lane.points = vec![AutomationPoint { beat: 4.0, value: 0.0 }, AutomationPoint { beat: 8.0, value: 1.0 }];
+        lane.points = vec![AutomationPoint { beat: 4.0, value: 0.0, curve: 0.0 }, AutomationPoint { beat: 8.0, value: 1.0, curve: 0.0 }];
         assert_eq!(lane.value_at(0.0), Some(0.0));
         assert_eq!(lane.value_at(6.0), Some(0.5));
         assert_eq!(lane.value_at(8.0), Some(1.0));
         assert_eq!(lane.value_at(100.0), Some(1.0));
+    }
+
+    #[test]
+    fn bent_stretches_curve_and_keep_their_ends() {
+        let mut lane = AutomationLane::new(Param::Volume);
+        lane.points = vec![AutomationPoint { beat: 4.0, value: 0.0, curve: 0.6 }, AutomationPoint { beat: 8.0, value: 1.0, curve: 0.0 }];
+        // Fast first, then settling: above the straight line in the middle.
+        assert!(lane.value_at(6.0).unwrap() > 0.8);
+        assert_eq!((lane.value_at(4.0), lane.value_at(8.0)), (Some(0.0), Some(1.0)));
+        lane.points[0].curve = -0.6;
+        assert!(lane.value_at(6.0).unwrap() < 0.2, "slow first");
+        // Straight ones don't write the field (older projects read back the same).
+        let json = serde_json::to_string(&AutomationPoint { beat: 1.0, value: 0.5, curve: 0.0 }).unwrap();
+        assert!(!json.contains("curve"), "{json}");
+        let back: AutomationPoint = serde_json::from_str(r#"{"beat":1.0,"value":0.5}"#).unwrap();
+        assert_eq!(back.curve, 0.0);
+        assert_eq!(lane.curve_at(5.0), -0.6);
+        assert_eq!(lane.curve_at(9.0), 0.0, "past the last point there is no stretch");
     }
 
     #[test]

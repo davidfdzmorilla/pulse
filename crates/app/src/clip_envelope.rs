@@ -1,7 +1,8 @@
 //! The lane under the note editor shows either the notes' velocities or one of the
 //! clip's envelopes (its own automation, in clip time, looping with it). Here:
 //! choosing what it shows, and drawing and editing an envelope: a clic adds a
-//! point, dragging moves it, a double clic deletes it.
+//! point, dragging moves it, a double clic deletes it; ⌥ + drag on a stretch
+//! bends it (see `curves`).
 
 use crate::theme::{self, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
@@ -19,6 +20,9 @@ pub struct LaneChoice {
     names_for: Option<(usize, usize)>,
     /// The point being dragged.
     dragging: Option<usize>,
+    /// The stretch being bent: the point it starts at, its bend and the
+    /// pointer's height when the drag began.
+    bending: Option<(usize, f32, f32)>,
 }
 
 impl LaneChoice {
@@ -113,9 +117,7 @@ pub fn lane(
         painter.line_segment([pos2(area.left(), y), pos2(end, y)], Stroke::new(1.0, Color32::from_gray(110)));
         painter.text(pos2(area.left() + 4.0, lane.top() + 3.0), Align2::LEFT_TOP, "Clic para añadir puntos a la envolvente del clip", theme::small(), TEXT_DIM);
     } else {
-        let mut line = vec![pos2(area.left(), y_of(points[0].value))];
-        line.extend(points.iter().map(|p| pos2(x_of(p.beat), y_of(p.value))));
-        line.push(pos2(end, y_of(points[points.len() - 1].value)));
+        let line = crate::curves::line(&points, x_of, &y_of, area.left(), end);
         painter.add(egui::Shape::line(line, Stroke::new(1.5, color)));
         for p in &points {
             painter.circle_filled(pos2(x_of(p.beat), y_of(p.value)), 3.5, color);
@@ -134,12 +136,45 @@ pub fn lane(
             }
         }
     };
+    let alt = ui.input(|i| i.modifiers.alt);
+    let stretch = crate::curves::stretch_at(&points, pos.x, x_of).filter(|_| near.is_none());
+    if alt && stretch.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
     if response.double_clicked() {
         if let (Some(i), Some(lane)) = (near, index) {
             envelopes[lane].points.remove(i);
             envelopes.retain(|l| !l.points.is_empty());
+        } else if let (true, Some(i), Some(lane)) = (alt, stretch, index) {
+            // ⌥ + double clic: straight again.
+            envelopes[lane].points[i].curve = 0.0;
         }
         choice.dragging = None;
+        choice.bending = None;
+        return response;
+    }
+    // ⌥ + drag on a stretch bends it.
+    if let Some((i, start, from_y)) = choice.bending {
+        if let (true, Some(lane)) = (response.double_clicked(), index) {
+            if let Some(point) = envelopes[lane].points.get_mut(i) {
+                point.curve = 0.0;
+            }
+            choice.bending = None;
+            return response;
+        }
+        if let (true, Some(lane)) = (response.dragged(), index) {
+            let points = &mut envelopes[lane].points;
+            if let (Some(&from), Some(&to)) = (points.get(i), points.get(i + 1)) {
+                points[i].curve = crate::curves::bent(start, pos.y - from_y, &from, &to);
+            }
+        }
+        if ui.input(|i| i.pointer.primary_released()) {
+            choice.bending = None;
+        }
+        return response;
+    }
+    if let (true, true, Some(i), Some(lane)) = (alt, ui.input(|i| i.pointer.primary_pressed()) && response.hovered(), stretch, index) {
+        choice.bending = Some((i, envelopes[lane].points[i].curve, pos.y));
         return response;
     }
     if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() && pos.x >= area.left() {
@@ -148,7 +183,7 @@ pub fn lane(
         let i = match near {
             Some(i) => i,
             None => {
-                let point = AutomationPoint { beat: snap(beat_of(pos.x)), value: value_of(pos.y) };
+                let point = AutomationPoint { beat: snap(beat_of(pos.x)), value: value_of(pos.y), curve: 0.0 };
                 let i = points.partition_point(|p| p.beat <= point.beat);
                 points.insert(i, point);
                 i
@@ -162,7 +197,7 @@ pub fn lane(
             if i < points.len() {
                 let lo = if i > 0 { points[i - 1].beat } else { 0.0 };
                 let hi = points.get(i + 1).map_or(length, |p| p.beat);
-                points[i] = AutomationPoint { beat: snap(beat_of(pos.x)).clamp(lo, hi), value: value_of(pos.y) };
+                points[i] = AutomationPoint { beat: snap(beat_of(pos.x)).clamp(lo, hi), value: value_of(pos.y), ..points[i] };
             }
         }
     }
@@ -221,6 +256,25 @@ mod tests {
         assert!(matches!(app.clip(clip), Some(c) if !c.envelopes().is_empty()));
     }
 
+    /// ⌥ + drag between two points bends that stretch; no point is added.
+    #[test]
+    fn alt_dragging_between_points_bends_the_envelope() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let clip = ClipRef::Session { track: 0, slot: 0 };
+        app.select_clip(clip);
+        app.piano_roll.lane.shown = Some(Param::Volume);
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| editor(&mut app, ui));
+        let at = |beat: f32, height: f32| pos2(64.0 + beat * 72.0, 895.0 - height * 50.0);
+        click(&mut app, editor, at(0.0, 0.1), Modifiers::NONE);
+        click(&mut app, editor, at(3.0, 0.9), Modifiers::NONE);
+        drag(&mut app, editor, at(1.5, 0.5), at(1.5, 0.9), Modifiers::ALT);
+        let Some(c) = app.clip(clip) else { panic!() };
+        let lane = c.envelopes().iter().find(|l| l.param == Param::Volume).unwrap();
+        assert_eq!(lane.points.len(), 2, "no point added");
+        assert!(lane.points[0].curve > 0.2, "dragged up, it bulges up: {}", lane.points[0].curve);
+    }
+
     /// Two clics in a row in one context, as egui needs for a double clic.
     fn double_click(app: &mut PulseApp, at: egui::Pos2) {
         let ctx = egui::Context::default();
@@ -262,7 +316,7 @@ mod tests {
             transpose: 0.0,
             envelopes: Vec::new(),
         };
-        audio.envelopes.push(engine::model::AutomationLane { param: Param::Pan, points: vec![engine::model::AutomationPoint { beat: 1.0, value: -1.0 }] });
+        audio.envelopes.push(engine::model::AutomationLane { param: Param::Pan, points: vec![engine::model::AutomationPoint { beat: 1.0, value: -1.0, curve: 0.0 }] });
         app.set_clip(track, 0, Some(Clip::Audio(audio)));
         app.select_clip(ClipRef::Session { track, slot: 0 });
         app.piano_roll.lane.shown = Some(Param::Pan);

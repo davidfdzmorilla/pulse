@@ -587,7 +587,7 @@ pub(crate) mod tests {
         assert_eq!(app.param_info(target, level).map(|i| (i.min, i.max, i.default)), Some((0.0, 1.0, 0.5)));
 
         // The synth's level falls from full to nothing over the bar.
-        let ramp = |from: f32, to: f32, param: Param| AutomationLane { param, points: vec![AutomationPoint { beat: 0.0, value: from }, AutomationPoint { beat: 4.0, value: to }] };
+        let ramp = |from: f32, to: f32, param: Param| AutomationLane { param, points: vec![AutomationPoint { beat: 0.0, value: from, curve: 0.0 }, AutomationPoint { beat: 4.0, value: to, curve: 0.0 }] };
         app.project.tracks[3].automation = vec![ramp(1.0, 0.0, level)];
         let out = render(&mut app);
         let (start, end) = (rms(&out[2400..24_000]), rms(&out[72_000..93_600]));

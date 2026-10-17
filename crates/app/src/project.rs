@@ -538,9 +538,9 @@ impl Project {
         keys.automation.push(AutomationLane {
             param: Param::Device { device: 0, param: 0 },
             points: vec![
-                AutomationPoint { beat: 0.0, value: 300.0 },
-                AutomationPoint { beat: 28.0, value: 6000.0 },
-                AutomationPoint { beat: 32.0, value: 1200.0 },
+                AutomationPoint { beat: 0.0, value: 300.0, curve: 0.0 },
+                AutomationPoint { beat: 28.0, value: 6000.0, curve: 0.0 },
+                AutomationPoint { beat: 32.0, value: 1200.0, curve: 0.0 },
             ],
         });
 

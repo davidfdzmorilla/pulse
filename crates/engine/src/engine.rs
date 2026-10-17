@@ -2575,15 +2575,15 @@ mod tests {
         let lanes = vec![
             AutomationLane {
                 param: Param::Volume,
-                points: vec![AutomationPoint { beat: 0.0, value: 0.0 }, AutomationPoint { beat: 4.0, value: 1.0 }],
+                points: vec![AutomationPoint { beat: 0.0, value: 0.0, curve: 0.0 }, AutomationPoint { beat: 4.0, value: 1.0, curve: 0.0 }],
             },
             AutomationLane {
                 param: Param::Send(0),
-                points: vec![AutomationPoint { beat: 1.99, value: 0.0 }, AutomationPoint { beat: 2.0, value: 1.0 }],
+                points: vec![AutomationPoint { beat: 1.99, value: 0.0, curve: 0.0 }, AutomationPoint { beat: 2.0, value: 1.0, curve: 0.0 }],
             },
             AutomationLane {
                 param: Param::Device { device: 0, param: 0 },
-                points: vec![AutomationPoint { beat: 0.0, value: 100.0 }],
+                points: vec![AutomationPoint { beat: 0.0, value: 100.0, curve: 0.0 }],
             },
         ];
         h.send(Command::InsertDevice {
@@ -2614,7 +2614,7 @@ mod tests {
         use crate::model::{AutomationPoint, Param};
         let ramp = |param| AutomationLane {
             param,
-            points: vec![AutomationPoint { beat: 0.0, value: 0.0 }, AutomationPoint { beat: 2.0, value: 1.0 }],
+            points: vec![AutomationPoint { beat: 0.0, value: 0.0, curve: 0.0 }, AutomationPoint { beat: 2.0, value: 1.0, curve: 0.0 }],
         };
         let near = |a: f32, b: f32| (a - b).abs() < 0.05;
         // A session clip, 4 beats, its volume rising over its first 2; the track's
@@ -2622,7 +2622,7 @@ mod tests {
         let mut h = Harness::new();
         h.send(Command::SetAutomation {
             target: Target::Track(0),
-            lanes: Box::new(vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.25 }] }]),
+            lanes: Box::new(vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.25, curve: 0.0 }] }]),
         });
         let mut clip = MidiClip::new("env", 4.0, [0, 0, 0]);
         clip.envelopes.push(ramp(Param::Volume));

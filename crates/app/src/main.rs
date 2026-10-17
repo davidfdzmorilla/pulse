@@ -10,6 +10,7 @@ mod clip_split;
 mod comping;
 mod commands;
 mod consolidate;
+mod curves;
 mod detail;
 mod devices;
 mod editor;

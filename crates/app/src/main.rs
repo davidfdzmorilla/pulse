@@ -15,6 +15,7 @@ mod consolidate;
 mod curves;
 mod detail;
 mod devices;
+mod drum_gen;
 mod editor;
 mod export;
 mod files;

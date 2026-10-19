@@ -154,6 +154,7 @@ pub enum Panel {
     Settings,
     Shortcuts,
     Guide,
+    Versions,
     Updates,
     Export,
 }
@@ -283,7 +284,7 @@ pub struct PulseApp {
     pub drop_targets: crate::browser::DropTargets,
     /// Input track last sent to the engine.
     pub(crate) input_track: Option<Option<usize>>,
-    history: History,
+    pub(crate) history: History,
     pub(crate) file: Option<PathBuf>,
     saved: Project,
     /// Recent projects, newest first.
@@ -300,6 +301,7 @@ pub struct PulseApp {
     pub quitting: bool,
     pub show_shortcuts: bool,
     pub guide: crate::guide::Guide,
+    pub versions: crate::versions::Window,
     /// The session clips playing while recording onto the arrangement.
     pub session_capture: Option<crate::session_rec::SessionCapture>,
     /// Preferences, the window for them and the devices it shows.
@@ -451,6 +453,7 @@ impl PulseApp {
             quitting: false,
             show_shortcuts: false,
             guide: Default::default(),
+            versions: Default::default(),
             session_capture: None,
             settings: Default::default(),
             show_settings: false,
@@ -984,6 +987,7 @@ impl PulseApp {
         self.show_settings = panel == Panel::Settings;
         self.show_shortcuts = panel == Panel::Shortcuts;
         self.guide.open = panel == Panel::Guide;
+        self.versions.open = panel == Panel::Versions;
         self.updates.show = panel == Panel::Updates;
         self.export.open = panel == Panel::Export;
     }
@@ -2270,6 +2274,7 @@ impl PulseApp {
                 self.status = Some(status);
                 self.remember_recent(&path);
                 self.file = Some(path);
+                self.auto_version();
             }
             Err(error) => self.status = Some(error),
         }
@@ -2306,7 +2311,7 @@ impl PulseApp {
                 cmd && i.key_pressed(egui::Key::D),
                 cmd && !shift && i.key_pressed(egui::Key::Z),
                 cmd && shift && i.key_pressed(egui::Key::Z),
-                cmd && !shift && i.key_pressed(egui::Key::S),
+                cmd && !shift && !i.modifiers.alt && i.key_pressed(egui::Key::S),
                 cmd && shift && i.key_pressed(egui::Key::S),
                 cmd && i.key_pressed(egui::Key::O),
                 cmd && i.key_pressed(egui::Key::N),
@@ -2316,11 +2321,15 @@ impl PulseApp {
                 cmd && shift && i.key_pressed(egui::Key::R),
                 !cmd && i.key_pressed(egui::Key::M),
                 i.key_pressed(egui::Key::F9),
+                cmd && i.modifiers.alt && i.key_pressed(egui::Key::S),
             ]
         });
-        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record] =
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record, versions] =
             input;
         self.tab_pressed = None;
+        if versions {
+            self.open_panel(Panel::Versions);
+        }
         if export {
             self.open_panel(Panel::Export);
         }
@@ -2526,6 +2535,7 @@ impl eframe::App for PulseApp {
         crate::midi_map::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
         crate::guide::window(self, &ctx);
+        crate::versions::window(self, &ctx);
         crate::settings::window(self, &ctx);
         self.follow_updates();
         self.follow_stems(&ctx);

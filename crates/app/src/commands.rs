@@ -20,6 +20,7 @@ pub enum Command {
     Revert,
     Save,
     SaveAs,
+    Versions,
     ImportLive,
     ImportAudio,
     Export,
@@ -80,10 +81,11 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 30] = [
+pub const SHORTCUTS: [(&str, &str); 31] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
+    ("⌥⌘S", "Versiones del proyecto"),
     ("⌘I", "Importar set de Live"),
     ("⇧⌘R", "Exportar audio"),
     ("⌘Q", "Salir"),
@@ -189,6 +191,7 @@ impl PulseApp {
             }
             Command::Save => self.save(),
             Command::SaveAs => self.save_as(),
+            Command::Versions => self.open_panel(crate::app::Panel::Versions),
             Command::ImportLive => {
                 if self.may_discard() {
                     self.import_live_set();

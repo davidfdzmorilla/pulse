@@ -343,14 +343,16 @@ En el carril de abajo, con **Velocidad** elegido, arrastra arriba o abajo cerca 
 
 ## Generar ritmos
 
-En el **Editor MIDI** de un clip de batería (Drum Machine o Drum Rack), **Generar ritmo** escribe un patrón en un estilo:
+En el **Editor MIDI** de un clip de batería (Drum Machine o Drum Rack), **Generar ritmo** escribe una base en un estilo:
 
-- **Estilos**: House, Techno, Trap, Drum & Bass, Hip hop, Pop / Rock, Reggaetón y Breakbeat. Cada uno con lo que lo define (el bombo a negras del house, la caja en el 3 del trap, el dos-pasos del drum & bass, el dembow del reggaetón…). Al pasar por encima de cada uno dice a qué tempo suele ir.
-- **Complejidad**: al 0 % solo lo esencial del estilo; más arriba, golpes de más y notas fantasma. Los compases pares cambian algún detalle, como un batería de verdad.
-- **Redoble al final de cada frase**: el último tiempo de cada 4 compases, semicorcheas de caja y toms que crecen.
-- **El bombo sigue al bajo**: añade bombos donde el bajo empieza sus notas (en corcheas). Se activa si hay una pista de bajo sonando con el clip (en la misma escena, o debajo en el Arrangement).
-- Funciona con cualquier kit: Pulse busca cada sonido por su nombre (kick/bombo, snare/caja, clap, hat/charles, tom, rim…) y usa lo que haya (sin caja, la palma).
-- **Generar** sustituye las notas del clip; **Otra versión** escribe otra cada vez. ⌘Z recupera las anteriores. El ritmo dura lo que el clip: cambia su **Loop** antes para tener más compases.
+- **Estilos**: House, Techno, Trap, Drum & Bass, Hip hop, Pop / Rock, Reggaetón y Breakbeat. Las bases están escritas a mano, como las tocaría un batería de cada estilo (el bombo a negras y el charles abierto a contratiempo del house, la caja en el 3 y los redobles de charles del trap, el dos-pasos del drum & bass, el dembow del reggaetón…), con sus acentos y notas fantasma. Cada estilo suena a sí mismo a su tempo: **Tempo del proyecto a… BPM** lo pone.
+- **Nivel**: **Básico** (lo esencial), **Medio** e **Intenso** (más golpes, percusión, notas fantasma).
+- **Largo**: 1, 2, 4 u 8 compases. El ritmo se repite y el **cuarto compás** da la vuelta a la frase con una variación.
+- **Redoble al final de cada frase**: en el último tiempo de cada 8 compases (o del clip, si tiene 4 o más), el de cada estilo (el reggaetón no lleva).
+- **El bombo sigue al bajo**: añade bombos donde el bajo empieza sus notas (en corcheas), si hay una pista de bajo sonando con el clip.
+- El hip hop lleva **swing** (y el house, un poco): se pone en el **Groove** del clip.
+- Funciona con cualquier kit: Pulse busca cada sonido por su nombre (kick/bombo, snare/caja, clap, hat/charles, tom, rim…) y usa lo que haya.
+- **Generar** sustituye las notas del clip; **Otra versión** pasa a otra base del mismo estilo y nivel. ⌘Z recupera las anteriores.
 
 ## Tonalidad y escala
 

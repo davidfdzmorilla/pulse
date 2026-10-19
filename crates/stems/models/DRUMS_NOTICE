@@ -1,0 +1,19 @@
+drums.onnx — Pulse's drum model
+
+A small transformer trained by Pulse (training code in ml/drums) on drum
+parts taken from two datasets, both under the Creative Commons Attribution
+4.0 International license (https://creativecommons.org/licenses/by/4.0/):
+
+The Lakh MIDI Dataset v0.1
+  Colin Raffel. "Learning-Based Methods for Comparing Sequences, with
+  Applications to Audio-to-MIDI Alignment and Matching". PhD Thesis, 2016.
+  https://colinraffel.com/projects/lmd/
+
+The Groove MIDI Dataset v1.0.0
+  Jon Gillick, Adam Roberts, Jesse Engel, Douglas Eck, and David Bamman.
+  "Learning to Groove with Inverse Sequence Transformations." International
+  Conference on Machine Learning (ICML), 2019.
+  https://magenta.tensorflow.org/datasets/groove
+
+From each part only its drum hits were kept, on a sixteenth-note grid, in
+eight sounds and four strengths; the model learned from those.

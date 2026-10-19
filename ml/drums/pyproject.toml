@@ -1,0 +1,12 @@
+[project]
+name = "pulse-drums"
+version = "0.1.0"
+description = "Trains the drum model that Pulse uses to write beats"
+requires-python = ">=3.11,<3.13"
+dependencies = [
+    "torch==2.5.1",
+    "numpy<2.2",
+    "mido==1.3.3",
+    "onnx==1.17.0",
+    "onnxruntime==1.20.1",
+]

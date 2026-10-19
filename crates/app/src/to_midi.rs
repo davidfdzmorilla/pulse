@@ -3,6 +3,7 @@
 //!
 //! - Melodía: one note at a time (a voice, a hummed tune, a solo instrument).
 //! - Armonía: every note (chords, piano, guitar).
+//! - Acordes: the chords of a song or a part, one per change, voiced.
 //! - Batería: each hit as a kick, snare or hi-hat, by where its energy is.
 //!
 //! A melody's notes come from following the pitch of the voice (`stems::pitch`,
@@ -21,17 +22,19 @@ pub enum ToMidi {
     /// A melody without the key's scale: each note at its nearest semitone.
     MelodyFree,
     Harmony,
+    Chords,
     Drums,
 }
 
 impl ToMidi {
-    pub const ALL: [ToMidi; 4] = [ToMidi::Melody, ToMidi::MelodyFree, ToMidi::Harmony, ToMidi::Drums];
+    pub const ALL: [ToMidi; 5] = [ToMidi::Melody, ToMidi::MelodyFree, ToMidi::Harmony, ToMidi::Chords, ToMidi::Drums];
 
     pub fn label(self) -> &'static str {
         match self {
             ToMidi::Melody => "Melodía",
             ToMidi::MelodyFree => "Melodía sin ajustar",
             ToMidi::Harmony => "Armonía",
+            ToMidi::Chords => "Acordes",
             ToMidi::Drums => "Batería",
         }
     }
@@ -41,6 +44,7 @@ impl ToMidi {
             ToMidi::Melody => "Una nota cada vez: voz, tarareo, un instrumento solista. Cada nota va a la de la escala de la canción más cercana, así que cantar un poco alto o bajo no cambia la nota",
             ToMidi::MelodyFree => "Como Melodía, pero cada nota al semitono más cercano, sin la escala (para melodías con notas fuera de la tonalidad)",
             ToMidi::Harmony => "Todas las notas: acordes, piano, guitarra",
+            ToMidi::Chords => "Los acordes de una canción o de un instrumento, uno por cada cambio (como mucho cada medio compás), con las voces enlazadas: para tocarlos con otro sonido",
             ToMidi::Drums => "Cada golpe como bombo, caja o charles, en una Drum Machine",
         }
     }
@@ -178,6 +182,7 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
             None => stems::pitch::melody(&mono, rate, context.weights(), true),
         },
         ToMidi::MelodyFree => stems::pitch::melody(&mono, rate, context.weights(), false),
+        ToMidi::Chords => chord_events(&mono, rate, audio, tempo, from, context.key),
         ToMidi::Harmony => {
             let mut transcriber = stems::transcribe::Transcriber::load()?;
             let notes = transcriber.notes(&mono, rate, |f| {
@@ -194,6 +199,33 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
         e.end += from;
     }
     Ok((events, key))
+}
+
+/// The chords of `mono` (the clip's audio from `from` seconds of its file), half
+/// a bar of the clip at a time, voiced one into the next; in `key` if known,
+/// else in the one the audio sounds in.
+fn chord_events(mono: &[f32], rate: f32, audio: &AudioClip, tempo: f64, from: f64, key: Option<stems::key::Key>) -> (Vec<NoteEvent>, Option<stems::key::Key>) {
+    let key = key.or_else(|| stems::key::Key::detect(&stems::key::chroma(mono, rate)));
+    let gram = stems::chord::Chromagram::new(mono, rate);
+    let mut stretches = Vec::new();
+    let mut beat = 0.0;
+    while beat < audio.length - 1e-9 {
+        let end = (beat + 2.0).min(audio.length);
+        stretches.push((audio.source_seconds(beat, tempo) - from, audio.source_seconds(end, tempo) - from));
+        beat = end;
+    }
+    let mut events = Vec::new();
+    let mut previous: Vec<u8> = Vec::new();
+    for (start, end, chord) in gram.chords(&stretches, key) {
+        let Some(chord) = chord else { continue };
+        let upper = if previous.len() > 1 { &previous[1..] } else { &previous[..] };
+        let pitches = stems::chord::voice(&chord, upper);
+        for &pitch in &pitches {
+            events.push(NoteEvent { start, end, pitch, amplitude: 0.6 });
+        }
+        previous = pitches;
+    }
+    (events, key)
 }
 
 impl PulseApp {
@@ -256,6 +288,7 @@ impl PulseApp {
             ToMidi::Melody if self.project.key.is_some() => Context { audio: Vec::new(), midi: [0.0; 12], key: self.project.key },
             ToMidi::Melody => self.key_context(&audio.sample),
             ToMidi::MelodyFree => Context { key: None, ..self.key_context(&audio.sample) },
+            ToMidi::Chords => Context { audio: Vec::new(), midi: [0.0; 12], key: self.project.key },
             _ => Context { audio: Vec::new(), midi: [0.0; 12], key: None },
         };
         let chosen = self.project.key.is_some();
@@ -291,6 +324,7 @@ impl PulseApp {
                     status.push_str(&match job.mode {
                         ToMidi::Melody if job.chosen => format!(", ajustadas a la escala del proyecto ({})", key.name()),
                         ToMidi::Melody => format!(", en {} (ajustadas a su escala)", key.name()),
+                        ToMidi::Chords => format!(", en {}", key.name()),
                         _ => format!(" (la canción parece estar en {})", key.name()),
                     });
                 }
@@ -439,6 +473,47 @@ mod tests {
             assert_eq!(first, vec![(0.0, 60), (1.0, 64), (2.0, 67), (3.0, 72)], "{mode:?}: a beat each at 120 BPM");
         }
         assert_eq!(app.project.tracks.len(), tracks + 2);
+    }
+
+    /// «Acordes»: Am F C G from audio (a bar each at 120 BPM) as voiced chords.
+    #[test]
+    fn the_chords_of_audio_become_voiced_chords() {
+        let rate = 22_050.0;
+        let progression: [&[u8]; 4] = [&[45, 57, 60, 64], &[41, 57, 60, 65], &[48, 55, 60, 64], &[43, 55, 59, 62]];
+        let mut mono = Vec::new();
+        for chord in progression {
+            for i in 0..(rate * 2.0) as usize {
+                let t = i as f32 / rate;
+                let v: f32 = chord.iter().map(|&p| {
+                    let f = 440.0 * 2f32.powf((p as f32 - 69.0) / 12.0);
+                    (1..5).map(|h| (2.0 * std::f32::consts::PI * f * h as f32 * t).sin() / (h * h) as f32).sum::<f32>()
+                }).sum();
+                mono.push(v * 0.1);
+            }
+        }
+        let sample = engine::Sample::from_channels(mono.clone(), mono, rate);
+        let audio = AudioClip {
+            name: "Piano".into(),
+            color: [0; 3],
+            sample: String::new(),
+            length: 16.0,
+            offset: 0.0,
+            warp: engine::model::WarpMode::Stretch,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            takes: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+        };
+        let context = Context { audio: Vec::new(), midi: [0.0; 12], key: None };
+        let (events, key) = convert(&sample, &audio, 120.0, ToMidi::Chords, &context, &Mutex::new(0.0)).unwrap();
+        assert_eq!(key.map(|k| k.name()).as_deref(), Some("Do mayor"));
+        let notes = clip_notes(&events, &audio, 120.0, false);
+        let named: Vec<(f64, String)> = crate::harmony::chords(&notes, 16.0, key).iter().filter_map(|(a, _, c)| c.map(|c| (*a, c.name()))).collect();
+        let expected = [(0.0, "Lam"), (4.0, "Fa"), (8.0, "Do"), (12.0, "Sol")].map(|(b, n)| (b, n.to_string()));
+        assert_eq!(named, expected);
+        assert_eq!(notes.len(), 16, "a bass and three notes each");
     }
 
     /// «Detectar»: the key the MIDI clips play in, leaving the drums out.

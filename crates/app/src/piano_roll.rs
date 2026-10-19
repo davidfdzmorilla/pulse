@@ -8,6 +8,9 @@
 //!
 //! With a project key the scale's rows are lit and the tonic's marked; «Plegar»
 //! leaves only the scale's rows, and then notes move along the scale.
+//!
+//! Under the ruler, the chord each stretch plays (see `harmony`); «Acordes»
+//! writes the key's chords at the insert marker.
 
 use crate::app::{ClipRef, PulseApp};
 use crate::note_edit::{self, Selection, MIN_LENGTH};
@@ -22,6 +25,8 @@ use std::sync::atomic::Ordering;
 
 const KEY_W: f32 = 64.0;
 const RULER_H: f32 = 16.0;
+/// The strip of chord names under the ruler.
+const CHORD_H: f32 = 15.0;
 const VELOCITY_H: f32 = 60.0;
 const LANE_HEADER_H: f32 = 22.0;
 const EDGE_GRAB: f32 = 5.0;
@@ -76,6 +81,7 @@ pub struct State {
     scroll_x: f32,
     /// Only the rows of the project's scale.
     fold: bool,
+    chords: crate::harmony::ChordMenu,
 }
 
 impl Default for State {
@@ -96,6 +102,7 @@ impl Default for State {
             lane: Default::default(),
             scroll_x: 0.0,
             fold: false,
+            chords: Default::default(),
         }
     }
 }
@@ -189,7 +196,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let before = clip.clone();
     let mut previews: Vec<u8> = Vec::new();
 
-    toolbar(ui, state, clip, key);
+    previews.extend(toolbar(ui, state, clip, key, is_drums));
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
     if keys_enabled {
@@ -221,10 +228,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         scroll = scroll.vertical_scroll_offset((row_h * (96.0 - center) - 80.0).max(0.0));
     }
     let output = scroll.show(ui, |ui| {
-        let size = vec2(KEY_W + grid_w, RULER_H + pitches.len() as f32 * row_h);
+        let chord_h = if is_drums { 0.0 } else { CHORD_H };
+        let size = vec2(KEY_W + grid_w, RULER_H + chord_h + pitches.len() as f32 * row_h);
         let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
         let painter = ui.painter_at(rect);
-        let top = rect.top() + RULER_H;
+        let top = rect.top() + RULER_H + chord_h;
         let grid = Rect::from_min_max(pos2(rect.left() + KEY_W, top), rect.max);
         let x_of = |beat: f64| grid.left() + beat as f32 * beat_w;
         let beat_of = |x: f32| ((x - grid.left()) / beat_w) as f64;
@@ -244,6 +252,21 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         let insert_x = x_of(state.insert_at);
         painter.line_segment([pos2(insert_x, rect.top()), pos2(insert_x, rect.top() + RULER_H)], Stroke::new(2.0, ACCENT));
+
+        // The chords, with their degree in the project's key.
+        if !is_drums {
+            let strip_y = rect.top() + RULER_H;
+            for (from, to, chord) in crate::harmony::chords(&clip.notes, clip.length, key) {
+                let Some(chord) = chord else { continue };
+                let r = Rect::from_min_max(pos2(x_of(from) + 1.0, strip_y + 1.0), pos2(x_of(to) - 1.0, strip_y + CHORD_H - 1.0));
+                painter.rect_filled(r, 2.0, Color32::from_gray(52));
+                let text = match key.and_then(|k| chord.numeral(k)) {
+                    Some(numeral) => format!("{} · {numeral}", chord.name()),
+                    None => chord.name(),
+                };
+                painter.with_clip_rect(r.intersect(painter.clip_rect())).text(pos2(r.left() + 4.0, r.center().y), Align2::LEFT_CENTER, text, theme::small(), Color32::from_gray(225));
+            }
+        }
 
         // Rows and keys; with a key, its scale's rows lit and the tonic's tinted.
         let scale = key.map(|k| k.scale());
@@ -571,7 +594,9 @@ fn to_scale(notes: &mut [Note], targets: &[usize], scale: Scale) -> usize {
     moved
 }
 
-fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>) {
+/// The editor's bar; the pitches of any chord written, to preview.
+fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool) -> Vec<u8> {
+    let mut previews = Vec::new();
     ui.horizontal_wrapped(|ui| {
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
         ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
@@ -593,6 +618,13 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
             state.draw_mode = !state.draw_mode;
         }
         groove_menu(ui, clip);
+        if !is_drums {
+            let (added, pitches) = crate::harmony::menu(ui, &mut state.chords, clip, &mut state.insert_at, key);
+            if !added.is_empty() {
+                state.selection = added.into_iter().collect();
+                previews = pitches;
+            }
+        }
         ui.separator();
         let targets = note_edit::targets(&clip.notes, &state.selection);
         let scope = if state.selection.is_empty() { "todas las notas" } else { "las notas seleccionadas" };
@@ -633,6 +665,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         ui.add(egui::Slider::new(&mut state.zoom, 0.5..=4.0).logarithmic(true).show_value(false));
     });
     ui.add_space(2.0);
+    previews
 }
 
 /// «Groove»: the clip follows the project's swing, or has its own groove
@@ -842,5 +875,24 @@ mod tests {
         click(&mut app, view, fit, egui::Modifiers::NONE);
         let Some(Clip::Midi(midi)) = app.clip(clip) else { panic!() };
         assert_eq!(midi.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60, 64], "C# to C, E stays");
+    }
+
+    /// The strip under the ruler names the demo's «Am F C G» (C over G), with
+    /// their degrees once the project has a key.
+    #[test]
+    fn the_chord_strip_names_each_bar() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let t = app.project.tracks.iter().position(|t| t.clips[0].as_ref().is_some_and(|c| c.name() == "Am F C G")).expect("the keys");
+        app.select_clip(ClipRef::Session { track: t, slot: 0 });
+        let names = |app: &mut PulseApp| -> Vec<String> { texts(app).into_iter().map(|(t, _)| t).filter(|t| t.starts_with(['L', 'F', 'D', 'S'])).collect() };
+        let shown = names(&mut app);
+        for chord in ["Lam", "Fa", "Do/Sol", "Sol"] {
+            assert!(shown.contains(&chord.to_string()), "{chord}: {shown:?}");
+        }
+        app.project.key = Some(Scale { tonic: 0, minor: false });
+        let shown = names(&mut app);
+        for chord in ["Lam · vi", "Fa · IV", "Do/Sol · I", "Sol · V"] {
+            assert!(shown.contains(&chord.to_string()), "{chord}: {shown:?}");
+        }
     }
 }

@@ -1,5 +1,6 @@
 mod accompany;
 mod als;
+mod arrange;
 mod app;
 mod arrangement;
 mod automation_rec;

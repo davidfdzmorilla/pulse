@@ -85,6 +85,8 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Separator,
             Run(C::GroupTracks, "Agrupar pistas", "g"),
             Run(C::Ungroup, "Desagrupar", "⇧g"),
+            Separator,
+            Run(C::Arrange, "Arreglo automático…", ""),
         ],
     ),
     (

@@ -175,6 +175,17 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 - Dos clips de audio seguidos (sin hueco entre ellos, como las partes de un clip dividido o los trozos de tomas) se funden entre sí durante 10 ms en el corte, en vez de bajar cada uno a silencio. Al unirlos, el archivo nuevo conserva ese fundido.
 - Por ahora unir y consolidar no aplican los efectos de la pista.
 
+## Arreglo automático
+
+Cuando tienes las ideas en escenas de Session, **Crear → Arreglo automático…** hace con ellas una canción entera en el Arrangement.
+
+- Elige una **estructura**: **Electrónica** (intro, subida, drop, break, subida, drop, outro), **Pop** (intro, estrofa, estribillo, estrofa, estribillo, puente, estribillo, final) o **Corta** (intro, A, B, final).
+- Cada parte toma una escena: si tus escenas se llaman como partes («Intro», «Estrofa», «Drop», «Estribillo», «Break»…), esas; si no, la más llena (más batería, bajo y melodía) es el estribillo o el drop, la siguiente la estrofa y la más ligera la intro.
+- Cada parte lleva solo las pistas que le tocan según su **papel**, que Pulse deduce del instrumento, el nombre y las notas (batería, bajo, armonía, melodía): sin bajo en la intro, sin batería en el break… En el estribillo o el drop suena todo: si una pista no tiene clip en esa escena, trae el suyo de otra.
+- **Subidas**: el último compás de la batería es un **redoble** de caja que acelera y crece. **Cortes**: el último tiempo antes del drop, en silencio, para que entre con fuerza.
+- Antes de crearla, en la tabla puedes cambiar los **compases** de cada parte, **qué pistas suenan** en cada una (casillas) y los redobles y cortes.
+- **Crear** sustituye lo que hubiera en el Arrangement (⌘Z lo recupera), pone el loop en toda la canción y te lleva al Arrangement.
+
 ## Grabar
 
 ### Qué pistas graban

@@ -488,7 +488,7 @@ fn widgets(ctx: &egui::Context) -> Vec<Widget> {
     })
 }
 
-const COMMANDS: [Command; 47] = [
+const COMMANDS: [Command; 48] = [
     Command::New,
     Command::Open,
     Command::ClearRecent,
@@ -518,6 +518,7 @@ const COMMANDS: [Command; 47] = [
     Command::DeleteTrack,
     Command::GroupTracks,
     Command::Ungroup,
+    Command::Arrange,
     Command::ShowSession,
     Command::ShowArrangement,
     Command::ToggleDetail,

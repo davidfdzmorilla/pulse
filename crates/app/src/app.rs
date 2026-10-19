@@ -156,6 +156,7 @@ pub enum Panel {
     Guide,
     Versions,
     Mix,
+    Arrange,
     Updates,
     Export,
 }
@@ -304,6 +305,7 @@ pub struct PulseApp {
     pub guide: crate::guide::Guide,
     pub versions: crate::versions::Window,
     pub mix: crate::mix_assist::Assistant,
+    pub arrange: crate::arrange::Window,
     /// Playing with the voice (see `voice_play`).
     pub voice: crate::voice_play::Voice,
     /// The accompaniment written last (see `accompany`).
@@ -463,6 +465,7 @@ impl PulseApp {
             guide: Default::default(),
             versions: Default::default(),
             mix: Default::default(),
+            arrange: Default::default(),
             voice: Default::default(),
             accompaniment: None,
             session_capture: None,
@@ -1013,6 +1016,7 @@ impl PulseApp {
         self.guide.open = panel == Panel::Guide;
         self.versions.open = panel == Panel::Versions;
         self.mix.open = panel == Panel::Mix;
+        self.arrange.open = panel == Panel::Arrange;
         self.updates.show = panel == Panel::Updates;
         self.export.open = panel == Panel::Export;
     }
@@ -2591,6 +2595,7 @@ impl eframe::App for PulseApp {
         crate::guide::window(self, &ctx);
         crate::versions::window(self, &ctx);
         crate::mix_assist::window(self, &ctx);
+        crate::arrange::window(self, &ctx);
         crate::settings::window(self, &ctx);
         self.follow_updates();
         self.follow_stems(&ctx);

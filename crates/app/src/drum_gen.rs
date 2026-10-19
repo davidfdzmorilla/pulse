@@ -171,28 +171,31 @@ fn takes(style: Style, level: Level) -> &'static [Take] {
                 b: &[(Kick, "X...X...X...X..g"), (Back, "....X.......X..."), (Open, "..x...x...x...x."), (Hat, "g.ggg.ggg.ggg.gg"), (Perc, "..o..o.o..o..o.o")],
             },
         ],
+        // Techno: the kick on every beat, the open hat on the off-beats, soft
+        // closed hats between, the clap on 2 and 4; rims as it gets busier. No
+        // cowbell: it rings like a ride.
         (Style::Techno, Level::Basic) => &[Take {
-            a: &[(Kick, FOUR), (Hat, "..x...x...x...x."), (Back, "....o.......o...")],
-            b: &[(Kick, FOUR), (Hat, "..x...x...x...x."), (Back, "....o.......o...")],
+            a: &[(Kick, FOUR), (Open, "..x...x...x...x."), (Back, "....o.......o...")],
+            b: &[(Kick, FOUR), (Open, "..x...x...x...x."), (Back, "....o.......o...")],
         }],
         (Style::Techno, Level::Medium) => &[
             Take {
-                a: &[(Kick, FOUR), (Hat, "g.x.g.x.g.x.g.x."), (Back, "....x.......x..."), (Rim, "...o.......o....")],
-                b: &[(Kick, FOUR), (Hat, "g.x.g.x.g.x.g.x."), (Back, "....x.......x..."), (Rim, "...o.......o..o.")],
+                a: &[(Kick, FOUR), (Open, "..x...x...x...x."), (Hat, ".g.g.g.g.g.g.g.g"), (Back, "....x.......x...")],
+                b: &[(Kick, FOUR), (Open, "..x...x...x...x."), (Hat, ".g.g.g.g.g.g.g.g"), (Back, "....x.......x..."), (Rim, "...........o..o.")],
             },
             Take {
-                a: &[(Kick, FOUR), (Hat, "ggxgggxgggxgggxg"), (Back, "....x.......x...")],
-                b: &[(Kick, FOUR), (Hat, "ggxgggxgggxgggx."), (Back, "....x.......x..."), (Open, "..............x.")],
+                a: &[(Kick, FOUR), (Hat, "g.x.g.x.g.x.g.x."), (Back, "....x.......x...")],
+                b: &[(Kick, FOUR), (Hat, "g.x.g.x.g.x.g..."), (Back, "....x.......x..."), (Open, "..............x.")],
             },
         ],
         (Style::Techno, Level::Intense) => &[
             Take {
-                a: &[(Kick, FOUR), (Hat, "gxgXgxgXgxgXgxgX"), (Open, "......x.......x."), (Back, "....x.......x..."), (Rim, "...o..o....o..o."), (Perc, "o..o..o...o..o..")],
-                b: &[(Kick, FOUR), (Hat, "gxgXgxgXgxgXgxgX"), (Open, "......x.......x."), (Back, "....x.......x..."), (Rim, "...o..o....o..o."), (Perc, "o..o..o...o..o.o")],
+                a: &[(Kick, FOUR), (Open, "..x...x...x...x."), (Hat, ".g.o.g.o.g.o.g.o"), (Back, "....x.......x..."), (Rim, "...o..o....o....")],
+                b: &[(Kick, FOUR), (Open, "..x...x...x...x."), (Hat, ".g.o.g.o.g.o.g.o"), (Back, "....x.......x..."), (Rim, "...o..o....o..o.")],
             },
             Take {
-                a: &[(Kick, "X...X...X...X..g"), (Hat, "xgxgxgxgxgxgxgxg"), (Open, "..o...o...o...o."), (Back, "....x.......x..."), (Rim, "......o.......o.")],
-                b: &[(Kick, "X...X...X...X.gg"), (Hat, "xgxgxgxgxgxgxgxg"), (Open, "..o...o...o...o."), (Back, "....x.......x..."), (Rim, "......o.......o.")],
+                a: &[(Kick, "X...X...X...X..g"), (Hat, "ggxgggxgggxgggxg"), (Back, "....x.......x..."), (Rim, "......o.......o.")],
+                b: &[(Kick, "X...X...X...X.gg"), (Hat, "ggxgggxgggxggg.."), (Open, "..............x."), (Back, "....x.......x..."), (Rim, "......o.......o.")],
             },
         ],
         (Style::Trap, Level::Basic) => &[Take {
@@ -552,30 +555,47 @@ mod tests {
         Kit::from_rows(&rows)
     }
 
-    /// Renders a beat of each style on its machine, at its tempo, to WAVs in
-    /// `PULSE_OUT` (for listening).
+    /// A beat of `style` on its machine, at its tempo, eight bars, to a WAV in `dir`.
+    fn beat_to_wav(dir: &std::path::Path, style: Style, level: Level, take: u64) -> String {
+        let mut project = crate::project::Project::empty();
+        project.tempo = style.tempo() as f64;
+        let params = engine::model::DrumParams { model: style.machine(), ..Default::default() };
+        let mut track = crate::project::Track::new("Drums", [0; 3], engine::model::InstrumentKind::DrumMachine(params));
+        let settings = Settings { style, level, fills: true, follow_bass: false, bars: 8, machine: true };
+        let (notes, groove) = generate(&machine(), &settings, 32.0, &[], take);
+        let clip = engine::model::MidiClip { notes, groove, ..engine::model::MidiClip::new("Beat", 32.0, [0; 3]) };
+        track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: engine::model::Clip::Midi(clip) });
+        project.tracks = vec![track];
+        let mut samples = crate::sync::SampleCache::default();
+        let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+        let (l, r) = crate::export::render(commands, (0.0, 32.0), project.tempo, 48_000.0, &Default::default(), &|_| {}).unwrap();
+        let name = format!("{} {} {} v{}.wav", style.label().replace(['/', '&'], "y"), level.label(), style.machine().label(), take + 1);
+        crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
+        name
+    }
+
+    /// Renders beats to WAVs in `PULSE_OUT` (for listening): every level and take
+    /// of the styles in `PULSE_STYLES` (labels, comma-separated), or one of each.
     #[test]
     #[ignore]
     fn beats_to_wav() {
         let Ok(dir) = std::env::var("PULSE_OUT") else { return };
         let dir = std::path::PathBuf::from(dir);
         std::fs::create_dir_all(&dir).unwrap();
-        for (style, level) in [(Style::House, Level::Medium), (Style::Techno, Level::Intense), (Style::Trap, Level::Medium), (Style::BoomBap, Level::Medium), (Style::Reggaeton, Level::Medium), (Style::DrumAndBass, Level::Medium)] {
-            let mut project = crate::project::Project::empty();
-            project.tempo = style.tempo() as f64;
-            let params = engine::model::DrumParams { model: style.machine(), ..Default::default() };
-            let mut track = crate::project::Track::new("Drums", [0; 3], engine::model::InstrumentKind::DrumMachine(params));
-            let settings = Settings { style, level, fills: true, follow_bass: false, bars: 8, machine: true };
-            let (notes, groove) = generate(&machine(), &settings, 32.0, &[], 0);
-            let clip = engine::model::MidiClip { notes, groove, ..engine::model::MidiClip::new("Beat", 32.0, [0; 3]) };
-            track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: engine::model::Clip::Midi(clip) });
-            project.tracks = vec![track];
-            let mut samples = crate::sync::SampleCache::default();
-            let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
-            let (l, r) = crate::export::render(commands, (0.0, 32.0), project.tempo, 48_000.0, &Default::default(), &|_| {}).unwrap();
-            let name = format!("{} {} {}.wav", style.label().replace(['/', '&'], "y"), level.label(), style.machine().label());
-            crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
-            println!("{name}");
+        let wanted = std::env::var("PULSE_STYLES").unwrap_or_default();
+        for style in Style::ALL {
+            if !wanted.is_empty() {
+                if !wanted.split(',').any(|w| w.trim().eq_ignore_ascii_case(style.label())) {
+                    continue;
+                }
+                for level in Level::ALL {
+                    for take in 0..take_count(style, level) as u64 {
+                        println!("{}", beat_to_wav(&dir, style, level, take));
+                    }
+                }
+            } else {
+                println!("{}", beat_to_wav(&dir, style, Level::Medium, 0));
+            }
         }
     }
 

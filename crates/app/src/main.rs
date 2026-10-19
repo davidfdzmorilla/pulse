@@ -52,6 +52,7 @@ mod theme;
 mod to_midi;
 mod tracks;
 mod updates;
+mod versions;
 mod transport;
 mod wave_ui;
 mod widgets;

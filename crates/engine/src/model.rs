@@ -916,26 +916,49 @@ pub mod drum_note {
     pub const LOW_TOM: u8 = 45;
     pub const OPEN_HAT: u8 = 46;
     pub const COWBELL: u8 = 56;
+    pub const MID_TOM: u8 = 48;
+    pub const HIGH_TOM: u8 = 50;
+    pub const CRASH: u8 = 49;
+    pub const RIDE: u8 = 51;
+    pub const SHAKER: u8 = 70;
+    pub const TAMBOURINE: u8 = 54;
+    pub const CONGA: u8 = 63;
+    pub const CLAVE: u8 = 75;
 }
 
+/// How many sounds the drum machine has.
+pub const DRUM_SOUNDS: usize = 16;
+
 /// The drum machine's sounds, in parameter order, with their General MIDI notes.
-pub const DRUM_VOICES: [(u8, &str); 8] = [
+/// The first eight were its sounds before it had sixteen, and keep their places.
+pub const DRUM_VOICES: [(u8, &str); DRUM_SOUNDS] = [
     (drum_note::KICK, "Kick"),
     (drum_note::RIM, "Rim"),
     (drum_note::SNARE, "Snare"),
     (drum_note::CLAP, "Clap"),
     (drum_note::CLOSED_HAT, "Closed Hat"),
     (drum_note::OPEN_HAT, "Open Hat"),
-    (drum_note::LOW_TOM, "Tom"),
+    (drum_note::LOW_TOM, "Low Tom"),
     (drum_note::COWBELL, "Cowbell"),
+    (drum_note::MID_TOM, "Mid Tom"),
+    (drum_note::HIGH_TOM, "High Tom"),
+    (drum_note::CRASH, "Crash"),
+    (drum_note::RIDE, "Ride"),
+    (drum_note::SHAKER, "Shaker"),
+    (drum_note::TAMBOURINE, "Tambourine"),
+    (drum_note::CONGA, "Conga"),
+    (drum_note::CLAVE, "Clave"),
 ];
 
 /// Per-sound tuning (semitones), decay (multiplier) and level of the drum machine.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DrumParams {
-    pub tune: [f32; 8],
-    pub decay: [f32; 8],
-    pub level: [f32; 8],
+    #[serde(deserialize_with = "drum_tunes")]
+    pub tune: [f32; DRUM_SOUNDS],
+    #[serde(deserialize_with = "drum_decays")]
+    pub decay: [f32; DRUM_SOUNDS],
+    #[serde(deserialize_with = "drum_levels")]
+    pub level: [f32; DRUM_SOUNDS],
     /// Which machine it sounds like.
     #[serde(default, skip_serializing_if = "is_classic")]
     pub model: DrumModel,
@@ -943,8 +966,31 @@ pub struct DrumParams {
 
 impl Default for DrumParams {
     fn default() -> Self {
-        Self { tune: [0.0; 8], decay: [1.0; 8], level: [0.8; 8], model: DrumModel::Classic }
+        Self { tune: [0.0; DRUM_SOUNDS], decay: [1.0; DRUM_SOUNDS], level: [0.8; DRUM_SOUNDS], model: DrumModel::Classic }
     }
+}
+
+/// A drum machine's values for its sounds; projects from when it had eight
+/// get the new ones at their defaults.
+fn drum_values<'de, D: serde::Deserializer<'de>>(d: D, default: f32) -> Result<[f32; DRUM_SOUNDS], D::Error> {
+    let saved = Vec::<f32>::deserialize(d)?;
+    let mut values = [default; DRUM_SOUNDS];
+    for (value, saved) in values.iter_mut().zip(saved) {
+        *value = saved;
+    }
+    Ok(values)
+}
+
+fn drum_tunes<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; DRUM_SOUNDS], D::Error> {
+    drum_values(d, 0.0)
+}
+
+fn drum_decays<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; DRUM_SOUNDS], D::Error> {
+    drum_values(d, 1.0)
+}
+
+fn drum_levels<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; DRUM_SOUNDS], D::Error> {
+    drum_values(d, 0.8)
 }
 
 /// The sound of the drum machine: its own first sounds, or modelled on the
@@ -1782,7 +1828,7 @@ const RACK_PARAMS: [ParamInfo; RACK_PADS * 4] = {
     }
     table
 };
-const DRUM_PARAMS: [ParamInfo; 24] = {
+const DRUM_PARAMS: [ParamInfo; DRUM_SOUNDS * 3] = {
     let names = [
         ["Kick Tune", "Kick Decay", "Kick Level"],
         ["Rim Tune", "Rim Decay", "Rim Level"],
@@ -1792,10 +1838,18 @@ const DRUM_PARAMS: [ParamInfo; 24] = {
         ["OH Tune", "OH Decay", "OH Level"],
         ["Tom Tune", "Tom Decay", "Tom Level"],
         ["Bell Tune", "Bell Decay", "Bell Level"],
+        ["Mid Tom Tune", "Mid Tom Decay", "Mid Tom Level"],
+        ["High Tom Tune", "High Tom Decay", "High Tom Level"],
+        ["Crash Tune", "Crash Decay", "Crash Level"],
+        ["Ride Tune", "Ride Decay", "Ride Level"],
+        ["Shaker Tune", "Shaker Decay", "Shaker Level"],
+        ["Tamb Tune", "Tamb Decay", "Tamb Level"],
+        ["Conga Tune", "Conga Decay", "Conga Level"],
+        ["Clave Tune", "Clave Decay", "Clave Level"],
     ];
-    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); 24];
+    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); DRUM_SOUNDS * 3];
     let mut voice = 0;
-    while voice < 8 {
+    while voice < DRUM_SOUNDS {
         table[voice * 3] = ParamInfo::linear(names[voice][0], -12.0, 12.0, 0.0, Semitones);
         table[voice * 3 + 1] = ParamInfo::log(names[voice][1], 0.25, 4.0, 1.0, Times);
         table[voice * 3 + 2] = ParamInfo::linear(names[voice][2], 0.0, 1.0, 0.8, Percent);
@@ -6589,6 +6643,17 @@ pub const MODULAR_PARAMS: [ParamInfo; MOD_PARAM_COUNT] = [
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_drum_machine_from_when_it_had_eight_sounds_opens_with_sixteen() {
+        let old = r#"{"tune":[1,2,3,4,5,6,7,8],"decay":[2,2,2,2,2,2,2,2],"level":[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5],"model":"Tr909"}"#;
+        let p: super::DrumParams = serde_json::from_str(old).unwrap();
+        assert_eq!(p.tune[..8], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
+        assert_eq!((p.tune[8], p.decay[15], p.level[12], p.decay[0]), (0.0, 1.0, 0.8, 2.0));
+        assert_eq!(p.model, super::DrumModel::Tr909);
+        let again: super::DrumParams = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
+        assert_eq!(again, p);
+    }
+
     use super::*;
 
     #[test]

@@ -587,12 +587,20 @@ impl DrumMachine {
             CLOSED_HAT | 44 => (4, 1.0),
             OPEN_HAT => (5, 1.0),
             LOW_TOM | 41 | 43 => (6, 1.0),
-            47 | 48 => (6, 1.4),
-            50 => (6, 1.8),
             COWBELL => (7, 1.0),
+            MID_TOM | 47 => (8, 1.0),
+            HIGH_TOM => (9, 1.0),
+            CRASH | 57 | 55 | 52 => (10, 1.0),
+            RIDE | 59 | 53 => (11, 1.0),
+            SHAKER | 69 | 82 => (12, 1.0),
+            TAMBOURINE => (13, 1.0),
+            CONGA | 62 => (14, 1.0),
+            64 => (14, 0.75),
+            CLAVE | 76 | 77 => (15, 1.0),
             _ => return,
         };
-        if self.params.model != crate::model::DrumModel::Classic {
+        // The classic machine has its own first eight; the rest are the models'.
+        if self.params.model != crate::model::DrumModel::Classic || voice >= 8 {
             let params = self.params;
             self.kit.hit(voice, velocity, base, &params);
             return;

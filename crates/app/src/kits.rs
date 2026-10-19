@@ -38,7 +38,7 @@ pub fn basic_kit(dir: &Path) -> Result<(RackParams, Vec<String>), String> {
     const SAMPLE_RATE: f32 = 48_000.0;
     let mut params = RackParams::default();
     let mut files = vec![String::new(); RACK_PADS];
-    let full_level = DrumParams { level: [1.0; 8], ..DrumParams::default() };
+    let full_level = DrumParams { level: [1.0; engine::model::DRUM_SOUNDS], ..DrumParams::default() };
     for (note, name, sound, tune) in BASIC_KIT {
         let pad = (note - RACK_FIRST_NOTE) as usize;
         let path = dir.join(format!("{name}.wav"));

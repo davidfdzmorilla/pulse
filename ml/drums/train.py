@@ -18,7 +18,7 @@ import numpy as np
 import torch
 from torch import nn
 
-VOICES = 8
+VOICES = 16
 LEVELS = 4
 PHRASE = 128  # steps in eight bars
 CONTEXT = 128
@@ -90,10 +90,13 @@ class Windows:
 def phrase_shift(part):
     """Steps from the part's start to its first phrase. Songs have intros and
     pickups of any length, so bars counted from the start say little; phrases
-    are found where the fills are (snare and toms at the ends of bars), most
-    at every eighth bar and some at every fourth."""
+    are found where the fills are (snare and toms at the ends of bars) and
+    the crashes that follow them, most every eight bars and some every four."""
     bars = part.reshape(-1, 16, VOICES)
-    fills = (bars[:, 12:, [1, 7]] > 0).sum(axis=(1, 2)) + 2 * (bars[:, 8:, 7] > 0).sum(axis=1)
+    snare, crash, toms = 1, 6, [8, 9, 10]
+    fills = (bars[:, 12:, [snare] + toms] > 0).sum(axis=(1, 2)) + 2 * (bars[:, 8:, toms] > 0).sum(axis=(1, 2))
+    # A crash on a downbeat marks the bar before as a phrase's end.
+    fills[:-1] += 3 * (bars[1:, 0, crash] > 0)
     index = np.arange(len(bars))
     score = [fills[(index - o) % 8 == 7].sum() + 0.5 * fills[(index - o) % 4 == 3].sum() for o in range(8)]
     return int(np.argmax(score)) * 16

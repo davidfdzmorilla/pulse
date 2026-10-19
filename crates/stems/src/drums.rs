@@ -9,23 +9,34 @@ use crate::environment;
 
 const MODEL: &[u8] = include_bytes!("../models/drums.onnx");
 
-/// The sounds the model plays, in its order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The sounds the model plays, in its order: the drum machine's sixteen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Voice {
     Kick,
     Snare,
     Clap,
-    /// Closed hat, or the ride, which keeps time the same way.
     Hat,
     Open,
+    Ride,
+    Crash,
     Rim,
-    /// Cowbell, shaker, tambourine, congas and bongos.
-    Perc,
-    Tom,
+    LowTom,
+    MidTom,
+    HighTom,
+    Shaker,
+    Tambourine,
+    Cowbell,
+    /// Congas, bongos and timbales.
+    Conga,
+    /// Claves and wood blocks.
+    Clave,
 }
 
-pub const VOICES: usize = 8;
-pub const ALL: [Voice; VOICES] = [Voice::Kick, Voice::Snare, Voice::Clap, Voice::Hat, Voice::Open, Voice::Rim, Voice::Perc, Voice::Tom];
+pub const VOICES: usize = 16;
+pub const ALL: [Voice; VOICES] = [
+    Voice::Kick, Voice::Snare, Voice::Clap, Voice::Hat, Voice::Open, Voice::Ride, Voice::Crash, Voice::Rim,
+    Voice::LowTom, Voice::MidTom, Voice::HighTom, Voice::Shaker, Voice::Tambourine, Voice::Cowbell, Voice::Conga, Voice::Clave,
+];
 
 /// How hard each voice plays on a step: 0 silent, 1 a ghost note, 2 normal,
 /// 3 accented.
@@ -65,7 +76,7 @@ impl DrumWriter {
         if seed.is_empty() {
             return Err("El modelo de batería necesita al menos un paso para empezar".into());
         }
-        let mut rng = Rng(luck.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut rng = Rng::new(luck);
         let mut song: Vec<Step> = seed.to_vec();
         let offset = (PHRASE - seed.len() % PHRASE) % PHRASE;
         for _ in 0..steps {
@@ -120,6 +131,15 @@ fn pick(logits: &[f32], heat: f32, rng: &mut Rng) -> u8 {
 struct Rng(u64);
 
 impl Rng {
+    /// Mixed well first (splitmix64): from a small state like 1 xorshift gives
+    /// numbers near zero for dozens of draws, and they all came out silent.
+    fn new(luck: u64) -> Self {
+        let mut z = luck.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        Self((z ^ (z >> 31)) | 1)
+    }
+
     fn unit(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
@@ -167,10 +187,20 @@ mod tests {
     fn takes_differ_and_missing_sounds_stay_silent() {
         let mut writer = DrumWriter::load().unwrap();
         let mut voices = [true; VOICES];
-        voices[Voice::Tom as usize] = false;
+        voices[Voice::LowTom as usize] = false;
         let a = writer.play_on(&house(), 128, 1.0, voices, 1).unwrap();
         let b = writer.play_on(&house(), 128, 1.0, voices, 2).unwrap();
         assert_ne!(a, b);
-        assert!(a.iter().chain(&b).all(|s| s[Voice::Tom as usize] == 0));
+        assert!(a.iter().chain(&b).all(|s| s[Voice::LowTom as usize] == 0));
+    }
+
+    #[test]
+    fn every_take_keeps_the_floor() {
+        let mut writer = DrumWriter::load().unwrap();
+        for luck in 0..4 {
+            let out = writer.play_on(&house(), 64, 1.0, [true; VOICES], luck).unwrap();
+            let kicks = (0..64).step_by(4).filter(|&i| out[i][Voice::Kick as usize] > 0).count();
+            assert!(kicks >= 12, "take {luck}: kicks on the beat {kicks}/16");
+        }
     }
 }

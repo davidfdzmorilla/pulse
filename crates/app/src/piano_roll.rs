@@ -580,9 +580,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     if let Some(bpm) = tempo {
         app.set_param(engine::Target::Master, engine::model::Param::Tempo, bpm as f32);
     }
-    if let (Some(model), Some(params)) = (machine, drum_machine) {
-        if params.model != model {
-            app.set_instrument(t, engine::model::InstrumentKind::DrumMachine(engine::model::DrumParams { model, ..params }));
+    if let (Some(sound), Some(params)) = (machine, drum_machine) {
+        // Only over a machine as it came, or as another style left it: never over the user's own tuning.
+        let untouched = params == engine::model::DrumParams { model: params.model, ..Default::default() } || crate::drum_gen::Style::ALL.iter().any(|s| s.sound() == params);
+        if params != sound && untouched {
+            app.set_instrument(t, engine::model::InstrumentKind::DrumMachine(sound));
+        } else if params.model != sound.model && !untouched {
+            app.set_instrument(t, engine::model::InstrumentKind::DrumMachine(engine::model::DrumParams { model: sound.model, ..params }));
         }
     }
     if vary == Some(true) {
@@ -714,7 +718,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
 /// «Generar ritmo»: a beat in a style for this drum clip (see `drum_gen`); each
 /// «Otra versión» the style's next take. Returns a tempo to set the project to,
 /// if asked.
-fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &crate::drum_gen::Kit, bass: &[f64], machine: bool) -> (Option<f64>, Option<engine::model::DrumModel>) {
+fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &crate::drum_gen::Kit, bass: &[f64], machine: bool) -> (Option<f64>, Option<engine::model::DrumParams>) {
     use crate::drum_gen::{Level, Style};
     let mut tempo = None;
     let mut model = None;
@@ -726,7 +730,10 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
             ui.label(egui::RichText::new("Estilo").color(TEXT_DIM).size(10.5));
             ui.horizontal_wrapped(|ui| {
                 for style in Style::ALL {
-                    ui.selectable_value(&mut settings.style, style, style.label()).on_hover_text(format!("Suele ir a unos {} BPM", style.tempo()));
+                    if ui.selectable_label(settings.style == style, style.label()).on_hover_text(format!("Suele ir a unos {} BPM", style.tempo())).clicked() && settings.style != style {
+                        settings.style = style;
+                        settings.sounds = style.sounds();
+                    }
                 }
             });
             ui.horizontal(|ui| {
@@ -741,6 +748,20 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
                     ui.selectable_value(&mut settings.bars, bars, format!("{bars} c.")).on_hover_text("Compases del clip: con 4, el cuarto da la vuelta a la frase; con 8, redoble al final");
                 }
             });
+            ui.label(egui::RichText::new("Sonidos").color(TEXT_DIM).size(10.5));
+            ui.horizontal_wrapped(|ui| {
+                for (name, sounds) in crate::drum_gen::SOUND_CHOICES {
+                    let on = sounds.iter().all(|&s| settings.sounds[s as usize]);
+                    let here = sounds.iter().any(|&s| kit.pitch(s).is_some());
+                    let text = if here { egui::RichText::new(name) } else { egui::RichText::new(name).color(TEXT_DIM).strikethrough() };
+                    let hint = if here { "Que la base pueda usarlo" } else { "Este kit no lo tiene: no sonará" };
+                    if ui.selectable_label(on, text).on_hover_text(hint).clicked() {
+                        for &s in sounds {
+                            settings.sounds[s as usize] = !on;
+                        }
+                    }
+                }
+            });
             ui.checkbox(&mut settings.ai, "Que lo toque la IA")
                 .on_hover_text("El modelo de batería de Pulse oye la base del estilo y la toca a su manera, como un batería: varía, mete redobles donde acaban las frases y cada versión es distinta");
             ui.add_enabled(!settings.ai, egui::Checkbox::new(&mut settings.fills, "Redoble al final de cada frase"))
@@ -750,8 +771,8 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
                 .on_hover_text("Añade bombos donde el bajo empieza notas (en corcheas)")
                 .on_disabled_hover_text("No hay una pista de bajo sonando con este clip");
             if machine {
-                ui.checkbox(&mut settings.machine, format!("Sonidos de su máquina ({})", settings.style.machine().label()))
-                    .on_hover_text("Pone la Drum Machine en la máquina del estilo: 808 para trap, hip hop y reggaetón; 909 para el resto");
+                ui.checkbox(&mut settings.machine, format!("Sonido del estilo ({})", settings.style.machine().label()))
+                    .on_hover_text("Pone la Drum Machine en la máquina del estilo (808 para trap, hip hop y reggaetón; 909 para el resto) afinada como suena el estilo. Si has afinado tú la máquina, solo cambia de máquina y respeta tus ajustes");
             }
             let style = settings.style;
             if ui.small_button(format!("Tempo del proyecto a {} BPM", style.tempo())).on_hover_text("Cada estilo suena a sí mismo a su tempo").clicked() {
@@ -786,7 +807,7 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
                         clip.groove = swing;
                         state.selection.clear();
                         if machine && state.drums.machine {
-                            model = Some(state.drums.style.machine());
+                            model = Some(state.drums.style.sound());
                         }
                     }
                     Err(e) => state.drum_error = Some(e),

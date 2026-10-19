@@ -271,6 +271,7 @@ pub fn project_commands(
         commands.extend(mixer_commands(target, &track.mixer));
     }
     commands.push(Command::SetGroups(crate::groups::parents(&project.tracks)));
+    commands.push(Command::SetTrackIds(std::array::from_fn(|t| project.tracks.get(t).map_or(0, |track| track.id))));
     for (r, ret) in project.returns.iter().enumerate().take(NUM_RETURNS) {
         let target = Target::Return(r);
         commands.push(Command::ReplaceChain { target, chain: chain(project, &ret.devices, samples, sample_rate) });

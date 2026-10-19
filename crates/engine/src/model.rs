@@ -1078,6 +1078,9 @@ pub struct CompressorParams {
     pub attack_ms: f32,
     pub release_ms: f32,
     pub makeup_db: f32,
+    /// Sidechain: the track (by its id) whose sound it listens to, instead of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<u32>,
 }
 
 impl Default for CompressorParams {
@@ -1088,6 +1091,7 @@ impl Default for CompressorParams {
             attack_ms: 10.0,
             release_ms: 120.0,
             makeup_db: 0.0,
+            sidechain: None,
         }
     }
 }
@@ -1244,11 +1248,15 @@ pub struct DuckerParams {
     pub release: f32,
     /// Ducking period in beats (1 = every quarter note).
     pub rate_beats: f64,
+    /// Sidechain: the track (by its id) that makes it duck when it sounds, instead
+    /// of the beat (its release then lasts `release` of the period).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<u32>,
 }
 
 impl Default for DuckerParams {
     fn default() -> Self {
-        Self { depth: 0.7, release: 0.6, rate_beats: 1.0 }
+        Self { depth: 0.7, release: 0.6, rate_beats: 1.0, sidechain: None }
     }
 }
 

@@ -506,7 +506,7 @@ fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularP
                             }
                         });
                     });
-                    devices::discrete_controls(ui, &mut edited.effect, 200 + l * 10 + slot);
+                    devices::discrete_controls(ui, &mut edited.effect, 200 + l * 10 + slot, &[]);
                     ui.horizontal_wrapped(|ui| {
                         ui.spacing_mut().item_spacing.x = 0.0;
                         for k in 0..device.effect.params().len() {

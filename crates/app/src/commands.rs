@@ -434,7 +434,9 @@ mod tests {
         // Not saving goes ahead.
         app.answers.push_back(Answer::Discard);
         app.run(Command::New, &ctx());
-        assert_eq!(app.project, Project::empty());
+        let mut empty = Project::empty();
+        empty.assign_ids();
+        assert_eq!(app.project, empty);
         // Nothing unsaved: no question.
         app.run(Command::New, &ctx());
         assert!(app.answers.is_empty());

@@ -235,6 +235,8 @@ pub enum Command {
     /// Which group track each track plays into (None: the master). A group
     /// mixes its tracks through its own chain and fader, like a bus.
     SetGroups([Option<u8>; MAX_TRACKS]),
+    /// Each track's id (what sidechains name their source by; 0 for none).
+    SetTrackIds([u32; MAX_TRACKS]),
     LaunchScene(usize),
     StopAllClips,
     /// Returns every track from session clips to its arrangement.
@@ -1236,26 +1238,78 @@ pub struct Engine {
     /// A track's output on its way into its group.
     bus_left: Vec<f32>,
     bus_right: Vec<f32>,
+    /// Each track's id, and its sound after its effects (before its fader) in
+    /// the last block it was processed: what sidechains listen to.
+    ids: [u32; MAX_TRACKS],
+    key_left: Vec<Vec<f32>>,
+    key_right: Vec<Vec<f32>>,
 }
 
-/// The order to process tracks in so that every track comes before the group
-/// it plays into: by depth, the deepest first (and in their own order within one).
-fn processing_order(parents: &[Option<u8>; MAX_TRACKS]) -> [usize; MAX_TRACKS] {
-    let depth = |mut i: usize| {
-        let mut d = 0;
-        while let Some(p) = parents[i] {
-            d += 1;
-            i = p as usize;
-            if d > MAX_TRACKS {
+/// Gives the sidechained effects of a chain their sources' sound.
+fn feed_keys(chain: &mut [ChainSlot], ids: &[u32; MAX_TRACKS], left: &[Vec<f32>], right: &[Vec<f32>], n: usize) {
+    for slot in chain.iter_mut() {
+        let Some(id) = slot.processor.sidechain() else { continue };
+        if let Some(source) = ids.iter().position(|&x| x == id && id != 0) {
+            slot.processor.feed_key(&left[source][..n], &right[source][..n]);
+        }
+    }
+}
+
+/// The order to process tracks in: every track before the group it plays
+/// into, and, where it can be, a sidechain's source before the track that
+/// listens to it (so it hears this block, not the last). `wants[i]` has bit `j`
+/// set if track `i` listens to track `j`.
+fn processing_order(parents: &[Option<u8>; MAX_TRACKS], wants: &[u64; MAX_TRACKS]) -> [usize; MAX_TRACKS] {
+    let mut children = [0u64; MAX_TRACKS];
+    for (i, p) in parents.iter().enumerate() {
+        if let Some(p) = p {
+            children[*p as usize] |= 1 << i;
+        }
+    }
+    let ancestor = |a: usize, mut of: usize| {
+        let mut steps = 0;
+        while let Some(p) = parents[of] {
+            if p as usize == a {
+                return true;
+            }
+            of = p as usize;
+            steps += 1;
+            if steps > MAX_TRACKS {
                 break;
             }
         }
-        d
+        false
     };
-    let mut order: [usize; MAX_TRACKS] = std::array::from_fn(|i| i);
-    let depths: [usize; MAX_TRACKS] = std::array::from_fn(depth);
-    order.sort_by_key(|&i| std::cmp::Reverse(depths[i]));
-    order
+    struct Walk {
+        state: [u8; MAX_TRACKS],
+        order: [usize; MAX_TRACKS],
+        len: usize,
+    }
+    fn visit(i: usize, walk: &mut Walk, children: &[u64; MAX_TRACKS], wants: &[u64; MAX_TRACKS], ancestor: &dyn Fn(usize, usize) -> bool) {
+        walk.state[i] = 1;
+        // What it needs first: its tracks (always), then what it listens to
+        // (unless that holds it: a group can't come before its own tracks).
+        for (mask, required) in [(children[i], true), (wants[i], false)] {
+            let mut bits = mask;
+            while bits != 0 {
+                let j = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if walk.state[j] == 0 && (required || !ancestor(j, i)) {
+                    visit(j, walk, children, wants, ancestor);
+                }
+            }
+        }
+        walk.state[i] = 2;
+        walk.order[walk.len] = i;
+        walk.len += 1;
+    }
+    let mut walk = Walk { state: [0; MAX_TRACKS], order: [0; MAX_TRACKS], len: 0 };
+    for i in 0..MAX_TRACKS {
+        if walk.state[i] == 0 {
+            visit(i, &mut walk, &children, wants, &ancestor);
+        }
+    }
+    walk.order
 }
 
 /// Whether each track sounds while some are soloed: soloed itself, inside a
@@ -1325,6 +1379,9 @@ impl Engine {
             order: std::array::from_fn(|i| i),
             bus_left: vec![0.0; MAX_BLOCK],
             bus_right: vec![0.0; MAX_BLOCK],
+            ids: [0; MAX_TRACKS],
+            key_left: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
+            key_right: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
         };
         (engine, shared)
     }
@@ -1542,16 +1599,17 @@ impl Engine {
                 }
                 let old = self.parents;
                 self.parents = std::array::from_fn(|i| old[order[i]].map(|p| moved_to[p as usize] as u8));
-                self.order = processing_order(&self.parents);
+                let ids = self.ids;
+                self.ids = std::array::from_fn(|i| ids[order[i]]);
             }
             Command::SetGroups(parents) => {
                 // Only groups that come before their tracks, so nothing loops.
                 let valid = parents.iter().enumerate().all(|(i, p)| p.is_none_or(|p| (p as usize) < i));
                 if valid {
                     self.parents = parents;
-                    self.order = processing_order(&parents);
                 }
             }
+            Command::SetTrackIds(ids) => self.ids = ids,
             Command::LaunchScene(slot) => {
                 if slot >= NUM_SCENES {
                     return;
@@ -1850,6 +1908,16 @@ impl Engine {
             channel.right[..n].fill(0.0);
         }
 
+        // Which tracks each listens to (sidechains), to process those first.
+        let mut wants = [0u64; MAX_TRACKS];
+        for (i, track) in self.tracks.iter().enumerate() {
+            for id in track.channel.chain.iter().filter_map(|slot| slot.processor.sidechain()) {
+                if let Some(source) = self.ids.iter().position(|&x| x == id && id != 0) {
+                    wants[i] |= 1 << source;
+                }
+            }
+        }
+        self.order = processing_order(&self.parents, &wants);
         let any_solo = self.tracks.iter().any(|t| t.solo);
         let solo: [bool; MAX_TRACKS] = std::array::from_fn(|i| self.tracks[i].solo);
         let soloed = soloed(&solo, &self.parents, &self.order);
@@ -1887,7 +1955,11 @@ impl Engine {
                 channel.left[i] = left[i] + track.audio_left[i];
                 channel.right[i] = right[i] + track.audio_right[i];
             }
+            feed_keys(&mut channel.chain, &self.ids, &self.key_left, &self.key_right, n);
             channel.run_chain(n, &ctx);
+            // What sidechains listening to it hear: after its effects, before its fader.
+            self.key_left[index][..n].copy_from_slice(&channel.left[..n]);
+            self.key_right[index][..n].copy_from_slice(&channel.right[..n]);
 
             let audible = !channel.mute && (!any_solo || soloed[index]);
             let gain = if audible { channel.gain } else { 0.0 };
@@ -1921,6 +1993,7 @@ impl Engine {
         }
 
         for (index, ret) in self.returns.iter_mut().enumerate() {
+            feed_keys(&mut ret.chain, &self.ids, &self.key_left, &self.key_right, n);
             ret.run_chain(n, &ctx);
             let gain = if ret.mute { 0.0 } else { ret.gain };
             let peak = ret.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
@@ -1949,6 +2022,7 @@ impl Engine {
         }
 
         let master = &mut self.master;
+        feed_keys(&mut master.chain, &self.ids, &self.key_left, &self.key_right, n);
         master.run_chain(n, &ctx);
         let (gl, gr) = master.pan_gains(master.gain);
         let (l0, r0) = master.last_gains;
@@ -3094,7 +3168,7 @@ mod tests {
 
     #[test]
     fn groups_follow_their_tracks_when_reordered_and_nest() {
-        assert_eq!(processing_order(&std::array::from_fn(|i| match i { 1 => Some(0), 2 => Some(1), _ => None }))[..3], [2, 1, 0]);
+        assert_eq!(processing_order(&std::array::from_fn(|i| match i { 1 => Some(0), 2 => Some(1), _ => None }), &[0; MAX_TRACKS])[..3], [2, 1, 0]);
         let mut h = grouped();
         // Group and tracks moved to the end of the first four: 3, 0, 1, 2.
         let mut order: [usize; MAX_TRACKS] = std::array::from_fn(|i| i);
@@ -3108,6 +3182,103 @@ mod tests {
         h.send(Command::SetGroups(wrong));
         h.run_beats(0.1);
         assert_eq!(h.engine.parents[0], None);
+    }
+
+    /// Track 1 plays on, with a ducker; track 0 (muted, as a sidechain source
+    /// needs not be heard) plays a note now and then.
+    fn sidechained(sidechain: Option<u32>) -> f32 {
+        let mut h = Harness::new();
+        let mut ids = [0u32; MAX_TRACKS];
+        ids[0] = 7;
+        ids[1] = 8;
+        h.send(Command::SetTrackIds(ids));
+        let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
+        held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0 });
+        h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::SetMute { target: Target::Track(0), mute: true });
+        let ducker = Device::new(Effect::Ducker(crate::model::DuckerParams { depth: 1.0, sidechain, ..Default::default() }));
+        h.send(Command::InsertDevice { target: Target::Track(1), index: 0, slot: ChainSlot::new(&ducker, SR) });
+        h.send(Command::LaunchScene(0));
+        // While track 0's note sounds (its first beat).
+        energy(&h.run_beats(0.9))
+    }
+
+    #[test]
+    fn a_sidechain_ducks_when_its_source_sounds() {
+        let free = {
+            let mut h = Harness::new();
+            let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
+            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0 });
+            h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
+            h.send(Command::LaunchScene(0));
+            energy(&h.run_beats(0.9))
+        };
+        let ducked = sidechained(Some(7));
+        // A source that does not exist: nothing to listen to, so the tempo-synced
+        // pump instead (it ducks at the start of each beat, much less overall).
+        let missing = sidechained(Some(99));
+        assert!(ducked < free * 0.3, "ducked by the source: {ducked} vs {free}");
+        assert!(missing > ducked * 2.0, "{missing} vs {ducked}");
+    }
+
+    #[test]
+    fn a_sidechained_compressor_listens_to_its_source() {
+        let run = |sidechain: Option<u32>| {
+            let mut h = Harness::new();
+            let mut ids = [0u32; MAX_TRACKS];
+            ids[0] = 7;
+            h.send(Command::SetTrackIds(ids));
+            // A soft pad that alone stays under the threshold; a loud note on track 0.
+            let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
+            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 0.3 });
+            h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+            h.send(Command::SetMute { target: Target::Track(0), mute: true });
+            let params = crate::model::CompressorParams { threshold_db: -30.0, ratio: 20.0, attack_ms: 1.0, sidechain, ..Default::default() };
+            let device = Device::new(Effect::Compressor(params));
+            h.send(Command::InsertDevice { target: Target::Track(1), index: 0, slot: ChainSlot::new(&device, SR) });
+            h.send(Command::LaunchScene(0));
+            energy(&h.run_beats(0.9))
+        };
+        let (own, keyed) = (run(None), run(Some(7)));
+        assert!(keyed < own * 0.5, "{keyed} vs {own}");
+    }
+
+    #[test]
+    fn sidechain_sources_are_processed_first_and_follow_reordering() {
+        // Track 0 listens to 3: 3 first.
+        let mut wants = [0u64; MAX_TRACKS];
+        wants[0] = 1 << 3;
+        assert_eq!(&processing_order(&[None; MAX_TRACKS], &wants)[..2], &[3, 0]);
+        // A bass inside group 1 listening to a kick outside it (track 4): kick,
+        // bass, then the group.
+        let mut parents = [None; MAX_TRACKS];
+        parents[2] = Some(1);
+        let mut wants = [0u64; MAX_TRACKS];
+        wants[2] = 1 << 4;
+        let order = processing_order(&parents, &wants);
+        let at = |t: usize| order.iter().position(|&o| o == t).unwrap();
+        assert!(at(4) < at(2) && at(2) < at(1), "{:?}", &order[..5]);
+        // A track listening to its own group: the group still comes after it.
+        let mut wants = [0u64; MAX_TRACKS];
+        wants[2] = 1 << 1;
+        let order = processing_order(&parents, &wants);
+        let at = |t: usize| order.iter().position(|&o| o == t).unwrap();
+        assert!(at(2) < at(1));
+        // Each track once.
+        let mut seen = order.to_vec();
+        seen.sort_unstable();
+        assert_eq!(seen, (0..MAX_TRACKS).collect::<Vec<_>>());
+        let mut h = Harness::new();
+        let mut ids = [0u32; MAX_TRACKS];
+        ids[0] = 5;
+        h.send(Command::SetTrackIds(ids));
+        let mut order: [usize; MAX_TRACKS] = std::array::from_fn(|i| i);
+        order[..2].copy_from_slice(&[1, 0]);
+        h.send(Command::ReorderTracks(order));
+        h.run_beats(0.05);
+        assert_eq!(&h.engine.ids[..2], &[0, 5]);
     }
 
     #[test]

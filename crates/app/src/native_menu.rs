@@ -47,6 +47,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Run(C::Save, "Guardar", "s"),
             Run(C::SaveAs, "Guardar como…", "⇧s"),
             Run(C::Revert, "Volver a la versión guardada", ""),
+            Run(C::Versions, "Versiones…", "⌥s"),
             Separator,
             Run(C::ImportLive, "Importar set de Live (.als)…", "i"),
             Run(C::ImportAudio, "Importar audio…", ""),

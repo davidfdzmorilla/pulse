@@ -566,18 +566,31 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
 
 Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`; se cambia en Ajustes):
 
-- `Proyectos/<nombre>/`: cada proyecto en su carpeta, con sus audios en `Samples/` (Importados, Grabaciones, Stems, Trozos, Consolidados, Congelados). La carpeta entera se puede copiar a otro Mac.
+- `Proyectos/<nombre>/`: cada proyecto en su carpeta, con sus audios en `Samples/` (Importados, Grabaciones, Stems, Trozos, Consolidados, Congelados) y sus versiones en `Versiones/`. La carpeta entera se puede copiar a otro Mac.
 - `Exportaciones`, `Presets`, `Wavetables` y `Samples` (las tuyas).
 - `Sin guardar`: lo que graba o crea un proyecto que aún no has guardado. Al guardarlo se mueve a su carpeta.
 
 ### Archivo
 
-- **⌘N** nuevo, **⌘O** abrir, **Abrir recientes** (los 10 últimos), **⌘S** guardar, **⇧⌘S** guardar como, **Volver a la versión guardada**.
+- **⌘N** nuevo, **⌘O** abrir, **Abrir recientes** (los 10 últimos), **⌘S** guardar, **⇧⌘S** guardar como, **Volver a la versión guardada**, **⌥⌘S** versiones (ver «Versiones del proyecto»).
 - Al guardar, todos los audios que usa el proyecto se copian a su carpeta.
 - Antes de perder cambios sin guardar, Pulse pregunta (Guardar / No guardar / Cancelar).
 - **⌘Z / ⇧⌘Z**: deshacer y rehacer.
 - **Mostrar la carpeta de Pulse** la abre en Finder.
 - El título de la ventana lleva * si hay cambios sin guardar.
+
+## Versiones del proyecto
+
+Pulse guarda el historial de tu canción: puedes probar ideas sin miedo y volver a cualquier punto. **Archivo → Versiones…** (**⌥⌘S**) abre la ventana de versiones.
+
+- **Guardar versión**: escribe un nombre («Con el bajo nuevo») y, si quieres, una nota, y guarda cómo está el proyecto ahora. Las versiones con nombre se quedan para siempre.
+- **Automáticas**: cada vez que guardas (⌘S) se hace también una versión, si algo cambió desde la anterior. Se guardan las 20 últimas.
+- Cada versión dice **cuándo** se hizo y **qué cambió** respecto a la anterior: «Tempo 120 → 124», «+ Pista «Voz»», ««Bass»: 1 → 2 clips en Session, mezcla»…
+- **Comparar con ahora**: lo que ha cambiado desde esa versión hasta el proyecto tal como está.
+- **Volver a esta**: abre esa versión en lugar de lo que hay. Lo que había se guarda antes como versión («Antes de volver a…»), así que no se pierde nada, y **⌘Z** lo deshace. Guarda para quedarte con ella.
+- **Renombrar** (una automática con nombre pasa a quedarse para siempre) y **Borrar** (pide confirmación).
+
+Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos audios. Hace falta que el proyecto esté guardado en su carpeta: si es un `.pulse` suelto de antes, usa **Guardar como…**.
 
 ## Importar de Ableton Live
 
@@ -626,6 +639,7 @@ Pulse busca versiones nuevas al arrancar y cada 6 horas (también en Pulse → *
 | ⌘N | Proyecto nuevo |
 | ⌘O | Abrir |
 | ⌘S / ⇧⌘S | Guardar / Guardar como |
+| ⌥⌘S | Versiones del proyecto |
 | ⌘I | Importar set de Live |
 | ⇧⌘R | Exportar audio |
 | ⌘Q | Salir |

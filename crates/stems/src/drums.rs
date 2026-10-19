@@ -9,23 +9,34 @@ use crate::environment;
 
 const MODEL: &[u8] = include_bytes!("../models/drums.onnx");
 
-/// The sounds the model plays, in its order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The sounds the model plays, in its order: the drum machine's sixteen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Voice {
     Kick,
     Snare,
     Clap,
-    /// Closed hat, or the ride, which keeps time the same way.
     Hat,
     Open,
+    Ride,
+    Crash,
     Rim,
-    /// Cowbell, shaker, tambourine, congas and bongos.
-    Perc,
-    Tom,
+    LowTom,
+    MidTom,
+    HighTom,
+    Shaker,
+    Tambourine,
+    Cowbell,
+    /// Congas, bongos and timbales.
+    Conga,
+    /// Claves and wood blocks.
+    Clave,
 }
 
-pub const VOICES: usize = 8;
-pub const ALL: [Voice; VOICES] = [Voice::Kick, Voice::Snare, Voice::Clap, Voice::Hat, Voice::Open, Voice::Rim, Voice::Perc, Voice::Tom];
+pub const VOICES: usize = 16;
+pub const ALL: [Voice; VOICES] = [
+    Voice::Kick, Voice::Snare, Voice::Clap, Voice::Hat, Voice::Open, Voice::Ride, Voice::Crash, Voice::Rim,
+    Voice::LowTom, Voice::MidTom, Voice::HighTom, Voice::Shaker, Voice::Tambourine, Voice::Cowbell, Voice::Conga, Voice::Clave,
+];
 
 /// How hard each voice plays on a step: 0 silent, 1 a ghost note, 2 normal,
 /// 3 accented.
@@ -167,10 +178,10 @@ mod tests {
     fn takes_differ_and_missing_sounds_stay_silent() {
         let mut writer = DrumWriter::load().unwrap();
         let mut voices = [true; VOICES];
-        voices[Voice::Tom as usize] = false;
+        voices[Voice::LowTom as usize] = false;
         let a = writer.play_on(&house(), 128, 1.0, voices, 1).unwrap();
         let b = writer.play_on(&house(), 128, 1.0, voices, 2).unwrap();
         assert_ne!(a, b);
-        assert!(a.iter().chain(&b).all(|s| s[Voice::Tom as usize] == 0));
+        assert!(a.iter().chain(&b).all(|s| s[Voice::LowTom as usize] == 0));
     }
 }

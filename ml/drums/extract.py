@@ -4,7 +4,7 @@ Each song becomes an array of steps x VOICES, every cell a level:
 0 silent, 1 ghost, 2 normal, 3 accented. Only songs in 4/4 are kept, and
 bar one starts at the first tick, so step 0 is always a downbeat.
 
-    uv run python extract.py data/groove data/lmd_full --out data/grids.npz
+    uv run python extract.py data/lmd_full --out data/lmd.npz
 """
 
 import argparse
@@ -15,23 +15,33 @@ from multiprocessing import Pool
 import mido
 import numpy as np
 
-# The sounds the model knows, in the order Pulse's drum_model.rs expects.
-VOICES = ["kick", "snare", "clap", "hat", "open", "rim", "perc", "tom"]
-KICK, SNARE, CLAP, HAT, OPEN, RIM, PERC, TOM = range(8)
+# The sounds the model knows, in the order Pulse's drums.rs expects: the drum
+# machine's sixteen.
+VOICES = [
+    "kick", "snare", "clap", "hat", "open", "ride", "crash", "rim",
+    "low tom", "mid tom", "high tom", "shaker", "tambourine", "cowbell", "conga", "clave",
+]
+(KICK, SNARE, CLAP, HAT, OPEN, RIDE, CRASH, RIM,
+ LOW_TOM, MID_TOM, HIGH_TOM, SHAKER, TAMBOURINE, COWBELL, CONGA, CLAVE) = range(16)
 
 # General MIDI drums, plus the Roland TD-11 notes the Groove MIDI Dataset uses.
-# Rides keep time like a closed hat; crashes are left out, Pulse kits have none.
 NOTE = {
     35: KICK, 36: KICK,
     38: SNARE, 40: SNARE,
     39: CLAP,
     37: RIM,
-    42: HAT, 44: HAT, 22: HAT, 51: HAT, 59: HAT, 53: HAT,
+    42: HAT, 44: HAT, 22: HAT,
     46: OPEN, 26: OPEN,
-    41: TOM, 43: TOM, 45: TOM, 47: TOM, 48: TOM, 50: TOM, 58: TOM,
-    54: PERC, 56: PERC, 60: PERC, 61: PERC, 62: PERC, 63: PERC, 64: PERC,
-    65: PERC, 66: PERC, 69: PERC, 70: PERC, 75: PERC, 76: PERC, 77: PERC,
-    82: PERC,
+    51: RIDE, 59: RIDE, 53: RIDE,
+    49: CRASH, 57: CRASH, 55: CRASH, 52: CRASH,
+    41: LOW_TOM, 43: LOW_TOM, 58: LOW_TOM,
+    45: MID_TOM, 47: MID_TOM,
+    48: HIGH_TOM, 50: HIGH_TOM,
+    69: SHAKER, 70: SHAKER, 82: SHAKER,
+    54: TAMBOURINE,
+    56: COWBELL,
+    60: CONGA, 61: CONGA, 62: CONGA, 63: CONGA, 64: CONGA, 65: CONGA, 66: CONGA,
+    75: CLAVE, 76: CLAVE, 77: CLAVE,
 }
 
 MAX_STEPS = 16 * 400

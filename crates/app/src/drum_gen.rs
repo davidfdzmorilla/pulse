@@ -5,6 +5,28 @@
 
 use crate::project::Track;
 use engine::model::Note;
+pub use stems::drums::Voice as Sound;
+
+/// The sounds a beat may use, by the drum model's order (`stems::drums::ALL`).
+pub type Sounds = [bool; stems::drums::VOICES];
+
+/// The sounds to choose among, as the menu shows them (the three toms go together).
+pub const SOUND_CHOICES: [(&str, &[Sound]); 14] = [
+    ("Bombo", &[Sound::Kick]),
+    ("Caja", &[Sound::Snare]),
+    ("Palmada", &[Sound::Clap]),
+    ("Charles", &[Sound::Hat]),
+    ("Charles abierto", &[Sound::Open]),
+    ("Ride", &[Sound::Ride]),
+    ("Crash", &[Sound::Crash]),
+    ("Rim", &[Sound::Rim]),
+    ("Toms", &[Sound::LowTom, Sound::MidTom, Sound::HighTom]),
+    ("Shaker", &[Sound::Shaker]),
+    ("Pandereta", &[Sound::Tambourine]),
+    ("Cencerro", &[Sound::Cowbell]),
+    ("Congas", &[Sound::Conga]),
+    ("Clave", &[Sound::Clave]),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Style {
@@ -49,6 +71,89 @@ impl Style {
     }
 }
 
+impl Style {
+    /// The sounds the style plays, to start with.
+    pub fn sounds(self) -> Sounds {
+        use Sound::*;
+        let list: &[Sound] = match self {
+            Style::House => &[Kick, Clap, Hat, Open, Rim, Shaker, Cowbell, Conga],
+            // No ride or cowbell: they ring over the kick.
+            Style::Techno => &[Kick, Clap, Hat, Open, Rim],
+            Style::Trap => &[Kick, Snare, Clap, Hat, Open],
+            Style::DrumAndBass => &[Kick, Snare, Hat, Open, Ride, Crash, Rim],
+            Style::BoomBap => &[Kick, Snare, Hat, Open, Rim, Shaker],
+            Style::PopRock => &[Kick, Snare, Hat, Open, Ride, Crash, LowTom, MidTom, HighTom, Tambourine],
+            Style::Reggaeton => &[Kick, Snare, Hat, Open, Rim, Shaker, Conga],
+            Style::Breakbeat => &[Kick, Snare, Hat, Open, Ride, Crash, Rim, LowTom, MidTom, HighTom],
+        };
+        let mut sounds = [false; stems::drums::VOICES];
+        for &sound in list {
+            sounds[sound as usize] = true;
+        }
+        sounds
+    }
+
+    /// How its machine is tuned: each style's own sound (the long, deep 808
+    /// kick of trap, the short, punchy 909 of techno, drum & bass's high snare…).
+    pub fn sound(self) -> engine::model::DrumParams {
+        use engine::model::drum_note::*;
+        let mut p = engine::model::DrumParams { model: self.machine(), ..Default::default() };
+        let voice = |pitch: u8| engine::model::DRUM_VOICES.iter().position(|v| v.0 == pitch).unwrap();
+        let mut set = |pitch: u8, tune: f32, decay: f32, level: f32| {
+            let v = voice(pitch);
+            (p.tune[v], p.decay[v], p.level[v]) = (tune, decay, level);
+        };
+        match self {
+            Style::House => {
+                set(KICK, 0.0, 1.0, 0.9);
+                set(CLAP, 0.0, 1.2, 0.8);
+                set(OPEN_HAT, 0.0, 0.8, 0.7);
+            }
+            Style::Techno => {
+                set(KICK, -1.0, 0.8, 0.85);
+                set(CLAP, -1.0, 1.0, 0.7);
+                set(CLOSED_HAT, 0.0, 0.8, 0.65);
+                set(OPEN_HAT, 1.0, 0.6, 0.65);
+                set(RIM, 0.0, 1.0, 0.6);
+            }
+            Style::Trap => {
+                set(KICK, -2.0, 2.2, 0.95);
+                set(SNARE, 1.0, 1.0, 0.85);
+                set(CLAP, 0.0, 1.0, 0.8);
+                set(CLOSED_HAT, 1.0, 0.7, 0.6);
+            }
+            Style::DrumAndBass => {
+                set(KICK, 1.0, 0.6, 0.9);
+                set(SNARE, 4.0, 0.8, 0.9);
+                set(CLOSED_HAT, 2.0, 0.7, 0.6);
+                set(RIDE, 0.0, 0.8, 0.5);
+            }
+            Style::BoomBap => {
+                set(KICK, -1.0, 1.3, 0.95);
+                set(SNARE, -2.0, 1.3, 0.85);
+                set(CLOSED_HAT, -1.0, 1.0, 0.6);
+            }
+            Style::PopRock => {
+                set(KICK, 0.0, 0.9, 0.8);
+                set(SNARE, -1.0, 1.2, 0.85);
+                set(CRASH, 0.0, 1.2, 0.55);
+                set(RIDE, 0.0, 1.0, 0.5);
+            }
+            Style::Reggaeton => {
+                set(KICK, 0.0, 1.5, 0.95);
+                set(SNARE, 2.0, 0.8, 0.8);
+                set(CLOSED_HAT, 0.0, 0.8, 0.55);
+            }
+            Style::Breakbeat => {
+                set(KICK, 0.0, 0.7, 0.8);
+                set(SNARE, 2.0, 0.9, 0.8);
+                set(CRASH, 0.0, 1.0, 0.5);
+            }
+        }
+        p
+    }
+}
+
 /// The sounds of a kit, by the note that plays them.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Kit {
@@ -57,9 +162,19 @@ pub struct Kit {
     pub clap: Option<u8>,
     pub closed: Option<u8>,
     pub open: Option<u8>,
+    /// The low tom (or the only one).
     pub tom: Option<u8>,
+    pub mid_tom: Option<u8>,
+    pub high_tom: Option<u8>,
     pub rim: Option<u8>,
+    /// The cowbell, or a percussion with no other name.
     pub perc: Option<u8>,
+    pub crash: Option<u8>,
+    pub ride: Option<u8>,
+    pub shaker: Option<u8>,
+    pub tambourine: Option<u8>,
+    pub conga: Option<u8>,
+    pub clave: Option<u8>,
 }
 
 impl Kit {
@@ -79,19 +194,40 @@ impl Kit {
             clap: find(&["clap", "palma"], &[]),
             closed: find(&["closed", "cerrad", "chh", "hat", "hh", "charles"], &["open", "abiert"]),
             open: find(&["open", "abiert", "ohh", "oh "], &[]),
-            tom: find(&["tom"], &[]),
+            tom: find(&["low tom", "floor", "tom grave", "tom bajo"], &[]).or(find(&["tom"], &["mid", "medio", "high", "hi tom", "agudo", "alto"])),
+            mid_tom: find(&["mid tom", "tom medio"], &[]),
+            high_tom: find(&["high tom", "hi tom", "tom agudo", "tom alto"], &[]),
             rim: find(&["rim", "stick"], &[]),
-            perc: find(&["cowbell", "perc", "shaker", "conga", "bongo", "cencerro"], &[]),
+            perc: find(&["cowbell", "cencerro", "perc"], &[]),
+            crash: find(&["crash", "platillo"], &[]),
+            ride: find(&["ride"], &[]),
+            shaker: find(&["shaker", "maraca", "cabasa"], &[]),
+            tambourine: find(&["tambourine", "pandereta", "tamb"], &[]),
+            conga: find(&["conga", "bongo"], &[]),
+            clave: find(&["clave", "wood"], &[]),
         }
     }
 
-    /// The backbeat: the snare, or the clap, or the rim.
-    fn back(&self, prefer_clap: bool) -> Option<u8> {
-        if prefer_clap { self.clap.or(self.snare) } else { self.snare.or(self.clap) }.or(self.rim)
-    }
-
-    fn hat(&self) -> Option<u8> {
-        self.closed.or(self.open).or(self.perc)
+    /// What plays `sound` in this kit: its own, or the nearest it has.
+    pub fn pitch(&self, sound: Sound) -> Option<u8> {
+        match sound {
+            Sound::Kick => self.kick,
+            Sound::Snare => self.snare.or(self.clap),
+            Sound::Clap => self.clap.or(self.snare),
+            Sound::Hat => self.closed.or(self.open),
+            Sound::Open => self.open,
+            Sound::Ride => self.ride,
+            Sound::Crash => self.crash,
+            Sound::Rim => self.rim,
+            Sound::LowTom => self.tom,
+            Sound::MidTom => self.mid_tom.or(self.tom),
+            Sound::HighTom => self.high_tom.or(self.mid_tom).or(self.tom),
+            Sound::Shaker => self.shaker,
+            Sound::Tambourine => self.tambourine,
+            Sound::Cowbell => self.perc,
+            Sound::Conga => self.conga,
+            Sound::Clave => self.clave,
+        }
     }
 }
 
@@ -386,6 +522,8 @@ pub struct Settings {
     pub machine: bool,
     /// The drum model plays the clip, carrying the written beat on its way.
     pub ai: bool,
+    /// The sounds it may use (the style's, unless changed).
+    pub sounds: Sounds,
 }
 
 impl Style {
@@ -401,7 +539,7 @@ impl Style {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { style: Style::House, level: Level::Medium, fills: true, follow_bass: false, bars: 4, machine: true, ai: false }
+        Self { style: Style::House, level: Level::Medium, fills: true, follow_bass: false, bars: 4, machine: true, ai: false, sounds: Style::House.sounds() }
     }
 }
 
@@ -433,16 +571,7 @@ fn velocity(c: char) -> Option<f32> {
 pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take: u64) -> (Vec<Note>, Option<engine::model::Groove>) {
     let options = takes(settings.style, settings.level);
     let groove = &options[take as usize % options.len()];
-    let back_clap = matches!(settings.style, Style::House | Style::Techno | Style::Trap);
-    let pitch = |v: V| match v {
-        Kick => kit.kick,
-        Back => kit.back(back_clap),
-        Hat => kit.hat(),
-        Open => kit.open.or(kit.closed),
-        Rim => kit.rim.or(kit.perc),
-        Perc => kit.perc.or(kit.rim),
-        Tom => kit.tom.or(kit.back(false)),
-    };
+    let pitch = |v: V| sound_of(settings, v).and_then(|s| kit.pitch(s));
     let mut dice = Dice(take.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let bars = (length / 4.0).ceil().max(1.0) as usize;
     let mut notes = Vec::new();
@@ -488,8 +617,41 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
             }
         }
     }
+    crash_phrases(kit, settings, &mut notes, length);
     follow_bass(kit, settings, &mut notes, bass, length);
     (notes, swing(settings.style, settings.level))
+}
+
+/// Which of the chosen sounds plays a written line: the backbeat on the clap
+/// or the snare (as the style likes), the percussion on what there is.
+fn sound_of(settings: &Settings, v: V) -> Option<Sound> {
+    let on = |s: Sound| settings.sounds[s as usize];
+    let first = |list: &[Sound]| list.iter().copied().find(|&s| on(s));
+    let back_clap = matches!(settings.style, Style::House | Style::Techno | Style::Trap);
+    match v {
+        Kick => first(&[Sound::Kick]),
+        Back if back_clap => first(&[Sound::Clap, Sound::Snare, Sound::Rim]),
+        Back => first(&[Sound::Snare, Sound::Clap, Sound::Rim]),
+        Hat => first(&[Sound::Hat, Sound::Shaker]),
+        Open => first(&[Sound::Open, Sound::Hat]),
+        Rim => first(&[Sound::Rim]),
+        Perc => first(&[Sound::Cowbell, Sound::Conga, Sound::Shaker]),
+        Tom => first(&[Sound::LowTom, Sound::Snare]),
+    }
+}
+
+/// A crash where each phrase starts (every eight bars, from the first), if
+/// it's chosen and the clip is long enough for it not to crash every bar.
+fn crash_phrases(kit: &Kit, settings: &Settings, notes: &mut Vec<Note>, length: f64) {
+    let Some(crash) = kit.pitch(Sound::Crash).filter(|_| settings.sounds[Sound::Crash as usize]) else { return };
+    if length < 16.0 {
+        return;
+    }
+    let mut beat = 0.0;
+    while beat < length {
+        notes.push(Note { start: beat, length: 0.25, pitch: crash, velocity: 0.9 });
+        beat += 32.0;
+    }
 }
 
 /// With the bass: a kick where it starts a note on an eighth and none is there.
@@ -517,23 +679,13 @@ static WRITER: std::sync::Mutex<Option<stems::drums::DrumWriter>> = std::sync::M
 /// drummer's way, with its own variations and fills where phrases end. Every
 /// `take` is another performance. Plainer levels play it safer.
 pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take: u64) -> Result<(Vec<Note>, Option<engine::model::Groove>), String> {
-    use stems::drums::{Voice, VOICES};
+    use stems::drums::VOICES;
     let options = takes(settings.style, settings.level);
     let groove = &options[take as usize % options.len()];
-    let back_clap = matches!(settings.style, Style::House | Style::Techno | Style::Trap);
-    let voice = |v: V| match v {
-        Kick => Voice::Kick,
-        Back if back_clap => Voice::Clap,
-        Back => Voice::Snare,
-        Hat => Voice::Hat,
-        Open => Voice::Open,
-        Rim => Voice::Rim,
-        Perc => Voice::Perc,
-        Tom => Voice::Tom,
-    };
     let mut seed = vec![[0u8; VOICES]; 64];
     for bar in 0..4 {
         for &(v, steps) in if bar == 3 { groove.b } else { groove.a } {
+            let Some(sound) = sound_of(settings, v) else { continue };
             for (s, c) in steps.char_indices() {
                 let level = match c {
                     'X' => 3,
@@ -541,22 +693,12 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
                     'g' => 1,
                     _ => continue,
                 };
-                let cell = &mut seed[bar * 16 + s][voice(v) as usize];
+                let cell = &mut seed[bar * 16 + s][sound as usize];
                 *cell = (*cell).max(level);
             }
         }
     }
-    let pitch = |v: Voice| match v {
-        Voice::Kick => kit.kick,
-        Voice::Snare => kit.snare.or(kit.clap),
-        Voice::Clap => kit.clap.or(kit.snare),
-        Voice::Hat => kit.closed.or(kit.open),
-        Voice::Open => kit.open,
-        Voice::Rim => kit.rim,
-        Voice::Perc => kit.perc,
-        Voice::Tom => kit.tom,
-    };
-    let playable = stems::drums::ALL.map(|v| pitch(v).is_some());
+    let playable = stems::drums::ALL.map(|s| settings.sounds[s as usize] && kit.pitch(s).is_some());
     let heat = match settings.level {
         Level::Basic => 0.85,
         Level::Medium => 1.0,
@@ -576,12 +718,12 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
         for v in stems::drums::ALL {
             let level = step[v as usize];
             // Where the open hat plays, the closed one doesn't (it would choke it).
-            if level == 0 || (v == Voice::Hat && step[Voice::Open as usize] > 0) {
+            if level == 0 || (v == Sound::Hat && step[Sound::Open as usize] > 0) {
                 continue;
             }
-            let Some(pitch) = pitch(v) else { continue };
+            let Some(pitch) = kit.pitch(v) else { continue };
             let base = [0.0, 0.38, 0.8, 1.0][level as usize];
-            let base = if matches!(v, Voice::Hat | Voice::Open) { base * 0.85 } else { base };
+            let base = if matches!(v, Sound::Hat | Sound::Open | Sound::Ride | Sound::Shaker) { base * 0.85 } else { base };
             let velocity = (base * (0.96 + 0.08 * dice.roll())).clamp(0.05, 1.0);
             notes.push(Note { start: s as f64 * 0.25, length: 0.25, pitch, velocity });
         }
@@ -647,9 +789,9 @@ mod tests {
     fn beat_to_wav(dir: &std::path::Path, style: Style, level: Level, take: u64, ai: bool) -> String {
         let mut project = crate::project::Project::empty();
         project.tempo = style.tempo() as f64;
-        let params = engine::model::DrumParams { model: style.machine(), ..Default::default() };
+        let params = style.sound();
         let mut track = crate::project::Track::new("Drums", [0; 3], engine::model::InstrumentKind::DrumMachine(params));
-        let settings = Settings { style, level, fills: true, follow_bass: false, bars: 8, machine: true, ai };
+        let settings = Settings { style, level, fills: true, follow_bass: false, bars: 8, machine: true, ai, sounds: style.sounds() };
         let (notes, groove) = if ai { generate_ai(&machine(), &settings, 32.0, &[], take).unwrap() } else { generate(&machine(), &settings, 32.0, &[], take) };
         let clip = engine::model::MidiClip { notes, groove, ..engine::model::MidiClip::new("Beat", 32.0, [0; 3]) };
         track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: engine::model::Clip::Midi(clip) });
@@ -725,7 +867,7 @@ mod tests {
     }
 
     fn beat(style: Style, level: Level, fills: bool, bars: f64) -> Vec<Note> {
-        generate(&machine(), &Settings { style, level, fills, follow_bass: false, bars: 4, machine: false, ai: false }, bars * 4.0, &[], 0).0
+        generate(&machine(), &Settings { style, level, fills, follow_bass: false, bars: 4, machine: false, ai: false, sounds: [true; stems::drums::VOICES] }, bars * 4.0, &[], 0).0
     }
 
     #[test]
@@ -765,16 +907,49 @@ mod tests {
     }
 
     #[test]
+    fn only_the_chosen_sounds_play_and_a_crash_opens_each_phrase() {
+        let kit = machine();
+        let mut settings = Settings { style: Style::PopRock, level: Level::Intense, bars: 16, ..Settings::default() };
+        settings.sounds = Style::PopRock.sounds();
+        let (notes, _) = generate(&kit, &settings, 64.0, &[], 0);
+        let crashes: Vec<f64> = notes.iter().filter(|n| n.pitch == drum_note::CRASH).map(|n| n.start).collect();
+        assert_eq!(crashes, vec![0.0, 32.0]);
+        // Without hats the hat lines go silent; without the crash, no crash.
+        settings.sounds[Sound::Hat as usize] = false;
+        settings.sounds[Sound::Open as usize] = false;
+        settings.sounds[Sound::Crash as usize] = false;
+        let (notes, _) = generate(&kit, &settings, 64.0, &[], 0);
+        assert!(notes.iter().all(|n| ![drum_note::CLOSED_HAT, drum_note::OPEN_HAT, drum_note::CRASH].contains(&n.pitch)));
+        assert!(notes.iter().any(|n| n.pitch == drum_note::KICK) && notes.iter().any(|n| n.pitch == drum_note::SNARE));
+        // Techno keeps its ride and cowbell out.
+        let techno = Style::Techno.sounds();
+        assert!(!techno[Sound::Ride as usize] && !techno[Sound::Cowbell as usize]);
+    }
+
+    #[test]
+    fn each_style_has_its_own_sound() {
+        let trap = Style::Trap.sound();
+        let techno = Style::Techno.sound();
+        assert_eq!((trap.model, techno.model), (engine::model::DrumModel::Tr808, engine::model::DrumModel::Tr909));
+        // The trap kick long and deep; the techno one short.
+        assert!(trap.decay[0] > 2.0 && trap.tune[0] < 0.0 && techno.decay[0] < 1.0);
+        let sounds: Vec<_> = Style::ALL.iter().map(|s| s.sound()).collect();
+        assert!(sounds.iter().enumerate().all(|(i, a)| sounds[i + 1..].iter().all(|b| a != b)), "no two styles sound alike");
+    }
+
+    #[test]
     fn a_bar_repeats_and_the_fourth_turns_it_around() {
-        // A groove, not noise: bars one to three alike.
+        // A groove, not noise: bars one to three alike (but for the crash that opens the phrase).
         let notes = beat(Style::BoomBap, Level::Medium, false, 4.0);
-        let bar = |b: usize| -> Vec<(u8, usize)> { notes.iter().filter(|n| (n.start / 4.0) as usize == b).map(|n| (n.pitch, ((n.start % 4.0) * 4.0).round() as usize)).collect() };
+        let bar = |b: usize| -> Vec<(u8, usize)> {
+            notes.iter().filter(|n| (n.start / 4.0) as usize == b && n.pitch != drum_note::CRASH).map(|n| (n.pitch, ((n.start % 4.0) * 4.0).round() as usize)).collect()
+        };
         assert_eq!(bar(0), bar(1));
         assert_eq!(bar(1), bar(2));
         assert_ne!(bar(2), bar(3), "the fourth turns it around");
         // Takes differ.
         let kit = machine();
-        let settings = Settings { style: Style::Techno, level: Level::Intense, fills: false, follow_bass: false, bars: 4, machine: false, ai: false };
+        let settings = Settings { style: Style::Techno, level: Level::Intense, fills: false, follow_bass: false, bars: 4, machine: false, ai: false, sounds: [true; stems::drums::VOICES] };
         assert_ne!(generate(&kit, &settings, 16.0, &[], 0).0, generate(&kit, &settings, 16.0, &[], 1).0);
         // Busier levels have more.
         let count = |level| beat(Style::PopRock, level, false, 4.0).len();
@@ -802,7 +977,7 @@ mod tests {
     #[test]
     fn the_kick_can_follow_the_bass_and_small_kits_still_play() {
         let kit = machine();
-        let settings = Settings { style: Style::PopRock, level: Level::Basic, fills: false, follow_bass: true, bars: 1, machine: false, ai: false };
+        let settings = Settings { style: Style::PopRock, level: Level::Basic, fills: false, follow_bass: true, bars: 1, machine: false, ai: false, sounds: [true; stems::drums::VOICES] };
         let (notes, _) = generate(&kit, &settings, 4.0, &[1.5, 3.0, 2.3], 0);
         let kicks: Vec<f64> = notes.iter().filter(|n| n.pitch == drum_note::KICK).map(|n| n.start).collect();
         assert!(kicks.contains(&1.5) && kicks.contains(&3.0) && !kicks.contains(&2.3), "{kicks:?}");

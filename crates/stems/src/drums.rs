@@ -76,7 +76,7 @@ impl DrumWriter {
         if seed.is_empty() {
             return Err("El modelo de batería necesita al menos un paso para empezar".into());
         }
-        let mut rng = Rng(luck.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
+        let mut rng = Rng::new(luck);
         let mut song: Vec<Step> = seed.to_vec();
         let offset = (PHRASE - seed.len() % PHRASE) % PHRASE;
         for _ in 0..steps {
@@ -131,6 +131,15 @@ fn pick(logits: &[f32], heat: f32, rng: &mut Rng) -> u8 {
 struct Rng(u64);
 
 impl Rng {
+    /// Mixed well first (splitmix64): from a small state like 1 xorshift gives
+    /// numbers near zero for dozens of draws, and they all came out silent.
+    fn new(luck: u64) -> Self {
+        let mut z = luck.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        Self((z ^ (z >> 31)) | 1)
+    }
+
     fn unit(&mut self) -> f32 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
@@ -183,5 +192,15 @@ mod tests {
         let b = writer.play_on(&house(), 128, 1.0, voices, 2).unwrap();
         assert_ne!(a, b);
         assert!(a.iter().chain(&b).all(|s| s[Voice::LowTom as usize] == 0));
+    }
+
+    #[test]
+    fn every_take_keeps_the_floor() {
+        let mut writer = DrumWriter::load().unwrap();
+        for luck in 0..4 {
+            let out = writer.play_on(&house(), 64, 1.0, [true; VOICES], luck).unwrap();
+            let kicks = (0..64).step_by(4).filter(|&i| out[i][Voice::Kick as usize] > 0).count();
+            assert!(kicks >= 12, "take {luck}: kicks on the beat {kicks}/16");
+        }
     }
 }

@@ -123,10 +123,11 @@ impl Style {
                 set(CLOSED_HAT, 1.0, 0.7, 0.6);
             }
             Style::DrumAndBass => {
-                set(KICK, 1.0, 0.6, 0.9);
-                set(SNARE, 4.0, 0.8, 0.9);
+                set(KICK, 1.0, 0.6, 0.8);
+                set(SNARE, 4.0, 0.8, 0.8);
                 set(CLOSED_HAT, 2.0, 0.7, 0.6);
                 set(RIDE, 0.0, 0.8, 0.5);
+                set(CRASH, 0.0, 1.0, 0.5);
             }
             Style::BoomBap => {
                 set(KICK, -1.0, 1.3, 0.95);
@@ -149,6 +150,11 @@ impl Style {
                 set(SNARE, 2.0, 0.9, 0.8);
                 set(CRASH, 0.0, 1.0, 0.5);
             }
+        }
+        // The 909 hits harder than the 808: 2 dB down, so a full kit (a crash
+        // over the kick and snare, a fill) stays under 0 dBFS.
+        if p.model == engine::model::DrumModel::Tr909 {
+            p.level.iter_mut().for_each(|l| *l *= 0.8);
         }
         p
     }
@@ -698,6 +704,7 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
             }
         }
     }
+    extras(settings, &mut seed);
     let playable = stems::drums::ALL.map(|s| settings.sounds[s as usize] && kit.pitch(s).is_some());
     let heat = match settings.level {
         Level::Basic => 0.85,
@@ -730,6 +737,44 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
     }
     follow_bass(kit, settings, &mut notes, bass, length);
     Ok((notes, swing(settings.style, settings.level)))
+}
+
+/// The chosen sounds the written grooves leave out, put into the four bars
+/// the model starts from: it carries on with the sounds it hears, so
+/// without them it would never play them. A tom fill ends the fourth bar;
+/// from Medium a tambourine on the backbeat and a shaker on the sixteenths;
+/// at Intense congas and a cowbell too.
+fn extras(settings: &Settings, seed: &mut [stems::drums::Step]) {
+    let on = |s: Sound| settings.sounds[s as usize];
+    let toms: Vec<Sound> = [Sound::HighTom, Sound::MidTom, Sound::LowTom].into_iter().filter(|&t| on(t)).collect();
+    if settings.fills && !toms.is_empty() {
+        for (i, step) in seed[60..64].iter_mut().enumerate() {
+            *step = [0; stems::drums::VOICES];
+            step[toms[i * toms.len() / 4] as usize] = if i == 0 { 3 } else { 2 };
+        }
+    }
+    let mut lay = |sound: Sound, line: &str| {
+        if !on(sound) || seed.iter().any(|s| s[sound as usize] > 0) {
+            return;
+        }
+        // Not over the fill.
+        for (i, step) in seed[..60].iter_mut().enumerate() {
+            let level = match line.as_bytes()[i % 16] {
+                b'x' => 2,
+                b'g' => 1,
+                _ => 0,
+            };
+            step[sound as usize] = level;
+        }
+    };
+    if settings.level != Level::Basic {
+        lay(Sound::Tambourine, "....x.......x...");
+        lay(Sound::Shaker, "gxgxgxgxgxgxgxgx");
+    }
+    if settings.level == Level::Intense {
+        lay(Sound::Conga, "......x..x...x.x");
+        lay(Sound::Cowbell, "..x...x...x...x.");
+    }
 }
 
 /// How many takes a style has at a level.
@@ -802,7 +847,8 @@ mod tests {
         let by = if ai { " IA" } else { "" };
         let name = format!("{} {} {}{by} v{}.wav", style.label().replace(['/', '&'], "y"), level.label(), style.machine().label(), take + 1);
         crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
-        name
+        let peak = l.iter().chain(&r).fold(0.0f32, |p, s| p.max(s.abs()));
+        format!("{name}: pico {:.1} dBFS", 20.0 * peak.log10())
     }
 
     /// Renders beats to WAVs in `PULSE_OUT` (for listening): every level and take

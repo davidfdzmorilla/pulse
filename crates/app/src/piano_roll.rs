@@ -185,6 +185,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     // One row per drum sound or pad, the lowest note at the bottom.
     let drum_rows = if is_drums { app.project.tracks[t].drum_rows() } else { Vec::new() };
     let key = app.project.key.filter(|_| !is_drums);
+    let drum_machine = match app.project.tracks[t].instrument {
+        engine::model::InstrumentKind::DrumMachine(params) => Some(params),
+        _ => None,
+    };
     // A drum clip: its kit's sounds, and where the bass plays over it.
     let drums = is_drums.then(|| {
         let kit = crate::drum_gen::Kit::from_rows(&drum_rows);
@@ -215,7 +219,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut previews: Vec<u8> = Vec::new();
 
     previews.extend(toolbar(ui, state, clip, key, is_drums, &mut vary));
-    let tempo = drums.as_ref().and_then(|(kit, bass)| drum_menu(ui, state, clip, kit, bass));
+    let (tempo, machine) = drums.as_ref().map_or((None, None), |(kit, bass)| drum_menu(ui, state, clip, kit, bass, drum_machine.is_some()));
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
     if keys_enabled {
@@ -573,6 +577,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     if let Some(bpm) = tempo {
         app.set_param(engine::Target::Master, engine::model::Param::Tempo, bpm as f32);
     }
+    if let (Some(model), Some(params)) = (machine, drum_machine) {
+        if params.model != model {
+            app.set_instrument(t, engine::model::InstrumentKind::DrumMachine(engine::model::DrumParams { model, ..params }));
+        }
+    }
     if vary == Some(true) {
         app.vary_accompaniment();
         return;
@@ -702,9 +711,10 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
 /// «Generar ritmo»: a beat in a style for this drum clip (see `drum_gen`); each
 /// «Otra versión» the style's next take. Returns a tempo to set the project to,
 /// if asked.
-fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &crate::drum_gen::Kit, bass: &[f64]) -> Option<f64> {
+fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &crate::drum_gen::Kit, bass: &[f64], machine: bool) -> (Option<f64>, Option<engine::model::DrumModel>) {
     use crate::drum_gen::{Level, Style};
     let mut tempo = None;
+    let mut model = None;
     ui.horizontal(|ui| {
         widgets::field_menu_button(ui, "Generar ritmo", |ui| {
             ui.set_min_width(320.0);
@@ -732,6 +742,10 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
             ui.add_enabled(!bass.is_empty(), egui::Checkbox::new(&mut settings.follow_bass, "El bombo sigue al bajo"))
                 .on_hover_text("Añade bombos donde el bajo empieza notas (en corcheas)")
                 .on_disabled_hover_text("No hay una pista de bajo sonando con este clip");
+            if machine {
+                ui.checkbox(&mut settings.machine, format!("Sonidos de su máquina ({})", settings.style.machine().label()))
+                    .on_hover_text("Pone la Drum Machine en la máquina del estilo: 808 para trap, hip hop y reggaetón; 909 para el resto");
+            }
             let style = settings.style;
             if ui.small_button(format!("Tempo del proyecto a {} BPM", style.tempo())).on_hover_text("Cada estilo suena a sí mismo a su tempo").clicked() {
                 tempo = Some(style.tempo() as f64);
@@ -752,10 +766,13 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
                 clip.notes = notes;
                 clip.groove = swing;
                 state.selection.clear();
+                if machine && state.drums.machine {
+                    model = Some(state.drums.style.machine());
+                }
             }
         });
     });
-    tempo
+    (tempo, model)
 }
 
 /// «Groove»: the clip follows the project's swing, or has its own groove

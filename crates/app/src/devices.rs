@@ -509,6 +509,22 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         }
         InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => {
             device_frame(ui, kind.label(), 600.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
+                // Which machine it sounds like.
+                if let InstrumentKind::DrumMachine(params) = kind {
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new("Máquina").color(TEXT_DIM).size(10.5));
+                        for model in engine::model::DrumModel::ALL {
+                            let hint = match model {
+                                engine::model::DrumModel::Tr808 => "Como la Roland TR-808: bombo largo y redondo, palma, cencerro (hip hop, trap, reggaetón)",
+                                engine::model::DrumModel::Tr909 => "Como la Roland TR-909: bombo con pegada, charles brillantes (house, techno)",
+                                engine::model::DrumModel::Classic => "Los sonidos primeros de Pulse",
+                            };
+                            if ui.selectable_label(params.model == model, model.label()).on_hover_text(hint).clicked() && params.model != model {
+                                actions.push(Action::Instrument(InstrumentKind::DrumMachine(engine::model::DrumParams { model, ..params })));
+                            }
+                        }
+                    });
+                }
                 egui::Grid::new("drum_machine").spacing([8.0, 2.0]).show(ui, |ui| {
                     for (voice, (pitch, name)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
                         ui.vertical(|ui| {

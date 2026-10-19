@@ -6,6 +6,7 @@ mod effects;
 mod engine;
 mod input;
 mod instruments;
+mod drumkit;
 mod kick;
 mod midi_fx;
 mod offline;

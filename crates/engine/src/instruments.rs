@@ -537,6 +537,8 @@ impl Hit {
 
 pub struct DrumMachine {
     params: DrumParams,
+    /// The 808 and 909 models (the classic sounds are below).
+    kit: crate::drumkit::ModelKit,
     sample_rate: f32,
     seed: u32,
     hits: [Hit; 8],
@@ -549,6 +551,7 @@ impl DrumMachine {
     pub fn new(params: DrumParams, sample_rate: f32) -> Self {
         Self {
             params,
+            kit: crate::drumkit::ModelKit::new(params.model, sample_rate),
             sample_rate,
             seed: 0x9E37_79B9,
             hits: [Hit::default(); 8],
@@ -564,6 +567,7 @@ impl DrumMachine {
 
     pub fn set_params(&mut self, params: DrumParams) {
         self.params = params;
+        self.kit.set_model(params.model);
     }
 
     fn noise(&mut self) -> f32 {
@@ -588,6 +592,11 @@ impl DrumMachine {
             COWBELL => (7, 1.0),
             _ => return,
         };
+        if self.params.model != crate::model::DrumModel::Classic {
+            let params = self.params;
+            self.kit.hit(voice, velocity, base, &params);
+            return;
+        }
         if voice == 4 {
             // A closed hat chokes the open one, as on the real machines.
             self.hits[5].active = false;
@@ -596,6 +605,9 @@ impl DrumMachine {
     }
 
     pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
+        // The models ring out even if the model changes meanwhile.
+        let params = self.params;
+        self.kit.render(&params, left, right);
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
         let p = self.params;

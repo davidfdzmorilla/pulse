@@ -936,12 +936,41 @@ pub struct DrumParams {
     pub tune: [f32; 8],
     pub decay: [f32; 8],
     pub level: [f32; 8],
+    /// Which machine it sounds like.
+    #[serde(default, skip_serializing_if = "is_classic")]
+    pub model: DrumModel,
 }
 
 impl Default for DrumParams {
     fn default() -> Self {
-        Self { tune: [0.0; 8], decay: [1.0; 8], level: [0.8; 8] }
+        Self { tune: [0.0; 8], decay: [1.0; 8], level: [0.8; 8], model: DrumModel::Classic }
     }
+}
+
+/// The sound of the drum machine: its own first sounds, or modelled on the
+/// Roland TR-808 or TR-909 (see the engine's `drumkit`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DrumModel {
+    #[default]
+    Classic,
+    Tr808,
+    Tr909,
+}
+
+impl DrumModel {
+    pub const ALL: [DrumModel; 3] = [DrumModel::Tr808, DrumModel::Tr909, DrumModel::Classic];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            DrumModel::Classic => "Clásica",
+            DrumModel::Tr808 => "808",
+            DrumModel::Tr909 => "909",
+        }
+    }
+}
+
+fn is_classic(model: &DrumModel) -> bool {
+    *model == DrumModel::Classic
 }
 
 /// Unison sawtooth polysynth.

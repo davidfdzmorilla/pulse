@@ -351,6 +351,7 @@ En el **Editor MIDI** de un clip de batería (Drum Machine o Drum Rack), **Gener
 - **Redoble al final de cada frase**: en el último tiempo de cada 8 compases (o del clip, si tiene 4 o más), el de cada estilo (el reggaetón no lleva).
 - **El bombo sigue al bajo**: añade bombos donde el bajo empieza sus notas (en corcheas), si hay una pista de bajo sonando con el clip.
 - El hip hop lleva **swing** (y el house, un poco): se pone en el **Groove** del clip.
+- **Sonidos de su máquina**: en una Drum Machine, pone la máquina del estilo (**808** para trap, hip hop y reggaetón; **909** para el resto).
 - Funciona con cualquier kit: Pulse busca cada sonido por su nombre (kick/bombo, snare/caja, clap, hat/charles, tom, rim…) y usa lo que haya.
 - **Generar** sustituye las notas del clip; **Otra versión** pasa a otra base del mismo estilo y nivel. ⌘Z recupera las anteriores.
 
@@ -544,7 +545,7 @@ Se eligen en el navegador (INSTRUMENTOS) con una pista MIDI seleccionada.
   - **Multisample**: carga o arrastra **varias** muestras a la vez y se reparten por el teclado según la nota de su nombre («Piano C3», «Rhodes_F#2», «Strings Db4»; C3 es el do central). Cada una cubre las teclas hasta la mitad de camino de sus vecinas y suena tal cual en su nota. Varias de la misma nota son **capas de velocidad**: la más suave abajo. Las que no llevan nota van una por tecla desde C3.
   - El mapa muestra las zonas sobre el teclado (arriba, las velocidades altas); clic en una tecla para oírla. **−12 / +12** mueven todo el mapa una octava (librerías que llaman C4 al do central). **Zonas…** permite ajustar a mano las notas, la raíz y las velocidades de cada muestra.
   - Hasta 32 muestras. Cargar una sola vuelve al modo normal.
-- **Drum Machine**: 8 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tom, cencerro), cada uno con Tune, Decay y Level. Clic en un sonido para escucharlo.
+- **Drum Machine**: 8 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tom, cencerro), cada uno con Tune, Decay y Level. Clic en un sonido para escucharlo. **Máquina**: **808** (bombo largo y redondo, palma, cencerro: hip hop, trap, reggaetón), **909** (bombo con pegada y charles brillantes: house, techno) o **Clásica**, sus sonidos primeros.
 - **Drum Rack**: 16 pads de muestras (el 1 abajo a la izquierda, desde C1).
   - Clic en un pad lo escucha y lo selecciona. Arrastra uno o varios audios sobre los pads.
   - Por pad: Tune, Length, Level, Pan y grupo de **choke** (los pads del mismo grupo se cortan entre sí, como el hi-hat abierto y cerrado).

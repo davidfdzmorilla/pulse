@@ -379,11 +379,24 @@ pub struct Settings {
     pub follow_bass: bool,
     /// Bars the clip is made (it takes four for its turnaround, eight for a fill).
     pub bars: u32,
+    /// A drum machine is switched to the style's machine (808 or 909).
+    pub machine: bool,
+}
+
+impl Style {
+    /// The machine the style is played on.
+    pub fn machine(self) -> engine::model::DrumModel {
+        use engine::model::DrumModel::*;
+        match self {
+            Style::Trap | Style::BoomBap | Style::Reggaeton => Tr808,
+            Style::House | Style::Techno | Style::Breakbeat | Style::DrumAndBass | Style::PopRock => Tr909,
+        }
+    }
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { style: Style::House, level: Level::Medium, fills: true, follow_bass: false, bars: 4 }
+        Self { style: Style::House, level: Level::Medium, fills: true, follow_bass: false, bars: 4, machine: true }
     }
 }
 
@@ -539,6 +552,33 @@ mod tests {
         Kit::from_rows(&rows)
     }
 
+    /// Renders a beat of each style on its machine, at its tempo, to WAVs in
+    /// `PULSE_OUT` (for listening).
+    #[test]
+    #[ignore]
+    fn beats_to_wav() {
+        let Ok(dir) = std::env::var("PULSE_OUT") else { return };
+        let dir = std::path::PathBuf::from(dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (style, level) in [(Style::House, Level::Medium), (Style::Techno, Level::Intense), (Style::Trap, Level::Medium), (Style::BoomBap, Level::Medium), (Style::Reggaeton, Level::Medium), (Style::DrumAndBass, Level::Medium)] {
+            let mut project = crate::project::Project::empty();
+            project.tempo = style.tempo() as f64;
+            let params = engine::model::DrumParams { model: style.machine(), ..Default::default() };
+            let mut track = crate::project::Track::new("Drums", [0; 3], engine::model::InstrumentKind::DrumMachine(params));
+            let settings = Settings { style, level, fills: true, follow_bass: false, bars: 8, machine: true };
+            let (notes, groove) = generate(&machine(), &settings, 32.0, &[], 0);
+            let clip = engine::model::MidiClip { notes, groove, ..engine::model::MidiClip::new("Beat", 32.0, [0; 3]) };
+            track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: engine::model::Clip::Midi(clip) });
+            project.tracks = vec![track];
+            let mut samples = crate::sync::SampleCache::default();
+            let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+            let (l, r) = crate::export::render(commands, (0.0, 32.0), project.tempo, 48_000.0, &Default::default(), &|_| {}).unwrap();
+            let name = format!("{} {} {}.wav", style.label().replace(['/', '&'], "y"), level.label(), style.machine().label());
+            crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
+            println!("{name}");
+        }
+    }
+
     #[test]
     fn the_bass_of_the_same_scene_is_found() {
         let demo = crate::project::Project::demo();
@@ -566,7 +606,7 @@ mod tests {
     }
 
     fn beat(style: Style, level: Level, fills: bool, bars: f64) -> Vec<Note> {
-        generate(&machine(), &Settings { style, level, fills, follow_bass: false, bars: 4 }, bars * 4.0, &[], 0).0
+        generate(&machine(), &Settings { style, level, fills, follow_bass: false, bars: 4, machine: false }, bars * 4.0, &[], 0).0
     }
 
     #[test]
@@ -615,7 +655,7 @@ mod tests {
         assert_ne!(bar(2), bar(3), "the fourth turns it around");
         // Takes differ.
         let kit = machine();
-        let settings = Settings { style: Style::Techno, level: Level::Intense, fills: false, follow_bass: false, bars: 4 };
+        let settings = Settings { style: Style::Techno, level: Level::Intense, fills: false, follow_bass: false, bars: 4, machine: false };
         assert_ne!(generate(&kit, &settings, 16.0, &[], 0).0, generate(&kit, &settings, 16.0, &[], 1).0);
         // Busier levels have more.
         let count = |level| beat(Style::PopRock, level, false, 4.0).len();
@@ -643,7 +683,7 @@ mod tests {
     #[test]
     fn the_kick_can_follow_the_bass_and_small_kits_still_play() {
         let kit = machine();
-        let settings = Settings { style: Style::PopRock, level: Level::Basic, fills: false, follow_bass: true, bars: 1 };
+        let settings = Settings { style: Style::PopRock, level: Level::Basic, fills: false, follow_bass: true, bars: 1, machine: false };
         let (notes, _) = generate(&kit, &settings, 4.0, &[1.5, 3.0, 2.3], 0);
         let kicks: Vec<f64> = notes.iter().filter(|n| n.pitch == drum_note::KICK).map(|n| n.start).collect();
         assert!(kicks.contains(&1.5) && kicks.contains(&3.0) && !kicks.contains(&2.3), "{kicks:?}");

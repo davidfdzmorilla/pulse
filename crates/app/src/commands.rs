@@ -21,6 +21,7 @@ pub enum Command {
     Save,
     SaveAs,
     Versions,
+    MixAssistant,
     ImportLive,
     ImportAudio,
     Export,
@@ -192,6 +193,7 @@ impl PulseApp {
             Command::Save => self.save(),
             Command::SaveAs => self.save_as(),
             Command::Versions => self.open_panel(crate::app::Panel::Versions),
+            Command::MixAssistant => self.open_panel(crate::app::Panel::Mix),
             Command::ImportLive => {
                 if self.may_discard() {
                     self.import_live_set();

@@ -640,6 +640,27 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Normalizar**: pico a un valor (no en stems).
 - Se exporta el **Arrangement** (no la Session), con la cola de reverbs y delays. Avisa si la mezcla satura.
 - Por defecto se guarda en la carpeta `Exportaciones`.
+- Antes de exportar, mira el **Asistente de mezcla y master**.
+
+## Asistente de mezcla y master
+
+**Archivo → Asistente de mezcla y master…** te dice cómo suena tu mezcla y qué arreglar antes de publicarla, con un botón **Aplicar** en cada consejo.
+
+- **Analizar la mezcla**: toca la canción (o el loop) sin sonido, más rápido que en tiempo real, la mezcla entera y cada pista sola, y las mide:
+  - **Sonoridad** (LUFS integrados, la medida que usan Spotify, YouTube o Apple Music para igualar el volumen de las canciones).
+  - **Pico real** (dBTP: también entre muestras, donde nace la distorsión al pasar a MP3 o AAC).
+  - **Rango** (LU: cuánto cambia de volumen entre partes), **lo más fuerte** (3 segundos) y **estéreo** (correlación: 1 mono, por debajo de 0 se pierde en mono).
+- **Destino**: Spotify / YouTube / Tidal (−14 LUFS), Apple Music (−16), club / DJ / SoundCloud (−9), radio y TV (−23), o **como la referencia**. Todos con el pico real por debajo de −1 dBTP.
+- **Consejos**:
+  - **Sonoridad** por debajo o por encima del destino: **Aplicar** pone un **Limiter** en el master y lo ajusta midiendo cada vez, hasta llegar (y con el pico real por debajo de −1 dBTP). Si la mezcla no da más sin aplastarla, se para y te lo dice: para más volumen, comprime o satura las pistas.
+  - **Pistas por encima de 0 dB**: **Aplicar** les baja el volumen.
+  - **Graves que chocan**: dos pistas llenando los graves (por debajo de 120 Hz) a la vez. Si una es la batería, **Aplicar** pone un **Ducker** a la otra (se aparta en cada tiempo, como un sidechain); si no, recorta los graves de la que menos tiene con un **EQ Three**.
+  - **Fase**: mezcla o pistas en contrafase, que en mono (un móvil, un club) se pierden.
+  - **Dinámica**: muy apretada o con partes muy lejos en volumen.
+- **Referencia**: **Elegir canción…** carga una canción que suene como quieres. Se compara su sonoridad y su **balance de graves, medios y agudos** con el tuyo (en la gráfica por octavas: barras, tu mezcla; línea, la referencia), y **Aplicar** pone un **EQ Three** en el master que lo acerca.
+- **Pistas**: el pico, la sonoridad y el estéreo de cada una.
+
+Tras **Aplicar** se vuelve a analizar sola, para que veas el resultado. Todo lo que hace son dispositivos normales (Limiter, Ducker, EQ Three) y volúmenes: puedes retocarlos o quitarlos, y se deshace con ⌘Z.
 
 ## Ajustes
 

@@ -85,6 +85,8 @@ pub struct State {
     /// How «Generar ritmo» makes drum beats, and the takes made so far.
     pub(crate) drums: crate::drum_gen::Settings,
     drum_takes: u64,
+    /// Why the drum model couldn't play, shown in the menu.
+    drum_error: Option<String>,
 }
 
 impl Default for State {
@@ -108,6 +110,7 @@ impl Default for State {
             chords: Default::default(),
             drums: Default::default(),
             drum_takes: 0,
+            drum_error: None,
         }
     }
 }
@@ -738,7 +741,11 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
                     ui.selectable_value(&mut settings.bars, bars, format!("{bars} c.")).on_hover_text("Compases del clip: con 4, el cuarto da la vuelta a la frase; con 8, redoble al final");
                 }
             });
-            ui.checkbox(&mut settings.fills, "Redoble al final de cada frase").on_hover_text("En el último tiempo de cada 8 compases (o del clip, si tiene 4 o más), el de cada estilo");
+            ui.checkbox(&mut settings.ai, "Que lo toque la IA")
+                .on_hover_text("El modelo de batería de Pulse oye la base del estilo y la toca a su manera, como un batería: varía, mete redobles donde acaban las frases y cada versión es distinta");
+            ui.add_enabled(!settings.ai, egui::Checkbox::new(&mut settings.fills, "Redoble al final de cada frase"))
+                .on_hover_text("En el último tiempo de cada 8 compases (o del clip, si tiene 4 o más), el de cada estilo")
+                .on_disabled_hover_text("La IA pone los suyos donde acaban las frases");
             ui.add_enabled(!bass.is_empty(), egui::Checkbox::new(&mut settings.follow_bass, "El bombo sigue al bajo"))
                 .on_hover_text("Añade bombos donde el bajo empieza notas (en corcheas)")
                 .on_disabled_hover_text("No hay una pista de bajo sonando con este clip");
@@ -756,19 +763,37 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
             }
             ui.separator();
             let takes = crate::drum_gen::take_count(state.drums.style, state.drums.level);
-            let label = if state.drum_takes == 0 { "Generar".to_string() } else { format!("Otra versión ({} de {takes})", (state.drum_takes as usize - 1) % takes + 1) };
+            let label = match state.drum_takes {
+                0 => "Generar".to_string(),
+                n if state.drums.ai => format!("Otra versión ({n})"),
+                n => format!("Otra versión ({} de {takes})", (n as usize - 1) % takes + 1),
+            };
             if ui.button(label).on_hover_text("Sustituye las notas del clip (⌘Z las recupera)").clicked() {
                 let take = state.drum_takes;
                 state.drum_takes += 1;
                 let bass = if state.drums.follow_bass { bass } else { &[] };
                 clip.length = state.drums.bars as f64 * 4.0;
-                let (notes, swing) = crate::drum_gen::generate(kit, &state.drums, clip.length, bass, take);
-                clip.notes = notes;
-                clip.groove = swing;
-                state.selection.clear();
-                if machine && state.drums.machine {
-                    model = Some(state.drums.style.machine());
+                let beat = if state.drums.ai {
+                    crate::drum_gen::generate_ai(kit, &state.drums, state.drums.bars as f64 * 4.0, bass, take)
+                } else {
+                    Ok(crate::drum_gen::generate(kit, &state.drums, state.drums.bars as f64 * 4.0, bass, take))
+                };
+                state.drum_error = None;
+                match beat {
+                    Ok((notes, swing)) => {
+                        clip.length = state.drums.bars as f64 * 4.0;
+                        clip.notes = notes;
+                        clip.groove = swing;
+                        state.selection.clear();
+                        if machine && state.drums.machine {
+                            model = Some(state.drums.style.machine());
+                        }
+                    }
+                    Err(e) => state.drum_error = Some(e),
                 }
+            }
+            if let Some(e) = &state.drum_error {
+                ui.colored_label(Color32::LIGHT_RED, e);
             }
         });
     });

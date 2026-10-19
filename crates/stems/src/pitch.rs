@@ -337,6 +337,51 @@ pub fn melody(mono: &[f32], rate: f32, context: [f64; 12], snap: bool) -> (Vec<N
     (notes(&track, key.filter(|_| snap)), key)
 }
 
+/// The pitch of a short stretch of a voice, as it comes in (YIN, without the
+/// look back and ahead of [`track`]): its frequency and how unsure it is (the
+/// aperiodicity, 0 a perfect tone), or None if it has none between `fmin` and
+/// `fmax` Hz. `frame` needs at least two periods of `fmin` and `fmax`'s lag.
+pub fn live(frame: &[f32], rate: f32, fmin: f64, fmax: f64) -> Option<(f64, f64)> {
+    const THRESHOLD: f64 = 0.15;
+    let (lag_min, lag_max) = ((rate as f64 / fmax).floor() as usize, (rate as f64 / fmin).ceil() as usize);
+    if lag_min < 2 || frame.len() < 2 * lag_max {
+        return None;
+    }
+    let width = frame.len() - lag_max;
+    // The difference function and its cumulative mean normalized form.
+    let mut d = vec![0f64; lag_max + 2];
+    for (tau, slot) in d.iter_mut().enumerate().take(lag_max + 2).skip(1) {
+        if tau + width > frame.len() {
+            break;
+        }
+        *slot = (0..width).map(|j| {
+            let diff = (frame[j] - frame[j + tau]) as f64;
+            diff * diff
+        }).sum();
+    }
+    let mut cmnd = vec![1f64; d.len()];
+    let mut running = 0.0;
+    for tau in 1..d.len() {
+        running += d[tau];
+        cmnd[tau] = if running > 0.0 { d[tau] * tau as f64 / running } else { 1.0 };
+    }
+    let mut tau = lag_min;
+    while tau <= lag_max {
+        if cmnd[tau] < THRESHOLD {
+            while tau + 1 <= lag_max && cmnd[tau + 1] < cmnd[tau] {
+                tau += 1;
+            }
+            // Between the lags around the dip.
+            let (a, b, c) = (cmnd[tau - 1], cmnd[tau], cmnd[(tau + 1).min(d.len() - 1)]);
+            let shift = if a + c - 2.0 * b != 0.0 { 0.5 * (a - c) / (a + c - 2.0 * b) } else { 0.0 };
+            let period = tau as f64 + shift.clamp(-1.0, 1.0);
+            return Some((rate as f64 / period, b));
+        }
+        tau += 1;
+    }
+    None
+}
+
 /// A melody's notes in a key already known (the project's), each note that is
 /// not in tune going to its scale.
 pub fn melody_in(mono: &[f32], rate: f32, key: Key) -> Vec<NoteEvent> {
@@ -394,6 +439,24 @@ mod tests {
         let parts = [(0.2, 0.4, 57.0), (0.65, 0.4, 57.0)];
         let found = melody(&tone(44_100.0, &parts), 44_100.0, [0.0; 12], false).0;
         assert_eq!(found.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![57, 57], "{found:?}");
+    }
+
+    #[test]
+    fn live_pitch_follows_a_voice_as_it_comes_in() {
+        let rate = 48_000.0;
+        for (pitch, hz) in [(45.0, 110.0), (57.0, 220.0), (69.0, 440.0), (76.0, 659.26)] {
+            let audio = tone(rate, &[(0.0, 0.1, pitch)]);
+            let frame = &audio[1000..1000 + 2048];
+            let (found, unsure) = live(frame, rate, 65.0, 1100.0).expect("a pitch");
+            assert!((found / hz - 1.0).abs() < 0.005, "{hz}: {found}");
+            assert!(unsure < 0.1);
+        }
+        let silence = vec![0f32; 2048];
+        assert!(live(&silence, rate, 65.0, 1100.0).is_none());
+        // Noise has no pitch.
+        let mut seed = 7u32;
+        let noise: Vec<f32> = (0..2048).map(|_| { seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345); (seed >> 9) as f32 / (1u32 << 23) as f32 - 1.0 }).collect();
+        assert!(live(&noise, rate, 65.0, 1100.0).is_none());
     }
 
     #[test]

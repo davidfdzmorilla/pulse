@@ -304,6 +304,8 @@ pub struct PulseApp {
     pub guide: crate::guide::Guide,
     pub versions: crate::versions::Window,
     pub mix: crate::mix_assist::Assistant,
+    /// Playing with the voice (see `voice_play`).
+    pub voice: crate::voice_play::Voice,
     /// The accompaniment written last (see `accompany`).
     pub accompaniment: Option<crate::accompany::Generated>,
     /// The session clips playing while recording onto the arrangement.
@@ -459,6 +461,7 @@ impl PulseApp {
             guide: Default::default(),
             versions: Default::default(),
             mix: Default::default(),
+            voice: Default::default(),
             accompaniment: None,
             session_capture: None,
             settings: Default::default(),
@@ -1670,7 +1673,7 @@ impl PulseApp {
     }
 
     /// Opens the audio input (macOS asks for microphone permission the first time).
-    fn ensure_capture(&mut self) -> bool {
+    pub(crate) fn ensure_capture(&mut self) -> bool {
         if self.capture.is_some() {
             return true;
         }
@@ -1695,7 +1698,8 @@ impl PulseApp {
 
     /// Keeps the input flowing while audio tracks are armed; closes it otherwise.
     fn pump_capture(&mut self) {
-        let wanted = self.project.tracks.iter().any(|t| (t.armed && t.is_audio()) || t.monitors())
+        let wanted = self.voice.enabled
+            || self.project.tracks.iter().any(|t| (t.armed && t.is_audio()) || t.monitors())
             || self.recorder.session.iter().any(|take| self.project.tracks.get(take.track).is_some_and(|t| t.is_audio()));
         if !wanted {
             if self.capture.take().is_some() {
@@ -2503,6 +2507,7 @@ impl eframe::App for PulseApp {
         self.keyboard.handle(&ctx, live.as_ref());
         self.update_input_track();
         self.update_recording();
+        self.follow_voice(&ctx);
 
         let bar = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 5));
         egui::Panel::top("transport").frame(bar).show(ui, |ui| transport::show(self, ui));

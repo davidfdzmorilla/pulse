@@ -228,6 +228,38 @@ fn chord_events(mono: &[f32], rate: f32, audio: &AudioClip, tempo: f64, from: f6
     (events, key)
 }
 
+/// The chords of an audio clip, in its beats (half a bar at a time, equal ones
+/// run together), in `key` if known, else in the one it sounds in.
+pub fn audio_chords(sample: &engine::Sample, audio: &AudioClip, tempo: f64, key: Option<stems::key::Key>) -> Vec<(f64, f64, stems::chord::Chord)> {
+    let rate = sample.sample_rate;
+    let from = audio.offset.max(0.0);
+    let to = audio.source_seconds(audio.length, tempo).min(sample.duration());
+    let (a, b) = ((from * rate as f64) as usize, ((to * rate as f64) as usize).min(sample.frames()));
+    if b <= a + 64 {
+        return Vec::new();
+    }
+    let mono: Vec<f32> = sample.left[a..b].iter().zip(&sample.right[a..b]).map(|(l, r)| (l + r) * 0.5).collect();
+    let key = key.or_else(|| stems::key::Key::detect(&stems::key::chroma(&mono, rate)));
+    let gram = stems::chord::Chromagram::new(&mono, rate);
+    // Each stretch in beats and in seconds of `mono`.
+    let mut bounds: Vec<(f64, f64, f64, f64)> = Vec::new();
+    let mut beat = 0.0;
+    while beat < audio.length - 1e-9 {
+        let end = (beat + 2.0).min(audio.length);
+        bounds.push((beat, end, audio.source_seconds(beat, tempo) - from, audio.source_seconds(end, tempo) - from));
+        beat = end;
+    }
+    let stretches: Vec<(f64, f64)> = bounds.iter().map(|b| (b.2, b.3)).collect();
+    gram.chords(&stretches, key)
+        .into_iter()
+        .filter_map(|(s0, s1, chord)| {
+            let start = bounds.iter().find(|b| (b.2 - s0).abs() < 1e-9)?.0;
+            let end = bounds.iter().find(|b| (b.3 - s1).abs() < 1e-9)?.1;
+            Some((start, end, chord?))
+        })
+        .collect()
+}
+
 impl PulseApp {
     /// The rest of the song, for finding its key (see [`Context`]).
     fn key_context(&mut self, own: &str) -> Context {
@@ -517,6 +549,10 @@ mod tests {
         let expected = [(0.0, "Lam"), (4.0, "Fa"), (8.0, "Do"), (12.0, "Sol")].map(|(b, n)| (b, n.to_string()));
         assert_eq!(named, expected);
         assert_eq!(notes.len(), 16, "a bass and three notes each");
+        // The same chords in the clip's beats, for accompanying it.
+        let chords: Vec<(f64, f64, String)> = audio_chords(&sample, &audio, 120.0, None).into_iter().map(|(a, b, c)| (a, b, c.name())).collect();
+        let expected = [(0.0, 4.0, "Lam"), (4.0, 8.0, "Fa"), (8.0, 12.0, "Do"), (12.0, 16.0, "Sol")].map(|(a, b, n)| (a, b, n.to_string()));
+        assert_eq!(chords, expected);
     }
 
     /// «Detectar»: the key the MIDI clips play in, leaving the drums out.

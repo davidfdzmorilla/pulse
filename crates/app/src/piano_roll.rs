@@ -180,6 +180,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     // One row per drum sound or pad, the lowest note at the bottom.
     let drum_rows = if is_drums { app.project.tracks[t].drum_rows() } else { Vec::new() };
     let key = app.project.key.filter(|_| !is_drums);
+    // The accompaniment just written can be written again, another way.
+    let mut vary = app.can_vary(clip_ref).then_some(false);
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     let state = &mut app.piano_roll;
     if state.selection_clip != Some(clip_ref) {
@@ -196,7 +198,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let before = clip.clone();
     let mut previews: Vec<u8> = Vec::new();
 
-    previews.extend(toolbar(ui, state, clip, key, is_drums));
+    previews.extend(toolbar(ui, state, clip, key, is_drums, &mut vary));
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
     if keys_enabled {
@@ -551,6 +553,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
 
     let changed = *clip != before;
+    if vary == Some(true) {
+        app.vary_accompaniment();
+        return;
+    }
     for pitch in previews {
         app.audio.send(Command::PreviewNote { track: t, pitch, velocity: 0.8 });
     }
@@ -595,9 +601,14 @@ fn to_scale(notes: &mut [Note], targets: &[usize], scale: Scale) -> usize {
 }
 
 /// The editor's bar; the pitches of any chord written, to preview.
-fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool) -> Vec<u8> {
+fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool, vary: &mut Option<bool>) -> Vec<u8> {
     let mut previews = Vec::new();
     ui.horizontal_wrapped(|ui| {
+        if let Some(asked) = vary.as_mut() {
+            if widgets::flat_button(ui, "Otra variación", true, vec2(104.0, 20.0)).on_hover_text("Escribe este acompañamiento de otra manera, sobre los mismos acordes").clicked() {
+                *asked = true;
+            }
+        }
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
         ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
         ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(110.0));

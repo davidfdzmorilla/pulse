@@ -1,3 +1,4 @@
+mod accompany;
 mod als;
 mod app;
 mod arrangement;

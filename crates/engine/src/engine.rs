@@ -237,6 +237,8 @@ pub enum Command {
     SetGroups([Option<u8>; MAX_TRACKS]),
     /// Each track's id (what sidechains name their source by; 0 for none).
     SetTrackIds([u32; MAX_TRACKS]),
+    /// A MIDI track's MIDI effects, in order (keys already filled in).
+    SetMidiEffects { track: usize, devices: [Option<crate::model::MidiDevice>; crate::model::MAX_MIDI_EFFECTS] },
     LaunchScene(usize),
     StopAllClips,
     /// Returns every track from session clips to its arrangement.
@@ -748,7 +750,7 @@ impl Expression {
 }
 
 #[derive(Clone, Copy)]
-enum Event {
+pub(crate) enum Event {
     AllNotesOff,
     NoteOn { pitch: u8, velocity: f32, gate: u32 },
     NoteOff { pitch: u8 },
@@ -756,9 +758,9 @@ enum Event {
 }
 
 /// (frame offset, sort rank, event). Pre-allocated; never grows on the audio thread.
-type EventQueue = Vec<(usize, u8, Event)>;
+pub(crate) type EventQueue = Vec<(usize, u8, Event)>;
 
-fn push_event(events: &mut EventQueue, frame: usize, event: Event) {
+pub(crate) fn push_event(events: &mut EventQueue, frame: usize, event: Event) {
     if events.len() < MAX_EVENTS {
         let rank = match event {
             Event::AllNotesOff => 0,
@@ -1086,6 +1088,8 @@ struct Track {
     audio_left: Vec<f32>,
     audio_right: Vec<f32>,
     events: EventQueue,
+    /// What its notes go through before the instrument.
+    midi_fx: crate::midi_fx::MidiChain,
     /// Pitch bend and modulation wheel for the built-in instruments.
     expression: Expression,
     armed: bool,
@@ -1134,6 +1138,7 @@ impl Track {
             audio_left: vec![0.0; MAX_BLOCK],
             audio_right: vec![0.0; MAX_BLOCK],
             events: Vec::with_capacity(MAX_EVENTS),
+            midi_fx: crate::midi_fx::MidiChain::new(MAX_EVENTS),
             expression: Expression::default(),
             armed: false,
             monitor: false,
@@ -1610,6 +1615,11 @@ impl Engine {
                 }
             }
             Command::SetTrackIds(ids) => self.ids = ids,
+            Command::SetMidiEffects { track, devices } => {
+                if let Some(t) = self.tracks.get_mut(track) {
+                    t.midi_fx.set(devices);
+                }
+            }
             Command::LaunchScene(slot) => {
                 if slot >= NUM_SCENES {
                     return;
@@ -1929,6 +1939,10 @@ impl Engine {
             left.fill(0.0);
             right.fill(0.0);
             track.events.sort_unstable_by_key(|&(frame, rank, _)| (frame, rank));
+            if !track.midi_fx.is_empty() {
+                let timing = crate::midi_fx::Timing { sample_rate: sr, tempo: self.tempo, beat: ctx.beat, beats_per_sample: ctx.beats_per_sample };
+                track.midi_fx.process(&mut track.events, n, timing);
+            }
             track.instrument.set_tempo(self.tempo);
             let mut cursor = 0;
             for &(frame, _, event) in &track.events {

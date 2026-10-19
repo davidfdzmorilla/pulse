@@ -7,6 +7,7 @@ mod engine;
 mod input;
 mod instruments;
 mod kick;
+mod midi_fx;
 mod offline;
 pub mod model;
 pub mod plugin;

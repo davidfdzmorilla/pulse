@@ -82,7 +82,7 @@ pub(crate) enum Action {
 const PLUGIN_KNOBS: usize = 6;
 
 /// Draws a device frame with a title bar and returns the body's UI result.
-fn device_frame<R>(
+pub(crate) fn device_frame<R>(
     ui: &mut egui::Ui,
     title: &str,
     width: f32,
@@ -137,6 +137,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.spacing_mut().item_spacing.x = 4.0;
             if let Target::Track(t) = target {
                 if !app.project.tracks[t].is_audio() && !app.project.tracks[t].is_group() {
+                    crate::midi_fx_ui::show(app, ui, t);
                     instrument_device(app, ui, t, &mut actions, &mut zones);
                 }
             }

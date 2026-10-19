@@ -27,6 +27,7 @@ mod kits;
 mod library;
 mod loop_key;
 mod midi_map;
+mod mix_assist;
 mod multisample;
 mod modular_ui;
 mod native_menu;

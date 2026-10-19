@@ -80,6 +80,7 @@ impl PulseApp {
                     "shortcuts" => self.open_panel(crate::app::Panel::Shortcuts),
                     "guide" => self.open_panel(crate::app::Panel::Guide),
                     "versions" => self.open_panel(crate::app::Panel::Versions),
+                    "mix" => self.open_panel(crate::app::Panel::Mix),
                     "updates" => self.open_panel(crate::app::Panel::Updates),
                     "export" => self.open_panel(crate::app::Panel::Export),
                     "tables" => crate::table_editor::open(self, track, 0),

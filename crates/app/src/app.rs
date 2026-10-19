@@ -155,6 +155,7 @@ pub enum Panel {
     Shortcuts,
     Guide,
     Versions,
+    Mix,
     Updates,
     Export,
 }
@@ -302,6 +303,7 @@ pub struct PulseApp {
     pub show_shortcuts: bool,
     pub guide: crate::guide::Guide,
     pub versions: crate::versions::Window,
+    pub mix: crate::mix_assist::Assistant,
     /// The accompaniment written last (see `accompany`).
     pub accompaniment: Option<crate::accompany::Generated>,
     /// The session clips playing while recording onto the arrangement.
@@ -456,6 +458,7 @@ impl PulseApp {
             show_shortcuts: false,
             guide: Default::default(),
             versions: Default::default(),
+            mix: Default::default(),
             accompaniment: None,
             session_capture: None,
             settings: Default::default(),
@@ -993,6 +996,7 @@ impl PulseApp {
         self.show_shortcuts = panel == Panel::Shortcuts;
         self.guide.open = panel == Panel::Guide;
         self.versions.open = panel == Panel::Versions;
+        self.mix.open = panel == Panel::Mix;
         self.updates.show = panel == Panel::Updates;
         self.export.open = panel == Panel::Export;
     }
@@ -2542,10 +2546,12 @@ impl eframe::App for PulseApp {
         crate::commands::shortcuts_window(self, &ctx);
         crate::guide::window(self, &ctx);
         crate::versions::window(self, &ctx);
+        crate::mix_assist::window(self, &ctx);
         crate::settings::window(self, &ctx);
         self.follow_updates();
         self.follow_stems(&ctx);
         self.follow_to_midi(&ctx);
+        self.follow_mix(&ctx);
         self.follow_tempo(&ctx);
         self.show_notice(&ctx);
         crate::updates::window(self, &ctx);

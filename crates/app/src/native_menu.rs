@@ -52,6 +52,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Run(C::ImportLive, "Importar set de Live (.als)…", "i"),
             Run(C::ImportAudio, "Importar audio…", ""),
             Run(C::Export, "Exportar audio…", "⇧r"),
+            Run(C::MixAssistant, "Asistente de mezcla y master…", ""),
             Separator,
             Run(C::ShowFolder, "Mostrar la carpeta de Pulse", ""),
         ],

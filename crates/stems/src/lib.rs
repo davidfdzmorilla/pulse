@@ -10,6 +10,7 @@
 
 pub mod chord;
 pub mod key;
+pub mod loudness;
 pub mod pitch;
 pub mod transcribe;
 

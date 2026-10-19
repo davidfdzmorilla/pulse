@@ -20,6 +20,8 @@ use std::sync::atomic::Ordering;
 
 const HEADER_W: f32 = 150.0;
 const LOOP_H: f32 = 12.0;
+/// The markers' strip, between the loop's and the ruler.
+const MARKER_H: f32 = 15.0;
 const RULER_H: f32 = 20.0;
 const LANE_H: f32 = 52.0;
 const EDGE_GRAB: f32 = 6.0;
@@ -29,6 +31,8 @@ const TAKE_H: f32 = 24.0;
 
 #[derive(Clone, Debug)]
 enum Drag {
+    /// A marker grabbed: dragged it moves, let go without moving it jumps there.
+    Marker { index: usize, moved: bool },
     /// The selected clips, grabbed at `grab` (beat) on `grab_track`. They are laid
     /// out again from `snapshot` (every lane before the drag) each time the offset
     /// changes; `applied` is the offset in place (beats, tracks).
@@ -81,6 +85,10 @@ enum Menu {
     /// An empty place on a track, at a beat (snapped to the grid).
     Lane { track: usize, beat: f64 },
     Automation { track: usize, param: Param },
+    /// A marker.
+    Marker(usize),
+    /// The markers' strip, at a beat (snapped).
+    Markers(f64),
 }
 
 impl Default for State {
@@ -241,7 +249,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
     }
     let layout = Layout::new(app);
-    let lanes_height = LOOP_H + RULER_H + layout.height;
+    let lanes_height = LOOP_H + MARKER_H + RULER_H + layout.height;
     let mut headers = Vec::new();
     let mut clip_rects = Vec::new();
     let mut lane_rects = Vec::new();
@@ -252,7 +260,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         // Track headers.
         ui.vertical(|ui| {
             ui.set_width(HEADER_W);
-            ui.add_space(LOOP_H + RULER_H);
+            ui.add_space(LOOP_H + MARKER_H + RULER_H);
             for t in (0..tracks).filter(|&t| layout.shown(t)) {
                 headers.push((t, track_header(app, ui, t, layout.rows[t].1, layout.rows[t].2)));
             }
@@ -273,7 +281,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             crate::widgets::name(&response, egui::WidgetType::Other, "Línea de tiempo");
             let painter = ui.painter_at(rect);
             let x_at = |beat: f64| rect.left() + beat as f32 * ppb;
-            let lanes_top = rect.top() + LOOP_H + RULER_H;
+            let lanes_top = rect.top() + LOOP_H + MARKER_H + RULER_H;
             let lane_rect = |t: usize| {
                 Rect::from_min_size(pos2(rect.left(), lanes_top + layout.rows[t].0), vec2(rect.width(), LANE_H))
             };
@@ -308,11 +316,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 painter.line_segment([pos2(x, lanes_top), pos2(x, rect.bottom())], Stroke::new(1.0, color));
                 if bar && (beat / 4) % label_every == 0 {
                     painter.line_segment(
-                        [pos2(x, rect.top() + LOOP_H + 8.0), pos2(x, lanes_top)],
+                        [pos2(x, rect.top() + LOOP_H + MARKER_H + 8.0), pos2(x, lanes_top)],
                         Stroke::new(1.0, TEXT_DIM),
                     );
                     painter.text(
-                        pos2(x + 3.0, rect.top() + LOOP_H + 2.0),
+                        pos2(x + 3.0, rect.top() + LOOP_H + MARKER_H + 2.0),
                         Align2::LEFT_TOP,
                         (beat / 4 + 1).to_string(),
                         theme::small(),
@@ -418,7 +426,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             };
             let x = x_at(position);
             painter.line_segment([pos2(x, rect.top() + LOOP_H), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::WHITE));
-            widgets::play_triangle(&painter, pos2(x, rect.top() + LOOP_H + RULER_H - 6.0), 8.0, Color32::WHITE);
+            widgets::play_triangle(&painter, pos2(x, rect.top() + LOOP_H + MARKER_H + RULER_H - 6.0), 8.0, Color32::WHITE);
+            paint_markers(app, &painter, rect, &x_at);
             // Region being recorded on armed tracks.
             if let Some(take) = &app.recorder.arrangement {
                 for t in (0..tracks).filter(|&t| app.project.tracks[t].armed && !app.project.tracks[t].is_audio()) {
@@ -883,6 +892,90 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
     });
 }
 
+/// The markers: a flag and its name in their strip, a faint line down the lanes.
+fn paint_markers(app: &PulseApp, painter: &egui::Painter, rect: Rect, x_at: &dyn Fn(f64) -> f32) {
+    let top = rect.top() + LOOP_H;
+    for marker in &app.project.markers {
+        let x = x_at(marker.beat);
+        painter.line_segment([pos2(x, top), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::from_rgba_unmultiplied(255, 168, 36, 50)));
+        let flag = egui::Shape::convex_polygon(vec![pos2(x, top + 1.0), pos2(x + 7.0, top + 1.0), pos2(x + 7.0, top + MARKER_H - 4.0), pos2(x, top + MARKER_H - 1.0)], ACCENT, Stroke::NONE);
+        painter.add(flag);
+        painter.text(pos2(x + 10.0, top + MARKER_H / 2.0), Align2::LEFT_CENTER, &marker.name, theme::small(), TEXT);
+    }
+}
+
+/// The marker under `x`, if any (its flag and name).
+fn marker_at(app: &PulseApp, x: f32, origin_x: f32) -> Option<usize> {
+    let ppb = app.arrangement.pixels_per_beat;
+    app.project.markers.iter().enumerate().rev().find_map(|(i, m)| {
+        let mx = origin_x + m.beat as f32 * ppb;
+        let width = 12.0 + m.name.chars().count() as f32 * 6.0;
+        (x >= mx - 3.0 && x <= mx + width).then_some(i)
+    })
+}
+
+/// Clicks and drags in the markers' strip: a click on a marker jumps there,
+/// dragging moves it, a double click on empty space adds one, a right click
+/// opens its menu. Returns whether it took the pointer.
+#[allow(clippy::too_many_arguments)]
+fn handle_markers(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, rect: Rect, pos: egui::Pos2, beat: f64, unit: f64, origin_x: f32) -> bool {
+    let strip = pos.y >= rect.top() + LOOP_H && pos.y < rect.top() + LOOP_H + MARKER_H;
+    if let Some(Drag::Marker { index, moved }) = app.arrangement.drag {
+        if response.dragged() {
+            if let Some(marker) = app.project.markers.get_mut(index) {
+                let to = snap(beat, unit);
+                if (to - marker.beat).abs() > 1e-9 {
+                    marker.beat = to;
+                    app.arrangement.drag = Some(Drag::Marker { index, moved: true });
+                }
+            }
+        }
+        if ui.input(|i| i.pointer.primary_released()) {
+            if !moved {
+                if let Some(marker) = app.project.markers.get(index) {
+                    app.audio.send(Command::SetPosition(marker.beat));
+                }
+            }
+            app.project.markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+            app.arrangement.drag = None;
+        }
+        return true;
+    }
+    if !strip {
+        return false;
+    }
+    let under = marker_at(app, pos.x, origin_x);
+    if response.secondary_clicked() {
+        app.arrangement.menu = Some(match under {
+            Some(i) => Menu::Marker(i),
+            None => Menu::Markers(snap(beat, unit)),
+        });
+        return true;
+    }
+    if response.double_clicked() && under.is_none() {
+        app.add_marker(snap(beat, unit));
+        return true;
+    }
+    if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
+        if let Some(index) = under {
+            app.arrangement.drag = Some(Drag::Marker { index, moved: false });
+        }
+    }
+    if under.is_some() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    true
+}
+
+impl PulseApp {
+    /// A new marker at `beat`, named after how many there are.
+    pub fn add_marker(&mut self, beat: f64) {
+        let name = format!("Marcador {}", self.project.markers.len() + 1);
+        self.project.markers.push(crate::project::SongMarker { beat, name });
+        self.project.markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    }
+}
+
 /// The right-click menu of the timeline: for a clip, an empty place on a track,
 /// or an automation lane.
 fn context_menu(app: &mut PulseApp, response: &egui::Response) {
@@ -892,6 +985,26 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
             return;
         };
         match menu {
+            Menu::Marker(i) => {
+                let Some(marker) = app.project.markers.get_mut(i) else { return ui.close() };
+                ui.label("Nombre");
+                ui.text_edit_singleline(&mut marker.name);
+                let beat = marker.beat;
+                if ui.button("Ir aquí").clicked() {
+                    app.audio.send(Command::SetPosition(beat));
+                    ui.close();
+                }
+                if ui.button("Eliminar marcador").clicked() {
+                    app.project.markers.remove(i);
+                    ui.close();
+                }
+            }
+            Menu::Markers(beat) => {
+                if ui.button("Añadir marcador aquí").clicked() {
+                    app.add_marker(beat);
+                    ui.close();
+                }
+            }
             Menu::Clip(clip, beat) => clip_menu(app, ui, clip, beat),
             Menu::Lane { track, beat } => {
                 let Some(t) = app.project.tracks.get(track) else { return ui.close() };
@@ -1085,6 +1198,10 @@ fn handle_pointer(
         let top = lanes_top + top + LANE_H + 1.0 + takes_height(takes);
         Some((t, param, Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), AUTO_H))))
     });
+    // The markers' strip: its own clicks and drags.
+    if handle_markers(app, ui, response, rect, pos, beat, unit, origin_x) {
+        return;
+    }
     // A right-click picks what the menu is about (and selects a clip not selected).
     if response.secondary_clicked() {
         app.arrangement.menu = match (lane, automation) {
@@ -1249,7 +1366,7 @@ fn handle_pointer(
             Some(Drag::Scrub) => {
                 app.audio.send(Command::SetPosition(snap(beat, unit)));
             }
-            Some(Drag::Point { .. } | Drag::Bend { .. } | Drag::Comp { .. }) | None => {}
+            Some(Drag::Point { .. } | Drag::Bend { .. } | Drag::Comp { .. } | Drag::Marker { .. }) | None => {}
         }
     }
 
@@ -1471,7 +1588,7 @@ mod tests {
 
     /// Lane `t` at `beat`, with no automation lanes shown above it.
     fn at(app: &PulseApp, t: usize, beat: f64) -> Pos2 {
-        pos2(150.0 + beat as f32 * app.arrangement.pixels_per_beat, 81.0 + t as f32 * 53.0)
+        pos2(150.0 + beat as f32 * app.arrangement.pixels_per_beat, 96.0 + t as f32 * 53.0)
     }
 
     fn app() -> PulseApp {
@@ -1514,6 +1631,41 @@ mod tests {
         screen.menu(&mut app, other, "Pegar aquí");
         let lane: Vec<f64> = app.project.tracks[2].arrangement.iter().map(|c| c.start).collect();
         assert_eq!(lane, vec![13.0], "where it was right-clicked (on the grid)");
+    }
+
+    /// The markers' strip: a double click adds one, dragging moves it, a click
+    /// jumps there.
+    #[test]
+    fn markers_are_added_moved_and_jumped_to() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        screen.frame(&mut app, vec![]);
+        let ppb = app.arrangement.pixels_per_beat;
+        // The strip is under the loop's (12 px), at the top of the timeline (x 150,
+        // y about 22 under the toolbar).
+        let strip = |beat: f64| pos2(150.0 + beat as f32 * ppb + 2.0, 22.5 + 12.0 + 7.0);
+        screen.click(&mut app, strip(8.0), PointerButton::Primary);
+        let at = strip(8.0);
+        let press = |pressed| egui::Event::PointerButton { pos: at, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        screen.frame(&mut app, vec![press(true)]);
+        screen.frame(&mut app, vec![press(false)]);
+        screen.frame(&mut app, vec![]);
+        assert_eq!(app.project.markers.len(), 1, "a double click adds one");
+        assert_eq!(app.project.markers[0].beat, 8.0);
+        assert_eq!(app.project.markers[0].name, "Marcador 1");
+        // Dragged to beat 16.
+        let (from, to) = (strip(8.0), strip(16.0));
+        let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        screen.frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+        screen.frame(&mut app, vec![button(from, true)]);
+        for k in 1..=6 {
+            screen.frame(&mut app, vec![egui::Event::PointerMoved(from + (to - from) * k as f32 / 6.0)]);
+        }
+        screen.frame(&mut app, vec![button(to, false)]);
+        assert_eq!(app.project.markers[0].beat, 16.0);
+        // The texts show its name.
+        let texts = screen.frame(&mut app, vec![]);
+        assert!(texts.iter().any(|(t, _)| t == "Marcador 1"));
     }
 
     /// The master's row, last, opens its automation on the tempo.
@@ -1574,7 +1726,7 @@ mod tests {
             let _ = screen.ctx.run_ui(input, |ui| show(app, ui));
         };
         // The middle of the stretch, in track 1's automation lane (under its clips).
-        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 55.0 + 53.0 + 53.0 + 40.0);
+        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 70.0 + 53.0 + 53.0 + 40.0);
         let to = from - vec2(0.0, 30.0);
         let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::ALT };
         frame(&mut app, vec![egui::Event::PointerMoved(from)]);

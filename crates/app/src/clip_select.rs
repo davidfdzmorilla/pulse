@@ -598,7 +598,7 @@ mod tests {
     fn arrangement_clips_are_selected_and_dragged_with_the_mouse() {
         let view = crate::arrangement::show as fn(&mut PulseApp, &mut egui::Ui);
         let ppb = PulseApp::headless(Project::demo()).arrangement.pixels_per_beat;
-        let at = |t: usize, beat: f64| pos2(150.0 + beat as f32 * ppb, 81.0 + t as f32 * 53.0);
+        let at = |t: usize, beat: f64| pos2(150.0 + beat as f32 * ppb, 96.0 + t as f32 * 53.0);
         let mut app = empty_tracks();
         for (t, start) in [(0, 0.0), (1, 8.0)] {
             let clip = midi(&app, &format!("c{t}"));

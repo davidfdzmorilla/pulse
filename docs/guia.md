@@ -95,6 +95,14 @@ La línea de tiempo. Arriba la **franja del loop**, debajo la **regla** con los 
 - Al dar la vuelta, las notas de los clips terminan en el final del loop; las que mantienes en el teclado siguen sonando.
 - **Clic en la regla**: mueve el cursor y el marcador de inicio. **Arrastrar en la regla**: recorre la canción.
 
+### Marcadores
+
+La franja bajo la del loop tiene los **marcadores**: las partes de la canción con su nombre.
+
+- **Doble clic** en la franja: un marcador nuevo ahí. **Clic** en uno: el cursor salta a él. **Arrastrar**: lo mueve (por la rejilla).
+- **Clic derecho** en un marcador: renombrarlo, **Ir aquí** o eliminarlo; en la franja vacía, **Añadir marcador aquí**.
+- El **Arreglo automático** pone uno en cada parte, y al importar de Live llegan sus locators.
+
 ### Clips
 
 - **Doble clic en un hueco**: en una pista MIDI crea un clip vacío de un compás; en una de audio abre el selector de archivos.
@@ -184,7 +192,7 @@ Cuando tienes las ideas en escenas de Session, **Crear → Arreglo automático�
 - Cada parte lleva solo las pistas que le tocan según su **papel**, que Pulse deduce del instrumento, el nombre y las notas (batería, bajo, armonía, melodía): sin bajo en la intro, sin batería en el break… En el estribillo o el drop suena todo: si una pista no tiene clip en esa escena, trae el suyo de otra.
 - **Subidas**: el último compás de la batería es un **redoble** de caja que acelera y crece. **Cortes**: el último tiempo antes del drop, en silencio, para que entre con fuerza.
 - Antes de crearla, en la tabla puedes cambiar los **compases** de cada parte, **qué pistas suenan** en cada una (casillas) y los redobles y cortes.
-- **Crear** sustituye lo que hubiera en el Arrangement (⌘Z lo recupera), pone el loop en toda la canción y te lleva al Arrangement.
+- **Crear** sustituye lo que hubiera en el Arrangement (⌘Z lo recupera), pone un **marcador** con el nombre de cada parte, el loop en toda la canción, y te lleva al Arrangement.
 
 ## Grabar
 
@@ -695,6 +703,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - Se importan: tempo, loop, escenas, pistas MIDI y de audio (nombre, color, volumen, panorama, envíos, activador, solo) y los clips de Session y del Arrangement, con sus notas o sus muestras y su warp.
 - Los Drum Racks con muestras pasan al Drum Rack de Pulse; Simpler y Sampler, al Sampler.
 - Los **grupos** llegan como grupos de Pulse, con sus pistas dentro y su mezclador.
+- Los **locators** llegan como marcadores.
 - No se importan los sintes de Live (esas pistas reciben Pulse Synth), los efectos ni la automatización.
 - Las muestras se buscan por ruta y, si el set viene de otro ordenador, por nombre en la carpeta del set.
 

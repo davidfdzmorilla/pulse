@@ -258,7 +258,7 @@ impl PulseApp {
         let context = self.key_context("");
         match stems::key::Key::detect_clearly(&context.weights()) {
             Some((key, clarity)) => {
-                self.project.key = Some(key);
+                self.set_key(Some(key));
                 self.status = Some(if clarity >= CLEAR_KEY {
                     format!("La canción está en {}", key.name())
                 } else {
@@ -423,6 +423,7 @@ mod tests {
             original_bpm: 120.0,
             warp_markers: Vec::new(),
             takes: Vec::new(),
+            key: None,
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),
@@ -450,6 +451,7 @@ mod tests {
             warp: engine::model::WarpMode::Stretch,
             original_bpm: 120.0,
             warp_markers: Vec::new(),
+            key: None,
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
@@ -500,6 +502,7 @@ mod tests {
             offset: 0.0,
             warp: engine::model::WarpMode::Stretch,
             original_bpm: 120.0,
+            key: None,
             warp_markers: Vec::new(),
             takes: Vec::new(),
             gain_db: 0.0,
@@ -555,6 +558,7 @@ mod tests {
             length: 8.0,
             offset: 0.0,
             warp: engine::model::WarpMode::Stretch,
+            key: None,
             original_bpm: 120.0,
             warp_markers: Vec::new(),
             takes: Vec::new(),

@@ -143,6 +143,20 @@ pub struct AudioClip {
     /// playing); the clip's menu swaps them.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub takes: Vec<String>,
+    /// The file's key, if it has one (from its name or heard), and whether the
+    /// clip is transposed to follow the project's.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<ClipKey>,
+}
+
+/// The key an audio file is in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ClipKey {
+    /// Pitch class of the tonic (0 = C).
+    pub tonic: u8,
+    pub minor: bool,
+    /// Transposed to the project's key (see the app's `loop_key`).
+    pub follow: bool,
 }
 
 /// A point of an audio file (`seconds`) pinned to a beat of the file's own beat
@@ -6411,6 +6425,7 @@ mod tests {
             original_bpm: 120.0,
             warp_markers: Vec::new(),
             takes: Vec::new(),
+            key: None,
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

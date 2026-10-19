@@ -396,6 +396,7 @@ mod tests {
             original_bpm: 120.0,
             warp_markers: Vec::new(),
             takes: Vec::new(),
+            key: None,
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

@@ -27,21 +27,22 @@ impl Key {
         if weights.iter().sum::<f64>() <= 0.0 {
             return None;
         }
-        let correlation = |profile: &[f64; 12], tonic: usize| {
-            let x: Vec<f64> = (0..12).map(|i| weights[(i + tonic) % 12]).collect();
-            let (mx, my) = (x.iter().sum::<f64>() / 12.0, profile.iter().sum::<f64>() / 12.0);
-            let (mut num, mut sx, mut sy) = (0.0, 0.0, 0.0);
-            for i in 0..12 {
-                num += (x[i] - mx) * (profile[i] - my);
-                sx += (x[i] - mx).powi(2);
-                sy += (profile[i] - my).powi(2);
-            }
-            num / (sx * sy).sqrt().max(1e-12)
-        };
-        (0..12)
-            .flat_map(|tonic| [(tonic, false), (tonic, true)])
-            .map(|(tonic, minor)| (Key { tonic: tonic as u8, minor }, correlation(if minor { &MINOR } else { &MAJOR }, tonic)))
-            .max_by(|a, b| a.1.total_cmp(&b.1))
+        Key::all().map(|key| (key, key.fit(weights))).max_by(|a, b| a.1.total_cmp(&b.1))
+    }
+
+    /// How well `weights` (C first) fit this key: the correlation with its
+    /// profile, -1..1.
+    pub fn fit(&self, weights: &[f64; 12]) -> f64 {
+        let profile = if self.minor { &MINOR } else { &MAJOR };
+        let x: Vec<f64> = (0..12).map(|i| weights[(i + self.tonic as usize) % 12]).collect();
+        let (mx, my) = (x.iter().sum::<f64>() / 12.0, profile.iter().sum::<f64>() / 12.0);
+        let (mut num, mut sx, mut sy) = (0.0, 0.0, 0.0);
+        for i in 0..12 {
+            num += (x[i] - mx) * (profile[i] - my);
+            sx += (x[i] - mx).powi(2);
+            sy += (profile[i] - my).powi(2);
+        }
+        num / (sx * sy).sqrt().max(1e-12)
     }
 
     /// Whether each pitch class (C first) is in the scale (natural minor).

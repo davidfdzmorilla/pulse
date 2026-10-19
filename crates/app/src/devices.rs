@@ -141,6 +141,15 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
 
+            // The tracks a compressor or ducker can listen to: the others.
+            let sources: Vec<(u32, String)> = app
+                .project
+                .tracks
+                .iter()
+                .enumerate()
+                .filter(|&(t, track)| target != Target::Track(t) && track.id != 0)
+                .map(|(_, track)| (track.id, track.name.clone()))
+                .collect();
             let count = app.devices(target).len();
             for index in 0..count {
                 let before = app.devices(target)[index];
@@ -175,7 +184,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                             crate::plugins::device_body(app, ui, target, &as_param, id, PLUGIN_KNOBS, &mut actions);
                             return;
                         }
-                        discrete_controls(ui, effect, index);
+                        discrete_controls(ui, effect, index, &sources);
                         for (param, info) in effect.params().iter().enumerate() {
                             let id = Param::Device { device: index, param };
                             let value = app.display_value(target, id);
@@ -347,7 +356,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
     // Knobs are 46 px wide plus spacing; option columns (combos, radios) take about 96 px.
     let (knobs, columns) = match effect {
         Effect::Eq3(_) => (5, 0),
-        Effect::Compressor(_) => (5, 0),
+        Effect::Compressor(_) => (5, 1),
         Effect::Delay(_) => (3, 1),
         Effect::Reverb(_) => (4, 0),
         Effect::Saturator(_) => (3, 0),
@@ -374,9 +383,30 @@ fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) {
         });
 }
 
+/// A compressor's or ducker's sidechain: none, or the track it listens to.
+fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources: &[(u32, String)]) {
+    ui.label(egui::RichText::new("Sidechain").color(TEXT_DIM).size(10.5));
+    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Ninguno", |(_, name)| name.as_str());
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(current)
+        .width(84.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, "Ninguno");
+            for (track, name) in sources {
+                ui.selectable_value(value, Some(*track), name);
+            }
+        })
+        .response
+        .on_hover_text("La pista que lo dispara: escucha su sonido (tras sus efectos, aunque esté silenciada) en vez del propio. Con el bombo, el bajo o el pad se apartan cuando suena");
+}
+
 /// Settings that are choices rather than knobs: time divisions, modes, switches.
-pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize) {
+/// `sources` are the tracks a sidechain can listen to (id and name).
+pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize, sources: &[(u32, String)]) {
     match effect {
+        Effect::Compressor(p) if !sources.is_empty() => {
+            ui.vertical(|ui| sidechain_combo(ui, &format!("comp_sc{index}"), &mut p.sidechain, sources));
+        }
         Effect::Delay(p) => {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Tiempo").color(TEXT_DIM).size(10.5));
@@ -398,8 +428,11 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         }
         Effect::Ducker(p) => {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Ritmo").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(if p.sidechain.is_some() { "Release" } else { "Ritmo" }).color(TEXT_DIM).size(10.5));
                 beats_combo(ui, &format!("ducker{index}"), &mut p.rate_beats, &[0.25, 0.5, 1.0, 2.0, 4.0]);
+                if !sources.is_empty() {
+                    sidechain_combo(ui, &format!("duck_sc{index}"), &mut p.sidechain, sources);
+                }
             });
         }
         Effect::Eq3(_)

@@ -695,7 +695,7 @@ pub(crate) fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &m
                                 remove = ui.small_button("×").clicked();
                             });
                             ui.horizontal(|ui| {
-                                devices::discrete_controls(ui, &mut edited.effect, 100 + slot);
+                                devices::discrete_controls(ui, &mut edited.effect, 100 + slot, &[]);
                                 ui.spacing_mut().item_spacing.x = 0.0;
                                 for (i, info) in device.effect.params().iter().enumerate() {
                                     if let Some(v) = widgets::param_knob(ui, info, device.effect.get(i), info.name, 26.0, None) {

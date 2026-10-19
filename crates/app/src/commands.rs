@@ -41,6 +41,8 @@ pub enum Command {
     NewAudioTrack,
     DuplicateTrack,
     DeleteTrack,
+    GroupTracks,
+    Ungroup,
     ShowSession,
     ShowArrangement,
     ToggleDetail,
@@ -82,7 +84,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 31] = [
+pub const SHORTCUTS: [(&str, &str); 33] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -98,6 +100,8 @@ pub const SHORTCUTS: [(&str, &str); 31] = [
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),
     ("⌘T / ⇧⌘T", "Nueva pista MIDI / de audio"),
+    ("⌘G", "Agrupar las pistas seleccionadas"),
+    ("⇧⌘G", "Desagrupar el grupo seleccionado"),
     ("⌘ clic / ⇧ clic", "Seleccionar varias pistas (en sus cabeceras) o varios clips"),
     ("Arrastrar cabecera", "Mover las pistas seleccionadas"),
     ("Arrastrar en un hueco", "Seleccionar clips y pistas con un recuadro"),
@@ -137,7 +141,8 @@ impl PulseApp {
             Command::Split | Command::Join => matches!(self.selected_clip, Some(crate::app::ClipRef::Arrangement { .. })),
             Command::Paste => self.clip_clipboard.is_some() || editing_notes,
             Command::SelectAll => editing_notes,
-            Command::DuplicateTrack | Command::DeleteTrack => track,
+            Command::DuplicateTrack | Command::DeleteTrack | Command::GroupTracks => track,
+            Command::Ungroup => matches!(self.selected_target, Target::Track(t) if self.project.tracks.get(t).is_some_and(|t| t.is_group())),
             _ => true,
         }
     }
@@ -250,6 +255,12 @@ impl PulseApp {
             }
             Command::DuplicateTrack => self.duplicate_selected_tracks(),
             Command::DeleteTrack => self.delete_selected_tracks(),
+            Command::GroupTracks => self.group_selected(),
+            Command::Ungroup => {
+                if let Target::Track(t) = self.selected_target {
+                    self.ungroup(t);
+                }
+            }
             Command::ShowSession => self.view = View::Session,
             Command::ShowArrangement => self.view = View::Arrangement,
             Command::ToggleDetail => {

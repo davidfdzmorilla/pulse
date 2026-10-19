@@ -114,6 +114,15 @@ pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport
     }
 
     project.scene_names = scene_names(set);
+    // Live's locators: the markers.
+    if let Some(locators) = path(set, &["Locators", "Locators"]) {
+        for locator in locators.children().filter(|n| n.has_tag_name("Locator")) {
+            let Some(beat) = number(locator, &["Time"]) else { continue };
+            let name = value(locator, &["Name"]).map_or_else(|| format!("Marcador {}", project.markers.len() + 1), str::to_string);
+            project.markers.push(crate::project::SongMarker { beat: beat.max(0.0), name });
+        }
+        project.markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    }
 
     let ctx = Context { base, tempo: project.tempo };
     let tracks = child(set, "Tracks").map(|t| t.children().filter(Node::is_element).collect::<Vec<_>>());
@@ -735,6 +744,20 @@ mod tests {
         assert_eq!(project.scene_names[0], "Verse");
         assert_eq!(project.tracks[0].color, PALETTE[3]);
         assert_eq!(project.tracks[0].name, "1 MIDI");
+    }
+
+    #[test]
+    fn locators_become_markers() {
+        let set = r#"<Ableton><LiveSet>
+            <Tracks><MidiTrack/></Tracks>
+            <Locators><Locators>
+                <Locator Id="1"><Time Value="32"/><Name Value="Drop"/></Locator>
+                <Locator Id="0"><Time Value="0"/><Name Value="Intro"/></Locator>
+            </Locators></Locators>
+        </LiveSet></Ableton>"#;
+        let (project, _) = parse(set).unwrap();
+        let markers: Vec<(f64, &str)> = project.markers.iter().map(|m| (m.beat, m.name.as_str())).collect();
+        assert_eq!(markers, vec![(0.0, "Intro"), (32.0, "Drop")]);
     }
 
     #[test]

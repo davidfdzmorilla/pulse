@@ -428,7 +428,7 @@ pub(crate) mod tests {
     fn headers_in_both_views_select_and_drag_with_the_mouse() {
         for (view, header) in [
             (crate::session::show as fn(&mut PulseApp, &mut egui::Ui), (|t: usize| pos2(54.0 + t as f32 * 109.0, 11.0)) as fn(usize) -> egui::Pos2),
-            (crate::arrangement::show, |t: usize| pos2(75.0, 81.0 + t as f32 * 53.0)),
+            (crate::arrangement::show, |t: usize| pos2(75.0, 96.0 + t as f32 * 53.0)),
         ] {
             let mut app = PulseApp::headless(Project::demo());
             app.project.tracks.truncate(4);

@@ -320,6 +320,7 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 - **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom**.
 - Con una escala en el proyecto: **Plegar** y **A la escala** (ver «Tonalidad y escala»).
 - **Acordes**: escribe los acordes de la escala, progresiones enteras y sugiere el siguiente (ver «Acordes»).
+- En pistas de batería, **Generar ritmo** (ver «Generar ritmos»).
 - Bajo la regla, una franja con el **acorde** que suena en cada tramo (ver «Acordes»).
 
 ### Notas
@@ -339,6 +340,17 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 ### Velocidad
 
 En el carril de abajo, con **Velocidad** elegido, arrastra arriba o abajo cerca de una nota; las seleccionadas cambian juntas.
+
+## Generar ritmos
+
+En el **Editor MIDI** de un clip de batería (Drum Machine o Drum Rack), **Generar ritmo** escribe un patrón en un estilo:
+
+- **Estilos**: House, Techno, Trap, Drum & Bass, Hip hop, Pop / Rock, Reggaetón y Breakbeat. Cada uno con lo que lo define (el bombo a negras del house, la caja en el 3 del trap, el dos-pasos del drum & bass, el dembow del reggaetón…). Al pasar por encima de cada uno dice a qué tempo suele ir.
+- **Complejidad**: al 0 % solo lo esencial del estilo; más arriba, golpes de más y notas fantasma. Los compases pares cambian algún detalle, como un batería de verdad.
+- **Redoble al final de cada frase**: el último tiempo de cada 4 compases, semicorcheas de caja y toms que crecen.
+- **El bombo sigue al bajo**: añade bombos donde el bajo empieza sus notas (en corcheas). Se activa si hay una pista de bajo sonando con el clip (en la misma escena, o debajo en el Arrangement).
+- Funciona con cualquier kit: Pulse busca cada sonido por su nombre (kick/bombo, snare/caja, clap, hat/charles, tom, rim…) y usa lo que haya (sin caja, la palma).
+- **Generar** sustituye las notas del clip; **Otra versión** escribe otra cada vez. ⌘Z recupera las anteriores. El ritmo dura lo que el clip: cambia su **Loop** antes para tener más compases.
 
 ## Tonalidad y escala
 

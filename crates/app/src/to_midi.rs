@@ -51,6 +51,8 @@ pub struct MidiJob {
     clip: ClipRef,
     audio: AudioClip,
     mode: ToMidi,
+    /// Whether the key was the project's (rather than heard).
+    chosen: bool,
     progress: Arc<Mutex<f32>>,
     result: Arc<Mutex<Option<Result<Converted, String>>>>,
 }
@@ -67,6 +69,8 @@ const CLEAR_KEY: f64 = 0.6;
 struct Context {
     audio: Vec<Arc<engine::Sample>>,
     midi: [f64; 12],
+    /// The project's key, if chosen: melodies go to it, nothing is detected.
+    key: Option<stems::key::Key>,
 }
 
 impl Context {
@@ -169,7 +173,11 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
         ToMidi::Drums => (drum_hits(&mono, rate), None),
         // One voice: its pitch followed frame by frame (pYIN), cut into notes,
         // heard in the song's key.
-        ToMidi::Melody | ToMidi::MelodyFree => stems::pitch::melody(&mono, rate, context.weights(), mode == ToMidi::Melody),
+        ToMidi::Melody => match context.key {
+            Some(key) => (stems::pitch::melody_in(&mono, rate, key), Some(key)),
+            None => stems::pitch::melody(&mono, rate, context.weights(), true),
+        },
+        ToMidi::MelodyFree => stems::pitch::melody(&mono, rate, context.weights(), false),
         ToMidi::Harmony => {
             let mut transcriber = stems::transcribe::Transcriber::load()?;
             let notes = transcriber.notes(&mono, rate, |f| {
@@ -209,7 +217,24 @@ impl PulseApp {
         }
         // A dozen files are plenty to hear the key.
         let audio = paths.into_iter().take(12).map(|p| self.sample(&p)).filter(|s| s.frames() > 0).collect();
-        Context { audio, midi }
+        Context { audio, midi, key: self.project.key }
+    }
+
+    /// Sets the project's key to the one its clips sound in: the MIDI notes and
+    /// the audio files with a clear key of their own.
+    pub fn detect_key(&mut self) {
+        let context = self.key_context("");
+        match stems::key::Key::detect_clearly(&context.weights()) {
+            Some((key, clarity)) => {
+                self.project.key = Some(key);
+                self.status = Some(if clarity >= CLEAR_KEY {
+                    format!("La canción está en {}", key.name())
+                } else {
+                    format!("La canción parece estar en {}, aunque no está muy claro: si no lo es, elige la escala a mano", key.name())
+                });
+            }
+            None => self.status = Some("No hay notas ni audio con una tonalidad clara de donde sacarla: elige la escala a mano".into()),
+        }
     }
 }
 
@@ -226,7 +251,14 @@ impl PulseApp {
             self.status = Some("No se encuentra el audio del clip".into());
             return;
         }
-        let context = if matches!(mode, ToMidi::Melody | ToMidi::MelodyFree) { self.key_context(&audio.sample) } else { Context { audio: Vec::new(), midi: [0.0; 12] } };
+        let context = match mode {
+            // With the project's key nothing needs hearing.
+            ToMidi::Melody if self.project.key.is_some() => Context { audio: Vec::new(), midi: [0.0; 12], key: self.project.key },
+            ToMidi::Melody => self.key_context(&audio.sample),
+            ToMidi::MelodyFree => Context { key: None, ..self.key_context(&audio.sample) },
+            _ => Context { audio: Vec::new(), midi: [0.0; 12], key: None },
+        };
+        let chosen = self.project.key.is_some();
         let (progress, result) = (Arc::new(Mutex::new(0.0)), Arc::new(Mutex::new(None)));
         let (p, r, a, tempo) = (progress.clone(), result.clone(), audio.clone(), self.project.tempo);
         std::thread::spawn(move || {
@@ -236,7 +268,7 @@ impl PulseApp {
             }
         });
         self.status = Some(format!("Sacando las notas de «{}» ({})…", audio.name, mode.label().to_lowercase()));
-        self.to_midi = Some(MidiJob { clip, audio, mode, progress, result });
+        self.to_midi = Some(MidiJob { clip, audio, mode, chosen, progress, result });
     }
 
     /// Once a frame: shows the progress, and places the clip when it is done.
@@ -257,6 +289,7 @@ impl PulseApp {
                 self.place_midi(job.clip, &job.audio, job.mode, &events);
                 if let (Some(key), Some(status)) = (key, self.status.as_mut()) {
                     status.push_str(&match job.mode {
+                        ToMidi::Melody if job.chosen => format!(", ajustadas a la escala del proyecto ({})", key.name()),
                         ToMidi::Melody => format!(", en {} (ajustadas a su escala)", key.name()),
                         _ => format!(" (la canción parece estar en {})", key.name()),
                     });
@@ -406,5 +439,60 @@ mod tests {
             assert_eq!(first, vec![(0.0, 60), (1.0, 64), (2.0, 67), (3.0, 72)], "{mode:?}: a beat each at 120 BPM");
         }
         assert_eq!(app.project.tracks.len(), tracks + 2);
+    }
+
+    /// «Detectar»: the key the MIDI clips play in, leaving the drums out.
+    #[test]
+    fn the_project_key_comes_from_its_clips() {
+        let mut app = PulseApp::headless(crate::project::Project::empty());
+        app.detect_key();
+        assert_eq!(app.project.key, None, "nothing sounds");
+        let mut clip = MidiClip::new("Acordes", 8.0, [0; 3]);
+        // E minor, A minor, B minor, E minor (E G B, A C E, B D F#, E G B).
+        for (bar, chord) in [[52u8, 55, 59], [45, 48, 52], [47, 50, 54], [52, 55, 59]].iter().enumerate() {
+            for &pitch in chord {
+                clip.notes.push(Note { start: bar as f64 * 2.0, length: 2.0, pitch, velocity: 0.8 });
+            }
+        }
+        clip.notes.push(Note { start: 7.0, length: 1.0, pitch: 64, velocity: 0.8 });
+        let synth = crate::project::Track::new("Synth", [0; 3], InstrumentKind::Synth(SynthParams::default()));
+        app.project.tracks.push(synth);
+        app.project.tracks.last_mut().unwrap().clips[0] = Some(Clip::Midi(clip));
+        // A drum clip full of Cs and F#s must not count.
+        let mut drums = crate::project::Track::new("Drums", [0; 3], InstrumentKind::DrumMachine(Default::default()));
+        let hits = (0..32).map(|i| Note { start: i as f64 * 0.25, length: 0.25, pitch: if i % 2 == 0 { 36 } else { 42 }, velocity: 0.8 }).collect();
+        drums.clips[0] = Some(Clip::Midi(MidiClip { notes: hits, ..MidiClip::new("Ritmo", 8.0, [0; 3]) }));
+        app.project.tracks.push(drums);
+        app.detect_key();
+        assert_eq!(app.project.key.map(|k| k.name()), Some("Mi menor".into()), "{:?}", app.status);
+    }
+
+    /// With the project's key chosen, «Melodía» uses it rather than one it hears
+    /// (and, as ever, notes sung in tune stay where they are).
+    #[test]
+    fn a_melody_goes_to_the_project_key() {
+        let melody = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../stems/tests/data/melody.wav");
+        let sample = engine::Sample::load(&melody).expect("test audio");
+        let audio = AudioClip {
+            name: "Melodía".into(),
+            color: [0; 3],
+            sample: String::new(),
+            length: 8.0,
+            offset: 0.0,
+            warp: engine::model::WarpMode::Stretch,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            takes: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+        };
+        // C E G C, in tune: C# major is not what they sound in, but it is chosen.
+        let c_sharp = stems::key::Key { tonic: 1, minor: false };
+        let context = Context { audio: Vec::new(), midi: [0.0; 12], key: Some(c_sharp) };
+        let (events, key) = convert(&sample, &audio, 120.0, ToMidi::Melody, &context, &Mutex::new(0.0)).unwrap();
+        assert_eq!(key, Some(c_sharp));
+        let pitches: Vec<u8> = events.iter().take(4).map(|e| e.pitch).collect();
+        assert_eq!(pitches, vec![60, 64, 67, 72], "in tune notes stay, even off the scale");
     }
 }

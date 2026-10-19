@@ -7,7 +7,7 @@ const MAJOR: [f64; 12] = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 
 const MINOR: [f64; 12] = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
 const NAMES: [&str; 12] = ["Do", "Do#", "Re", "Mib", "Mi", "Fa", "Fa#", "Sol", "Lab", "La", "Sib", "Si"];
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Key {
     /// Pitch class of the tonic (0 = C).
     pub tonic: u8,
@@ -62,6 +62,39 @@ impl Key {
             .filter(|&p| (0..=127).contains(&p) && scale[p.rem_euclid(12) as usize])
             .min_by(|a, b| (*a as f64 - pitch).abs().total_cmp(&(*b as f64 - pitch).abs()))
             .unwrap_or(pitch.round().clamp(0.0, 127.0) as i32) as u8
+    }
+
+    /// The pitch class (C first) a scale `step` up from the tonic (0..7, the
+    /// scale's degrees), wrapping round the octave.
+    pub fn degree(&self, step: usize) -> u8 {
+        let steps: [u8; 7] = if self.minor { [0, 2, 3, 5, 7, 8, 10] } else { [0, 2, 4, 5, 7, 9, 11] };
+        (self.tonic + steps[step % 7]) % 12
+    }
+
+    /// `pitch` moved `steps` notes of the scale up (or down); a note off the
+    /// scale counts from its neighbour on the other side (C# up one is D, down
+    /// one C). None if it would leave 0..=127.
+    pub fn step(&self, pitch: u8, steps: i32) -> Option<u8> {
+        let scale = self.scale();
+        let mut p = pitch as i32;
+        if !scale[p.rem_euclid(12) as usize] {
+            let back = if steps < 0 { 1 } else { -1 };
+            while !scale[p.rem_euclid(12) as usize] {
+                p += back;
+            }
+        }
+        for _ in 0..steps.abs() {
+            p += steps.signum();
+            while !scale[p.rem_euclid(12) as usize] {
+                p += steps.signum();
+            }
+        }
+        (0..=127).contains(&p).then_some(p as u8)
+    }
+
+    /// Every key, majors first, from C.
+    pub fn all() -> impl Iterator<Item = Key> {
+        [false, true].into_iter().flat_map(|minor| (0..12).map(move |tonic| Key { tonic, minor }))
     }
 
     /// «Mi menor», «Do mayor».
@@ -137,6 +170,22 @@ mod tests {
         // G# is not in the scale: nearest of G or A.
         assert_eq!(e_minor.snap(67.9), 67);
         assert_eq!(e_minor.snap(68.7), 69);
+    }
+
+    #[test]
+    fn steps_walk_the_scale() {
+        let c = Key { tonic: 0, minor: false };
+        // E up one is F, B up one is C, C down one is B.
+        assert_eq!(c.step(64, 1), Some(65));
+        assert_eq!(c.step(71, 1), Some(72));
+        assert_eq!(c.step(60, -1), Some(59));
+        // C# (not in the scale) counts from C: up one is D.
+        assert_eq!(c.step(61, 1), Some(62));
+        assert_eq!(c.step(61, -1), Some(60));
+        assert_eq!(c.step(60, 7), Some(72));
+        assert_eq!(c.step(127, 1), None);
+        assert_eq!(Key { tonic: 4, minor: true }.degree(2), 7, "E minor's third is G");
+        assert_eq!(Key::all().count(), 24);
     }
 
     #[test]

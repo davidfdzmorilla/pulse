@@ -337,6 +337,12 @@ pub fn melody(mono: &[f32], rate: f32, context: [f64; 12], snap: bool) -> (Vec<N
     (notes(&track, key.filter(|_| snap)), key)
 }
 
+/// A melody's notes in a key already known (the project's), each note that is
+/// not in tune going to its scale.
+pub fn melody_in(mono: &[f32], rate: f32, key: Key) -> Vec<NoteEvent> {
+    notes(&track(mono, rate), Some(key))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -171,6 +171,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
         ui.add_space(12.0);
         groove(app, ui);
+        scale(app, ui);
 
         ui.add_space(12.0);
         let needed = app.back_to_arrangement_needed();
@@ -284,6 +285,40 @@ fn groove(app: &mut PulseApp, ui: &mut egui::Ui) {
         app.project.swing_grid = grid;
         app.audio.send(Command::SetSwing { amount: app.project.swing, grid });
     }
+}
+
+/// The project's key: chosen by hand, detected from its clips, or none.
+fn scale(app: &mut PulseApp, ui: &mut egui::Ui) {
+    use stems::key::Key;
+    let label = app.project.key.map_or("Escala".to_string(), |k| k.name());
+    widgets::field_menu_button(ui, &label, |ui| {
+        ui.set_min_width(230.0);
+        if ui.button("Detectar en la canción").on_hover_text("Escucha las notas MIDI y el audio con una tonalidad clara").clicked() {
+            app.detect_key();
+            ui.close();
+        }
+        if ui.selectable_label(app.project.key.is_none(), "Sin escala").clicked() {
+            app.project.key = None;
+            ui.close();
+        }
+        ui.separator();
+        for minor in [false, true] {
+            ui.label(RichText::new(if minor { "Menores" } else { "Mayores" }).color(TEXT_DIM).size(10.5));
+            egui::Grid::new(("keys", minor)).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
+                for (i, key) in Key::all().filter(|k| k.minor == minor).enumerate() {
+                    let name = key.name();
+                    let short = name.split(' ').next().unwrap_or(&name);
+                    if ui.selectable_label(app.project.key == Some(key), short).on_hover_text(&name).clicked() {
+                        app.project.key = Some(key);
+                        ui.close();
+                    }
+                    if i % 6 == 5 {
+                        ui.end_row();
+                    }
+                }
+            });
+        }
+    });
 }
 
 pub fn status_bar(app: &mut PulseApp, ui: &mut egui::Ui) {

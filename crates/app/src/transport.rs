@@ -73,17 +73,23 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.spacing_mut().item_spacing.x = 4.0;
 
         // Tempo and launch settings.
+        // With tempo automation, what plays now; moved by hand, it overrides it
+        // (until «▶ Arrangement»), as any automated control.
+        let automated = app.automation_state(engine::Target::Master, engine::model::Param::Tempo);
+        let mut bpm = app.display_value(engine::Target::Master, engine::model::Param::Tempo) as f64;
+        let hint = match automated {
+            Some(false) => "Tempo: lo marca la automatización del Master. Moverlo a mano la anula hasta «▶ Arrangement»",
+            Some(true) => "Tempo puesto a mano: la automatización está anulada («▶ Arrangement» la reactiva)",
+            None => "Tempo (arrastra o escribe)",
+        };
         let tempo = ui
-            .add_sized(
-                [74.0, 22.0],
-                egui::DragValue::new(&mut app.project.tempo)
-                    .range(20.0..=999.0)
-                    .speed(0.2)
-                    .fixed_decimals(2),
-            )
-            .on_hover_text("Tempo (arrastra o escribe)");
+            .add_sized([74.0, 22.0], egui::DragValue::new(&mut bpm).range(20.0..=999.0).speed(0.2).fixed_decimals(2))
+            .on_hover_text(hint);
         if tempo.changed() {
-            app.audio.send(Command::SetTempo(app.project.tempo));
+            app.set_param(engine::Target::Master, engine::model::Param::Tempo, bpm as f32);
+        }
+        if automated == Some(false) {
+            crate::widgets::outline(ui.painter(), tempo.rect, theme::METER_RED);
         }
         ui.label(RichText::new("BPM").color(TEXT_DIM).size(10.5));
         if icon_button(ui, "●", app.project.metronome, ACCENT, "Metrónomo").clicked() {

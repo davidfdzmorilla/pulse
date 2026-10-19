@@ -1027,7 +1027,7 @@ impl Channel {
                     slot.processor.set_param(param, value);
                 }
             }
-            param @ (Param::Send(_) | Param::Instrument(_)) => other(param, value),
+            param @ (Param::Send(_) | Param::Instrument(_) | Param::Tempo) => other(param, value),
         }
     }
 
@@ -2088,9 +2088,16 @@ impl Engine {
                 }
             }
         }
-        for channel in self.returns.iter_mut().chain([&mut self.master]) {
+        for channel in self.returns.iter_mut() {
             channel.automate(beat, |_, _| {});
         }
+        // The master's lanes can hold the tempo.
+        let tempo = &mut self.tempo;
+        self.master.automate(beat, |param, value| {
+            if param == Param::Tempo {
+                *tempo = (value as f64).clamp(20.0, 999.0);
+            }
+        });
     }
 
     /// Advances the transport over `n` frames, wrapping at the loop end.
@@ -3293,6 +3300,32 @@ mod tests {
         h.send(Command::ReorderTracks(order));
         h.run_beats(0.05);
         assert_eq!(&h.engine.ids[..2], &[0, 5]);
+    }
+
+    #[test]
+    fn the_masters_tempo_lane_sets_the_tempo() {
+        // 120 BPM until beat 4, then 60.
+        let mut h = Harness::new();
+        let mut lane = AutomationLane::new(Param::Tempo);
+        for (beat, value) in [(0.0, 120.0), (3.99, 120.0), (4.0, 60.0)] {
+            lane.points.push(crate::model::AutomationPoint { beat, value, curve: 0.0 });
+        }
+        h.send(Command::SetAutomation { target: Target::Master, lanes: Box::new(vec![lane]) });
+        h.send(Command::Play);
+        // Two seconds at 120: four beats.
+        let frames = (2.0 * SR) as usize;
+        let mut out = vec![0.0; frames * 2];
+        for chunk in out.chunks_mut(512 * 2) {
+            h.engine.process(chunk, 2);
+        }
+        let at = h.shared.position();
+        assert!((at - 4.0).abs() < 0.05, "{at}");
+        // Two more seconds at 60: two beats more.
+        for chunk in out.chunks_mut(512 * 2) {
+            h.engine.process(chunk, 2);
+        }
+        let at = h.shared.position();
+        assert!((at - 6.0).abs() < 0.05, "{at}");
     }
 
     #[test]

@@ -51,6 +51,8 @@ pub struct State {
     drag: Option<Drag>,
     /// Tracks showing an automation lane, and the parameter it shows.
     pub automation: HashMap<usize, Param>,
+    /// The master's automation lane (the last row), if shown: tempo, volume…
+    pub master_automation: Option<Param>,
     /// Tracks showing a lane per take of their loop recordings.
     pub takes: HashSet<usize>,
     /// What the automation parameter list is filtered by (long lists: plugins).
@@ -88,6 +90,7 @@ impl Default for State {
             follow: false,
             drag: None,
             automation: HashMap::new(),
+            master_automation: None,
             takes: HashSet::new(),
             automation_filter: String::new(),
             menu: None,
@@ -143,6 +146,13 @@ impl Layout {
                 y += row_height(shown.is_some(), takes);
             }
         }
+        // The master's row, last: no clips, its automation.
+        let (mut hidden, mut groups) = (hidden, groups);
+        let master = app.arrangement.master_automation;
+        rows.push((y, master, 0));
+        hidden.push(false);
+        groups.push(true);
+        y += row_height(master.is_some(), 0);
         Self { rows, hidden, groups, height: y }
     }
 
@@ -246,6 +256,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             for t in (0..tracks).filter(|&t| layout.shown(t)) {
                 headers.push((t, track_header(app, ui, t, layout.rows[t].1, layout.rows[t].2)));
             }
+            master_header(app, ui, tracks, layout.rows[tracks].1);
         });
 
         let mut scroll = egui::ScrollArea::horizontal().id_salt("arrangement").auto_shrink(false);
@@ -393,8 +404,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
 
-            // Automation lanes.
-            for t in (0..tracks).filter(|&t| layout.shown(t)) {
+            painter.rect_filled(lane_rect(tracks), 0.0, theme::shade(theme::SLOT, 0.7));
+            // Automation lanes (the master's too).
+            for t in (0..=tracks).filter(|&t| layout.shown(t)) {
                 if let Some(param) = layout.rows[t].1 {
                     paint_automation(app, &painter, auto_rect(t), t, param, &x_at);
                 }
@@ -646,7 +658,58 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
         ui.painter().text(lane.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, format!("{mark}Toma {}", k + 1), theme::small(), if playing { TEXT } else { TEXT_DIM });
     }
 
-    let Some(param) = shown else { return rect };
+    if let Some(param) = shown {
+        automation_picker(app, ui, rect, t, param, takes);
+    }
+    rect
+}
+
+/// The channel a row of the arrangement is: a track's, or the master's (the
+/// last row, after the tracks).
+fn row_target(app: &PulseApp, t: usize) -> Target {
+    if t < app.project.tracks.len() { Target::Track(t) } else { Target::Master }
+}
+
+/// Shows `param` in a row's automation lane.
+fn set_row_param(app: &mut PulseApp, t: usize, param: Param) {
+    if t < app.project.tracks.len() {
+        app.arrangement.automation.insert(t, param);
+    } else {
+        app.arrangement.master_automation = Some(param);
+    }
+}
+
+/// The master's row: its name, and its automation (the tempo among it).
+fn master_header(app: &mut PulseApp, ui: &mut egui::Ui, row: usize, shown: Option<Param>) {
+    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some(), 0)), Sense::click());
+    if response.clicked() {
+        app.selected_target = Target::Master;
+    }
+    let body = Rect::from_min_size(rect.min, vec2(HEADER_W - 4.0, LANE_H));
+    let selected = app.selected_target == Target::Master;
+    ui.painter().rect_filled(body, 2.0, if selected { theme::CONTROL_HOVER } else { theme::SURFACE });
+    ui.painter().rect_filled(Rect::from_min_size(body.min, vec2(5.0, LANE_H)), 2.0, theme::CONTROL_HOVER);
+    ui.painter().text(body.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, "Master", theme::body(), TEXT);
+    let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(150.0, 18.0));
+    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::left_to_right(egui::Align::Center)));
+    if widgets::toggle(&mut child, shown.is_some(), "A", theme::METER_RED, vec2(24.0, 16.0))
+        .on_hover_text("Mostrar la automatización del Master: tempo, volumen y efectos")
+        .clicked()
+    {
+        app.arrangement.master_automation = match shown {
+            Some(_) => None,
+            // Open on what already has automation, or the tempo.
+            None => Some(app.automation(Target::Master).iter().find(|l| !l.points.is_empty()).map_or(Param::Tempo, |l| l.param)),
+        };
+    }
+    if let Some(param) = shown {
+        automation_picker(app, ui, rect, row, param, 0);
+    }
+}
+
+/// The parameter list of a row's automation lane, and «Borrar automatización».
+fn automation_picker(app: &mut PulseApp, ui: &mut egui::Ui, rect: Rect, t: usize, param: Param, takes: usize) {
+    let target = row_target(app, t);
     let area = Rect::from_min_size(rect.left_top() + vec2(10.0, LANE_H + 1.0 + takes_height(takes) + 5.0), vec2(HEADER_W - 18.0, AUTO_H - 8.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
     let mut chosen = param;
@@ -684,14 +747,13 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
             app.arrangement.automation_filter = filter;
         });
     if chosen != param {
-        app.arrangement.automation.insert(t, chosen);
+        set_row_param(app, t, chosen);
     }
     if app.automation_state(target, param).is_some() && child.small_button("Borrar automatización").clicked() {
         app.automation_mut(target).retain(|l| l.param != param);
         app.overridden.remove(&(target, param));
         app.sync_automation(target);
     }
-    rect
 }
 
 /// Maps a parameter value to a y position inside an automation lane.
@@ -701,7 +763,7 @@ fn value_y(rect: Rect, normalized: f32) -> f32 {
 
 fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usize, param: Param, x_at: &dyn Fn(f64) -> f32) {
     painter.rect_filled(rect, 0.0, theme::shade(theme::SLOT, 0.8));
-    let target = Target::Track(t);
+    let target = row_target(app, t);
     let Some(info) = app.param_info(target, param) else {
         painter.text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "Parámetro no disponible", theme::small(), TEXT_DIM);
         return;
@@ -854,7 +916,7 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                 }
             }
             Menu::Automation { track, param } => {
-                let target = Target::Track(track);
+                let target = row_target(app, track);
                 ui.label(egui::RichText::new(app.param_name(target, param)).color(TEXT_DIM).size(10.5));
                 if app.automation_state(target, param).is_some() && ui.button("Borrar automatización").clicked() {
                     app.automation_mut(target).retain(|l| l.param != param);
@@ -863,7 +925,11 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                     ui.close();
                 }
                 if ui.button("Ocultar carril").clicked() {
-                    app.arrangement.automation.remove(&track);
+                    if track < app.project.tracks.len() {
+                        app.arrangement.automation.remove(&track);
+                    } else {
+                        app.arrangement.master_automation = None;
+                    }
                     ui.close();
                 }
             }
@@ -1247,7 +1313,7 @@ fn handle_automation(
     // Dragging a breakpoint continues even if the pointer leaves the lane.
     if let Some(Drag::Point { track, param, index, lane: rect }) = app.arrangement.drag {
         if response.dragged() {
-            let target = Target::Track(track);
+            let target = row_target(app, track);
             if let Some(info) = app.param_info(target, param) {
                 let value = info.denormalize((rect.bottom() - 4.0 - pos.y) / (rect.height() - 8.0));
                 let lane = app.lane_mut(target, param);
@@ -1269,7 +1335,7 @@ fn handle_automation(
     if let Some(Drag::Bend { track, param, index, start, from_y }) = app.arrangement.drag {
         // ⌥ + double clic: straight again.
         if response.double_clicked() {
-            let target = Target::Track(track);
+            let target = row_target(app, track);
             if let Some(point) = app.lane_mut(target, param).points.get_mut(index) {
                 point.curve = 0.0;
             }
@@ -1278,7 +1344,7 @@ fn handle_automation(
             return true;
         }
         if response.dragged() {
-            let target = Target::Track(track);
+            let target = row_target(app, track);
             let lane = app.lane_mut(target, param);
             if let (Some(&from), Some(&to)) = (lane.points.get(index), lane.points.get(index + 1)) {
                 lane.points[index].curve = crate::curves::bent(start, pos.y - from_y, &from, &to);
@@ -1292,7 +1358,7 @@ fn handle_automation(
     }
 
     let Some((track, param, rect)) = lane else { return false };
-    let target = Target::Track(track);
+    let target = row_target(app, track);
     let Some(info) = app.param_info(target, param) else { return true };
     let alt = ui.input(|i| i.modifiers.alt);
     let y_of = |v: f32| value_y(rect, info.normalize(v));
@@ -1448,6 +1514,20 @@ mod tests {
         screen.menu(&mut app, other, "Pegar aquí");
         let lane: Vec<f64> = app.project.tracks[2].arrangement.iter().map(|c| c.start).collect();
         assert_eq!(lane, vec![13.0], "where it was right-clicked (on the grid)");
+    }
+
+    /// The master's row, last, opens its automation on the tempo.
+    #[test]
+    fn the_master_row_shows_tempo_automation() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let texts = screen.frame(&mut app, vec![]);
+        assert!(texts.iter().any(|(t, _)| t == "Master"));
+        app.arrangement.master_automation = Some(Param::Tempo);
+        let texts = screen.frame(&mut app, vec![]);
+        let texts = screen.frame(&mut app, vec![]).into_iter().chain(texts).collect::<Vec<_>>();
+        assert!(texts.iter().any(|(t, _)| t == "Tempo"), "{:?}", texts.iter().map(|t| &t.0).collect::<Vec<_>>());
+        assert!(texts.iter().any(|(t, _)| t == "Clic para añadir puntos"));
     }
 
     #[test]

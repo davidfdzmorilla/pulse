@@ -1530,7 +1530,12 @@ pub enum Unit {
     Note,
     Degrees,
     Plain,
+    /// Beats a minute.
+    Bpm,
 }
+
+/// Tempo automation's range: what a tempo lane spans.
+pub const TEMPO_PARAM: ParamInfo = ParamInfo::linear("Tempo", 40.0, 240.0, 120.0, Unit::Bpm);
 
 /// Description of a continuous parameter: what knobs and automation lanes need to know.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -2128,6 +2133,8 @@ pub enum Param {
     Device { device: usize, param: usize },
     /// Parameter of the track's synth.
     Instrument(usize),
+    /// The song's tempo (BPM), on the master: tempo automation.
+    Tempo,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]

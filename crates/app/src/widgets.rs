@@ -385,6 +385,7 @@ pub fn format_param(info: &engine::model::ParamInfo, value: f32) -> String {
         Unit::Degrees => format!("{value:.0}°"),
         Unit::Note => crate::project::note_name(value.round().clamp(0.0, 127.0) as u8),
         Unit::Plain => format!("{value:.2}"),
+        Unit::Bpm => format!("{value:.1} BPM"),
         Unit::Pan => match (value * 50.0).round() as i32 {
             0 => "C".into(),
             n if n < 0 => format!("{}L", -n),

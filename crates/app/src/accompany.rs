@@ -307,6 +307,8 @@ impl PulseApp {
                 ClipRef::Arrangement { track: source + 1, index: 0 }
             }
         };
+        // Beside its source, in the same group.
+        track.depth = self.project.tracks[source].depth;
         self.project.tracks.insert(source + 1, track);
         self.selected_target = Target::Track(source + 1);
         self.sync_all();

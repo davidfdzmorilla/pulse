@@ -232,6 +232,9 @@ pub enum Command {
     /// Puts the tracks in a new order: track `i` becomes the one that was at
     /// `order[i]`. Everything moves with them (clips playing, instruments, plugins).
     ReorderTracks([usize; MAX_TRACKS]),
+    /// Which group track each track plays into (None: the master). A group
+    /// mixes its tracks through its own chain and fader, like a bus.
+    SetGroups([Option<u8>; MAX_TRACKS]),
     LaunchScene(usize),
     StopAllClips,
     /// Returns every track from session clips to its arrangement.
@@ -1225,6 +1228,56 @@ pub struct Engine {
     /// This block of input, as stereo, for the monitored tracks.
     monitor_left: Vec<f32>,
     monitor_right: Vec<f32>,
+    /// The group each track plays into (see [`Command::SetGroups`]), and the
+    /// order tracks are processed in: the deepest first, so a group has all its
+    /// tracks before it runs its own chain.
+    parents: [Option<u8>; MAX_TRACKS],
+    order: [usize; MAX_TRACKS],
+    /// A track's output on its way into its group.
+    bus_left: Vec<f32>,
+    bus_right: Vec<f32>,
+}
+
+/// The order to process tracks in so that every track comes before the group
+/// it plays into: by depth, the deepest first (and in their own order within one).
+fn processing_order(parents: &[Option<u8>; MAX_TRACKS]) -> [usize; MAX_TRACKS] {
+    let depth = |mut i: usize| {
+        let mut d = 0;
+        while let Some(p) = parents[i] {
+            d += 1;
+            i = p as usize;
+            if d > MAX_TRACKS {
+                break;
+            }
+        }
+        d
+    };
+    let mut order: [usize; MAX_TRACKS] = std::array::from_fn(|i| i);
+    let depths: [usize; MAX_TRACKS] = std::array::from_fn(depth);
+    order.sort_by_key(|&i| std::cmp::Reverse(depths[i]));
+    order
+}
+
+/// Whether each track sounds while some are soloed: soloed itself, inside a
+/// soloed group, or a group holding a soloed track.
+fn soloed(solo: &[bool; MAX_TRACKS], parents: &[Option<u8>; MAX_TRACKS], order: &[usize; MAX_TRACKS]) -> [bool; MAX_TRACKS] {
+    let mut on = *solo;
+    // Down: the shallowest first, so a group's solo reaches all its depths.
+    for &i in order.iter().rev() {
+        if let Some(p) = parents[i] {
+            on[i] |= on[p as usize];
+        }
+    }
+    // Up: a soloed track's groups play too (only them, not their other tracks).
+    let mut up = [false; MAX_TRACKS];
+    for &i in order.iter() {
+        if solo[i] || up[i] {
+            if let Some(p) = parents[i] {
+                up[p as usize] = true;
+            }
+        }
+    }
+    std::array::from_fn(|i| on[i] || up[i])
 }
 
 impl Engine {
@@ -1268,6 +1321,10 @@ impl Engine {
             arrangement_record: false,
             limit_output: true,
             swing: (0.25, 0.0),
+            parents: [None; MAX_TRACKS],
+            order: std::array::from_fn(|i| i),
+            bus_left: vec![0.0; MAX_BLOCK],
+            bus_right: vec![0.0; MAX_BLOCK],
         };
         (engine, shared)
     }
@@ -1478,6 +1535,22 @@ impl Engine {
                     }
                 }
                 self.input_track = self.input_track.and_then(|t| order.iter().position(|&o| o == t));
+                // The groups follow their tracks.
+                let mut moved_to = [0usize; MAX_TRACKS];
+                for (new, &old) in order.iter().enumerate() {
+                    moved_to[old] = new;
+                }
+                let old = self.parents;
+                self.parents = std::array::from_fn(|i| old[order[i]].map(|p| moved_to[p as usize] as u8));
+                self.order = processing_order(&self.parents);
+            }
+            Command::SetGroups(parents) => {
+                // Only groups that come before their tracks, so nothing loops.
+                let valid = parents.iter().enumerate().all(|(i, p)| p.is_none_or(|p| (p as usize) < i));
+                if valid {
+                    self.parents = parents;
+                    self.order = processing_order(&parents);
+                }
             }
             Command::LaunchScene(slot) => {
                 if slot >= NUM_SCENES {
@@ -1778,8 +1851,12 @@ impl Engine {
         }
 
         let any_solo = self.tracks.iter().any(|t| t.solo);
+        let solo: [bool; MAX_TRACKS] = std::array::from_fn(|i| self.tracks[i].solo);
+        let soloed = soloed(&solo, &self.parents, &self.order);
         let sr = self.sample_rate;
-        for (index, track) in self.tracks.iter_mut().enumerate() {
+        for k in 0..MAX_TRACKS {
+            let index = self.order[k];
+            let track = &mut self.tracks[index];
             let (left, right) = (&mut track.buffer[..n], &mut track.buffer_right[..n]);
             left.fill(0.0);
             right.fill(0.0);
@@ -1812,7 +1889,7 @@ impl Engine {
             }
             channel.run_chain(n, &ctx);
 
-            let audible = !channel.mute && (!any_solo || track.solo);
+            let audible = !channel.mute && (!any_solo || soloed[index]);
             let gain = if audible { channel.gain } else { 0.0 };
             // Post-fader sends, taken before panning.
             for (ret, &amount) in self.returns.iter_mut().zip(&track.sends) {
@@ -1823,8 +1900,24 @@ impl Engine {
                     }
                 }
             }
-            let peak = channel.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
-            self.shared.tracks[index].peak.publish(peak);
+            // Into its group (which comes later in the order), or the master.
+            match self.parents[index] {
+                Some(group) => {
+                    self.bus_left[..n].fill(0.0);
+                    self.bus_right[..n].fill(0.0);
+                    let peak = channel.mix_into(n, gain, &mut self.bus_left, &mut self.bus_right);
+                    self.shared.tracks[index].peak.publish(peak);
+                    let into = &mut self.tracks[group as usize];
+                    for i in 0..n {
+                        into.audio_left[i] += self.bus_left[i];
+                        into.audio_right[i] += self.bus_right[i];
+                    }
+                }
+                None => {
+                    let peak = channel.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
+                    self.shared.tracks[index].peak.publish(peak);
+                }
+            }
         }
 
         for (index, ret) in self.returns.iter_mut().enumerate() {
@@ -2946,6 +3039,75 @@ mod tests {
         assert_eq!(h.shared.tracks[0].peak.take(), 0.0);
         assert!(h.shared.tracks[1].peak.take() > 0.0);
         assert!(h.shared.returns[0].take() > 0.0);
+    }
+
+    /// Tracks 1 and 2 in group 0, track 3 outside.
+    fn grouped() -> Harness {
+        let mut h = Harness::new();
+        for t in 1..=3 {
+            h.send(Command::SetClip { track: t, slot: 0, clip: Some(one_note_clip()) });
+        }
+        let mut parents = [None; MAX_TRACKS];
+        parents[1] = Some(0);
+        parents[2] = Some(0);
+        h.send(Command::SetGroups(parents));
+        h.send(Command::LaunchScene(0));
+        h
+    }
+
+    fn peaks(h: &Harness) -> Vec<f32> {
+        (0..4).map(|t| h.shared.tracks[t].peak.take()).collect()
+    }
+
+    #[test]
+    fn a_group_plays_its_tracks_through_its_fader() {
+        let mut h = grouped();
+        h.run_beats(0.5);
+        let p = peaks(&h);
+        assert!(p.iter().all(|&x| x > 0.0), "the group sounds with its tracks: {p:?}");
+        // The group's fader down: its tracks go quiet in the master, the other doesn't.
+        let mut alone = grouped();
+        alone.send(Command::SetMute { target: Target::Track(3), mute: true });
+        let with_group = energy(&alone.run_beats(0.5));
+        let mut h = grouped();
+        h.send(Command::SetMute { target: Target::Track(3), mute: true });
+        h.send(Command::SetMute { target: Target::Track(0), mute: true });
+        let without = energy(&h.run_beats(0.5));
+        assert!(with_group > 1.0 && without < 1e-6, "{with_group} {without}");
+    }
+
+    #[test]
+    fn soloing_inside_and_outside_a_group() {
+        // A track inside: it and its group sound, not its sibling nor the rest.
+        let mut h = grouped();
+        h.send(Command::SetSolo { track: 1, solo: true });
+        h.run_beats(0.5);
+        let p = peaks(&h);
+        assert!(p[0] > 0.0 && p[1] > 0.0 && p[2] == 0.0 && p[3] == 0.0, "{p:?}");
+        // The group: all its tracks.
+        let mut h = grouped();
+        h.send(Command::SetSolo { track: 0, solo: true });
+        h.run_beats(0.5);
+        let p = peaks(&h);
+        assert!(p[0] > 0.0 && p[1] > 0.0 && p[2] > 0.0 && p[3] == 0.0, "{p:?}");
+    }
+
+    #[test]
+    fn groups_follow_their_tracks_when_reordered_and_nest() {
+        assert_eq!(processing_order(&std::array::from_fn(|i| match i { 1 => Some(0), 2 => Some(1), _ => None }))[..3], [2, 1, 0]);
+        let mut h = grouped();
+        // Group and tracks moved to the end of the first four: 3, 0, 1, 2.
+        let mut order: [usize; MAX_TRACKS] = std::array::from_fn(|i| i);
+        order[..4].copy_from_slice(&[3, 0, 1, 2]);
+        h.send(Command::ReorderTracks(order));
+        h.run_beats(0.1);
+        assert_eq!(&h.engine.parents[..4], &[None, None, Some(1), Some(1)]);
+        // A group after its tracks is refused.
+        let mut wrong = [None; MAX_TRACKS];
+        wrong[0] = Some(3);
+        h.send(Command::SetGroups(wrong));
+        h.run_beats(0.1);
+        assert_eq!(h.engine.parents[0], None);
     }
 
     #[test]

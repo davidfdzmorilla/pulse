@@ -136,7 +136,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             if let Target::Track(t) = target {
-                if !app.project.tracks[t].is_audio() {
+                if !app.project.tracks[t].is_audio() && !app.project.tracks[t].is_group() {
                     instrument_device(app, ui, t, &mut actions, &mut zones);
                 }
             }

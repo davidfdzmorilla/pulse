@@ -17,6 +17,7 @@ mod devices;
 mod editor;
 mod export;
 mod files;
+mod groups;
 mod guide;
 mod harmony;
 mod freeze;

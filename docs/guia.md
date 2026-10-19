@@ -133,6 +133,20 @@ Las pistas que están tocando clips de Session se ven oscurecidas: **▶ Arrange
 - **Duplicar pista** / **Eliminar pista**: en el clic derecho de la cabecera o en el menú Crear. Con varias seleccionadas actúan sobre todas. Las copias se llaman «<nombre> copia». Siempre queda al menos una pista; ⌘Z deshace.
 - **Nombre y color**: clic derecho en la cabecera.
 
+### Grupos
+
+Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como un bus), y se pliegan para ganar sitio.
+
+- **Agrupar** (**⌘G**, menú Crear o clic derecho en la cabecera): las pistas seleccionadas pasan a un grupo nuevo donde estaba la primera. Se pueden agrupar grupos (grupos dentro de grupos).
+- **Desagrupar** (**⇧⌘G**): quita el grupo; sus pistas se quedan donde están. **Sacar del grupo** (clic derecho en una pista de un grupo) la saca justo debajo.
+- **Plegar**: clic en **▾** en la cabecera del grupo; sus pistas se ocultan (**▸** para volver a verlas). En Session se ocultan sus columnas y en el Arrangement sus filas.
+- Las pistas de un grupo van justo debajo de él, con una barra del color del grupo en su cabecera (y sangradas en el Arrangement). **Arrastrar** el grupo lo mueve con todas sus pistas; soltar una pista justo debajo de la cabecera de un grupo la mete en él.
+- **Duplicar** o **eliminar** un grupo duplica o elimina también sus pistas.
+- El grupo tiene **mezclador** (volumen, panorama, envíos, activador, solo), **cadena de efectos** (en Dispositivos) y **automatización**, como cualquier pista. Un **solo** en el grupo hace sonar todas sus pistas; un solo en una de sus pistas mantiene el grupo sonando.
+- **Session**: los slots del grupo se encienden donde sus pistas tienen clips; clic lanza los de esa escena (y para las demás pistas del grupo). Su ■ para todas sus pistas.
+- **Arrangement**: la fila del grupo muestra en pequeño los clips de sus pistas. En ella no se ponen clips.
+- Un grupo no tiene instrumento ni clips: no se arma ni recibe notas.
+
 ### Congelar
 
 **Congelar pista** (clic derecho en la cabecera) renderiza a audio lo que suenan su instrumento y sus efectos, y la pista pasa a sonar ese audio: deja de gastar CPU. El volumen, el panorama y los envíos siguen en vivo.
@@ -642,7 +656,8 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 
 - Se importan: tempo, loop, escenas, pistas MIDI y de audio (nombre, color, volumen, panorama, envíos, activador, solo) y los clips de Session y del Arrangement, con sus notas o sus muestras y su warp.
 - Los Drum Racks con muestras pasan al Drum Rack de Pulse; Simpler y Sampler, al Sampler.
-- No se importan los sintes de Live (esas pistas reciben Pulse Synth), los efectos, la automatización ni los grupos.
+- Los **grupos** llegan como grupos de Pulse, con sus pistas dentro y su mezclador.
+- No se importan los sintes de Live (esas pistas reciben Pulse Synth), los efectos ni la automatización.
 - Las muestras se buscan por ruta y, si el set viene de otro ordenador, por nombre en la carpeta del set.
 
 ## Exportar audio
@@ -716,6 +731,8 @@ Pulse busca versiones nuevas al arrancar y cada 6 horas (también en Pulse → *
 | ⌫ | Eliminar |
 | ⌘A | Seleccionar todas las notas |
 | ⌘T / ⇧⌘T | Nueva pista MIDI / de audio |
+| ⌘G | Agrupar las pistas seleccionadas |
+| ⇧⌘G | Desagrupar el grupo seleccionado |
 | ⌘ clic / ⇧ clic | Seleccionar varias pistas (en sus cabeceras) o varios clips |
 | Arrastrar cabecera | Mover las pistas seleccionadas |
 | Arrastrar en un hueco | Seleccionar clips y pistas con un recuadro |

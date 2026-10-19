@@ -1569,24 +1569,38 @@ impl PulseApp {
     }
 
     pub fn delete_track(&mut self, track: usize) {
-        if self.project.tracks.len() <= 1 {
+        // A group goes with everything in it.
+        let block = crate::groups::block(&self.project.tracks, track);
+        if self.project.tracks.len() <= block.len() || track >= self.project.tracks.len() {
             return;
         }
-        self.project.tracks.remove(track);
+        self.project.tracks.drain(block);
+        crate::groups::normalize(&mut self.project.tracks);
         self.selected_clip = None;
         self.selected_target = Target::Track(track.min(self.project.tracks.len() - 1));
         self.sync_all();
     }
 
     pub fn duplicate_track(&mut self, track: usize) {
-        if self.project.tracks.len() >= MAX_TRACKS {
+        // A group, with copies of everything in it, after it.
+        let block = crate::groups::block(&self.project.tracks, track);
+        if self.project.tracks.len() + block.len() > MAX_TRACKS {
             self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
             return;
         }
-        let mut copy = self.project.tracks[track].clone();
-        copy.name = format!("{} copia", copy.name);
-        // The copy gets plugin instances of its own, starting from the same state.
         self.capture_plugins();
+        let end = block.end;
+        let mut copies: Vec<Track> = block.map(|t| self.copy_track(t)).collect();
+        copies[0].name = format!("{} copia", copies[0].name);
+        let at = end;
+        self.project.tracks.splice(at..at, copies);
+        self.selected_target = Target::Track(at);
+        self.sync_all();
+    }
+
+    /// A copy of a track, with plugin instances of its own (from the same state).
+    fn copy_track(&mut self, track: usize) -> Track {
+        let mut copy = self.project.tracks[track].clone();
         let fresh = |project: &mut Project, id: PluginId| -> PluginId {
             let new = project.new_plugin_id();
             if let Some(mut plugin) = project.plugin(id).cloned() {
@@ -1603,9 +1617,7 @@ impl PulseApp {
                 device.effect = Effect::Plugin(fresh(&mut self.project, id));
             }
         }
-        self.project.tracks.insert(track + 1, copy);
-        self.selected_target = Target::Track(track + 1);
-        self.sync_all();
+        copy
     }
 
     /// Returns tracks to their arrangement clips and re-enables overridden automation.
@@ -1643,6 +1655,10 @@ impl PulseApp {
     }
 
     pub fn toggle_arm(&mut self, track: usize) {
+        if self.project.tracks[track].is_group() {
+            self.status = Some("Un grupo no graba: arma las pistas que tiene dentro".into());
+            return;
+        }
         let t = &mut self.project.tracks[track];
         t.armed = !t.armed;
         let (armed, audio) = (t.armed, t.is_audio());
@@ -1933,8 +1949,9 @@ impl PulseApp {
 
     /// Live input follows the selected track when no track is armed.
     fn update_input_track(&mut self) {
+        // A group has no instrument to play.
         let desired = match self.selected_target {
-            Target::Track(t) => Some(t),
+            Target::Track(t) if !self.project.tracks.get(t).is_some_and(|t| t.is_group()) => Some(t),
             _ => None,
         };
         if self.input_track != Some(desired) {
@@ -2336,13 +2353,21 @@ impl PulseApp {
                 !cmd && i.key_pressed(egui::Key::M),
                 i.key_pressed(egui::Key::F9),
                 cmd && i.modifiers.alt && i.key_pressed(egui::Key::S),
+                cmd && !shift && i.key_pressed(egui::Key::G),
+                cmd && shift && i.key_pressed(egui::Key::G),
             ]
         });
-        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record, versions] =
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record, versions, group, ungroup] =
             input;
         self.tab_pressed = None;
         if versions {
             self.open_panel(Panel::Versions);
+        }
+        if group {
+            self.run(crate::commands::Command::GroupTracks, ctx);
+        }
+        if ungroup {
+            self.run(crate::commands::Command::Ungroup, ctx);
         }
         if export {
             self.open_panel(Panel::Export);

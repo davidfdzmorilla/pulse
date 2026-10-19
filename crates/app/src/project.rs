@@ -47,6 +47,8 @@ pub enum TrackKind {
     #[default]
     Midi,
     Audio,
+    /// A bus for the tracks under it (see `groups`): no clips, no instrument.
+    Group,
 }
 
 fn is_default<T: Default + PartialEq>(value: &T) -> bool {
@@ -113,6 +115,13 @@ pub struct Track {
     /// Its instrument and effects rendered to audio, which it plays instead (see `freeze`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frozen: Option<crate::freeze::Frozen>,
+    /// How many groups it is inside (see `groups`): the tracks of a group are
+    /// the ones right under it, one level deeper.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub depth: u8,
+    /// A group with its tracks hidden.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub folded: bool,
 }
 
 impl Track {
@@ -133,7 +142,20 @@ impl Track {
             automation: Vec::new(),
             samples: Vec::new(),
             frozen: None,
+            depth: 0,
+            folded: false,
         }
+    }
+
+    pub fn new_group(name: impl Into<String>, color: [u8; 3]) -> Self {
+        Self {
+            kind: TrackKind::Group,
+            ..Self::new(name, color, InstrumentKind::Synth(SynthParams::default()))
+        }
+    }
+
+    pub fn is_group(&self) -> bool {
+        self.kind == TrackKind::Group
     }
 
     pub fn new_audio(name: impl Into<String>, color: [u8; 3]) -> Self {

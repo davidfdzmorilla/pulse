@@ -67,7 +67,8 @@ impl PulseApp {
     /// track count for the end). Returns whether anything moved.
     pub fn move_tracks(&mut self, tracks: &[usize], gap: usize) -> bool {
         let n = self.project.tracks.len();
-        let mut moving: Vec<usize> = tracks.iter().copied().filter(|&t| t < n).collect();
+        // A group goes with everything in it.
+        let mut moving: Vec<usize> = tracks.iter().copied().filter(|&t| t < n).flat_map(|t| crate::groups::block(&self.project.tracks, t)).collect();
         moving.sort_unstable();
         moving.dedup();
         if moving.is_empty() || gap > n {
@@ -83,7 +84,37 @@ impl PulseApp {
         if order.iter().enumerate().all(|(i, &o)| i == o) {
             return false;
         }
+        // How deep each moving track is under the outermost of them it is inside.
+        let all = &self.project.tracks;
+        let relative: Vec<u8> = moving
+            .iter()
+            .map(|&m| {
+                let mut root = m;
+                while let Some(p) = crate::groups::parent(all, root).filter(|p| moving.contains(p)) {
+                    root = p;
+                }
+                all[m].depth - all[root].depth
+            })
+            .collect();
         self.reorder_tracks(&order);
+        // Where they land says how deep: under an open group's header, inside it;
+        // otherwise beside the track above (or what holds it, if that is hidden).
+        let tracks = &mut self.project.tracks;
+        let depth = match at.checked_sub(1) {
+            None => 0,
+            Some(mut above) => {
+                while crate::groups::hidden(tracks, above) {
+                    above = crate::groups::parent(tracks, above).unwrap_or(0);
+                }
+                let above = &tracks[above];
+                if above.is_group() && !above.folded { above.depth + 1 } else { above.depth }
+            }
+        };
+        for (k, rel) in relative.into_iter().enumerate() {
+            tracks[at + k].depth = depth + rel;
+        }
+        crate::groups::normalize(tracks);
+        self.sync_groups();
         self.status = Some(match moving.len() {
             1 => "Pista movida".to_string(),
             k => format!("{k} pistas movidas"),
@@ -143,7 +174,7 @@ impl PulseApp {
         self.sync_midi_map();
     }
 
-    fn recording_anything(&self) -> bool {
+    pub(crate) fn recording_anything(&self) -> bool {
         !self.recorder.session.is_empty()
             || self.recorder.arrangement.is_some()
             || self.audio.state().is_some_and(|s| {
@@ -198,15 +229,21 @@ impl PulseApp {
     /// from the headers' rects (in track order), draws a line there, and moves
     /// them when the button is released. `vertical` is for headers stacked
     /// top to bottom (arrangement); otherwise they go left to right (session).
-    pub fn finish_track_drag(&mut self, ui: &egui::Ui, headers: &[Rect], vertical: bool) {
+    /// `headers` are the shown headers' tracks and rects, in order (those in a
+    /// folded group are not shown).
+    pub fn finish_track_drag(&mut self, ui: &egui::Ui, headers: &[(usize, Rect)], vertical: bool) {
+        let tracks = self.project.tracks.len();
         let Some(drag) = &mut self.track_drag else { return };
         let Some(pos) = ui.ctx().pointer_latest_pos() else { return };
         let along = |r: &Rect| if vertical { (r.top(), r.bottom()) } else { (r.left(), r.right()) };
         let p = if vertical { pos.y } else { pos.x };
-        drag.gap = Some(headers.iter().position(|r| p < (along(r).0 + along(r).1) / 2.0).unwrap_or(headers.len()));
-        if let Some(gap) = drag.gap {
+        // The shown header it lands before, and so the track.
+        let shown = headers.iter().position(|(_, r)| p < (along(r).0 + along(r).1) / 2.0).unwrap_or(headers.len());
+        drag.gap = Some(headers.get(shown).map_or(tracks, |h| h.0));
+        if drag.gap.is_some() {
+            let headers: Vec<Rect> = headers.iter().map(|h| h.1).collect();
             if let (Some(first), Some(last)) = (headers.first(), headers.last()) {
-                let edge = match headers.get(gap) {
+                let edge = match headers.get(shown) {
                     Some(r) => along(r).0 - 1.0,
                     None => along(last).1 + 1.0,
                 };
@@ -330,7 +367,7 @@ pub(crate) mod tests {
     #[test]
     fn dragging_headers_moves_the_selection() {
         // Four headers side by side, as in the session view.
-        let headers: Vec<Rect> = (0..4).map(|i| Rect::from_min_size(pos2(i as f32 * 100.0, 0.0), egui::vec2(98.0, 20.0))).collect();
+        let headers: Vec<(usize, Rect)> = (0..4).map(|i| (i, Rect::from_min_size(pos2(i as f32 * 100.0, 0.0), egui::vec2(98.0, 20.0)))).collect();
         let mut app = PulseApp::headless(Project::demo());
         app.project.tracks.truncate(4);
         app.sync_all();

@@ -5,7 +5,8 @@
 //! or samples with their warp settings). Live's synths are proprietary, so MIDI
 //! tracks get Pulse's default instrument; the samples of Drum Racks and of
 //! Simpler/Sampler devices are loaded into Pulse's Drum Rack and Sampler (a Drum
-//! Rack without samples becomes the drum machine). Group tracks are skipped and counted in the report. The parser is
+//! Rack without samples becomes the drum machine). Group tracks become groups,
+//! with their tracks inside (and their mixer settings). The parser is
 //! lenient: anything missing falls back to a default instead of failing.
 
 use crate::project::{Mixer, Project, Track, PALETTE};
@@ -23,7 +24,7 @@ pub struct ImportReport {
     pub audio_tracks: usize,
     pub session_clips: usize,
     pub arrangement_clips: usize,
-    pub skipped_group_tracks: usize,
+    pub group_tracks: usize,
     /// Tracks beyond Pulse's track limit.
     pub dropped_tracks: usize,
     /// Session clips in scenes beyond Pulse's scene count.
@@ -42,8 +43,8 @@ impl ImportReport {
         if self.missing_samples > 0 {
             notes.push(format!("{} muestras no encontradas", self.missing_samples));
         }
-        if self.skipped_group_tracks > 0 {
-            notes.push(format!("{} grupos omitidos", self.skipped_group_tracks));
+        if self.group_tracks > 0 {
+            notes.push(format!("{} grupo(s) con sus pistas", self.group_tracks));
         }
         if self.dropped_tracks > 0 {
             notes.push(format!("{} pistas omitidas por encima del máximo de {MAX_TRACKS}", self.dropped_tracks));
@@ -116,25 +117,45 @@ pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport
 
     let ctx = Context { base, tempo: project.tempo };
     let tracks = child(set, "Tracks").map(|t| t.children().filter(Node::is_element).collect::<Vec<_>>());
+    // Each group's depth by its id: a track's TrackGroupId says which it is in
+    // (Live keeps a group's tracks right after it, as Pulse does).
+    let mut group_depths: std::collections::HashMap<String, u8> = std::collections::HashMap::new();
     for node in tracks.unwrap_or_default() {
+        let depth = value(node, &["TrackGroupId"]).and_then(|id| group_depths.get(id)).map_or(0, |d| d + 1);
         match node.tag_name().name() {
             "MidiTrack" | "AudioTrack" => {
                 if project.tracks.len() >= MAX_TRACKS {
                     report.dropped_tracks += 1;
                     continue;
                 }
-                let track = track(node, project.tracks.len(), &ctx, &mut report);
+                let mut track = track(node, project.tracks.len(), &ctx, &mut report);
                 if track.is_audio() {
                     report.audio_tracks += 1;
                 } else {
                     report.midi_tracks += 1;
                 }
+                track.depth = depth;
                 project.tracks.push(track);
             }
-            "GroupTrack" => report.skipped_group_tracks += 1,
+            "GroupTrack" => {
+                if project.tracks.len() >= MAX_TRACKS {
+                    report.dropped_tracks += 1;
+                    continue;
+                }
+                let index = project.tracks.len();
+                let mut group = Track::new_group(track_name(node).unwrap_or_else(|| format!("Grupo {}", report.group_tracks + 1)), color(node, index));
+                group.mixer = mixer(node);
+                group.depth = depth;
+                if let Some(id) = node.attribute("Id") {
+                    group_depths.insert(id.to_string(), depth);
+                }
+                report.group_tracks += 1;
+                project.tracks.push(group);
+            }
             _ => {}
         }
     }
+    crate::groups::normalize(&mut project.tracks);
 
     // Pulse's returns keep their own effects; only the names and levels come across.
     let returns: Vec<Node> = child(set, "Tracks")
@@ -147,7 +168,7 @@ pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport
         ret.mixer = mixer(*node);
     }
 
-    if project.tracks.is_empty() {
+    if project.tracks.iter().all(|t| t.is_group()) {
         return Err("El set no tiene pistas MIDI ni de audio que importar".into());
     }
     Ok((project, report))
@@ -714,6 +735,25 @@ mod tests {
         assert_eq!(project.scene_names[0], "Verse");
         assert_eq!(project.tracks[0].color, PALETTE[3]);
         assert_eq!(project.tracks[0].name, "1 MIDI");
+    }
+
+    #[test]
+    fn groups_come_with_their_tracks() {
+        let set = r#"<Ableton><LiveSet><Tracks>
+            <GroupTrack Id="10"><Name><EffectiveName Value="Drums"/></Name><TrackGroupId Value="-1"/></GroupTrack>
+            <MidiTrack Id="11"><Name><EffectiveName Value="Kick"/></Name><TrackGroupId Value="10"/></MidiTrack>
+            <GroupTrack Id="12"><Name><EffectiveName Value="Tops"/></Name><TrackGroupId Value="10"/></GroupTrack>
+            <MidiTrack Id="13"><Name><EffectiveName Value="Hats"/></Name><TrackGroupId Value="12"/></MidiTrack>
+            <MidiTrack Id="14"><Name><EffectiveName Value="Bass"/></Name><TrackGroupId Value="-1"/></MidiTrack>
+        </Tracks></LiveSet></Ableton>"#;
+        let (project, report) = parse(set).unwrap();
+        let layout: Vec<(String, u8, bool)> = project.tracks.iter().map(|t| (t.name.clone(), t.depth, t.is_group())).collect();
+        assert_eq!(
+            layout,
+            vec![("Drums".into(), 0, true), ("Kick".into(), 1, false), ("Tops".into(), 1, true), ("Hats".into(), 2, false), ("Bass".into(), 0, false)]
+        );
+        assert_eq!(report.group_tracks, 2);
+        assert_eq!(&crate::groups::parents(&project.tracks)[..5], &[None, Some(0), Some(0), Some(2), None]);
     }
 
     #[test]

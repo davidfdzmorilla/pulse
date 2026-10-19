@@ -254,6 +254,10 @@ pub struct Project {
     pub punch_in: bool,
     #[serde(default, skip_serializing_if = "is_default")]
     pub punch_out: bool,
+    /// The song's key, chosen or detected: the piano roll shows its scale and
+    /// Audio a MIDI fits melodies to it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub key: Option<stems::key::Key>,
     pub tracks: Vec<Track>,
     pub returns: Vec<ReturnTrack>,
     pub master: MasterTrack,
@@ -325,6 +329,7 @@ impl Project {
             record_quantize: None,
             punch_in: false,
             punch_out: false,
+            key: None,
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

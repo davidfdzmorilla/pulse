@@ -5,6 +5,9 @@
 //! with a rectangle, double-click to create or delete. Draw mode (B): click to add
 //! (drag to lengthen) or delete. The velocity lane below edits note velocities.
 //! Keys: arrows move/transpose, ⌘A/⌘C/⌘X/⌘V/⌘D, ⌘U quantizes, Delete removes.
+//!
+//! With a project key the scale's rows are lit and the tonic's marked; «Plegar»
+//! leaves only the scale's rows, and then notes move along the scale.
 
 use crate::app::{ClipRef, PulseApp};
 use crate::note_edit::{self, Selection, MIN_LENGTH};
@@ -14,6 +17,7 @@ use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Key, Rect, Sense, Stroke, StrokeKind};
 use engine::model::{Clip, MidiClip, Note};
 use engine::Command;
+use stems::key::Key as Scale;
 use std::sync::atomic::Ordering;
 
 const KEY_W: f32 = 64.0;
@@ -70,6 +74,8 @@ pub struct State {
     /// What the lane under the notes shows: velocities or a clip envelope.
     pub(crate) lane: crate::clip_envelope::LaneChoice,
     scroll_x: f32,
+    /// Only the rows of the project's scale.
+    fold: bool,
 }
 
 impl Default for State {
@@ -89,6 +95,7 @@ impl Default for State {
             scrolled: None,
             lane: Default::default(),
             scroll_x: 0.0,
+            fold: false,
         }
     }
 }
@@ -165,6 +172,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let is_drums = app.project.tracks[t].is_drums();
     // One row per drum sound or pad, the lowest note at the bottom.
     let drum_rows = if is_drums { app.project.tracks[t].drum_rows() } else { Vec::new() };
+    let key = app.project.key.filter(|_| !is_drums);
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     let state = &mut app.piano_roll;
     if state.selection_clip != Some(clip_ref) {
@@ -181,16 +189,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let before = clip.clone();
     let mut previews: Vec<u8> = Vec::new();
 
-    toolbar(ui, state, clip);
+    toolbar(ui, state, clip, key);
+    // Folded, notes move along the scale.
+    let walk = key.filter(|_| state.fold);
     if keys_enabled {
-        keyboard(ui, state, clip);
+        keyboard(ui, state, clip, walk);
     }
     state.selection.retain(|&i| i < clip.notes.len());
 
     let pitches: Vec<u8> = if is_drums {
         drum_rows.iter().map(|(pitch, _)| *pitch).collect()
     } else {
-        (24..=96).rev().collect()
+        rows(walk, &clip.notes)
     };
     let row_h = if !is_drums { 13.0 } else if pitches.len() > 12 { 20.0 } else { 24.0 };
     // Sixteenths are 18 px at zoom 1.
@@ -235,21 +245,33 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let insert_x = x_of(state.insert_at);
         painter.line_segment([pos2(insert_x, rect.top()), pos2(insert_x, rect.top() + RULER_H)], Stroke::new(2.0, ACCENT));
 
-        // Rows and keys.
+        // Rows and keys; with a key, its scale's rows lit and the tonic's tinted.
+        let scale = key.map(|k| k.scale());
         for (row, &pitch) in pitches.iter().enumerate() {
             let y = top + row as f32 * row_h;
             let dark = !is_drums && is_black_key(pitch);
-            painter.rect_filled(Rect::from_min_size(pos2(grid.left(), y), vec2(grid_w, row_h)), 0.0, if dark { Color32::from_gray(36) } else { Color32::from_gray(44) });
-            let key = Rect::from_min_size(pos2(rect.left(), y), vec2(KEY_W - 2.0, row_h - 1.0));
-            painter.rect_filled(key, 1.0, if dark { Color32::from_gray(30) } else { Color32::from_gray(205) });
+            let tonic = key.is_some_and(|k| pitch % 12 == k.tonic);
+            let fill = match scale {
+                _ if tonic => theme::shade(ACCENT, 0.32),
+                Some(scale) if scale[pitch as usize % 12] => Color32::from_gray(48),
+                Some(_) => Color32::from_gray(33),
+                None if dark => Color32::from_gray(36),
+                None => Color32::from_gray(44),
+            };
+            painter.rect_filled(Rect::from_min_size(pos2(grid.left(), y), vec2(grid_w, row_h)), 0.0, fill);
+            let piano_key = Rect::from_min_size(pos2(rect.left(), y), vec2(KEY_W - 2.0, row_h - 1.0));
+            painter.rect_filled(piano_key, 1.0, if dark { Color32::from_gray(30) } else { Color32::from_gray(205) });
+            if tonic {
+                painter.rect_filled(Rect::from_min_size(piano_key.right_top() - vec2(4.0, 0.0), vec2(4.0, piano_key.height())), 0.0, ACCENT);
+            }
             let text = if is_drums {
                 drum_rows[row].1.clone()
-            } else if pitch % 12 == 0 {
+            } else if pitch % 12 == 0 || tonic || walk.is_some() {
                 note_name(pitch)
             } else {
                 String::new()
             };
-            painter.text(pos2(key.left() + 4.0, key.center().y), Align2::LEFT_CENTER, text, theme::small(), if dark { Color32::from_gray(200) } else { Color32::from_gray(30) });
+            painter.text(pos2(piano_key.left() + 4.0, piano_key.center().y), Align2::LEFT_CENTER, text, theme::small(), if dark { Color32::from_gray(200) } else { Color32::from_gray(30) });
             painter.line_segment([pos2(grid.left(), y + row_h), pos2(grid.right(), y + row_h)], Stroke::new(1.0, Color32::from_gray(30)));
         }
 
@@ -514,7 +536,42 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
 }
 
-fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
+/// The piano roll's rows, highest first: every note from C0 to C6, or, folded
+/// to a scale, the scale's and those of the notes off it (so none is hidden).
+fn rows(folded: Option<Scale>, notes: &[Note]) -> Vec<u8> {
+    let scale = folded.map(|k| k.scale());
+    (24..=96).rev().filter(|&p| scale.is_none_or(|s| s[p as usize % 12]) || notes.iter().any(|n| n.pitch == p)).collect()
+}
+
+/// Moves notes `semitones` up or down; folded to a scale, ±1 is a step of the
+/// scale. Nothing moves if any would leave the MIDI range.
+fn transpose(notes: &mut [Note], targets: &[usize], semitones: i32, walk: Option<Scale>) {
+    match walk {
+        Some(scale) if semitones.abs() == 1 => {
+            let moved: Option<Vec<u8>> = targets.iter().map(|&i| scale.step(notes[i].pitch, semitones)).collect();
+            for (&i, pitch) in targets.iter().zip(moved.into_iter().flatten()) {
+                notes[i].pitch = pitch;
+            }
+        }
+        _ => note_edit::transpose(notes, targets, semitones),
+    }
+}
+
+/// Moves each note off the scale to the scale's nearest (the lower of two as
+/// near); how many moved.
+fn to_scale(notes: &mut [Note], targets: &[usize], scale: Scale) -> usize {
+    let mut moved = 0;
+    for &i in targets {
+        let pitch = scale.snap(notes[i].pitch as f64);
+        if pitch != notes[i].pitch {
+            notes[i].pitch = pitch;
+            moved += 1;
+        }
+    }
+    moved
+}
+
+fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>) {
     ui.horizontal_wrapped(|ui| {
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
         ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
@@ -548,9 +605,22 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
         }
         ui.checkbox(&mut state.quantize_ends, "finales").on_hover_text("Cuantiza también el final de las notas");
         ui.separator();
+        let walk = key.filter(|_| state.fold);
         for (text, semitones) in [("-12", -12), ("-1", -1), ("+1", 1), ("+12", 12)] {
-            if ui.small_button(text).on_hover_text(format!("Transponer {scope} (↑↓, ⇧ octava)")).clicked() {
-                note_edit::transpose(&mut clip.notes, &targets, semitones);
+            let hint = if walk.is_some() { format!("Transponer {scope} por la escala (↑↓, ⇧ octava)") } else { format!("Transponer {scope} (↑↓, ⇧ octava)") };
+            if ui.small_button(text).on_hover_text(hint).clicked() {
+                transpose(&mut clip.notes, &targets, semitones, walk);
+            }
+        }
+        if let Some(key) = key {
+            ui.separator();
+            let hint = format!("Solo las filas de {}: las notas se mueven por la escala", key.name());
+            if widgets::flat_button(ui, "Plegar", state.fold, vec2(56.0, 20.0)).on_hover_text(hint).clicked() {
+                state.fold = !state.fold;
+                state.scrolled = None;
+            }
+            if ui.button("A la escala").on_hover_text(format!("Lleva {scope} que no son de {} a la nota de la escala más cercana", key.name())).clicked() {
+                to_scale(&mut clip.notes, &targets, key);
             }
         }
         if ui.small_button("×2").on_hover_text("Duplicar loop: dobla la longitud copiando las notas").clicked() {
@@ -634,7 +704,7 @@ fn pasted_notes(state: &State, text: &str) -> Vec<Note> {
         .unwrap_or_else(|| state.clipboard.clone())
 }
 
-fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
+fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Option<Scale>) {
     let events = ui.input(|i| i.events.clone());
     for event in events {
         let targets = note_edit::targets(&clip.notes, &state.selection);
@@ -676,7 +746,7 @@ fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
                     Key::ArrowUp | Key::ArrowDown if !selected.is_empty() => {
                         let step = if modifiers.shift { 12 } else { 1 };
                         let sign = if key == Key::ArrowUp { 1 } else { -1 };
-                        note_edit::transpose(&mut clip.notes, &selected, sign * step);
+                        transpose(&mut clip.notes, &selected, sign * step, walk);
                     }
                     _ => {}
                 }
@@ -697,5 +767,80 @@ mod tests {
         let state = State { clipboard: vec![Note { start: 0.0, length: 1.0, pitch: 36, velocity: 1.0 }], ..Default::default() };
         assert_eq!(pasted_notes(&state, &text), notes);
         assert_eq!(pasted_notes(&state, "texto cualquiera")[0].pitch, 36);
+    }
+
+    #[test]
+    fn folded_to_a_scale_notes_walk_it() {
+        let e_minor = Scale { tonic: 4, minor: true };
+        let note = |pitch| Note { start: 0.0, length: 1.0, pitch, velocity: 0.8 };
+        let folded = rows(Some(e_minor), &[note(64)]);
+        assert!(folded.iter().all(|p| e_minor.scale()[*p as usize % 12]));
+        assert_eq!(folded.len(), 7 * 6 + 1, "six octaves of seven notes, and the top C");
+        assert_eq!(rows(None, &[]).len(), 73);
+        // An F (off E minor) keeps its row.
+        assert_eq!(rows(Some(e_minor), &[note(65)]).len(), 7 * 6 + 2);
+
+        // E and B a step up: F# and C.
+        let mut notes = vec![note(64), note(71)];
+        transpose(&mut notes, &[0, 1], 1, Some(e_minor));
+        assert_eq!((notes[0].pitch, notes[1].pitch), (66, 72));
+        transpose(&mut notes, &[0, 1], -1, Some(e_minor));
+        assert_eq!((notes[0].pitch, notes[1].pitch), (64, 71));
+        // Not folded, a semitone.
+        transpose(&mut notes, &[0], 1, None);
+        assert_eq!(notes[0].pitch, 65);
+
+        // F and G# are not in E minor: to E (as near as F#, and lower) and G.
+        let mut notes = vec![note(65), note(68), note(67)];
+        assert_eq!(to_scale(&mut notes, &[0, 1, 2], e_minor), 2);
+        assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![64, 67, 67]);
+    }
+
+    /// What the editor draws, as texts and where.
+    fn texts(app: &mut PulseApp) -> Vec<(String, Rect)> {
+        let ctx = egui::Context::default();
+        let input = || egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0))), ..Default::default() };
+        let _ = ctx.run_ui(input(), |ui| show(app, ui));
+        let output = ctx.run_ui(input(), |ui| show(app, ui));
+        let mut texts = Vec::new();
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), Rect::from_min_size(t.pos, t.galley.size()))),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
+                _ => {}
+            }
+        }
+        output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+        texts
+    }
+
+    /// With a project key: «Plegar» leaves the scale's rows, «A la escala» moves
+    /// the notes off it; without one, neither is there.
+    #[test]
+    fn the_project_scale_folds_the_rows_and_fits_the_notes() {
+        use crate::tracks::tests::click;
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        // The bass (the drums have no scale).
+        let clip = ClipRef::Session { track: 1, slot: 0 };
+        app.select_clip(clip);
+        let Some(Clip::Midi(midi)) = app.project.tracks[1].clips[0].as_mut() else { panic!() };
+        midi.notes = vec![Note { start: 0.0, length: 1.0, pitch: 61, velocity: 0.8 }, Note { start: 1.0, length: 1.0, pitch: 64, velocity: 0.8 }];
+        let find = |texts: &[(String, Rect)], text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, r)| r.center());
+        let view = |app: &mut PulseApp, ui: &mut egui::Ui| show(app, ui);
+        assert!(find(&texts(&mut app), "Plegar").is_none());
+
+        app.project.key = Some(Scale { tonic: 0, minor: false });
+        let shown = texts(&mut app);
+        let fold = find(&shown, "Plegar").expect("a Plegar button");
+        click(&mut app, view, fold, egui::Modifiers::NONE);
+        assert!(app.piano_roll.fold);
+        // Folded every row is named; of the black keys only the note's (C#3) is left.
+        let shown = texts(&mut app);
+        assert!(find(&shown, "D3").is_some() && find(&shown, "C#3").is_some() && find(&shown, "D#3").is_none());
+
+        let fit = find(&shown, "A la escala").expect("an «A la escala» button");
+        click(&mut app, view, fit, egui::Modifiers::NONE);
+        let Some(Clip::Midi(midi)) = app.clip(clip) else { panic!() };
+        assert_eq!(midi.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60, 64], "C# to C, E stays");
     }
 }

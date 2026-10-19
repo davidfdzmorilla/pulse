@@ -17,6 +17,7 @@ mod editor;
 mod export;
 mod files;
 mod guide;
+mod harmony;
 mod freeze;
 mod history;
 mod input;

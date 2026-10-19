@@ -274,6 +274,8 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 - **Cuantizar** (⌘U) con su **intensidad** (%) y **finales** (cuantizar también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
 - **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom**.
 - Con una escala en el proyecto: **Plegar** y **A la escala** (ver «Tonalidad y escala»).
+- **Acordes**: escribe los acordes de la escala, progresiones enteras y sugiere el siguiente (ver «Acordes»).
+- Bajo la regla, una franja con el **acorde** que suena en cada tramo (ver «Acordes»).
 
 ### Notas
 
@@ -309,6 +311,27 @@ Con una escala, en el **Editor MIDI**:
 En **Audio a MIDI**, **Melodía** usa la escala del proyecto en vez de buscar una.
 
 Las pistas de batería no usan la escala. Se guarda con el proyecto y se deshace con ⌘Z.
+
+## Acordes
+
+### Ver los acordes
+
+En el **Editor MIDI**, bajo la regla, una franja dice el acorde que suena en cada tramo (como mucho uno cada medio compás): **Lam**, **Sol7**, **Do/Mi** (Do con Mi en el bajo)… Con una escala en el proyecto, también su grado: **Lam · vi**. Se actualiza mientras editas. Las notas sueltas de una melodía por encima no cambian el acorde.
+
+Para sacar los acordes de un audio (una canción, un stem, un loop de piano), usa **Audio a MIDI → Acordes**.
+
+### Escribir acordes
+
+Con una **Escala** en el proyecto, el menú **Acordes** de la barra del Editor MIDI:
+
+- Los **siete acordes de la escala**, con su grado (I, ii, iii, IV, V, vi, vii°). Clic: escribe el acorde en el marcador naranja y lo mueve al final, así que clic, clic, clic construye una progresión.
+- **Sugerencias**: los acordes que suelen ir después del que hay antes del marcador salen en naranja («Después de Sol suelen ir: Do, Lam»).
+- En menor, también el **V mayor** (menor armónica), la dominante que lleva con fuerza a la tónica.
+- **Con séptima**: cuatriadas en vez de tríadas (Domaj7, Rem7, Sol7…).
+- **Duración** de cada acorde: 2 tiempos, 1 compás o 2 compases.
+- **Progresiones** listas: en mayor Pop (I–V–vi–IV), Balada, Años 50, Jazz (ii–V–I), Rock y Canon; en menor Épica (i–VI–III–VII), Andaluza (i–VII–VI–V), Menor, Dramática y Lamento.
+
+Cada acorde lleva el bajo abajo y las demás notas juntas, en la inversión más cercana a la del acorde anterior: las voces se mueven lo menos posible, como lo tocaría un pianista. Las notas nuevas quedan seleccionadas, para moverlas o transponerlas.
 
 ## Editor de audio
 
@@ -361,6 +384,7 @@ Saca las notas de cualquier audio y las pone en una pista MIDI nueva, justo deba
 - **Melodía**: una nota cada vez. Para una voz, un tarareo o un instrumento solista: canta una idea, conviértela y tócala con cualquier sinte.
 - **Melodía sin ajustar**: igual, pero cada nota al semitono más cercano en vez de a la escala de la canción. Para melodías con notas fuera de la tonalidad, o un instrumento bien afinado.
 - **Armonía**: todas las notas a la vez. Para acordes, piano o guitarra.
+- **Acordes**: los acordes de una canción o de un instrumento, uno por cambio (como mucho cada medio compás), con el bajo y las voces enlazadas, listos para tocarlos con otro sonido. Ignora la batería y los golpes cortos. Usa la **Escala** del proyecto si la hay; si no, la del audio.
 - **Batería**: cada golpe pasa a bombo, caja o charles (según dónde tiene su energía), en una Drum Machine.
 
 Se hace en este Mac, sin internet, en unos segundos; la barra de estado muestra el progreso. Las notas siguen el tempo del clip (su warp) y su fuerza pasa a la velocidad. Se combina bien con **Separar en stems**: separa una canción y convierte el bajo o la voz en MIDI.

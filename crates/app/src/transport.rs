@@ -195,6 +195,25 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         {
             app.toggle_keyboard();
         }
+        let voice_label = match (app.voice.enabled, app.voice.playing()) {
+            (true, Some(pitch)) => format!("Voz · {}", crate::project::note_name(pitch)),
+            (true, None) => "Voz · …".to_string(),
+            (false, _) => "Voz".to_string(),
+        };
+        let voice = widgets::flat_button(ui, &voice_label, app.voice.enabled, vec2(if app.voice.enabled { 74.0 } else { 40.0 }, 22.0))
+            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. Usa auriculares.\nClic derecho: octava");
+        if voice.clicked() {
+            app.toggle_voice();
+        }
+        voice.context_menu(|ui| {
+            ui.label("Octava");
+            for (octave, label) in [(-2, "−2 (voz aguda → bajo)"), (-1, "−1"), (0, "Como suena"), (1, "+1"), (2, "+2 (voz grave → agudo)")] {
+                if ui.radio(app.voice.octave == octave, label).clicked() {
+                    app.voice.octave = octave;
+                    ui.close();
+                }
+            }
+        });
         let devices = app.midi.names.len();
         let midi_hint = if devices == 0 {
             "Ningún dispositivo MIDI conectado. Clic para volver a buscar.".to_string()

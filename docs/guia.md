@@ -459,16 +459,24 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 ### Efectos
 
 - **EQ Three**: graves, medios y agudos, con sus frecuencias de corte.
-- **Compressor**: umbral, ratio, ataque, release y ganancia.
+- **Compressor**: umbral, ratio, ataque, release y ganancia, y **Sidechain** (ver abajo).
 - **Limiter**: ganancia, techo y release.
 - **Saturator**: drive y salida.
 - **Bitcrusher**: bits y reducción de muestreo.
 - **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo.
-- **Ducker**: bombeo de volumen sincronizado al tempo (efecto sidechain sin sidechain).
+- **Ducker**: bombeo de volumen. Sin sidechain, sincronizado al tempo (**Ritmo**); con **Sidechain**, baja cada vez que suena la pista elegida (**Release**: cuánto tarda en volver, en fracción del tiempo elegido).
 - **Chorus** y **Phaser**.
 - **Delay**: tiempo sincronizado (1/16 a un compás), Ping Pong, feedback y filtro.
 - **Reverb**: tamaño, amortiguación y anchura.
 - **Utility**: ganancia y anchura estéreo (0 % mono, 200 % muy abierto).
+
+### Sidechain
+
+El **Compressor** y el **Ducker** pueden escuchar a otra pista en vez de a la suya: elige cuál en **Sidechain**. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
+
+- Escucha el sonido de la pista elegida **tras sus efectos y antes de su fader**: funciona aunque esa pista esté silenciada o con el fader abajo (puedes tener un bombo solo para disparar el sidechain).
+- La fuente se recuerda aunque muevas, agrupes o renombres las pistas.
+- Vale también en pistas de grupos, retornos y el Master.
 
 ## Instrumentos
 
@@ -684,7 +692,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Consejos**:
   - **Sonoridad** por debajo o por encima del destino: **Aplicar** pone un **Limiter** en el master y lo ajusta midiendo cada vez, hasta llegar (y con el pico real por debajo de −1 dBTP). Si la mezcla no da más sin aplastarla, se para y te lo dice: para más volumen, comprime o satura las pistas.
   - **Pistas por encima de 0 dB**: **Aplicar** les baja el volumen.
-  - **Graves que chocan**: dos pistas llenando los graves (por debajo de 120 Hz) a la vez. Si una es la batería, **Aplicar** pone un **Ducker** a la otra (se aparta en cada tiempo, como un sidechain); si no, recorta los graves de la que menos tiene con un **EQ Three**.
+  - **Graves que chocan**: dos pistas llenando los graves (por debajo de 120 Hz) a la vez. Si una es la batería, **Aplicar** pone a la otra un **Ducker** con **sidechain** de la batería (se aparta cada vez que suena); si no, recorta los graves de la que menos tiene con un **EQ Three**.
   - **Fase**: mezcla o pistas en contrafase, que en mono (un móvil, un club) se pierden.
   - **Dinámica**: muy apretada o con partes muy lejos en volumen.
 - **Referencia**: **Elegir canción…** carga una canción que suene como quieres. Se compara su sonoridad y su **balance de graves, medios y agudos** con el tuyo (en la gráfica por octavas: barras, tu mezcla; línea, la referencia), y **Aplicar** pone un **EQ Three** en el master que lo acerca.

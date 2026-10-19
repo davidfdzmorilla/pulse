@@ -272,6 +272,33 @@ mod tests {
         assert_eq!(names(&app)[2], format!("·{}", before[2]));
     }
 
+    /// Tracks keep their ids when they move, copies get new ones, and a
+    /// sidechain naming one survives saving and opening.
+    #[test]
+    fn track_ids_are_stable_for_sidechains() {
+        let mut app = app();
+        let ids: Vec<u32> = app.project.tracks.iter().map(|t| t.id).collect();
+        assert!(ids.iter().all(|&id| id != 0));
+        assert_eq!(ids.iter().collect::<std::collections::HashSet<_>>().len(), ids.len());
+        // The bass ducks with the drums.
+        let drums = app.project.tracks[0].id;
+        let ducker = engine::model::DuckerParams { sidechain: Some(drums), ..Default::default() };
+        app.project.tracks[1].devices.push(engine::model::Device::new(engine::model::Effect::Ducker(ducker)));
+        app.move_tracks(&[0], 4);
+        assert_eq!(app.project.tracks[3].id, drums, "moved with its id");
+        app.duplicate_track(3);
+        assert_ne!(app.project.tracks[4].id, drums, "a copy has its own");
+        let dir = std::env::temp_dir().join(format!("pulse-ids-{}", std::process::id()));
+        let file = dir.join("Ids").join("Ids.pulse");
+        app.save_to_path(&file);
+        let loaded = crate::project::Project::load(&file).unwrap();
+        let bass = loaded.tracks.iter().find(|t| t.devices.iter().any(|d| matches!(d.effect, engine::model::Effect::Ducker(_)))).unwrap();
+        let engine::model::Effect::Ducker(p) = bass.devices.last().unwrap().effect else { panic!() };
+        assert_eq!(p.sidechain, Some(drums));
+        assert!(loaded.tracks.iter().any(|t| t.id == drums));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// The texts a view draws.
     fn texts(app: &mut PulseApp, view: fn(&mut PulseApp, &mut eframe::egui::Ui)) -> Vec<String> {
         let ctx = eframe::egui::Context::default();

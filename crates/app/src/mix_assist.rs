@@ -84,6 +84,8 @@ impl Measures {
 #[derive(Clone, Debug)]
 pub struct TrackMeasures {
     pub index: usize,
+    /// Its id (what a sidechain names it by).
+    pub id: u32,
     pub name: String,
     pub drums: bool,
     pub peak: f64,
@@ -106,8 +108,9 @@ pub enum Fix {
     MasterLimiter { gain_db: f32, ceiling_db: f32 },
     /// A track's volume moved (dB).
     TrackGain { track: usize, name: String, db: f32 },
-    /// A ducker on a track, so it makes room on every beat (for the kick).
-    Duck { track: usize, name: String },
+    /// A ducker on a track that listens to the drums (by their track id), so it
+    /// makes room each time they hit.
+    Duck { track: usize, name: String, source: u32, source_name: String },
     /// Less low end on a track (an EQ Three, lows down).
     CutLows { track: usize, name: String },
     /// The master's EQ Three moved by these (dB).
@@ -218,8 +221,8 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         // A kick against the rest: the rest ducks. Otherwise the one with less
         // low end gives it up.
         let fix = match (a.drums, b.drums) {
-            (true, false) => Some(Fix::Duck { track: b.index, name: b.name.clone() }),
-            (false, true) => Some(Fix::Duck { track: a.index, name: a.name.clone() }),
+            (true, false) => Some(Fix::Duck { track: b.index, name: b.name.clone(), source: a.id, source_name: a.name.clone() }),
+            (false, true) => Some(Fix::Duck { track: a.index, name: a.name.clone(), source: b.id, source_name: b.name.clone() }),
             _ => {
                 let mean = |t: &TrackMeasures| t.low_end.iter().sum::<f64>() / t.low_end.len().max(1) as f64;
                 let lesser = if mean(a) < mean(b) { a } else { b };
@@ -339,7 +342,7 @@ impl PulseApp {
         let mix = export::plan(&self.project, &mut self.samples, &export::Settings { stems: false, ..settings }, std::path::Path::new("mezcla.wav"));
         let tracks = export::plan(&self.project, &mut self.samples, &settings, std::path::Path::new("mezcla.wav"));
         self.samples.plugins = live;
-        let names: Vec<(String, bool)> = self.project.tracks.iter().map(|t| (t.name.clone(), t.is_drums())).collect();
+        let names: Vec<(String, bool, u32)> = self.project.tracks.iter().map(|t| (t.name.clone(), t.is_drums(), t.id)).collect();
         let tempo = self.project.tempo;
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
@@ -358,9 +361,10 @@ impl PulseApp {
                     None => report = Some(Report { mix: Measures::of(&left, &right, RATE), tracks: Vec::new() }),
                     Some(report) => {
                         let index = k - 1;
-                        let (name, drums) = names.get(index).cloned().unwrap_or_default();
+                        let (name, drums, id) = names.get(index).cloned().unwrap_or_default();
                         report.tracks.push(TrackMeasures {
                             index,
+                            id,
                             name,
                             drums,
                             peak: loudness::sample_peak(&left, &right),
@@ -506,9 +510,11 @@ impl PulseApp {
                 mixer.gain *= 10f32.powf(db / 20.0);
                 self.status = Some(format!("«{name}» {:+.1} dB", db));
             }
-            Fix::Duck { track, name } if track_ok(self, *track, name) => {
-                self.project.tracks[*track].devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.6, release: 0.5, rate_beats: 1.0 })));
-                self.status = Some(format!("Ducker en «{name}»: se aparta en cada tiempo, cuando suena el bombo"));
+            Fix::Duck { track, name, source, source_name } if track_ok(self, *track, name) => {
+                // Listening to the drums; a quarter of a beat to come back.
+                let sidechain = self.project.tracks.iter().any(|t| t.id == *source).then_some(*source);
+                self.project.tracks[*track].devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.6, release: 0.25, rate_beats: 1.0, sidechain })));
+                self.status = Some(format!("Ducker en «{name}» con sidechain de «{source_name}»: se aparta cada vez que suena"));
             }
             Fix::CutLows { track, name } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -9.0, low_freq: 150.0, ..Default::default() })));
@@ -690,7 +696,7 @@ fn fix_hint(fix: &Fix) -> String {
     match fix {
         Fix::MasterLimiter { gain_db, ceiling_db } => format!("Limiter en el master: ganancia {gain_db:+.1} dB, techo {ceiling_db:.1} dB"),
         Fix::TrackGain { name, db, .. } => format!("Volumen de «{name}» {db:+.1} dB"),
-        Fix::Duck { name, .. } => format!("Añade un Ducker a «{name}»: baja en cada tiempo para dejar sitio al bombo"),
+        Fix::Duck { name, source_name, .. } => format!("Añade un Ducker a «{name}» que escucha a «{source_name}» (sidechain): baja cuando suena, para dejarle sitio"),
         Fix::CutLows { name, .. } => format!("Añade un EQ Three a «{name}» con los graves (bajo 150 Hz) a −9 dB"),
         Fix::MasterEq { low, mid, high } => format!("EQ Three en el master: graves {low:+.1}, medios {mid:+.1}, agudos {high:+.1} dB"),
     }
@@ -730,7 +736,7 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, name: name.into(), drums, peak, lufs: Some(-20.0), correlation: 0.9, low_end: low }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, peak, lufs: Some(-20.0), correlation: 0.9, low_end: low }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
@@ -759,7 +765,7 @@ mod tests {
         let list = advise(&report(-14.0, -1.5, tracks), Target::Streaming, None);
         assert!(list.iter().any(|a| a.fix == Some(Fix::TrackGain { track: 1, name: "Bass".into(), db: -3.0 })), "{list:?}");
         // Kick and bass: the bass ducks. Bass and pad: the pad gives up its lows.
-        assert!(list.iter().any(|a| a.fix == Some(Fix::Duck { track: 1, name: "Bass".into() })));
+        assert!(list.iter().any(|a| a.fix == Some(Fix::Duck { track: 1, name: "Bass".into(), source: 10, source_name: "Kick".into() })));
         assert!(list.iter().any(|a| matches!(&a.fix, Some(Fix::CutLows { .. }))));
         assert!(!list.iter().any(|a| a.text.contains("Hats")));
     }

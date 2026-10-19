@@ -122,6 +122,10 @@ pub struct Track {
     /// A group with its tracks hidden.
     #[serde(default, skip_serializing_if = "is_default")]
     pub folded: bool,
+    /// Its own number in the project, which stays when tracks move: what a
+    /// sidechain names its source by (0 until it is given one, see `assign_ids`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub id: u32,
 }
 
 impl Track {
@@ -144,6 +148,7 @@ impl Track {
             frozen: None,
             depth: 0,
             folded: false,
+            id: 0,
         }
     }
 
@@ -317,6 +322,19 @@ impl PartialEq for PluginRef {
 }
 
 impl Project {
+    /// Gives each track without one (or with another's: a copy) an id of its own.
+    pub fn assign_ids(&mut self) {
+        let mut next = self.tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        let mut seen = std::collections::HashSet::new();
+        for track in &mut self.tracks {
+            if track.id == 0 || !seen.insert(track.id) {
+                track.id = next;
+                seen.insert(next);
+                next += 1;
+            }
+        }
+    }
+
     pub fn plugin(&self, id: PluginId) -> Option<&PluginRef> {
         self.plugins.iter().find(|p| p.id == id)
     }
@@ -460,6 +478,7 @@ impl Project {
             attack_ms: 8.0,
             release_ms: 90.0,
             makeup_db: 1.5,
+            sidechain: None,
         })));
 
         let mut bass = Track::new("Bass", bass_color, InstrumentKind::Acid(AcidParams::default()));

@@ -401,7 +401,9 @@ impl PulseApp {
         app
     }
 
-    fn with_audio(project: Project, audio: Audio) -> Self {
+    fn with_audio(mut project: Project, audio: Audio) -> Self {
+        // Ids given before anything compares with it (so it does not look edited).
+        project.assign_ids();
         Self {
             history: History::new(&project),
             saved: project.clone(),
@@ -485,6 +487,7 @@ impl PulseApp {
 
     /// Pushes the whole project to the engine (after loading or undo).
     pub fn sync_all(&mut self) {
+        self.project.assign_ids();
         // Plugins are loaded again from their state: take it from the running ones first.
         self.capture_plugins();
         self.suspend_editors();
@@ -2132,6 +2135,7 @@ impl PulseApp {
     fn replace_project(&mut self, project: Project, file: Option<PathBuf>) {
         self.audio.send(Command::Stop);
         self.project = project;
+        self.project.assign_ids();
         self.saved = self.project.clone();
         self.history.reset(&self.project);
         self.file = file;

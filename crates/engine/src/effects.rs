@@ -89,6 +89,35 @@ impl Eq3 {
 pub struct Compressor {
     params: CompressorParams,
     envelope_db: f32,
+    key: Key,
+}
+
+/// The sound of a sidechain's source for this block (the louder channel), when
+/// the engine has fed it.
+pub struct Key {
+    level: Vec<f32>,
+    fed: bool,
+}
+
+impl Key {
+    /// Room for a block; call off the audio thread.
+    fn new() -> Self {
+        Self { level: vec![0.0; 4096], fed: false }
+    }
+
+    fn feed(&mut self, left: &[f32], right: &[f32]) {
+        let n = left.len().min(right.len()).min(self.level.len());
+        for i in 0..n {
+            self.level[i] = left[i].abs().max(right[i].abs());
+        }
+        self.fed = true;
+    }
+
+    /// Whether it was fed for this block of `n` (once: the next block needs
+    /// feeding again).
+    fn take(&mut self, n: usize) -> bool {
+        std::mem::replace(&mut self.fed, false) && n <= self.level.len()
+    }
 }
 
 impl Compressor {
@@ -112,9 +141,10 @@ impl Compressor {
         let attack = (-1.0 / (self.params.attack_ms.max(0.05) * 0.001 * sr)).exp();
         let release = (-1.0 / (self.params.release_ms.max(1.0) * 0.001 * sr)).exp();
         let makeup = db_to_gain(self.params.makeup_db);
-        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
-            // Stereo-linked peak detection.
-            let peak = a.abs().max(b.abs()).max(1e-6);
+        let keyed = self.key.take(l.len());
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            // Stereo-linked peak detection, of the sidechain's sound if it has one.
+            let peak = if keyed { self.key.level[i] } else { a.abs().max(b.abs()) }.max(1e-6);
             let target = self.gain_reduction_db(20.0 * peak.log10());
             let coef = if target < self.envelope_db { attack } else { release };
             self.envelope_db = target + coef * (self.envelope_db - target);
@@ -437,6 +467,9 @@ impl Bitcrusher {
 
 pub struct Ducker {
     params: DuckerParams,
+    key: Key,
+    /// The sidechain's followed level.
+    envelope: f32,
 }
 
 impl Ducker {
@@ -455,6 +488,25 @@ impl Ducker {
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], ctx: &ProcessContext) {
+        // With a sidechain it ducks when that sounds: from -40 dBFS, all the way
+        // by -10; its release is `release` of the period.
+        let p = self.params;
+        if self.key.take(l.len()) {
+            let attack = (-1.0 / (0.001 * ctx.sample_rate)).exp();
+            let seconds = (p.release.max(0.05) as f64 * p.rate_beats.max(0.0625) * 60.0 / ctx.tempo.max(1.0)) as f32;
+            let release = (-1.0 / (seconds * ctx.sample_rate)).exp();
+            for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+                let level = self.key.level[i];
+                let coef = if level > self.envelope { attack } else { release };
+                self.envelope = level + coef * (self.envelope - level);
+                let db = 20.0 * self.envelope.max(1e-6).log10();
+                let duck = ((db + 40.0) / 30.0).clamp(0.0, 1.0);
+                let g = 1.0 - p.depth * duck;
+                *a *= g;
+                *b *= g;
+            }
+            return;
+        }
         // Synced to the transport: nothing to pump while stopped.
         if ctx.beats_per_sample <= 0.0 {
             return;
@@ -553,6 +605,7 @@ impl EffectProcessor {
             Effect::Compressor(params) => Self::Compressor(Compressor {
                 params,
                 envelope_db: 0.0,
+                key: Key::new(),
             }),
             Effect::Delay(params) => Self::Delay(Delay::new(params, sample_rate)),
             Effect::Reverb(params) => Self::Reverb(Reverb::new(params, sample_rate)),
@@ -569,10 +622,28 @@ impl EffectProcessor {
                 phase: 0.0,
             }),
             Effect::Bitcrusher(params) => Self::Bitcrusher(Bitcrusher { params, counter: 0.0, held: [0.0; 2] }),
-            Effect::Ducker(params) => Self::Ducker(Ducker { params }),
+            Effect::Ducker(params) => Self::Ducker(Ducker { params, key: Key::new(), envelope: 0.0 }),
             Effect::Limiter(params) => Self::Limiter(Limiter::new(params, sample_rate)),
             Effect::Utility(params) => Self::Utility(Utility { params }),
             Effect::Plugin(id) => Self::Plugin(id, None),
+        }
+    }
+
+    /// The track (by id) whose sound drives it, if it has a sidechain.
+    pub fn sidechain(&self) -> Option<u32> {
+        match self {
+            Self::Compressor(fx) => fx.params.sidechain,
+            Self::Ducker(fx) => fx.params.sidechain,
+            _ => None,
+        }
+    }
+
+    /// Gives a sidechained effect its source's sound for this block.
+    pub fn feed_key(&mut self, left: &[f32], right: &[f32]) {
+        match self {
+            Self::Compressor(fx) => fx.key.feed(left, right),
+            Self::Ducker(fx) => fx.key.feed(left, right),
+            _ => {}
         }
     }
 

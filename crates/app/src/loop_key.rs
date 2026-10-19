@@ -171,6 +171,7 @@ impl PulseApp {
     pub fn set_key(&mut self, key: Option<Key>) {
         self.project.key = key;
         self.follow_key();
+        self.sync_all_midi_effects();
     }
 
     /// Transposes every clip that follows the project's key to it.

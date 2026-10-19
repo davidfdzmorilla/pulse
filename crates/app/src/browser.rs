@@ -196,6 +196,22 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         });
 
+        section(ui, "EFECTOS MIDI", |ui| {
+            let track = match app.selected_target {
+                Target::Track(t) if !app.project.tracks[t].is_audio() && !app.project.tracks[t].is_group() => Some(t),
+                _ => None,
+            };
+            let hint = if track.is_some() { "Clic: lo pone antes del instrumento de la pista seleccionada" } else { "Selecciona una pista MIDI" };
+            for effect in engine::model::MidiEffect::catalog() {
+                if item(ui, "♪", effect.label(), hint) {
+                    if let Some(t) = track {
+                        app.add_midi_effect(t, effect);
+                        app.detail = crate::app::Detail::Devices;
+                    }
+                }
+            }
+        });
+
         section(ui, "EFECTOS DE AUDIO", |ui| {
             for effect in Effect::catalog() {
                 if item(ui, "≈", effect.label(), "Clic: añade el efecto al final de la cadena seleccionada") {

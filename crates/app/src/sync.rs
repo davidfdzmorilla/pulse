@@ -271,6 +271,17 @@ pub fn project_commands(
         commands.extend(mixer_commands(target, &track.mixer));
     }
     commands.push(Command::SetGroups(crate::groups::parents(&project.tracks)));
+    // MIDI effects, with the project's key where they follow it.
+    let key = project.key.map(|k| engine::model::ScaleKey { tonic: k.tonic, minor: k.minor });
+    for t in 0..MAX_TRACKS {
+        let mut devices = [None; engine::model::MAX_MIDI_EFFECTS];
+        if let Some(track) = project.tracks.get(t) {
+            for (slot, device) in devices.iter_mut().zip(&track.midi_effects) {
+                *slot = Some(engine::model::MidiDevice { effect: device.effect.with_project_key(key), ..*device });
+            }
+        }
+        commands.push(Command::SetMidiEffects { track: t, devices });
+    }
     commands.push(Command::SetTrackIds(std::array::from_fn(|t| project.tracks.get(t).map_or(0, |track| track.id))));
     for (r, ret) in project.returns.iter().enumerate().take(NUM_RETURNS) {
         let target = Target::Return(r);

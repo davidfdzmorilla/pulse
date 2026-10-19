@@ -24,6 +24,7 @@ mod input;
 mod kick_ui;
 mod kits;
 mod library;
+mod loop_key;
 mod midi_map;
 mod multisample;
 mod modular_ui;

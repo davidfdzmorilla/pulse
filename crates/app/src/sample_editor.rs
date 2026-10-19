@@ -51,6 +51,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let mut slice = false;
     let mut separate = false;
     let (mut detect, mut use_tempo) = (false, false);
+    let (mut detect_key, mut follow_to) = (false, None);
+    let project_key = app.project.key;
     // Where it will be sliced, while the cuts are shown to edit them.
     let mut cuts = if app.show_cuts { app.cuts_for(clip_ref) } else { None };
     let cuts_before = cuts.clone();
@@ -155,6 +157,29 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 }
             });
             ui.horizontal(|ui| {
+                label(ui, "Tonalidad");
+                match clip.key {
+                    Some(k) => {
+                        let own = stems::key::Key { tonic: k.tonic, minor: k.minor };
+                        ui.label(egui::RichText::new(own.name()).size(10.5));
+                        let mut follow = k.follow;
+                        let hint = match project_key {
+                            Some(p) => format!("Transpone el clip a la escala del proyecto ({}) por el camino más corto, y lo sigue si cambia", p.name()),
+                            None => "Transpone el clip a la escala del proyecto cuando la elijas (barra de transporte)".to_string(),
+                        };
+                        if ui.checkbox(&mut follow, "Seguir la escala").on_hover_text(hint).changed() {
+                            follow_to = Some(follow);
+                        }
+                    }
+                    None => {
+                        ui.label(egui::RichText::new("sin detectar").color(TEXT_DIM).size(10.5));
+                    }
+                }
+                if ui.button("Detectar").on_hover_text("Busca la tonalidad del audio (o la lee de su nombre, como «Pad_Am»)").clicked() {
+                    detect_key = true;
+                }
+            });
+            ui.horizontal(|ui| {
                 label(ui, "Stems");
                 separate = ui
                     .add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems"))
@@ -183,6 +208,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     .on_disabled_hover_text("La transposición se aplica en modo Stretch");
             });
             clip.transpose = clip.transpose.round();
+            // Moved by hand, it no longer follows the project's key.
+            if clip.transpose != before.transpose {
+                if let Some(k) = clip.key.as_mut() {
+                    k.follow = false;
+                }
+            }
         });
         ui.add_space(8.0);
 
@@ -428,6 +459,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     if detect {
         app.detect_tempo(vec![clip_ref], true);
     }
+    if let Some(follow) = follow_to {
+        app.set_follow_key(clip_ref, follow);
+    }
+    if detect_key {
+        app.detect_clip_key(clip_ref);
+    }
     if use_tempo {
         app.use_clip_tempo(clip_ref);
     }
@@ -448,6 +485,7 @@ mod tests {
             original_bpm: 120.0,
             warp_markers: Vec::new(),
             takes: Vec::new(),
+            key: None,
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: Vec::new(),

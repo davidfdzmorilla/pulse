@@ -37,7 +37,7 @@ La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a do
 - **Punch in** y **punch out** (los dos botones rojos junto al loop): al grabar en el Arrangement, solo se graba desde el inicio del loop y/o hasta su final (ver «Grabar»).
 - **Rec Q**: cuantiza el inicio de las notas MIDI grabadas (Off, 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32).
 - **Swing** (0–100 %) y su rejilla (1/8 o 1/16): retrasa los contratiempos al reproducir, sin cambiar las notas. 100 % es un shuffle de tresillo. También se aplica al exportar. Vale para todos los clips MIDI, salvo los que tengan su propio groove (ver «Editor MIDI»).
-- **Escala**: la tonalidad de la canción (ver «Tonalidad y escala»).
+- **Escala**: la tonalidad de la canción (ver «Tonalidad y escala»), y si los loops nuevos se ajustan a ella.
 - **▶ Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
 - **Teclado**: el teclado del ordenador como teclado MIDI (M).
 - **MIDI**: encendido si hay teclados MIDI conectados. Clic para volver a buscarlos.
@@ -312,6 +312,18 @@ En **Audio a MIDI**, **Melodía** usa la escala del proyecto en vez de buscar un
 
 Las pistas de batería no usan la escala. Se guarda con el proyecto y se deshace con ⌘Z.
 
+### Loops en tu tonalidad
+
+Los audios que añades (arrastrándolos, desde el navegador o con Importar) se ponen en la escala del proyecto, igual que se ponen a su tempo:
+
+- Pulse busca la **tonalidad de cada archivo**: primero en su nombre, como la escriben las librerías de loops («Pad_120_Am», «Keys F#m», «Bass_E», «124Gm»), y si no, en su sonido, cuando está clara. Si el nombre dice una y el sonido otra muy distinta, gana el sonido.
+- El clip se **transpone por el camino más corto** (como mucho 6 semitonos) a la escala del proyecto. Si uno es mayor y el otro menor, va a la relativa: un loop en mi menor en una canción en sol mayor no se mueve.
+- Si el proyecto aún **no tiene escala**, toma la del primer loop con tonalidad, y los siguientes se ajustan a ella.
+- Si **cambias la escala** del proyecto, todos los loops que la siguen se mueven con ella.
+- Las **baterías** (por su nombre: kick, snare, hat, perc, drum…) y los audios sin tonalidad clara no se tocan.
+
+En el **Editor de audio** de cada clip, **Tonalidad** muestra la del archivo; **Seguir la escala** lo ajusta o lo deja en la suya; **Detectar** la busca de nuevo. Mover **Transp.** a mano hace que deje de seguir la escala. Para no ajustar los loops nuevos, desmarca **Ajustar los loops nuevos a la escala** en el menú **Escala** del transporte.
+
 ## Acordes
 
 ### Ver los acordes
@@ -343,6 +355,7 @@ Se abre al seleccionar un clip de audio.
 - **Ver**: **El clip** o **Archivo entero**. En «Archivo entero», clic o arrastrar en la forma de onda mueve el **inicio** del clip.
 - **Inicio** en segundos (puede ser negativo, para empezar en un compás antes del archivo).
 - **Gain** (−36 a +12 dB) y **Transp.** (±24 semitonos, solo en Stretch).
+- **Tonalidad** del audio, **Seguir la escala** y **Detectar** (ver «Loops en tu tonalidad»).
 - **Marcadores** de warp y **Quitar**. **Trocear → A Drum Rack**. **Tempo: Detectar / Usar en el proyecto**. **Separar en stems**.
 - **Carril**: envolventes del clip (ver «Automatización»).
 

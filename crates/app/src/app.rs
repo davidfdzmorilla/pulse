@@ -565,6 +565,7 @@ impl PulseApp {
             original_bpm,
             warp_markers: Vec::new(),
             takes: Vec::new(),
+            key: None,
             gain_db: 0.0,
             transpose: 0.0,
         }
@@ -641,7 +642,8 @@ impl PulseApp {
         if added > 0 {
             self.status = Some(format!("{added} muestra(s) añadida(s)"));
         }
-        // Each file's tempo, so its clips follow the project's.
+        // Each file's key, so its clips follow the project's, and its tempo.
+        self.find_clip_keys(&created);
         for clip in created {
             self.detect_tempo(vec![clip], false);
         }
@@ -1776,6 +1778,7 @@ impl PulseApp {
             warp: WarpMode::Stretch,
             original_bpm: tempo,
             warp_markers: Vec::new(),
+            key: None,
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,

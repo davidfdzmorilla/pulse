@@ -297,8 +297,18 @@ fn scale(app: &mut PulseApp, ui: &mut egui::Ui) {
             app.detect_key();
             ui.close();
         }
+        let mut follow = app.settings.loops_follow_key;
+        if ui
+            .checkbox(&mut follow, "Ajustar los loops nuevos a la escala")
+            .on_hover_text("Los audios que añadas se transponen a la escala del proyecto (su tonalidad sale del nombre, como «Pad_Am», o del sonido); las baterías no. Si el proyecto no tiene escala, toma la del primero")
+            .changed()
+        {
+            let settings = crate::settings::Settings { loops_follow_key: follow, ..app.settings.clone() };
+            app.set_settings(settings);
+        }
+        ui.separator();
         if ui.selectable_label(app.project.key.is_none(), "Sin escala").clicked() {
-            app.project.key = None;
+            app.set_key(None);
             ui.close();
         }
         ui.separator();
@@ -309,7 +319,7 @@ fn scale(app: &mut PulseApp, ui: &mut egui::Ui) {
                     let name = key.name();
                     let short = name.split(' ').next().unwrap_or(&name);
                     if ui.selectable_label(app.project.key == Some(key), short).on_hover_text(&name).clicked() {
-                        app.project.key = Some(key);
+                        app.set_key(Some(key));
                         ui.close();
                     }
                     if i % 6 == 5 {

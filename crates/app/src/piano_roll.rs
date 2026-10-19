@@ -82,6 +82,9 @@ pub struct State {
     /// Only the rows of the project's scale.
     fold: bool,
     chords: crate::harmony::ChordMenu,
+    /// How «Generar ritmo» makes drum beats, and the takes made so far.
+    pub(crate) drums: crate::drum_gen::Settings,
+    drum_takes: u64,
 }
 
 impl Default for State {
@@ -103,6 +106,8 @@ impl Default for State {
             scroll_x: 0.0,
             fold: false,
             chords: Default::default(),
+            drums: Default::default(),
+            drum_takes: 0,
         }
     }
 }
@@ -180,6 +185,16 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     // One row per drum sound or pad, the lowest note at the bottom.
     let drum_rows = if is_drums { app.project.tracks[t].drum_rows() } else { Vec::new() };
     let key = app.project.key.filter(|_| !is_drums);
+    // A drum clip: its kit's sounds, and where the bass plays over it.
+    let drums = is_drums.then(|| {
+        let kit = crate::drum_gen::Kit::from_rows(&drum_rows);
+        let length = app.clip(clip_ref).map_or(4.0, |c| c.length());
+        let (slot, span) = match clip_ref {
+            ClipRef::Session { slot, .. } => (Some(slot), None),
+            ClipRef::Arrangement { track, index } => (None, app.project.tracks[track].arrangement.get(index).map(|p| (p.start, p.end()))),
+        };
+        (kit, crate::drum_gen::bass_onsets(&app.project.tracks, slot, span, length))
+    });
     // The accompaniment just written can be written again, another way.
     let mut vary = app.can_vary(clip_ref).then_some(false);
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
@@ -199,6 +214,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut previews: Vec<u8> = Vec::new();
 
     previews.extend(toolbar(ui, state, clip, key, is_drums, &mut vary));
+    if let Some((kit, bass)) = &drums {
+        drum_menu(ui, state, clip, kit, bass);
+    }
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
     if keys_enabled {
@@ -679,6 +697,43 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
     previews
 }
 
+/// «Generar ritmo»: a beat in a style for this drum clip (see `drum_gen`), a new
+/// take each time.
+fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &crate::drum_gen::Kit, bass: &[f64]) {
+    use crate::drum_gen::Style;
+    ui.horizontal(|ui| {
+        widgets::field_menu_button(ui, "Generar ritmo", |ui| {
+            ui.set_min_width(300.0);
+            let settings = &mut state.drums;
+            ui.label(egui::RichText::new("Estilo").color(TEXT_DIM).size(10.5));
+            ui.horizontal_wrapped(|ui| {
+                for style in Style::ALL {
+                    ui.selectable_value(&mut settings.style, style, style.label()).on_hover_text(format!("Suele ir a unos {} BPM", style.tempo()));
+                }
+            });
+            let mut percent = settings.complexity * 100.0;
+            ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("Complejidad").color(TEXT_DIM).size(10.5));
+                if ui.add(egui::Slider::new(&mut percent, 0.0..=100.0).suffix(" %").fixed_decimals(0)).on_hover_text("0 %: solo lo esencial del estilo; 100 %: golpes de más, notas fantasma").changed() {
+                    settings.complexity = percent / 100.0;
+                }
+            });
+            ui.checkbox(&mut settings.fills, "Redoble al final de cada frase").on_hover_text("El último tiempo de cada 4 compases (o del clip), con la caja y los toms");
+            ui.add_enabled(!bass.is_empty(), egui::Checkbox::new(&mut settings.follow_bass, "El bombo sigue al bajo"))
+                .on_hover_text("Añade bombos donde el bajo empieza notas (en corcheas)")
+                .on_disabled_hover_text("No hay una pista de bajo sonando con este clip");
+            ui.separator();
+            let label = if state.drum_takes == 0 { "Generar" } else { "Otra versión" };
+            if ui.button(label).on_hover_text("Sustituye las notas del clip (⌘Z las recupera)").clicked() {
+                state.drum_takes += 1;
+                let seed = crate::versions::now() ^ (state.drum_takes << 20);
+                clip.notes = crate::drum_gen::generate(kit, &state.drums, clip.length, if state.drums.follow_bass { bass } else { &[] }, seed);
+                state.selection.clear();
+            }
+        });
+    });
+}
+
 /// «Groove»: the clip follows the project's swing, or has its own groove
 /// (swing, softer off-beats, humanize), with some ready-made ones.
 fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip) {
@@ -886,6 +941,16 @@ mod tests {
         click(&mut app, view, fit, egui::Modifiers::NONE);
         let Some(Clip::Midi(midi)) = app.clip(clip) else { panic!() };
         assert_eq!(midi.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60, 64], "C# to C, E stays");
+    }
+
+    /// A drum clip's editor has «Generar ritmo»; a bass clip's, not.
+    #[test]
+    fn drum_clips_can_generate_a_beat() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        app.select_clip(ClipRef::Session { track: 0, slot: 0 });
+        assert!(texts(&mut app).iter().any(|(t, _)| t == "Generar ritmo"));
+        app.select_clip(ClipRef::Session { track: 1, slot: 0 });
+        assert!(!texts(&mut app).iter().any(|(t, _)| t == "Generar ritmo"));
     }
 
     /// The strip under the ruler names the demo's «Am F C G» (C over G), with

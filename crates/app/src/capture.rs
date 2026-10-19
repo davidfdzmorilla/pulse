@@ -87,6 +87,22 @@ impl InputCapture {
         frame_at_beat(&self.markers, beat, after)
     }
 
+    /// The input frame after the newest one buffered.
+    pub fn end_frame(&self) -> u64 {
+        self.first_frame + (self.buffer.len() / self.handle.channels.max(1)) as u64
+    }
+
+    /// The newest `frames` of input, both channels mixed; None until there are as many.
+    pub fn latest(&self, frames: usize) -> Option<Vec<f32>> {
+        let channels = self.handle.channels.max(1);
+        let have = self.buffer.len() / channels;
+        if have < frames {
+            return None;
+        }
+        let from = (have - frames) * channels;
+        Some(self.buffer[from..].chunks(channels).map(|c| c.iter().sum::<f32>() / channels as f32).collect())
+    }
+
     /// Stereo copy of `frames` input frames from `start`; missing input is silence.
     pub fn extract(&self, start: u64, frames: usize) -> (Vec<f32>, Vec<f32>) {
         let channels = self.handle.channels.max(1);

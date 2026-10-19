@@ -40,6 +40,7 @@ La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a do
 - **Escala**: la tonalidad de la canción (ver «Tonalidad y escala»), y si los loops nuevos se ajustan a ella.
 - **▶ Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
 - **Teclado**: el teclado del ordenador como teclado MIDI (M).
+- **Voz**: tocar cantando, tarareando o silbando al micrófono (ver «Tocar con la voz»).
 - **MIDI**: encendido si hay teclados MIDI conectados. Clic para volver a buscarlos.
 - **Asignar**: asignar knobs y botones de un controlador MIDI (ver «Controladores MIDI»).
 - A la derecha: **☰** (navegador), **Session** / **Arrangement** y el medidor del master.
@@ -573,6 +574,20 @@ Pulsa **M** (o el botón **Teclado**) para tocar con el teclado del ordenador:
 - **Z / X**: octava abajo / arriba. **C / V**: velocidad abajo / arriba.
 - El botón muestra la nota base y la velocidad («Teclado C3 · 100»).
 - No toca mientras escribes en un campo de texto.
+
+## Tocar con la voz
+
+Tu voz como teclado MIDI: pulsa **Voz** en la barra de transporte y canta, tararea o silba al micrófono. Suena la pista seleccionada (o las armadas), nota a nota, mientras cantas.
+
+- Una nota se mantiene aunque la voz oscile un poco a su alrededor, y cambia cuando te asientas en otra (unos 50 ms). Si paras un instante y vuelves a cantar, es una nota nueva («la-la»). Lo fuerte que cantes es la velocidad.
+- Con una **Escala** en el proyecto, las notas que cantes desafinadas van a la nota de la escala más cercana; las que cantes afinadas se quedan, aunque no sean de la escala.
+- **Clic derecho** en **Voz**: la **octava**. −1 o −2 para tocar un bajo con una voz aguda; +1 o +2 para un lead con una voz grave.
+- **Graba** como un teclado MIDI: arma una pista MIDI y graba (F9 o en un slot) mientras cantas.
+- El botón muestra la nota que suena («Voz · A2»).
+- Usa **auriculares**: si el micrófono oye los altavoces, toca también lo que suena (sobre todo el bajo).
+- La primera vez, macOS pide permiso para usar el micrófono.
+
+Para pasar a MIDI algo ya grabado, usa **Audio a MIDI → Melodía**, que lo analiza con más calma y saca notas más limpias.
 
 ## Navegador y biblioteca
 

@@ -815,6 +815,7 @@ impl PulseApp {
                 Target::Track(t) if !self.project.tracks[t].is_audio() => self.project.tracks[t].instrument.param_info(i),
                 _ => None,
             },
+            Param::Tempo => (target == Target::Master).then_some(engine::model::TEMPO_PARAM),
         }
     }
 
@@ -836,12 +837,16 @@ impl PulseApp {
                 Target::Track(t) => format!("{}: {info}", self.project.tracks[t].instrument.label()),
                 _ => info.to_string(),
             },
+            Param::Tempo => "Tempo".into(),
         }
     }
 
     /// Every parameter of a channel that can be automated.
     pub fn automatable(&self, target: Target) -> Vec<Param> {
         let mut params = vec![Param::Volume, Param::Pan];
+        if target == Target::Master {
+            params.insert(0, Param::Tempo);
+        }
         if let Target::Track(t) = target {
             params.extend((0..NUM_RETURNS).map(Param::Send));
             if !self.project.tracks[t].is_audio() {
@@ -885,6 +890,7 @@ impl PulseApp {
                 Target::Track(t) => self.project.tracks[t].instrument.get(i),
                 _ => 0.0,
             },
+            Param::Tempo => self.project.tempo as f32,
         }
     }
 
@@ -946,6 +952,10 @@ impl PulseApp {
                     let kind = *instrument;
                     self.audio.send(Command::update_instrument(t, kind));
                 }
+            }
+            Param::Tempo => {
+                self.project.tempo = (value as f64).clamp(20.0, 999.0);
+                self.audio.send(Command::SetTempo(self.project.tempo));
             }
         }
         if matches!(param, Param::Volume | Param::Pan) {

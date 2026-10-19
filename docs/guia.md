@@ -25,7 +25,7 @@ La primera vez Pulse abre una canción de demostración (Drums, Bass, Chords, Le
 
 La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a dos filas.
 
-- **Tempo**: arrastra o escribe (20–999 BPM).
+- **Tempo**: arrastra o escribe (20–999 BPM). Con automatización de tempo (ver «Cambios de tempo») muestra el que suena, con un borde rojo; moverlo a mano la anula hasta **▶ Arrangement**.
 - **●** junto al tempo: **metrónomo**.
 - **Cuantización de lanzamiento**: cuándo arrancan los clips que lanzas (Ninguna, 1/16 … 1 Compás, 2 Compases). Por defecto, 1 Compás.
 - **Posición** (compás. tiempo. semicorchea). Durante la cuenta atrás muestra «Cuenta N».
@@ -270,6 +270,15 @@ Al terminar la grabación aparece **una fila por toma** debajo de la pista, con 
 - **⌥ + arrastrar** un tramo entre dos puntos lo **curva**: hacia arriba abomba la curva hacia arriba, hacia abajo la hunde. Sirve para fundidos y subidas más naturales. **⌥ + doble clic** en el tramo lo vuelve recto.
 - **Borrar automatización** (en la cabecera o con clic derecho en el carril) y **Ocultar carril**.
 - Los controles automatizados llevan un punto rojo y se mueven solos. Si mueves uno a mano, su automatización queda **anulada** (punto hueco, carril gris) hasta que pulses **▶ Arrangement**.
+
+### Master y cambios de tempo
+
+La última fila del Arrangement es el **Master**. Su **A** muestra su automatización: **Tempo**, volumen, panorama y los knobs de sus efectos.
+
+- **Tempo** hace que la canción cambie de velocidad: puntos a distintos tempos dan saltos (una intro lenta, un estribillo más rápido), y una línea entre dos puntos, un accelerando o un ritardando (con **⌥ + arrastrar** se curva). El carril va de 40 a 240 BPM.
+- Todo sigue el tempo: los clips MIDI, los audios en Stretch o Re-Pitch, el metrónomo, los delays y los arpegiadores. Los audios con warp **Off** no siguen el tempo (y en un cambio de tempo pueden saltar): en una canción con cambios, ponlos en **Stretch**.
+- Al **exportar**, la canción dura lo que dan sus tempos.
+- Mover el tempo del transporte a mano anula la automatización (lo dice su borde) hasta **▶ Arrangement**.
 
 ### Grabar automatización
 

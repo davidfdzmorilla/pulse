@@ -164,16 +164,27 @@ pub fn render(
         renderer.send(command);
     }
 
+    // Until the transport reaches the end: with tempo automation the song is as
+    // long as its tempos make it. Near the end, in steps the size of what is
+    // left at `tempo` (the last few samples land on the end).
     let frames = ((end - start) * 60.0 / tempo * sample_rate as f64).ceil() as usize;
     let (mut left, mut right) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
     let chunk = (sample_rate as usize / 10).max(1);
-    while left.len() < frames {
+    // However slow it gets (20 BPM), it ends.
+    let most = ((end - start) * 3.0 * sample_rate as f64).ceil() as usize + chunk;
+    loop {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        renderer.render(chunk.min(frames - left.len()), &mut left, &mut right);
-        progress(left.len() as f32 / frames as f32);
+        let at = renderer.state.position();
+        if at >= end - 1e-9 || left.len() >= most {
+            break;
+        }
+        let left_frames = ((end - at) * 60.0 / tempo * sample_rate as f64).ceil() as usize;
+        renderer.render(chunk.min(left_frames.max(1)), &mut left, &mut right);
+        progress(((renderer.state.position() - start) / (end - start)).clamp(0.0, 1.0) as f32);
     }
+    let frames = left.len();
 
     // Let notes release and reverbs/delays ring out until the output falls silent.
     renderer.send(Command::Stop);
@@ -488,6 +499,24 @@ mod tests {
         let range = beat_range(&project, settings.range).unwrap();
         let renders = plan(&project, &mut samples, settings, Path::new("/tmp/pulse-demo.wav"));
         (renders, range, project.tempo)
+    }
+
+    /// With tempo automation the song lasts what its tempos make it: 4 beats at
+    /// 120 BPM and 4 at 60 are 2 + 4 seconds.
+    #[test]
+    fn a_song_with_tempo_automation_renders_its_real_length() {
+        let mut project = Project::demo();
+        let mut lane = engine::model::AutomationLane::new(engine::model::Param::Tempo);
+        for (beat, value) in [(0.0, 120.0), (3.99, 120.0), (4.0, 60.0)] {
+            lane.points.push(engine::model::AutomationPoint { beat, value, curve: 0.0 });
+        }
+        project.master.automation.push(lane);
+        project.tempo = 120.0;
+        let mut samples = SampleCache::default();
+        let commands = sync::project_commands(&project, &mut samples, 48_000.0, &HashSet::new());
+        let (left, _) = render(commands, (0.0, 8.0), project.tempo, 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
+        let seconds = left.len() as f64 / 48_000.0;
+        assert!(seconds >= 5.95, "{seconds}");
     }
 
     #[test]

@@ -37,6 +37,7 @@ La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a do
 - **Punch in** y **punch out** (los dos botones rojos junto al loop): al grabar en el Arrangement, solo se graba desde el inicio del loop y/o hasta su final (ver «Grabar»).
 - **Rec Q**: cuantiza el inicio de las notas MIDI grabadas (Off, 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32).
 - **Swing** (0–100 %) y su rejilla (1/8 o 1/16): retrasa los contratiempos al reproducir, sin cambiar las notas. 100 % es un shuffle de tresillo. También se aplica al exportar. Vale para todos los clips MIDI, salvo los que tengan su propio groove (ver «Editor MIDI»).
+- **Escala**: la tonalidad de la canción (ver «Tonalidad y escala»).
 - **▶ Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
 - **Teclado**: el teclado del ordenador como teclado MIDI (M).
 - **MIDI**: encendido si hay teclados MIDI conectados. Clic para volver a buscarlos.
@@ -272,6 +273,7 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 - **Groove**: el del proyecto (el swing del transporte) o **uno propio para este clip**, con **Swing** y su rejilla, **Acentos** (contratiempos más suaves) y **Humanizar** (pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta). Tiene grooves listos: Recto, Swing 1/16, MPC 1/16, Shuffle 1/8 y Humano. Se aplica al tocar: las notas no se mueven.
 - **Cuantizar** (⌘U) con su **intensidad** (%) y **finales** (cuantizar también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
 - **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom**.
+- Con una escala en el proyecto: **Plegar** y **A la escala** (ver «Tonalidad y escala»).
 
 ### Notas
 
@@ -285,11 +287,28 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 ### Teclado
 
 - **⌘A** seleccionar todas, **⌘C / ⌘X / ⌘V** copiar, cortar y pegar (también entre clips), **⌘D** duplicar, **⌫** borrar, **Esc** deseleccionar.
-- **← →** mueven por la rejilla (⇧: un compás). **↑ ↓** transponen (⇧: una octava).
+- **← →** mueven por la rejilla (⇧: un compás). **↑ ↓** transponen (⇧: una octava). Con **Plegar**, una nota de la escala.
 
 ### Velocidad
 
 En el carril de abajo, con **Velocidad** elegido, arrastra arriba o abajo cerca de una nota; las seleccionadas cambian juntas.
+
+## Tonalidad y escala
+
+El proyecto puede tener una escala: la tonalidad de la canción. Se elige en **Escala**, en la barra de transporte:
+
+- **Detectar en la canción**: escucha las notas de los clips MIDI (sin las baterías) y los audios con una tonalidad clara, y elige la escala. La barra de estado dice cuál, y avisa si no está clara. Una canción en mi menor y otra en sol mayor usan las mismas notas: si sale la relativa y no es la que quieres, elígela a mano.
+- O cualquiera de las 24 a mano (mayores y menores), o **Sin escala**.
+
+Con una escala, en el **Editor MIDI**:
+
+- Las filas de las notas de la escala se ven más claras, y las de la tónica en naranja, con su nombre.
+- **Plegar**: solo quedan las filas de la escala, todas con su nombre (y las de las notas que no son de ella, para que no se pierda ninguna). Al arrastrar notas arriba o abajo, o con ↑ ↓ y **-1 / +1**, se mueven de nota en nota de la escala: no hay forma de salirse.
+- **A la escala**: lleva las notas que no son de la escala a la más cercana (las seleccionadas o, si no hay, todas).
+
+En **Audio a MIDI**, **Melodía** usa la escala del proyecto en vez de buscar una.
+
+Las pistas de batería no usan la escala. Se guarda con el proyecto y se deshace con ⌘Z.
 
 ## Editor de audio
 
@@ -346,7 +365,7 @@ Saca las notas de cualquier audio y las pone en una pista MIDI nueva, justo deba
 
 Se hace en este Mac, sin internet, en unos segundos; la barra de estado muestra el progreso. Las notas siguen el tempo del clip (su warp) y su fuerza pasa a la velocidad. Se combina bien con **Separar en stems**: separa una canción y convierte el bajo o la voz en MIDI.
 
-La melodía sigue el tono de la voz fotograma a fotograma (pYIN, el método de las herramientas para transcribir canto), también con voces muy graves, y la corta en notas donde se queda en otra nota o vuelves a atacar. En **Melodía**, cada nota va a la de la escala de la canción más cercana, para que cantar un poco alto o bajo no cambie la nota; la tonalidad sale de tu voz, de las notas MIDI del proyecto y de los audios con una tonalidad clara (las baterías no cuentan), y la barra de estado dice cuál ha usado. La armonía la encuentra Basic Pitch, un modelo de Spotify (licencia Apache 2.0) que va dentro de la app.
+La melodía sigue el tono de la voz fotograma a fotograma (pYIN, el método de las herramientas para transcribir canto), también con voces muy graves, y la corta en notas donde se queda en otra nota o vuelves a atacar. En **Melodía**, cada nota va a la de la escala de la canción más cercana, para que cantar un poco alto o bajo no cambie la nota; la tonalidad es la **Escala** del proyecto si la has elegido; si no, sale de tu voz, de las notas MIDI del proyecto y de los audios con una tonalidad clara (las baterías no cuentan). La barra de estado dice cuál ha usado. Las notas que cantas afinadas se quedan aunque no sean de la escala. La armonía la encuentra Basic Pitch, un modelo de Spotify (licencia Apache 2.0) que va dentro de la app.
 
 ## Mezclador
 

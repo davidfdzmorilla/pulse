@@ -1,3 +1,10 @@
 /target
 *.wav
 !crates/stems/tests/data/*.wav
+
+# Drum model training data and checkpoints
+ml/drums/data/
+ml/drums/runs/
+ml/drums/.venv/
+ml/drums/runs.log
+ml/drums/__pycache__/

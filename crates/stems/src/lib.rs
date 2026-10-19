@@ -9,6 +9,7 @@
 //! `HTDemucs._spec` / `_ispec`; the tests compare each against PyTorch's results.
 
 pub mod chord;
+pub mod drums;
 pub mod key;
 pub mod loudness;
 pub mod pitch;

@@ -82,6 +82,9 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Separator,
             Run(C::DuplicateTrack, "Duplicar pista", ""),
             Run(C::DeleteTrack, "Eliminar pista", ""),
+            Separator,
+            Run(C::GroupTracks, "Agrupar pistas", "g"),
+            Run(C::Ungroup, "Desagrupar", "⇧g"),
         ],
     ),
     (

@@ -20,6 +20,13 @@ const MONITOR_H: f32 = 16.0;
 
 pub(crate) enum Action {
     Launch(usize, usize),
+    /// A group's slot: its tracks play their clips in that scene.
+    LaunchGroup(usize, usize),
+    StopGroup(usize),
+    ToggleFold(usize),
+    GroupTracks,
+    Ungroup(usize),
+    LeaveGroup(usize),
     ClickClip(ClipRef, egui::Modifiers),
     StartMove(usize, usize, egui::Modifiers),
     StartMarquee(egui::Pos2, egui::Modifiers),
@@ -71,6 +78,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
             for t in 0..app.project.tracks.len() {
+                // Inside a folded group: not shown.
+                if crate::groups::hidden(&app.project.tracks, t) {
+                    continue;
+                }
+                let is_group = app.project.tracks[t].is_group();
                 let play = state.as_ref().map_or(
                     TrackPlayState {
                         playing: NONE,
@@ -94,13 +106,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 );
                 ui.vertical(|ui| {
                     ui.set_width(COL_W);
-                    headers.push(track_header(app, ui, t, &mut actions));
+                    headers.push((t, track_header(app, ui, t, &mut actions)));
                     for slot in 0..NUM_SCENES {
-                        slots.push((t, slot, clip_slot(app, ui, t, slot, &play, blink, &mut actions)));
+                        if is_group {
+                            group_slot(app, ui, t, slot, state.as_deref(), &mut actions);
+                        } else {
+                            slots.push((t, slot, clip_slot(app, ui, t, slot, &play, blink, &mut actions)));
+                        }
                     }
                     let stop_queued = play.queued == QUEUED_STOP && blink;
-                    if stop_cell(ui, stop_queued, "Parar pista").clicked() {
-                        actions.push(Action::StopTrack(t));
+                    if stop_cell(ui, stop_queued, if is_group { "Parar las pistas del grupo" } else { "Parar pista" }).clicked() {
+                        actions.push(if is_group { Action::StopGroup(t) } else { Action::StopTrack(t) });
                     }
                     ui.add_space(6.0);
                     mixer_strip(app, ui, Target::Track(t));
@@ -192,6 +208,58 @@ fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: 
     response
 }
 
+/// In a group's tracks' headers, a bar of the group's colour for each group they
+/// are in.
+pub(crate) fn group_marks(app: &PulseApp, painter: &egui::Painter, t: usize, rect: Rect) {
+    let mut at = crate::groups::parent(&app.project.tracks, t);
+    let mut k = app.project.tracks[t].depth as f32;
+    while let Some(g) = at {
+        k -= 1.0;
+        let bar = Rect::from_min_size(rect.left_top() + vec2(k * 4.0, 0.0), vec2(3.0, rect.height()));
+        painter.rect_filled(bar, 0.0, theme::rgb(app.project.tracks[g].color));
+        at = crate::groups::parent(&app.project.tracks, g);
+    }
+}
+
+/// Grouping in a track's menu.
+pub(crate) fn group_items(ui: &mut egui::Ui, group: bool, in_group: bool, selected: usize, mut act: impl FnMut(Action), t: usize) {
+    ui.separator();
+    let label = if selected > 1 { format!("Agrupar {selected} pistas  ⌘G") } else { "Agrupar pista  ⌘G".to_string() };
+    if ui.button(label).on_hover_text("Las pone en un grupo nuevo: suenan juntas por su fader y sus efectos").clicked() {
+        act(Action::GroupTracks);
+        ui.close();
+    }
+    if group && ui.button("Desagrupar  ⇧⌘G").on_hover_text("Quita el grupo; sus pistas se quedan").clicked() {
+        act(Action::Ungroup(t));
+        ui.close();
+    }
+    if in_group && ui.button("Sacar del grupo").clicked() {
+        act(Action::LeaveGroup(t));
+        ui.close();
+    }
+}
+
+/// A group's slot: lit when its tracks have clips in that scene; clicked, they
+/// play them (and the others in the group stop).
+fn group_slot(app: &PulseApp, ui: &mut egui::Ui, g: usize, slot: usize, state: Option<&engine::SharedState>, actions: &mut Vec<Action>) {
+    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
+    let tracks = &app.project.tracks;
+    let inside = crate::groups::children(tracks, g);
+    let with_clips = inside.clone().filter(|&c| tracks[c].clips[slot].is_some()).count();
+    let playing = state.is_some_and(|s| inside.clone().any(|c| s.tracks[c].playing.load(Ordering::Relaxed) == slot as i32));
+    let painter = ui.painter();
+    painter.rect_filled(rect, 2.0, theme::shade(SLOT, 0.85));
+    if with_clips > 0 {
+        let color = theme::rgb(tracks[g].color);
+        let bar = Rect::from_min_size(rect.left_top() + vec2(LAUNCH_W, 4.0), vec2(COL_W - LAUNCH_W - 4.0, SLOT_H - 8.0));
+        painter.rect_filled(bar, 2.0, theme::shade(color, if playing { 1.0 } else { 0.55 }));
+        widgets::play_triangle(painter, pos2(rect.left() + LAUNCH_W / 2.0, rect.center().y), 8.0, if playing { theme::PLAY } else { TEXT });
+        if response.on_hover_text(format!("Lanza los {with_clips} clips de sus pistas en esta escena")).clicked() {
+            actions.push(Action::LaunchGroup(g, slot));
+        }
+    }
+}
+
 /// Freeze, unfreeze and flatten in a track's menu.
 pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut act: impl FnMut(Action), t: usize) {
     ui.separator();
@@ -217,9 +285,22 @@ pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut 
 /// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
 fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) -> egui::Rect {
     let track = &app.project.tracks[t];
-    let response = header(ui, &track.name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag())
-        .on_hover_text("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover");
+    let group = track.is_group();
+    let name = if group { format!("{} {}", if track.folded { "▸" } else { "▾" }, track.name) } else { track.name.clone() };
+    let hint = if group {
+        "Grupo: sus pistas suenan por su fader y sus efectos · clic en ▾: plegar o desplegar · clic: seleccionar · arrastrar: mover con sus pistas"
+    } else {
+        "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
+    };
+    let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag()).on_hover_text(hint);
+    group_marks(app, ui.painter(), t, response.rect);
+    // The fold arrow.
+    let on_arrow = response.interact_pointer_pos().is_some_and(|p| p.x < response.rect.left() + 18.0);
+    if group && response.clicked() && on_arrow {
+        actions.push(Action::ToggleFold(t));
+    }
     app.track_header_input(t, &response);
+    let in_group = crate::groups::parent(&app.project.tracks, t).is_some();
     let several = app.is_track_selected(t) && app.track_selection().len() > 1;
     let count = app.track_selection().len();
     let (frozen, freezing) = (app.is_frozen(t), app.freeze_job.is_some());
@@ -239,7 +320,10 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
             actions.push(Action::DeleteTrack(t));
             ui.close();
         }
-        freeze_items(ui, frozen, freezing, |action| actions.push(action), t);
+        group_items(ui, group, in_group, count, |action| actions.push(action), t);
+        if !group {
+            freeze_items(ui, frozen, freezing, |action| actions.push(action), t);
+        }
     });
     if frozen {
         crate::freeze::mark(ui.painter(), response.rect);
@@ -657,6 +741,16 @@ fn apply(app: &mut PulseApp, action: Action) {
             }
         }
         Action::StopTrack(t) => app.audio.send(Command::StopTrack(t)),
+        Action::LaunchGroup(g, slot) => app.launch_group(g, slot),
+        Action::StopGroup(g) => {
+            for t in crate::groups::children(&app.project.tracks, g) {
+                app.audio.send(Command::StopTrack(t));
+            }
+        }
+        Action::ToggleFold(g) => app.toggle_fold(g),
+        Action::GroupTracks => app.group_selected(),
+        Action::Ungroup(g) => app.ungroup(g),
+        Action::LeaveGroup(t) => app.leave_group(t),
         Action::LaunchScene(slot) => app.audio.send(Command::LaunchScene(slot)),
         Action::StopAll => app.audio.send(Command::StopAllClips),
         Action::AddTrack => app.add_track(),

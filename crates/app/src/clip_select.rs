@@ -129,7 +129,7 @@ impl PulseApp {
         let tracks = self.project.tracks.len();
         let fits = |app: &PulseApp, item: &CopiedClip| {
             let t = first_track + item.track;
-            t < tracks && matches!(item.clip, Clip::Audio(_)) == app.project.tracks[t].is_audio()
+            t < tracks && !app.project.tracks[t].is_group() && matches!(item.clip, Clip::Audio(_)) == app.project.tracks[t].is_audio()
         };
         if !board.items.iter().all(|item| fits(self, item)) {
             self.status = Some("Los clips no caben: faltan pistas o son de otro tipo (audio o MIDI)".into());

@@ -65,6 +65,10 @@ pub struct State {
 enum TrackAction {
     Duplicate,
     Delete,
+    Group,
+    Ungroup,
+    LeaveGroup,
+    Fold,
 }
 
 /// What a right-click landed on.
@@ -117,6 +121,10 @@ fn point_unit(pixels_per_beat: f32) -> f64 {
 /// automation lane, if shown, and how many take lanes it shows.
 struct Layout {
     rows: Vec<(f32, Option<Param>, usize)>,
+    /// Inside a folded group (no height, not drawn).
+    hidden: Vec<bool>,
+    /// Groups: their lane shows their tracks' clips, and takes none.
+    groups: Vec<bool>,
     height: f32,
 }
 
@@ -124,21 +132,33 @@ impl Layout {
     fn new(app: &PulseApp) -> Self {
         let mut rows = Vec::new();
         let mut y = 0.0;
-        for t in 0..app.project.tracks.len() {
+        let tracks = &app.project.tracks;
+        let hidden: Vec<bool> = (0..tracks.len()).map(|t| crate::groups::hidden(tracks, t)).collect();
+        let groups: Vec<bool> = tracks.iter().map(|t| t.is_group()).collect();
+        for t in 0..tracks.len() {
             let shown = app.arrangement.automation.get(&t).copied();
-            let takes = if app.arrangement.takes.contains(&t) { crate::comping::take_count(app, t) } else { 0 };
+            let takes = if app.arrangement.takes.contains(&t) && !groups[t] { crate::comping::take_count(app, t) } else { 0 };
             rows.push((y, shown, takes));
-            y += row_height(shown.is_some(), takes);
+            if !hidden[t] {
+                y += row_height(shown.is_some(), takes);
+            }
         }
-        Self { rows, height: y }
+        Self { rows, hidden, groups, height: y }
+    }
+
+    fn shown(&self, t: usize) -> bool {
+        !self.hidden.get(t).copied().unwrap_or(true)
     }
 
     /// Track under `y` (relative to the first lane) and whether it is in its automation lane.
     fn hit(&self, y: f32) -> Option<(usize, bool)> {
-        self.rows.iter().enumerate().find_map(|(t, &(top, shown, takes))| {
+        self.rows.iter().enumerate().filter(|&(t, _)| self.shown(t)).find_map(|(t, &(top, shown, takes))| {
             let clips_end = top + LANE_H + 1.0;
             let auto_top = clips_end + takes_height(takes);
-            if y >= top && y < clips_end {
+            // A group's lane holds no clips of its own.
+            if y >= top && y < clips_end && self.groups[t] {
+                None
+            } else if y >= top && y < clips_end {
                 Some((t, false))
             } else if shown.is_some() && y >= auto_top && y < auto_top + AUTO_H + 1.0 {
                 Some((t, true))
@@ -150,7 +170,7 @@ impl Layout {
 
     /// The track and take of the take lane under `y`.
     fn take_hit(&self, y: f32) -> Option<(usize, usize)> {
-        self.rows.iter().enumerate().find_map(|(t, &(top, _, takes))| {
+        self.rows.iter().enumerate().filter(|&(t, _)| self.shown(t)).find_map(|(t, &(top, _, takes))| {
             let below = y - (top + LANE_H + 1.0);
             (below >= 0.0 && below < takes_height(takes)).then(|| (t, (below / (TAKE_H + 1.0)) as usize))
         })
@@ -223,8 +243,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.vertical(|ui| {
             ui.set_width(HEADER_W);
             ui.add_space(LOOP_H + RULER_H);
-            for t in 0..tracks {
-                headers.push(track_header(app, ui, t, layout.rows[t].1, layout.rows[t].2));
+            for t in (0..tracks).filter(|&t| layout.shown(t)) {
+                headers.push((t, track_header(app, ui, t, layout.rows[t].1, layout.rows[t].2)));
             }
         });
 
@@ -257,7 +277,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
             // Background, lanes and grid.
             painter.rect_filled(rect, 0.0, theme::BG);
-            for t in 0..tracks {
+            for t in (0..tracks).filter(|&t| layout.shown(t)) {
+                if layout.groups[t] {
+                    painter.rect_filled(lane_rect(t), 0.0, theme::shade(theme::SLOT, 0.8));
+                    continue;
+                }
                 painter.rect_filled(lane_rect(t), 0.0, theme::SLOT);
                 lane_rects.push((t, lane_rect(t)));
                 app.drop_targets.lanes.push((t, lane_rect(t).intersect(ui.clip_rect()), rect.left(), ppb));
@@ -305,8 +329,22 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
 
+            // A group's lane: its tracks' clips, one thin strip each.
+            for g in (0..tracks).filter(|&t| layout.shown(t) && layout.groups[t]) {
+                let lane = lane_rect(g);
+                let inside: Vec<usize> = crate::groups::children(&app.project.tracks, g).filter(|&c| !layout.groups[c]).collect();
+                let strip = (LANE_H - 6.0) / inside.len().max(1) as f32;
+                for (k, &c) in inside.iter().enumerate() {
+                    for placed in &app.project.tracks[c].arrangement {
+                        let top = lane.top() + 3.0 + k as f32 * strip;
+                        let piece = Rect::from_min_max(pos2(x_at(placed.start), top), pos2(x_at(placed.end()), top + (strip - 1.0).max(1.0)));
+                        painter.rect_filled(piece, 1.0, theme::shade(theme::rgb(placed.clip.color()), 0.8));
+                    }
+                }
+            }
+
             // Clips.
-            for t in 0..tracks {
+            for t in (0..tracks).filter(|&t| layout.shown(t) && !layout.groups[t]) {
                 let lane = lane_rect(t);
                 for (index, placed) in app.project.tracks[t].arrangement.iter().enumerate() {
                     let clip_rect = Rect::from_min_max(
@@ -324,7 +362,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
 
             // Take lanes: each take of the loop recordings, bright where it plays.
-            for t in 0..tracks {
+            for t in (0..tracks).filter(|&t| layout.shown(t)) {
                 for k in 0..layout.rows[t].2 {
                     let lane = take_rect(t, k);
                     painter.rect_filled(lane, 0.0, theme::shade(theme::SLOT, 0.8));
@@ -356,7 +394,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
 
             // Automation lanes.
-            for t in 0..tracks {
+            for t in (0..tracks).filter(|&t| layout.shown(t)) {
                 if let Some(param) = layout.rows[t].1 {
                     paint_automation(app, &painter, auto_rect(t), t, param, &x_at);
                 }
@@ -379,7 +417,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     painter.rect_filled(region, 2.0, Color32::from_rgba_unmultiplied(240, 82, 70, 60));
                 }
             }
-            for t in (0..tracks).filter(|&t| !following(t)) {
+            for t in (0..tracks).filter(|&t| layout.shown(t) && !layout.groups[t] && !following(t)) {
                 // Tracks playing session clips are dimmed, as their arrangement is overridden.
                 painter.rect_filled(lane_rect(t), 0.0, Color32::from_black_alpha(110));
             }
@@ -394,6 +432,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         Some((TrackAction::Duplicate, t, false)) => app.duplicate_track(t),
         Some((TrackAction::Delete, _, true)) => app.delete_selected_tracks(),
         Some((TrackAction::Delete, t, false)) => app.delete_track(t),
+        Some((TrackAction::Group, _, _)) => app.group_selected(),
+        Some((TrackAction::Ungroup, t, _)) => app.ungroup(t),
+        Some((TrackAction::LeaveGroup, t, _)) => app.leave_group(t),
+        Some((TrackAction::Fold, t, _)) => app.toggle_fold(t),
         None => {}
     }
     app.update_clip_gesture(ui, &clip_rects, &lane_rects, &[]);
@@ -514,7 +556,19 @@ fn paint_wave(clipped: &egui::Painter, rect: Rect, body: Rect, audio: &engine::m
 /// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
 fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>, takes: usize) -> Rect {
     let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some(), takes)), Sense::click_and_drag());
-    let response = response.on_hover_text("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover");
+    let group = app.project.tracks[t].is_group();
+    let hint = if group {
+        "Grupo: sus pistas suenan por su fader y sus efectos · clic en ▾: plegar o desplegar · arrastrar: mover con sus pistas"
+    } else {
+        "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
+    };
+    let response = response.on_hover_text(hint);
+    // Inside groups: indented, a bar of each group's colour.
+    let indent = app.project.tracks[t].depth as f32 * 4.0;
+    let arrow = Rect::from_min_size(rect.min + vec2(indent + 8.0, 4.0), vec2(14.0, 16.0));
+    if group && response.clicked() && response.interact_pointer_pos().is_some_and(|p| arrow.contains(p)) {
+        app.arrangement.track_action = Some((TrackAction::Fold, t, false));
+    }
     app.track_header_input(t, &response);
     track_menu(app, &response, t, shown.is_some());
     let selected = app.is_track_selected(t);
@@ -523,8 +577,10 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     let painter = ui.painter();
     let body = Rect::from_min_size(rect.min, vec2(HEADER_W - 4.0, LANE_H));
     painter.rect_filled(body, 2.0, if selected { theme::CONTROL_HOVER } else { theme::SURFACE });
-    painter.rect_filled(Rect::from_min_size(body.min, vec2(5.0, LANE_H)), 2.0, color);
-    painter.text(body.left_top() + vec2(10.0, 6.0), Align2::LEFT_TOP, &track.name, theme::body(), TEXT);
+    crate::session::group_marks(app, painter, t, body);
+    painter.rect_filled(Rect::from_min_size(body.min + vec2(indent, 0.0), vec2(5.0, LANE_H)), 2.0, color);
+    let name = if group { format!("{} {}", if track.folded { "▸" } else { "▾" }, track.name) } else { track.name.clone() };
+    painter.text(body.left_top() + vec2(10.0 + indent, 6.0), Align2::LEFT_TOP, name, theme::body(), TEXT);
     if track.frozen.is_some() {
         crate::freeze::mark(painter, body);
     }
@@ -542,7 +598,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
         app.audio.send(Command::SetSolo { track: t, solo: !solo });
     }
     let armed = app.project.tracks[t].armed;
-    if widgets::toggle(&mut child, armed, "●", theme::METER_RED, vec2(24.0, 16.0))
+    if !group && widgets::toggle(&mut child, armed, "●", theme::METER_RED, vec2(24.0, 16.0))
         .on_hover_text("Armar para grabar")
         .clicked()
     {
@@ -745,12 +801,21 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
             ui.close();
         }
         let (frozen, freezing) = (app.is_frozen(t), app.freeze_job.is_some());
+        let group = app.project.tracks[t].is_group();
+        let in_group = crate::groups::parent(&app.project.tracks, t).is_some();
         let mut chosen = None;
-        crate::session::freeze_items(ui, frozen, freezing, |action| chosen = Some(action), t);
+        crate::session::group_items(ui, group, in_group, count, |action| chosen = Some(action), t);
+        if !group {
+            crate::session::freeze_items(ui, frozen, freezing, |action| chosen = Some(action), t);
+        }
         match chosen {
             Some(crate::session::Action::Freeze(t)) => app.freeze(t),
             Some(crate::session::Action::Unfreeze(t)) => app.unfreeze(t),
             Some(crate::session::Action::Flatten(t)) => app.flatten(t),
+            // After the view is drawn, as they change the tracks.
+            Some(crate::session::Action::GroupTracks) => app.arrangement.track_action = Some((TrackAction::Group, t, several)),
+            Some(crate::session::Action::Ungroup(t)) => app.arrangement.track_action = Some((TrackAction::Ungroup, t, false)),
+            Some(crate::session::Action::LeaveGroup(t)) => app.arrangement.track_action = Some((TrackAction::LeaveGroup, t, false)),
             _ => {}
         }
     });

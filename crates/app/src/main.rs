@@ -27,6 +27,7 @@ mod kick_ui;
 mod kits;
 mod library;
 mod loop_key;
+mod midi_fx_ui;
 mod midi_map;
 mod mix_assist;
 mod multisample;

@@ -1286,6 +1286,140 @@ impl Default for UtilityParams {
     }
 }
 
+/// A key, for the MIDI effects (pitch class of the tonic, 0 = C).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ScaleKey {
+    pub tonic: u8,
+    pub minor: bool,
+}
+
+impl ScaleKey {
+    fn steps(self) -> [u8; 7] {
+        if self.minor { [0, 2, 3, 5, 7, 8, 10] } else { [0, 2, 4, 5, 7, 9, 11] }
+    }
+
+    /// Whether a pitch is in the scale.
+    pub fn contains(self, pitch: u8) -> bool {
+        self.steps().contains(&((pitch + 12 - self.tonic % 12) % 12))
+    }
+
+    /// The scale's nearest note (the lower of two as near).
+    pub fn snap(self, pitch: u8) -> u8 {
+        (0..=6u8)
+            .flat_map(|d| [pitch.saturating_sub(d), pitch.saturating_add(d).min(127)])
+            .find(|&p| self.contains(p))
+            .unwrap_or(pitch)
+    }
+
+    /// The scale note `steps` scale notes above `pitch` (snapped first).
+    pub fn up(self, pitch: u8, steps: usize) -> u8 {
+        let mut p = self.snap(pitch);
+        for _ in 0..steps {
+            p = (p + 1..=127).find(|&q| self.contains(q)).unwrap_or(p);
+        }
+        p
+    }
+}
+
+/// The arpeggiator MIDI effect (see `midi_fx`): plays the held notes one at a
+/// time, in time with the transport.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ArpeggiatorParams {
+    pub mode: ArpMode,
+    /// Beats between notes (0.25 = sixteenths).
+    pub rate: f64,
+    /// Octaves it climbs through, 1..=4.
+    pub octaves: u8,
+    /// How long each note lasts, as a fraction of a step.
+    pub gate: f32,
+}
+
+impl Default for ArpeggiatorParams {
+    fn default() -> Self {
+        Self { mode: ArpMode::Up, rate: 0.25, octaves: 1, gate: 0.6 }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ChordParams {
+    /// In the key's scale: each note gets its third and fifth (and seventh) in
+    /// the scale, so the chords fit the key. Otherwise `intervals`.
+    pub in_key: bool,
+    pub seventh: bool,
+    /// Semitones added above each note (0: none).
+    pub intervals: [i8; 3],
+    /// How loud the added notes are, relative to the played one.
+    pub velocity: f32,
+    /// The key for `in_key`: the project's (filled in by the app) or its own.
+    pub key: Option<ScaleKey>,
+    pub follow_project: bool,
+}
+
+impl Default for ChordParams {
+    fn default() -> Self {
+        Self { in_key: true, seventh: false, intervals: [4, 7, 0], velocity: 0.85, key: None, follow_project: true }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ScaleParams {
+    pub key: Option<ScaleKey>,
+    pub follow_project: bool,
+}
+
+impl Default for ScaleParams {
+    fn default() -> Self {
+        Self { key: None, follow_project: true }
+    }
+}
+
+/// What a MIDI track's notes go through before its instrument.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub enum MidiEffect {
+    Arpeggiator(ArpeggiatorParams),
+    Chord(ChordParams),
+    Scale(ScaleParams),
+}
+
+impl MidiEffect {
+    pub fn catalog() -> [MidiEffect; 3] {
+        [MidiEffect::Arpeggiator(Default::default()), MidiEffect::Chord(Default::default()), MidiEffect::Scale(Default::default())]
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            MidiEffect::Arpeggiator(_) => "Arpegiador",
+            MidiEffect::Chord(_) => "Acorde",
+            MidiEffect::Scale(_) => "Escala",
+        }
+    }
+
+    /// Fills in the project's key where the effect follows it.
+    pub fn with_project_key(mut self, key: Option<ScaleKey>) -> Self {
+        match &mut self {
+            MidiEffect::Chord(p) if p.follow_project => p.key = key,
+            MidiEffect::Scale(p) if p.follow_project => p.key = key,
+            _ => {}
+        }
+        self
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct MidiDevice {
+    pub effect: MidiEffect,
+    pub enabled: bool,
+}
+
+impl MidiDevice {
+    pub fn new(effect: MidiEffect) -> Self {
+        Self { effect, enabled: true }
+    }
+}
+
+/// How many MIDI effects a track can chain.
+pub const MAX_MIDI_EFFECTS: usize = 4;
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Effect {
     Eq3(Eq3Params),

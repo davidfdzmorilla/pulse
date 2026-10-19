@@ -126,6 +126,9 @@ pub struct Track {
     /// sidechain names its source by (0 until it is given one, see `assign_ids`).
     #[serde(default, skip_serializing_if = "is_default")]
     pub id: u32,
+    /// What its notes go through before its instrument (see `midi_fx_ui`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub midi_effects: Vec<engine::model::MidiDevice>,
 }
 
 impl Track {
@@ -149,6 +152,7 @@ impl Track {
             depth: 0,
             folded: false,
             id: 0,
+            midi_effects: Vec::new(),
         }
     }
 

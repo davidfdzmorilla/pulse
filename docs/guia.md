@@ -470,6 +470,16 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 - **Reverb**: tamaño, amortiguación y anchura.
 - **Utility**: ganancia y anchura estéreo (0 % mono, 200 % muy abierto).
 
+### Efectos MIDI
+
+Cambian las notas antes de que lleguen al instrumento (en pistas MIDI). Se añaden desde el navegador (**EFECTOS MIDI**) con la pista seleccionada y aparecen en Dispositivos, antes del instrumento; hasta 4 por pista, en orden (el punto los activa, **◀ ▶** los mueven, **×** los quita).
+
+- **Arpegiador**: toca las notas que mantienes una a una, en tiempo. **Orden**: arriba, abajo, arriba y abajo, como se tocan o al azar. **Ritmo**: de 1/4 a 1/32, con tresillos. **Octavas** (1–4) y **Duración** de cada nota. Con el transporte en marcha va con la rejilla; parado, empieza al tocar y sigue el tempo. Funciona con el teclado y con los clips.
+- **Acorde**: cada nota se convierte en un acorde. **En la escala**: le añade su tercera y su quinta (y **séptima**) de la escala, así que los acordes encajan con la canción (en do mayor, un re da re–fa–la, un sol da sol–si–re). La escala puede ser la del proyecto o una propia. Sin «En la escala»: los **semitonos añadidos**, con atajos (Mayor, Menor, Quinta, Octava, Sus4, Séptima). **Velocidad añadidas**: lo fuerte de las notas nuevas.
+- **Escala**: lleva las notas fuera de la escala a la más cercana: con ella no hay nota que desafine. La del proyecto o una propia.
+
+Se combinan: **Acorde + Arpegiador** arpegia acordes tocando una sola nota. Al grabar se graban las notas que tocas (antes de los efectos), como en Live.
+
 ### Sidechain
 
 El **Compressor** y el **Ducker** pueden escuchar a otra pista en vez de a la suya: elige cuál en **Sidechain**. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).

@@ -296,9 +296,19 @@ pub struct Project {
     /// The VST3 plugins the instruments and devices refer to by id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginRef>,
+    /// Named places on the Arrangement: the song's parts.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub markers: Vec<SongMarker>,
     /// MIDI controllers linked to the project's controls (see `midi_map`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_map: Vec<crate::midi_map::Mapping>,
+}
+
+/// A marker on the Arrangement: where (beat) and its name.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SongMarker {
+    pub beat: f64,
+    pub name: String,
 }
 
 /// A plugin instance: which plugin, and its saved state.
@@ -374,6 +384,7 @@ impl Project {
             punch_in: false,
             punch_out: false,
             key: None,
+            markers: Vec::new(),
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

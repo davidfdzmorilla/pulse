@@ -253,8 +253,10 @@ impl PulseApp {
             track.arrangement.clear();
         }
         let mut start = 0.0;
+        self.project.markers.clear();
         for (k, section) in sections.iter().enumerate() {
             let length = section.bars as f64 * 4.0;
+            self.project.markers.push(crate::project::SongMarker { beat: start, name: section.name.clone() });
             // A cut: the last beat silent, before what comes next.
             let cut = if section.cut && k + 1 < sections.len() { 1.0 } else { 0.0 };
             for (t, &source) in section.tracks.iter().enumerate() {
@@ -467,6 +469,10 @@ mod tests {
         let starts: Vec<f64> = app.project.tracks[bass].arrangement.iter().map(|c| c.start).collect();
         assert_eq!(starts, vec![96.0, 256.0]);
         assert_eq!(app.project.loop_end, 384.0, "96 bars");
+        // A marker at each part.
+        let markers: Vec<(f64, &str)> = app.project.markers.iter().map(|m| (m.beat, m.name.as_str())).collect();
+        assert_eq!(markers[..3], [(0.0, "Intro"), (64.0, "Subida"), (96.0, "Drop")]);
+        assert_eq!(markers.len(), 7);
         assert!(app.view == crate::app::View::Arrangement);
     }
 }

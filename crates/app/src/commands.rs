@@ -43,6 +43,7 @@ pub enum Command {
     DeleteTrack,
     GroupTracks,
     Ungroup,
+    Arrange,
     ShowSession,
     ShowArrangement,
     ToggleDetail,
@@ -256,6 +257,7 @@ impl PulseApp {
             Command::DuplicateTrack => self.duplicate_selected_tracks(),
             Command::DeleteTrack => self.delete_selected_tracks(),
             Command::GroupTracks => self.group_selected(),
+            Command::Arrange => self.open_panel(crate::app::Panel::Arrange),
             Command::Ungroup => {
                 if let Target::Track(t) = self.selected_target {
                     self.ungroup(t);

@@ -9,10 +9,15 @@
 //! - TR-909: a kick whose pitch falls fast from high, with a click, driven; a
 //!   brighter snare with more noise; hats brighter and noisier.
 //!
-//! The sounds and their order are the drum machine's (kick, rim, snare, clap,
-//! closed hat, open hat, tom, cowbell), and so are its tune, decay and level.
+//! - Both: three toms; a crash and a ride from a second, higher set of squares
+//!   with noise; a shaker of band-passed noise; a tambourine, jingles in three
+//!   quick strokes; a conga, a sine that drops a touch; a clave, a short high
+//!   sine. The classic machine plays these eight as the 808 does.
+//!
+//! The sounds and their order are the drum machine's (`DRUM_VOICES`), and so
+//! are its tune, decay and level.
 
-use crate::model::{DrumModel, DrumParams};
+use crate::model::{DrumModel, DrumParams, DRUM_SOUNDS};
 use std::f32::consts::TAU;
 
 /// A biquad filter (RBJ's cookbook), its coefficients set when a hit starts.
@@ -63,6 +68,11 @@ impl Biquad {
 
 /// The six square oscillators of the 808's hats and cowbell (Hz).
 const METAL: [f32; 6] = [205.3, 304.4, 369.6, 522.7, 540.0, 800.0];
+/// A higher, more clashing set for the cymbals and the tambourine's jingles.
+const CYMBAL: [f32; 6] = [507.0, 751.9, 912.9, 1291.0, 1333.8, 1976.0];
+
+/// The pitch each tom (low, mid, high) is tuned to, against the low one.
+const TOM_PITCH: [(usize, f32); 3] = [(6, 1.0), (8, 1.4), (9, 1.85)];
 
 /// One sound's state while it rings.
 #[derive(Clone, Copy, Default)]
@@ -71,7 +81,7 @@ struct Voice {
     /// Seconds since it was hit.
     t: f32,
     velocity: f32,
-    /// The tom's pitch (low, mid, high).
+    /// The pitch against the sound's own (a low conga, 0.75).
     base: f32,
     phases: [f32; 2],
     filters: [Biquad; 3],
@@ -80,8 +90,9 @@ struct Voice {
 pub struct ModelKit {
     model: DrumModel,
     sample_rate: f32,
-    voices: [Voice; 8],
+    voices: [Voice; DRUM_SOUNDS],
     metal: [f32; 6],
+    cymbal: [f32; 6],
     seed: u32,
 }
 
@@ -96,7 +107,7 @@ fn square(phase: f32) -> f32 {
 
 impl ModelKit {
     pub fn new(model: DrumModel, sample_rate: f32) -> Self {
-        Self { model, sample_rate, voices: [Voice::default(); 8], metal: [0.0; 6], seed: 0x1234_5679 }
+        Self { model, sample_rate, voices: [Voice::default(); DRUM_SOUNDS], metal: [0.0; 6], cymbal: [0.0; 6], seed: 0x1234_5679 }
     }
 
     pub fn set_model(&mut self, model: DrumModel) {
@@ -110,7 +121,7 @@ impl ModelKit {
         (self.seed as f32 / u32::MAX as f32) * 2.0 - 1.0
     }
 
-    /// Strikes sound `voice` (the drum machine's order), at `base` pitch (toms).
+    /// Strikes sound `voice` (the drum machine's order), at `base` pitch.
     pub fn hit(&mut self, voice: usize, velocity: f32, base: f32, p: &DrumParams) {
         let sr = self.sample_rate;
         let tune = |v: usize| 2f32.powf(p.tune[v] / 12.0);
@@ -135,10 +146,23 @@ impl ModelKit {
                     [Biquad::band(3440.0 * t, 1.5, sr), Biquad::band(7100.0 * t, 1.5, sr), Biquad::high(6500.0 * t, 0.7, sr)]
                 }
             }
-            // Tom: a breath of noise, low-passed.
-            6 => [Biquad::low(900.0 * base * tune(6), 0.7, sr), Biquad::default(), Biquad::default()],
+            // Toms: a breath of noise, low-passed.
+            6 | 8 | 9 => {
+                let pitch = TOM_PITCH.iter().find(|t| t.0 == voice).map_or(1.0, |t| t.1);
+                [Biquad::low(900.0 * pitch * tune(voice), 0.7, sr), Biquad::default(), Biquad::default()]
+            }
             // Cowbell: a band round its tones.
             7 => [Biquad::band(2640.0 * tune(7), 2.0, sr), Biquad::default(), Biquad::default()],
+            // Crash: high-passed and given its sizzle band.
+            10 => [Biquad::high(3800.0 * tune(10), 0.7, sr), Biquad::band(if is_909 { 9000.0 } else { 7500.0 } * tune(10), 0.7, sr), Biquad::default()],
+            // Ride: a narrower ping and a little wash.
+            11 => [Biquad::band(5200.0 * tune(11), 1.6, sr), Biquad::high(3000.0 * tune(11), 0.7, sr), Biquad::default()],
+            // Shaker: a band of noise, high up.
+            12 => [Biquad::band(7000.0 * tune(12), 1.2, sr), Biquad::high(4500.0 * tune(12), 0.7, sr), Biquad::default()],
+            // Tambourine: the jingles, very high.
+            13 => [Biquad::high(7000.0 * tune(13), 0.7, sr), Biquad::band(10_000.0 * tune(13), 1.0, sr), Biquad::default()],
+            // Conga: the slap of the hand.
+            14 => [Biquad::band(1800.0 * tune(14), 1.0, sr), Biquad::default(), Biquad::default()],
             _ => [Biquad::default(); 3],
         };
         if voice == 4 {
@@ -155,6 +179,7 @@ impl ModelKit {
         let length = |v: usize, seconds: f32| seconds * p.decay[v].max(0.05);
         let is_909 = self.model == DrumModel::Tr909;
         let metal_on = self.voices[4].active || self.voices[5].active || self.voices[7].active;
+        let cymbal_on = self.voices[10].active || self.voices[11].active || self.voices[13].active;
         for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
             let mut s = 0.0;
             let noise = self.noise();
@@ -165,6 +190,14 @@ impl ModelKit {
                     *phase = (*phase + METAL[i] * dt) % 1.0;
                     metal[i] = square(*phase);
                 }
+            }
+            let mut cymbal = 0.0;
+            if cymbal_on {
+                for (i, phase) in self.cymbal.iter_mut().enumerate() {
+                    *phase = (*phase + CYMBAL[i] * dt) % 1.0;
+                    cymbal += square(*phase);
+                }
+                cymbal /= 6.0;
             }
 
             // Kick.
@@ -258,18 +291,21 @@ impl ModelKit {
                 v.active = v.t < tau * 7.0;
             }
 
-            // Tom: a falling sine and a breath of noise.
-            let v = &mut self.voices[6];
-            if v.active {
+            // Toms: a falling sine and a breath of noise.
+            for (voice, pitch) in TOM_PITCH {
+                let v = &mut self.voices[voice];
+                if !v.active {
+                    continue;
+                }
                 let t = v.t;
-                let base = if is_909 { 100.0 } else { 85.0 } * v.base * tune(6);
+                let base = if is_909 { 100.0 } else { 85.0 } * pitch * v.base * tune(voice);
                 let sweep = if is_909 { 0.5 } else { 0.2 };
                 let freq = base * (1.0 + sweep * decay(t, 0.03));
                 v.phases[0] = (v.phases[0] + freq * dt) % 1.0;
-                let tau = length(6, 0.24 / v.base.max(0.5));
+                let tau = length(voice, 0.24 / pitch);
                 let body = (v.phases[0] * TAU).sin() * decay(t, tau);
                 let breath = v.filters[0].tick(noise) * decay(t, 0.03) * 0.25;
-                s += (body + breath) * v.velocity * p.level[6];
+                s += (body + breath) * v.velocity * p.level[voice];
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -285,6 +321,84 @@ impl ModelKit {
                 s += v.filters[0].tick(tone) * env * v.velocity * p.level[7] * 1.4;
                 v.t += dt;
                 v.active = v.t < length(7, 0.22) * 7.0;
+            }
+
+            // Crash: the high squares and noise, a burst and a long wash.
+            let v = &mut self.voices[10];
+            if v.active {
+                let t = v.t;
+                let tau = length(10, if is_909 { 0.5 } else { 0.45 });
+                let source = cymbal * 0.6 + noise * 0.6;
+                let high = v.filters[0].tick(source);
+                let out = high * 0.6 + v.filters[1].tick(high) * 1.2;
+                let env = (t / 0.001).min(1.0) * (0.5 * decay(t, 0.04) + 0.5 * decay(t, tau));
+                s += out * env * v.velocity * p.level[10];
+                v.t += dt;
+                v.active = v.t < tau * 7.0;
+            }
+
+            // Ride: mostly the squares, a ping that rings on.
+            let v = &mut self.voices[11];
+            if v.active {
+                let t = v.t;
+                let tau = length(11, 0.45);
+                let source = cymbal * 0.85 + noise * 0.15;
+                let out = v.filters[0].tick(source) * 1.4 + v.filters[1].tick(source) * 0.3;
+                let env = (t / 0.0008).min(1.0) * (0.45 * decay(t, 0.015) + 0.55 * decay(t, tau));
+                s += out * env * v.velocity * p.level[11] * 1.2;
+                v.t += dt;
+                v.active = v.t < tau * 7.0;
+            }
+
+            // Shaker: noise that swells for a few milliseconds and falls.
+            let v = &mut self.voices[12];
+            if v.active {
+                let t = v.t;
+                let tau = length(12, 0.045);
+                let banded = v.filters[0].tick(noise);
+                let out = v.filters[1].tick(banded);
+                let env = (t / 0.006).min(1.0) * decay(t, tau);
+                s += out * env * v.velocity * p.level[12] * 2.2;
+                v.t += dt;
+                v.active = v.t < 0.006 + tau * 7.0;
+            }
+
+            // Tambourine: jingles shaken three times in quick succession.
+            let v = &mut self.voices[13];
+            if v.active {
+                let t = v.t;
+                let tau = length(13, 0.12);
+                let strokes: f32 = [0.0, 0.007, 0.016].iter().filter(|&&k| t >= k).map(|&k| decay(t - k, 0.004)).sum();
+                let high = v.filters[0].tick(cymbal * 0.5 + noise * 0.5);
+                let out = v.filters[1].tick(high);
+                s += out * (strokes * 0.6 + decay(t, tau) * 0.5) * v.velocity * p.level[13] * 2.4;
+                v.t += dt;
+                v.active = v.t < tau * 7.0;
+            }
+
+            // Conga: a sine a touch high at first, and the slap.
+            let v = &mut self.voices[14];
+            if v.active {
+                let t = v.t;
+                let tau = length(14, 0.16);
+                let freq = if is_909 { 350.0 } else { 330.0 } * v.base * tune(14) * (1.0 + 0.12 * decay(t, 0.01));
+                v.phases[0] = (v.phases[0] + freq * dt) % 1.0;
+                let body = (v.phases[0] * TAU).sin() * decay(t, tau);
+                let slap = v.filters[0].tick(noise) * decay(t, 0.004) * 0.4;
+                s += (body + slap) * v.velocity * p.level[14];
+                v.t += dt;
+                v.active = v.t < tau * 7.0;
+            }
+
+            // Clave: a short, high wooden sine.
+            let v = &mut self.voices[15];
+            if v.active {
+                let t = v.t;
+                let tau = length(15, 0.025);
+                v.phases[0] = (v.phases[0] + 2500.0 * tune(15) * dt) % 1.0;
+                s += (v.phases[0] * TAU).sin() * decay(t, tau) * v.velocity * p.level[15] * 0.9;
+                v.t += dt;
+                v.active = v.t < tau * 7.0;
             }
 
             // Headroom: kick and clap often land together.
@@ -339,7 +453,7 @@ mod tests {
     #[test]
     fn every_sound_of_both_models_plays_and_dies_away() {
         for model in [DrumModel::Tr808, DrumModel::Tr909] {
-            for voice in 0..8 {
+            for voice in 0..DRUM_SOUNDS {
                 let out = render(model, voice, 1.0, 4.0);
                 assert!(out.iter().all(|v| v.is_finite() && v.abs() <= 1.5));
                 let start = rms(&out[..(SR * 0.05) as usize]);
@@ -386,6 +500,30 @@ mod tests {
         for (model, share) in [(DrumModel::Tr808, 0.12), (DrumModel::Tr909, 0.3)] {
             let snare = render(model, 2, 1.0, 0.3);
             assert!(above(&snare, 2000.0) > share, "{model:?}: noise above 2 kHz: {}", above(&snare, 2000.0));
+        }
+    }
+
+    #[test]
+    fn the_new_sounds_sound_like_themselves() {
+        for model in [DrumModel::Tr808, DrumModel::Tr909] {
+            // Cymbals bright and long, the crash longer than the ride's ping.
+            let crash = render(model, 10, 1.0, 2.0);
+            let ride = render(model, 11, 1.0, 2.0);
+            let hat = render(model, 4, 1.0, 2.0);
+            let at = |x: &[f32], from: f32| rms(&x[(SR * from) as usize..(SR * (from + 0.1)) as usize]);
+            assert!(above(&crash, 3000.0) > 0.5 && above(&ride, 3000.0) > 0.5, "{model:?}");
+            assert!(at(&crash, 0.8) > 10.0 * at(&hat, 0.8) && at(&ride, 0.8) > 10.0 * at(&hat, 0.8), "{model:?}: cymbals ring");
+            // Shaker short and high.
+            let shaker = render(model, 12, 1.0, 0.5);
+            assert!(above(&shaker, 4000.0) > 0.5 && at(&shaker, 0.3) < 0.01 * at(&shaker, 0.0), "{model:?}");
+            // Toms go up low, mid, high.
+            let tom = |v| pitch(&render(model, v, 1.0, 0.3)[(SR * 0.05) as usize..(SR * 0.15) as usize]);
+            assert!(tom(6) < tom(8) && tom(8) < tom(9), "{model:?}: {} {} {}", tom(6), tom(8), tom(9));
+            // Conga and clave at their pitches.
+            let conga = pitch(&render(model, 14, 1.0, 0.2)[(SR * 0.03) as usize..(SR * 0.12) as usize]);
+            assert!((300.0..380.0).contains(&conga), "{model:?}: conga {conga}");
+            let clave = pitch(&render(model, 15, 1.0, 0.05)[48..(SR * 0.02) as usize]);
+            assert!((2200.0..2800.0).contains(&clave), "{model:?}: clave {clave}");
         }
     }
 }

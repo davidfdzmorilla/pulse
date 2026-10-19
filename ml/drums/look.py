@@ -10,7 +10,7 @@ import torch
 
 from train import CONTEXT, PHRASE, VOICES, DrumModel
 
-NAMES = ["kick", "snare", "clap", "hat", "open", "rim", "perc", "tom"]
+from extract import VOICES as NAMES
 
 # Four bars to start from, each voice a sixteen-step line (. g x X).
 SEEDS = {

@@ -837,6 +837,16 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             ui.separator();
         }
     }
+    if count == 1 && !app.project.tracks[track].is_drums() {
+        ui.menu_button("Acompañar", |ui| {
+            for part in crate::accompany::Part::ALL {
+                if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
+                    app.accompany(clip, part);
+                    ui.close();
+                }
+            }
+        });
+    }
     if audio && count == 1 {
         ui.menu_button("Convertir a MIDI", |ui| {
             for mode in crate::to_midi::ToMidi::ALL {

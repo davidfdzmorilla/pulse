@@ -65,6 +65,7 @@ Una columna por pista, con 8 slots (escenas). A la derecha, el botón **+** (nue
 - **Lanzar**.
 - **Copiar al Arrangement**: lo pone al final del Arrangement de su pista, en un compás.
 - Solo audio: **Separar en stems…**, **Consolidar**, **Detectar tempo** y **Usar el tempo de este clip en el proyecto**.
+- **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
 - **Duplicar** (⌘D): al siguiente slot libre de abajo.
 - **Eliminar** (Supr o ⌫).
 - Colores.
@@ -106,6 +107,7 @@ La línea de tiempo. Arriba la **franja del loop**, debajo la **regla** con los 
 
 - **Tomas** (en grabaciones en bucle): elegir la toma que suena y **Mostrar las tomas en filas…** (ver «Tomas y comping»).
 - Solo audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar**.
+- **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
 - **Dividir aquí** (⌘E corta en el cursor), **Unir N clips** (⌘J).
 - **Copiar**, **Cortar**, **Duplicar** (⌘D), **Eliminar** (⌫).
 - Con un solo clip: **Nombre** y **Color**.
@@ -344,6 +346,20 @@ Con una **Escala** en el proyecto, el menú **Acordes** de la barra del Editor M
 - **Progresiones** listas: en mayor Pop (I–V–vi–IV), Balada, Años 50, Jazz (ii–V–I), Rock y Canon; en menor Épica (i–VI–III–VII), Andaluza (i–VII–VI–V), Menor, Dramática y Lamento.
 
 Cada acorde lleva el bajo abajo y las demás notas juntas, en la inversión más cercana a la del acorde anterior: las voces se mueven lo menos posible, como lo tocaría un pianista. Las notas nuevas quedan seleccionadas, para moverlas o transponerlas.
+
+## Acompañamiento
+
+Pulse toca contigo: clic derecho en un clip con acordes (MIDI, o audio: un piano, una guitarra, una canción) → **Acompañar**, y elige una parte. Se escribe en una pista nueva justo debajo, en el mismo slot o en el mismo tramo del Arrangement, siguiendo los acordes del clip compás a compás.
+
+- **Bajo: raíz**: la fundamental en cada tiempo, con alguna octava y notas de paso hacia el acorde siguiente.
+- **Bajo: octavas**: fundamental y octava en corcheas (disco).
+- **Bajo: contratiempo**: en los contratiempos (house).
+- **Bajo: caminante**: una nota por tiempo recorriendo el acorde, y llega al siguiente por un semitono.
+- **Arpegio ascendente** y **Arpegio arriba y abajo**: las notas del acorde una tras otra.
+- **Pad**: los acordes sostenidos, con las voces enlazadas.
+- **Acordes rítmicos**: acordes cortos con un ritmo sincopado.
+
+Cada parte llega con un instrumento que le va (Acid para los bajos, FM para los arpegios, SuperSaw para el pad); cámbialo como cualquier otro. En el **Editor MIDI** del clip nuevo, **Otra variación** lo escribe de otra manera sobre los mismos acordes, tantas veces como quieras, hasta que lo edites. Los acordes salen como en la franja de acordes (ver «Acordes»); con una **Escala** en el proyecto, mejor.
 
 ## Editor de audio
 

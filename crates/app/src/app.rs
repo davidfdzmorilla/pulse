@@ -302,6 +302,8 @@ pub struct PulseApp {
     pub show_shortcuts: bool,
     pub guide: crate::guide::Guide,
     pub versions: crate::versions::Window,
+    /// The accompaniment written last (see `accompany`).
+    pub accompaniment: Option<crate::accompany::Generated>,
     /// The session clips playing while recording onto the arrangement.
     pub session_capture: Option<crate::session_rec::SessionCapture>,
     /// Preferences, the window for them and the devices it shows.
@@ -454,6 +456,7 @@ impl PulseApp {
             show_shortcuts: false,
             guide: Default::default(),
             versions: Default::default(),
+            accompaniment: None,
             session_capture: None,
             settings: Default::default(),
             show_settings: false,

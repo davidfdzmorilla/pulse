@@ -26,6 +26,7 @@ pub(crate) enum Action {
     SelectTarget(Target),
     Consolidate(usize, usize),
     ToMidi(usize, usize, crate::to_midi::ToMidi),
+    Accompany(usize, usize, crate::accompany::Part),
     Freeze(usize),
     Unfreeze(usize),
     Flatten(usize),
@@ -380,6 +381,8 @@ fn clip_slot(
         (false, true) => "Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)",
     };
     let response = response.on_hover_text(hint);
+    // Drums have no chords to accompany.
+    let app_drums = app.project.tracks[t].is_drums();
     if let Some(clip) = clip {
         let mut color = clip.color();
         response.context_menu(|ui| {
@@ -400,6 +403,16 @@ fn clip_slot(
                     for mode in crate::to_midi::ToMidi::ALL {
                         if ui.button(mode.label()).on_hover_text(mode.hint()).clicked() {
                             actions.push(Action::ToMidi(t, slot, mode));
+                            ui.close();
+                        }
+                    }
+                });
+            }
+            if !app_drums {
+                ui.menu_button("Acompañar", |ui| {
+                    for part in crate::accompany::Part::ALL {
+                        if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
+                            actions.push(Action::Accompany(t, slot, part));
                             ui.close();
                         }
                     }
@@ -615,6 +628,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),
         Action::ToMidi(t, slot, mode) => app.convert_to_midi(ClipRef::Session { track: t, slot }, mode),
+        Action::Accompany(t, slot, part) => app.accompany(ClipRef::Session { track: t, slot }, part),
         Action::SelectSlot(t, slot) => {
             app.set_clip_selection(Vec::new());
             app.selected_target = Target::Track(t);

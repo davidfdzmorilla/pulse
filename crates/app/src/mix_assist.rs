@@ -457,9 +457,25 @@ impl PulseApp {
                             _ => 1.0,
                         };
                         let gain = ((chase.goal - lufs) / slope).clamp(-12.0, 12.0) as f32;
-                        self.mix.chase = Some(Chase { steps: chase.steps + 1, last: (gain, Some(lufs)), ..chase });
                         self.mix.report = Some(report);
+                        let was = self.master_limiter_gain();
                         self.apply_fix(&Fix::MasterLimiter { gain_db: gain, ceiling_db: ceiling.max(-12.0) });
+                        // What the limiter took (it stops at its most): going back
+                        // undoes that, not what was asked.
+                        let applied = self.master_limiter_gain() - was;
+                        if gain > 0.0 && applied < 0.05 && chase.goal > lufs + 0.5 {
+                            // The limiter is at its most: that is as far as it goes.
+                            self.mix.chase = None;
+                            let note = format!(
+                                "Con el limitador no llega a {} LUFS sin aplastarla: se queda en unos {}. Para más volumen, comprime o satura las pistas (sobre todo la batería y el bajo)",
+                                num(chase.goal),
+                                num(lufs)
+                            );
+                            self.status = Some(note.clone());
+                            self.mix.note = Some(note);
+                            return;
+                        }
+                        self.mix.chase = Some(Chase { steps: chase.steps + 1, last: (applied, Some(lufs)), ..chase });
                         return;
                     }
                     self.mix.chase = None;
@@ -482,8 +498,15 @@ impl PulseApp {
     /// with the master's limiter, step by step.
     pub fn reach_loudness(&mut self, goal: f64, max_peak: f64, gain_db: f32, ceiling_db: f32) {
         let before = self.mix.report.as_ref().and_then(|r| r.mix.lufs);
-        self.mix.chase = Some(Chase { goal, max_peak, steps: 1, last: (gain_db, before) });
+        let was = self.master_limiter_gain();
         self.apply_fix(&Fix::MasterLimiter { gain_db, ceiling_db });
+        let applied = self.master_limiter_gain() - was;
+        self.mix.chase = Some(Chase { goal, max_peak, steps: 1, last: (applied, before) });
+    }
+
+    /// The gain of the master's last limiter (0 without one).
+    fn master_limiter_gain(&self) -> f32 {
+        self.project.master.devices.iter().rev().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(l.gain_db) } else { None }).unwrap_or(0.0)
     }
 
     /// The ceiling of the master's last limiter.
@@ -823,12 +846,12 @@ mod tests {
         app.mix.target = Target::Club;
         let list = advise(&report, Target::Club, None);
         let Some(Fix::MasterLimiter { gain_db, ceiling_db }) = list.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::MasterLimiter { .. }))) else { panic!("a limiter fix") };
-        // -9 is more than this loop gives without squashing it: it stops short
+        // -7 is more than this loop gives without squashing it: it stops short
         // and says so, without the limiter driven to the end.
-        app.reach_loudness(-9.0, -1.0, gain_db, ceiling_db);
+        app.reach_loudness(-7.0, -1.0, gain_db + 2.0, ceiling_db);
         wait(&mut app);
         let after = app.mix.report.as_ref().unwrap().mix.lufs.unwrap();
-        println!("demo: {before:.1} → {after:.1} LUFS (objetivo -9), pico real {:.1} dBTP", app.mix.report.as_ref().unwrap().mix.true_peak);
+        println!("demo: {before:.1} → {after:.1} LUFS (objetivo -7), pico real {:.1} dBTP", app.mix.report.as_ref().unwrap().mix.true_peak);
         assert!(after > before + 1.5, "{before} → {after}");
         assert!(app.mix.report.as_ref().unwrap().mix.true_peak <= -1.0, "under -1 dBTP");
         let limiter = |app: &PulseApp| app.project.master.devices.iter().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(*l) } else { None }).unwrap();

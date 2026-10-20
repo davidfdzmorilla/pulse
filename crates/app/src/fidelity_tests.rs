@@ -38,6 +38,11 @@ fn drums(id: u32) -> Track {
 /// What the engine plays from beat 0, `frames` long, in blocks of 512, the
 /// output limit off, after it has been running a little (as the live one has).
 fn play(project: &Project, frames: usize) -> Stereo {
+    play_in(project, frames, 512)
+}
+
+/// [`play`] with audio callbacks of `block` frames.
+fn play_in(project: &Project, frames: usize, block: usize) -> Stereo {
     let mut renderer = OfflineRenderer::new(SR);
     for command in sync::project_commands(project, &mut SampleCache::default(), SR, &HashSet::new()) {
         renderer.send(command);
@@ -50,7 +55,7 @@ fn play(project: &Project, frames: usize) -> Stereo {
         renderer.send(command);
     }
     while l.len() < frames {
-        renderer.render(512.min(frames - l.len()), &mut l, &mut r);
+        renderer.render(block.min(frames - l.len()), &mut l, &mut r);
     }
     (l, r)
 }
@@ -238,4 +243,26 @@ fn stems_without_the_master_add_up_to_the_mix() {
     }
     let gap = loudness_gap(&mix, &sum, 0..mix.0.len());
     assert!(gap < 1.0, "the stems add up to the mix: {gap:.2} dB apart");
+}
+
+/// What plays is the same whatever size of audio callback the device uses, and
+/// the export (in 1024-frame blocks) is what was heard: automation moves on the
+/// same frames (it moved once per callback: 20 ms steps at 1024).
+#[test]
+fn what_plays_does_not_depend_on_the_buffer_size() {
+    let mut p = Project::empty();
+    let mut pad = Track::new("Pad", [0, 100, 200], InstrumentKind::SuperSaw(Default::default()));
+    pad.arrangement = vec![ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Midi(midi("chords", 8.0, vec![note(0.0, 8.0, 57, 0.7), note(0.0, 8.0, 64, 0.7)])) }];
+    pad.devices.push(Device::new(Effect::AutoFilter(Default::default())));
+    pad.automation.push(lane(Param::Device { device: 0, param: 0 }, &[(0.0, 200.0), (4.0, 8000.0), (8.0, 300.0)]));
+    pad.automation.push(lane(Param::Volume, &[(0.0, 0.2), (2.0, 1.0), (2.01, 0.3), (8.0, 1.0)]));
+    p.tracks = vec![drums(1), pad];
+    let frames = seconds(&p, 8.0);
+    let reference = play_in(&p, frames, 1024);
+    for block in [32, 37, 64, 441] {
+        let other = play_in(&p, frames, block);
+        let gap = loudness_gap(&reference, &other, 2400..frames);
+        println!("bloque {block}: {gap:.3} dB");
+        assert!(gap < 0.5, "{block}-frame callbacks: {gap:.2} dB from the export's");
+    }
 }

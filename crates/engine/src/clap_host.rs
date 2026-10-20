@@ -522,8 +522,15 @@ impl ClapProcessor {
                 k += 1;
             }
         }
-        // Events must come in time order.
-        self.events.sort_by_key(|e| unsafe { e.header.time });
+        // Events must come in time order, keeping the order of those at the same
+        // time (an insertion sort: stable, and nothing to allocate here).
+        for i in 1..self.events.len() {
+            let mut j = i;
+            while j > 0 && unsafe { self.events[j - 1].header.time > self.events[j].header.time } {
+                self.events.swap(j - 1, j);
+                j -= 1;
+            }
+        }
         for &(first, channels) in &self.output_layout {
             for b in &mut self.buffers[first..first + channels] {
                 b[..n].fill(0.0);

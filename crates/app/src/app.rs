@@ -2386,6 +2386,14 @@ impl PulseApp {
         let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record, versions, group, ungroup] =
             input;
         self.tab_pressed = None;
+        // Without a system menu bar the menus' other shortcuts are read here.
+        if !self.has_menu_bar() {
+            use crate::commands::Command as C;
+            let here = [C::Duplicate, C::Undo, C::Redo, C::Save, C::SaveAs, C::Open, C::New, C::NewMidiTrack, C::NewAudioTrack, C::ImportLive, C::Export, C::Versions, C::GroupTracks, C::Ungroup];
+            for command in crate::native_menu::pressed(ctx, &here) {
+                self.run(command, ctx);
+            }
+        }
         if versions {
             self.open_panel(Panel::Versions);
         }

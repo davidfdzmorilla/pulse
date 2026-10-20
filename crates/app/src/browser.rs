@@ -233,10 +233,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         section(ui, "BIBLIOTECA", |ui| library(app, ui));
 
         section(ui, "PISTAS", |ui| {
-            if item(ui, "+", "Nueva pista MIDI", "⌘T") {
+            if item(ui, "+", "Nueva pista MIDI", &crate::theme::keys("⌘T")) {
                 app.add_track();
             }
-            if item(ui, "+", "Nueva pista de audio", "⇧⌘T") {
+            if item(ui, "+", "Nueva pista de audio", &crate::theme::keys("⇧⌘T")) {
                 app.add_audio_track();
             }
         });

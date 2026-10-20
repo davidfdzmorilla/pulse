@@ -119,6 +119,55 @@ pub const MENUS: [(&str, &[Item]); 8] = [
     ("Ayuda", &[Run(C::Guide, "Guía de Pulse", ""), Run(C::Shortcuts, "Atajos de teclado", "")]),
 ];
 
+/// Where there is no system menu bar (Windows, Linux) the menus' shortcuts are read
+/// from the keyboard here, with Ctrl for ⌘ and F11 for full screen. Copy, cut and
+/// paste come to egui as events of their own. `handled` are read elsewhere (see
+/// `handle_shortcuts`), and selecting every note goes to the clip editor as a key.
+pub fn pressed(ctx: &eframe::egui::Context, handled: &[Command]) -> Vec<Command> {
+    use eframe::egui::{Event, Key, KeyboardShortcut, Modifiers};
+    let mut found = Vec::new();
+    ctx.input_mut(|i| {
+        for event in &i.events {
+            match event {
+                Event::Copy => found.push(C::Copy),
+                Event::Cut => found.push(C::Cut),
+                Event::Paste(_) => found.push(C::Paste),
+                _ => {}
+            }
+        }
+        if i.consume_key(Modifiers::NONE, Key::F11) {
+            found.push(C::FullScreen);
+        }
+        for item in MENUS.iter().flat_map(|(_, items)| items.iter()) {
+            let Run(command, _, shortcut) = *item else { continue };
+            if shortcut.is_empty() || handled.contains(&command) || matches!(command, C::FullScreen | C::SelectAll | C::Copy | C::Cut | C::Paste) {
+                continue;
+            }
+            let Some((modifiers, key)) = parse(shortcut) else { continue };
+            if i.consume_shortcut(&KeyboardShortcut::new(modifiers, key)) {
+                found.push(command);
+            }
+        }
+    });
+    found
+}
+
+/// A menu shortcut ("⇧s", ",") as ⌘ (Ctrl off macOS) plus modifiers and a key.
+fn parse(shortcut: &str) -> Option<(eframe::egui::Modifiers, eframe::egui::Key)> {
+    let mut modifiers = eframe::egui::Modifiers::COMMAND;
+    let mut key = None;
+    for c in shortcut.chars() {
+        match c {
+            '⇧' => modifiers = modifiers | eframe::egui::Modifiers::SHIFT,
+            '⌥' => modifiers = modifiers | eframe::egui::Modifiers::ALT,
+            '⌃' => modifiers = modifiers | eframe::egui::Modifiers::CTRL,
+            ',' => key = Some(eframe::egui::Key::Comma),
+            c => key = eframe::egui::Key::from_name(&c.to_uppercase().to_string()),
+        }
+    }
+    Some((modifiers, key?))
+}
+
 /// Every command in the menus, in order (a menu item's tag is its index here).
 #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn commands() -> Vec<Command> {
@@ -369,6 +418,30 @@ impl MenuBar {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn menu_shortcuts_are_read_where_there_is_no_menu_bar() {
+        let ctx = eframe::egui::Context::default();
+        let press = |key: eframe::egui::Key, modifiers: eframe::egui::Modifiers| {
+            let mut input = eframe::egui::RawInput::default();
+            input.events.push(eframe::egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
+            let mut found = Vec::new();
+            let _ = ctx.run_ui(input, |ui| found = pressed(ui.ctx(), &[C::Save, C::Undo]));
+            found
+        };
+        assert_eq!(press(eframe::egui::Key::E, eframe::egui::Modifiers::COMMAND), vec![C::Split]);
+        assert_eq!(press(eframe::egui::Key::J, eframe::egui::Modifiers::COMMAND), vec![C::Join]);
+        assert_eq!(press(eframe::egui::Key::Comma, eframe::egui::Modifiers::COMMAND), vec![C::Settings]);
+        assert_eq!(press(eframe::egui::Key::F11, eframe::egui::Modifiers::NONE), vec![C::FullScreen]);
+        // Read elsewhere, or without Ctrl: nothing here.
+        assert!(press(eframe::egui::Key::S, eframe::egui::Modifiers::COMMAND).is_empty());
+        assert!(press(eframe::egui::Key::E, eframe::egui::Modifiers::NONE).is_empty());
+        let mut input = eframe::egui::RawInput::default();
+        input.events.push(eframe::egui::Event::Copy);
+        let mut found = Vec::new();
+        let _ = ctx.run_ui(input, |ui| found = pressed(ui.ctx(), &[]));
+        assert_eq!(found, vec![C::Copy]);
+    }
 
     #[test]
     fn every_command_with_a_shortcut_is_in_the_menus_once() {

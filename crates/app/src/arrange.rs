@@ -279,7 +279,7 @@ impl PulseApp {
         self.sync_all();
         self.sync_loop();
         self.back_to_arrangement();
-        self.status = Some(format!("Canción de {} compases en {} partes en el Arrangement (⌘Z la deshace)", (start / 4.0) as u32, sections.len()));
+        self.status = Some(crate::theme::keys(&format!("Canción de {} compases en {} partes en el Arrangement (⌘Z la deshace)", (start / 4.0) as u32, sections.len())));
     }
 }
 
@@ -375,7 +375,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     let replaces = app.project.tracks.iter().any(|t| !t.arrangement.is_empty());
     ui.horizontal(|ui| {
         let label = if replaces { "Crear (sustituye el Arrangement)" } else { "Crear en el Arrangement" };
-        if ui.button(label).on_hover_text("⌘Z lo deshace").clicked() {
+        if ui.button(label).on_hover_text(crate::theme::keys("⌘Z lo deshace")).clicked() {
             let sections = app.arrange.sections.clone();
             app.lay_out(&sections);
             app.arrange.open = false;

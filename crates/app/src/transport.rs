@@ -361,9 +361,9 @@ pub fn status_bar(app: &mut PulseApp, ui: &mut egui::Ui) {
         let text = match (&app.audio.error, &app.status) {
             (Some(error), _) => RichText::new(format!("Sin audio: {error}")).color(theme::METER_RED),
             (None, Some(status)) => RichText::new(status).color(TEXT),
-            (None, None) => RichText::new(
+            (None, None) => RichText::new(crate::theme::keys(
                 "Espacio: play/stop · Tab: Session/Arrangement · ⇧Tab: Clip/Dispositivos · M: teclado MIDI · F9: grabar · ⌘Z: deshacer · ⌘D: duplicar · Supr: borrar",
-            )
+            ))
             .color(TEXT_DIM),
         };
         ui.label(text.size(10.5));
@@ -390,7 +390,7 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
             for item in *items {
                 match *item {
                     Item::Run(command, label, shortcut) => {
-                        let label = if shortcut.is_empty() { label.to_string() } else { format!("{label}   ⌘{}", shortcut.to_uppercase()) };
+                        let label = if shortcut.is_empty() { label.to_string() } else { crate::theme::keys(&format!("{label}   ⌘{}", shortcut.to_uppercase().replace('⌃', "⌃⌘"))) };
                         if ui.add_enabled(app.command_enabled(command), egui::Button::new(label)).clicked() {
                             chosen = Some(command);
                             ui.close();

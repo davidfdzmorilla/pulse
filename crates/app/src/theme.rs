@@ -54,6 +54,48 @@ pub fn body() -> FontId {
     FontId::proportional(12.0)
 }
 
+/// Shortcuts as this system writes them: macOS's ⌘ ⇧ ⌥ ⌃ ⌫ as they are,
+/// elsewhere with names ("⇧⌘S" → "Ctrl+Mayús+S", "⌘ clic" → "Ctrl clic",
+/// full screen → "F11"; egui reads ⌘ as Ctrl there).
+pub fn keys(text: &str) -> String {
+    if cfg!(target_os = "macos") { text.to_string() } else { named_keys(text) }
+}
+
+/// [`keys`] off macOS.
+pub fn named_keys(text: &str) -> String {
+    let text = text.replace("⌃⌘F", "F11").replace('⌫', "Supr");
+    let modifier = |c: char| matches!(c, '⌘' | '⇧' | '⌥' | '⌃');
+    let mut out = String::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if !modifier(c) {
+            out.push(c);
+            continue;
+        }
+        let mut held = vec![c];
+        while let Some(next) = chars.next_if(|&n| modifier(n)) {
+            held.push(next);
+        }
+        // Windows' order: Ctrl, Mayús, Alt.
+        let names: Vec<&str> = [("Ctrl", '⌘'), ("Ctrl", '⌃'), ("Mayús", '⇧'), ("Alt", '⌥')]
+            .into_iter()
+            .filter(|(_, glyph)| held.contains(glyph))
+            .map(|(name, _)| name)
+            .fold(Vec::new(), |mut names, name| {
+                if !names.contains(&name) {
+                    names.push(name);
+                }
+                names
+            });
+        out += &names.join("+");
+        // "⌘D" → "Ctrl+D", but "⌘ clic" → "Ctrl clic".
+        if chars.peek().is_some_and(|n| !n.is_whitespace() && !matches!(n, ')' | ':' | '·')) {
+            out.push('+');
+        }
+    }
+    out
+}
+
 /// The system's interface, fixed-width and symbol fonts (macOS: San Francisco and
 /// Apple Symbols; Windows: Segoe UI, Consolas and Segoe UI Symbol).
 fn system_fonts() -> [std::path::PathBuf; 3] {
@@ -166,5 +208,27 @@ mod glyph_tests {
             used.iter().filter(|(c, _)| !f.has_glyph(&body(), **c)).map(|(c, at)| format!("{c} (U+{:04X}) en {at}", *c as u32)).collect()
         });
         assert!(missing.is_empty(), "{} símbolos sin glifo:\n{}", missing.len(), missing.join("\n"));
+    }
+}
+
+#[cfg(test)]
+mod key_tests {
+    use super::named_keys;
+
+    #[test]
+    fn shortcuts_are_named_the_windows_way() {
+        assert_eq!(named_keys("⌘D"), "Ctrl+D");
+        assert_eq!(named_keys("⇧⌘S"), "Ctrl+Mayús+S");
+        assert_eq!(named_keys("⌥⌘S"), "Ctrl+Alt+S");
+        assert_eq!(named_keys("⌘S / ⇧⌘S"), "Ctrl+S / Ctrl+Mayús+S");
+        assert_eq!(named_keys("Duplicar   ⌘D"), "Duplicar   Ctrl+D");
+        assert_eq!(named_keys("⌘ clic / ⇧ clic"), "Ctrl clic / Mayús clic");
+        assert_eq!(named_keys("arrastrar: mover (⌥ copia)"), "arrastrar: mover (Alt copia)");
+        assert_eq!(named_keys("Nueva pista MIDI (⌘T)"), "Nueva pista MIDI (Ctrl+T)");
+        assert_eq!(named_keys("⇧Tab"), "Mayús+Tab");
+        assert_eq!(named_keys("⌃⌘F"), "F11");
+        assert_eq!(named_keys("⌘,"), "Ctrl+,");
+        assert_eq!(named_keys("⌫"), "Supr");
+        assert_eq!(named_keys("Sin atajos"), "Sin atajos");
     }
 }

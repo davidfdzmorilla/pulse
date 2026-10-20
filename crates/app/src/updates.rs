@@ -376,6 +376,8 @@ fn install(release: &Release, bundle: &Path, token: &str) -> Result<String, Stri
         #[cfg(not(windows))]
         same_signer(bundle, &new)?;
         swap_in(bundle, &new)?;
+        #[cfg(windows)]
+        system::update_libraries(new.parent().unwrap_or(&work), bundle.parent().unwrap_or(Path::new(".")))?;
         Ok(version)
     })();
     let _ = std::fs::remove_dir_all(&work);
@@ -510,6 +512,31 @@ mod system {
         let fixed = unsafe { &*(info as *const VS_FIXEDFILEINFO) };
         let (ms, ls) = (fixed.dwProductVersionMS, fixed.dwProductVersionLS);
         Some(format!("{}.{}.{}", ms >> 16, ms & 0xffff, ls >> 16))
+    }
+
+    /// The DLLs that come with pulse.exe (the Visual C++ runtime) brought up to the
+    /// package's: a changed one is renamed to "<name>.anterior" (Windows lets a DLL
+    /// in use be renamed, not replaced) and the new one copied in. They stay when
+    /// going back to the previous version: newer runtimes run older programs.
+    pub fn update_libraries(package: &Path, installed: &Path) -> Result<(), String> {
+        let entries = std::fs::read_dir(package).map_err(|e| e.to_string())?;
+        for entry in entries.flatten() {
+            let new = entry.path();
+            if !new.extension().is_some_and(|e| e.eq_ignore_ascii_case("dll")) {
+                continue;
+            }
+            let target = installed.join(entry.file_name());
+            if std::fs::read(&target).ok() == std::fs::read(&new).ok() {
+                continue;
+            }
+            if target.exists() {
+                let old = target.with_extension("dll.anterior");
+                let _ = std::fs::remove_file(&old);
+                std::fs::rename(&target, &old).map_err(|e| format!("No se pudo apartar {}: {e}", target.display()))?;
+            }
+            std::fs::copy(&new, &target).map_err(|e| format!("No se pudo copiar {}: {e}", target.display()))?;
+        }
+        Ok(())
     }
 
     /// With the tar that comes with Windows 10 and 11 (it reads zips).
@@ -864,6 +891,26 @@ mod tests {
         // Without a digest only Windows refuses (macOS checks the signature instead).
         assert_eq!(check_digest(&file, &with(None)).is_err(), cfg!(windows));
         std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    #[cfg(windows)]
+    fn the_runtime_libraries_follow_the_package() {
+        let dir = std::env::temp_dir().join(format!("pulse dll ñ {}", std::process::id()));
+        let (package, installed) = (dir.join("Pulse"), dir.join("instalado"));
+        std::fs::create_dir_all(&package).unwrap();
+        std::fs::create_dir_all(&installed).unwrap();
+        std::fs::write(package.join("vcruntime140.dll"), b"nueva").unwrap();
+        std::fs::write(package.join("msvcp140.dll"), b"igual").unwrap();
+        std::fs::write(package.join("pulse.exe"), b"programa").unwrap();
+        std::fs::write(installed.join("vcruntime140.dll"), b"vieja").unwrap();
+        std::fs::write(installed.join("msvcp140.dll"), b"igual").unwrap();
+        system::update_libraries(&package, &installed).unwrap();
+        assert_eq!(std::fs::read(installed.join("vcruntime140.dll")).unwrap(), b"nueva");
+        assert_eq!(std::fs::read(installed.join("vcruntime140.dll.anterior")).unwrap(), b"vieja");
+        assert!(!installed.join("msvcp140.dll.anterior").exists(), "unchanged ones stay");
+        assert!(!installed.join("pulse.exe").exists(), "only libraries");
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

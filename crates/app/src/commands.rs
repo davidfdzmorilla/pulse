@@ -400,12 +400,13 @@ pub fn shortcuts_window(app: &mut PulseApp, ctx: &egui::Context) {
     egui::Window::new("Atajos de teclado").open(&mut open).resizable(false).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
         egui::Grid::new("shortcuts").num_columns(2).striped(true).show(ui, |ui| {
             for (keys, what) in SHORTCUTS {
-                ui.label(egui::RichText::new(keys).strong());
+                ui.label(egui::RichText::new(crate::theme::keys(keys)).strong());
                 ui.label(what);
                 ui.end_row();
             }
         });
-        ui.label(egui::RichText::new("Los atajos con ⌘ también están en la barra de menús.").color(TEXT_DIM).size(10.5));
+        let note = if app.has_menu_bar() { "Los atajos con ⌘ también están en la barra de menús." } else { "Los atajos con Ctrl también están en los menús de la barra de arriba." };
+        ui.label(egui::RichText::new(note).color(TEXT_DIM).size(10.5));
     });
     app.show_shortcuts = open;
 }

@@ -50,6 +50,8 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 
 [Files]
 Source: "{#Stage}\pulse.exe"; DestDir: "{app}"; Flags: ignoreversion
+; The Visual C++ runtime, beside pulse.exe (app-local, as Microsoft allows).
+Source: "{#Stage}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
@@ -69,6 +71,7 @@ Root: HKA; Subkey: "Software\Classes\Pulse.Proyecto\shell\open\command"; ValueTy
 Type: files; Name: "{app}\pulse (anterior).exe"
 Type: files; Name: "{app}\.pulse-cambio.exe"
 Type: filesandordirs; Name: "{app}\.pulse-update"
+Type: files; Name: "{app}\*.dll.anterior"
 
 [Run]
 Filename: "{app}\pulse.exe"; Description: "{cm:LaunchProgram,Pulse}"; Flags: nowait postinstall skipifsilent

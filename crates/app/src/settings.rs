@@ -258,7 +258,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             if next.library.is_some() && ui.button("Volver a Música/Pulse").clicked() {
                 next.library = None;
             }
-            if ui.button("Mostrar en Finder").clicked() {
+            if ui.button(if cfg!(windows) { "Mostrar en el Explorador" } else { "Mostrar en Finder" }).clicked() {
                 show_folder = true;
             }
         });

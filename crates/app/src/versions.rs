@@ -240,7 +240,7 @@ impl PulseApp {
     /// Where this project's versions are, or why it has none yet.
     fn versions_dir(&self) -> Result<PathBuf, String> {
         match &self.file {
-            None => Err("Guarda el proyecto (⌘S) para poder guardar versiones".into()),
+            None => Err(crate::theme::keys("Guarda el proyecto (⌘S) para poder guardar versiones")),
             Some(file) => folder(file).ok_or_else(|| "Usa «Guardar como…» para dar al proyecto su carpeta: las versiones se guardan en ella".into()),
         }
     }
@@ -290,7 +290,7 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         self.selected_clip = None;
         self.sync_all();
-        self.status = Some(format!("Has vuelto a «{}» (⌘Z lo deshace; guarda para quedarte con ella)", version.name));
+        self.status = Some(crate::theme::keys(&format!("Has vuelto a «{}» (⌘Z lo deshace; guarda para quedarte con ella)", version.name)));
     }
 }
 
@@ -326,12 +326,12 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         let w = &mut app.versions;
         ui.add(egui::TextEdit::singleline(&mut w.name).hint_text("Nombre (p. ej. «Con el bajo nuevo»)").desired_width(220.0));
         ui.add(egui::TextEdit::singleline(&mut w.note).hint_text("Nota (opcional)").desired_width(150.0));
-        if ui.button("Guardar versión").on_hover_text("Guarda cómo está el proyecto ahora (⌥⌘S)").clicked() {
+        if ui.button("Guardar versión").on_hover_text(crate::theme::keys("Guarda cómo está el proyecto ahora (⌥⌘S)")).clicked() {
             let (name, note) = (std::mem::take(&mut app.versions.name), std::mem::take(&mut app.versions.note));
             app.save_version(&name, &note);
         }
     });
-    ui.label(RichText::new(format!("Al guardar (⌘S) se hace también una versión automática; se guardan las {MAX_AUTO} últimas.")).color(TEXT_DIM).size(10.5));
+    ui.label(RichText::new(crate::theme::keys(&format!("Al guardar (⌘S) se hace también una versión automática; se guardan las {MAX_AUTO} últimas."))).color(TEXT_DIM).size(10.5));
     ui.separator();
 
     let versions = list(&dir);
@@ -367,7 +367,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             let shown = if changes.is_empty() { "Sin cambios".to_string() } else { changes.join(" · ") };
             ui.label(RichText::new(shown).color(TEXT_DIM).size(10.5));
             ui.horizontal(|ui| {
-                if ui.small_button("Volver a esta").on_hover_text("La abre en lugar de lo que hay ahora, que queda guardado como versión (⌘Z lo deshace)").clicked() {
+                if ui.small_button("Volver a esta").on_hover_text(crate::theme::keys("La abre en lugar de lo que hay ahora, que queda guardado como versión (⌘Z lo deshace)")).clicked() {
                     action = Some(("restore", v.file.clone()));
                 }
                 let comparing = w.comparing.as_deref() == Some(v.file.as_str());

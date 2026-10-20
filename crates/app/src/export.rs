@@ -161,6 +161,14 @@ fn sanitize(name: &str) -> String {
 }
 
 /// Renders `[start, end)` beats plus the effect tail. `progress` receives 0..1.
+/// Beats a render of part of the song starts before it (see [`render_mapped`]).
+const PREROLL_BEATS: f64 = 16.0;
+
+/// Where a render that has to start at `start` begins playing.
+fn preroll(start: f64) -> f64 {
+    (start - PREROLL_BEATS).max(0.0)
+}
+
 /// What a render needs to know of the song besides its commands.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Song {
@@ -230,10 +238,21 @@ pub fn render_mapped(
         Command::SetLoop { enabled: false, start: 0.0, end: 0.0 },
         Command::SetOutputLimit(false),
         Command::BackToArrangement,
-        Command::SetPosition(start),
+        Command::SetPosition(preroll(start)),
         Command::Play,
     ] {
         renderer.send(command);
+    }
+    let chunk = (sample_rate as usize / 10).max(1);
+    // From a few bars before (a region of the song): what sounds into it, held
+    // notes and the effects' tails, is in it. That part is then dropped.
+    let (mut left, mut right) = (Vec::new(), Vec::new());
+    while renderer.state.position() < start - 1e-9 {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        let frames = ((start - renderer.state.position()) * 60.0 / tempo * sample_rate as f64).ceil() as usize;
+        renderer.render(frames.clamp(1, chunk), &mut left, &mut right);
     }
 
     // Until the transport reaches the end: with tempo automation the song is as
@@ -241,7 +260,6 @@ pub fn render_mapped(
     // left at `tempo` (the last few samples land on the end).
     let frames = ((end - start) * 60.0 / tempo * sample_rate as f64).ceil() as usize;
     let (mut left, mut right) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
-    let chunk = (sample_rate as usize / 10).max(1);
     // However slow it gets (20 BPM), it ends.
     let most = ((end - start) * 3.0 * sample_rate as f64).ceil() as usize + chunk;
     loop {
@@ -582,6 +600,27 @@ mod tests {
         let range = beat_range(&project, settings.range).unwrap();
         let renders = plan(&project, &mut samples, settings, Path::new("/tmp/pulse-demo.wav"));
         (renders, range, project.tempo)
+    }
+
+    /// Exporting the loop region: a note held from before it sounds from its
+    /// first sample (the render started at the region, after every note began).
+    #[test]
+    fn a_region_has_what_sounds_into_it() {
+        use engine::model::{ArrangementClip, Clip, InstrumentKind, MidiClip, Note};
+        let mut project = Project::empty();
+        let mut track = crate::project::Track::new("Pad", [0, 0, 0], InstrumentKind::SuperSaw(Default::default()));
+        let mut clip = MidiClip::new("A", 16.0, [0, 0, 0]);
+        clip.notes.push(Note { start: 0.0, length: 16.0, pitch: 57, velocity: 0.8 });
+        track.arrangement.push(ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(clip) });
+        project.tracks = vec![track];
+        (project.loop_start, project.loop_end) = (8.0, 12.0);
+        let range = beat_range(&project, Range::Loop).unwrap();
+        let commands = sync::project_commands(&project, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+        let (left, _) = render(commands, range, Song::of(&project), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
+        let first = left[..480].iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(first > 0.05, "the held note from the first 10 ms: {first}");
+        // Two seconds of region, its tail aside.
+        assert!(left.len() >= 2 * 48_000 && left.len() < 2 * 48_000 + 10 * 48_000);
     }
 
     /// A delay with echoes two seconds apart: the export waits for them instead of

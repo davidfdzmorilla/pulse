@@ -746,7 +746,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Rango**: **Toda la canción** o **Región del loop**.
 - **Formato**: WAV de 16 bits (con dither), 24 o 32 bits; **44.1** o **48 kHz**.
 - **Normalizar**: pico a un valor (no en stems).
-- Se exporta el **Arrangement** (no la Session), con la cola de reverbs y delays (también los ecos de un delay largo: espera lo que tarda el delay más lento del proyecto antes de dar la cola por terminada). Empieza a todo volumen desde la primera muestra. Avisa si la mezcla satura.
+- Se exporta el **Arrangement** (no la Session), con la cola de reverbs y delays (también los ecos de un delay largo: espera lo que tarda el delay más lento del proyecto antes de dar la cola por terminada). Empieza a todo volumen desde la primera muestra. Al exportar la **Región del loop** se toca desde unos compases antes, así que lo que ya sonaba (notas largas, colas) está desde el principio. Lo exportado suena igual que lo que oyes, con cualquier tamaño de búfer: la automatización se aplica cada 64 muestras, en los mismos puntos. Avisa si la mezcla satura.
 - Por defecto se guarda en la carpeta `Exportaciones`.
 - Antes de exportar, mira el **Asistente de mezcla y master**.
 

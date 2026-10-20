@@ -28,10 +28,32 @@ pub const NUM_RETURNS: usize = 2;
 /// Devices per chain; insertions beyond this are rejected so the chain never reallocates.
 pub const MAX_CHAIN: usize = 16;
 const MAX_BLOCK: usize = 1024;
+/// Blocks are cut at every multiple of this many frames counted from the
+/// engine's start: automation, instruments' control rates and every other
+/// once-a-block thing happen at the same frames whatever size the audio device
+/// (or an export) asks for, so what is exported is what is heard.
+const SUB_BLOCK: u64 = 64;
 const MAX_EVENTS: usize = 512;
 
 /// `TrackStatus::queued` value meaning "stop at the next quantization boundary".
 pub const QUEUED_STOP: i32 = -2;
+/// Treats subnormal floats as zero on this thread (the audio callback's). The
+/// tails of reverbs and filters decay into them, and on x86 every operation on
+/// one is many times slower (ARM handles them at full speed).
+#[inline]
+fn flush_denormals() {
+    #[cfg(target_arch = "x86_64")]
+    unsafe {
+        // MXCSR: flush to zero (bit 15) and denormals are zero (bit 6).
+        let mut csr: u32 = 0;
+        std::arch::asm!("stmxcsr [{}]", in(reg) &mut csr, options(nostack));
+        if csr & 0x8040 != 0x8040 {
+            csr |= 0x8040;
+            std::arch::asm!("ldmxcsr [{}]", in(reg) &csr, options(nostack));
+        }
+    }
+}
+
 /// Parameters a clip's envelopes can hold at once on one track.
 const MAX_HELD: usize = 16;
 
@@ -197,6 +219,8 @@ pub enum Garbage {
     Arrangement(Box<Vec<PlacedClip>>),
     Automation(Box<Vec<AutomationLane>>),
     Samples(Box<Vec<Arc<Sample>>>),
+    /// One file (the browser's preview): no box to allocate on the audio thread.
+    Sample(Arc<Sample>),
     Wavetables(Box<Vec<Arc<Wavetable>>>),
     Instrument(Box<PreparedInstrument>),
     Monitor(Box<MonitorInput>),
@@ -865,7 +889,9 @@ fn schedule_notes(
     timing: &Timing,
     events: &mut EventQueue,
 ) {
-    if clip.length <= 0.0 || to <= from {
+    // A clip a 1000th of a beat long (only from a file edited by hand) would
+    // take a lap per thousandth: too short to play.
+    if clip.length < 1e-3 || to <= from {
         return;
     }
     let local_from = from - origin;
@@ -1302,6 +1328,10 @@ pub struct Engine {
     input_track: Option<usize>,
     arrangement_record: bool,
     limit_output: bool,
+    /// Frames rendered since the engine started (see [`SUB_BLOCK`]).
+    rendered: u64,
+    /// The transport started or jumped: automation applies at the next block.
+    automate_now: bool,
     swing: (f64, f32),
     /// The file the browser is previewing, and where in it (frames of the file).
     preview: Option<(Arc<Sample>, f64)>,
@@ -1454,6 +1484,8 @@ impl Engine {
             input_track: None,
             arrangement_record: false,
             limit_output: true,
+            rendered: 0,
+            automate_now: true,
             swing: (0.25, 0.0),
             parents: [None; MAX_TRACKS],
             order: std::array::from_fn(|i| i),
@@ -1900,7 +1932,7 @@ impl Engine {
             Command::SetCountIn(beats) => self.count_in_beats = beats.max(0.0),
             Command::PreviewSample(sample) => {
                 if let Some((old, _)) = self.preview.take() {
-                    self.discard(Garbage::Samples(Box::new(vec![old])));
+                    self.discard(Garbage::Sample(old));
                 }
                 self.preview = sample.map(|s| (s, 0.0));
             }
@@ -1952,11 +1984,16 @@ impl Engine {
 
     /// Renders interleaved frames into `out`.
     pub fn process(&mut self, out: &mut [f32], channels: usize) {
+        flush_denormals();
         for t in &mut self.tracks {
             t.events.clear();
         }
+        let (position, playing) = (self.position, self.playing);
         while let Ok(command) = self.commands.pop() {
             self.handle(command);
+        }
+        if self.position != position || self.playing != playing {
+            self.automate_now = true;
         }
         while let Ok(note) = self.live.pop() {
             self.handle_live(note);
@@ -1965,7 +2002,8 @@ impl Engine {
         let frames = out.len() / channels;
         let mut done = 0;
         while done < frames {
-            let mut n = (frames - done).min(MAX_BLOCK);
+            let to_boundary = (SUB_BLOCK - self.rendered % SUB_BLOCK) as usize;
+            let mut n = (frames - done).min(MAX_BLOCK).min(to_boundary);
             // A count-in ends a block where it ends, so the transport starts on time.
             if let Some(counted) = self.counting {
                 let bps = self.tempo / 60.0 / self.sample_rate as f64;
@@ -1973,6 +2011,7 @@ impl Engine {
                 n = n.min(left.max(1));
             }
             self.render_block(n);
+            self.rendered += n as u64;
             let (left, right) = (&self.master.left, &self.master.right);
             for i in 0..n {
                 let frame = &mut out[(done + i) * channels..(done + i + 1) * channels];
@@ -2006,7 +2045,12 @@ impl Engine {
         let playing = self.playing;
         self.count_in(n, beats_per_sample);
         if playing {
-            self.apply_automation();
+            // On the sub-block's frame (the same frames whatever the callbacks
+            // are), or at once when the transport has just started or moved.
+            if self.rendered % SUB_BLOCK == 0 || self.automate_now {
+                self.automate_now = false;
+                self.apply_automation();
+            }
             self.sequence(n, beats_per_sample);
         }
         self.monitor(n);
@@ -2147,7 +2191,7 @@ impl Engine {
         }
         if finished {
             if let Some((old, _)) = self.preview.take() {
-                self.discard(Garbage::Samples(Box::new(vec![old])));
+                self.discard(Garbage::Sample(old));
             }
         }
 

@@ -970,8 +970,8 @@ impl Default for DrumParams {
     }
 }
 
-/// A drum machine's values for its sounds; projects from when it had eight
-/// get the new ones at their defaults.
+/// A drum machine's values for its sounds; projects from when it had eight get
+/// `default` for the new ones.
 fn drum_values<'de, D: serde::Deserializer<'de>>(d: D, default: f32) -> Result<[f32; DRUM_SOUNDS], D::Error> {
     let saved = Vec::<f32>::deserialize(d)?;
     let mut values = [default; DRUM_SOUNDS];
@@ -989,8 +989,10 @@ fn drum_decays<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; DRUM_SOUN
     drum_values(d, 1.0)
 }
 
+/// The sounds a drum machine of eight didn't have are silent in its projects:
+/// the notes it ignored stay unheard, so they sound as they did.
 fn drum_levels<'de, D: serde::Deserializer<'de>>(d: D) -> Result<[f32; DRUM_SOUNDS], D::Error> {
-    drum_values(d, 0.8)
+    drum_values(d, 0.0)
 }
 
 /// The sound of the drum machine: its own first sounds, or modelled on the
@@ -5057,7 +5059,7 @@ impl ModularParams {
         let mut acid = module(K::NonlinearFilter, &[(slot::CUTOFF, 400.0), (slot::Q, 9.0), (slot::NL_DRIVE, 15.0)], 0);
         acid.choice[1] = 1;
         let mut loud = out(0.002, 0.4, 0.6, 0.08);
-        loud.set(slot::LEVEL, 2.0);
+        loud.set(slot::LEVEL, 1.8);
         let mut p = build(&[group, saw(&[]), acid, loud]);
         let mut env = Modulator::new(ModulatorKind::Envelope);
         env.a = 0.0;
@@ -5076,7 +5078,8 @@ impl ModularParams {
         let mut gate = module(K::CurveOutput, &[(slot::CURVE_LENGTH, 0.5), (slot::CURVE_START, 0.0), (slot::CURVE_END, 1.0)], 0);
         gate.choice[1] = 1;
         gate.set(slot::LEVEL, 1.7);
-        gate.curve = Shape::from_points(&[(0.0, 1.0, 0.0), (0.4, 0.9, 0.0), (0.42, 0.0, 0.0), (0.5, 0.0, 0.0), (0.52, 1.0, 0.0), (0.7, 0.8, 0.0), (0.72, 0.0, 0.0), (1.0, 0.0, 0.0)]);
+        // Opening over the first 2% (a few ms): straight to 1 it clicked.
+        gate.curve = Shape::from_points(&[(0.0, 0.0, 0.0), (0.02, 1.0, 0.0), (0.4, 0.9, 0.0), (0.42, 0.0, 0.0), (0.5, 0.0, 0.0), (0.52, 1.0, 0.0), (0.7, 0.8, 0.0), (0.72, 0.0, 0.0), (1.0, 0.0, 0.0)]);
         let mut p = build(&[group, saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.25), (slot::PHASE_RANDOM, 180.0)]), filter(0, 2200.0, 1.0, false), gate]);
         p.lanes[0].fx[0] = reverb(0.7, 0.25);
         p.gain = 1.0;
@@ -6648,7 +6651,8 @@ mod tests {
         let old = r#"{"tune":[1,2,3,4,5,6,7,8],"decay":[2,2,2,2,2,2,2,2],"level":[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5],"model":"Tr909"}"#;
         let p: super::DrumParams = serde_json::from_str(old).unwrap();
         assert_eq!(p.tune[..8], [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]);
-        assert_eq!((p.tune[8], p.decay[15], p.level[12], p.decay[0]), (0.0, 1.0, 0.8, 2.0));
+        // The new sounds are silent: the notes an old machine ignored stay unheard.
+        assert_eq!((p.tune[8], p.decay[15], p.level[12], p.decay[0]), (0.0, 1.0, 0.0, 2.0));
         assert_eq!(p.model, super::DrumModel::Tr909);
         let again: super::DrumParams = serde_json::from_str(&serde_json::to_string(&p).unwrap()).unwrap();
         assert_eq!(again, p);

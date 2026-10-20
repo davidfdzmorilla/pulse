@@ -32,6 +32,9 @@ const MAX_EVENTS: usize = 512;
 
 /// `TrackStatus::queued` value meaning "stop at the next quantization boundary".
 pub const QUEUED_STOP: i32 = -2;
+/// Parameters a clip's envelopes can hold at once on one track.
+const MAX_HELD: usize = 16;
+
 pub const NONE: i32 = -1;
 
 /// A mixer channel: a track, a return track or the master.
@@ -1018,13 +1021,19 @@ struct Channel {
     chain: Vec<ChainSlot>,
     gain: f32,
     pan: f32,
+    /// The fader and pan as set (automation and clip envelopes move `gain` and
+    /// `pan` from these, block by block, and they come back when those stop).
+    base_gain: f32,
+    base_pan: f32,
     mute: bool,
     left: Vec<f32>,
     right: Vec<f32>,
     automation: Box<Vec<AutomationLane>>,
-    /// Pan/fader gains reached at the end of the last block, ramped from to avoid zipper
-    /// noise. Starts silent so a channel fades in instead of popping.
-    last_gains: (f32, f32),
+    /// Pan/fader gains reached at the end of the last block, ramped from to avoid
+    /// zipper noise. None until the first block, which starts at its gains: a new
+    /// channel has nothing sounding yet, and a ramp from silence would soften the
+    /// first hit of every export.
+    last_gains: Option<(f32, f32)>,
 }
 
 impl Channel {
@@ -1033,17 +1042,21 @@ impl Channel {
             chain: Vec::with_capacity(MAX_CHAIN),
             gain: 1.0,
             pan: 0.0,
+            base_gain: 1.0,
+            base_pan: 0.0,
             mute: false,
             left: vec![0.0; MAX_BLOCK],
             right: vec![0.0; MAX_BLOCK],
             automation: Box::default(),
-            last_gains: (0.0, 0.0),
+            last_gains: None,
         }
     }
 
     /// Applies automation for the mixer and device parameters at `beat`.
     /// Returns values of parameters the channel does not own itself (sends, instrument).
     fn automate(&mut self, beat: f64, mut other: impl FnMut(Param, f32)) {
+        self.gain = self.base_gain;
+        self.pan = self.base_pan;
         for lane in self.automation.iter() {
             if let Some(value) = lane.value_at(beat) {
                 Self::set(lane.param, value, &mut self.gain, &mut self.pan, &mut self.chain, &mut other);
@@ -1077,8 +1090,8 @@ impl Channel {
     /// the previous block's gains. Returns the output peak.
     fn mix_into(&mut self, n: usize, gain: f32, left: &mut [f32], right: &mut [f32]) -> f32 {
         let (gl, gr) = self.pan_gains(gain);
-        let (l0, r0) = self.last_gains;
-        self.last_gains = (gl, gr);
+        let (l0, r0) = self.last_gains.unwrap_or((gl, gr));
+        self.last_gains = Some((gl, gr));
         let step = 1.0 / n as f32;
         let mut peak = 0f32;
         for i in 0..n {
@@ -1135,6 +1148,11 @@ struct Track {
     tables: Box<Vec<Arc<Wavetable>>>,
     solo: bool,
     sends: [f32; NUM_RETURNS],
+    /// The sends as set (see `Channel::base_gain`).
+    base_sends: [f32; NUM_RETURNS],
+    /// Device and instrument parameters a clip's envelopes hold, with the value
+    /// they had before: it comes back when the clip ends.
+    envelope_held: [Option<(Param, f32)>; MAX_HELD],
     arrangement: Box<Vec<PlacedClip>>,
     follows_arrangement: bool,
     buffer: Vec<f32>,
@@ -1186,6 +1204,8 @@ impl Track {
             tables: Box::default(),
             solo: false,
             sends: [0.0; NUM_RETURNS],
+            base_sends: [0.0; NUM_RETURNS],
+            envelope_held: [None; MAX_HELD],
             arrangement: Box::default(),
             follows_arrangement: true,
             buffer: vec![0.0; MAX_BLOCK],
@@ -1712,9 +1732,19 @@ impl Engine {
                 self.discard(Garbage::Arrangement(clips));
             }
             Command::SetInstrument { track, mut instrument } => {
+                self.forget_held(track, |p| matches!(p, Param::Instrument(_)));
                 let Some(t) = self.tracks.get_mut(track) else { return };
-                // Keep sounding voices when only parameters change.
-                if !t.instrument.update(instrument.kind) {
+                // A new instance is taken whenever one was built for a reason: a
+                // plugin's (the UI's handle controls that one, not the running
+                // one) or another layout of the same synth (an effect added inside
+                // a Wavetable). Otherwise sounding voices are kept and only the
+                // parameters change.
+                let rebuilt = match &instrument.built {
+                    Some(Instrument::Plugin(..)) => true,
+                    Some(_) => t.instrument.kind().needs_rebuild(&instrument.kind),
+                    None => false,
+                };
+                if rebuilt || !t.instrument.update(instrument.kind) {
                     let built = match instrument.built.take() {
                         Some(built) => built,
                         // Only reached if a caller skipped `set_instrument`.
@@ -1738,11 +1768,13 @@ impl Engine {
             Command::SetGain { target, gain } => {
                 if let Some(c) = self.channel(target) {
                     c.gain = gain.max(0.0);
+                    c.base_gain = c.gain;
                 }
             }
             Command::SetPan { target, pan } => {
                 if let Some(c) = self.channel(target) {
                     c.pan = pan.clamp(-1.0, 1.0);
+                    c.base_pan = c.pan;
                 }
             }
             Command::SetMute { target, mute } => {
@@ -1756,8 +1788,12 @@ impl Engine {
                 }
             }
             Command::SetSend { track, send, amount } => {
-                if let Some(s) = self.tracks.get_mut(track).and_then(|t| t.sends.get_mut(send)) {
-                    *s = amount.clamp(0.0, 1.0);
+                if let Some(t) = self.tracks.get_mut(track) {
+                    if let (Some(s), Some(base)) = (t.sends.get(send).copied(), t.base_sends.get_mut(send)) {
+                        let _ = s;
+                        *base = amount.clamp(0.0, 1.0);
+                        t.sends[send] = *base;
+                    }
                 }
             }
             Command::InsertDevice { target, index, slot } => {
@@ -1783,12 +1819,19 @@ impl Engine {
                 }
             }
             Command::UpdateDevice { target, index, device } => {
+                // New settings: what a clip's envelope comes back to.
+                if let Target::Track(t) = target {
+                    self.forget_held(t, |p| matches!(p, Param::Device { device, .. } if device == index));
+                }
                 if let Some(slot) = self.channel(target).and_then(|c| c.chain.get_mut(index)) {
                     slot.enabled = device.enabled;
                     slot.processor.set_params(&device.effect);
                 }
             }
             Command::ReplaceChain { target, mut chain } => {
+                if let Target::Track(t) = target {
+                    self.forget_held(t, |p| matches!(p, Param::Device { .. }));
+                }
                 let Some(c) = self.channel(target) else { return };
                 std::mem::swap(&mut c.chain, &mut chain);
                 self.discard(Garbage::Chain(chain));
@@ -1986,6 +2029,20 @@ impl Engine {
         let any_solo = self.tracks.iter().any(|t| t.solo);
         let solo: [bool; MAX_TRACKS] = std::array::from_fn(|i| self.tracks[i].solo);
         let soloed = soloed(&solo, &self.parents, &self.order);
+        // A track in a muted group (at any depth) is silent, its sends too: muting
+        // a bus silences all of it.
+        let silenced: [bool; MAX_TRACKS] = std::array::from_fn(|i| {
+            let mut parent = self.parents[i];
+            let mut depth = 0;
+            while let Some(group) = parent.filter(|_| depth < MAX_TRACKS) {
+                if self.tracks[group as usize].channel.mute {
+                    return true;
+                }
+                parent = self.parents[group as usize];
+                depth += 1;
+            }
+            false
+        });
         let sr = self.sample_rate;
         for k in 0..MAX_TRACKS {
             let index = self.order[k];
@@ -2032,7 +2089,7 @@ impl Engine {
             self.key_left[index][..n].copy_from_slice(&channel.left[..n]);
             self.key_right[index][..n].copy_from_slice(&channel.right[..n]);
 
-            let audible = !channel.mute && (!any_solo || soloed[index]);
+            let audible = !channel.mute && !silenced[index] && (!any_solo || soloed[index]);
             let gain = if audible { channel.gain } else { 0.0 };
             // Post-fader sends, taken before panning.
             for (ret, &amount) in self.returns.iter_mut().zip(&track.sends) {
@@ -2100,8 +2157,8 @@ impl Engine {
             self.shared.fault(Fault::Master);
         }
         let (gl, gr) = master.pan_gains(master.gain);
-        let (l0, r0) = master.last_gains;
-        master.last_gains = (gl, gr);
+        let (l0, r0) = master.last_gains.unwrap_or((gl, gr));
+        master.last_gains = Some((gl, gr));
         let click = &mut self.click_buffer[..n];
         click.fill(0.0);
         self.click.render(click);
@@ -2124,7 +2181,37 @@ impl Engine {
     fn apply_automation(&mut self) {
         let beat = self.position;
         for track in &mut self.tracks {
-            let Track { channel, sends, instrument, slots, playing, launch_beat, follows_arrangement, arrangement, .. } = track;
+            let Track { channel, sends, base_sends, envelope_held: held, instrument, slots, playing, launch_beat, follows_arrangement, arrangement, .. } = track;
+            // The sounding clip's envelopes, in its own time (looping with it), win
+            // over the track's automation.
+            let clip = if *follows_arrangement {
+                arrangement.iter().find(|c| beat >= c.start && beat < c.end()).map(|c| (&c.clip, beat - c.start))
+            } else {
+                playing.and_then(|p| slots[p].as_deref()).map(|c| (c, beat - *launch_beat))
+            };
+            let envelopes = clip.and_then(|(clip, since)| {
+                let length = clip.length();
+                (length > 0.0 && !clip.envelopes().is_empty()).then(|| (clip.envelopes(), since.rem_euclid(length)))
+            });
+            // What the envelopes take over, as it was before them.
+            let mut touched = [false; MAX_HELD];
+            for lane in envelopes.iter().flat_map(|(lanes, at)| lanes.iter().filter(move |l| l.value_at(*at).is_some())) {
+                let before = match lane.param {
+                    Param::Device { device, param } => channel.chain.get(device).filter(|s| !matches!(*s.processor, EffectProcessor::Plugin(..))).map(|s| s.processor.effect().get(param)),
+                    Param::Instrument(i) if !matches!(instrument, Instrument::Plugin(..)) => Some(instrument.kind().get(i)),
+                    _ => None,
+                };
+                let Some(before) = before else { continue };
+                let slot = held.iter().position(|h| h.is_some_and(|(p, _)| p == lane.param)).or_else(|| {
+                    let free = held.iter().position(|h| h.is_none())?;
+                    held[free] = Some((lane.param, before));
+                    Some(free)
+                });
+                if let Some(slot) = slot {
+                    touched[slot] = true;
+                }
+            }
+            *sends = *base_sends;
             let mut other = |param: Param, value: f32| match param {
                 Param::Send(i) => {
                     if let Some(send) = sends.get_mut(i) {
@@ -2135,17 +2222,14 @@ impl Engine {
                 _ => {}
             };
             channel.automate(beat, &mut other);
-            // The sounding clip's envelopes, in its own time (looping with it), win
-            // over the track's automation.
-            let clip = if *follows_arrangement {
-                arrangement.iter().find(|c| beat >= c.start && beat < c.end()).map(|c| (&c.clip, beat - c.start))
-            } else {
-                playing.and_then(|p| slots[p].as_deref()).map(|c| (c, beat - *launch_beat))
-            };
-            if let Some((clip, since)) = clip {
-                let length = clip.length();
-                if length > 0.0 && !clip.envelopes().is_empty() {
-                    channel.automate_with(clip.envelopes(), since.rem_euclid(length), &mut other);
+            if let Some((lanes, at)) = envelopes {
+                channel.automate_with(lanes, at, &mut other);
+            }
+            // Clip over: what its envelopes held comes back.
+            for (slot, touched) in held.iter_mut().zip(touched) {
+                if let (Some((param, value)), false) = (*slot, touched) {
+                    Channel::set(param, value, &mut channel.gain, &mut channel.pan, &mut channel.chain, &mut other);
+                    *slot = None;
                 }
             }
         }
@@ -2159,6 +2243,18 @@ impl Engine {
                 *tempo = (value as f64).clamp(20.0, 999.0);
             }
         });
+    }
+
+    /// Lets go of held parameters of `track` matching `which` (their settings
+    /// changed: the new ones are what an envelope comes back to).
+    fn forget_held(&mut self, track: usize, which: impl Fn(Param) -> bool) {
+        if let Some(t) = self.tracks.get_mut(track) {
+            for slot in &mut t.envelope_held {
+                if slot.is_some_and(|(p, _)| which(p)) {
+                    *slot = None;
+                }
+            }
+        }
     }
 
     /// Advances the transport over `n` frames, wrapping at the loop end.
@@ -2975,6 +3071,106 @@ mod tests {
         assert!((onset(0.0, Some(swing)) as i64 - 8000).abs() < 64);
         assert!((onset(1.0, Some(Groove::default())) as i64 - 6000).abs() < 64);
         assert!((onset(1.0, None) as i64 - 8000).abs() < 64, "without one, the project's");
+    }
+
+    /// When a clip with envelopes ends, what they moved comes back: the fader,
+    /// a send and a device's parameter (before, they stayed as the clip left
+    /// them, and the next clip played 17 dB down).
+    #[test]
+    fn a_clips_envelopes_end_with_it() {
+        use crate::model::{AutomationPoint, UtilityParams};
+        let near = |a: f32, b: f32| (a - b).abs() < 1e-4;
+        let mut h = Harness::new();
+        let mut quiet = audio_clip(WarpMode::Off);
+        let lane = |param, value| AutomationLane { param, points: vec![AutomationPoint { beat: 0.0, value, curve: 0.0 }] };
+        quiet.envelopes = vec![
+            lane(Param::Volume, 0.1),
+            lane(Param::Send(0), 1.0),
+            lane(Param::Device { device: 0, param: 0 }, -30.0),
+        ];
+        h.send(Command::ReplaceChain { target: Target::Track(0), chain: build_chain(&[Device::new(Effect::Utility(UtilityParams { gain_db: 0.0, ..Default::default() }))], SR) });
+        h.send(Command::SetGain { target: Target::Track(0), gain: 0.8 });
+        h.send(Command::SetSend { track: 0, send: 0, amount: 0.25 });
+        let clips = vec![PlacedClip::new(0.0, 2.0, PlayClip::Audio(quiet, sine_sample())), PlacedClip::new(2.0, 2.0, PlayClip::Audio(audio_clip(WarpMode::Off), sine_sample()))];
+        h.send(Command::SetArrangement { track: 0, clips: Box::new(clips) });
+        h.send(Command::Play);
+        h.run_beats(1.0);
+        let t = &h.engine.tracks[0];
+        assert!(near(t.channel.gain, 0.1) && near(t.sends[0], 1.0), "the envelopes rule inside the clip");
+        h.run_beats(2.0);
+        let t = &h.engine.tracks[0];
+        assert!(near(t.channel.gain, 0.8), "the fader again: {}", t.channel.gain);
+        assert!(near(t.sends[0], 0.25), "the send again: {}", t.sends[0]);
+        assert!(near(t.channel.chain[0].processor.effect().get(0), 0.0), "the device again: {}", t.channel.chain[0].processor.effect().get(0));
+    }
+
+    /// Muting a group silences what its tracks send to the returns too (before,
+    /// a muted bus still fed the reverb).
+    #[test]
+    fn a_muted_group_silences_its_tracks_sends() {
+        let level = |muted: bool| {
+            let mut h = Harness::new();
+            let mut parents = [None; MAX_TRACKS];
+            // Track 1 in the group on track 0 (groups come before their tracks).
+            parents[1] = Some(0);
+            h.send(Command::SetGroups(parents));
+            h.send(Command::SetSend { track: 1, send: 0, amount: 1.0 });
+            h.send(Command::SetMute { target: Target::Track(0), mute: muted });
+            h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Audio(audio_clip(WarpMode::Off), sine_sample()))) });
+            h.send(Command::LaunchClip { track: 1, slot: 0 });
+            energy(&h.run_beats(2.0))
+        };
+        assert!(level(false) > 100.0);
+        assert_eq!(level(true), 0.0, "nothing of the group is heard");
+    }
+
+    /// A render starts at full level: the first hit of an export or a freeze is
+    /// not faded in (it was 30 dB down for its first 5 ms).
+    #[test]
+    fn the_first_block_is_not_faded_in() {
+        let mut h = Harness::new();
+        h.send(Command::SetGain { target: Target::Track(0), gain: 0.5 });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(audio_clip(WarpMode::Off), sine_sample()))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        let mut first = vec![0.0; 512 * 2];
+        h.engine.process(&mut first, 2);
+        // After the clip's own 3 ms fade: what comes out over what goes in stays
+        // the same through the block (a ramp from silence would make it grow).
+        let input = |i: usize| (i as f32 * 440.0 * std::f32::consts::TAU / 48_000.0).sin() * 0.5;
+        let ratios: Vec<f32> = (150..512).filter(|&i| input(i).abs() > 0.3).map(|i| first[2 * i] / input(i)).collect();
+        let (low, high) = ratios.iter().fold((f32::MAX, 0f32), |(l, h), &r| (l.min(r), h.max(r)));
+        assert!(high > 0.1 && (high - low) / high < 0.02, "{low} … {high}");
+    }
+
+    /// An effect added inside a Wavetable synth while it plays changes its layout:
+    /// the app sends a rebuilt synth, and that is the one heard (before, the
+    /// running one only took the parameters and ignored the new slot).
+    #[test]
+    fn an_effect_added_inside_a_synth_is_heard_at_once() {
+        use crate::model::{UtilityParams, WaveParams};
+        use crate::wavetable::builtin;
+        let level = |with_fx: bool| -> f32 {
+            let mut h = Harness::new();
+            let base = InstrumentKind::Wavetable(WaveParams::default());
+            h.send(Command::set_instrument(0, base, SR));
+            h.send(Command::SetWavetables { track: 0, tables: Box::new(vec![Arc::new(builtin(0)), Arc::new(builtin(3))]) });
+            let mut clip = MidiClip::new("A", 4.0, [0, 0, 0]);
+            clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 60, velocity: 1.0 });
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            h.run_beats(0.5);
+            if with_fx {
+                let mut p = WaveParams::default();
+                p.fx[0] = Some(Device::new(Effect::Utility(UtilityParams { gain_db: -40.0, ..Default::default() })));
+                let kind = InstrumentKind::Wavetable(p);
+                assert!(base.needs_rebuild(&kind));
+                h.send(Command::set_instrument(0, kind, SR));
+            }
+            energy(&h.run_beats(1.0))
+        };
+        let (plain, with) = (level(false), level(true));
+        assert!(plain > 1.0, "{plain}");
+        assert!(with < plain * 0.01, "the added −40 dB is heard: {with} vs {plain}");
     }
 
     /// One NaN in a track's audio (a damaged float WAV, a plugin that blew up),

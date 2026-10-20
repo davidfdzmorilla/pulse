@@ -843,7 +843,7 @@ mod tests {
         project.tracks = vec![track];
         let mut samples = crate::sync::SampleCache::default();
         let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
-        let (l, r) = crate::export::render(commands, (0.0, 32.0), project.tempo, 48_000.0, &Default::default(), &|_| {}).unwrap();
+        let (l, r) = crate::export::render(commands, (0.0, 32.0), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap();
         let by = if ai { " IA" } else { "" };
         let name = format!("{} {} {}{by} v{}.wav", style.label().replace(['/', '&'], "y"), level.label(), style.machine().label(), take + 1);
         crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();

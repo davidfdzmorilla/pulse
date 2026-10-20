@@ -343,7 +343,7 @@ impl PulseApp {
         let tracks = export::plan(&self.project, &mut self.samples, &settings, std::path::Path::new("mezcla.wav"));
         self.samples.plugins = live;
         let names: Vec<(String, bool, u32)> = self.project.tracks.iter().map(|t| (t.name.clone(), t.is_drums(), t.id)).collect();
-        let tempo = self.project.tempo;
+        let song = export::Song::of(&self.project);
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -353,7 +353,7 @@ impl PulseApp {
             let mut outcome = Ok(());
             for (k, render) in renders.into_iter().enumerate() {
                 let step = |f: f32| p.store(((k as f32 + f) / count as f32).to_bits(), Ordering::Relaxed);
-                let Some((left, right)) = export::render(render.commands, range, tempo, RATE, &c, &step) else {
+                let Some((left, right)) = export::render(render.commands, range, song, RATE, &c, &step) else {
                     outcome = Err("Análisis cancelado".to_string());
                     break;
                 };

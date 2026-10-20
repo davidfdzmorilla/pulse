@@ -141,14 +141,52 @@ fn sanitize(name: &str) -> String {
 }
 
 /// Renders `[start, end)` beats plus the effect tail. `progress` receives 0..1.
+/// What a render needs to know of the song besides its commands.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Song {
+    pub tempo: f64,
+    /// Seconds of silence after which the tail is over: longer than the gap
+    /// between a delay's echoes (see [`Song::of`]).
+    pub ring_out: f64,
+}
+
+impl Song {
+    pub fn of(project: &crate::project::Project) -> Self {
+        Song { tempo: project.tempo, ring_out: ring_out(project) }
+    }
+}
+
+/// How long a tail can stay silent and still have echoes to come: the longest
+/// delay in the project at its slowest tempo, plus a margin.
+pub fn ring_out(project: &crate::project::Project) -> f64 {
+    use engine::model::{Device, Effect, InstrumentKind};
+    let slowest = project.master.automation.iter().filter(|l| l.param == engine::model::Param::Tempo).flat_map(|l| l.points.iter().map(|p| p.value as f64)).fold(project.tempo, f64::min).max(20.0);
+    let delay = |d: &Device| match d.effect {
+        Effect::Delay(p) if d.enabled => p.time_beats * 60.0 / slowest,
+        _ => 0.0,
+    };
+    let mut longest = 0f64;
+    for track in &project.tracks {
+        longest = track.devices.iter().map(delay).fold(longest, f64::max);
+        if let InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) = &track.instrument {
+            longest = p.fx.iter().flatten().map(delay).fold(longest, f64::max);
+        }
+    }
+    for devices in project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]) {
+        longest = devices.iter().map(delay).fold(longest, f64::max);
+    }
+    longest + 0.25
+}
+
 pub fn render(
     commands: Vec<Command>,
     (start, end): (f64, f64),
-    tempo: f64,
+    song: Song,
     sample_rate: f32,
     cancel: &AtomicBool,
     progress: &dyn Fn(f32),
 ) -> Option<(Vec<f32>, Vec<f32>)> {
+    let tempo = song.tempo;
     let mut renderer = OfflineRenderer::new(sample_rate);
     for command in commands {
         renderer.send(command);
@@ -189,7 +227,8 @@ pub fn render(
     // Let notes release and reverbs/delays ring out until the output falls silent.
     renderer.send(Command::Stop);
     let max_tail = (MAX_TAIL_SECONDS * sample_rate as f64) as usize;
-    let quiet_needed = sample_rate as usize / 2;
+    // Silence long enough to be the end, not the gap before a delay's next echo.
+    let quiet_needed = ((song.ring_out.max(0.5) * sample_rate as f64) as usize).min(max_tail);
     let (mut tail, mut quiet) = (0, 0);
     while tail < max_tail && quiet < quiet_needed {
         let from = left.len();
@@ -274,11 +313,11 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn start(renders: Vec<Render>, range: (f64, f64), tempo: f64, settings: Settings) -> Self {
+    pub fn start(renders: Vec<Render>, range: (f64, f64), song: Song, settings: Settings) -> Self {
         let progress = Arc::new(AtomicU32::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let (shared_progress, shared_cancel) = (progress.clone(), cancel.clone());
-        let handle = std::thread::spawn(move || run(renders, range, tempo, settings, &shared_progress, &shared_cancel));
+        let handle = std::thread::spawn(move || run(renders, range, song, settings, &shared_progress, &shared_cancel));
         Self { progress, cancel, handle: Some(handle) }
     }
 
@@ -303,7 +342,7 @@ impl Job {
 fn run(
     renders: Vec<Render>,
     range: (f64, f64),
-    tempo: f64,
+    song: Song,
     settings: Settings,
     progress: &AtomicU32,
     cancel: &AtomicBool,
@@ -314,7 +353,7 @@ fn run(
     let mut lengths = Vec::new();
     for (index, Render { path, commands }) in renders.into_iter().enumerate() {
         let step = |p: f32| progress.store(((index as f32 + p) / count as f32).to_bits(), Ordering::Relaxed);
-        let Some((left, right)) = render(commands, range, tempo, settings.sample_rate as f32, cancel, &step) else {
+        let Some((left, right)) = render(commands, range, song, settings.sample_rate as f32, cancel, &step) else {
             return Err("Exportación cancelada".into());
         };
         let peak = peak(&left, &right);
@@ -357,7 +396,7 @@ pub fn render_from_command_line(output: &Path, project: Option<&Path>) -> Result
         eprintln!("{error}");
     }
     let progress = AtomicU32::new(0);
-    let report = run(renders, range, project.tempo, settings, &progress, &AtomicBool::new(false))?;
+    let report = run(renders, range, Song::of(&project), settings, &progress, &AtomicBool::new(false))?;
     Ok(report.summary())
 }
 
@@ -385,7 +424,7 @@ impl PulseApp {
         let live = std::mem::take(&mut self.samples.plugins);
         let renders = plan(&self.project, &mut self.samples, &settings, &destination);
         self.samples.plugins = live;
-        self.export.job = Some(Job::start(renders, range, self.project.tempo, settings));
+        self.export.job = Some(Job::start(renders, range, Song::of(&self.project), settings));
     }
 }
 
@@ -501,6 +540,29 @@ mod tests {
         (renders, range, project.tempo)
     }
 
+    /// A delay with echoes two seconds apart: the export waits for them instead of
+    /// stopping at the first half second of silence.
+    #[test]
+    fn a_long_delays_echoes_are_in_the_tail() {
+        use engine::model::{ArrangementClip, Clip, DelayParams, Device, Effect, InstrumentKind, MidiClip, Note};
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut track = crate::project::Track::new("Synth", [0, 0, 0], InstrumentKind::Synth(Default::default()));
+        let mut clip = MidiClip::new("A", 1.0, [0, 0, 0]);
+        clip.notes.push(Note { start: 0.0, length: 0.25, pitch: 60, velocity: 1.0 });
+        track.arrangement.push(ArrangementClip { start: 0.0, length: 1.0, clip: Clip::Midi(clip) });
+        // 4 beats at 120: an echo every 2 s.
+        track.devices.push(Device::new(Effect::Delay(DelayParams { time_beats: 4.0, feedback: 0.5, mix: 0.5, ping_pong: false, ..Default::default() })));
+        project.tracks = vec![track];
+        assert!((ring_out(&project) - 2.25).abs() < 1e-9);
+        let mut samples = SampleCache::default();
+        let commands = sync::project_commands(&project, &mut samples, 48_000.0, &HashSet::new());
+        let (left, _) = render(commands, (0.0, 1.0), Song::of(&project), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
+        let level = |from: f64, to: f64| left[(from * 48_000.0) as usize..((to * 48_000.0) as usize).min(left.len())].iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(left.len() > 6 * 48_000, "{} s", left.len() as f64 / 48_000.0);
+        assert!(level(1.9, 2.4) > 0.01 && level(3.9, 4.4) > 0.005, "the echoes at 2 and 4 s");
+    }
+
     /// With tempo automation the song lasts what its tempos make it: 4 beats at
     /// 120 BPM and 4 at 60 are 2 + 4 seconds.
     #[test]
@@ -514,7 +576,7 @@ mod tests {
         project.tempo = 120.0;
         let mut samples = SampleCache::default();
         let commands = sync::project_commands(&project, &mut samples, 48_000.0, &HashSet::new());
-        let (left, _) = render(commands, (0.0, 8.0), project.tempo, 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
+        let (left, _) = render(commands, (0.0, 8.0), Song::of(&project), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
         let seconds = left.len() as f64 / 48_000.0;
         assert!(seconds >= 5.95, "{seconds}");
     }
@@ -525,7 +587,7 @@ mod tests {
         let (mut renders, range, tempo) = render_demo(&settings);
         let render = renders.remove(0);
         let cancel = AtomicBool::new(false);
-        let (left, right) = super::render(render.commands, range, tempo, 48_000.0, &cancel, &|_| {}).unwrap();
+        let (left, right) = super::render(render.commands, range, Song { tempo, ring_out: 0.5 }, 48_000.0, &cancel, &|_| {}).unwrap();
 
         let song_frames = (range.1 - range.0) * 60.0 / tempo * 48_000.0;
         assert!(left.len() as f64 >= song_frames, "the whole song is rendered");
@@ -552,7 +614,7 @@ mod tests {
         let mut samples = SampleCache::default();
         let range = beat_range(&project, settings.range).unwrap();
         let renders = plan(&project, &mut samples, &settings, &dir.join("demo.wav"));
-        let report = run(renders, range, project.tempo, settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let report = run(renders, range, Song::of(&project), settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
         let lengths: Vec<u32> = report.files.iter().map(|f| hound::WavReader::open(f).unwrap().duration()).collect();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(lengths.len(), 4);
@@ -569,7 +631,7 @@ mod tests {
         // The bass only plays from bar 5: its stem is silent over the first four bars.
         let bass = renders.into_iter().nth(1).unwrap();
         let cancel = AtomicBool::new(false);
-        let (left, _) = super::render(bass.commands, (0.0, 16.0), tempo, 48_000.0, &cancel, &|_| {}).unwrap();
+        let (left, _) = super::render(bass.commands, (0.0, 16.0), Song { tempo, ring_out: 0.5 }, 48_000.0, &cancel, &|_| {}).unwrap();
         let first_bars = (16.0 * 60.0 / tempo * 48_000.0) as usize;
         assert!(left[..first_bars].iter().all(|s| s.abs() < 1e-3), "only the bass should be in its stem");
     }
@@ -611,7 +673,7 @@ mod diagnostics {
         let range = beat_range(&project, settings.range).unwrap();
         let renders = plan(&project, &mut SampleCache::default(), &settings, Path::new("/tmp/x.wav"));
         for (render, track) in renders.into_iter().zip(&project.tracks) {
-            let (l, r) = super::render(render.commands, range, project.tempo, 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
+            let (l, r) = super::render(render.commands, range, Song::of(&project), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
             let rms = (l.iter().chain(&r).map(|s| s * s).sum::<f32>() / (l.len() * 2) as f32).sqrt();
             println!("{:8} pico {:6.1} dBFS  rms {:6.1} dBFS", track.name, db(peak(&l, &r)), db(rms));
         }

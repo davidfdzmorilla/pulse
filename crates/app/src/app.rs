@@ -96,7 +96,7 @@ impl Audio {
         self.handle.as_mut().map_or_else(Vec::new, |h| h.take_recorded())
     }
 
-    fn collect_garbage(&mut self) {
+    pub(crate) fn collect_garbage(&mut self) {
         if let Some(handle) = &mut self.handle {
             handle.collect_garbage();
         }

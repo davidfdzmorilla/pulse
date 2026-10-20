@@ -425,6 +425,18 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("LFO").color(TEXT_DIM).size(10.5));
                 beats_combo(ui, &format!("lfo{index}"), &mut p.lfo_beats, &[0.5, 1.0, 2.0, 4.0, 8.0, 16.0]);
+                ui.checkbox(&mut p.steep, "24 dB").on_hover_text("Corta el doble por octava (24 dB en vez de 12): más grave y oscuro. Res por encima del 95 % hace que el filtro suene solo");
+            });
+        }
+        Effect::Saturator(p) => {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Tipo").color(TEXT_DIM).size(10.5));
+                egui::ComboBox::from_id_salt(format!("sat_kind{index}")).selected_text(p.kind.label()).width(64.0).show_ui(ui, |ui| {
+                    for kind in KickDrive::ALL {
+                        ui.selectable_value(&mut p.kind, kind, kind.label());
+                    }
+                });
+                ui.checkbox(&mut p.oversample, "4×").on_hover_text("Trabaja a cuatro veces la frecuencia de muestreo: sin el aliasing (agudos sucios) de mucho drive. Gasta más CPU y retrasa 36 muestras");
             });
         }
         Effect::Ducker(p) => {
@@ -439,7 +451,6 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         Effect::Eq3(_)
         | Effect::Compressor(_)
         | Effect::Reverb(_)
-        | Effect::Saturator(_)
         | Effect::Chorus(_)
         | Effect::Phaser(_)
         | Effect::Bitcrusher(_)

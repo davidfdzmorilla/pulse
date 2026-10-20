@@ -35,6 +35,8 @@ pub(crate) enum Action {
     ToMidi(usize, usize, crate::to_midi::ToMidi),
     Accompany(usize, usize, crate::accompany::Part),
     Freeze(usize),
+    /// A rumble track from this one (see `rumble`).
+    Rumble(usize),
     Unfreeze(usize),
     Flatten(usize),
     /// An empty slot clicked: its track selected, no clip, pasting goes there.
@@ -278,6 +280,10 @@ pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut 
         .clicked()
     {
         act(Action::Freeze(t));
+        ui.close();
+    }
+    if ui.button("Crear rumble").on_hover_text("Una pista nueva con esta tocando por reverb, saturación y un filtro de graves, que se aparta cuando suena esta: el rumble del techno a partir del bombo").clicked() {
+        act(Action::Rumble(t));
         ui.close();
     }
 }
@@ -708,6 +714,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::StartMarquee(anchor, modifiers) => app.start_marquee(anchor, modifiers),
         Action::SelectTarget(target) => app.selected_target = target,
         Action::Freeze(t) => app.freeze(t),
+        Action::Rumble(t) => app.make_rumble(t),
         Action::Unfreeze(t) => app.unfreeze(t),
         Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),

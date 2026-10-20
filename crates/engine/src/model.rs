@@ -1224,6 +1224,24 @@ pub struct SaturatorParams {
     pub drive_db: f32,
     pub output_db: f32,
     pub mix: f32,
+    /// How it shapes the sound: Soft (the tanh it always had), Hard, Fold, Tube, Crush.
+    #[serde(default = "soft_drive", skip_serializing_if = "is_soft_drive")]
+    pub kind: KickDrive,
+    /// Works at four times the sample rate: high drives without aliasing.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub oversample: bool,
+}
+
+fn soft_drive() -> KickDrive {
+    KickDrive::Soft
+}
+
+fn is_default<T: Default + PartialEq>(value: &T) -> bool {
+    *value == T::default()
+}
+
+fn is_soft_drive(kind: &KickDrive) -> bool {
+    *kind == KickDrive::Soft
 }
 
 impl Default for SaturatorParams {
@@ -1232,6 +1250,8 @@ impl Default for SaturatorParams {
             drive_db: 6.0,
             output_db: -3.0,
             mix: 1.0,
+            kind: KickDrive::Soft,
+            oversample: false,
         }
     }
 }
@@ -1264,6 +1284,12 @@ pub struct AutoFilterParams {
     pub lfo_beats: f64,
     /// LFO depth in octaves.
     pub lfo_amount: f32,
+    /// Into the filter through a saturation, dB (0: clean).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub drive_db: f32,
+    /// 24 dB per octave (two stages) instead of 12.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub steep: bool,
 }
 
 impl Default for AutoFilterParams {
@@ -1274,6 +1300,8 @@ impl Default for AutoFilterParams {
             resonance: 0.3,
             lfo_beats: 4.0,
             lfo_amount: 0.0,
+            drive_db: 0.0,
+            steep: false,
         }
     }
 }
@@ -1691,10 +1719,12 @@ const SATURATOR_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Output", -36.0, 6.0, -3.0, Decibels),
     ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
 ];
-const AUTO_FILTER_PARAMS: [ParamInfo; 3] = [
+const AUTO_FILTER_PARAMS: [ParamInfo; 4] = [
     ParamInfo::log("Freq", 30.0, 18000.0, 1500.0, Hertz),
-    ParamInfo::linear("Res", 0.0, 0.95, 0.3, Percent),
+    // Past 95 % it rings on its own (self-oscillation).
+    ParamInfo::linear("Res", 0.0, 1.2, 0.3, Percent),
     ParamInfo::linear("LFO Amount", 0.0, 4.0, 0.0, Octaves),
+    ParamInfo::linear("Drive", 0.0, 24.0, 0.0, Decibels),
 ];
 const CHORUS_PARAMS: [ParamInfo; 4] = [
     ParamInfo::log("Rate", 0.05, 5.0, 0.6, Hertz),
@@ -2140,6 +2170,7 @@ impl Effect {
             (Effect::AutoFilter(p), 0) => &mut p.cutoff,
             (Effect::AutoFilter(p), 1) => &mut p.resonance,
             (Effect::AutoFilter(p), 2) => &mut p.lfo_amount,
+            (Effect::AutoFilter(p), 3) => &mut p.drive_db,
             (Effect::Chorus(p), 0) => &mut p.rate,
             (Effect::Chorus(p), 1) => &mut p.depth,
             (Effect::Chorus(p), 2) => &mut p.delay_ms,
@@ -5219,7 +5250,7 @@ impl ModularParams {
         // Poly lane: each note of the chord is driven on its own, so chords stay clean
         // (no intermodulation); velocity drives harder. A shared reverb lane after it.
         let mut p = build(&[group, saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.2)]), filter(0, 3200.0, 0.9, false), out(0.01, 0.8, 0.8, 0.5)]);
-        p.lanes[0].fx[0] = fx(Effect::Saturator(SaturatorParams { drive_db: 16.0, output_db: -10.0, mix: 1.0 }));
+        p.lanes[0].fx[0] = fx(Effect::Saturator(SaturatorParams { drive_db: 16.0, output_db: -10.0, mix: 1.0, ..Default::default() }));
         p.lanes[0].poly = true;
         p.lanes[0].dest = 2;
         p.lanes[2].fx[0] = reverb(0.8, 0.3);

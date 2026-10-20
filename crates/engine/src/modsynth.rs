@@ -3242,7 +3242,7 @@ mod lane_tests {
     }
 
     fn saturator() -> Option<Device> {
-        Some(Device::new(Effect::Saturator(crate::model::SaturatorParams { drive_db: 30.0, output_db: -12.0, mix: 1.0 })))
+        Some(Device::new(Effect::Saturator(crate::model::SaturatorParams { drive_db: 30.0, output_db: -12.0, mix: 1.0, ..Default::default() })))
     }
 
     #[test]

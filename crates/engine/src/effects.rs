@@ -3,7 +3,7 @@
 
 use crate::model::{
     db_to_gain, AutoFilterParams, BitcrusherParams, ChorusParams, CompressorParams, DelayParams, DuckerParams, Effect,
-    Eq3Params, FilterMode, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
+    Eq3Params, FilterMode, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
 use crate::plugin::PluginProcessor;
 use std::f32::consts::{PI, TAU};
@@ -319,31 +319,182 @@ impl Reverb {
 
 pub struct Saturator {
     params: SaturatorParams,
+    /// Per channel, for the 4× oversampling.
+    over: [Oversampler; 2],
+    /// The dry signal, as late as the oversampled wet (its filters' delay).
+    dry: [[f32; Oversampler::LATENCY]; 2],
+    at: usize,
 }
 
 impl Saturator {
+    fn new(params: SaturatorParams) -> Self {
+        Self { params, over: [Oversampler::new(), Oversampler::new()], dry: [[0.0; Oversampler::LATENCY]; 2], at: 0 }
+    }
+
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         let p = self.params;
         let drive = db_to_gain(p.drive_db);
         let out = db_to_gain(p.output_db);
-        for s in l.iter_mut().chain(r.iter_mut()) {
-            let wet = (*s * drive).tanh() * out;
-            *s += (wet - *s) * p.mix;
+        if !p.oversample {
+            for s in l.iter_mut().chain(r.iter_mut()) {
+                let wet = shape(*s, p.kind, drive, p.drive_db) * out;
+                *s += (wet - *s) * p.mix;
+            }
+            return;
         }
+        for i in 0..l.len() {
+            for (ch, buf) in [&mut *l, &mut *r].into_iter().enumerate() {
+                let x = buf[i];
+                let mut up = self.over[ch].up(x);
+                for y in &mut up {
+                    *y = shape(*y, p.kind, drive, p.drive_db);
+                }
+                let wet = self.over[ch].down(up) * out;
+                let dry = std::mem::replace(&mut self.dry[ch][self.at], x);
+                buf[i] = dry + (wet - dry) * p.mix;
+            }
+            self.at = (self.at + 1) % Oversampler::LATENCY;
+        }
+    }
+}
+
+/// A sample through a saturation `kind` at gain `drive` (`drive_db` in dB).
+/// Soft is the tanh the Saturator always had.
+fn shape(x: f32, kind: KickDrive, drive: f32, drive_db: f32) -> f32 {
+    let x = x * drive;
+    match kind {
+        KickDrive::Soft => x.tanh(),
+        KickDrive::Hard => x.clamp(-1.0, 1.0),
+        KickDrive::Fold => (x * PI * 0.5).sin(),
+        // The negative half saturates later: even harmonics, warm.
+        KickDrive::Tube => {
+            if x >= 0.0 { x.tanh() } else { 2.0 * (x * 0.5).tanh() }
+        }
+        KickDrive::Crush => {
+            let steps = 2f32.powf(12.0 - (drive_db / 36.0).clamp(0.0, 1.0) * 10.0);
+            (x.clamp(-1.0, 1.0) * steps).round() / steps
+        }
+    }
+}
+
+/// 4× oversampling for a nonlinearity: a 145-tap windowed-sinc low-pass (Kaiser,
+/// flat to about 18 kHz, 70 dB down by the base rate's Nyquist) to interpolate
+/// up, and the same to filter before coming down. Its delay is a whole number of
+/// samples ([`Oversampler::LATENCY`]).
+pub struct Oversampler {
+    /// The last inputs (a ring).
+    input: [f32; Self::PHASE_TAPS],
+    input_at: usize,
+    /// The last oversampled values (a ring).
+    output: [f32; Self::TAPS],
+    output_at: usize,
+}
+
+impl Oversampler {
+    const FACTOR: usize = 4;
+    const TAPS: usize = 145;
+    const PHASE_TAPS: usize = 37;
+    /// Samples (at the base rate) between a sample going in and coming out:
+    /// each filter's middle, 72 oversampled samples, twice.
+    pub const LATENCY: usize = 36;
+
+    fn new() -> Self {
+        Self { input: [0.0; Self::PHASE_TAPS], input_at: 0, output: [0.0; Self::TAPS], output_at: 0 }
+    }
+
+    /// The low-pass, at about 21 kHz for 48 kHz (0.44 of the base Nyquist), with
+    /// a Kaiser window (β 7).
+    fn taps() -> &'static [f32; 145] {
+        static TAPS: std::sync::OnceLock<[f32; 145]> = std::sync::OnceLock::new();
+        TAPS.get_or_init(|| {
+            // The modified Bessel function I0, by its series.
+            let bessel = |x: f64| {
+                let (mut sum, mut term) = (1.0, 1.0);
+                for k in 1..40 {
+                    term *= (x / 2.0) / k as f64;
+                    sum += term * term;
+                }
+                sum
+            };
+            let beta = 7.0;
+            let cutoff = 0.875 / 2.0 / Oversampler::FACTOR as f64;
+            let middle = (Oversampler::TAPS - 1) as f64 / 2.0;
+            let mut taps = [0f32; 145];
+            for (n, tap) in taps.iter_mut().enumerate() {
+                let t = n as f64 - middle;
+                let sinc = if t == 0.0 { 2.0 * cutoff } else { (std::f64::consts::TAU * cutoff * t).sin() / (std::f64::consts::PI * t) };
+                let ratio = t / middle;
+                let window = bessel(beta * (1.0 - ratio * ratio).max(0.0).sqrt()) / bessel(beta);
+                *tap = (sinc * window) as f32;
+            }
+            // Unity gain at DC.
+            let sum: f32 = taps.iter().sum();
+            taps.iter_mut().for_each(|t| *t /= sum);
+            taps
+        })
+    }
+
+    /// One input sample as four at the higher rate.
+    fn up(&mut self, x: f32) -> [f32; 4] {
+        self.input_at = (self.input_at + Self::PHASE_TAPS - 1) % Self::PHASE_TAPS;
+        self.input[self.input_at] = x;
+        let taps = Self::taps();
+        let mut out = [0f32; 4];
+        for (phase, y) in out.iter_mut().enumerate() {
+            let mut sum = 0.0;
+            for j in 0..Self::PHASE_TAPS {
+                let k = phase + Self::FACTOR * j;
+                if k < Self::TAPS {
+                    sum += taps[k] * self.input[(self.input_at + j) % Self::PHASE_TAPS];
+                }
+            }
+            // Zero-stuffing leaves a quarter of the level.
+            *y = sum * Self::FACTOR as f32;
+        }
+        out
+    }
+
+    /// Four samples at the higher rate as one at the base rate: taken at the
+    /// first of them, so the delay is whole base samples.
+    fn down(&mut self, xs: [f32; 4]) -> f32 {
+        let mut out = 0.0;
+        for (i, x) in xs.into_iter().enumerate() {
+            self.output_at = (self.output_at + Self::TAPS - 1) % Self::TAPS;
+            self.output[self.output_at] = x;
+            if i == 0 {
+                let taps = Self::taps();
+                out = (0..Self::TAPS).map(|k| taps[k] * self.output[(self.output_at + k) % Self::TAPS]).sum();
+            }
+        }
+        out
     }
 }
 
 pub struct AutoFilter {
     params: AutoFilterParams,
+    /// Per channel: the resonant stage, then the first of a 24 dB filter.
     filters: [Svf; 2],
+    first: [Svf; 2],
 }
 
 impl AutoFilter {
     const CONTROL_RATE: usize = 16;
+    /// Resonance from which the filter rings by itself.
+    const SELF_OSCILLATION: f32 = 0.95;
+
+    /// The SVF damping for `resonance`: as it always was up to 95 %, then on
+    /// down to none and a little under (it rings on its own; its saturation
+    /// keeps that level).
+    fn damping(resonance: f32) -> f32 {
+        let r = resonance.clamp(0.0, 1.2);
+        if r <= Self::SELF_OSCILLATION { 2.0 - 1.95 * r } else { 2.0 - 1.95 * Self::SELF_OSCILLATION - (r - Self::SELF_OSCILLATION) * 2.0 }
+    }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], ctx: &ProcessContext) {
         let p = self.params;
-        let k = 2.0 - 1.95 * p.resonance.clamp(0.0, 1.0);
+        let k = Self::damping(p.resonance);
+        let ringing = p.resonance > Self::SELF_OSCILLATION;
+        let drive = (p.drive_db > 0.0).then(|| db_to_gain(p.drive_db));
         let mut offset = 0;
         for (ca, cb) in l.chunks_mut(Self::CONTROL_RATE).zip(r.chunks_mut(Self::CONTROL_RATE)) {
             // LFO locked to the transport so it stays in time with the music.
@@ -352,9 +503,28 @@ impl AutoFilter {
             let lfo = (phase * TAU).sin();
             let cutoff = p.cutoff * 2f32.powf(lfo * p.lfo_amount);
             let c = SvfCoefs::new(cutoff, k, ctx.sample_rate);
+            // 24 dB: a first stage without resonance (a fourth-order Butterworth's).
+            let first = p.steep.then(|| SvfCoefs::new(cutoff, 1.848, ctx.sample_rate));
             for (ch, buf) in [ca, cb].into_iter().enumerate() {
                 for s in buf.iter_mut() {
-                    let (low, band, high) = self.filters[ch].tick(*s, &c);
+                    let mut x = *s;
+                    if let Some(g) = drive {
+                        // Driven: louder into a soft clip, about as loud out.
+                        x = (x * g).tanh() / g.sqrt();
+                    }
+                    if let Some(first) = &first {
+                        let (low, band, high) = self.first[ch].tick(x, first);
+                        x = match p.mode {
+                            FilterMode::LowPass => low,
+                            FilterMode::HighPass => high,
+                            FilterMode::BandPass => band,
+                        };
+                    }
+                    let (low, band, high) = self.filters[ch].tick(x, &c);
+                    if ringing {
+                        // Ringing on its own, the resonance's level stays bounded.
+                        self.filters[ch].ic1 = self.filters[ch].ic1.tanh();
+                    }
                     *s = match p.mode {
                         FilterMode::LowPass => low,
                         FilterMode::HighPass => high,
@@ -609,10 +779,11 @@ impl EffectProcessor {
             }),
             Effect::Delay(params) => Self::Delay(Delay::new(params, sample_rate)),
             Effect::Reverb(params) => Self::Reverb(Reverb::new(params, sample_rate)),
-            Effect::Saturator(params) => Self::Saturator(Saturator { params }),
+            Effect::Saturator(params) => Self::Saturator(Saturator::new(params)),
             Effect::AutoFilter(params) => Self::AutoFilter(AutoFilter {
                 params,
                 filters: Default::default(),
+                first: Default::default(),
             }),
             Effect::Chorus(params) => Self::Chorus(Chorus::new(params, sample_rate)),
             Effect::Phaser(params) => Self::Phaser(Phaser {
@@ -726,7 +897,10 @@ impl EffectProcessor {
                     allpass.index = 0;
                 }
             }
-            Self::AutoFilter(fx) => fx.filters = Default::default(),
+            Self::AutoFilter(fx) => {
+                fx.filters = Default::default();
+                fx.first = Default::default();
+            }
             Self::Chorus(fx) => {
                 fx.lines.iter_mut().for_each(|line| line.fill(0.0));
                 fx.write = 0;
@@ -747,7 +921,11 @@ impl EffectProcessor {
                 fx.gain = 1.0;
             }
             Self::Ducker(fx) => fx.envelope = 0.0,
-            Self::Saturator(_) | Self::Utility(_) | Self::Plugin(..) => {}
+            Self::Saturator(fx) => {
+                fx.over = [Oversampler::new(), Oversampler::new()];
+                fx.dry = [[0.0; Oversampler::LATENCY]; 2];
+            }
+            Self::Utility(_) | Self::Plugin(..) => {}
         }
     }
 
@@ -868,5 +1046,97 @@ mod tests {
         let mut r = l.clone();
         fx.process(&mut l, &mut r, &ctx());
         assert!(l[47_999] < 0.5, "expected gain reduction, got {}", l[47_999]);
+    }
+
+    fn sine(freq: f32, frames: usize, level: f32) -> Vec<f32> {
+        (0..frames).map(|i| (i as f32 * freq * TAU / 48_000.0).sin() * level).collect()
+    }
+
+    /// The level of `x` at `freq` (a single-bin DFT, Hann-windowed).
+    fn level_at(x: &[f32], freq: f32) -> f32 {
+        let n = x.len() as f32;
+        let (mut re, mut im) = (0f32, 0f32);
+        for (i, s) in x.iter().enumerate() {
+            let w = 0.5 - 0.5 * (TAU * i as f32 / n).cos();
+            let a = TAU * freq * i as f32 / 48_000.0;
+            re += s * w * a.cos();
+            im += s * w * a.sin();
+        }
+        (re * re + im * im).sqrt() / n * 4.0
+    }
+
+    /// Past 95 % resonance the filter rings by itself after a hit, for good,
+    /// at its cutoff, without running away.
+    #[test]
+    fn the_auto_filter_self_oscillates() {
+        let mut fx = EffectProcessor::new(&Effect::AutoFilter(AutoFilterParams { cutoff: 440.0, resonance: 1.1, ..Default::default() }), 48_000.0);
+        let mut l = vec![0f32; 96_000];
+        l[0] = 1.0;
+        let mut r = l.clone();
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            fx.process(a, b, &ctx());
+        }
+        let late = &l[72_000..];
+        let peak = late.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak > 0.05 && peak < 2.0, "still ringing, bounded: {peak}");
+        assert!(level_at(late, 440.0) > 10.0 * level_at(late, 880.0), "at its cutoff");
+        // As it always was below: a hit dies away.
+        let mut fx = EffectProcessor::new(&Effect::AutoFilter(AutoFilterParams { cutoff: 440.0, resonance: 0.9, ..Default::default() }), 48_000.0);
+        let mut l = vec![0f32; 96_000];
+        l[0] = 1.0;
+        let mut r = l.clone();
+        fx.process(&mut l, &mut r, &ctx());
+        assert!(l[72_000..].iter().all(|s| s.abs() < 1e-3));
+    }
+
+    /// 24 dB per octave: an octave over the cutoff, about twice as far down.
+    #[test]
+    fn the_steep_auto_filter_cuts_twice_as_much() {
+        let attenuation = |steep: bool| {
+            let mut fx = EffectProcessor::new(&Effect::AutoFilter(AutoFilterParams { cutoff: 1000.0, resonance: 0.0, steep, ..Default::default() }), 48_000.0);
+            let mut l = sine(2000.0, 48_000, 0.5);
+            let mut r = l.clone();
+            fx.process(&mut l, &mut r, &ctx());
+            20.0 * (level_at(&l[24_000..], 2000.0) / 0.5).log10()
+        };
+        let (gentle, steep) = (attenuation(false), attenuation(true));
+        println!("una octava por encima del corte: 12 dB {gentle:.1} dB, 24 dB {steep:.1} dB");
+        assert!((-17.0..-10.0).contains(&gentle), "12 dB: {gentle:.1}");
+        assert!((-34.0..-22.0).contains(&steep) && steep < gentle - 9.0, "24 dB: {steep:.1} (12 dB: {gentle:.1})");
+    }
+
+    /// Hard clipping a 5 kHz sine makes harmonics up past Nyquist, which fold
+    /// back (to 13 and 3 kHz here); oversampled, they stay out.
+    #[test]
+    fn oversampling_keeps_aliases_out() {
+        let aliases = |oversample: bool| {
+            let p = SaturatorParams { drive_db: 30.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Hard, oversample };
+            let mut fx = EffectProcessor::new(&Effect::Saturator(p), 48_000.0);
+            let mut l = sine(5000.0, 48_000, 0.5);
+            let mut r = l.clone();
+            fx.process(&mut l, &mut r, &ctx());
+            let x = &l[4_800..];
+            let fundamental = level_at(x, 5000.0);
+            20.0 * ((level_at(x, 13_000.0) + level_at(x, 3_000.0)) / fundamental).log10()
+        };
+        let (plain, over) = (aliases(false), aliases(true));
+        println!("alias (13 + 3 kHz) respecto a la fundamental: sin sobremuestreo {plain:.1} dB, con {over:.1} dB");
+        assert!(plain > -40.0, "without: {plain:.1} dB");
+        assert!(over < plain - 20.0, "oversampled: {over:.1} dB (without {plain:.1})");
+    }
+
+    /// The oversampled path is as late as its dry signal: half wet, half dry
+    /// doesn't comb-filter (a quiet sine goes through almost untouched).
+    #[test]
+    fn oversampled_dry_and_wet_line_up() {
+        let p = SaturatorParams { drive_db: 0.0, output_db: 0.0, mix: 0.5, kind: KickDrive::Soft, oversample: true };
+        let mut fx = EffectProcessor::new(&Effect::Saturator(p), 48_000.0);
+        for freq in [1000.0, 8000.0, 15_000.0] {
+            let mut l = sine(freq, 24_000, 0.05);
+            let mut r = l.clone();
+            fx.process(&mut l, &mut r, &ctx());
+            let level = level_at(&l[4_800..], freq) / 0.05;
+            assert!((0.9..1.1).contains(&level), "{freq} Hz: {level}");
+        }
     }
 }

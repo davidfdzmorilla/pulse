@@ -24,7 +24,7 @@ pub struct Library {
 }
 
 fn cache_path() -> PathBuf {
-    crate::kits::kits_dir().with_file_name("plugins.json")
+    paths::config_dir().join("plugins.json")
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]

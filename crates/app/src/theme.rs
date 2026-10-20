@@ -54,20 +54,29 @@ pub fn body() -> FontId {
     FontId::proportional(12.0)
 }
 
-/// Uses the macOS system font when available; egui's bundled font otherwise.
+/// The system's interface, fixed-width and symbol fonts (macOS: San Francisco and
+/// Apple Symbols; Windows: Segoe UI, Consolas and Segoe UI Symbol).
+fn system_fonts() -> [std::path::PathBuf; 3] {
+    if cfg!(windows) {
+        let fonts = std::env::var_os("WINDIR").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from).join("Fonts");
+        ["segoeui.ttf", "consola.ttf", "seguisym.ttf"].map(|f| fonts.join(f))
+    } else {
+        ["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/SFNSMono.ttf", "/System/Library/Fonts/Apple Symbols.ttf"].map(std::path::PathBuf::from)
+    }
+}
+
+/// Uses the system's fonts when available; egui's bundled font otherwise.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    for (name, path) in [
-        ("system", "/System/Library/Fonts/SFNS.ttf"),
-        ("system-mono", "/System/Library/Fonts/SFNSMono.ttf"),
-    ] {
+    let [system, mono, symbols] = system_fonts();
+    for (name, path) in [("system", system), ("system-mono", mono)] {
         let Ok(bytes) = std::fs::read(path) else { continue };
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_owned(bytes)));
         let family = if name == "system" { FontFamily::Proportional } else { FontFamily::Monospace };
         fonts.families.entry(family).or_default().insert(0, name.into());
     }
     // Symbols neither has (✎ ⤢ ✔ ⬆ …), from the system's symbol font, last.
-    if let Ok(bytes) = std::fs::read("/System/Library/Fonts/Apple Symbols.ttf") {
+    if let Ok(bytes) = std::fs::read(symbols) {
         fonts.font_data.insert("symbols".into(), Arc::new(FontData::from_owned(bytes)));
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
             fonts.families.entry(family).or_default().push("symbols".into());

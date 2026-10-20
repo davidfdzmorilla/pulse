@@ -9,6 +9,16 @@
 //! the new one in its place and restarts. "Volver a la versión anterior" swaps
 //! them back. GitHub is reached with `curl`; the token comes from the GitHub CLI
 //! (`gh auth token`) or one pasted in the window, kept in the login keychain.
+//!
+//! On Windows the release has `Pulse-<version>-windows-x64.zip` (see
+//! `scripts/package-windows.ps1`) and what is replaced is `pulse.exe` itself
+//! (a running program can be renamed there, not deleted): this one is kept as
+//! "pulse (anterior).exe". The download must match the SHA-256 GitHub gives for
+//! it, and the program inside must say it is that version (its version
+//! resource). There is no signing certificate yet, so a download is checked for
+//! being the file published, not for who made it. `curl.exe` and `tar.exe` come
+//! with Windows 10 and 11; the token pasted in the window is kept in Windows'
+//! Credential Manager.
 
 use crate::app::PulseApp;
 use crate::theme::TEXT_DIM;
@@ -26,8 +36,22 @@ pub const VERSION: &str = match option_env!("PULSE_VERSION") {
     Some(version) => version,
     None => env!("CARGO_PKG_VERSION"),
 };
+/// The keychain's (macOS) or Credential Manager's (Windows) name for the token.
 const KEYCHAIN_SERVICE: &str = "Pulse GitHub";
+/// The version kept beside this one, and where this one waits while they swap.
+#[cfg(not(windows))]
 const PREVIOUS: &str = "Pulse (anterior).app";
+#[cfg(not(windows))]
+const PARKED: &str = ".Pulse-cambio.app";
+#[cfg(windows)]
+const PREVIOUS: &str = "pulse (anterior).exe";
+#[cfg(windows)]
+const PARKED: &str = ".pulse-cambio.exe";
+/// The end of the name of this system's release asset.
+#[cfg(not(windows))]
+const PACKAGE: &str = ".zip";
+#[cfg(windows)]
+const PACKAGE: &str = "-windows-x64.zip";
 /// While Pulse stays open, it looks again this often.
 const CHECK_EVERY: std::time::Duration = std::time::Duration::from_secs(6 * 3600);
 
@@ -61,6 +85,9 @@ pub struct Asset {
     pub url: String,
     #[serde(default)]
     pub size: u64,
+    /// "sha256:<hex>", as GitHub works it out on upload.
+    #[serde(default)]
+    pub digest: Option<String>,
 }
 
 impl Release {
@@ -68,8 +95,9 @@ impl Release {
         self.tag_name.trim_start_matches('v')
     }
 
+    /// This system's package (the macOS one is the zip that isn't Windows').
     fn zip(&self) -> Option<&Asset> {
-        self.assets.iter().find(|a| a.name.ends_with(".zip"))
+        self.assets.iter().find(|a| a.name.ends_with(PACKAGE) && (cfg!(windows) || !a.name.contains("-windows-")))
     }
 }
 
@@ -121,20 +149,27 @@ pub fn newer(candidate: &str, current: &str) -> bool {
 
 // ----- GitHub ----------------------------------------------------------------------
 
-/// A token for the GitHub API: the GitHub CLI's, else the one kept in the keychain.
+/// A token for the GitHub API: the GitHub CLI's, else the one kept in the keychain
+/// (Credential Manager on Windows).
 pub(crate) fn token() -> Option<String> {
-    let gh = ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"].into_iter().find(|p| Path::new(p).exists());
-    let from_gh = gh.and_then(|gh| output(Command::new(gh).args(["auth", "token"])));
-    from_gh.or_else(|| output(Command::new("/usr/bin/security").args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])))
+    // A bare name is looked for on the PATH; a full path must be there.
+    let candidates = system::GH.iter().filter(|p| !p.contains(['/', '\\']) || Path::new(p).exists());
+    let from_gh = candidates.into_iter().find_map(|gh| output(command(gh).args(["auth", "token"])));
+    from_gh.or_else(system::stored_token)
 }
 
-/// Keeps a token in the login keychain.
-fn remember_token(token: &str) -> Result<(), String> {
-    let status = Command::new("/usr/bin/security")
-        .args(["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", "github", "-w", token])
-        .status()
-        .map_err(|e| e.to_string())?;
-    if status.success() { Ok(()) } else { Err("No se pudo guardar el token en el llavero".into()) }
+/// A program run without a console window of its own (Windows opens one for
+/// each otherwise).
+fn command(program: impl AsRef<std::ffi::OsStr>) -> Command {
+    #[allow(unused_mut)]
+    let mut command = Command::new(program);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+    command
 }
 
 fn output(command: &mut Command) -> Option<String> {
@@ -146,7 +181,7 @@ fn output(command: &mut Command) -> Option<String> {
 /// Starts curl with the token in its configuration (read from stdin, so it never
 /// shows in the process list), writing the body to `to` if given.
 pub(crate) fn spawn_curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<std::process::Child, String> {
-    let mut command = Command::new("/usr/bin/curl");
+    let mut command = command(system::curl());
     command.args(["--silent", "--show-error", "--fail", "--location", "--max-time", "3600", "--config", "-"]);
     if let Some(path) = to {
         command.arg("--output").arg(path);
@@ -204,23 +239,38 @@ pub(crate) fn release_at(token: &str, which: &str) -> Result<Release, String> {
 
 // ----- Installing --------------------------------------------------------------------
 
-/// The Pulse.app this program runs from, if it runs from one.
+/// What an update replaces, if this program can be updated: the Pulse.app it
+/// runs from (macOS), or itself when it is a published build (Windows; ones
+/// built with cargo can't be).
 pub fn running_bundle() -> Option<PathBuf> {
-    bundle_of(&std::env::current_exe().ok()?)
+    let executable = std::env::current_exe().ok()?;
+    if cfg!(windows) {
+        return option_env!("PULSE_VERSION").is_some().then_some(executable);
+    }
+    bundle_of(&executable)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn bundle_of(executable: &Path) -> Option<PathBuf> {
     // …/Pulse.app/Contents/MacOS/pulse
     let bundle = executable.parent()?.parent()?.parent()?;
     (bundle.extension().is_some_and(|e| e == "app")).then(|| bundle.to_path_buf())
 }
 
-/// The bundle's version, from its Info.plist.
-fn bundle_version(bundle: &Path) -> Option<String> {
-    output(Command::new("/usr/libexec/PlistBuddy").args(["-c", "Print :CFBundleShortVersionString"]).arg(bundle.join("Contents/Info.plist")))
+use system::bundle_version;
+
+/// Checks a download against the SHA-256 GitHub gives for it. Windows requires
+/// one (it has no signature to check otherwise); macOS checks it when there is.
+fn check_digest(file: &Path, asset: &Asset) -> Result<(), String> {
+    let Some(expected) = asset.digest.as_deref().and_then(|d| d.strip_prefix("sha256:")) else {
+        return if cfg!(windows) { Err("GitHub no da la huella (SHA-256) de la descarga: no se instala".into()) } else { Ok(()) };
+    };
+    let actual = crate::stems_ui::sha256(file)?;
+    if actual.eq_ignore_ascii_case(expected) { Ok(()) } else { Err("La descarga no coincide con la publicada (SHA-256 distinto): no se instala".into()) }
 }
 
 /// Who signed a bundle ("adhoc" for ad hoc signatures), if the signature is valid.
+#[cfg(not(windows))]
 /// `strict` also refuses stray file attributes: right for a fresh download, but
 /// an installed copy picks some up from the system (Finder info, iCloud).
 fn signer(bundle: &Path, strict: bool) -> Result<String, String> {
@@ -246,6 +296,7 @@ fn signer(bundle: &Path, strict: bool) -> Result<String, String> {
 /// designated requirement names the certificate's hash, not just its name). An
 /// ad hoc signed `ours` (a build that was never signed properly) accepts any valid
 /// signature.
+#[cfg(not(windows))]
 fn same_signer(ours: &Path, new: &Path) -> Result<(), String> {
     let theirs = signer(new, true)?;
     // A broken signature here must not open the door to any download.
@@ -274,7 +325,7 @@ fn same_signer(ours: &Path, new: &Path) -> Result<(), String> {
 pub fn swap_in(current: &Path, new: &Path) -> Result<(), String> {
     let previous = current.with_file_name(PREVIOUS);
     if previous.exists() {
-        std::fs::remove_dir_all(&previous).map_err(|e| format!("No se pudo quitar la versión anterior guardada: {e}"))?;
+        remove(&previous).map_err(|e| format!("No se pudo quitar la versión anterior guardada: {e}"))?;
     }
     std::fs::rename(current, &previous).map_err(|e| format!("No se pudo apartar esta versión: {e}"))?;
     if let Err(e) = std::fs::rename(new, current) {
@@ -290,14 +341,19 @@ pub fn swap_back(current: &Path) -> Result<(), String> {
     if !previous.exists() {
         return Err("No hay ninguna versión anterior guardada".into());
     }
-    let parked = current.with_file_name(".Pulse-cambio.app");
-    let _ = std::fs::remove_dir_all(&parked);
+    let parked = current.with_file_name(PARKED);
+    let _ = remove(&parked);
     std::fs::rename(current, &parked).map_err(|e| e.to_string())?;
     if let Err(e) = std::fs::rename(&previous, current) {
         let _ = std::fs::rename(&parked, current);
         return Err(e.to_string());
     }
     std::fs::rename(&parked, &previous).map_err(|e| e.to_string())
+}
+
+/// Removes a bundle (a folder) or a program (a file).
+fn remove(path: &Path) -> std::io::Result<()> {
+    if path.is_dir() { std::fs::remove_dir_all(path) } else { std::fs::remove_file(path) }
 }
 
 /// Downloads a release and installs it over `bundle`. Returns the new version.
@@ -310,15 +366,14 @@ fn install(release: &Release, bundle: &Path, token: &str) -> Result<String, Stri
     let result = (|| {
         let zip = work.join(&asset.name);
         curl(&asset.url, token, "application/octet-stream", Some(&zip))?;
-        let unzip = Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(&zip).arg(&work).status().map_err(|e| e.to_string())?;
-        if !unzip.success() {
-            return Err("No se pudo descomprimir la descarga".to_string());
-        }
-        let new = work.join("Pulse.app");
-        let version = bundle_version(&new).ok_or("La descarga no contiene Pulse.app")?;
+        check_digest(&zip, asset)?;
+        system::unzip(&zip, &work)?;
+        let new = work.join(system::IN_PACKAGE);
+        let version = bundle_version(&new).ok_or(format!("La descarga no contiene {}", system::IN_PACKAGE))?;
         if version != release.version() {
             return Err(format!("La descarga es la versión {version}, no la {}", release.version()));
         }
+        #[cfg(not(windows))]
         same_signer(bundle, &new)?;
         swap_in(bundle, &new)?;
         Ok(version)
@@ -327,10 +382,155 @@ fn install(release: &Release, bundle: &Path, token: &str) -> Result<String, Stri
     result
 }
 
-/// Opens `bundle` once this process has quit.
-fn relaunch(bundle: &Path) -> Result<(), String> {
-    let script = format!("while /bin/kill -0 {} 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$0\"", std::process::id());
-    Command::new("/bin/sh").arg("-c").arg(script).arg(bundle).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ()).map_err(|e| e.to_string())
+use system::relaunch;
+
+/// What differs between systems: where the tools are, how the token is kept, what
+/// a package holds and how Pulse is started again.
+#[cfg(not(windows))]
+mod system {
+    use super::*;
+
+    /// The GitHub CLI, where Homebrew puts it.
+    pub const GH: &[&str] = &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"];
+    /// What the package unzips to.
+    pub const IN_PACKAGE: &str = "Pulse.app";
+
+    pub fn curl() -> PathBuf {
+        PathBuf::from("/usr/bin/curl")
+    }
+
+    pub fn stored_token() -> Option<String> {
+        output(Command::new("/usr/bin/security").args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"]))
+    }
+
+    /// Keeps a token in the login keychain.
+    pub fn remember_token(token: &str) -> Result<(), String> {
+        let status = Command::new("/usr/bin/security")
+            .args(["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", "github", "-w", token])
+            .status()
+            .map_err(|e| e.to_string())?;
+        if status.success() { Ok(()) } else { Err("No se pudo guardar el token en el llavero".into()) }
+    }
+
+    /// The bundle's version, from its Info.plist.
+    pub fn bundle_version(bundle: &Path) -> Option<String> {
+        output(Command::new("/usr/libexec/PlistBuddy").args(["-c", "Print :CFBundleShortVersionString"]).arg(bundle.join("Contents/Info.plist")))
+    }
+
+    pub fn unzip(zip: &Path, to: &Path) -> Result<(), String> {
+        let unzip = Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(zip).arg(to).status().map_err(|e| e.to_string())?;
+        if unzip.success() { Ok(()) } else { Err("No se pudo descomprimir la descarga".to_string()) }
+    }
+
+    /// Opens `bundle` once this process has quit.
+    pub fn relaunch(bundle: &Path) -> Result<(), String> {
+        let script = format!("while /bin/kill -0 {} 2>/dev/null; do /bin/sleep 0.2; done; /usr/bin/open \"$0\"", std::process::id());
+        Command::new("/bin/sh").arg("-c").arg(script).arg(bundle).stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null()).spawn().map(|_| ()).map_err(|e| e.to_string())
+    }
+}
+
+#[cfg(windows)]
+mod system {
+    use super::*;
+    use windows_sys::Win32::Security::Credentials::{CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW, CredWriteW};
+
+    /// The GitHub CLI: on the PATH, or where its installer puts it.
+    pub const GH: &[&str] = &["gh", r"C:\Program Files\GitHub CLI\gh.exe"];
+    /// What the package unzips to.
+    pub const IN_PACKAGE: &str = r"Pulse\pulse.exe";
+
+    fn system32(program: &str) -> PathBuf {
+        let root = std::env::var_os("SystemRoot").map_or_else(|| PathBuf::from(r"C:\Windows"), PathBuf::from);
+        root.join("System32").join(program)
+    }
+
+    /// The curl that comes with Windows 10 and 11.
+    pub fn curl() -> PathBuf {
+        system32("curl.exe")
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    pub fn stored_token() -> Option<String> {
+        let target = wide(KEYCHAIN_SERVICE);
+        let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+        if unsafe { CredReadW(target.as_ptr(), CRED_TYPE_GENERIC, 0, &mut credential) } == 0 || credential.is_null() {
+            return None;
+        }
+        let token = unsafe {
+            let c = &*credential;
+            let bytes = std::slice::from_raw_parts(c.CredentialBlob, c.CredentialBlobSize as usize);
+            String::from_utf8(bytes.to_vec()).ok()
+        };
+        unsafe { CredFree(credential as *const _) };
+        token.filter(|t| !t.trim().is_empty())
+    }
+
+    /// Keeps a token in Credential Manager (Windows credentials, "Pulse GitHub").
+    pub fn remember_token(token: &str) -> Result<(), String> {
+        let (target, user) = (wide(KEYCHAIN_SERVICE), wide("github"));
+        let mut blob = token.as_bytes().to_vec();
+        let credential = CREDENTIALW {
+            Flags: 0,
+            Type: CRED_TYPE_GENERIC,
+            TargetName: target.as_ptr() as *mut u16,
+            Comment: std::ptr::null_mut(),
+            LastWritten: unsafe { std::mem::zeroed() },
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            AttributeCount: 0,
+            Attributes: std::ptr::null_mut(),
+            TargetAlias: std::ptr::null_mut(),
+            UserName: user.as_ptr() as *mut u16,
+        };
+        if unsafe { CredWriteW(&credential, 0) } != 0 { Ok(()) } else { Err("No se pudo guardar el token en el Administrador de credenciales".into()) }
+    }
+
+    /// A program's version, from its version resource (see the app's build.rs).
+    pub fn bundle_version(program: &Path) -> Option<String> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows_sys::Win32::Storage::FileSystem::{GetFileVersionInfoSizeW, GetFileVersionInfoW, VS_FIXEDFILEINFO, VerQueryValueW};
+        let path: Vec<u16> = program.as_os_str().encode_wide().chain(std::iter::once(0)).collect();
+        let size = unsafe { GetFileVersionInfoSizeW(path.as_ptr(), std::ptr::null_mut()) };
+        if size == 0 {
+            return None;
+        }
+        let mut data = vec![0u8; size as usize];
+        if unsafe { GetFileVersionInfoW(path.as_ptr(), 0, size, data.as_mut_ptr() as *mut _) } == 0 {
+            return None;
+        }
+        let (mut info, mut len): (*mut std::ffi::c_void, u32) = (std::ptr::null_mut(), 0);
+        let root = wide("\\");
+        if unsafe { VerQueryValueW(data.as_ptr() as *const _, root.as_ptr(), &mut info, &mut len) } == 0 || info.is_null() {
+            return None;
+        }
+        let fixed = unsafe { &*(info as *const VS_FIXEDFILEINFO) };
+        let (ms, ls) = (fixed.dwProductVersionMS, fixed.dwProductVersionLS);
+        Some(format!("{}.{}.{}", ms >> 16, ms & 0xffff, ls >> 16))
+    }
+
+    /// With the tar that comes with Windows 10 and 11 (it reads zips).
+    pub fn unzip(zip: &Path, to: &Path) -> Result<(), String> {
+        let unzip = command(system32("tar.exe")).arg("-xf").arg(zip).arg("-C").arg(to).status().map_err(|e| e.to_string())?;
+        if unzip.success() { Ok(()) } else { Err("No se pudo descomprimir la descarga".to_string()) }
+    }
+
+    /// Starts `program` once this process has quit (PowerShell waits for it).
+    pub fn relaunch(program: &Path) -> Result<(), String> {
+        let quoted = program.display().to_string().replace('\'', "''");
+        let script = format!("Wait-Process -Id {} -ErrorAction SilentlyContinue; Start-Process -FilePath '{quoted}'", std::process::id());
+        command("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", &script])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
 }
 
 // ----- In the app --------------------------------------------------------------------
@@ -507,7 +707,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     });
                     ui.label(egui::RichText::new("Esta versión se guarda como «Pulse (anterior)» para poder volver a ella.").color(TEXT_DIM).size(10.5));
                 } else {
-                    ui.label(egui::RichText::new("Pulse se está ejecutando fuera de Pulse.app (desde el terminal): no se puede instalar desde aquí.").color(TEXT_DIM).size(10.5));
+                    let outside = if cfg!(windows) {
+                        "Este Pulse no es una versión publicada (se compiló aquí): no se puede instalar desde aquí."
+                    } else {
+                        "Pulse se está ejecutando fuera de Pulse.app (desde el terminal): no se puede instalar desde aquí."
+                    };
+                    ui.label(egui::RichText::new(outside).color(TEXT_DIM).size(10.5));
                 }
             }
             State::Downloading(release) => {
@@ -552,7 +757,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         }
         ui.collapsing("Acceso a GitHub", |ui| {
             ui.label(
-                egui::RichText::new("Pulse usa la sesión de GitHub CLI («gh auth login»). Si no la tienes, pega un token con permiso de lectura del repositorio; se guarda en el llavero.")
+                egui::RichText::new(if cfg!(windows) {
+                    "Pulse usa la sesión de GitHub CLI («gh auth login»). Si no la tienes, pega un token con permiso de lectura del repositorio; se guarda en el Administrador de credenciales de Windows."
+                } else {
+                    "Pulse usa la sesión de GitHub CLI («gh auth login»). Si no la tienes, pega un token con permiso de lectura del repositorio; se guarda en el llavero."
+                })
                     .color(TEXT_DIM)
                     .size(10.5),
             );
@@ -591,7 +800,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         }
         Some(Action::SaveToken) => {
             let token = std::mem::take(&mut app.updates.token_input);
-            match remember_token(token.trim()) {
+            match system::remember_token(token.trim()) {
                 Ok(()) => app.check_updates(),
                 Err(e) => app.updates.set(State::Failed(e)),
             }
@@ -640,6 +849,25 @@ mod tests {
     }
 
     #[test]
+    fn each_system_takes_its_own_package_and_checks_its_digest() {
+        let json = r#"{"tag_name":"v0.2.0","assets":[
+            {"name":"Pulse-0.2.0-windows-x64.zip","url":"https://api.github.com/a/1","size":9,"digest":"sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"},
+            {"name":"Pulse-0.2.0.zip","url":"https://api.github.com/a/2","size":12}]}"#;
+        let release: Release = serde_json::from_str(json).unwrap();
+        let zip = release.zip().unwrap();
+        assert_eq!(zip.name, if cfg!(windows) { "Pulse-0.2.0-windows-x64.zip" } else { "Pulse-0.2.0.zip" });
+        let file = std::env::temp_dir().join(format!("pulse digest ñ {}.zip", std::process::id()));
+        std::fs::write(&file, b"abc").unwrap();
+        let with = |digest: Option<&str>| Asset { name: "x.zip".into(), url: String::new(), size: 3, digest: digest.map(str::to_string) };
+        assert_eq!(check_digest(&file, &release.assets[0]), Ok(()));
+        assert!(check_digest(&file, &with(Some("sha256:00"))).is_err(), "another file is refused");
+        // Without a digest only Windows refuses (macOS checks the signature instead).
+        assert_eq!(check_digest(&file, &with(None)).is_err(), cfg!(windows));
+        std::fs::remove_file(&file).unwrap();
+    }
+
+    #[test]
+    #[cfg(not(windows))]
     fn the_bundle_is_found_from_the_executable() {
         assert_eq!(bundle_of(Path::new("/Applications/Pulse.app/Contents/MacOS/pulse")), Some(PathBuf::from("/Applications/Pulse.app")));
         assert_eq!(bundle_of(Path::new("/x/target/release/pulse")), None);
@@ -725,6 +953,7 @@ mod tests {
     /// Who signed the installed Pulse and a downloaded release (set PULSE_DOWNLOADED
     /// to an unzipped Pulse.app).
     #[test]
+    #[cfg(target_os = "macos")]
     #[ignore = "diagnostic: reads signatures of the installed app"]
     fn signers() {
         let installed = std::path::PathBuf::from(std::env::var("HOME").unwrap()).join("Applications/Pulse.app");
@@ -748,6 +977,7 @@ mod tests {
     /// temporary folder: finds the latest release, downloads it, checks it and
     /// swaps it in, then back.
     #[test]
+    #[cfg(target_os = "macos")]
     #[ignore = "diagnostic: talks to GitHub and downloads the latest release"]
     fn update_a_copy_from_github() {
         let token = token().expect("gh auth token");

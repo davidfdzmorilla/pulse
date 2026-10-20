@@ -5,6 +5,7 @@ edition = "2024"
 
 [dependencies]
 beat-this = { version = "1.1.0", default-features = false }
+paths = { version = "0.1.0", path = "../paths" }
 
 [dev-dependencies]
 hound = "3.5.1"

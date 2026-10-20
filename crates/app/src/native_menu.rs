@@ -13,6 +13,8 @@ pub enum Item {
     Run(Command, &'static str, &'static str),
     Separator,
     Recent,
+    // Only macOS's menu bar has them (the in-window menu leaves them out).
+    #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     System(&'static str, &'static str, &'static str),
 }
 
@@ -118,6 +120,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
 ];
 
 /// Every command in the menus, in order (a menu item's tag is its index here).
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
 pub fn commands() -> Vec<Command> {
     MENUS.iter().flat_map(|(_, items)| items.iter()).filter_map(|item| if let Run(c, ..) = item { Some(*c) } else { None }).collect()
 }

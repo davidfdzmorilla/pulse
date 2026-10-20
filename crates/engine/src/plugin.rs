@@ -60,8 +60,17 @@ pub fn default_folders() -> Vec<PathBuf> {
             folders.push(PathBuf::from("/Library/Audio/Plug-Ins").join(format));
         }
     } else if cfg!(target_os = "windows") {
-        folders.push(PathBuf::from(r"C:\Program Files\Common Files\VST3"));
-        folders.push(PathBuf::from(r"C:\Program Files\Common Files\CLAP"));
+        // The system-wide folders (in Common Files) and the per-user ones, as the
+        // VST3 and CLAP specifications name them.
+        let env = |name: &str| std::env::var_os(name).filter(|v| !v.is_empty()).map(PathBuf::from);
+        let common = env("CommonProgramFiles").unwrap_or_else(|| PathBuf::from(r"C:\Program Files\Common Files"));
+        let local = env("LOCALAPPDATA").map(|l| l.join("Programs").join("Common"));
+        for format in ["VST3", "CLAP"] {
+            folders.push(common.join(format));
+            if let Some(local) = &local {
+                folders.push(local.join(format));
+            }
+        }
     } else {
         for format in ["vst3", "clap"] {
             if let Some(home) = &home {
@@ -903,6 +912,12 @@ impl Vst3View {
         unsafe { self.view.canResize() == kResultTrue }
     }
 
+    /// Tells the editor how many pixels make a point on screen. False if it doesn't listen.
+    pub fn set_scale(&self, scale: f64) -> bool {
+        let Some(support) = self.view.cast::<IPlugViewContentScaleSupport>() else { return false };
+        unsafe { support.setContentScaleFactor(scale as f32) == kResultOk }
+    }
+
     /// Called with the size the editor asks for; the window must take it.
     pub fn on_resize(&self, resize: impl Fn(i32, i32) + 'static) {
         *self.frame.resize.borrow_mut() = Some(Box::new(resize));
@@ -1559,6 +1574,12 @@ impl PluginView {
 
     pub fn can_resize(&self) -> bool {
         view!(&self.0, v => v.can_resize())
+    }
+
+    /// How many pixels make a point on the screen the editor is on (Windows, where
+    /// editors work in pixels and the host says the scale). False if it doesn't listen.
+    pub fn set_scale(&self, scale: f64) -> bool {
+        view!(&self.0, v => v.set_scale(scale))
     }
 
     /// Called with the size the editor asks for; the window must take it.

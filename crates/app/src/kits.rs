@@ -25,10 +25,7 @@ const BASIC_KIT: [(u8, &str, u8, f32); 13] = [
 
 /// Where generated kits are kept.
 pub fn kits_dir() -> PathBuf {
-    match std::env::var_os("HOME") {
-        Some(home) => Path::new(&home).join("Library/Application Support/Pulse/Kits"),
-        None => std::env::temp_dir().join("Pulse Kits"),
-    }
+    paths::data_dir().join("Kits")
 }
 
 /// Writes the basic kit's sounds to `dir` (once) and returns the rack settings and

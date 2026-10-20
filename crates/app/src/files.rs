@@ -30,3 +30,15 @@ pub fn pick_folder(dialog: rfd::FileDialog) -> Option<PathBuf> {
         None => dialog.pick_folder(),
     }
 }
+
+/// Shows `folder` in the system's file manager (Finder, the Explorer…).
+pub fn show_folder(folder: &std::path::Path) -> std::io::Result<()> {
+    let program = if cfg!(target_os = "macos") {
+        "open"
+    } else if cfg!(windows) {
+        "explorer"
+    } else {
+        "xdg-open"
+    };
+    std::process::Command::new(program).arg(folder).spawn().map(|_| ())
+}

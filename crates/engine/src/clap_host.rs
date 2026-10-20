@@ -653,8 +653,9 @@ impl ClapHandle {
     pub fn editor(&self) -> Option<ClapView> {
         let gui = unsafe { self.instance.gui.as_ref() }?;
         let plugin = self.instance.plugin;
-        let api = CLAP_WINDOW_API_COCOA.as_ptr();
-        if !cfg!(target_os = "macos") || !unsafe { gui.is_api_supported.is_some_and(|f| f(plugin, api, false)) } {
+        let api = WINDOW_API.as_ptr();
+        // Editors go into a window handle: an NSView or an HWND (X11 ids aren't pointers).
+        if !cfg!(any(target_os = "macos", windows)) || !unsafe { gui.is_api_supported.is_some_and(|f| f(plugin, api, false)) } {
             return None;
         }
         if !unsafe { gui.create.is_some_and(|f| f(plugin, api, false)) } {
@@ -663,6 +664,16 @@ impl ClapHandle {
         Some(ClapView { instance: self.instance.clone(), attached: false })
     }
 }
+
+/// The system's window API, as CLAP names it (the same kind of view as
+/// [`crate::plugin::PLATFORM_VIEW`]).
+const WINDOW_API: &std::ffi::CStr = if cfg!(target_os = "macos") {
+    CLAP_WINDOW_API_COCOA
+} else if cfg!(windows) {
+    CLAP_WINDOW_API_WIN32
+} else {
+    CLAP_WINDOW_API_X11
+};
 
 /// A CLAP editor. Dropping it hides and destroys it.
 pub(crate) struct ClapView {
@@ -676,7 +687,13 @@ impl ClapView {
     }
 
     pub fn supports(&self, platform: &str) -> bool {
-        platform == "NSView"
+        platform == crate::plugin::PLATFORM_VIEW
+    }
+
+    /// Tells the editor how many pixels make a point on screen (Windows: the
+    /// window's DPI over 96). False if it works that out itself.
+    pub fn set_scale(&self, scale: f64) -> bool {
+        unsafe { self.gui().set_scale.is_some_and(|f| f(self.instance.plugin, scale)) }
     }
 
     pub fn size(&self) -> (i32, i32) {
@@ -693,9 +710,9 @@ impl ClapView {
     }
 
     /// # Safety
-    /// `parent` must be a live NSView that outlives this editor.
+    /// `parent` must be a live NSView (an HWND on Windows) that outlives this editor.
     pub unsafe fn attach(&mut self, parent: *mut c_void) -> bool {
-        let window = clap_window { api: CLAP_WINDOW_API_COCOA.as_ptr(), specific: clap_window_handle { cocoa: parent } };
+        let window = clap_window { api: WINDOW_API.as_ptr(), specific: clap_window_handle { ptr: parent } };
         let plugin = self.instance.plugin;
         self.attached = unsafe { self.gui().set_parent.is_some_and(|f| f(plugin, &window)) };
         if self.attached {

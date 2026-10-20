@@ -2207,7 +2207,15 @@ impl PulseApp {
     fn open_from(&mut self, path: &std::path::Path) {
         match Project::load(path) {
             Ok(project) => {
-                self.status = Some(format!("Abierto {}", path.display()));
+                let missing = crate::library::missing_files(&project);
+                self.status = Some(match missing.first() {
+                    None => format!("Abierto {}", path.display()),
+                    Some(first) => format!(
+                        "Abierto {} · {} audio(s) no encontrados (p. ej. {first}): se conservan sus rutas; vuelve a importarlos o pon los archivos en su sitio",
+                        path.display(),
+                        missing.len()
+                    ),
+                });
                 self.replace_project(project, Some(path.to_path_buf()));
                 self.remember_recent(path);
             }

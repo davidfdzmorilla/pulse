@@ -1,0 +1,146 @@
+# Pulse on Windows x64: builds natively with MSVC, runs the tests, packs the zip
+# and the installer, and checks them on the runner's clean Windows: pulse.exe
+# renders a project from the command line, starts its window (a script drives
+# it and takes screenshots), and the installer installs, registers .pulse files
+# and uninstalls. Everything it makes is kept as artifacts; nothing is published.
+#
+# Not here: anything needing an audio or MIDI device, a GPU, third-party plugins
+# or GitHub access (see docs/WINDOWS_SUPPORT.md for the manual checks).
+
+name: Windows
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Versión para el paquete (p. ej. 0.2.0); vacío = la de Cargo"
+        required: false
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: 1
+
+jobs:
+  windows:
+    runs-on: windows-2022
+    timeout-minutes: 120
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Rust
+        run: |
+          rustup toolchain install stable --profile minimal --component clippy
+          rustup default stable
+          rustc -Vv
+          cargo -V
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Compilar (todo el workspace)
+        run: cargo build --release --workspace --all-targets 2>&1 | Tee-Object -FilePath build.log; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+
+      # Lint for information only: the code keeps its own hand style (no rustfmt,
+      # see docs/BUILD_WINDOWS.md) and clippy's suggestions aren't gates yet.
+      - name: Clippy (informativo)
+        continue-on-error: true
+        run: cargo clippy --release --workspace --all-targets 2>&1 | Tee-Object -FilePath clippy.log
+
+      - name: Tests
+        run: |
+          cargo test --release --workspace --no-fail-fast 2>&1 | Tee-Object -FilePath tests.log
+          $code = $LASTEXITCODE
+          Select-String -Path tests.log -Pattern '^test result|FAILED|panicked' | ForEach-Object { $_.Line }
+          exit $code
+
+      - name: Instalar Inno Setup
+        run: choco install innosetup -y --no-progress
+
+      - name: Empaquetar
+        run: |
+          $version = '${{ github.event.inputs.version }}'
+          if ($version) { pwsh scripts/package-windows.ps1 -Version $version } else { pwsh scripts/package-windows.ps1 }
+
+      - name: pulse.exe renderiza un proyecto
+        run: |
+          $exe = 'dist\Pulse\pulse.exe'
+          $out = Join-Path $env:RUNNER_TEMP 'demo con espacios ñ.wav'
+          $p = Start-Process -FilePath $exe -ArgumentList '--render', "`"$out`"" -Wait -PassThru -NoNewWindow
+          if ($p.ExitCode -ne 0) { throw "--render salió con $($p.ExitCode)" }
+          $size = (Get-Item $out).Length
+          Write-Host "WAV de $size bytes"
+          if ($size -lt 100000) { throw "WAV demasiado pequeño" }
+          Copy-Item $out dist\render-demo.wav
+
+      - name: pulse.exe arranca su ventana (guion)
+        continue-on-error: true
+        run: |
+          $out = Join-Path (Get-Location) 'dist\arranque'
+          New-Item -ItemType Directory -Force -Path $out | Out-Null
+          $env:PULSE_SCRIPT = (Resolve-Path 'scripts\ci\arranque.txt').Path
+          $env:PULSE_SCRIPT_OUT = $out
+          $p = Start-Process -FilePath 'dist\Pulse\pulse.exe' -PassThru
+          if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; throw 'Pulse no terminó el guion en 3 minutos' }
+          Get-Content (Join-Path $out 'log.txt')
+          Get-ChildItem $out -Filter *.ppm | ForEach-Object { python scripts\ppm.py $_.FullName ($_.FullName -replace '\.ppm$', '.png') }
+          if (Select-String -Path (Join-Path $out 'log.txt') -Pattern 'ERROR' -Quiet) { throw 'El guion tuvo errores' }
+          if (-not (Test-Path (Join-Path $out 'proyecto.json'))) { throw 'El guion no llegó al final' }
+          Get-ChildItem "$env:LOCALAPPDATA\Pulse\Logs" -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName }
+
+      - name: El instalador instala, asocia .pulse y desinstala
+        run: |
+          $setup = Get-ChildItem dist -Filter 'Pulse-*-windows-x64-setup.exe' | Select-Object -First 1
+          if (-not $setup) { throw 'No hay instalador' }
+          $p = Start-Process -FilePath $setup.FullName -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/CURRENTUSER', '/NORESTART', "/LOG=$(Join-Path (Get-Location) 'dist\instalacion.log')" -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "El instalador salió con $($p.ExitCode)" }
+          $app = Join-Path $env:LOCALAPPDATA 'Programs\Pulse'
+          $exe = Join-Path $app 'pulse.exe'
+          if (-not (Test-Path $exe)) { throw "No está $exe" }
+          Write-Host "Instalado: $exe, versión $((Get-Item $exe).VersionInfo.ProductVersion)"
+          $command = (Get-ItemProperty 'HKCU:\Software\Classes\Pulse.Proyecto\shell\open\command').'(default)'
+          Write-Host ".pulse se abre con: $command"
+          if ($command -notlike "*pulse.exe*") { throw '.pulse no está asociado' }
+          if (-not (Test-Path "$env:APPDATA\Microsoft\Windows\Start Menu\Programs\Pulse.lnk")) { throw 'Falta el acceso del menú Inicio' }
+          # The user's data stays after uninstalling.
+          New-Item -ItemType Directory -Force -Path "$env:APPDATA\Pulse" | Out-Null
+          Set-Content "$env:APPDATA\Pulse\settings.json" '{}'
+          $p = Start-Process -FilePath (Join-Path $app 'unins000.exe') -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART' -Wait -PassThru
+          if ($p.ExitCode -ne 0) { throw "El desinstalador salió con $($p.ExitCode)" }
+          Start-Sleep -Seconds 3
+          if (Test-Path $exe) { throw 'pulse.exe sigue tras desinstalar' }
+          if (Test-Path 'HKCU:\Software\Classes\Pulse.Proyecto') { throw 'La asociación sigue tras desinstalar' }
+          if (-not (Test-Path "$env:APPDATA\Pulse\settings.json")) { throw 'Desinstalar borró los ajustes del usuario' }
+          Write-Host 'Instalar y desinstalar: bien'
+
+      - name: Guardar paquetes
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pulse-windows-x64
+          path: |
+            dist/*.zip
+            dist/*-setup.exe
+          if-no-files-found: warn
+
+      - name: Guardar registros y capturas
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: registros-windows
+          path: |
+            build.log
+            clippy.log
+            tests.log
+            dist/arranque/
+            dist/render-demo.wav
+            dist/instalacion.log
+          if-no-files-found: warn

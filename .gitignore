@@ -8,3 +8,4 @@ ml/drums/runs/
 ml/drums/.venv/
 ml/drums/runs.log
 ml/drums/__pycache__/
+/dist

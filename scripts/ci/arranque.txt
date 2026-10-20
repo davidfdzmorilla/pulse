@@ -1,0 +1,13 @@
+# Pulse starts on Windows: its window draws, the demo project is there, the
+# menus answer, and it quits. Run by the Windows CI (see .github/workflows/windows.yml).
+wait 30
+shot arranque
+expect "Drums"
+widgets pantalla
+run Settings
+wait 10
+shot ajustes
+key Escape
+wait 5
+state proyecto
+quit

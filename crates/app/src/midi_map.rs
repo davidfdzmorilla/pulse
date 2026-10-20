@@ -113,7 +113,7 @@ pub struct Learn {
 }
 
 fn transport_path() -> PathBuf {
-    crate::kits::kits_dir().with_file_name("midi.json")
+    paths::config_dir().join("midi.json")
 }
 
 impl Learn {

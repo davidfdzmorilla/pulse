@@ -7,7 +7,7 @@
 //! one tempo for the whole piece (least squares over every beat, so long songs
 //! stay in time) and where its bars fall.
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 const MEL_MODEL: &[u8] = include_bytes!("../models/mel_spectrogram.onnx");
 const BEAT_MODEL: &[u8] = include_bytes!("../models/beat_this_small.onnx");
@@ -68,11 +68,7 @@ pub fn analyze(left: &[f32], right: &[f32], sample_rate: f32) -> Result<Option<G
 
 /// The models, written once to the cache folder (the runtime loads files).
 fn models() -> Result<(PathBuf, PathBuf), String> {
-    let dir = match std::env::var_os("HOME") {
-        Some(home) => Path::new(&home).join("Library/Caches/Pulse/beat-this"),
-        None => std::env::temp_dir().join("pulse-beat-this"),
-    };
-    std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo preparar {}: {e}", dir.display()))?;
+    let dir = paths::ensure(&paths::cache_dir().join("beat-this"))?;
     let write = |name: &str, bytes: &[u8]| -> Result<PathBuf, String> {
         let path = dir.join(name);
         if std::fs::metadata(&path).map(|m| m.len()).ok() != Some(bytes.len() as u64) {

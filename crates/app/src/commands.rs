@@ -75,7 +75,7 @@ pub enum Answer {
 pub const MAX_RECENT: usize = 10;
 
 fn recent_path() -> PathBuf {
-    crate::kits::kits_dir().with_file_name("recent.json")
+    paths::config_dir().join("recent.json")
 }
 
 /// The saved list of recent projects that still exist.
@@ -290,7 +290,7 @@ impl PulseApp {
             Command::ShowFolder => {
                 let folder = crate::library::root();
                 let _ = std::fs::create_dir_all(&folder);
-                if let Err(e) = std::process::Command::new("open").arg(&folder).spawn() {
+                if let Err(e) = crate::files::show_folder(&folder) {
                     self.status = Some(format!("No se pudo abrir {}: {e}", folder.display()));
                 }
             }

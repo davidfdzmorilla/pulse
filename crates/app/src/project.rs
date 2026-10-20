@@ -252,14 +252,31 @@ pub struct MasterTrack {
 }
 
 /// The project file format. Raise it when a change needs old files converted
-/// (in [`migrate`]); fields added with a default don't need it.
+/// (in [`migrate`]), or when an older Pulse opening a new file would get its
+/// sound wrong (it drops fields it doesn't know): it then refuses the file
+/// instead. Fields added with a default that an older Pulse can miss without
+/// sounding different don't need it; for those, `saved_by` makes it ask before
+/// saving over the file.
 pub const FORMAT: u32 = 1;
 const FORMAT_KEY: &str = "format";
+/// The Pulse that saved a file (see [`Project::saved_by`]).
+const SAVED_BY_KEY: &str = "saved_by";
 
 /// Converts a project file from `format` to the current one.
 fn migrate(_value: &mut serde_json::Value, format: u64) {
     // Format 0 (no number) and 1 are the same: the number was added in 1.
     if format < 1 {}
+}
+
+/// Which Pulse saved a project's file. Not its content: projects that differ
+/// only here are equal (an unchanged project isn't "unsaved").
+#[derive(Clone, Debug, Default)]
+pub struct SavedBy(pub Option<String>);
+
+impl PartialEq for SavedBy {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -293,6 +310,10 @@ pub struct Project {
     pub returns: Vec<ReturnTrack>,
     pub master: MasterTrack,
     pub scene_names: Vec<String>,
+    /// The Pulse that saved the file it came from, if it said (written from
+    /// this version on; see `PulseApp::save_to`).
+    #[serde(skip)]
+    pub saved_by: SavedBy,
     /// The VST3 plugins the instruments and devices refer to by id.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub plugins: Vec<PluginRef>,
@@ -372,6 +393,7 @@ impl Project {
 
     pub fn empty() -> Self {
         Self {
+            saved_by: SavedBy::default(),
             tempo: 120.0,
             metronome: false,
             quantize: 4.0,
@@ -425,8 +447,10 @@ impl Project {
         if format > FORMAT as u64 {
             return Err("Este proyecto se guardó con una versión más nueva de Pulse. Actualiza Pulse para abrirlo.".into());
         }
+        let saved_by = value.get(SAVED_BY_KEY).and_then(|v| v.as_str()).map(str::to_string);
         if let Some(object) = value.as_object_mut() {
             object.remove(FORMAT_KEY);
+            object.remove(SAVED_BY_KEY);
         }
         migrate(&mut value, format);
         let mut project: Project = serde_json::from_value(value).map_err(|e| format!("Archivo no válido: {e}"))?;
@@ -437,6 +461,7 @@ impl Project {
         if !(project.tempo.is_finite() && project.tempo > 0.0) {
             project.tempo = 120.0;
         }
+        project.saved_by = SavedBy(saved_by);
         Ok(project)
     }
 
@@ -451,6 +476,7 @@ impl Project {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
             object.insert(FORMAT_KEY.into(), FORMAT.into());
+            object.insert(SAVED_BY_KEY.into(), crate::updates::VERSION.into());
         }
         let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
         if repaired > 0 {
@@ -801,6 +827,38 @@ mod tests {
         assert!(app.status.as_deref().unwrap().contains("1 valor(es) no válidos"), "{:?}", app.status);
         assert_eq!(app.project.tracks[1].mixer.pan, 0.0);
         assert!(!app.is_dirty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A project says which Pulse saved it; one from a newer Pulse warns on
+    /// opening and asks before being saved over (it would lose what this one
+    /// doesn't know).
+    #[test]
+    fn a_project_from_a_newer_pulse_is_not_saved_over_without_asking() {
+        let dir = std::env::temp_dir().join(format!("pulse-newer-{}", std::process::id()));
+        let file = dir.join("N/N.pulse");
+        Project::demo().save(&file).unwrap();
+        assert_eq!(Project::load(&file).unwrap().saved_by.0.as_deref(), Some(crate::updates::VERSION));
+        let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        json["saved_by"] = "99.0.0".into();
+        json["a_future_field"] = 1.into();
+        std::fs::write(&file, json.to_string()).unwrap();
+
+        let mut app = crate::app::PulseApp::headless(Project::empty());
+        app.open_from(&file);
+        assert!(app.status.as_deref().unwrap().contains("lo guardó Pulse 99.0.0, más nuevo"), "{:?}", app.status);
+        app.answers.push_back(crate::commands::Answer::Cancel);
+        app.save_to_path(&file);
+        assert!(std::fs::read_to_string(&file).unwrap().contains("a_future_field"), "not saved over");
+        app.answers.push_back(crate::commands::Answer::Save);
+        app.save_to_path(&file);
+        let saved = Project::load(&file).unwrap();
+        assert_eq!(saved.saved_by.0.as_deref(), Some(crate::updates::VERSION), "saved, by this one now");
+        // Saved by this Pulse or an older one: no question.
+        let mut again = crate::app::PulseApp::headless(Project::empty());
+        again.open_from(&file);
+        again.save_to_path(&file);
+        assert!(again.status.as_deref().unwrap().starts_with("Guardado"), "{:?}", again.status);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

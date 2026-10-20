@@ -46,6 +46,10 @@ pub struct Settings {
     /// New loops are transposed to the project's key (see `loop_key`).
     #[serde(default = "yes")]
     pub loops_follow_key: bool,
+    /// Settings this Pulse doesn't know (a newer one wrote them): kept, so going
+    /// back to an older version and forward again loses none.
+    #[serde(flatten)]
+    pub unknown: serde_json::Map<String, serde_json::Value>,
 }
 
 fn yes() -> bool {
@@ -54,7 +58,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, unknown: Default::default() }
     }
 }
 
@@ -316,9 +320,20 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
+    }
+
+    /// Settings a newer Pulse wrote survive this one saving them.
+    #[test]
+    fn settings_this_pulse_does_not_know_are_kept() {
+        let newer = r#"{"reopen_last":false,"a_new_setting":{"x":1},"another":[1,2]}"#;
+        let settings: Settings = serde_json::from_str(newer).unwrap();
+        assert!(!settings.reopen_last);
+        let again: serde_json::Value = serde_json::to_value(&settings).unwrap();
+        assert_eq!(again["a_new_setting"]["x"], 1);
+        assert_eq!(again["another"][1], 2);
     }
 
     #[test]

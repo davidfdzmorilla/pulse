@@ -789,6 +789,7 @@ Pulse busca versiones nuevas al arrancar y cada 6 horas (también en Pulse → *
 - La versión anterior se guarda como «Pulse (anterior)»: **Volver a la versión anterior** la recupera.
 - La primera vez que arranca una versión nueva enseña sus novedades.
 - Hace falta acceso a GitHub (`gh auth login` o un token en «Acceso a GitHub»; se guarda en el llavero en macOS y en el Administrador de credenciales en Windows).
+- Si vuelves a una versión anterior y abres un proyecto guardado con una más nueva, la barra de estado lo dice, y antes de guardarlo encima Pulse pregunta: esa versión no conoce lo nuevo y se perdería. **Guardar como…** guarda una copia sin tocar el original. Los ajustes que no conoce se conservan.
 - En Windows se sustituye `pulse.exe` y el anterior queda como «pulse (anterior).exe» en la carpeta de instalación. Antes de instalarla, Pulse comprueba que la descarga es la publicada (su huella SHA-256) y que es la versión anunciada.
 
 ## Acerca de Pulse

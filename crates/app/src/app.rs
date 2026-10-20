@@ -352,6 +352,14 @@ pub struct PulseApp {
     pub script: Option<crate::script::Script>,
 }
 
+/// The version of a newer Pulse that saved `project`, if one did. Only a
+/// published Pulse compares (a build from the code is not a version).
+fn newer_pulse(project: &Project) -> Option<String> {
+    let saved_by = project.saved_by.0.as_deref()?;
+    (option_env!("PULSE_VERSION").is_some() || cfg!(test)).then_some(())?;
+    crate::updates::newer(saved_by, crate::updates::VERSION).then(|| saved_by.to_string())
+}
+
 impl PulseApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         theme::apply(&cc.egui_ctx);
@@ -2294,11 +2302,37 @@ impl PulseApp {
                         missing.len()
                     ),
                 });
+                let newer = newer_pulse(&project);
                 self.replace_project(project, Some(path.to_path_buf()));
                 self.remember_recent(path);
+                if let Some(version) = newer {
+                    self.status = Some(format!("Abierto {} · lo guardó Pulse {version}, más nuevo que este ({}): si lo guardas aquí, se perderá lo que esta versión no conoce", path.display(), crate::updates::VERSION));
+                }
             }
             Err(error) => self.status = Some(error),
         }
+    }
+
+    /// Before saving over a project a newer Pulse saved: what this one doesn't
+    /// know of it would be lost. True to go ahead.
+    fn may_overwrite_newer(&mut self, path: &Path) -> bool {
+        if self.file.as_deref() != Some(path) {
+            return true;
+        }
+        let Some(version) = newer_pulse(&self.project) else { return true };
+        if let Some(answer) = self.answers.pop_front() {
+            return answer == crate::commands::Answer::Save;
+        }
+        if !self.interactive {
+            return false;
+        }
+        let result = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title(format!("Este proyecto lo guardó Pulse {version}"))
+            .set_description(format!("Es más nuevo que este Pulse ({}). Si lo guardas aquí, se perderá lo que esta versión no conoce (instrumentos, efectos o ajustes nuevos). Puedes guardarlo como una copia con «Guardar como…».", crate::updates::VERSION))
+            .set_buttons(rfd::MessageButtons::OkCancelCustom("Guardar igualmente".into(), "Cancelar".into()))
+            .show();
+        matches!(result, rfd::MessageDialogResult::Ok) || matches!(&result, rfd::MessageDialogResult::Custom(label) if label == "Guardar igualmente")
     }
 
     /// Where dropped audio files go when a sampler or drum rack is on screen: the
@@ -2379,6 +2413,10 @@ impl PulseApp {
     }
 
     fn save_to(&mut self, path: PathBuf) {
+        if !self.may_overwrite_newer(&path) {
+            self.status = Some("No se guardó: usa «Guardar como…» para guardar una copia".into());
+            return;
+        }
         self.capture_plugins();
         // Every audio file it uses goes into its folder (a lone .pulse from before
         // stays as it was: "Guardar como…" gives it a folder).
@@ -2406,6 +2444,7 @@ impl PulseApp {
                         self.sync_all();
                     }
                 }
+                self.project.saved_by = crate::project::SavedBy(Some(crate::updates::VERSION.into()));
                 self.saved = self.project.clone();
                 self.forget_plugin_edits();
                 self.clear_recovery();

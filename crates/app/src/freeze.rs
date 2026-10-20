@@ -141,6 +141,7 @@ impl PulseApp {
         }
         let (tempo, rate) = (self.project.tempo, self.audio.sample_rate());
         let render = solo_project(&self.project, t);
+        let song = crate::export::Song::of(&render);
         // Plugins load here (with their state), the renders run in the background.
         self.capture_plugins();
         let live = std::mem::take(&mut self.samples.plugins);
@@ -153,7 +154,7 @@ impl PulseApp {
         let shared = result.clone();
         std::thread::spawn(move || {
             let cancel = AtomicBool::new(false);
-            let arrangement = arrangement.and_then(|(commands, end)| crate::export::render(commands, (0.0, end), tempo, rate, &cancel, &|_| {}));
+            let arrangement = arrangement.and_then(|(commands, end)| crate::export::render(commands, (0.0, end), song, rate, &cancel, &|_| {}));
             let clips = clips.into_iter().enumerate().map(|(slot, c)| c.map(|(commands, beats)| render_loop(commands, slot, beats, tempo, rate))).collect();
             if let Ok(mut r) = shared.lock() {
                 *r = Some(Ok(Rendered { arrangement, clips }));

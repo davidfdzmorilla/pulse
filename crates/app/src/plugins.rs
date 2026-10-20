@@ -753,4 +753,58 @@ pub(crate) mod tests {
             let _ = std::fs::remove_dir_all(file.parent().unwrap().parent().unwrap());
         }
     }
+
+    /// A plugin instrument playing, then what undo or adding a track do (the
+    /// project is synced again and the plugin reloaded from its state): its
+    /// knobs and its editor still drive what is heard.
+    #[test]
+    fn after_a_resync_the_plugin_knobs_still_reach_the_sound() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        app.plugin_library.search(&[test_bundle().parent().unwrap().to_path_buf()]);
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for (t, track) in app.project.tracks.iter_mut().enumerate() {
+            track.mixer.gain = if t == 3 { 1.0 } else { 0.0 };
+        }
+        let mut clip = engine::model::MidiClip::new("A", 4.0, [0, 0, 0]);
+        clip.notes.push(engine::model::Note { start: 0.0, length: 4.0, pitch: 69, velocity: 1.0 });
+        app.project.tracks[3].clips[0] = Some(engine::model::Clip::Midi(clip));
+        app.sync_all();
+        let synth = app.plugin_library.found[0].clone();
+        app.set_plugin_instrument(3, &synth);
+        let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!() };
+        app.audio.send(engine::Command::LaunchClip { track: 3, slot: 0 });
+        let state = app.audio.state().unwrap();
+        let mut out = vec![0f32; 512 * 2];
+        let mut level = |app: &mut PulseApp| {
+            for _ in 0..20 {
+                engine.process(&mut out, 2);
+                app.audio.collect_garbage();
+            }
+            state.tracks[3].peak.take();
+            for _ in 0..20 {
+                engine.process(&mut out, 2);
+                app.audio.collect_garbage();
+            }
+            state.tracks[3].peak.take()
+        };
+        let knob = |app: &PulseApp, value: f64| {
+            let handle = &app.samples.plugins[&id];
+            let param = handle.params().iter().find(|p| p.name == "Level").unwrap().id;
+            handle.set(param, value);
+        };
+        knob(&app, 0.5);
+        let loud = level(&mut app);
+        assert!(loud > 0.05, "{loud}");
+        app.add_track();
+        // (A resync starts the instruments again: the clip is launched again.)
+        app.audio.send(engine::Command::SetQuantize(0.0));
+        app.audio.send(engine::Command::LaunchClip { track: 3, slot: 0 });
+        level(&mut app);
+        let resynced = level(&mut app);
+        assert!((resynced - loud).abs() < loud * 0.1, "the state came through the resync: {resynced} vs {loud}");
+        knob(&app, 0.125);
+        let after = level(&mut app);
+        assert!(after < loud * 0.5, "the knob still changes the sound: {after} vs {loud}");
+    }
 }

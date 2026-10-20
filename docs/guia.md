@@ -152,7 +152,7 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 - **Plegar**: clic en **▾** en la cabecera del grupo; sus pistas se ocultan (**▸** para volver a verlas). En Session se ocultan sus columnas y en el Arrangement sus filas.
 - Las pistas de un grupo van justo debajo de él, con una barra del color del grupo en su cabecera (y sangradas en el Arrangement). **Arrastrar** el grupo lo mueve con todas sus pistas; soltar una pista justo debajo de la cabecera de un grupo la mete en él.
 - **Duplicar** o **eliminar** un grupo duplica o elimina también sus pistas.
-- El grupo tiene **mezclador** (volumen, panorama, envíos, activador, solo), **cadena de efectos** (en Dispositivos) y **automatización**, como cualquier pista. Un **solo** en el grupo hace sonar todas sus pistas; un solo en una de sus pistas mantiene el grupo sonando.
+- El grupo tiene **mezclador** (volumen, panorama, envíos, activador, solo), **cadena de efectos** (en Dispositivos) y **automatización**, como cualquier pista. Un **solo** en el grupo hace sonar todas sus pistas; un solo en una de sus pistas mantiene el grupo sonando. **Desactivar** el grupo silencia todo lo suyo, también lo que sus pistas mandan a los retornos.
 - **Session**: los slots del grupo se encienden donde sus pistas tienen clips; clic lanza los de esa escena (y para las demás pistas del grupo). Su ■ para todas sus pistas.
 - **Arrangement**: la fila del grupo muestra en pequeño los clips de sus pistas. En ella no se ponen clips.
 - Un grupo no tiene instrumento ni clips: no se arma ni recibe notas.
@@ -307,7 +307,7 @@ Con **A** (Armar automatización) encendido en el transporte, al grabar en el Ar
 
 ### Envolventes de clip
 
-En el editor de un clip, el desplegable **Carril** tiene **Velocidad** y **Envolventes del clip**: automatización dentro del clip, que se repite con él. Clic añade un punto, arrastrar lo mueve, doble clic lo borra, y **⌥ + arrastrar** un tramo lo curva (⌥ + doble clic lo endereza). **Borrar envolvente** la quita.
+En el editor de un clip, el desplegable **Carril** tiene **Velocidad** y **Envolventes del clip**: automatización dentro del clip, que se repite con él. Clic añade un punto, arrastrar lo mueve, doble clic lo borra, y **⌥ + arrastrar** un tramo lo curva (⌥ + doble clic lo endereza). **Borrar envolvente** la quita. Las envolventes mandan solo mientras suena el clip: al terminar, el volumen, el panorama, los envíos y los parámetros vuelven a lo que marcan el mezclador y la automatización de la pista.
 
 ## Editor MIDI
 
@@ -549,7 +549,7 @@ Se eligen en el navegador (INSTRUMENTOS) con una pista MIDI seleccionada.
   - **Multisample**: carga o arrastra **varias** muestras a la vez y se reparten por el teclado según la nota de su nombre («Piano C3», «Rhodes_F#2», «Strings Db4»; C3 es el do central). Cada una cubre las teclas hasta la mitad de camino de sus vecinas y suena tal cual en su nota. Varias de la misma nota son **capas de velocidad**: la más suave abajo. Las que no llevan nota van una por tecla desde C3.
   - El mapa muestra las zonas sobre el teclado (arriba, las velocidades altas); clic en una tecla para oírla. **−12 / +12** mueven todo el mapa una octava (librerías que llaman C4 al do central). **Zonas…** permite ajustar a mano las notas, la raíz y las velocidades de cada muestra.
   - Hasta 32 muestras. Cargar una sola vuelve al modo normal.
-- **Drum Machine**: 16 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tres toms, cencerro, crash, ride, shaker, pandereta, conga y clave), cada uno con Tune, Decay y Level. Clic en un sonido para escucharlo. **Máquina**: **808** (bombo largo y redondo, palma, cencerro: hip hop, trap, reggaetón), **909** (bombo con pegada y charles brillantes: house, techno) o **Clásica**, sus sonidos primeros.
+- **Drum Machine**: 16 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tres toms, cencerro, crash, ride, shaker, pandereta, conga y clave), cada uno con Tune, Decay y Level. Clic en un sonido para escucharlo. **Máquina**: **808** (bombo largo y redondo, palma, cencerro: hip hop, trap, reggaetón), **909** (bombo con pegada y charles brillantes: house, techno) o **Clásica**, sus sonidos primeros. En los proyectos de cuando tenía 8 sonidos, los 8 nuevos entran con Level a 0, para que suenen como sonaban: súbelos si quieres oírlos.
 - **Drum Pads**: 16 pads de muestras (el 1 abajo a la izquierda, desde C1).
   - Clic en un pad lo escucha y lo selecciona. Arrastra uno o varios audios sobre los pads.
   - Por pad: Tune, Length, Level, Pan y grupo de **choke** (los pads del mismo grupo se cortan entre sí, como el hi-hat abierto y cerrado).
@@ -745,7 +745,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Rango**: **Toda la canción** o **Región del loop**.
 - **Formato**: WAV de 16 bits (con dither), 24 o 32 bits; **44.1** o **48 kHz**.
 - **Normalizar**: pico a un valor (no en stems).
-- Se exporta el **Arrangement** (no la Session), con la cola de reverbs y delays. Avisa si la mezcla satura.
+- Se exporta el **Arrangement** (no la Session), con la cola de reverbs y delays (también los ecos de un delay largo: espera lo que tarda el delay más lento del proyecto antes de dar la cola por terminada). Empieza a todo volumen desde la primera muestra. Avisa si la mezcla satura.
 - Por defecto se guarda en la carpeta `Exportaciones`.
 - Antes de exportar, mira el **Asistente de mezcla y master**.
 

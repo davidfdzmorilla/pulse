@@ -250,7 +250,7 @@ mod tests {
         project.tracks[0].midi_effects = effects;
         let mut samples = crate::sync::SampleCache::default();
         let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
-        crate::export::render(commands, (0.0, 4.0), project.tempo, 48_000.0, &Default::default(), &|_| {}).unwrap()
+        crate::export::render(commands, (0.0, 4.0), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap()
     }
 
     /// Power at `freq` Hz over `from..to` seconds (Goertzel), both channels mixed.

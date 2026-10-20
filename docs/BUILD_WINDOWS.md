@@ -127,6 +127,24 @@ la versión: los archivos quedan como artefactos del trabajo y no se publican.
 - **Rutas largas**: `git config core.longpaths true`, y si hace falta activa
   `LongPathsEnabled` en el registro.
 
+## Enlazar para Windows desde macOS
+
+Sirve para ver que todo compila y enlaza sin un PC con Windows, no para
+ejecutarlo. Usa `lld-link` en vez del `link.exe` de Visual Studio, y descarga el
+CRT y el SDK de Windows: aceptas la licencia de Microsoft.
+
+```bash
+brew install llvm lld
+cargo install cargo-xwin --locked
+rustup target add x86_64-pc-windows-msvc
+export PATH="$(brew --prefix llvm)/bin:$(brew --prefix lld)/bin:$PATH"
+XWIN_ACCEPT_LICENSE=1 cargo xwin build --release --target x86_64-pc-windows-msvc --workspace --all-targets
+llvm-readobj --coff-imports target/x86_64-pc-windows-msvc/release/pulse.exe   # las DLL que carga
+```
+
+`llvm-rc` compila el icono y la versión. Sin él en el `PATH`, `pulse.exe` sale
+sin ellos y la compilación lo avisa.
+
 ## Estilo y lint
 
 El código mantiene su propio estilo, sin `cargo fmt`, porque reescribiría todo

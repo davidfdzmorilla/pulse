@@ -42,7 +42,7 @@ Windows** hasta que la CI o una prueba manual lo demuestren.
 |---|---|---|---|---|---|---|
 | 1 | El plugin de pruebas no compilaba para Windows | `crates/testplug/src/lib.rs` | En Windows las constantes del SDK VST3 son `i32` y el campo `u32` | `cargo test` no compilaba en Windows | Conversión `as _` | Verificado (comprobación cruzada) |
 | 2 | Rutas de macOS dentro del código | `kits.rs`, `settings.rs`, `library.rs`, `stems_ui.rs`, `midi_map.rs`, `plugins.rs`, `commands.rs`, `beats/src/lib.rs` | `HOME` + `Library/Application Support`, `Library/Caches`, `Music` | En Windows los ajustes y modelos irían a sitios sin sentido, o a la carpeta temporal | Crate `paths`: carpetas conocidas de Windows (`SHGetKnownFolderPath`: AppData, LocalAppData, Música, también si se han movido de disco), las de siempre en macOS y XDG en Linux | Implementado; reglas verificadas con pruebas en macOS; pendiente de Windows |
-| 3 | Editores de plugins solo en macOS | `app/src/editor.rs`, `engine/src/clap_host.rs`, `engine/src/plugin.rs` | Ventana NSWindow; CLAP solo con la API `cocoa` | En Windows, «Editor» solo daba un mensaje | Ventana Win32 propia, propiedad de la de Pulse, con el editor como hijo (HWND); CLAP con la API `win32`; escala de pantalla (`IPlugViewContentScaleSupport`, `clap_plugin_gui.set_scale`) y cambio de pantalla (`WM_DPICHANGED`) | Implementado, pendiente de Windows |
+| 3 | Editores de plugins solo en macOS | `app/src/editor.rs`, `engine/src/clap_host.rs`, `engine/src/plugin.rs` | Ventana NSWindow; CLAP solo con la API `cocoa` | En Windows, «Editor» solo daba un mensaje | Ventana Win32 propia, propiedad de la de Pulse, con el editor como hijo (HWND); CLAP con la API `win32`; escala de pantalla (`IPlugViewContentScaleSupport`, `clap_plugin_gui.set_scale`) y cambio de pantalla (`WM_DPICHANGED`) | Implementado; el `pulse.exe` enlazado desde macOS es de subsistema GUI y lleva icono y versión. Falta verlo en Windows |
 | 4 | Carpetas de plugins de Windows incompletas | `engine/src/plugin.rs` | `C:\Program Files\Common Files` fijo, sin las del usuario | Plugins instalados por usuario o en otra unidad no se encontraban | `%CommonProgramFiles%\VST3`/`CLAP` y `%LOCALAPPDATA%\Programs\Common\VST3`/`CLAP` | Implementado, pendiente de Windows |
 | 5 | Actualizador exclusivo de macOS | `app/src/updates.rs` | Llavero (`security`), `codesign`, `ditto`, `PlistBuddy`, `/bin/sh`, `open`, `/usr/bin/curl` | En Windows no podía buscar ni instalar versiones | Módulo `system` por plataforma. Windows: token en el Administrador de credenciales (`CredReadW`/`CredWriteW`), `curl.exe` y `tar.exe` del sistema, versión leída del recurso de `pulse.exe`, huella SHA-256 de GitHub obligatoria, cambio de `pulse.exe` guardando «pulse (anterior).exe», puesta al día de las DLL del runtime, reinicio con PowerShell | Implementado, pendiente de Windows |
 | 6 | SHA-256 con `/usr/bin/shasum` | `app/src/stems_ui.rs` | Utilidad de macOS | La descarga del modelo de stems fallaba en Windows | Crate `sha2` (RustCrypto), igual en todos los sistemas | Verificado en macOS |
@@ -52,7 +52,7 @@ Windows** hasta que la CI o una prueba manual lo demuestren.
 | 10 | Atajos escritos con ⌘ ⇧ ⌥ | 12 archivos de `app/src` | Símbolos de Mac en botones y ayudas | Confuso en Windows | `theme::keys`: «Ctrl+Mayús+S», «Ctrl clic», «F11», «Supr» | Implementado; la conversión se prueba en macOS |
 | 11 | Abrir `.pulse` con doble clic | `app/src/open_files.rs` | Solo los Apple Events de macOS | El archivo no se abría | Se lee de los argumentos; el instalador asocia `.pulse` | Implementado; la asociación se prueba en la CI (pendiente de que corra) |
 | 12 | Rutas de proyecto entre sistemas | `app/src/library.rs`, `app/src/app.rs` | Las rutas relativas se guardaban con el separador del sistema | Un proyecto guardado en Windows perdía sus audios en macOS | Rutas relativas siempre con «/»; al abrir se aceptan «\\» y las rutas absolutas del otro sistema se conservan; la barra de estado avisa de los audios que faltan | Verificado en macOS (prueba con rutas de Windows) |
-| 13 | ONNX Runtime de Windows importa DirectML | `.cargo/config.toml` | El binario precompilado de `ort` para Windows es el de DirectML: importa `DirectML.dll` (no viene con Windows) y `DXCORE.dll` (desde Windows 10 1903) | `pulse.exe` no arrancaría en un Windows sin esa DLL | Carga diferida (`/DELAYLOAD`): Pulse usa la CPU y no las carga | Implementado; pendiente de comprobar con `dumpbin` en Windows (el script de empaquetado lo hace) |
+| 13 | ONNX Runtime de Windows importa DirectML | `.cargo/config.toml` | El binario precompilado de `ort` para Windows es el de DirectML: importa `DirectML.dll` (no viene con Windows) y `DXCORE.dll` (desde Windows 10 1903) | `pulse.exe` no arrancaría en un Windows sin esa DLL | Carga diferida (`/DELAYLOAD`): Pulse usa la CPU y no las carga | Implementado y comprobado en el `pulse.exe` enlazado desde macOS: `DirectML.dll` solo está entre las diferidas y `DXCORE.dll` no se importa. Falta arrancarlo en Windows |
 | 14 | Runtime de Visual C++ | `scripts/package-windows.ps1`, `packaging/windows/pulse.iss` | Rust con MSVC y ONNX Runtime (C++) usan `vcruntime140.dll` y `msvcp140.dll`, que no están en todo Windows | Error al arrancar en un Windows limpio | Se empaquetan junto a `pulse.exe` (despliegue local permitido por Microsoft) y el actualizador las pone al día | Implementado, pendiente de Windows |
 | 15 | Ventana de consola, icono y versión | `app/src/main.rs`, `app/build.rs` | Programa de consola, sin recursos | Al abrir Pulse salía una consola; icono de egui | `windows_subsystem = "windows"` en release (las opciones de línea de órdenes se enganchan a la consola que las lanzó), recurso de icono y versión con `embed-resource`, icono de la ventana | Implementado, pendiente de Windows |
 | 16 | Sin registro de fallos | `app/src/logs.rs` | Un cierre inesperado no dejaba rastro (también en macOS) | No se podía diagnosticar | `pulse.log` en la carpeta de logs, con la traza de cada pánico | Verificado en macOS (escritura y rotación) |
@@ -66,6 +66,7 @@ Desde macOS 15 (Apple Silicon), con Rust estable:
 ```bash
 rustup target add x86_64-pc-windows-msvc
 cargo check --release --target x86_64-pc-windows-msvc --workspace --all-targets   # sin errores ni avisos
+cargo xwin build --release --target x86_64-pc-windows-msvc --workspace --all-targets   # enlaza; ver abajo
 cargo test --release                                                              # macOS: todo pasa
 cargo build --release                                                             # macOS
 ```
@@ -74,6 +75,21 @@ cargo build --release                                                           
   versión del ejecutable, editores) y descarga el ONNX Runtime precompilado de
   Windows, pero **no enlaza**. No demuestra que Pulse compile ni funcione en
   Windows.
+- `cargo xwin build` (con `lld-link` y `llvm-rc` de LLVM, y el CRT y el SDK de
+  Windows que descarga `xwin` aceptando la licencia de Microsoft) **enlaza** todo
+  el workspace para Windows x64: `pulse.exe`, el plugin de pruebas y los
+  ejecutables de las pruebas, sin errores ni avisos. Mirado con `llvm-readobj`:
+  - `pulse.exe` es AMD64 y de subsistema GUI (sin consola).
+  - Lleva icono y versión (recursos ICON y VERSIONINFO).
+  - Importa el runtime de Visual C++ (`VCRUNTIME140`, `MSVCP140`, que van en el
+    paquete), las DLL de UCRT y de sistema de Windows 10 (`d3d12`, `dxgi`,
+    `mmdevapi`, `winmm`…). `DirectML.dll` solo está entre las de carga diferida y
+    `DXCORE.dll` no aparece.
+  - `pulse_testplug.dll` exporta `GetPluginFactory`, `InitDll`, `ExitDll` y
+    `clap_entry`.
+
+  Es otro enlazador (`lld-link`, no el `link.exe` de Visual Studio) y nada se ha
+  **ejecutado**: no demuestra que Pulse arranque ni funcione en Windows.
 - Las pruebas nuevas (rutas por sistema, proyectos con rutas de Windows,
   huella SHA-256, paquete por sistema, atajos, registro de fallos) corren en
   macOS. Las marcadas `#[cfg(windows)]` (DLL del runtime) solo correrán en Windows.
@@ -82,10 +98,10 @@ cargo build --release                                                           
 
 En orden de prioridad (la CI hace del 1 al 5 en cuanto pueda correr):
 
-1. Compilación y enlace nativos (`cargo build --release --workspace --all-targets`).
+1. Compilación y enlace nativos con Visual Studio (`cargo build --release --workspace --all-targets`); con `lld-link` desde macOS ya enlaza.
 2. `cargo test --release --workspace`: incluye el motor, ONNX Runtime con los tres
    modelos, el alojamiento VST3/CLAP con el plugin de pruebas y el render offline.
-3. `dumpbin /dependents pulse.exe`: que `DirectML.dll` y `DXCORE.dll` no se carguen al arrancar.
+3. Que `pulse.exe` arranque sin `DirectML.dll` (la tabla de importaciones ya está bien: ver arriba).
 4. `pulse.exe --render`: un WAV válido.
 5. Arranque de la ventana con el guion `scripts/ci/arranque.txt` (wgpu en un
    equipo sin GPU puede necesitar el adaptador de software WARP: si falla, se verá aquí).

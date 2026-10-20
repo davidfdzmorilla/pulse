@@ -8,12 +8,6 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
     }
-    // The resource compiler comes with Visual Studio's tools: checking from macOS
-    // (`cargo check --target x86_64-pc-windows-msvc`) goes without.
-    if !cfg!(windows) {
-        println!("cargo:warning=pulse.exe sin icono ni versión: los recursos de Windows se compilan en Windows");
-        return;
-    }
     let version = std::env::var("PULSE_VERSION").unwrap_or_else(|_| std::env::var("CARGO_PKG_VERSION").unwrap());
     let mut numbers = version.split(['.', '-']).map(|p| p.parse::<u16>().unwrap_or(0));
     let (major, minor, patch) = (numbers.next().unwrap_or(0), numbers.next().unwrap_or(0), numbers.next().unwrap_or(0));
@@ -54,5 +48,13 @@ END
     );
     let out = std::path::PathBuf::from(std::env::var("OUT_DIR").unwrap()).join("pulse.rc");
     std::fs::write(&out, rc).unwrap();
-    embed_resource::compile(&out, embed_resource::NONE).manifest_optional().unwrap();
+    // On Windows the resource compiler is Visual Studio's rc.exe. From macOS
+    // (`cargo xwin`, `cargo check --target x86_64-pc-windows-msvc`) it is LLVM's
+    // llvm-rc when it's on the PATH; without it pulse.exe goes without them.
+    match embed_resource::compile(&out, embed_resource::NONE) {
+        embed_resource::CompilationResult::NotAttempted(why) if !cfg!(windows) => {
+            println!("cargo:warning=pulse.exe sin icono ni versión (falta llvm-rc): {why}");
+        }
+        result => result.manifest_required().unwrap(),
+    }
 }

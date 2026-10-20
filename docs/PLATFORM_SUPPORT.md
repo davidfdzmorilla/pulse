@@ -13,7 +13,7 @@ Detalle de Windows: [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md).
 
 | Función | macOS (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
-| Compilación nativa | Verificado | Implementado (pasa `cargo check` cruzado; sin enlazar) | No soportado |
+| Compilación nativa | Verificado | Implementado (enlaza desde macOS con `cargo xwin`; sin ejecutar) | No soportado |
 | Pruebas automáticas | Verificado (`cargo test --release`) | Implementado (CI escrita; bloqueada por facturación de GitHub) | No soportado |
 | Arranque y ventana | Verificado | Implementado | No soportado |
 | Rutas de datos | Verificado | Implementado (reglas probadas en macOS) | Implementado (XDG) |

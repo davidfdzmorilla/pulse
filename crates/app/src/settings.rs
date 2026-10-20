@@ -64,14 +64,12 @@ fn path() -> PathBuf {
 
 impl Settings {
     pub fn load() -> Settings {
-        std::fs::read_to_string(path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default()
+        crate::store::read_json(&path())
     }
 
-    fn save(&self) {
-        if let Ok(text) = serde_json::to_string_pretty(self) {
-            let path = path();
-            let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
-            let _ = std::fs::write(path, text);
+    pub(crate) fn save(&self) {
+        if let Err(e) = crate::store::write_json(&path(), self) {
+            crate::logs::note(&e);
         }
     }
 }
@@ -96,6 +94,13 @@ impl PulseApp {
         self.devices = Devices { outputs: engine::output_devices(), inputs: engine::input_devices() };
     }
 
+    /// Saves changed settings now (they wait a second, see `set_settings`).
+    pub(crate) fn save_settings_now(&mut self) {
+        if self.settings_changed.take().is_some() {
+            self.settings.save();
+        }
+    }
+
     /// Changes the settings: saves them and restarts the audio if it changed.
     pub fn set_settings(&mut self, settings: Settings) {
         let audio_changed = settings.audio != self.settings.audio;
@@ -109,7 +114,9 @@ impl PulseApp {
             self.audio.send(engine::Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
         }
         if self.interactive {
-            self.settings.save();
+            // A second after the last change (a drag changes them every frame,
+            // and each save waits for the disk), or on quitting.
+            self.settings_changed = Some(std::time::Instant::now());
         }
         if audio_changed {
             self.restart_audio();

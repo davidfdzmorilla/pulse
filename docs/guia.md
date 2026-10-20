@@ -702,7 +702,16 @@ Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`
 - **⌘Z / ⇧⌘Z**: deshacer y rehacer.
 - **Mostrar la carpeta de Pulse** la abre en Finder (en el Explorador en Windows).
 - Los ajustes y lo que Pulse genera no son tu trabajo y no están en la carpeta de Pulse: en macOS en `~/Library/Application Support/Pulse`; en Windows, los ajustes en `%APPDATA%\Pulse` y kits y modelos en `%LOCALAPPDATA%\Pulse`. Si Pulse se cierra por un fallo, deja lo que pasó en `pulse.log` (`~/Library/Logs/Pulse` en macOS, `%LOCALAPPDATA%\Pulse\Logs` en Windows).
-- El título de la ventana lleva * si hay cambios sin guardar.
+- El título de la ventana lleva * si hay cambios sin guardar. También cuentan los que haces dentro de un plugin (en su editor, con un controlador o en **Parámetros…**).
+- Guardar es todo o nada: Pulse escribe primero una copia completa y solo entonces sustituye el archivo, así que un cierre, un disco lleno o un corte de luz a mitad de guardar dejan el archivo anterior entero. Si el proyecto tuviera algún número no válido (NaN o infinito, por ejemplo de un set de Live dañado), se guarda como 0 y la barra de estado dice cuántos. Si un archivo de ajustes o de listas está dañado, Pulse lo aparta como «… (dañado)» en vez de sobrescribirlo.
+
+### Autoguardado y recuperación
+
+- Cada 30 segundos, si hay cambios sin guardar, Pulse guarda una copia aparte en la carpeta `Recuperación` de sus ajustes (`~/Library/Application Support/Pulse/Recuperación` en macOS, `%LOCALAPPDATA%\Pulse\Recuperación` en Windows). Tu archivo `.pulse` no se toca hasta que guardas.
+- Si Pulse se cierra sin guardar ni preguntar (un fallo, el ordenador se apaga), al abrirlo otra vez pregunta si quieres **Recuperar** los cambios. Vuelve el proyecto tal como estaba en el último autoguardado, marcado como sin guardar: guárdalo con ⌘S para conservarlo. **Descartar** lo aparta como `descartado.pulse` en la misma carpeta, por si acaso, hasta la próxima vez.
+- Mientras grabas audio, lo que entra se va escribiendo a disco en `Samples/Grabaciones` como «Grabación sin terminar…». Al parar se convierte en la toma de siempre y esa copia se borra; si Pulse se cierra a mitad, queda ahí con lo grabado hasta ese momento, y la pregunta de recuperar lo menciona.
+- Si Pulse se cerró mientras reabría el último proyecto al arrancar, la vez siguiente no lo reabre solo (puede ser ese proyecto lo que lo cierra). Ábrelo desde **Abrir recientes** cuando quieras.
+- Si el sonido de una pista deja de ser válido (NaN o infinito, por un archivo dañado o un plugin que falla), Pulse la silencia en ese momento, vacía sus efectos y lo dice en la barra de estado; el resto sigue sonando.
 
 ## Versiones del proyecto
 

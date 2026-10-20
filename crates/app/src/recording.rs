@@ -642,4 +642,65 @@ mod tests {
             assert_eq!(pitches, if looping { vec![62, 64] } else { vec![62] });
         }
     }
+
+    /// A take goes to the disk as it is recorded (so a crash doesn't lose it),
+    /// and a track name with characters a file can't have still records.
+    #[test]
+    fn takes_are_kept_on_disk_while_recording_whatever_the_track_is_called() {
+        use crate::midi_map::Transport;
+        use engine::model::Clip;
+        for name in ["Voz 1/2", "Bajo: DI*?"] {
+            let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+            let (audio, mut engine) = crate::app::Audio::detached();
+            app.audio = audio;
+            for track in &mut app.project.tracks {
+                track.armed = false;
+                track.arrangement.clear();
+            }
+            app.project.tracks.push(crate::project::Track::new_audio(name, [0, 0, 0]));
+            let voice = app.project.tracks.len() - 1;
+            app.project.tracks[voice].monitor = crate::project::Monitor::Off;
+            app.project.tempo = 120.0;
+            app.sync_all();
+            let (mut samples, mut markers, handle) = engine::detached_input(48_000.0, 1);
+            app.capture = Some(crate::capture::InputCapture::with_handle(None, handle));
+            app.project.tracks[voice].armed = true;
+            app.audio.send(engine::Command::SetArm { track: voice, armed: true });
+            let state = app.audio.state().unwrap();
+            let mut frame = 0u64;
+            let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+                let mut buffer = vec![0.0; 1024];
+                for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).round() as usize {
+                    let beat = state.position();
+                    let playing = state.playing.load(Ordering::Relaxed);
+                    engine.process(&mut buffer, 2);
+                    let _ = markers.push(engine::Marker { frame, beat, playing });
+                    for i in 0..512 {
+                        let _ = samples.push(((frame + i) as f32 * 0.01).sin() * 0.5);
+                    }
+                    frame += 512;
+                    app.update_recording();
+                }
+            };
+            run(&mut app, 0.5);
+            app.transport(Transport::Record);
+            run(&mut app, 4.0);
+            let safety = app.capture.as_ref().unwrap().safety_path().expect("copied to the disk while recording").to_path_buf();
+            assert!(safety.file_name().unwrap().to_string_lossy().starts_with(crate::capture::UNFINISHED));
+            assert!(safety.starts_with(app.recordings_dir()));
+            // What a crash would leave: readable, with the seconds recorded so far.
+            std::thread::sleep(std::time::Duration::from_millis(1100));
+            run(&mut app, 0.25);
+            let left = engine::Sample::load(&safety).expect("a WAV that reads").frames();
+            assert!(left > 48_000, "{left} frames");
+            app.transport(Transport::Record);
+            run(&mut app, 0.5);
+            assert!(app.capture.as_ref().unwrap().safety_path().is_none());
+            assert!(!safety.exists(), "the take is written: the copy goes");
+            let lane = &app.project.tracks[voice].arrangement;
+            assert_eq!(lane.len(), 1, "{name}: {:?}", app.status);
+            let Clip::Audio(take) = &lane[0].clip else { panic!() };
+            assert!(std::path::Path::new(&take.sample).exists(), "{}", take.sample);
+        }
+    }
 }

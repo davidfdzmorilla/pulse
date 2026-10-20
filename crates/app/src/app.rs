@@ -289,7 +289,17 @@ pub struct PulseApp {
     pub(crate) input_track: Option<Option<usize>>,
     pub(crate) history: History,
     pub(crate) file: Option<PathBuf>,
-    saved: Project,
+    pub(crate) saved: Project,
+    /// A plugin changed inside itself since the last save (its state lives in
+    /// the plugin until saving, so it isn't part of `project`).
+    pub(crate) plugins_edited: bool,
+    /// Autosave and recovery (see `recovery`); none for tests and scripts.
+    pub(crate) recovery: Option<crate::recovery::Recovery>,
+    pub(crate) autosave: crate::recovery::Autosave,
+    /// Invalid sound the engine silenced (see `engine::Fault`), as last told.
+    seen_faults: u32,
+    /// Settings changed and not yet saved, since when (see `set_settings`).
+    pub(crate) settings_changed: Option<std::time::Instant>,
     /// Recent projects, newest first.
     pub recent: Vec<PathBuf>,
     /// A copied or cut clip.
@@ -357,6 +367,9 @@ impl PulseApp {
         let screenshot = std::env::var_os("PULSE_SCREENSHOT").is_some() || app.script.is_some();
         app.interactive = !screenshot;
         app.recent = crate::commands::load_recent();
+        if app.interactive {
+            app.recovery = Some(crate::recovery::Recovery::standard());
+        }
         crate::library::prepare();
         app.menu_bar = crate::native_menu::MenuBar::install();
         // A project opened from Finder or given on the command line, else the
@@ -367,11 +380,17 @@ impl PulseApp {
         let argument = std::env::args().nth(1).map(PathBuf::from).filter(project);
         // Screenshots and scripts open the project they're given, not the last one.
         let last = app.settings.reopen_last.then(|| app.recent.first().cloned()).flatten().filter(|_| !screenshot);
-        if let Some(path) = from_finder.or(argument).or(last) {
-            if path.extension().is_some_and(|e| e == "als") {
-                app.import_live_set_from(&path);
-            } else {
-                app.open_from(&path);
+        // Changes Pulse closed without saving come first.
+        if !app.offer_recovery() {
+            let reopening = from_finder.is_none() && argument.is_none();
+            if let Some(path) = from_finder.or(argument).or(last) {
+                if path.extension().is_some_and(|e| e == "als") {
+                    app.import_live_set_from(&path);
+                } else if reopening {
+                    app.reopen_guarded(&path);
+                } else {
+                    app.open_from(&path);
+                }
             }
         }
         app.sync_all();
@@ -411,6 +430,11 @@ impl PulseApp {
         Self {
             history: History::new(&project),
             saved: project.clone(),
+            plugins_edited: false,
+            recovery: None,
+            autosave: Default::default(),
+            seen_faults: 0,
+            settings_changed: None,
             project,
             audio,
             view: View::Session,
@@ -1749,7 +1773,18 @@ impl PulseApp {
             self.ensure_capture();
         }
         let keep_all = !self.recorder.session.is_empty() || self.recorder.arrangement.is_some();
+        let recordings = self.recordings_dir();
         if let Some(capture) = &mut self.capture {
+            // While recording, the input is also copied to the disk as it comes.
+            match (keep_all, capture.safety_path().is_some()) {
+                (true, false) => {
+                    if let Err(e) = capture.start_safety(&recordings) {
+                        crate::logs::note(&e);
+                    }
+                }
+                (false, true) => capture.finish_safety(),
+                _ => {}
+            }
             capture.pump(keep_all);
         }
     }
@@ -1803,7 +1838,7 @@ impl PulseApp {
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
         // Takes of one loop recording are written in the same second.
-        let base = format!("{} {stamp}", self.project.tracks[track].name);
+        let base = format!("{} {stamp}", crate::files::safe_name(&self.project.tracks[track].name));
         let (name, path) = (1..)
             .map(|n| if n == 1 { base.clone() } else { format!("{base} {n}") })
             .map(|name| (name.clone(), dir.join(format!("{name}.wav"))))
@@ -2150,7 +2185,9 @@ impl PulseApp {
         self.sync_all();
     }
 
-    fn replace_project(&mut self, project: Project, file: Option<PathBuf>) {
+    pub(crate) fn replace_project(&mut self, project: Project, file: Option<PathBuf>) {
+        // The changes being replaced were saved or let go (see `may_discard`).
+        self.clear_recovery();
         self.audio.send(Command::Stop);
         self.project = project;
         self.project.assign_ids();
@@ -2160,10 +2197,46 @@ impl PulseApp {
         self.selected_clip = None;
         self.selected_target = Target::Track(0);
         self.sync_all();
+        // Loading their states may have touched the new plugins.
+        self.forget_plugin_edits();
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.project != self.saved
+        self.plugins_edited || self.project != self.saved
+    }
+
+    /// Tells the user when the engine had to silence a channel whose sound
+    /// stopped being valid numbers (a damaged file, a plugin that blew up).
+    pub(crate) fn report_faults(&mut self) {
+        let Some(state) = self.audio.state() else { return };
+        let faults = state.faults.load(std::sync::atomic::Ordering::Relaxed);
+        if faults == self.seen_faults {
+            return;
+        }
+        self.seen_faults = faults;
+        let name = match state.last_fault() {
+            engine::Fault::Track(t) => self.project.tracks.get(t).map_or_else(|| format!("la pista {}", t + 1), |t| format!("«{}»", t.name)),
+            engine::Fault::Return(r) => self.project.returns.get(r).map_or_else(|| format!("el retorno {}", r + 1), |r| format!("«{}»", r.name)),
+            engine::Fault::Master => "el master".into(),
+        };
+        let message = format!("El sonido de {name} dejó de ser válido (NaN o infinito: un archivo dañado o un plugin): Pulse lo silenció y vació sus efectos");
+        crate::logs::note(&message);
+        self.status = Some(message);
+    }
+
+    /// Notes changes made inside plugins (their editors, presets, controllers).
+    pub(crate) fn poll_plugin_edits(&mut self) {
+        // Every flag is taken, not only up to the first set one.
+        let edited = self.samples.plugins.values().fold(false, |edited, h| h.take_edited() | edited);
+        self.plugins_edited |= edited;
+    }
+
+    /// Forgets plugin changes so far: what loading a state did, or what a save kept.
+    fn forget_plugin_edits(&mut self) {
+        for handle in self.samples.plugins.values() {
+            handle.take_edited();
+        }
+        self.plugins_edited = false;
     }
 
     pub fn new_project(&mut self) {
@@ -2208,7 +2281,7 @@ impl PulseApp {
         self.open_from(path);
     }
 
-    fn open_from(&mut self, path: &std::path::Path) {
+    pub(crate) fn open_from(&mut self, path: &std::path::Path) {
         match Project::load(path) {
             Ok(project) => {
                 let missing = crate::library::missing_files(&project);
@@ -2321,9 +2394,24 @@ impl PulseApp {
             None => None,
         };
         match self.project.save(&path) {
-            Ok(()) => {
+            Ok(repaired) => {
+                if repaired > 0 {
+                    // What was saved: the invalid numbers as 0, here too (they would
+                    // reach the engine as they are).
+                    if let Ok(fixed) = Project::load(&path) {
+                        self.project = fixed;
+                        self.project.assign_ids();
+                        self.history.commit(&self.project, false);
+                        self.sync_all();
+                    }
+                }
                 self.saved = self.project.clone();
+                self.forget_plugin_edits();
+                self.clear_recovery();
                 let mut status = format!("Guardado en {}", path.display());
+                if repaired > 0 {
+                    status += &format!(" · {repaired} valor(es) no válidos (NaN o infinito) guardados como 0");
+                }
                 match collected {
                     Some(c) if c.copied + c.moved > 0 => status += &format!(" · {} audio(s) traídos a su carpeta", c.copied + c.moved),
                     None => status += " · usa «Guardar como…» para darle su propia carpeta con sus audios",
@@ -2551,7 +2639,18 @@ impl eframe::App for PulseApp {
             self.run(command, &ctx);
         }
         self.handle_close_request(&ctx);
+        if self.settings_changed.is_some_and(|since| self.quitting || since.elapsed() >= std::time::Duration::from_secs(1)) {
+            self.save_settings_now();
+        } else if self.settings_changed.is_some() {
+            ctx.request_repaint_after(std::time::Duration::from_secs(1));
+        }
+        if self.quitting {
+            // Asked and answered: nothing is left to recover.
+            self.clear_recovery();
+        }
+        self.autosave_now_and_then(&ctx);
         self.audio.collect_garbage();
+        self.report_faults();
         if let Some(state) = self.audio.state() {
             let dt = ctx.input(|i| i.stable_dt).min(0.1);
             self.meters.update(&state, dt);
@@ -2608,6 +2707,7 @@ impl eframe::App for PulseApp {
 
         crate::plugins::window(self, &ctx);
         self.poll_editors();
+        self.poll_plugin_edits();
         self.show_plugin_automation();
         self.poll_midi_map();
         crate::midi_map::window(self, &ctx);

@@ -31,6 +31,14 @@ pub fn pick_folder(dialog: rfd::FileDialog) -> Option<PathBuf> {
     }
 }
 
+/// `name` made fit for a file name on macOS and Windows: no path separators
+/// or characters Windows refuses, no dots or spaces at the end.
+pub fn safe_name(name: &str) -> String {
+    let clean: String = name.chars().map(|c| if c.is_control() || matches!(c, '/' | '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|') { '-' } else { c }).collect();
+    let clean = clean.trim().trim_end_matches(['.', ' ']).to_string();
+    if clean.is_empty() { "Sin nombre".into() } else { clean }
+}
+
 /// Shows `folder` in the system's file manager (Finder, the Explorer…).
 pub fn show_folder(folder: &std::path::Path) -> std::io::Result<()> {
     let program = if cfg!(target_os = "macos") {

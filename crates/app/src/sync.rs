@@ -197,6 +197,8 @@ pub fn load_plugin(project: &Project, id: PluginId, samples: &mut SampleCache, s
     let state = crate::plugins::decode(&plugin.state);
     match engine::plugin::instantiate(Path::new(&plugin.path), &plugin.cid, sample_rate, state.as_deref().filter(|s| !s.is_empty())) {
         Ok((processor, handle)) => {
+            // Restoring its state is not an edit.
+            handle.take_edited();
             samples.plugins.insert(id, handle);
             Some(processor)
         }

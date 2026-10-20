@@ -1,11 +1,28 @@
 //! Buffers audio input on the UI thread and cuts recorded takes out of it.
 
 use engine::{start_input_with, AudioInput, InputHandle, Marker, SharedState};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// Input kept while nothing is being recorded, so a take can start slightly in the past.
 const IDLE_SECONDS: usize = 4;
+
+/// How a recording that was going on when Pulse closed is named (see [`Safety`]).
+pub const UNFINISHED: &str = "Grabación sin terminar";
+
+/// How often the safety copy is brought up to date on the disk.
+const SAFETY_FLUSH: Duration = Duration::from_secs(1);
+
+/// While recording, the input also goes straight to a WAV file whose header is
+/// brought up to date every second: if Pulse closes in the middle of a take,
+/// what was played is there. Removed when the recording ends (its takes are
+/// written as usual).
+struct Safety {
+    writer: hound::WavWriter<std::io::BufWriter<std::fs::File>>,
+    path: PathBuf,
+    flushed: Instant,
+}
 
 pub struct InputCapture {
     /// The stream (none for an input fed by hand).
@@ -16,6 +33,7 @@ pub struct InputCapture {
     first_frame: u64,
     markers: Vec<Marker>,
     pub level: f32,
+    safety: Option<Safety>,
 }
 
 impl InputCapture {
@@ -32,6 +50,7 @@ impl InputCapture {
             first_frame: 0,
             markers: Vec::new(),
             level: 0.0,
+            safety: None,
         }
     }
 
@@ -63,6 +82,7 @@ impl InputCapture {
             let (a, b) = chunk.as_slices();
             self.buffer.extend_from_slice(a);
             self.buffer.extend_from_slice(b);
+            Self::keep_safely(&mut self.safety, &[a, b]);
             chunk.commit_all();
         }
         self.level = self.handle.take_peak().max(self.level * 0.86);
@@ -78,6 +98,48 @@ impl InputCapture {
             }
             let oldest = self.first_frame;
             self.markers.retain(|m| m.frame >= oldest);
+        }
+    }
+
+    /// Starts copying the input to a file in `dir` (see [`Safety`]), with the
+    /// seconds already buffered (a take can start slightly in the past).
+    pub fn start_safety(&mut self, dir: &Path) -> Result<(), String> {
+        std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+        let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
+        let path = crate::library::unique(&dir.join(format!("{UNFINISHED} {stamp}.wav")));
+        let spec = hound::WavSpec { channels: self.handle.channels.max(1) as u16, sample_rate: self.handle.sample_rate as u32, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
+        let writer = hound::WavWriter::create(&path, spec).map_err(|e| format!("No se pudo crear {}: {e}", path.display()))?;
+        self.safety = Some(Safety { writer, path, flushed: Instant::now() });
+        let buffered = std::mem::take(&mut self.buffer);
+        Self::keep_safely(&mut self.safety, &[&buffered]);
+        self.buffer = buffered;
+        Ok(())
+    }
+
+    /// The recording ended: its takes are written, the copy goes.
+    pub fn finish_safety(&mut self) {
+        if let Some(safety) = self.safety.take() {
+            drop(safety.writer);
+            let _ = std::fs::remove_file(&safety.path);
+        }
+    }
+
+    /// The safety copy being written, if recording.
+    pub fn safety_path(&self) -> Option<&Path> {
+        self.safety.as_ref().map(|s| s.path.as_path())
+    }
+
+    /// Adds input to the safety copy, if recording (see [`Safety`]).
+    fn keep_safely(slot: &mut Option<Safety>, parts: &[&[f32]]) {
+        let Some(safety) = slot else { return };
+        let mut written = parts.iter().flat_map(|p| p.iter()).try_for_each(|&s| safety.writer.write_sample(s));
+        if written.is_ok() && safety.flushed.elapsed() >= SAFETY_FLUSH {
+            written = safety.writer.flush();
+            safety.flushed = Instant::now();
+        }
+        if let Err(e) = written {
+            crate::logs::note(&format!("La copia de seguridad de la grabación ({}) se detuvo: {e}", safety.path.display()));
+            *slot = None;
         }
     }
 

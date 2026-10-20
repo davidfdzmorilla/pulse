@@ -433,30 +433,40 @@ impl Project {
         for track in &mut project.tracks {
             track.instrument = track.instrument.upgraded();
         }
+        // A tempo of 0 (an invalid number saved as 0) would stop time.
+        if !(project.tempo.is_finite() && project.tempo > 0.0) {
+            project.tempo = 120.0;
+        }
         Ok(project)
     }
 
     pub fn to_json(&self) -> Result<String, String> {
-        let mut value = serde_json::to_value(self).map_err(|e| e.to_string())?;
+        self.to_json_repaired().map(|(text, _)| text)
+    }
+
+    /// The project's JSON, and how many numbers in it weren't valid (NaN or
+    /// infinite: they are written as 0, see `finite`). What it writes always
+    /// reads back.
+    pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
+        let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
             object.insert(FORMAT_KEY.into(), FORMAT.into());
         }
-        serde_json::to_string_pretty(&value).map_err(|e| e.to_string())
+        let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
+        if repaired > 0 {
+            // Never write what wouldn't open again.
+            Self::from_json(&text).map_err(|e| format!("El proyecto tiene valores no válidos y no se pudo corregir: {e}"))?;
+        }
+        Ok((text, repaired))
     }
 
-    /// Saves through a temporary file, so a failed save never leaves half a project.
-    pub fn save(&self, path: &Path) -> Result<(), String> {
+    /// Saves all at once (see `store`), so a crash or a full disk never leaves
+    /// half a project. Gives how many invalid numbers were saved as 0.
+    pub fn save(&self, path: &Path) -> Result<usize, String> {
         let dir = path.parent().unwrap_or(Path::new("."));
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(|e| format!("No se pudo crear {}: {e}", parent.display()))?;
-        }
-        let text = crate::library::relative(self, dir).to_json()?;
-        let temporary = path.with_extension("pulse-tmp");
-        std::fs::write(&temporary, text).map_err(|e| format!("No se pudo guardar: {e}"))?;
-        std::fs::rename(&temporary, path).map_err(|e| {
-            let _ = std::fs::remove_file(&temporary);
-            format!("No se pudo guardar: {e}")
-        })
+        let (text, repaired) = crate::library::relative(self, dir).to_json_repaired()?;
+        crate::store::write_atomic(path, text.as_bytes())?;
+        Ok(repaired)
     }
 
     /// A small A-minor demo set so the app makes sound right away.
@@ -766,5 +776,31 @@ mod tests {
         // Tracks saved before samples existed still load.
         let old = serde_json::to_string(&Track::new("Synth", PALETTE[0], InstrumentKind::Synth(Default::default()))).unwrap();
         assert!(!old.contains("samples"));
+    }
+
+    /// A NaN or an infinity anywhere (JSON writes them as null) never leaves a
+    /// file that doesn't open: they are saved as 0, and saving says how many.
+    #[test]
+    fn invalid_numbers_are_saved_as_zero_and_the_file_opens() {
+        let dir = std::env::temp_dir().join(format!("pulse-nan-{}", std::process::id()));
+        let file = dir.join("T/T.pulse");
+        let mut project = Project::demo();
+        project.tempo = f64::INFINITY;
+        project.tracks[0].mixer.gain = f32::NAN;
+        project.tracks[2].automation[0].points[0].value = f32::NEG_INFINITY;
+        assert_eq!(project.save(&file).unwrap(), 3);
+        let loaded = Project::load(&file).expect("it opens");
+        assert_eq!(loaded.tempo, 120.0, "a tempo of 0 would stop time");
+        assert_eq!(loaded.tracks[0].mixer.gain, 0.0);
+        assert_eq!(loaded.tracks[2].automation[0].points[0].value, 0.0);
+        assert_eq!(Project::demo().save(&file).unwrap(), 0);
+        // From the app: it says so, and what plays is what was saved.
+        let mut app = crate::app::PulseApp::headless(Project::demo());
+        app.project.tracks[1].mixer.pan = f32::NAN;
+        app.save_to_path(&file);
+        assert!(app.status.as_deref().unwrap().contains("1 valor(es) no válidos"), "{:?}", app.status);
+        assert_eq!(app.project.tracks[1].mixer.pan, 0.0);
+        assert!(!app.is_dirty());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

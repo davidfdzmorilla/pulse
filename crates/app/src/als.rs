@@ -198,8 +198,9 @@ fn value<'a>(node: Node<'a, '_>, names: &[&str]) -> Option<&'a str> {
     path(node, names)?.attribute("Value")
 }
 
+/// A number from the set; «NaN» or «inf» (which Rust reads as numbers) are not.
 fn number(node: Node, names: &[&str]) -> Option<f64> {
-    value(node, names)?.parse().ok()
+    value(node, names)?.parse().ok().filter(|n: &f64| n.is_finite())
 }
 
 fn flag(node: Node, names: &[&str]) -> Option<bool> {
@@ -207,7 +208,7 @@ fn flag(node: Node, names: &[&str]) -> Option<bool> {
 }
 
 fn attribute_number(node: Node, name: &str) -> Option<f64> {
-    node.attribute(name)?.parse().ok()
+    node.attribute(name)?.parse().ok().filter(|n: &f64| n.is_finite())
 }
 
 // ----- Live structures ---------------------------------------------------------------
@@ -905,5 +906,19 @@ mod tests {
         assert_eq!(params.root, 48.0);
         assert_eq!(keys.sample(0), Some("/nowhere/piano.wav"));
         assert_eq!(report.missing_samples, 3);
+    }
+
+    #[test]
+    fn numbers_a_set_cannot_hold_are_ignored() {
+        let dir = std::env::temp_dir().join(format!("pulse-als-nan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        for tempo in ["NaN", "inf", "1e999"] {
+            let path = dir.join("set.als");
+            let set = format!(r#"<Ableton><LiveSet><Tracks><MidiTrack/></Tracks><MasterTrack><DeviceChain><Mixer><Tempo><Manual Value="{tempo}"/></Tempo><Volume><Manual Value="{tempo}"/></Volume></Mixer></DeviceChain></MasterTrack></LiveSet></Ableton>"#);
+            std::fs::write(&path, set).unwrap();
+            let (project, _) = import(&path).unwrap();
+            assert!(project.tempo.is_finite() && project.master.mixer.gain.is_finite(), "{tempo}");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

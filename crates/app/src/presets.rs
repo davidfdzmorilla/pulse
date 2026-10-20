@@ -72,8 +72,7 @@ pub fn save(root: &Path, preset: &Preset) -> Result<PathBuf, String> {
     let dir = folder(root, &preset.instrument);
     std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
     let path = dir.join(file_name(&preset.name));
-    let json = serde_json::to_string_pretty(preset).map_err(|e| e.to_string())?;
-    std::fs::write(&path, json).map_err(|e| format!("No se pudo guardar {}: {e}", path.display()))?;
+    crate::store::write_json(&path, preset)?;
     Ok(path)
 }
 

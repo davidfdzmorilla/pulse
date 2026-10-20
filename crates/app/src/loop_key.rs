@@ -12,10 +12,17 @@ use stems::key::Key;
 /// How clearly a file must sound in a key for it to count, without one in its name.
 const CLEAR: f64 = 0.6;
 
+/// How much its loudest pitch class must stand out (over the mean of the
+/// twelve) for a file to have a key at all, named or heard. Hats and noise
+/// measure about 1, a kick with tops about 2 (the kick is tuned), chords and
+/// lines 3 and more.
+const TONAL: f64 = 2.5;
+
 /// How the words in a file's name that say it is drums begin (drums have no key
 /// to follow).
-const DRUM_WORDS: [&str; 15] =
-    ["kick", "snare", "hat", "hihat", "clap", "perc", "drum", "tom", "cymbal", "ride", "crash", "break", "shaker", "rimshot", "bombo"];
+const DRUM_WORDS: [&str; 25] = [
+    "kick", "snare", "hat", "hihat", "clap", "perc", "drum", "tom", "cymbal", "ride", "crash", "break", "shaker", "rimshot", "bombo", "top", "groove", "shuffle", "rumble", "fill", "tamb", "conga", "bongo", "cowbell", "rim",
+];
 
 /// The key written in a file's name: a word like «Am», «F#m», «Ebmin», «Cmaj»,
 /// «E», or one after its tempo («120Am»). The mode, if the name says it.
@@ -101,6 +108,11 @@ pub fn file_key(name: &str, mono: &[f32], rate: f32, project: Option<Key>) -> Op
         return None;
     }
     let chroma = stems::key::chroma(mono, rate);
+    // Without pitches that stand out it has no key, whatever its name says.
+    let mean = chroma.iter().sum::<f64>() / 12.0;
+    if chroma.iter().cloned().fold(0.0, f64::max) < TONAL * mean {
+        return None;
+    }
     let heard = stems::key::Key::detect_clearly(&chroma).filter(|(_, clarity)| *clarity >= CLEAR);
     // A name's key, unless the sound clearly says another and hardly fits it
     // (names have numbers and letters that are not keys: «150A»).
@@ -388,5 +400,33 @@ mod tests {
         app.set_key(None);
         assert_eq!(audio(&app, 0).transpose, 0.0);
         let _ = std::fs::remove_dir_all(dir);
+    }
+
+    /// Drum loops whose names don't say so, or that have a key in their name,
+    /// are not transposed (they were, up to 5 semitones); a chord loop is.
+    #[test]
+    fn loops_without_pitches_that_stand_out_have_no_key() {
+        let rate = 48_000.0;
+        let mut seed = 1u64;
+        let mut noise = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32 / (1u64 << 31) as f32) - 1.0
+        };
+        let frames = rate as usize * 6;
+        let tops: Vec<f32> = (0..frames).map(|i| if i % 6000 < 1500 { noise() * (-((i % 6000) as f32) / 300.0).exp() } else { 0.0 }).collect();
+        let kick_and_tops: Vec<f32> = (0..frames)
+            .map(|i| {
+                let t = (i % 19_200) as f32 / rate;
+                (t * 55.0 * std::f32::consts::TAU).sin() * (-t * 8.0).exp() + if i % 6000 < 800 { noise() * 0.3 } else { 0.0 }
+            })
+            .collect();
+        let chords: Vec<f32> = (0..frames).map(|i| [220.0f32, 261.63, 329.63].iter().map(|f| (i as f32 / rate * f * std::f32::consts::TAU).sin()).sum::<f32>() * 0.2).collect();
+        assert_eq!(file_key("Tops_150_Dm", &tops, rate, None), None);
+        assert_eq!(file_key("Loop_150_E", &kick_and_tops, rate, None), None);
+        assert_eq!(file_key("Pad_150_Am", &chords, rate, None), Some(Key { tonic: 9, minor: true }));
+        for name in ["Tops_150", "Groove 02", "Shuffle_Perc", "Rumble_150_F", "HardFill", "Conga loop"] {
+            assert!(is_drums(name), "{name}");
+        }
+        assert!(!is_drums("Stab_150_Am") && !is_drums("Chord Loop"));
     }
 }

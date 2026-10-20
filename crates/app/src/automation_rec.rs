@@ -28,6 +28,12 @@ pub struct AutomationTake {
     last: HashMap<(Target, Param), f32>,
     /// The points recorded per parameter, in time order.
     points: HashMap<(Target, Param), Vec<AutomationPoint>>,
+    /// Where the playhead was on the last frame (a loop takes it back).
+    beat: Option<f64>,
+    /// Per parameter, once the loop came round: the first of its points of this
+    /// pass, and the beat the pass started at. What it records replaces what
+    /// earlier passes left there.
+    passes: HashMap<(Target, Param), (usize, f64)>,
 }
 
 /// The controls moved while recording a session clip, for its envelopes.
@@ -68,7 +74,7 @@ impl PulseApp {
     }
 
     fn new_take(&self, only: Option<Target>, origin: f64) -> AutomationTake {
-        AutomationTake { only, origin, last: self.param_values(only), points: HashMap::new() }
+        AutomationTake { only, origin, last: self.param_values(only), ..Default::default() }
     }
 
     /// Recording starts: remembers where every control is.
@@ -121,6 +127,13 @@ impl PulseApp {
     fn record_into(&self, take: &mut AutomationTake, beat: f64) {
         let now = self.param_values(take.only);
         let beat = beat - take.origin;
+        // The loop came round: a new pass for every parameter.
+        if take.beat.is_some_and(|last| beat < last - 1e-6) {
+            for (key, points) in &take.points {
+                take.passes.insert(*key, (points.len(), beat));
+            }
+        }
+        take.beat = Some(beat);
         for (&key, &value) in &now {
             let (target, param) = key;
             let Some(&before) = take.last.get(&key) else { continue };
@@ -136,10 +149,26 @@ impl PulseApp {
                 // Holds the old value up to the first move.
                 points.push(AutomationPoint { beat: (beat - MIN_GAP).max(0.0), value: before, curve: 0.0 });
             }
-            // The held old value (the first point) is never overwritten.
-            let several = points.len() > 1;
+            // Another pass over the loop: up to here, it replaces the earlier ones.
+            let mut first_of_pass = 0;
+            if let Some((first, from)) = take.passes.get_mut(&key) {
+                let earlier = *first;
+                let mut kept = Vec::with_capacity(points.len());
+                for (i, p) in points.drain(..).enumerate() {
+                    if i < earlier && p.beat >= *from - 1e-9 && p.beat <= beat {
+                        *first -= 1;
+                    } else {
+                        kept.push(p);
+                    }
+                }
+                *points = kept;
+                first_of_pass = *first;
+            }
+            // The held old value (the first point) is never overwritten, nor one
+            // of an earlier pass.
+            let mergeable = points.len() > 1 && points.len() - 1 >= first_of_pass.max(1);
             match points.last_mut() {
-                Some(last) if several && beat - last.beat < MIN_GAP => last.value = value,
+                Some(last) if mergeable && beat >= last.beat && beat - last.beat < MIN_GAP => last.value = value,
                 _ => points.push(AutomationPoint { beat, value, curve: 0.0 }),
             }
         }
@@ -241,5 +270,32 @@ mod tests {
         app.start_automation_take();
         app.record_automation(3.0);
         assert_eq!(app.finish_automation_take(), 0);
+    }
+
+    /// Recording over a loop: the second pass replaces the first where it moved
+    /// the control, and the first stays where it didn't (the second pass was
+    /// lost: every point overwrote the last one).
+    #[test]
+    fn a_second_pass_over_the_loop_replaces_the_first_where_it_moves() {
+        let mut app = PulseApp::headless(Project::demo());
+        let volume = (Target::Track(1), Param::Volume);
+        app.start_automation_take();
+        app.record_automation(4.0);
+        // Pass 1, beats 4 to 8: a rise.
+        for step in 1..=40 {
+            app.project.tracks[1].mixer.gain = 0.5 + step as f32 * 0.01;
+            app.record_automation(4.0 + step as f64 * 0.1);
+        }
+        // The loop comes round to 4; pass 2 pulls it down until 6.
+        for step in 0..=20 {
+            app.project.tracks[1].mixer.gain = 0.3 - step as f32 * 0.005;
+            app.record_automation(4.0 + step as f64 * 0.1);
+        }
+        assert_eq!(app.finish_automation_take(), 1);
+        let lane = app.automation(volume.0).iter().find(|l| l.param == volume.1).unwrap().clone();
+        assert!(lane.points.windows(2).all(|w| w[0].beat <= w[1].beat));
+        let at = |beat: f64| lane.value_at(beat).unwrap();
+        assert!(at(5.0) < 0.3 && at(5.9) < 0.3, "pass 2 where it moved: {} {}", at(5.0), at(5.9));
+        assert!(at(7.0) > 0.7 && at(8.0) > 0.85, "pass 1 after it: {} {}", at(7.0), at(8.0));
     }
 }

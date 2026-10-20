@@ -19,6 +19,10 @@ pub struct Sample {
     pub sample_rate: f32,
     /// (min, max) over each block of [`PEAK_BLOCK`] frames, for drawing waveforms.
     pub peaks: Vec<(f32, f32)>,
+    /// Where its hits start (seconds, in order), for the Beats warp mode. Found
+    /// by the app before a clip in that mode plays it, once (the audio thread
+    /// only reads it; until then the clip plays in Stretch).
+    pub onsets: std::sync::OnceLock<Vec<f64>>,
 }
 
 impl Sample {
@@ -35,6 +39,7 @@ impl Sample {
             right,
             sample_rate,
             peaks,
+            onsets: std::sync::OnceLock::new(),
         }
     }
 

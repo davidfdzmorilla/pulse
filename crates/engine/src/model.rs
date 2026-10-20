@@ -101,16 +101,20 @@ pub enum WarpMode {
     Repitch,
     /// Follows the tempo while keeping the pitch (granular time-stretch).
     Stretch,
+    /// For drums: each hit starts where the tempo puts it and plays at the
+    /// file's speed, fading out before the next (no grains smearing the hits).
+    Beats,
 }
 
 impl WarpMode {
-    pub const ALL: [WarpMode; 3] = [Self::Off, Self::Repitch, Self::Stretch];
+    pub const ALL: [WarpMode; 4] = [Self::Off, Self::Repitch, Self::Stretch, Self::Beats];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Off => "Off",
             Self::Repitch => "Re-Pitch",
             Self::Stretch => "Stretch",
+            Self::Beats => "Beats",
         }
     }
 }

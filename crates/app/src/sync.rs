@@ -160,7 +160,13 @@ pub fn instrument_tables(track: &Track, samples: &mut SampleCache) -> Box<Vec<Ar
 pub fn play_clip(clip: &Clip, samples: &mut SampleCache) -> PlayClip {
     match clip {
         Clip::Midi(midi) => PlayClip::Midi(midi.clone()),
-        Clip::Audio(audio) => PlayClip::Audio(audio.clone(), samples.get(&audio.sample)),
+        Clip::Audio(audio) => {
+            let sample = samples.get(&audio.sample);
+            if audio.warp == engine::model::WarpMode::Beats {
+                crate::slicing::find_onsets(&sample);
+            }
+            PlayClip::Audio(audio.clone(), sample)
+        }
     }
 }
 

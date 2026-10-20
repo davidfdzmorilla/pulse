@@ -1020,7 +1020,11 @@ fn render_audio_clip(
         let (l, r) = match clip.warp {
             WarpMode::Off => sample.read((clip.offset + local * 60.0 / tempo) * rate),
             WarpMode::Repitch => sample.read(clip.file_seconds(first_beat + local) * rate),
-            WarpMode::Stretch => {
+            WarpMode::Beats if sample.onsets.get().is_some_and(|o| !o.is_empty()) => {
+                let onsets = sample.onsets.get().map_or(&[][..], |o| o.as_slice());
+                beats_read(clip, sample, onsets, first_beat, local, tempo, pitch)
+            }
+            WarpMode::Stretch | WarpMode::Beats => {
                 // Two overlapping Hann-windowed grains read the file at its own speed
                 // (times the transposition) from positions that follow the tempo.
                 let t = local * 60.0 / tempo;
@@ -1041,6 +1045,47 @@ fn render_audio_clip(
         left[k] += l * gain * envelope;
         right[k] += r * gain * envelope;
     }
+}
+
+/// How long a Beats slice takes to fade out before the next hit's material, and
+/// to fade under the next hit when that comes first (seconds).
+const SLICE_FADE: f64 = 0.004;
+const SLICE_CROSS: f64 = 0.002;
+
+/// Beats warp mode, at clip time `local` (beats): the slice of the hit at or
+/// before where the tempo has the file, played from its hit at the file's speed
+/// (times `pitch`), fading out before the next hit's material; just after a hit,
+/// the slice before it fades under it.
+fn beats_read(clip: &AudioClip, sample: &Sample, onsets: &[f64], first_beat: f64, local: f64, tempo: f64, pitch: f64) -> (f32, f32) {
+    let rate = sample.sample_rate as f64;
+    let end = sample.duration();
+    let at = clip.file_seconds(first_beat + local);
+    let slice = |i: Option<usize>| -> (f32, f32, f64) {
+        // Before the first hit, the file's start is one.
+        let start = i.map_or(0.0, |i| onsets[i]);
+        let next = i.map_or(onsets[0], |i| onsets.get(i + 1).copied().unwrap_or(end));
+        let since = (local - (clip.file_beat(start) - first_beat)) * 60.0 / tempo;
+        let source = start + since.max(0.0) * pitch;
+        let fade = ((next - source) / SLICE_FADE).clamp(0.0, 1.0) as f32;
+        let (l, r) = if fade > 0.0 { sample.read(source * rate) } else { (0.0, 0.0) };
+        (l * fade, r * fade, since)
+    };
+    let index = onsets.partition_point(|&o| o <= at).checked_sub(1);
+    let (mut l, mut r, since) = slice(index);
+    if since < SLICE_CROSS {
+        let before = match index {
+            Some(0) if onsets[0] > 0.0 => Some(None),
+            Some(i) if i > 0 => Some(Some(i - 1)),
+            _ => None,
+        };
+        if let Some(before) = before {
+            let (pl, pr, _) = slice(before);
+            let under = (1.0 - since / SLICE_CROSS) as f32;
+            l += pl * under;
+            r += pr * under;
+        }
+    }
+    (l, r)
 }
 
 struct Channel {
@@ -3146,6 +3191,47 @@ mod tests {
         assert!(near(t.channel.gain, 0.8), "the fader again: {}", t.channel.gain);
         assert!(near(t.sends[0], 0.25), "the send again: {}", t.sends[0]);
         assert!(near(t.channel.chain[0].processor.effect().get(0), 0.0), "the device again: {}", t.channel.chain[0].processor.effect().get(0));
+    }
+
+    /// A drum loop at 125 played at 150: in Beats every hit sounds once, where
+    /// it should (Stretch's grains repeat some a few ms later, an echo).
+    #[test]
+    fn beats_mode_plays_each_hit_once() {
+        let rate = 48_000.0;
+        let sixteenth = 60.0 / 125.0 / 4.0;
+        let frames = (64.0 * sixteenth * rate as f64) as usize;
+        // A sharp click on every sixteenth, silent in between.
+        let click: Vec<f32> = (0..frames)
+            .map(|i| {
+                let into = (i as f64 / rate as f64) % sixteenth;
+                if into < 0.001 { (1.0 - into / 0.001) as f32 * 0.8 } else { 0.0 }
+            })
+            .collect();
+        let sample = Sample::from_channels(click.clone(), click, rate);
+        sample.onsets.set((0..64).map(|k| k as f64 * sixteenth).collect()).unwrap();
+        let sample = Arc::new(sample);
+        let hit_share = |warp: WarpMode| {
+            let mut h = Harness::new();
+            let clip = AudioClip { warp, original_bpm: 125.0, length: 16.0, gain_db: 0.0, ..audio_clip(warp) };
+            h.send(Command::SetTempo(150.0));
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(clip, sample.clone()))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            // At 150, a sixteenth every 0.1 s.
+            let out: Vec<f32> = h.run_beats(12.0 * 120.0 / 150.0).chunks(2).map(|f| f[0]).collect();
+            let at = |s: f64| (s * rate as f64) as usize;
+            let mut worst = 1f32;
+            for k in 2..20 {
+                let t = k as f64 * 0.1;
+                let energy = |a: usize, b: usize| out[a..b].iter().map(|x| x * x).sum::<f32>();
+                let share = energy(at(t - 0.002), at(t + 0.003)) / energy(at(t - 0.002), at(t + 0.06)).max(1e-12);
+                worst = worst.min(share);
+            }
+            worst
+        };
+        let (beats, stretch) = (hit_share(WarpMode::Beats), hit_share(WarpMode::Stretch));
+        println!("energía de cada golpe en sus primeros 3 ms (el peor): Beats {beats:.3}, Stretch {stretch:.3}");
+        assert!(beats > 0.95, "in Beats each hit is all in its first 3 ms: {beats}");
+        assert!(stretch < beats, "Stretch smears some: {stretch}");
     }
 
     /// Muting a group silences what its tracks send to the returns too (before,

@@ -653,7 +653,10 @@ impl PulseApp {
         // likely loops cut to whole bars; longer ones play as they are.
         let guess = if duration <= 30.0 { guess_loop_bpm(duration, tempo) } else { None };
         let (warp, original_bpm, length) = match guess {
-            Some(bpm) => (WarpMode::Stretch, bpm, (duration * bpm / 60.0).round().max(1.0)),
+            Some(bpm) => {
+                let warp = if crate::tempo_ui::is_drum_loop(&name, sample) { WarpMode::Beats } else { WarpMode::Stretch };
+                (warp, bpm, (duration * bpm / 60.0).round().max(1.0))
+            }
             None => (WarpMode::Off, tempo, ((duration * tempo / 60.0) * 4.0).ceil().max(1.0) / 4.0),
         };
         AudioClip {

@@ -104,7 +104,7 @@ impl PulseApp {
 
     /// Audio clips of one track rendered together into one file, from the first's
     /// start to the last's end (gaps silent); the clip that plays it.
-    pub(crate) fn join_audio(&mut self, parts: &[ArrangementClip]) -> Result<ArrangementClip, String> {
+    pub(crate) fn join_audio(&mut self, track: usize, parts: &[ArrangementClip]) -> Result<ArrangementClip, String> {
         let start = parts.iter().map(|p| p.start).fold(f64::INFINITY, f64::min);
         let end = parts.iter().map(|p| p.end()).fold(f64::NEG_INFINITY, f64::max);
         let first = parts.iter().min_by(|a, b| a.start.total_cmp(&b.start)).ok_or("Nada que unir")?;
@@ -140,7 +140,8 @@ impl PulseApp {
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            // The pieces' envelopes still move the mixer and effects, along it.
+            envelopes: crate::clip_split::join_envelopes(parts, start, &|p| self.envelope_base(track, p)),
             ..base.clone()
         };
         Ok(ArrangementClip { start, length: end - start, clip: Clip::Audio(clip) })

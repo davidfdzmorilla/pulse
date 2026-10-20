@@ -30,15 +30,54 @@ pub struct Frozen {
     pub content: u64,
 }
 
-/// What a freeze bakes in: the instrument, effects, clips, samples and the
-/// automation that isn't the mixer's.
-pub fn content(track: &Track) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let lanes: Vec<&AutomationLane> = track.automation.iter().filter(|l| !mixer_param(l.param)).collect();
-    let text = serde_json::to_string(&(&track.instrument, &track.devices, &track.clips, &track.arrangement, &track.samples, lanes)).unwrap_or_default();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    text.hash(&mut hasher);
-    hasher.finish()
+/// What a freeze bakes in: the track's instrument, effects, MIDI effects,
+/// clips, samples and the automation that isn't the mixer's; the song's tempo,
+/// swing and key; and the tracks its sidechains listen to. Hashed with FNV-1a
+/// (the same in every build). Opening a project takes its frozen tracks as
+/// they are (see [`refresh_frozen`]), so a new Pulse writing these a little
+/// differently doesn't unfreeze them.
+pub fn content(project: &Project, t: usize) -> u64 {
+    let Some(track) = project.tracks.get(t) else { return 0 };
+    let own = |track: &Track| {
+        let lanes: Vec<&AutomationLane> = track.automation.iter().filter(|l| !mixer_param(l.param)).collect();
+        serde_json::to_string(&(&track.instrument, &track.devices, &track.midi_effects, &track.clips, &track.arrangement, &track.samples, lanes)).unwrap_or_default()
+    };
+    let tempo: Vec<&AutomationLane> = project.master.automation.iter().filter(|l| l.param == Param::Tempo).collect();
+    let mut text = own(track);
+    text += &serde_json::to_string(&(project.tempo, project.swing, project.swing_grid, &project.key, tempo)).unwrap_or_default();
+    for source in sidechain_sources(project, t) {
+        text += &own(&project.tracks[source]);
+    }
+    text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ byte as u64).wrapping_mul(0x0100_0000_01b3))
+}
+
+/// The tracks (indices) whose sound track `t`'s effects listen to (sidechains).
+fn sidechain_sources(project: &Project, t: usize) -> Vec<usize> {
+    use engine::model::Effect;
+    let Some(track) = project.tracks.get(t) else { return Vec::new() };
+    let mut ids: Vec<u32> = track
+        .devices
+        .iter()
+        .filter_map(|d| match &d.effect {
+            Effect::Compressor(p) => p.sidechain,
+            Effect::Ducker(p) => p.sidechain,
+            _ => None,
+        })
+        .collect();
+    ids.dedup();
+    ids.iter().filter_map(|id| project.tracks.iter().position(|o| o.id == *id)).filter(|&s| s != t).collect()
+}
+
+/// After opening a project: its frozen tracks are taken as up to date.
+pub fn refresh_frozen(project: &mut Project) {
+    for t in 0..project.tracks.len() {
+        if project.tracks[t].frozen.is_some() {
+            let content = content(project, t);
+            if let Some(frozen) = &mut project.tracks[t].frozen {
+                frozen.content = content;
+            }
+        }
+    }
 }
 
 /// Volume, pan and sends: the mixer's, which a freeze leaves live.
@@ -66,10 +105,35 @@ pub fn playing(track: &Track) -> std::borrow::Cow<'_, Track> {
     })
 }
 
+/// Warp markers from where the render was at each frame (`map`): each beat
+/// where it was rendered. Past the song's end (its tail) the beats go on at the
+/// tempo `after`, to cover `seconds`.
+fn warp_markers(map: &[(f64, usize)], rate: f32, seconds: f64, after: f64) -> Vec<engine::model::WarpMarker> {
+    let mut markers: Vec<engine::model::WarpMarker> = Vec::new();
+    for &(beat, frame) in map {
+        let time = frame as f64 / rate as f64;
+        if markers.last().is_none_or(|m| beat > m.beat + 1e-9) {
+            markers.push(engine::model::WarpMarker { beat, seconds: time });
+        }
+    }
+    if markers.is_empty() {
+        markers.push(engine::model::WarpMarker { beat: 0.0, seconds: 0.0 });
+    }
+    let last = *markers.last().unwrap();
+    if seconds > last.seconds {
+        markers.push(engine::model::WarpMarker { beat: last.beat + (seconds - last.seconds) * after / 60.0, seconds });
+    }
+    markers
+}
+
 /// A freeze being rendered in the background.
 pub struct FreezeJob {
     track: usize,
     content: u64,
+    /// The song changes tempo: the arrangement's audio follows it as rendered.
+    tempo_changes: bool,
+    /// Where the arrangement's last clip ends, in beats.
+    end: f64,
     result: Arc<Mutex<Option<Result<Rendered, String>>>>,
 }
 
@@ -77,23 +141,38 @@ pub struct FreezeJob {
 struct Rendered {
     arrangement: Option<(Vec<f32>, Vec<f32>)>,
     clips: Vec<Option<(Vec<f32>, Vec<f32>)>>,
+    /// Where the arrangement's render was (beat) at frames along it.
+    map: Vec<(f64, usize)>,
 }
 
 /// The project as a freeze renders track `t`: only it, its mixer flat (unity,
-/// centre, no sends, its lanes left out), the master plain.
+/// centre, no sends, its lanes left out), the master plain but with its tempo.
+/// The tracks its sidechains listen to play too, silent, so it still ducks.
+/// Its session clips' mixer envelopes stay out: they still move the frozen clips.
 fn solo_project(project: &Project, t: usize) -> Project {
     let mut render = project.clone();
-    let mut track = render.tracks[t].clone();
-    track.mixer.gain = 1.0;
-    track.mixer.pan = 0.0;
-    track.mixer.active = true;
-    track.solo = false;
-    track.armed = false;
-    track.sends = Default::default();
-    track.automation.retain(|l| !mixer_param(l.param));
-    render.tracks = vec![track];
+    let flat = |mut track: Track, heard: bool| {
+        track.mixer.gain = 1.0;
+        track.mixer.pan = 0.0;
+        track.mixer.active = heard;
+        track.solo = false;
+        track.armed = false;
+        track.depth = 0;
+        track.sends = Default::default();
+        track.automation.retain(|l| !mixer_param(l.param));
+        track
+    };
+    let mut track = flat(render.tracks[t].clone(), true);
+    for clip in track.clips.iter_mut().flatten() {
+        match clip {
+            Clip::Midi(m) => m.envelopes.retain(|l| !mixer_param(l.param)),
+            Clip::Audio(a) => a.envelopes.retain(|l| !mixer_param(l.param)),
+        }
+    }
+    let sources = sidechain_sources(project, t).into_iter().map(|s| flat(playing(&project.tracks[s]).into_owned(), false));
+    render.tracks = std::iter::once(track).chain(sources).collect();
     render.master.devices.clear();
-    render.master.automation.clear();
+    render.master.automation.retain(|l| l.param == Param::Tempo);
     render.master.mixer.gain = 1.0;
     render.master.mixer.pan = 0.0;
     render.quantize = 0.0;
@@ -109,7 +188,10 @@ fn render_loop(commands: Vec<Command>, slot: usize, beats: f64, tempo: f64, rate
     }
     renderer.send(Command::SetOutputLimit(false));
     renderer.send(Command::SetMetronome(false));
-    renderer.send(Command::LaunchClip { track: 0, slot });
+    // With the tracks its sidechains listen to (they come after it).
+    for track in 0..engine::MAX_TRACKS {
+        renderer.send(Command::LaunchClip { track, slot });
+    }
     let lap = (beats * 60.0 / tempo * rate as f64).round() as usize;
     let (mut left, mut right) = (Vec::new(), Vec::new());
     renderer.render(2 * lap, &mut left, &mut right);
@@ -141,6 +223,7 @@ impl PulseApp {
         }
         let (tempo, rate) = (self.project.tempo, self.audio.sample_rate());
         let render = solo_project(&self.project, t);
+        let tempo_changes = render.master.automation.iter().any(|l| l.param == Param::Tempo && !l.points.is_empty());
         let song = crate::export::Song::of(&render);
         // Plugins load here (with their state), the renders run in the background.
         self.capture_plugins();
@@ -154,14 +237,15 @@ impl PulseApp {
         let shared = result.clone();
         std::thread::spawn(move || {
             let cancel = AtomicBool::new(false);
-            let arrangement = arrangement.and_then(|(commands, end)| crate::export::render(commands, (0.0, end), song, rate, &cancel, &|_| {}));
+            let mut map = Vec::new();
+            let arrangement = arrangement.and_then(|(commands, end)| crate::export::render_mapped(commands, (0.0, end), song, rate, &cancel, &|_| {}, &mut map));
             let clips = clips.into_iter().enumerate().map(|(slot, c)| c.map(|(commands, beats)| render_loop(commands, slot, beats, tempo, rate))).collect();
             if let Ok(mut r) = shared.lock() {
-                *r = Some(Ok(Rendered { arrangement, clips }));
+                *r = Some(Ok(Rendered { arrangement, clips, map }));
             }
         });
         self.status = Some(format!("Congelando «{}»…", self.project.tracks[t].name));
-        self.freeze_job = Some(FreezeJob { track: t, content: content(&self.project.tracks[t]), result });
+        self.freeze_job = Some(FreezeJob { track: t, content: content(&self.project, t), tempo_changes, end, result });
     }
 
     /// Every frame: a finished freeze is written and put in place; a frozen track
@@ -183,7 +267,7 @@ impl PulseApp {
     fn finish_freeze(&mut self, job: &FreezeJob, rendered: Rendered) -> Result<String, String> {
         let t = job.track;
         let track = self.project.tracks.get(t).ok_or("La pista ya no existe")?;
-        if content(track) != job.content {
+        if content(&self.project, t) != job.content {
             return Err(format!("«{}» cambió mientras se congelaba: vuelve a congelarla", track.name));
         }
         let (name, color, tempo, rate) = (track.name.clone(), track.color, self.project.tempo, self.audio.sample_rate());
@@ -195,14 +279,17 @@ impl PulseApp {
             crate::export::write(&path, left, right, rate as u32, crate::export::BitDepth::Float32, 1.0)?;
             Ok(path.to_string_lossy().into_owned())
         };
-        // At the project's tempo, which is theirs: Stretch at the same tempo plays them as they are.
-        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>| AudioClip {
+        // At the project's tempo, which is theirs: Stretch at the same tempo plays
+        // them as they are. A song that changes tempo was rendered following it:
+        // warp markers on every beat put each beat where it was rendered, and
+        // Re-Pitch plays it as it is (at 1:1).
+        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>, warp: WarpMode| AudioClip {
             name,
             color,
             sample,
             length,
             offset: 0.0,
-            warp: WarpMode::Stretch,
+            warp,
             original_bpm: tempo,
             warp_markers: Vec::new(),
             takes: Vec::new(),
@@ -213,9 +300,21 @@ impl PulseApp {
         };
         let mut frozen = Frozen { arrangement: Vec::new(), clips: vec![None; NUM_SCENES], content: job.content };
         if let Some(audio) = &rendered.arrangement {
-            let beats = audio.0.len() as f64 / rate as f64 * tempo / 60.0;
+            let seconds = audio.0.len() as f64 / rate as f64;
             let sample = write("(congelada)", audio)?;
-            frozen.arrangement.push(ArrangementClip { start: 0.0, length: beats, clip: Clip::Audio(clip(format!("{name} (congelada)"), sample, beats, Vec::new())) });
+            let mut placed = if job.tempo_changes {
+                let last_tempo = self.project.master.automation.iter().find(|l| l.param == Param::Tempo).and_then(|l| l.value_at(job.end)).map_or(tempo, |t| t as f64);
+                let markers = warp_markers(&rendered.map, rate, seconds, last_tempo);
+                let beats = markers.last().map_or(0.0, |m| m.beat);
+                let mut audio = clip(format!("{name} (congelada)"), sample, beats, Vec::new(), WarpMode::Repitch);
+                audio.warp_markers = markers;
+                ArrangementClip { start: 0.0, length: beats, clip: Clip::Audio(audio) }
+            } else {
+                let beats = seconds * tempo / 60.0;
+                ArrangementClip { start: 0.0, length: beats, clip: Clip::Audio(clip(format!("{name} (congelada)"), sample, beats, Vec::new(), WarpMode::Stretch)) }
+            };
+            placed.length = placed.length.max(job.end);
+            frozen.arrangement.push(placed);
         }
         for (slot, audio) in rendered.clips.iter().enumerate() {
             let (Some(audio), Some(original)) = (audio, self.project.tracks[t].clips.get(slot).cloned().flatten()) else { continue };
@@ -226,7 +325,7 @@ impl PulseApp {
                 Clip::Audio(a) => a.envelopes.clone(),
             };
             let envelopes = envelopes.into_iter().filter(|l| mixer_param(l.param)).collect();
-            frozen.clips[slot] = Some(clip(original.name().to_string(), sample, original.length().max(0.25), envelopes));
+            frozen.clips[slot] = Some(clip(original.name().to_string(), sample, original.length().max(0.25), envelopes, WarpMode::Stretch));
         }
         self.project.tracks[t].frozen = Some(frozen);
         self.sync_track(t);
@@ -274,7 +373,7 @@ impl PulseApp {
     /// After a change: frozen tracks whose content changed unfreeze.
     pub fn check_frozen(&mut self) {
         let changed: Vec<usize> = (0..self.project.tracks.len())
-            .filter(|&t| self.project.tracks[t].frozen.as_ref().is_some_and(|f| f.content != content(&self.project.tracks[t])))
+            .filter(|&t| self.project.tracks[t].frozen.as_ref().is_some_and(|f| f.content != content(&self.project, t)))
             .collect();
         for t in changed {
             self.unfreeze(t);
@@ -371,5 +470,30 @@ mod tests {
         for file in std::fs::read_dir(app.media_dir(crate::library::FROZEN)).into_iter().flatten().flatten() {
             std::fs::remove_file(file.path()).ok();
         }
+    }
+
+    /// A frozen track saved by another Pulse (its content noted otherwise: a new
+    /// field, another hash) stays frozen when opened, until it is changed.
+    #[test]
+    fn frozen_tracks_stay_frozen_across_versions() {
+        let mut app = PulseApp::headless(Project::demo());
+        let t = app.project.tracks.iter().position(|t| t.name == "Chords").unwrap();
+        app.freeze(t);
+        wait(&mut app);
+        let file = std::env::temp_dir().join(format!("pulse-frozen-{}/F/F.pulse", std::process::id()));
+        app.save_to_path(&file);
+        // As an older Pulse would have noted it.
+        let mut json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&file).unwrap()).unwrap();
+        json["tracks"][t]["frozen"]["content"] = 12345.into();
+        std::fs::write(&file, json.to_string()).unwrap();
+        let mut opened = PulseApp::headless(Project::empty());
+        opened.open_from(&file);
+        opened.project.tracks[0].name = "Otra cosa".into();
+        opened.check_frozen();
+        assert!(opened.project.tracks[t].frozen.is_some(), "an edit elsewhere doesn't unfreeze it");
+        opened.project.tracks[t].devices.clear();
+        opened.check_frozen();
+        assert!(opened.project.tracks[t].frozen.is_none(), "changing it does");
+        let _ = std::fs::remove_dir_all(file.parent().unwrap().parent().unwrap());
     }
 }

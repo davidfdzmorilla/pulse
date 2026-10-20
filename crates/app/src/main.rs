@@ -23,6 +23,8 @@ mod drum_gen;
 mod editor;
 mod export;
 mod files;
+#[cfg(test)]
+mod fidelity_tests;
 mod finite;
 mod groups;
 mod guide;

@@ -20,6 +20,8 @@ rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
 cp "$root/target/release/pulse" "$app/Contents/MacOS/pulse"
 cp "$root/packaging/Pulse.icns" "$app/Contents/Resources/Pulse.icns"
+cp "$root/LICENSE" "$app/Contents/Resources/LICENSE.txt"
+cp "$root/packaging/THIRD_PARTY_NOTICES.txt" "$app/Contents/Resources/THIRD_PARTY_NOTICES.txt"
 sed "s/@VERSION@/$version/g" "$root/packaging/Info.plist" > "$app/Contents/Info.plist"
 plutil -lint "$app/Contents/Info.plist" >/dev/null
 xattr -cr "$app"

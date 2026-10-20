@@ -2,6 +2,7 @@
 name = "paths"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 description = "Where Pulse keeps its settings, data, caches and logs on each system."
 
 [target.'cfg(windows)'.dependencies]

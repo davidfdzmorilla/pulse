@@ -1,4 +1,4 @@
-; Pulse's Windows installer (Inno Setup 6). Built by scripts/package-windows.ps1,
+﻿; Pulse's Windows installer (Inno Setup 6). Built by scripts/package-windows.ps1,
 ; which passes /DAppVersion=<version> and /DStage=<folder with pulse.exe>.
 ;
 ; Installs for the current user, without administrator rights, in
@@ -20,7 +20,8 @@ AppId={{6F1C9B52-3E4A-4D7B-9C21-5A8E0D4F7B13}
 AppName=Pulse
 AppVersion={#AppVersion}
 AppVerName=Pulse {#AppVersion}
-AppPublisher=Pulse
+AppPublisher=David Fernández Morilla
+AppCopyright=Copyright © 2026 David Fernández Morilla
 VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\Pulse
 DefaultGroupName=Pulse
@@ -53,6 +54,7 @@ Source: "{#Stage}\pulse.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; The Visual C++ runtime, beside pulse.exe (app-local, as Microsoft allows).
 Source: "{#Stage}\*.dll"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Stage}\THIRD_PARTY_NOTICES.txt"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Stage}\LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
 Name: "{autoprograms}\Pulse"; Filename: "{app}\pulse.exe"

@@ -1,6 +1,7 @@
 // A published Windows build opens without a console window (see `attach_console`).
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+mod about;
 mod accompany;
 mod als;
 mod arrange;

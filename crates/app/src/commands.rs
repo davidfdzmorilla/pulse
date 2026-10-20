@@ -285,7 +285,7 @@ impl PulseApp {
             Command::MidiAssign => self.toggle_learn(),
             Command::Shortcuts => self.open_panel(crate::app::Panel::Shortcuts),
             Command::Guide => self.open_panel(crate::app::Panel::Guide),
-            Command::About => crate::native_menu::about(),
+            Command::About => self.open_panel(crate::app::Panel::About),
             Command::Settings => self.open_settings(),
             Command::ShowFolder => {
                 let folder = crate::library::root();

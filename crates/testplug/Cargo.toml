@@ -2,6 +2,7 @@
 name = "pulse-testplug"
 version = "0.1.0"
 edition = "2024"
+license = "GPL-3.0-or-later"
 publish = false
 description = "A tiny VST3 plugin (a sine synth and a gain) that Pulse's plugin host is tested against."
 

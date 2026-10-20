@@ -78,7 +78,7 @@ pwsh scripts/package-windows.ps1 -Version 0.2.0  # una versión concreta
 Deja en `dist\`:
 
 - `Pulse\`: `pulse.exe`, el runtime de Visual C++ (`vcruntime140*.dll`,
-  `msvcp140*.dll`…) y `THIRD_PARTY_NOTICES.txt`;
+  `msvcp140*.dll`…), `LICENSE.txt` (la GPL) y `THIRD_PARTY_NOTICES.txt`;
 - `Pulse-<versión>-windows-x64.zip`: esa carpeta, comprimida (la copia portable
   y lo que descarga el actualizador);
 - `Pulse-<versión>-windows-x64-setup.exe`: el instalador, si está Inno Setup 6;

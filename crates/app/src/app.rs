@@ -159,6 +159,7 @@ pub enum Panel {
     Arrange,
     Updates,
     Export,
+    About,
 }
 
 /// Where newly added samples go.
@@ -302,6 +303,7 @@ pub struct PulseApp {
     /// The window is closing (the user chose to quit).
     pub quitting: bool,
     pub show_shortcuts: bool,
+    pub show_about: bool,
     pub guide: crate::guide::Guide,
     pub versions: crate::versions::Window,
     pub mix: crate::mix_assist::Assistant,
@@ -462,6 +464,7 @@ impl PulseApp {
             interactive: false,
             quitting: false,
             show_shortcuts: false,
+            show_about: false,
             guide: Default::default(),
             versions: Default::default(),
             mix: Default::default(),
@@ -1013,6 +1016,7 @@ impl PulseApp {
     pub fn open_panel(&mut self, panel: Panel) {
         self.show_settings = panel == Panel::Settings;
         self.show_shortcuts = panel == Panel::Shortcuts;
+        self.show_about = panel == Panel::About;
         self.guide.open = panel == Panel::Guide;
         self.versions.open = panel == Panel::Versions;
         self.mix.open = panel == Panel::Mix;
@@ -1561,7 +1565,7 @@ impl PulseApp {
             ClipRef::Arrangement { .. } => ClipRef::Arrangement { track, index: 0 },
         });
         let grid_note = if grid > 0.0 { format!(" (rejilla de {grid} beats)") } else { String::new() };
-        self.status = Some(format!("{name}: {pads} trozos en un Drum Rack nuevo{grid_note}"));
+        self.status = Some(format!("{name}: {pads} trozos en un Drum Pads nuevo{grid_note}"));
     }
 
     fn push_track(&mut self, make: impl FnOnce(usize, [u8; 3]) -> Track) -> Option<usize> {
@@ -2608,6 +2612,7 @@ impl eframe::App for PulseApp {
         self.poll_midi_map();
         crate::midi_map::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
+        crate::about::window(self, &ctx);
         crate::guide::window(self, &ctx);
         crate::versions::window(self, &ctx);
         crate::mix_assist::window(self, &ctx);

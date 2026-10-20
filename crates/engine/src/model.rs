@@ -1884,7 +1884,7 @@ impl InstrumentKind {
             InstrumentKind::Acid(_) => "Acid Bass",
             InstrumentKind::Fm(_) => "FM Synth",
             InstrumentKind::Sampler(_) => "Sampler",
-            InstrumentKind::DrumRack(_) => "Drum Rack",
+            InstrumentKind::DrumRack(_) => "Drum Pads",
             InstrumentKind::Kick(_) => "Kick Designer",
             InstrumentKind::Wavetable(_) => "Wavetable Synth",
             InstrumentKind::Polychrome(_) => "Polychrome Synth",

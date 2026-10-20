@@ -139,7 +139,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                         }
                     });
                 slice = ui
-                    .button("A Drum Rack")
+                    .button("A Drum Pads")
                     .on_hover_text("Corta la región del clip en golpes, uno por pad, en una pista MIDI nueva con un clip que los toca en orden")
                     .clicked();
             });
@@ -386,7 +386,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                         Some(i) => {
                             list.remove(i);
                         }
-                        None if list.len() >= engine::model::RACK_PADS => app.status = Some(format!("Hasta {} cortes: uno por pad del Drum Rack", engine::model::RACK_PADS)),
+                        None if list.len() >= engine::model::RACK_PADS => app.status = Some(format!("Hasta {} cortes: uno por pad del Drum Pads", engine::model::RACK_PADS)),
                         None => list.push(seconds_at(pos.x).clamp(start, end)),
                     }
                 } else if let (Some(i), true) = (grabbed, cut_response.dragged()) {

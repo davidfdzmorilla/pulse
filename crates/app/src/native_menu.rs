@@ -174,14 +174,6 @@ pub fn commands() -> Vec<Command> {
     MENUS.iter().flat_map(|(_, items)| items.iter()).filter_map(|item| if let Run(c, ..) = item { Some(*c) } else { None }).collect()
 }
 
-/// The standard "About" panel (or a status line elsewhere).
-pub fn about() {
-    #[cfg(target_os = "macos")]
-    if let Some(mtm) = objc2::MainThreadMarker::new() {
-        objc2_app_kit::NSApplication::sharedApplication(mtm).orderFrontStandardAboutPanel(None);
-    }
-}
-
 #[cfg(target_os = "macos")]
 pub use mac::{describe, MenuBar};
 

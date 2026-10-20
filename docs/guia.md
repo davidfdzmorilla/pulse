@@ -7,7 +7,7 @@ añade o corrige su tema aquí.
 
 ## Primeros pasos
 
-Pulse tiene dos vistas, como Live: **Session**, para lanzar clips en bucle e improvisar, y **Arrangement**, la línea de tiempo de la canción. **Tab** cambia de una a otra.
+Pulse tiene dos vistas: **Session**, para lanzar clips en bucle e improvisar, y **Arrangement**, la línea de tiempo de la canción. **Tab** cambia de una a otra.
 
 - Arriba está el **transporte**: tempo, metrónomo, reproducir, parar, grabar, loop y más.
 - A la izquierda, el **navegador**: instrumentos, efectos, plugins, muestras y tu biblioteca. **☰** lo muestra u oculta.
@@ -217,7 +217,7 @@ Mientras grabas en el Arrangement (F9), los clips de Session que suenan quedan e
 
 - Así puedes improvisar una canción lanzando clips y escenas, y que quede montada en el Arrangement.
 - Si solo hay clips de Session sonando, grabar no arma ninguna pista.
-- Lo que hubiera en el Arrangement de esa pista en ese tramo se sustituye (como en Live).
+- Lo que hubiera en el Arrangement de esa pista en ese tramo se sustituye.
 - Cuando terminas, las pistas siguen tocando la Session: pulsa **▶ Arrangement** para escuchar lo grabado.
 - Con el loop activado, cada clip se escribe una sola vez. El punch in/out también se aplica.
 
@@ -345,7 +345,7 @@ En el carril de abajo, con **Velocidad** elegido, arrastra arriba o abajo cerca 
 
 ## Generar ritmos
 
-En el **Editor MIDI** de un clip de batería (Drum Machine o Drum Rack), **Generar ritmo** escribe una base en un estilo:
+En el **Editor MIDI** de un clip de batería (Drum Machine o Drum Pads), **Generar ritmo** escribe una base en un estilo:
 
 - **Estilos**: House, Techno, Trap, Drum & Bass, Hip hop, Pop / Rock, Reggaetón y Breakbeat. Las bases están escritas a mano, como las tocaría un batería de cada estilo (el bombo a negras y el charles abierto a contratiempo del house, la caja en el 3 y los redobles de charles del trap, el dos-pasos del drum & bass, el dembow del reggaetón…), con sus acentos y notas fantasma. Cada estilo suena a sí mismo a su tempo: **Tempo del proyecto a… BPM** lo pone.
 - **Nivel**: **Básico** (lo esencial), **Medio** e **Intenso** (más golpes, percusión, notas fantasma).
@@ -434,7 +434,7 @@ Se abre al seleccionar un clip de audio.
 - **Inicio** en segundos (puede ser negativo, para empezar en un compás antes del archivo).
 - **Gain** (−36 a +12 dB) y **Transp.** (±24 semitonos, solo en Stretch).
 - **Tonalidad** del audio, **Seguir la escala** y **Detectar** (ver «Loops en tu tonalidad»).
-- **Marcadores** de warp y **Quitar**. **Trocear → A Drum Rack**. **Tempo: Detectar / Usar en el proyecto**. **Separar en stems**.
+- **Marcadores** de warp y **Quitar**. **Trocear → A Drum Pads**. **Tempo: Detectar / Usar en el proyecto**. **Separar en stems**.
 - **Carril**: envolventes del clip (ver «Automatización»).
 
 ### Marcadores de warp
@@ -454,11 +454,11 @@ Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadame
 
 ## Trocear y separar stems
 
-### Trocear a un Drum Rack
+### Trocear a un Drum Pads
 
-En el editor de audio, **Trocear** (Transitorios, 1/16, 1/8 o 1/4) y **A Drum Rack**: corta el clip en golpes (hasta 16), cada uno en un pad de un Drum Rack en una pista nueva, con un clip MIDI que los toca en orden en el mismo sitio. Al cambiar el tempo el groove lo sigue sin estirar el audio, y puedes reordenar o repetir golpes en el editor MIDI. El Drum Rack también tiene **Trocear archivo…**.
+En el editor de audio, **Trocear** (Transitorios, 1/16, 1/8 o 1/4) y **A Drum Pads**: corta el clip en golpes (hasta 16), cada uno en un pad de un Drum Pads en una pista nueva, con un clip MIDI que los toca en orden en el mismo sitio. Al cambiar el tempo el groove lo sigue sin estirar el audio, y puedes reordenar o repetir golpes en el editor MIDI. El Drum Pads también tiene **Trocear archivo…**.
 
-- **Editar cortes** (casilla bajo «Trocear»): muestra los cortes numerados sobre la forma de onda, con una franja debajo. **Arrastra** un corte para moverlo, **doble clic** en uno para quitarlo o en un hueco para añadir otro (hasta 16, uno por pad). **A Drum Rack** trocea entonces por tus cortes. Cambiar el modo (Transitorios, 1/16…) vuelve a buscar los cortes.
+- **Editar cortes** (casilla bajo «Trocear»): muestra los cortes numerados sobre la forma de onda, con una franja debajo. **Arrastra** un corte para moverlo, **doble clic** en uno para quitarlo o en un hueco para añadir otro (hasta 16, uno por pad). **A Drum Pads** trocea entonces por tus cortes. Cambiar el modo (Transitorios, 1/16…) vuelve a buscar los cortes.
 
 ### Separar en stems
 
@@ -525,7 +525,7 @@ Cambian las notas antes de que lleguen al instrumento (en pistas MIDI). Se añad
 - **Acorde**: cada nota se convierte en un acorde. **En la escala**: le añade su tercera y su quinta (y **séptima**) de la escala, así que los acordes encajan con la canción (en do mayor, un re da re–fa–la, un sol da sol–si–re). La escala puede ser la del proyecto o una propia. Sin «En la escala»: los **semitonos añadidos**, con atajos (Mayor, Menor, Quinta, Octava, Sus4, Séptima). **Velocidad añadidas**: lo fuerte de las notas nuevas.
 - **Escala**: lleva las notas fuera de la escala a la más cercana: con ella no hay nota que desafine. La del proyecto o una propia.
 
-Se combinan: **Acorde + Arpegiador** arpegia acordes tocando una sola nota. Al grabar se graban las notas que tocas (antes de los efectos), como en Live.
+Se combinan: **Acorde + Arpegiador** arpegia acordes tocando una sola nota. Al grabar se graban las notas que tocas (antes de los efectos).
 
 ### Sidechain
 
@@ -550,7 +550,7 @@ Se eligen en el navegador (INSTRUMENTOS) con una pista MIDI seleccionada.
   - El mapa muestra las zonas sobre el teclado (arriba, las velocidades altas); clic en una tecla para oírla. **−12 / +12** mueven todo el mapa una octava (librerías que llaman C4 al do central). **Zonas…** permite ajustar a mano las notas, la raíz y las velocidades de cada muestra.
   - Hasta 32 muestras. Cargar una sola vuelve al modo normal.
 - **Drum Machine**: 16 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tres toms, cencerro, crash, ride, shaker, pandereta, conga y clave), cada uno con Tune, Decay y Level. Clic en un sonido para escucharlo. **Máquina**: **808** (bombo largo y redondo, palma, cencerro: hip hop, trap, reggaetón), **909** (bombo con pegada y charles brillantes: house, techno) o **Clásica**, sus sonidos primeros.
-- **Drum Rack**: 16 pads de muestras (el 1 abajo a la izquierda, desde C1).
+- **Drum Pads**: 16 pads de muestras (el 1 abajo a la izquierda, desde C1).
   - Clic en un pad lo escucha y lo selecciona. Arrastra uno o varios audios sobre los pads.
   - Por pad: Tune, Length, Level, Pan y grupo de **choke** (los pads del mismo grupo se cortan entre sí, como el hi-hat abierto y cerrado).
   - **Kit básico**: carga los sonidos de la Drum Machine. **Trocear archivo…**: corta un loop en los pads.
@@ -722,7 +722,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 **⌘I** (Archivo → Importar set de Live) o arrastra un `.als` a la ventana. Sustituye el proyecto actual; el `.als` no se toca.
 
 - Se importan: tempo, loop, escenas, pistas MIDI y de audio (nombre, color, volumen, panorama, envíos, activador, solo) y los clips de Session y del Arrangement, con sus notas o sus muestras y su warp.
-- Los Drum Racks con muestras pasan al Drum Rack de Pulse; Simpler y Sampler, al Sampler.
+- Los Drum Racks con muestras pasan al Drum Pads de Pulse; Simpler y Sampler, al Sampler.
 - Los **grupos** llegan como grupos de Pulse, con sus pistas dentro y su mezclador.
 - Los **locators** llegan como marcadores.
 - No se importan los sintes de Live (esas pistas reciben Pulse Synth), los efectos ni la automatización.
@@ -780,6 +780,13 @@ Pulse busca versiones nuevas al arrancar y cada 6 horas (también en Pulse → *
 - La primera vez que arranca una versión nueva enseña sus novedades.
 - Hace falta acceso a GitHub (`gh auth login` o un token en «Acceso a GitHub»; se guarda en el llavero en macOS y en el Administrador de credenciales en Windows).
 - En Windows se sustituye `pulse.exe` y el anterior queda como «pulse (anterior).exe» en la carpeta de instalación. Antes de instalarla, Pulse comprueba que la descarga es la publicada (su huella SHA-256) y que es la versión anunciada.
+
+## Acerca de Pulse
+
+Pulse → **Acerca de Pulse** muestra la versión y la licencia. Pulse es software libre (GPL-3.0 o posterior): puedes usarlo, estudiarlo, modificarlo y compartirlo. Si distribuyes una versión modificada, también con su código y con la misma licencia. Su código está en GitHub (el enlace de la ventana).
+
+- **Licencia (GPL-3.0)** abre el texto completo de la licencia.
+- **Componentes de terceros** abre las licencias de lo que Pulse incluye: las librerías, ONNX Runtime, los modelos de IA y las fuentes.
 
 ## Atajos de teclado
 

@@ -12,6 +12,8 @@
     <string>Pulse</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2026 David Fernández Morilla. GPL-3.0 o posterior.</string>
     <key>CFBundleShortVersionString</key>
     <string>@VERSION@</string>
     <key>CFBundleVersion</key>

@@ -53,18 +53,10 @@ if ($dumpbin) {
     & $dumpbin.FullName /nologo /dependents (Join-Path $stage 'pulse.exe') | Tee-Object -FilePath (Join-Path $dist 'dependencias.txt')
 }
 
-# The notices of what pulse.exe carries inside (models and ONNX Runtime).
-$notices = @(
-    'packaging/windows/ONNXRUNTIME_LICENSE',
-    'crates/beats/models/LICENSE',
-    'crates/stems/models/BASIC_PITCH_NOTICE',
-    'crates/stems/models/DRUMS_NOTICE'
-)
-$text = "Pulse $Version — avisos de terceros`r`n`r`n"
-foreach ($file in $notices) {
-    $text += "===== $file =====`r`n`r`n" + (Get-Content -Raw -Encoding UTF8 $file) + "`r`n`r`n"
-}
-Set-Content -Path (Join-Path $stage 'THIRD_PARTY_NOTICES.txt') -Value $text -Encoding UTF8
+# Pulse's licence and the notices of what it carries (scripts/notices.py writes
+# them; pulse.exe also shows both in «Acerca de Pulse»).
+Copy-Item LICENSE (Join-Path $stage 'LICENSE.txt')
+Copy-Item packaging/THIRD_PARTY_NOTICES.txt (Join-Path $stage 'THIRD_PARTY_NOTICES.txt')
 
 # The version pulse.exe says it is (its version resource; the updater checks it).
 $said = (Get-Item (Join-Path $stage 'pulse.exe')).VersionInfo.ProductVersion

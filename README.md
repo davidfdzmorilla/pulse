@@ -88,3 +88,29 @@ Las pruebas comparan el espectrograma, la reconstrucción, la red y la separaci�
 de una canción con los resultados de PyTorch. Si el archivo cambia, hay que
 actualizar su tamaño y su SHA-256 en `crates/app/src/stems_ui.rs` y publicarlo
 con otra etiqueta.
+
+## Licencia
+
+Copyright © 2026 David Fernández Morilla.
+
+Pulse es software libre: se puede redistribuir y modificar según los términos
+de la [GNU General Public License](LICENSE), versión 3 o (a tu elección)
+cualquier versión posterior (`GPL-3.0-or-later`). Se distribuye sin ninguna
+garantía.
+
+Lo que Pulse incluye de terceros (crates de Rust, ONNX Runtime, los modelos de
+IA, las fuentes) conserva su propia licencia: todas están en
+[`packaging/THIRD_PARTY_NOTICES.txt`](packaging/THIRD_PARTY_NOTICES.txt), que va
+en los paquetes de macOS y Windows y se ve en **Acerca de Pulse**. Tras cambiar
+dependencias se regenera con `python3 scripts/notices.py` (una prueba comprueba
+que esté al día).
+
+Para contribuir: [CONTRIBUTING.md](CONTRIBUTING.md).
+
+### Marcas
+
+Ableton y Live son marcas de Ableton AG; VST es una marca de Steinberg Media
+Technologies GmbH; CLAP es un estándar de free-audio; Roland, TR-808 y TR-909
+son marcas de Roland Corporation. Se nombran solo para describir compatibilidad
+(importar sets `.als`, alojar plugins VST3 y CLAP) o un estilo de sonido. Pulse
+no tiene relación con ninguna de ellas ni cuenta con su respaldo.

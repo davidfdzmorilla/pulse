@@ -67,6 +67,13 @@ impl PulseApp {
     }
 
     /// Closes every editor before their plugins are reloaded, to open them again after.
+    /// Closes plugin `id`'s editor, to open again on its new instance.
+    pub fn suspend_editor(&mut self, id: PluginId) {
+        if self.editors.open.remove(&id).is_some() {
+            self.editors.reopen.extend([id]);
+        }
+    }
+
     pub fn suspend_editors(&mut self) {
         let ids: Vec<PluginId> = self.editors.open.keys().copied().collect();
         self.editors.reopen.extend(ids);

@@ -700,7 +700,7 @@ Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`
 - **⌘N** nuevo, **⌘O** abrir, **Abrir recientes** (los 10 últimos), **⌘S** guardar, **⇧⌘S** guardar como, **Volver a la versión guardada**, **⌥⌘S** versiones (ver «Versiones del proyecto»).
 - Al guardar, todos los audios que usa el proyecto se copian a su carpeta.
 - Antes de perder cambios sin guardar, Pulse pregunta (Guardar / No guardar / Cancelar).
-- **⌘Z / ⇧⌘Z**: deshacer y rehacer.
+- **⌘Z / ⇧⌘Z**: deshacer y rehacer. Se puede hacer mientras suena: solo cambia lo que deshaces; las demás pistas siguen como estaban, con sus colas de reverb y delay y sus plugins (lo mismo al añadir una pista).
 - **Mostrar la carpeta de Pulse** la abre en Finder (en el Explorador en Windows).
 - Los ajustes y lo que Pulse genera no son tu trabajo y no están en la carpeta de Pulse: en macOS en `~/Library/Application Support/Pulse`; en Windows, los ajustes en `%APPDATA%\Pulse` y kits y modelos en `%LOCALAPPDATA%\Pulse`. Si Pulse se cierra por un fallo, deja lo que pasó en `pulse.log` (`~/Library/Logs/Pulse` en macOS, `%LOCALAPPDATA%\Pulse\Logs` en Windows).
 - El título de la ventana lleva * si hay cambios sin guardar. También cuentan los que haces dentro de un plugin (en su editor, con un controlador o en **Parámetros…**).

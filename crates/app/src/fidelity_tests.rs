@@ -266,3 +266,64 @@ fn what_plays_does_not_depend_on_the_buffer_size() {
         assert!(gap < 0.5, "{block}-frame callbacks: {gap:.2} dB from the export's");
     }
 }
+
+/// The demo with sends into the reverb and delay returns, its first scene laid
+/// out on the arrangement, playing in 256-frame callbacks; `action` runs on the
+/// app at 3 s. Gives the left channel.
+fn playing_through(action: &dyn Fn(&mut PulseApp)) -> Vec<f32> {
+    let mut project = Project::demo();
+    for track in &mut project.tracks {
+        track.sends = [0.5, 0.3];
+        if let Some(clip) = track.clips[0].clone() {
+            track.arrangement = vec![ArrangementClip { start: 0.0, length: 32.0, clip }];
+        }
+    }
+    let mut app = PulseApp::headless(project);
+    let (audio, mut engine) = crate::app::Audio::detached();
+    app.audio = audio;
+    app.sync_all();
+    app.audio.send(Command::BackToArrangement);
+    app.audio.send(Command::Play);
+    let mut out = vec![0f32; 256 * 2];
+    let mut left = Vec::new();
+    for call in 0..6 * 48_000 / 256 {
+        if call == 3 * 48_000 / 256 {
+            action(&mut app);
+        }
+        engine.process(&mut out, 2);
+        left.extend(out.chunks(2).map(|f| f[0]));
+        app.audio.collect_garbage();
+    }
+    left
+}
+
+/// Undo, redo and adding a track while it plays are not heard: what didn't
+/// change goes on (the engine got every chain and arrangement again, which cut
+/// the reverb and delay tails: 3 to 8 dB down for a quarter of a second).
+#[test]
+fn undo_and_adding_a_track_while_playing_are_not_heard() {
+    let reference = playing_through(&|_| {});
+    let from = 3 * 48_000;
+    let heard = |other: &[f32]| {
+        let signal: f32 = reference[from..].iter().map(|s| s * s).sum();
+        let difference: f32 = reference[from..].iter().zip(&other[from..]).map(|(a, b)| (a - b).powi(2)).sum();
+        10.0 * (difference / signal).max(1e-20).log10()
+    };
+    // A device setting changed (and synced), then undone.
+    let undone = playing_through(&|app| {
+        let t = app.project.tracks.iter().position(|t| !t.devices.is_empty()).expect("a track with effects");
+        app.commit_history();
+        let device = app.project.tracks[t].devices[0];
+        let mut changed = device;
+        changed.enabled = !device.enabled;
+        app.project.tracks[t].devices[0] = changed;
+        app.commit_history();
+        app.undo();
+        app.redo();
+        app.undo();
+    });
+    let added = playing_through(&|app| app.add_track());
+    let (undone, added) = (heard(&undone), heard(&added));
+    assert!(undone < -60.0, "undo and redo are heard: {undone:.1} dB");
+    assert!(added < -60.0, "adding a track is heard: {added:.1} dB");
+}

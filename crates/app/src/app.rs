@@ -540,6 +540,30 @@ impl PulseApp {
         self.show_sample_errors();
     }
 
+    /// Like [`PulseApp::sync_all`], when the engine plays `before` (as it does
+    /// right before an undo, say): only what changed is sent, so the rest goes
+    /// on sounding (voices, effect tails, plugins and their editors).
+    pub fn sync_from(&mut self, before: &Project) {
+        self.project.assign_ids();
+        self.capture_plugins();
+        self.samples.reloaded.clear();
+        let sample_rate = self.audio.sample_rate();
+        let commands = sync::changed_commands(before, &self.project, &mut self.samples, sample_rate, &self.overridden);
+        for command in commands {
+            self.audio.send(command);
+        }
+        // Editors of plugins loaded again open on the new instance; those of
+        // plugins gone close.
+        for id in std::mem::take(&mut self.samples.reloaded) {
+            self.suspend_editor(id);
+        }
+        let project = &self.project;
+        self.samples.plugins.retain(|id, _| project.plugin(*id).is_some());
+        self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+        self.sync_midi_map();
+        self.show_sample_errors();
+    }
+
     fn show_sample_errors(&mut self) {
         if let Some(error) = self.samples.errors.pop() {
             self.status = Some(error);
@@ -1607,9 +1631,11 @@ impl PulseApp {
             return None;
         }
         let color = PALETTE[(index * 5 + 1) % PALETTE.len()];
+        let before = self.project.clone();
         self.project.tracks.push(make(index, color));
         self.selected_target = Target::Track(index);
-        self.sync_all();
+        // The others go on as they were.
+        self.sync_from(&before);
         Some(index)
     }
 
@@ -2171,18 +2197,21 @@ impl PulseApp {
     }
 
     pub fn undo(&mut self) {
+        let before = self.project.clone();
         if self.history.undo(&mut self.project) {
-            self.after_project_replaced();
+            self.after_project_replaced(Some(&before));
         }
     }
 
     pub fn redo(&mut self) {
+        let before = self.project.clone();
         if self.history.redo(&mut self.project) {
-            self.after_project_replaced();
+            self.after_project_replaced(Some(&before));
         }
     }
 
-    fn after_project_replaced(&mut self) {
+    /// After undo or redo: the engine gets what changed from `before`.
+    fn after_project_replaced(&mut self, before: Option<&Project>) {
         if self.selected_clip.is_some_and(|c| self.clip(c).is_none()) {
             self.selected_clip = None;
         }
@@ -2190,7 +2219,10 @@ impl PulseApp {
         if matches!(self.selected_target, Target::Track(t) if t >= tracks) {
             self.selected_target = Target::Track(0);
         }
-        self.sync_all();
+        match before {
+            Some(before) => self.sync_from(before),
+            None => self.sync_all(),
+        }
     }
 
     pub(crate) fn replace_project(&mut self, project: Project, file: Option<PathBuf>) {

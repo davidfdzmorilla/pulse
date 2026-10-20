@@ -20,6 +20,8 @@ pub struct SampleCache {
     pub errors: Vec<String>,
     /// The UI-thread side of the plugins loaded for the project, by id.
     pub plugins: HashMap<PluginId, PluginHandle>,
+    /// Plugins loaded again (a new instance) since this was last emptied.
+    pub reloaded: Vec<PluginId>,
 }
 
 impl SampleCache {
@@ -200,6 +202,7 @@ pub fn load_plugin(project: &Project, id: PluginId, samples: &mut SampleCache, s
             // Restoring its state is not an edit.
             handle.take_edited();
             samples.plugins.insert(id, handle);
+            samples.reloaded.push(id);
             Some(processor)
         }
         Err(error) => {
@@ -238,6 +241,47 @@ pub fn project_commands(
     sample_rate: f32,
     overridden: &HashSet<(Target, Param)>,
 ) -> Vec<Command> {
+    commands_from(None, project, samples, sample_rate, overridden)
+}
+
+/// The commands that bring an engine playing `before` to `project`. What didn't
+/// change isn't sent again, so it goes on sounding as it was: a track's voices,
+/// the tails of its effects, its plugins. Effects whose settings changed (but
+/// not which effects they are) are updated in place. Tracks are matched by
+/// place and id: one that moved is sent whole.
+pub fn changed_commands(
+    before: &Project,
+    project: &Project,
+    samples: &mut SampleCache,
+    sample_rate: f32,
+    overridden: &HashSet<(Target, Param)>,
+) -> Vec<Command> {
+    commands_from(Some(before), project, samples, sample_rate, overridden)
+}
+
+/// The commands for a chain of `devices` at `target`, given what it had.
+fn chain_commands(project: &Project, target: Target, before: Option<&[Device]>, devices: &[Device], samples: &mut SampleCache, sample_rate: f32) -> Vec<Command> {
+    let same_layout = |old: &[Device]| {
+        old.len() == devices.len()
+            && old.iter().zip(devices).all(|(a, b)| match (a.effect, b.effect) {
+                (Effect::Plugin(x), Effect::Plugin(y)) => x == y,
+                (x, y) => std::mem::discriminant(&x) == std::mem::discriminant(&y),
+            })
+    };
+    match before {
+        Some(old) if old == devices => Vec::new(),
+        Some(old) if same_layout(old) => old.iter().zip(devices).enumerate().filter(|(_, (a, b))| a != b).map(|(index, (_, &device))| Command::UpdateDevice { target, index, device }).collect(),
+        _ => vec![Command::ReplaceChain { target, chain: chain(project, devices, samples, sample_rate) }],
+    }
+}
+
+fn commands_from(
+    before: Option<&Project>,
+    project: &Project,
+    samples: &mut SampleCache,
+    sample_rate: f32,
+    overridden: &HashSet<(Target, Param)>,
+) -> Vec<Command> {
     let mut commands = vec![
         Command::SetTempo(project.tempo),
         Command::SetMetronome(project.metronome),
@@ -247,26 +291,43 @@ pub fn project_commands(
     ];
     let empty = Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default()));
     for t in 0..MAX_TRACKS {
+        let new = project.tracks.get(t);
+        // What the engine has for this place: the same track as before, if it is.
+        let old = before.map(|b| b.tracks.get(t).filter(|o| new.is_some_and(|n| n.id == o.id)));
+        if old.is_some() && before.is_some_and(|b| b.tracks.get(t).is_none()) && new.is_none() {
+            continue;
+        }
+        let old = old.flatten().map(crate::freeze::playing);
+        let old = old.as_deref();
         // A frozen track plays its frozen audio, through no instrument or effects.
-        let track = crate::freeze::playing(project.tracks.get(t).unwrap_or(&empty));
+        let track = crate::freeze::playing(new.unwrap_or(&empty));
         let track = track.as_ref();
         let target = Target::Track(t);
+        if !old.is_some_and(|o| o.instrument == track.instrument && o.samples == track.samples) {
+            commands.extend([
+                instrument_command(project, t, track.instrument, samples, sample_rate),
+                Command::SetSamples { track: t, samples: instrument_samples(track, samples) },
+                Command::SetWavetables { track: t, tables: instrument_tables(track, samples) },
+            ]);
+        }
         commands.extend([
-            instrument_command(project, t, track.instrument, samples, sample_rate),
-            Command::SetSamples { track: t, samples: instrument_samples(track, samples) },
-            Command::SetWavetables { track: t, tables: instrument_tables(track, samples) },
             Command::SetSolo { track: t, solo: track.solo },
             Command::SetArm { track: t, armed: track.armed },
             // A frozen track has no effects left to monitor through.
-            Command::SetMonitor { track: t, on: track.monitors() && project.tracks.get(t).is_some_and(|t| t.frozen.is_none()) },
-            Command::ReplaceChain { target, chain: chain(project, &track.devices, samples, sample_rate) },
-            Command::SetArrangement { track: t, clips: placed_clips(track, samples) },
-            Command::SetAutomation { target, lanes: active_lanes(&track.automation, target, overridden) },
+            Command::SetMonitor { track: t, on: track.monitors() && new.is_some_and(|t| t.frozen.is_none()) },
         ]);
+        commands.extend(chain_commands(project, target, old.map(|o| o.devices.as_slice()), &track.devices, samples, sample_rate));
+        if !old.is_some_and(|o| o.arrangement == track.arrangement && o.samples == track.samples) {
+            commands.push(Command::SetArrangement { track: t, clips: placed_clips(track, samples) });
+        }
+        commands.push(Command::SetAutomation { target, lanes: active_lanes(&track.automation, target, overridden) });
         for (send, &amount) in track.sends.iter().enumerate() {
             commands.push(Command::SetSend { track: t, send, amount });
         }
         for slot in 0..NUM_SCENES {
+            if old.is_some_and(|o| o.clips[slot] == track.clips[slot]) {
+                continue;
+            }
             let clip = track.clips[slot].as_ref().map(|c| Box::new(play_clip(c, samples)));
             commands.push(Command::SetClip { track: t, slot, clip });
         }
@@ -276,6 +337,10 @@ pub fn project_commands(
     // MIDI effects, with the project's key where they follow it.
     let key = project.key.map(|k| engine::model::ScaleKey { tonic: k.tonic, minor: k.minor });
     for t in 0..MAX_TRACKS {
+        let effects = |p: &Project| p.tracks.get(t).map(|track| (track.id, track.midi_effects.clone()));
+        if before.is_some_and(|b| effects(b) == effects(project) && b.key == project.key) {
+            continue;
+        }
         let mut devices = [None; engine::model::MAX_MIDI_EFFECTS];
         if let Some(track) = project.tracks.get(t) {
             for (slot, device) in devices.iter_mut().zip(&track.midi_effects) {
@@ -287,16 +352,70 @@ pub fn project_commands(
     commands.push(Command::SetTrackIds(std::array::from_fn(|t| project.tracks.get(t).map_or(0, |track| track.id))));
     for (r, ret) in project.returns.iter().enumerate().take(NUM_RETURNS) {
         let target = Target::Return(r);
-        commands.push(Command::ReplaceChain { target, chain: chain(project, &ret.devices, samples, sample_rate) });
+        let old = before.and_then(|b| b.returns.get(r)).map(|o| o.devices.as_slice());
+        commands.extend(chain_commands(project, target, old, &ret.devices, samples, sample_rate));
         commands.push(Command::SetAutomation { target, lanes: active_lanes(&ret.automation, target, overridden) });
         commands.extend(mixer_commands(target, &ret.mixer));
     }
     let master = &project.master;
-    commands.push(Command::ReplaceChain { target: Target::Master, chain: chain(project, &master.devices, samples, sample_rate) });
+    let old = before.map(|b| b.master.devices.as_slice());
+    commands.extend(chain_commands(project, Target::Master, old, &master.devices, samples, sample_rate));
     commands.push(Command::SetAutomation {
         target: Target::Master,
         lanes: active_lanes(&master.automation, Target::Master, overridden),
     });
     commands.extend(mixer_commands(Target::Master, &master.mixer));
     commands
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use engine::model::ArrangementClip;
+
+    fn heavy(commands: &[Command]) -> Vec<String> {
+        commands
+            .iter()
+            .filter_map(|c| match c {
+                Command::SetInstrument { track, .. } => Some(format!("instrumento {track}")),
+                Command::ReplaceChain { target, .. } => Some(format!("cadena {target:?}")),
+                Command::UpdateDevice { target, index, .. } => Some(format!("efecto {target:?} {index}")),
+                Command::SetArrangement { track, .. } => Some(format!("arreglo {track}")),
+                Command::SetClip { track, slot, .. } => Some(format!("clip {track} {slot}")),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// From a project the engine plays, only what changed is sent again, and all
+    /// of what changed is.
+    #[test]
+    fn only_what_changed_is_sent_again() {
+        let mut before = Project::demo();
+        before.assign_ids();
+        let mut samples = SampleCache::default();
+        let unchanged = changed_commands(&before, &before, &mut samples, 48_000.0, &HashSet::new());
+        assert!(heavy(&unchanged).is_empty(), "{:?}", heavy(&unchanged));
+        // A clip moved on one track, one effect's setting on another.
+        let mut after = before.clone();
+        let clip = after.tracks[1].clips[0].clone().unwrap();
+        after.tracks[1].arrangement.push(ArrangementClip { start: 8.0, length: 4.0, clip });
+        let fx = after.tracks.iter().position(|t| !t.devices.is_empty()).unwrap();
+        after.tracks[fx].devices[0].enabled = !after.tracks[fx].devices[0].enabled;
+        let mut expected = vec!["arreglo 1".to_string(), format!("efecto Track({fx}) 0")];
+        expected.sort();
+        let mut got = heavy(&changed_commands(&before, &after, &mut samples, 48_000.0, &HashSet::new()));
+        got.sort();
+        assert_eq!(got, expected);
+        // Another effect in the chain: the chain is built again.
+        let mut more = before.clone();
+        more.tracks[0].devices.push(Device::new(Effect::Saturator(Default::default())));
+        assert_eq!(heavy(&changed_commands(&before, &more, &mut samples, 48_000.0, &HashSet::new())), ["cadena Track(0)"]);
+        // A track in front of the rest: every one moved, every one goes again.
+        let mut moved = before.clone();
+        moved.tracks.insert(0, Track::new("Nueva", [0; 3], InstrumentKind::Synth(SynthParams::default())));
+        moved.assign_ids();
+        let sent = heavy(&changed_commands(&before, &moved, &mut samples, 48_000.0, &HashSet::new()));
+        assert!((0..moved.tracks.len()).all(|t| sent.contains(&format!("instrumento {t}"))), "{sent:?}");
+    }
 }

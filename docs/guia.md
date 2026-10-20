@@ -3,6 +3,8 @@
 Esta guía se ve dentro de la app en Ayuda → Guía de Pulse. Cada función nueva
 añade o corrige su tema aquí.
 
+**En Windows**, donde la guía dice ⌘ es **Ctrl**, ⇧ es **Mayús**, ⌥ es **Alt** y ⌫ es **Supr**; la pantalla completa es **F11**. Los menús están en la barra de arriba de la ventana de Pulse, y donde dice Finder es el Explorador de archivos.
+
 ## Primeros pasos
 
 Pulse tiene dos vistas, como Live: **Session**, para lanzar clips en bucle e improvisar, y **Arrangement**, la línea de tiempo de la canción. **Tab** cambia de una a otra.
@@ -235,7 +237,7 @@ Ver «Grabar en un slot» en el tema Session.
 
 ### Audio
 
-- La primera vez macOS pide permiso para usar el micrófono.
+- La primera vez macOS pide permiso para usar el micrófono. En Windows, si no graba nada, mira Configuración → Privacidad y seguridad → Micrófono («Permitir que las aplicaciones de escritorio accedan al micrófono»).
 - La entrada se elige en Ajustes → «Entrada (grabar audio)». Se abre al armar una pista de audio.
 - Las grabaciones son WAV en `Samples/Grabaciones` dentro de la carpeta del proyecto (o en `Sin guardar/Grabaciones` si aún no lo has guardado; al guardar se mueven).
 
@@ -620,6 +622,7 @@ Los plugins no usan este menú: guardan su estado con el proyecto.
   - 6 knobs con sus parámetros principales (primero los automatizados).
 - Todos sus parámetros se pueden automatizar y asignar a un controlador MIDI. Su estado se guarda con el proyecto.
 - Si un plugin ya no está instalado, su dispositivo lo avisa y no suena.
+- Las carpetas del sistema: en macOS, `/Library/Audio/Plug-Ins/VST3` y `CLAP` (y las de tu usuario en `~/Library`); en Windows, `C:\Program Files\Common Files\VST3` y `CLAP` (y las de tu usuario en `%LOCALAPPDATA%\Programs\Common`). Pulse para Windows es de 64 bits: los plugins de 32 bits no se cargan.
 
 ## Controladores MIDI
 
@@ -685,9 +688,9 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
 
 ## Proyectos y carpeta de Pulse
 
-Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`; se cambia en Ajustes):
+Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse` en macOS, la carpeta Música de tu usuario en Windows; se cambia en Ajustes):
 
-- `Proyectos/<nombre>/`: cada proyecto en su carpeta, con sus audios en `Samples/` (Importados, Grabaciones, Stems, Trozos, Consolidados, Congelados) y sus versiones en `Versiones/`. La carpeta entera se puede copiar a otro Mac.
+- `Proyectos/<nombre>/`: cada proyecto en su carpeta, con sus audios en `Samples/` (Importados, Grabaciones, Stems, Trozos, Consolidados, Congelados) y sus versiones en `Versiones/`. La carpeta entera se puede copiar a otro ordenador, también de macOS a Windows y al revés. Si al abrir un proyecto falta algún audio (estaba fuera de su carpeta o en otro ordenador), Pulse lo dice en la barra de estado y conserva su ruta: pon el archivo en su sitio o vuelve a importarlo.
 - `Exportaciones`, `Presets`, `Wavetables` y `Samples` (las tuyas).
 - `Sin guardar`: lo que graba o crea un proyecto que aún no has guardado. Al guardarlo se mueve a su carpeta.
 
@@ -697,7 +700,8 @@ Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`
 - Al guardar, todos los audios que usa el proyecto se copian a su carpeta.
 - Antes de perder cambios sin guardar, Pulse pregunta (Guardar / No guardar / Cancelar).
 - **⌘Z / ⇧⌘Z**: deshacer y rehacer.
-- **Mostrar la carpeta de Pulse** la abre en Finder.
+- **Mostrar la carpeta de Pulse** la abre en Finder (en el Explorador en Windows).
+- Los ajustes y lo que Pulse genera no son tu trabajo y no están en la carpeta de Pulse: en macOS en `~/Library/Application Support/Pulse`; en Windows, los ajustes en `%APPDATA%\Pulse` y kits y modelos en `%LOCALAPPDATA%\Pulse`. Si Pulse se cierra por un fallo, deja lo que pasó en `pulse.log` (`~/Library/Logs/Pulse` en macOS, `%LOCALAPPDATA%\Pulse\Logs` en Windows).
 - El título de la ventana lleva * si hay cambios sin guardar.
 
 ## Versiones del proyecto
@@ -774,7 +778,8 @@ Pulse busca versiones nuevas al arrancar y cada 6 horas (también en Pulse → *
 - Al terminar, **Reiniciar ahora** (pregunta antes si hay cambios sin guardar).
 - La versión anterior se guarda como «Pulse (anterior)»: **Volver a la versión anterior** la recupera.
 - La primera vez que arranca una versión nueva enseña sus novedades.
-- Hace falta acceso a GitHub (`gh auth login` o un token en «Acceso a GitHub»).
+- Hace falta acceso a GitHub (`gh auth login` o un token en «Acceso a GitHub»; se guarda en el llavero en macOS y en el Administrador de credenciales en Windows).
+- En Windows se sustituye `pulse.exe` y el anterior queda como «pulse (anterior).exe» en la carpeta de instalación. Antes de instalarla, Pulse comprueba que la descarga es la publicada (su huella SHA-256) y que es la versión anunciada.
 
 ## Atajos de teclado
 

@@ -213,9 +213,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("Zoom").color(TEXT_DIM).size(10.5));
         ui.add(egui::Slider::new(&mut app.arrangement.pixels_per_beat, 3.0..=60.0).logarithmic(true).show_value(false));
         ui.checkbox(&mut app.arrangement.follow, "Seguir cursor");
-        let hint = "Doble clic: nuevo clip · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop";
+        let hint = crate::theme::keys("Doble clic: nuevo clip · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop");
         // Cut with "…" in a narrow window; the tooltip has all of it.
-        ui.add(egui::Label::new(egui::RichText::new(hint).color(TEXT_DIM).size(10.5)).truncate()).on_hover_text(hint);
+        ui.add(egui::Label::new(egui::RichText::new(&hint).color(TEXT_DIM).size(10.5)).truncate()).on_hover_text(hint);
     });
     ui.add_space(2.0);
 
@@ -583,7 +583,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     } else {
         "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
     };
-    let response = response.on_hover_text(hint);
+    let response = response.on_hover_text(crate::theme::keys(hint));
     // Inside groups: indented, a bar of each group's colour.
     let indent = app.project.tracks[t].depth as f32 * 4.0;
     let arrow = Rect::from_min_size(rect.min + vec2(indent + 8.0, 4.0), vec2(14.0, 16.0));
@@ -1120,11 +1120,11 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         app.consolidate(app.clip_selection());
         ui.close();
     }
-    if count == 1 && ui.button("Dividir aquí   ⌘E").on_hover_text("Corta el clip en dos donde hiciste clic derecho (⌘E corta en el cursor)").clicked() {
+    if count == 1 && ui.button(crate::theme::keys("Dividir aquí   ⌘E")).on_hover_text(crate::theme::keys("Corta el clip en dos donde hiciste clic derecho (⌘E corta en el cursor)")).clicked() {
         app.split_clip_at(track, index, beat);
         ui.close();
     }
-    if count > 1 && ui.button(format!("Unir {count} clips   ⌘J")).on_hover_text("Clips de una pista en uno solo, de principio a fin (los de audio, en un archivo nuevo)").clicked() {
+    if count > 1 && ui.button(crate::theme::keys(&format!("Unir {count} clips   ⌘J"))).on_hover_text("Clips de una pista en uno solo, de principio a fin (los de audio, en un archivo nuevo)").clicked() {
         app.join_selected();
         ui.close();
     }
@@ -1137,7 +1137,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         app.delete_selected_clip();
         ui.close();
     }
-    if ui.button(format!("{}   ⌘D", label("Duplicar"))).clicked() {
+    if ui.button(crate::theme::keys(&format!("{}   ⌘D", label("Duplicar")))).clicked() {
         app.duplicate_selected_clip();
         ui.close();
     }
@@ -1612,7 +1612,7 @@ mod tests {
         screen.menu(&mut app, clip, "Copiar");
         assert_eq!(app.selected_clip, Some(ClipRef::Arrangement { track: 0, index: 0 }), "right-clicking selects it");
         assert!(app.clip_clipboard.is_some());
-        screen.menu(&mut app, clip, "Duplicar   ⌘D");
+        screen.menu(&mut app, clip, &crate::theme::keys("Duplicar   ⌘D"));
         assert_eq!(app.project.tracks[0].arrangement.len(), 2);
         screen.menu(&mut app, clip, "Eliminar   ⌫");
         let starts: Vec<f64> = app.project.tracks[0].arrangement.iter().map(|c| c.start).collect();

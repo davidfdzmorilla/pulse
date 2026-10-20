@@ -10,7 +10,12 @@ propia en Rust (cpal para audio, egui para la interfaz).
 cargo run --release
 ```
 
-Los proyectos se guardan como `.pulse` (JSON). `cargo test` ejecuta las pruebas, que no necesitan tarjeta de sonido.
+Los proyectos se guardan como `.pulse` (JSON). `cargo test --release` ejecuta las pruebas, que no necesitan tarjeta de sonido.
+
+Sistemas: macOS (Apple Silicon) y Windows 10/11 x64, este pendiente de verificar
+en un equipo real. Qué funciona en cada uno: [`docs/PLATFORM_SUPPORT.md`](docs/PLATFORM_SUPPORT.md).
+En Windows: [compilar](docs/BUILD_WINDOWS.md), [instalar](docs/INSTALL_WINDOWS.md)
+y [estado](docs/WINDOWS_SUPPORT.md).
 
 ## Uso
 
@@ -22,6 +27,10 @@ el mismo pull request.
 
 - `crates/engine`: motor de audio en tiempo real (sin bloqueos ni reservas de memoria en el hilo de audio).
 - `crates/app`: interfaz (Session View, mezclador, panel de instrumento, piano roll).
+- `crates/stems`: modelos ONNX (batería, audio a MIDI, stems) con ONNX Runtime.
+- `crates/beats`: tempo y compases de un audio.
+- `crates/paths`: dónde van ajustes, datos, cachés y logs en cada sistema.
+- `crates/testplug`: plugin VST3/CLAP mínimo para probar el alojamiento de plugins.
 
 ## Hoja de ruta
 
@@ -42,7 +51,10 @@ el mismo pull request.
 - Publicar: `scripts/release.sh [patch|minor|major]` desde `main` al día. La
   versión sale de la última etiqueta (`v1.2.3`); el script pasa las pruebas,
   firma Pulse.app, crea la etiqueta y la publica en GitHub, de donde la app se
-  actualiza.
+  actualiza. El paquete de Windows se añade a esa publicación desde Windows con
+  `scripts/package-windows.ps1` (ver [`docs/BUILD_WINDOWS.md`](docs/BUILD_WINDOWS.md)).
+- La CI (`.github/workflows/windows.yml`) compila, prueba y empaqueta Pulse en
+  Windows en cada pull request; macOS se prueba en local antes de cada pull request.
 
 ## Audio a MIDI
 
@@ -63,7 +75,8 @@ cargo test --release -p stems dump_track -- --ignored --nocapture`.
 HTDemucs (Meta, licencia MIT) con ONNX Runtime, en la CPU y sin conexión. El
 modelo (`htdemucs.onnx`, 174 MB) no va dentro de la app: se descarga una vez de
 la publicación `modelo-htdemucs-1` del repositorio y se guarda en
-`~/Library/Application Support/Pulse/Models`.
+`Models` dentro de la carpeta de datos (`~/Library/Application Support/Pulse` en
+macOS, `%LOCALAPPDATA%\Pulse` en Windows).
 
 Para regenerarlo (en un entorno de Python con `demucs onnx onnxruntime soundfile`):
 

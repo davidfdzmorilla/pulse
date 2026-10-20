@@ -2,6 +2,11 @@
 //! floats over Pulse (and hides while Pulse is in the background), as in other DAWs.
 //! The window follows the sizes the editor asks for, and the editor follows the
 //! window when the user resizes it.
+//!
+//! macOS: an NSWindow at the floating level that hides with Pulse. Windows: a
+//! window owned by Pulse's (it stays above it and minimizes with it), in pixels,
+//! with the editor told the screen's scale; it follows the window to a screen
+//! of another scale.
 
 use crate::app::PulseApp;
 use engine::model::PluginId;
@@ -12,7 +17,9 @@ use std::collections::HashMap;
 pub struct Editors {
     #[cfg(target_os = "macos")]
     open: HashMap<PluginId, mac::Editor>,
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    open: HashMap<PluginId, win::Editor>,
+    #[cfg(not(any(target_os = "macos", windows)))]
     open: HashMap<PluginId, ()>,
     /// Editors to open again once their plugins are reloaded (after undo or opening).
     reopen: Vec<PluginId>,
@@ -32,13 +39,17 @@ impl PulseApp {
             self.status = Some(format!("{name} no está cargado"));
             return;
         };
-        #[cfg(target_os = "macos")]
+        #[cfg(any(target_os = "macos", windows))]
         {
             if let Some(editor) = self.editors.open.get(&id) {
                 editor.front();
                 return;
             }
-            match mac::Editor::open(handle, &name) {
+            #[cfg(target_os = "macos")]
+            let opened = mac::Editor::open(handle, &name);
+            #[cfg(windows)]
+            let opened = win::Editor::open(handle, &name);
+            match opened {
                 Ok(editor) => {
                     self.editors.open.insert(id, editor);
                 }
@@ -48,10 +59,10 @@ impl PulseApp {
                 }
             }
         }
-        #[cfg(not(target_os = "macos"))]
+        #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = handle;
-            self.status = Some(format!("{name}: los editores de plugins solo se abren en macOS por ahora"));
+            self.status = Some(format!("{name}: en este sistema los editores de plugins aún no se abren; usa Parámetros…"));
         }
     }
 
@@ -71,7 +82,7 @@ impl PulseApp {
         }
         let plugins = &self.samples.plugins;
         self.editors.open.retain(|id, _editor| {
-            #[cfg(target_os = "macos")]
+            #[cfg(any(target_os = "macos", windows))]
             if !_editor.poll() {
                 return false;
             }
@@ -91,7 +102,9 @@ impl PulseApp {
 pub fn check_installed() -> Vec<String> {
     #[cfg(target_os = "macos")]
     let mut report = vec![format!("Ventanas de editor: {}", mac::check_closing())];
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(windows)]
+    let mut report = vec![format!("Ventanas de editor: {}", win::check_closing())];
+    #[cfg(not(any(target_os = "macos", windows)))]
     let mut report = Vec::new();
     for bundle in engine::plugin::default_folders().iter().flat_map(|f| engine::plugin::bundles(f)) {
         let Ok(list) = engine::plugin::scan(&bundle) else { continue };
@@ -148,9 +161,14 @@ fn check_editor(handle: &engine::plugin::PluginHandle) -> String {
     )
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(windows)]
+fn check_editor(handle: &engine::plugin::PluginHandle) -> String {
+    win::check_editor(handle)
+}
+
+#[cfg(not(any(target_os = "macos", windows)))]
 fn check_editor(_handle: &engine::plugin::PluginHandle) -> String {
-    "solo se comprueba en macOS".into()
+    "solo se comprueba en macOS y Windows".into()
 }
 
 #[cfg(target_os = "macos")]
@@ -297,5 +315,284 @@ mod mac {
             self.window.setDelegate(None);
             self.window.close();
         }
+    }
+}
+
+#[cfg(windows)]
+mod win {
+    use engine::plugin::{PluginHandle, PluginView};
+    use std::cell::Cell;
+    use std::ffi::c_void;
+    use std::rc::Rc;
+    use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::HiDpi::{AdjustWindowRectExForDpi, GetDpiForWindow};
+    use windows_sys::Win32::UI::Input::KeyboardAndMouse::GetActiveWindow;
+    use windows_sys::Win32::UI::WindowsAndMessaging::*;
+
+    const CLASS: &str = "PulsePluginEditor";
+    /// Windows' "100 %".
+    const BASE_DPI: u32 = 96;
+
+    /// What the window procedure tells the editor (through GWLP_USERDATA).
+    struct WindowState {
+        closed: Cell<bool>,
+        /// The DPI of the screen the window is on, once it moved to another.
+        dpi: Cell<Option<u32>>,
+    }
+
+    fn wide(text: &str) -> Vec<u16> {
+        text.encode_utf16().chain(std::iter::once(0)).collect()
+    }
+
+    unsafe extern "system" fn procedure(hwnd: HWND, message: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+        let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } as *const WindowState;
+        match message {
+            // The user closed it: the editor goes on the next frame, and the window with it.
+            WM_CLOSE if !state.is_null() => {
+                unsafe { (*state).closed.set(true) };
+                0
+            }
+            // Moved to a screen of another scale: take the size Windows suggests,
+            // and tell the editor on the next frame.
+            WM_DPICHANGED if !state.is_null() => {
+                let suggested = unsafe { &*(lparam as *const RECT) };
+                unsafe {
+                    (*state).dpi.set(Some(((wparam >> 16) & 0xffff) as u32));
+                    SetWindowPos(hwnd, std::ptr::null_mut(), suggested.left, suggested.top, suggested.right - suggested.left, suggested.bottom - suggested.top, SWP_NOZORDER | SWP_NOACTIVATE);
+                }
+                0
+            }
+            _ => unsafe { DefWindowProcW(hwnd, message, wparam, lparam) },
+        }
+    }
+
+    fn register() -> Result<(), String> {
+        static REGISTERED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        let ok = *REGISTERED.get_or_init(|| {
+            let name = wide(CLASS);
+            let class = WNDCLASSEXW {
+                cbSize: std::mem::size_of::<WNDCLASSEXW>() as u32,
+                style: CS_HREDRAW | CS_VREDRAW,
+                lpfnWndProc: Some(procedure),
+                cbClsExtra: 0,
+                cbWndExtra: 0,
+                hInstance: unsafe { GetModuleHandleW(std::ptr::null()) },
+                hIcon: std::ptr::null_mut(),
+                hCursor: unsafe { LoadCursorW(std::ptr::null_mut(), IDC_ARROW) },
+                hbrBackground: std::ptr::null_mut(),
+                lpszMenuName: std::ptr::null(),
+                lpszClassName: name.as_ptr(),
+                hIconSm: std::ptr::null_mut(),
+            };
+            unsafe { RegisterClassExW(&class) != 0 }
+        });
+        if ok { Ok(()) } else { Err("no se pudo preparar la ventana del editor".into()) }
+    }
+
+    fn style(resizable: bool) -> u32 {
+        let mut style = WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_CLIPCHILDREN;
+        if resizable {
+            style |= WS_THICKFRAME | WS_MAXIMIZEBOX;
+        }
+        style
+    }
+
+    /// The window's outer size for a content of `width` × `height` pixels.
+    fn outer(hwnd: HWND, width: i32, height: i32) -> (i32, i32) {
+        let style = unsafe { GetWindowLongPtrW(hwnd, GWL_STYLE) } as u32;
+        let dpi = unsafe { GetDpiForWindow(hwnd) }.max(BASE_DPI);
+        let mut rect = RECT { left: 0, top: 0, right: width, bottom: height };
+        unsafe { AdjustWindowRectExForDpi(&mut rect, style, 0, 0, dpi) };
+        (rect.right - rect.left, rect.bottom - rect.top)
+    }
+
+    fn content_size(hwnd: HWND) -> (i32, i32) {
+        let mut rect = RECT { left: 0, top: 0, right: 0, bottom: 0 };
+        unsafe { GetClientRect(hwnd, &mut rect) };
+        (rect.right - rect.left, rect.bottom - rect.top)
+    }
+
+    fn resize(hwnd: HWND, width: i32, height: i32) {
+        let (w, h) = outer(hwnd, width, height);
+        unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), 0, 0, w, h, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    }
+
+    /// A window for an editor, owned by `owner`, not shown yet.
+    fn create(title: &str, owner: HWND, resizable: bool) -> Result<HWND, String> {
+        register()?;
+        let (class, title) = (wide(CLASS), wide(title));
+        let hwnd = unsafe {
+            CreateWindowExW(0, class.as_ptr(), title.as_ptr(), style(resizable), CW_USEDEFAULT, CW_USEDEFAULT, 400, 300, owner, std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null())
+        };
+        if hwnd.is_null() { Err("no se pudo crear la ventana del editor".into()) } else { Ok(hwnd) }
+    }
+
+    /// Centers `hwnd` over `owner` (or leaves it where Windows put it).
+    fn center(hwnd: HWND, owner: HWND) {
+        let (mut window, mut over) = (RECT { left: 0, top: 0, right: 0, bottom: 0 }, RECT { left: 0, top: 0, right: 0, bottom: 0 });
+        if owner.is_null() || unsafe { GetWindowRect(hwnd, &mut window) } == 0 || unsafe { GetWindowRect(owner, &mut over) } == 0 {
+            return;
+        }
+        let (w, h) = (window.right - window.left, window.bottom - window.top);
+        let x = over.left + ((over.right - over.left) - w) / 2;
+        let y = (over.top + ((over.bottom - over.top) - h) / 2).max(over.top);
+        unsafe { SetWindowPos(hwnd, std::ptr::null_mut(), x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE) };
+    }
+
+    pub struct Editor {
+        // The view goes before the window: the editor leaves its window first.
+        view: Option<PluginView>,
+        hwnd: HWND,
+        state: Box<WindowState>,
+        /// The content size last given to the editor (or asked for by it), in pixels.
+        size: Rc<Cell<(i32, i32)>>,
+    }
+
+    impl Editor {
+        pub fn open(handle: &PluginHandle, title: &str) -> Result<Editor, String> {
+            let mut view = handle.editor().ok_or("no tiene editor propio; usa Parámetros…")?;
+            if !view.supports(engine::plugin::PLATFORM_VIEW) {
+                return Err("su editor no funciona en Windows".into());
+            }
+            // Pulse's window, active when the editor is asked for: the editor stays over it.
+            let owner = unsafe { GetActiveWindow() };
+            let hwnd = create(title, owner, view.can_resize())?;
+            let state = Box::new(WindowState { closed: Cell::new(false), dpi: Cell::new(None) });
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const WindowState as isize) };
+            // Editors on Windows work in pixels: they're told the scale before saying their size.
+            view.set_scale(unsafe { GetDpiForWindow(hwnd) }.max(BASE_DPI) as f64 / BASE_DPI as f64);
+            let (width, height) = view.size();
+            let (width, height) = (width.max(100), height.max(60));
+            resize(hwnd, width, height);
+            center(hwnd, owner);
+            let size = Rc::new(Cell::new((width, height)));
+            {
+                let size = size.clone();
+                view.on_resize(move |w, h| {
+                    let wanted = (w.max(1), h.max(1));
+                    size.set(wanted);
+                    resize(hwnd, wanted.0, wanted.1);
+                });
+            }
+            if !unsafe { view.attach(hwnd as *mut c_void) } {
+                drop(view);
+                unsafe {
+                    SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+                    DestroyWindow(hwnd);
+                }
+                return Err("su editor no se pudo abrir".into());
+            }
+            unsafe {
+                ShowWindow(hwnd, SW_SHOW);
+                SetForegroundWindow(hwnd);
+            }
+            Ok(Editor { view: Some(view), hwnd, state, size })
+        }
+
+        pub fn front(&self) {
+            unsafe {
+                if IsIconic(self.hwnd) != 0 {
+                    ShowWindow(self.hwnd, SW_RESTORE);
+                } else {
+                    ShowWindow(self.hwnd, SW_SHOW);
+                }
+                SetForegroundWindow(self.hwnd);
+            }
+        }
+
+        /// False once the user closed the window. Hands window resizes and scale
+        /// changes to the editor.
+        pub fn poll(&self) -> bool {
+            if self.state.closed.get() {
+                return false;
+            }
+            let Some(view) = &self.view else { return true };
+            if let Some(dpi) = self.state.dpi.take() {
+                view.set_scale(dpi.max(BASE_DPI) as f64 / BASE_DPI as f64);
+            }
+            // Minimized windows have no content to follow.
+            if unsafe { IsIconic(self.hwnd) } != 0 {
+                return true;
+            }
+            let now = content_size(self.hwnd);
+            if now != self.size.get() && now.0 > 0 && now.1 > 0 {
+                let accepted = view.set_size(now.0, now.1);
+                self.size.set(accepted);
+                if accepted != now {
+                    resize(self.hwnd, accepted.0, accepted.1);
+                }
+            }
+            true
+        }
+    }
+
+    impl Drop for Editor {
+        fn drop(&mut self) {
+            self.view.take();
+            unsafe {
+                SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+                DestroyWindow(self.hwnd);
+            }
+        }
+    }
+
+    /// Whether closing an editor's window is noticed and hiding it is not: checked on
+    /// a window that is never shown.
+    pub fn check_closing() -> String {
+        let Ok(hwnd) = create("Pulse", std::ptr::null_mut(), false) else { return "no se pudo crear una ventana".into() };
+        let state = Box::new(WindowState { closed: Cell::new(false), dpi: Cell::new(None) });
+        unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, &*state as *const WindowState as isize) };
+        unsafe { ShowWindow(hwnd, SW_HIDE) };
+        let after_hiding = state.closed.get();
+        unsafe { SendMessageW(hwnd, WM_CLOSE, 0, 0) };
+        let after_closing = state.closed.get();
+        let alive = unsafe { IsWindow(hwnd) } != 0;
+        unsafe {
+            SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
+            DestroyWindow(hwnd);
+        }
+        format!(
+            "ocultar la ventana {} la cierra; cerrarla {} avisa{}",
+            if after_hiding { "SÍ" } else { "no" },
+            if after_closing { "sí" } else { "NO" },
+            if alive { "" } else { " (y la destruye antes de tiempo)" }
+        )
+    }
+
+    /// Mounts an installed plugin's editor in a window that is never shown, resizes
+    /// it and takes it out again.
+    pub fn check_editor(handle: &PluginHandle) -> String {
+        let Some(mut view) = handle.editor() else { return "sin editor propio".into() };
+        if !view.supports(engine::plugin::PLATFORM_VIEW) {
+            return "su editor no admite HWND".into();
+        }
+        let resizable = view.can_resize();
+        let Ok(hwnd) = create("Pulse", std::ptr::null_mut(), resizable) else { return "no se pudo crear una ventana".into() };
+        let scaled = view.set_scale(1.0);
+        let (w, h) = view.size();
+        resize(hwnd, w.max(1), h.max(1));
+        let requested = Rc::new(Cell::new(None));
+        {
+            let requested = requested.clone();
+            view.on_resize(move |w, h| requested.set(Some((w, h))));
+        }
+        if !unsafe { view.attach(hwnd as *mut c_void) } {
+            unsafe { DestroyWindow(hwnd) };
+            return format!("editor de {w}×{h} que no se pudo montar");
+        }
+        let child = !unsafe { GetWindow(hwnd, GW_CHILD) }.is_null();
+        let resized = if resizable { view.set_size(w + 100, h + 60) } else { (w, h) };
+        drop(view);
+        let left = !unsafe { GetWindow(hwnd, GW_CHILD) }.is_null();
+        unsafe { DestroyWindow(hwnd) };
+        format!(
+            "editor de {w}×{h} montado ({}), {}{}{}, desmontado ({})",
+            if child { "con su ventana" } else { "sin ventana propia" },
+            if resizable { format!("redimensionable: pide {}×{} → {}×{}", w + 100, h + 60, resized.0, resized.1) } else { "tamaño fijo".into() },
+            if scaled { ", acepta la escala" } else { "" },
+            requested.get().map_or(String::new(), |(w, h)| format!(", pidió {w}×{h}")),
+            if left { "dejó su ventana" } else { "sin restos" },
+        )
     }
 }

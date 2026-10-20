@@ -59,7 +59,7 @@ impl Default for Settings {
 }
 
 fn path() -> PathBuf {
-    crate::kits::kits_dir().with_file_name("settings.json")
+    paths::config_dir().join("settings.json")
 }
 
 impl Settings {
@@ -247,10 +247,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.label(egui::RichText::new("Proyectos (cada uno en su carpeta, con sus audios), exportaciones, presets, wavetables y muestras").color(TEXT_DIM).size(10.5));
         // ~ for the home folder, and cut with "…" if long (the tooltip has it all).
         let root = crate::library::root().display().to_string();
-        let shown = match std::env::var("HOME") {
-            Ok(home) if root.starts_with(&home) => format!("~{}", &root[home.len()..]),
-            _ => root.clone(),
-        };
+        let shown = paths::shorten(&crate::library::root());
         ui.add(egui::Label::new(shown).truncate()).on_hover_text(root);
         ui.horizontal(|ui| {
             if ui.button("Cambiar…").on_hover_text("Lo que ya hay no se mueve: los proyectos se abren desde donde estén").clicked() {
@@ -261,7 +258,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             if next.library.is_some() && ui.button("Volver a Música/Pulse").clicked() {
                 next.library = None;
             }
-            if ui.button("Mostrar en Finder").clicked() {
+            if ui.button(if cfg!(windows) { "Mostrar en el Explorador" } else { "Mostrar en Finder" }).clicked() {
                 show_folder = true;
             }
         });

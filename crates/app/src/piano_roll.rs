@@ -675,7 +675,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         ui.separator();
         let targets = note_edit::targets(&clip.notes, &state.selection);
         let scope = if state.selection.is_empty() { "todas las notas" } else { "las notas seleccionadas" };
-        if ui.button("Cuantizar").on_hover_text(format!("Cuantiza {scope} a la rejilla (⌘U)")).clicked() {
+        if ui.button("Cuantizar").on_hover_text(crate::theme::keys(&format!("Cuantiza {scope} a la rejilla (⌘U)"))).clicked() {
             note_edit::quantize(&mut clip.notes, &targets, state.grid, state.quantize_strength, state.quantize_ends, clip.length);
         }
         let mut percent = state.quantize_strength * 100.0;
@@ -789,7 +789,7 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
                 n if state.drums.ai => format!("Otra versión ({n})"),
                 n => format!("Otra versión ({} de {takes})", (n as usize - 1) % takes + 1),
             };
-            if ui.button(label).on_hover_text("Sustituye las notas del clip (⌘Z las recupera)").clicked() {
+            if ui.button(label).on_hover_text(crate::theme::keys("Sustituye las notas del clip (⌘Z las recupera)")).clicked() {
                 let take = state.drum_takes;
                 state.drum_takes += 1;
                 let bass = if state.drums.follow_bass { bass } else { &[] };

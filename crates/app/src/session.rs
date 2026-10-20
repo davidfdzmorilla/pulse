@@ -129,7 +129,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
                 ui.painter().rect_filled(rect, 2.0, fill);
                 ui.painter().text(rect.center(), Align2::CENTER_CENTER, "+", theme::body(), TEXT);
-                if response.on_hover_text("Nueva pista MIDI (⌘T)").clicked() {
+                if response.on_hover_text(crate::theme::keys("Nueva pista MIDI (⌘T)")).clicked() {
                     actions.push(Action::AddTrack);
                 }
             });
@@ -224,12 +224,12 @@ pub(crate) fn group_marks(app: &PulseApp, painter: &egui::Painter, t: usize, rec
 /// Grouping in a track's menu.
 pub(crate) fn group_items(ui: &mut egui::Ui, group: bool, in_group: bool, selected: usize, mut act: impl FnMut(Action), t: usize) {
     ui.separator();
-    let label = if selected > 1 { format!("Agrupar {selected} pistas  ⌘G") } else { "Agrupar pista  ⌘G".to_string() };
+    let label = crate::theme::keys(&if selected > 1 { format!("Agrupar {selected} pistas  ⌘G") } else { "Agrupar pista  ⌘G".to_string() });
     if ui.button(label).on_hover_text("Las pone en un grupo nuevo: suenan juntas por su fader y sus efectos").clicked() {
         act(Action::GroupTracks);
         ui.close();
     }
-    if group && ui.button("Desagrupar  ⇧⌘G").on_hover_text("Quita el grupo; sus pistas se quedan").clicked() {
+    if group && ui.button(crate::theme::keys("Desagrupar  ⇧⌘G")).on_hover_text("Quita el grupo; sus pistas se quedan").clicked() {
         act(Action::Ungroup(t));
         ui.close();
     }
@@ -292,7 +292,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     } else {
         "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
     };
-    let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag()).on_hover_text(hint);
+    let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag()).on_hover_text(crate::theme::keys(hint));
     group_marks(app, ui.painter(), t, response.rect);
     // The fold arrow.
     let on_arrow = response.interact_pointer_pos().is_some_and(|p| p.x < response.rect.left() + 18.0);
@@ -464,7 +464,7 @@ fn clip_slot(
         (false, false) => "Doble clic: nuevo clip MIDI · arrastrar: seleccionar con un recuadro",
         (false, true) => "Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)",
     };
-    let response = response.on_hover_text(hint);
+    let response = response.on_hover_text(crate::theme::keys(hint));
     // Drums have no chords to accompany.
     let app_drums = app.project.tracks[t].is_drums();
     if let Some(clip) = clip {
@@ -518,7 +518,7 @@ fn clip_slot(
             }
             let several = app.is_clip_selected(ClipRef::Session { track: t, slot }) && app.clip_selection().len() > 1;
             let count = app.clip_selection().len();
-            if ui.button(if several { format!("Duplicar {count} clips   ⌘D") } else { "Duplicar   ⌘D".into() }).clicked() {
+            if ui.button(crate::theme::keys(&if several { format!("Duplicar {count} clips   ⌘D") } else { "Duplicar   ⌘D".into() })).clicked() {
                 actions.push(Action::Duplicate(t, slot));
                 ui.close();
             }

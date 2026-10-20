@@ -46,7 +46,7 @@ pub struct StemJob {
 pub fn model_path() -> PathBuf {
     match std::env::var_os("PULSE_STEMS_MODEL") {
         Some(path) => path.into(),
-        None => crate::kits::kits_dir().with_file_name("Models").join(MODEL_FILE),
+        None => paths::data_dir().join("Models").join(MODEL_FILE),
     }
 }
 
@@ -243,15 +243,27 @@ fn download_model(dest: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Res
     std::fs::rename(&partial, dest).map_err(|e| e.to_string())
 }
 
-fn sha256(path: &Path) -> Result<String, String> {
-    let out = std::process::Command::new("/usr/bin/shasum").args(["-a", "256"]).arg(path).output().map_err(|e| e.to_string())?;
-    String::from_utf8_lossy(&out.stdout).split_whitespace().next().map(str::to_string).ok_or("No se pudo comprobar el modelo".into())
+/// A file's SHA-256, in hex.
+pub(crate) fn sha256(path: &Path) -> Result<String, String> {
+    use sha2::Digest;
+    let mut file = std::fs::File::open(path).map_err(|e| format!("No se pudo comprobar {}: {e}", path.display()))?;
+    let mut hasher = sha2::Sha256::new();
+    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("No se pudo comprobar {}: {e}", path.display()))?;
+    Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::project::Project;
+
+    #[test]
+    fn sha256_matches_the_known_digest() {
+        let file = std::env::temp_dir().join(format!("pulse sha ñ {}.txt", std::process::id()));
+        std::fs::write(&file, b"abc").unwrap();
+        assert_eq!(sha256(&file).unwrap(), "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad");
+        std::fs::remove_file(&file).unwrap();
+    }
 
     fn audio_clip(path: &str) -> AudioClip {
         AudioClip {

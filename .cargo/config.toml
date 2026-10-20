@@ -1,0 +1,7 @@
+# Windows x64 (MSVC). The ONNX Runtime that `ort` links in on Windows is the
+# DirectML build: it imports DirectML.dll (not part of Windows) and DXCORE.dll
+# (only from Windows 10 1903). Pulse runs its models on the CPU, so they are
+# delay-loaded: pulse.exe and the tests start without them, and they would only
+# load if a DirectML session were ever created.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "link-arg=/DELAYLOAD:DirectML.dll", "-C", "link-arg=/DELAYLOAD:DXCORE.dll", "-C", "link-arg=delayimp.lib"]

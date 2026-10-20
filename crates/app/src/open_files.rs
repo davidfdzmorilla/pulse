@@ -1,4 +1,4 @@
-//! Projects macOS asks Pulse to open: a double clic in Finder, "Abrir con", or a
+//! Projects the system asks Pulse to open. macOS: a double clic in Finder, "Abrir con", or a
 //! file dropped on the Dock icon. They arrive as `application:openURLs:` on the
 //! application delegate, which belongs to the windowing library and doesn't
 //! answer it, so the method is added to its class as the app starts. The paths
@@ -32,8 +32,18 @@ pub fn set_context(ctx: &eframe::egui::Context) {
 #[cfg(target_os = "macos")]
 pub use mac::listen;
 
+/// Elsewhere they come as arguments: a double click on a .pulse file (or "Abrir
+/// con") starts Pulse with its path. A second double click while Pulse runs
+/// starts another Pulse.
 #[cfg(not(target_os = "macos"))]
-pub fn listen() {}
+pub fn listen() {
+    for arg in std::env::args_os().skip(1) {
+        let path = PathBuf::from(arg);
+        if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("pulse")) && path.is_file() {
+            push(path);
+        }
+    }
+}
 
 /// Where the mouse is over Pulse's window (in its points, from the top left), asked
 /// of macOS: a drag from Finder brings no pointer events, and the files dropped

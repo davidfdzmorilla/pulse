@@ -57,10 +57,7 @@ pub fn default_root() -> PathBuf {
     if cfg!(test) {
         return std::env::temp_dir().join(format!("pulse-test-library-{}", std::process::id()));
     }
-    match std::env::var_os("HOME") {
-        Some(home) => Path::new(&home).join("Music/Pulse"),
-        None => std::env::temp_dir().join("Pulse"),
-    }
+    paths::default_library()
 }
 
 /// A folder of Pulse's (created if missing).
@@ -76,9 +73,9 @@ pub fn prepare() {
     for name in [PROJECTS, EXPORTS, PRESETS, WAVETABLES, SAMPLES] {
         folder(name);
     }
-    let old = crate::kits::kits_dir();
+    let old = paths::data_dir();
     for name in [PRESETS, WAVETABLES] {
-        let _ = copy_missing(&old.with_file_name(name), &root().join(name));
+        let _ = copy_missing(&old.join(name), &root().join(name));
     }
 }
 
@@ -233,19 +230,40 @@ pub fn relative(project: &Project, dir: &Path) -> Project {
     let mut project = project.clone();
     for file in files_mut(&mut project) {
         if let Ok(rest) = Path::new(file.as_str()).strip_prefix(dir) {
-            *file = rest.to_string_lossy().into_owned();
+            // With "/" whatever the system: the project opens on macOS and Windows alike.
+            *file = rest.components().map(|c| c.as_os_str().to_string_lossy()).collect::<Vec<_>>().join("/");
         }
     }
     project
 }
 
-/// The project as loaded from `dir`: relative paths made whole again.
+/// The project as loaded from `dir`: relative paths made whole again, with this
+/// system's separators (Windows understands "/", but macOS takes a backslash as
+/// part of a name).
 pub fn resolve(project: &mut Project, dir: &Path) {
     for file in files_mut(project) {
-        if Path::new(file.as_str()).is_relative() {
-            *file = dir.join(file.as_str()).to_string_lossy().into_owned();
+        if Path::new(file.as_str()).is_relative() && !looks_absolute(file) {
+            let relative: PathBuf = file.split(['/', '\\']).filter(|p| !p.is_empty()).collect();
+            *file = dir.join(relative).to_string_lossy().into_owned();
         }
     }
+}
+
+/// A path that is absolute on some system, if not on this one (a drive or network
+/// path on macOS, "/Users/…" on Windows): it stays as it was saved, missing.
+fn looks_absolute(file: &str) -> bool {
+    let bytes = file.as_bytes();
+    file.starts_with('/') || file.starts_with("\\\\") || (bytes.len() > 2 && bytes[0].is_ascii_alphabetic() && bytes[1] == b':' && matches!(bytes[2], b'\\' | b'/'))
+}
+
+/// The audio files the project uses that aren't where it says (moved, deleted, or
+/// on another computer). Their paths stay as they are, so nothing is lost.
+pub fn missing_files(project: &Project) -> Vec<String> {
+    let mut project = project.clone();
+    let mut missing: Vec<String> = files_mut(&mut project).into_iter().filter(|f| !Path::new(f.as_str()).exists()).map(|f| f.clone()).collect();
+    missing.sort();
+    missing.dedup();
+    missing
 }
 
 #[cfg(test)]
@@ -306,13 +324,14 @@ mod tests {
             Some(Clip::Audio(a)) => a.sample.clone(),
             _ => panic!(),
         };
-        assert_eq!(sample(0, 0), dir.join("Samples/Importados/song.wav").to_string_lossy());
+        let same = |file: String, path: PathBuf| assert_eq!(Path::new(&file), path);
+        same(sample(0, 0), dir.join("Samples").join("Importados").join("song.wav"));
         assert_eq!(sample(0, 1), sample(0, 0), "one copy of a file used twice");
-        assert_eq!(sample(0, 2), dir.join("Samples/Grabaciones").join(recording.file_name().unwrap()).to_string_lossy());
+        same(sample(0, 2), dir.join("Samples").join("Grabaciones").join(recording.file_name().unwrap()));
         assert!(!recording.exists(), "the unsaved take moved in");
         assert!(!recording.parent().unwrap().exists(), "its folder, empty, went too");
         assert!(song.exists(), "imported files are copied, not moved");
-        assert_eq!(project.tracks[1].samples[1], dir.join("Samples/Importados/kick.wav").to_string_lossy());
+        same(project.tracks[1].samples[1].clone(), dir.join("Samples").join("Importados").join("kick.wav"));
         assert_eq!(project.tracks[1].samples[2], "/no/such.wav", "missing files are left as they were");
 
         // Saved with paths relative to the folder; loaded back from wherever it is.
@@ -323,7 +342,7 @@ mod tests {
         let mut moved = saved.clone();
         resolve(&mut moved, Path::new("/Volumes/Otro/Tema"));
         let Some(Clip::Audio(a)) = &moved.tracks[0].clips[0] else { panic!() };
-        assert_eq!(a.sample, "/Volumes/Otro/Tema/Samples/Importados/song.wav");
+        assert_eq!(Path::new(&a.sample), Path::new("/Volumes/Otro/Tema").join("Samples").join("Importados").join("song.wav"));
 
         // Saved again: nothing to bring in (the missing one is still missing); a new
         // file with a taken name gets another.
@@ -334,7 +353,39 @@ mod tests {
         project.tracks[0].clips[3] = Some(audio(&other));
         collect(&mut project, &dir);
         let Some(Clip::Audio(a)) = &project.tracks[0].clips[3] else { panic!() };
-        assert_eq!(a.sample, dir.join("Samples/Importados/song 2.wav").to_string_lossy());
+        same(a.sample.clone(), dir.join("Samples").join("Importados").join("song 2.wav"));
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn projects_travel_between_macos_and_windows() {
+        let dir = std::env::temp_dir().join(format!("pulse viaje ñ {}", std::process::id())).join("Mi Tema");
+        let file = dir.join("Samples").join("Importados").join("Guitarra acústica.wav");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(&file, b"riff").unwrap();
+        let mut project = Project::empty();
+        project.tracks[0].clips[0] = Some(audio(&file));
+        // Saved here: "/" between folders, on every system.
+        let saved = relative(&project, &dir);
+        let Some(Clip::Audio(a)) = &saved.tracks[0].clips[0] else { panic!() };
+        assert_eq!(a.sample, "Samples/Importados/Guitarra acústica.wav");
+        // A project saved on Windows with backslashes, and one from the other
+        // system's absolute paths.
+        let mut from_windows = saved.clone();
+        if let Some(Clip::Audio(a)) = &mut from_windows.tracks[0].clips[0] {
+            a.sample = "Samples\\Importados\\Guitarra acústica.wav".into();
+        }
+        from_windows.tracks[1].samples = vec![r"C:\Users\ana\Music\kick.wav".into(), "/Users/ana/Music/snare.wav".into()];
+        resolve(&mut from_windows, &dir);
+        let Some(Clip::Audio(a)) = &from_windows.tracks[0].clips[0] else { panic!() };
+        assert_eq!(Path::new(&a.sample), file, "the file in its folder is found");
+        assert!(Path::new(&a.sample).exists());
+        // The other system's paths are kept as they were, and reported missing.
+        let missing = missing_files(&from_windows);
+        let elsewhere = if cfg!(windows) { "/Users/ana/Music/snare.wav" } else { r"C:\Users\ana\Music\kick.wav" };
+        assert!(missing.iter().any(|m| m == elsewhere), "{missing:?}");
+        assert!(from_windows.tracks[1].samples.iter().any(|s| s == elsewhere));
+        assert!(!missing.iter().any(|m| Path::new(m) == file));
+        std::fs::remove_dir_all(dir.parent().unwrap()).ok();
     }
 }

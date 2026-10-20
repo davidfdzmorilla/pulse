@@ -1,0 +1,8 @@
+[package]
+name = "paths"
+version = "0.1.0"
+edition = "2024"
+description = "Where Pulse keeps its settings, data, caches and logs on each system."
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_System_Com", "Win32_UI_Shell"] }

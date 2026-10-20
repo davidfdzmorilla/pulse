@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/engine", "crates/app", "crates/testplug", "crates/stems", "crates/beats"]
+members = ["crates/engine", "crates/app", "crates/testplug", "crates/stems", "crates/beats", "crates/paths"]
 
 [profile.dev]
 opt-level = 1

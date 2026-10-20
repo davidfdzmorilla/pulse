@@ -1644,7 +1644,7 @@ impl PulseApp {
     }
 
     /// A copy of a track, with plugin instances of its own (from the same state).
-    fn copy_track(&mut self, track: usize) -> Track {
+    pub(crate) fn copy_track(&mut self, track: usize) -> Track {
         let mut copy = self.project.tracks[track].clone();
         let fresh = |project: &mut Project, id: PluginId| -> PluginId {
             let new = project.new_plugin_id();
@@ -2191,6 +2191,7 @@ impl PulseApp {
         self.audio.send(Command::Stop);
         self.project = project;
         self.project.assign_ids();
+        crate::freeze::refresh_frozen(&mut self.project);
         self.saved = self.project.clone();
         self.history.reset(&self.project);
         self.file = file;

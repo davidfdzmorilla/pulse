@@ -162,7 +162,8 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 **Congelar pista** (clic derecho en la cabecera) renderiza a audio lo que suenan su instrumento y sus efectos, y la pista pasa a sonar ese audio: deja de gastar CPU. El volumen, el panorama y los envíos siguen en vivo.
 
 - Una pista congelada lleva un marco azul y ✱. Su instrumento y efectos no se pueden editar.
-- **Descongelar pista** (o el botón «Descongelar» en el panel de abajo) vuelve a lo de antes. Si cambias el contenido de una pista congelada, se descongela sola.
+- **Descongelar pista** (o el botón «Descongelar» en el panel de abajo) vuelve a lo de antes. Si cambias el contenido de una pista congelada, se descongela sola; también si cambias el tempo, el swing o la tonalidad del proyecto, o la pista de la que escucha su sidechain.
+- Suena como antes también con sidechain (la pista que lo dispara se tiene en cuenta al congelar) y con cambios de tempo (el audio congelado sigue la automatización de tempo tal como sonaba). Las envolventes de volumen, panorama y envíos de los clips de Session siguen en vivo; las de los clips del Arrangement quedan grabadas en el audio.
 - **Convertir en audio**: la pista pasa a ser una pista de audio con lo congelado, para siempre.
 - Solo se congela una pista a la vez. Una pista de audio sin efectos no necesita congelarse.
 
@@ -179,7 +180,7 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 
 ## Dividir, unir y consolidar
 
-- **⌘E — Dividir clip**: corta los clips seleccionados del Arrangement por el cursor. **Dividir aquí** (clic derecho) corta donde hiciste clic. Cada parte sigue sonando lo mismo que antes, también en el corte; no se tocan los archivos.
+- **⌘E — Dividir clip**: corta los clips seleccionados del Arrangement por el cursor. **Dividir aquí** (clic derecho) corta donde hiciste clic. Cada parte sigue sonando lo mismo que antes; no se tocan los archivos. Una nota MIDI que cruza el corte termina en él y lo que le quedaba se toca al principio de la parte derecha (vuelve a oírse su ataque).
 - **⌘J — Unir clips**: dos o más clips de la misma pista en uno, del principio del primero al final del último. Los MIDI juntan sus notas; los de audio se renderizan a un archivo nuevo, con silencio en los huecos.
 - **Consolidar** (clic derecho en un clip de audio): lo que suena el clip (con su warp, transposición y ganancia) pasa a un archivo de audio nuevo solo con su trozo. Pierde sus tomas.
 - Dos clips de audio seguidos (sin hueco entre ellos, como las partes de un clip dividido o los trozos de tomas) se funden entre sí durante 10 ms en el corte, en vez de bajar cada uno a silencio. Al unirlos, el archivo nuevo conserva ese fundido.
@@ -462,7 +463,7 @@ En el editor de audio, **Trocear** (Transitorios, 1/16, 1/8 o 1/4) y **A Drum Pa
 
 ### Separar en stems
 
-Clic derecho en un clip de audio → **Separar en stems…** (o el botón del editor). Crea cuatro pistas nuevas debajo, **Batería**, **Bajo**, **Resto** y **Voz**, con el mismo clip en el mismo sitio, y desactiva la original para que suene igual.
+Clic derecho en un clip de audio → **Separar en stems…** (o el botón del editor). Crea cuatro pistas nuevas debajo, **Batería**, **Bajo**, **Resto** y **Voz**, con el mismo clip en el mismo sitio, y desactiva la original para que suene igual: cada pista nueva es una copia de la original, con sus efectos, su volumen, panorama, envíos, automatización y grupo, y el clip conserva sus envolventes.
 
 - Se hace en este Mac, sin enviar nada a internet, y puedes seguir trabajando mientras tanto. **Cancelar** la detiene.
 - La primera vez descarga el modelo (174 MB) de GitHub: hace falta acceso a GitHub (`gh auth login`).
@@ -741,7 +742,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 
 **⇧⌘R** (Archivo → Exportar audio…):
 
-- **Qué**: **Mezcla completa** o **Una pista por archivo (stems)** (cada pista en solo con sus envíos).
+- **Qué**: **Mezcla completa** o **Una pista por archivo (stems)**: cada pista que suena en solo, con sus envíos y su grupo. No se exportan las pistas desactivadas (ni las de un grupo desactivado) ni los grupos como stem aparte (sus pistas ya pasan por él). **Con la cadena del master** (en stems): quítala para que los stems sumados den la mezcla.
 - **Rango**: **Toda la canción** o **Región del loop**.
 - **Formato**: WAV de 16 bits (con dither), 24 o 32 bits; **44.1** o **48 kHz**.
 - **Normalizar**: pico a un valor (no en stems).

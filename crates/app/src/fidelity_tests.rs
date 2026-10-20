@@ -1,0 +1,241 @@
+//! Edits that bounce or rewrite audio keep what was heard: each test renders
+//! before and after the edit and compares. Everything here makes its own audio
+//! (nothing outside the repository).
+
+use crate::app::PulseApp;
+use crate::project::{Project, Track};
+use crate::sync::{self, SampleCache};
+use engine::model::*;
+use engine::{Command, OfflineRenderer};
+use std::collections::HashSet;
+
+const SR: f32 = 48_000.0;
+
+type Stereo = (Vec<f32>, Vec<f32>);
+
+fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
+    Note { start, length, pitch, velocity }
+}
+
+fn lane(param: Param, points: &[(f64, f32)]) -> AutomationLane {
+    AutomationLane { param, points: points.iter().map(|&(beat, value)| AutomationPoint { beat, value, curve: 0.0 }).collect() }
+}
+
+fn midi(name: &str, length: f64, notes: Vec<Note>) -> MidiClip {
+    MidiClip { notes, ..MidiClip::new(name, length, [0; 3]) }
+}
+
+/// A drum beat on a drum machine, as track `id`.
+fn drums(id: u32) -> Track {
+    let mut track = Track::new("Drums", [200, 0, 0], InstrumentKind::DrumMachine(Default::default()));
+    track.id = id;
+    let mut beat: Vec<Note> = (0..16).map(|s| note(s as f64 * 0.25, 0.2, drum_note::CLOSED_HAT, if s % 2 == 0 { 0.7 } else { 0.4 })).collect();
+    beat.extend((0..4).map(|b| note(b as f64, 0.25, drum_note::KICK, 1.0)));
+    track.arrangement = vec![ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(midi("beat", 4.0, beat)) }];
+    track
+}
+
+/// What the engine plays from beat 0, `frames` long, in blocks of 512, the
+/// output limit off, after it has been running a little (as the live one has).
+fn play(project: &Project, frames: usize) -> Stereo {
+    let mut renderer = OfflineRenderer::new(SR);
+    for command in sync::project_commands(project, &mut SampleCache::default(), SR, &HashSet::new()) {
+        renderer.send(command);
+    }
+    let (mut l, mut r) = (Vec::new(), Vec::new());
+    renderer.render(4096, &mut l, &mut r);
+    l.clear();
+    r.clear();
+    for command in [Command::SetMetronome(false), Command::SetOutputLimit(false), Command::BackToArrangement, Command::SetPosition(0.0), Command::Play] {
+        renderer.send(command);
+    }
+    while l.len() < frames {
+        renderer.render(512.min(frames - l.len()), &mut l, &mut r);
+    }
+    (l, r)
+}
+
+fn db(x: f32) -> f32 {
+    if x > 0.0 { 20.0 * x.log10() } else { -999.0 }
+}
+
+/// The largest loudness difference between `a` and `b` in 20 ms windows over
+/// `range` (where `a` is above −60 dBFS), in dB: timing within a window and
+/// phase don't count.
+fn loudness_gap(a: &Stereo, b: &Stereo, range: std::ops::Range<usize>) -> f32 {
+    let n = range.end.min(a.0.len()).min(b.0.len());
+    let rms = |x: &Stereo, r: std::ops::Range<usize>| ((x.0[r.clone()].iter().chain(&x.1[r.clone()]).map(|s| (*s as f64).powi(2)).sum::<f64>()) / (2 * r.len()) as f64).sqrt() as f32;
+    let mut worst = 0f32;
+    let mut i = range.start;
+    while i + 960 <= n {
+        let (x, y) = (rms(a, i..i + 960), rms(b, i..i + 960));
+        if db(x) > -60.0 {
+            worst = worst.max((db(x) - db(y.max(1e-9))).abs());
+        }
+        i += 960;
+    }
+    worst
+}
+
+fn wait_freeze(app: &mut PulseApp) {
+    let ctx = eframe::egui::Context::default();
+    let started = std::time::Instant::now();
+    while app.freeze_job.is_some() {
+        app.follow_freeze(&ctx);
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(started.elapsed().as_secs() < 120, "the freeze never finished");
+    }
+}
+
+fn seconds(project: &Project, beats: f64) -> usize {
+    (beats * 60.0 / project.tempo * SR as f64) as usize
+}
+
+/// A pad ducked by the drums' sidechain, frozen: it still ducks (it rendered
+/// alone, without the drums, and stopped ducking: +7 dB on average).
+#[test]
+fn a_frozen_track_keeps_ducking_to_its_sidechain() {
+    let mut p = Project::empty();
+    let mut pad = Track::new("Pad", [0, 100, 200], InstrumentKind::SuperSaw(Default::default()));
+    pad.id = 2;
+    pad.arrangement = vec![ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(midi("chords", 16.0, vec![note(0.0, 16.0, 57, 0.7), note(0.0, 16.0, 64, 0.7)])) }];
+    pad.devices.push(Device::new(Effect::Ducker(DuckerParams { sidechain: Some(1), ..Default::default() })));
+    p.tracks = vec![drums(1), pad];
+    // Only the pad heard: the drums still drive its ducker.
+    p.tracks[0].mixer.gain = 0.0;
+    let frames = seconds(&p, 16.0);
+    let before = play(&p, frames);
+    let mut app = PulseApp::headless(p);
+    app.freeze(1);
+    wait_freeze(&mut app);
+    assert!(app.project.tracks[1].frozen.is_some(), "{:?}", app.status);
+    let after = play(&app.project, frames);
+    let gap = loudness_gap(&before, &after, 2400..frames);
+    assert!(gap < 1.0, "frozen, it ducks as before: {gap:.2} dB apart");
+}
+
+/// A song that slows from 120 to 80 BPM, its drums frozen: the hits stay where
+/// they were (they drifted up to 44 ms, the frozen audio playing at one tempo).
+#[test]
+fn a_frozen_track_follows_the_songs_tempo_changes() {
+    let mut p = Project::empty();
+    p.tracks = vec![drums(1)];
+    p.master.automation = vec![lane(Param::Tempo, &[(0.0, 120.0), (16.0, 80.0)])];
+    let frames = 10 * SR as usize;
+    let before = play(&p, frames);
+    let mut app = PulseApp::headless(p);
+    app.freeze(0);
+    wait_freeze(&mut app);
+    assert!(app.project.tracks[0].frozen.is_some(), "{:?}", app.status);
+    let after = play(&app.project, frames);
+    let gap = loudness_gap(&before, &after, 2400..frames);
+    assert!(gap < 1.0, "the same hits at the same times: {gap:.2} dB apart");
+}
+
+/// A session clip with a volume envelope, frozen: the envelope moves the
+/// frozen clip once (it was baked in and applied again: 12 dB down).
+#[test]
+fn a_frozen_session_clip_keeps_its_volume_envelope_once() {
+    let mut p = Project::empty();
+    p.quantize = 0.0;
+    let mut synth = Track::new("Synth", [0; 3], InstrumentKind::Synth(Default::default()));
+    let mut clip = midi("c", 4.0, vec![note(0.0, 3.9, 60, 0.8)]);
+    clip.envelopes.push(lane(Param::Volume, &[(0.0, 0.25), (4.0, 0.25)]));
+    synth.clips[0] = Some(Clip::Midi(clip));
+    p.tracks = vec![synth];
+    let launch = |p: &Project| {
+        let mut renderer = OfflineRenderer::new(SR);
+        for command in sync::project_commands(p, &mut SampleCache::default(), SR, &HashSet::new()) {
+            renderer.send(command);
+        }
+        renderer.send(Command::SetOutputLimit(false));
+        renderer.send(Command::LaunchClip { track: 0, slot: 0 });
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        // Two laps; the second is compared.
+        renderer.render(2 * 96_000, &mut l, &mut r);
+        (l.split_off(96_000), r.split_off(96_000))
+    };
+    let before = launch(&p);
+    let mut app = PulseApp::headless(p);
+    app.freeze(0);
+    wait_freeze(&mut app);
+    let after = launch(&app.project);
+    let rms = |x: &Stereo| (x.0.iter().map(|s| s * s).sum::<f32>() / x.0.len() as f32).sqrt();
+    let change = db(rms(&after)) - db(rms(&before));
+    assert!(change.abs() < 0.5, "{change:.1} dB");
+}
+
+/// Two MIDI clips joined: the second's envelope and groove still sound where
+/// they did (both were dropped: 17 dB louder, the hits off the swing).
+#[test]
+fn joined_clips_keep_their_envelopes_and_grooves() {
+    let mut p = Project::empty();
+    let mut track = drums(1);
+    let beat = |groove: Option<Groove>, volume: Option<f32>| {
+        let mut clip = midi("beat", 4.0, (0..16).map(|s| note(s as f64 * 0.25, 0.2, drum_note::CLOSED_HAT, 0.8)).collect());
+        clip.groove = groove;
+        if let Some(v) = volume {
+            clip.envelopes.push(lane(Param::Volume, &[(0.0, v)]));
+        }
+        Clip::Midi(clip)
+    };
+    let swung = Groove { grid: 0.25, swing: 1.0, accent: 0.3, humanize: 0.5 };
+    track.arrangement = vec![ArrangementClip { start: 0.0, length: 4.0, clip: beat(None, None) }, ArrangementClip { start: 4.0, length: 4.0, clip: beat(Some(swung), Some(0.1)) }];
+    p.tracks = vec![track];
+    let frames = seconds(&p, 8.0);
+    let before = play(&p, frames);
+    let mut app = PulseApp::headless(p);
+    app.set_clip_selection(vec![crate::app::ClipRef::Arrangement { track: 0, index: 0 }, crate::app::ClipRef::Arrangement { track: 0, index: 1 }]);
+    app.join_selected();
+    assert_eq!(app.project.tracks[0].arrangement.len(), 1, "{:?}", app.status);
+    let after = play(&app.project, frames);
+    let gap = loudness_gap(&before, &after, 2400..frames);
+    assert!(gap < 1.0, "joined, it sounds as before: {gap:.2} dB apart");
+}
+
+/// A held note split in two keeps sounding after the cut (it stopped there).
+#[test]
+fn a_held_note_sounds_on_after_a_split() {
+    let mut p = Project::empty();
+    let mut synth = Track::new("Synth", [0; 3], InstrumentKind::Synth(Default::default()));
+    synth.arrangement = vec![ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Midi(midi("pad", 8.0, vec![note(0.0, 8.0, 57, 0.8)])) }];
+    p.tracks = vec![synth];
+    let mut app = PulseApp::headless(p);
+    assert!(app.split_clip_at(0, 0, 4.0));
+    let after = play(&app.project, seconds(&app.project, 8.0));
+    let from = seconds(&app.project, 5.0);
+    let to = seconds(&app.project, 7.5);
+    let level = after.0[from..to].iter().fold(0f32, |m, s| m.max(s.abs()));
+    assert!(level > 0.05, "after the cut the note goes on: peak {level}");
+}
+
+/// Stems without the master's effects add up to the mix: switched-off tracks
+/// and groups are not stems of their own.
+#[test]
+fn stems_without_the_master_add_up_to_the_mix() {
+    use crate::export::{beat_range, plan, render, Range, Settings, Song};
+    let mut p = Project::demo();
+    p.master.devices.push(Device::new(Effect::Saturator(SaturatorParams { drive_db: 12.0, ..Default::default() })));
+    let off = p.tracks.len() - 1;
+    p.tracks[off].mixer.active = false;
+    let range = beat_range(&p, Range::Song).unwrap();
+    let cancel = std::sync::atomic::AtomicBool::new(false);
+    let song = Song::of(&p);
+    let mix_settings = Settings { stems: false, ..Default::default() };
+    let mut plain = p.clone();
+    plain.master.devices.clear();
+    let mix = render(plan(&plain, &mut SampleCache::default(), &mix_settings, std::path::Path::new("/tmp/mix.wav")).remove(0).commands, range, song, SR, &cancel, &|_| {}).unwrap();
+    let stems = plan(&p, &mut SampleCache::default(), &Settings { stems: true, stems_master: false, ..Default::default() }, std::path::Path::new("/tmp/mix.wav"));
+    assert_eq!(stems.len(), p.tracks.len() - 1, "the switched-off track has no stem");
+    assert!(stems.iter().all(|s| s.track != Some(off)));
+    let mut sum = (vec![0f32; mix.0.len()], vec![0f32; mix.0.len()]);
+    for stem in stems {
+        let (l, r) = render(stem.commands, range, song, SR, &cancel, &|_| {}).unwrap();
+        for i in 0..sum.0.len().min(l.len()) {
+            sum.0[i] += l[i];
+            sum.1[i] += r[i];
+        }
+    }
+    let gap = loudness_gap(&mix, &sum, 0..mix.0.len());
+    assert!(gap < 1.0, "the stems add up to the mix: {gap:.2} dB apart");
+}

@@ -352,6 +352,7 @@ impl PulseApp {
             let mut report: Option<Report> = None;
             let mut outcome = Ok(());
             for (k, render) in renders.into_iter().enumerate() {
+                let track = render.track;
                 let step = |f: f32| p.store(((k as f32 + f) / count as f32).to_bits(), Ordering::Relaxed);
                 let Some((left, right)) = export::render(render.commands, range, song, RATE, &c, &step) else {
                     outcome = Err("Análisis cancelado".to_string());
@@ -360,7 +361,7 @@ impl PulseApp {
                 match report.as_mut() {
                     None => report = Some(Report { mix: Measures::of(&left, &right, RATE), tracks: Vec::new() }),
                     Some(report) => {
-                        let index = k - 1;
+                        let index = track.unwrap_or(k - 1);
                         let (name, drums, id) = names.get(index).cloned().unwrap_or_default();
                         report.tracks.push(TrackMeasures {
                             index,

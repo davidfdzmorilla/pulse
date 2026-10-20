@@ -12,7 +12,7 @@ use crate::app::{ClipRef, PulseApp};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
 use engine::model::{ArrangementClip, AudioClip, Clip};
-use engine::{Target, MAX_TRACKS};
+use engine::MAX_TRACKS;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
@@ -112,7 +112,9 @@ impl PulseApp {
     }
 
     /// Four audio tracks under the clip's, each with the clip again on a stem;
-    /// the original track goes silent.
+    /// the original track goes silent. Each is a copy of the original (its
+    /// effects, with plugins of their own, mixer, sends, automation and group)
+    /// and the clip keeps its envelopes, so together they sound like it.
     pub fn place_stems(&mut self, clip: ClipRef, audio: &AudioClip, paths: &[PathBuf; 4]) {
         // The clip may have moved meanwhile: then the stems go at the end.
         let still_there = matches!(self.clip(clip), Some(Clip::Audio(a)) if a.sample == audio.sample);
@@ -122,13 +124,29 @@ impl PulseApp {
             return;
         }
         let first = self.project.tracks.len();
+        let source = clip.track();
         let mut tracks = Vec::new();
+        if still_there {
+            self.capture_plugins();
+        }
         for (i, path) in paths.iter().enumerate() {
-            let Some(t) = self.add_audio_track() else { break };
+            let t = if still_there {
+                let mut copy = self.copy_track(source);
+                copy.clips = Default::default();
+                copy.arrangement.clear();
+                copy.frozen = None;
+                copy.mixer.active = true;
+                (copy.armed, copy.solo, copy.id) = (false, false, 0);
+                self.project.tracks.push(copy);
+                self.project.tracks.len() - 1
+            } else {
+                let Some(t) = self.add_audio_track() else { break };
+                t
+            };
             let track = &mut self.project.tracks[t];
             track.name = format!("{} · {}", audio.name, NAMES[i]);
             track.color = COLORS[i];
-            let stem = AudioClip { name: NAMES[i].to_string(), color: COLORS[i], sample: path.to_string_lossy().into_owned(), envelopes: Vec::new(), ..audio.clone() };
+            let stem = AudioClip { name: NAMES[i].to_string(), color: COLORS[i], sample: path.to_string_lossy().into_owned(), ..audio.clone() };
             match clip {
                 ClipRef::Session { slot, .. } => self.set_clip(t, slot, Some(Clip::Audio(stem))),
                 ClipRef::Arrangement { track: source, index } => {
@@ -140,11 +158,12 @@ impl PulseApp {
             }
             tracks.push(t);
         }
-        let source = clip.track();
         if still_there {
             self.move_tracks(&tracks, source + 1);
             self.project.tracks[source].mixer.active = false;
-            self.sync_mixer(Target::Track(source));
+            self.project.assign_ids();
+            // The copies' effects and plugins, and where they now are.
+            self.sync_all();
         }
         let placed_at = if still_there { source + 1 } else { first };
         let first_clip = match clip {
@@ -300,9 +319,21 @@ mod tests {
         let mut app = PulseApp::headless(Project::demo());
         app.project.tracks.truncate(2);
         let source = app.add_audio_track().unwrap();
-        let audio = audio_clip("/x/song.wav");
+        let mut audio = audio_clip("/x/song.wav");
+        audio.envelopes.push(engine::model::AutomationLane { param: engine::model::Param::Volume, points: vec![engine::model::AutomationPoint { beat: 0.0, value: 0.5, curve: 0.0 }] });
+        // The original's sound: an effect, its fader and a send.
+        app.project.tracks[source].devices.push(engine::model::Device::new(engine::model::Effect::Saturator(Default::default())));
+        app.project.tracks[source].mixer.gain = 0.7;
+        app.project.tracks[source].sends[0] = 0.3;
         app.set_clip(source, 3, Some(Clip::Audio(audio.clone())));
         app.place_stems(ClipRef::Session { track: source, slot: 3 }, &audio, &paths);
+        for stem in &app.project.tracks[source + 1..source + 5] {
+            assert_eq!((stem.devices.len(), stem.mixer.gain, stem.sends[0], stem.mixer.active), (1, 0.7, 0.3, true), "{}: sounds like the original", stem.name);
+            let Some(Clip::Audio(clip)) = &stem.clips[3] else { panic!() };
+            assert_eq!(clip.envelopes, audio.envelopes);
+        }
+        let ids: std::collections::HashSet<u32> = app.project.tracks.iter().map(|t| t.id).collect();
+        assert_eq!(ids.len(), app.project.tracks.len(), "each track its own id");
 
         let names: Vec<&str> = app.project.tracks.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(&names[3..], ["Canción · Batería", "Canción · Bajo", "Canción · Resto", "Canción · Voz"], "{names:?}");

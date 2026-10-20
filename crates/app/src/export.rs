@@ -52,11 +52,14 @@ pub struct Settings {
     pub sample_rate: u32,
     /// Normalize the mix so its peak sits at this level (dBFS).
     pub normalize: Option<f32>,
+    /// Stems through the master's effects (as heard), or without them (they
+    /// then add up to the mix).
+    pub stems_master: bool,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { range: Range::Song, stems: false, bits: BitDepth::Int24, sample_rate: 48_000, normalize: None }
+        Self { range: Range::Song, stems: false, bits: BitDepth::Int24, sample_rate: 48_000, normalize: None, stems_master: true }
     }
 }
 
@@ -64,6 +67,8 @@ impl Default for Settings {
 pub struct Render {
     pub path: PathBuf,
     pub commands: Vec<Command>,
+    /// The track a stem is of (none for the mix).
+    pub track: Option<usize>,
 }
 
 #[derive(Debug, Default)]
@@ -117,21 +122,36 @@ pub fn plan(
     // Exports always play the automation as written, ignoring knobs moved by hand.
     let commands = |samples: &mut SampleCache| sync::project_commands(project, samples, sample_rate, &HashSet::new());
     if !settings.stems {
-        return vec![Render { path: destination.to_path_buf(), commands: commands(samples) }];
+        return vec![Render { path: destination.to_path_buf(), commands: commands(samples), track: None }];
     }
     let base = destination.file_stem().map_or("Pulse".into(), |s| s.to_string_lossy().into_owned());
     let folder = destination.parent().unwrap_or(Path::new("."));
+    // What is heard, one track at a time: not the ones switched off (or in a
+    // group that is), and not groups, whose tracks come out each through it.
+    let heard = |t: usize| {
+        let mut at = Some(t);
+        while let Some(i) = at {
+            if !project.tracks[i].mixer.active {
+                return false;
+            }
+            at = crate::groups::parent(&project.tracks, i);
+        }
+        true
+    };
     project
         .tracks
         .iter()
         .enumerate()
+        .filter(|&(t, track)| !track.is_group() && heard(t))
         .map(|(t, track)| {
             let mut list = commands(samples);
             // Soloing one track keeps its sends, so its reverb and delay are part of the stem.
             list.extend((0..MAX_TRACKS).map(|other| Command::SetSolo { track: other, solo: other == t }));
-            list.push(Command::SetMute { target: engine::Target::Track(t), mute: false });
+            if !settings.stems_master {
+                list.push(Command::ReplaceChain { target: engine::Target::Master, chain: Box::default() });
+            }
             let name = format!("{base} - {} {}.wav", t + 1, sanitize(&track.name));
-            Render { path: folder.join(name), commands: list }
+            Render { path: folder.join(name), commands: list, track: Some(t) }
         })
         .collect()
 }
@@ -180,11 +200,25 @@ pub fn ring_out(project: &crate::project::Project) -> f64 {
 
 pub fn render(
     commands: Vec<Command>,
+    range: (f64, f64),
+    song: Song,
+    sample_rate: f32,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(f32),
+) -> Option<(Vec<f32>, Vec<f32>)> {
+    render_mapped(commands, range, song, sample_rate, cancel, progress, &mut Vec::new())
+}
+
+/// [`render`], noting in `map` where the transport was (beat) at frames along
+/// the way: with tempo automation, where each beat fell in the file.
+pub fn render_mapped(
+    commands: Vec<Command>,
     (start, end): (f64, f64),
     song: Song,
     sample_rate: f32,
     cancel: &AtomicBool,
     progress: &dyn Fn(f32),
+    map: &mut Vec<(f64, usize)>,
 ) -> Option<(Vec<f32>, Vec<f32>)> {
     let tempo = song.tempo;
     let mut renderer = OfflineRenderer::new(sample_rate);
@@ -215,6 +249,7 @@ pub fn render(
             return None;
         }
         let at = renderer.state.position();
+        map.push((at, left.len()));
         if at >= end - 1e-9 || left.len() >= most {
             break;
         }
@@ -351,7 +386,7 @@ fn run(
     let mut report = Report::default();
     let mut peak_overall = 0f32;
     let mut lengths = Vec::new();
-    for (index, Render { path, commands }) in renders.into_iter().enumerate() {
+    for (index, Render { path, commands, .. }) in renders.into_iter().enumerate() {
         let step = |p: f32| progress.store(((index as f32 + p) / count as f32).to_bits(), Ordering::Relaxed);
         let Some((left, right)) = render(commands, range, song, settings.sample_rate as f32, cancel, &step) else {
             return Err("Exportación cancelada".into());
@@ -495,6 +530,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     });
                 });
                 ui.end_row();
+                if s.stems {
+                    ui.label("Master");
+                    ui.checkbox(&mut s.stems_master, "Con la cadena del master").on_hover_text("Sin ella, los stems sumados dan la mezcla (sin los efectos del master)");
+                    ui.end_row();
+                }
             });
             if let Some((start, end)) = beat_range(&app.project, app.export.settings.range) {
                 let seconds = (end - start) * 60.0 / app.project.tempo;
@@ -510,7 +550,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             }
             if app.export.settings.stems {
                 ui.label(
-                    egui::RichText::new("Cada pista se exporta en solo, con sus envíos de reverb y delay y la cadena del master.")
+                    egui::RichText::new(if app.export.settings.stems_master {
+                        "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay, su grupo y la cadena del master."
+                    } else {
+                        "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master: sumados dan la mezcla."
+                    })
                         .color(TEXT_DIM)
                         .size(10.5),
                 );
@@ -672,10 +716,11 @@ mod diagnostics {
         let settings = Settings { stems: true, ..Default::default() };
         let range = beat_range(&project, settings.range).unwrap();
         let renders = plan(&project, &mut SampleCache::default(), &settings, Path::new("/tmp/x.wav"));
-        for (render, track) in renders.into_iter().zip(&project.tracks) {
+        for render in renders {
+            let name = render.path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
             let (l, r) = super::render(render.commands, range, Song::of(&project), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
             let rms = (l.iter().chain(&r).map(|s| s * s).sum::<f32>() / (l.len() * 2) as f32).sqrt();
-            println!("{:8} pico {:6.1} dBFS  rms {:6.1} dBFS", track.name, db(peak(&l, &r)), db(rms));
+            println!("{name:12} pico {:6.1} dBFS  rms {:6.1} dBFS", db(peak(&l, &r)), db(rms));
         }
     }
 

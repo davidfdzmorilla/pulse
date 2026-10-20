@@ -746,7 +746,8 @@ impl EffectProcessor {
                 fx.position = 0;
                 fx.gain = 1.0;
             }
-            Self::Saturator(_) | Self::Ducker(_) | Self::Utility(_) | Self::Plugin(..) => {}
+            Self::Ducker(fx) => fx.envelope = 0.0,
+            Self::Saturator(_) | Self::Utility(_) | Self::Plugin(..) => {}
         }
     }
 

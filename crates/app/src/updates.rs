@@ -662,6 +662,7 @@ impl PulseApp {
         if !self.may_discard() {
             return;
         }
+        self.save_settings_now();
         match relaunch(&bundle) {
             Ok(()) => {
                 self.quitting = true;

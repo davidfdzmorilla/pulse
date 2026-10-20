@@ -26,6 +26,14 @@ pub fn install() {
     }));
 }
 
+/// Notes something that went wrong without stopping Pulse (a damaged file set
+/// aside…). Tests only print it: the log is the user's.
+pub fn note(entry: &str) {
+    eprintln!("{entry}");
+    #[cfg(not(test))]
+    let _ = append(&file(), &format!("Pulse {}: {entry}", crate::updates::VERSION));
+}
+
 /// Adds an entry, with the time (seconds since 1970, UTC).
 fn append(path: &Path, entry: &str) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {

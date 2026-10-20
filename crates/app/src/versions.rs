@@ -41,12 +41,11 @@ pub fn folder(file: &Path) -> Option<PathBuf> {
 
 /// The versions in `dir`, oldest first.
 pub fn list(dir: &Path) -> Vec<Version> {
-    std::fs::read_to_string(dir.join(INDEX)).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default()
+    crate::store::read_json(&dir.join(INDEX))
 }
 
 fn write_list(dir: &Path, versions: &[Version]) -> Result<(), String> {
-    let text = serde_json::to_string_pretty(versions).map_err(|e| e.to_string())?;
-    std::fs::write(dir.join(INDEX), text).map_err(|e| format!("No se pudo guardar la lista de versiones: {e}"))
+    crate::store::write_json(&dir.join(INDEX), versions).map_err(|e| format!("No se pudo guardar la lista de versiones: {e}"))
 }
 
 pub fn now() -> u64 {
@@ -77,7 +76,7 @@ pub fn add(dir: &Path, project: &Project, name: &str, note: &str, auto: bool) ->
         stem = format!("{created}-{n}");
     }
     let file = format!("{stem}.pulse");
-    std::fs::write(dir.join(&file), content).map_err(|e| format!("No se pudo guardar la versión: {e}"))?;
+    crate::store::write_atomic(&dir.join(&file), content.as_bytes()).map_err(|e| format!("No se pudo guardar la versión: {e}"))?;
     let version = Version { file, name: name.to_string(), note: note.to_string(), created, auto };
     versions.push(version.clone());
     let autos = versions.iter().filter(|v| v.auto).count();

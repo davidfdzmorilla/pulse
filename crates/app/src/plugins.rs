@@ -9,7 +9,7 @@ use eframe::egui;
 use engine::model::{Device, Effect, InstrumentKind, Param, PluginId};
 use engine::plugin::PluginInfo;
 use engine::{ChainSlot, Command, Target};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 /// What the app knows about the plugins on this computer.
 #[derive(Default)]
@@ -40,7 +40,7 @@ struct Cached {
 impl Library {
     /// The list from the last search, if one was saved.
     pub fn load_cache() -> Library {
-        let found: Vec<Cached> = std::fs::read_to_string(cache_path()).ok().and_then(|text| serde_json::from_str(&text).ok()).unwrap_or_default();
+        let found: Vec<Cached> = crate::store::read_json(&cache_path());
         Library {
             searched: !found.is_empty(),
             found: found
@@ -75,9 +75,8 @@ impl Library {
             .iter()
             .map(|p| Cached { path: p.path.to_string_lossy().into_owned(), cid: p.cid.clone(), name: p.name.clone(), vendor: p.vendor.clone(), category: p.category.clone(), instrument: p.instrument })
             .collect();
-        if let Ok(text) = serde_json::to_string_pretty(&cached) {
-            let _ = std::fs::create_dir_all(cache_path().parent().unwrap_or(Path::new(".")));
-            let _ = std::fs::write(cache_path(), text);
+        if let Err(e) = crate::store::write_json(&cache_path(), &cached) {
+            crate::logs::note(&e);
         }
     }
 }
@@ -384,7 +383,7 @@ pub(crate) mod tests {
         static BUNDLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
         BUNDLE
             .get_or_init(|| {
-                let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+                let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
                 let target = root.join("target/testplug");
                 let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
                 let status = std::process::Command::new(cargo).args(["build", "--release", "-p", "pulse-testplug", "--target-dir"]).arg(&target).current_dir(&root).status().expect("cargo build");
@@ -721,5 +720,37 @@ pub(crate) mod tests {
         }
         assert_eq!(app.plugin_library.window, Some(id));
         assert_eq!(app.samples.plugins[&id].value(0), 0.5, "drawing changes nothing");
+    }
+
+    /// Changes made inside a plugin (its editor, a controller, its parameter
+    /// window) are unsaved changes: closing asks, and they are what gets saved.
+    #[test]
+    fn plugin_edits_are_unsaved_changes() {
+        let clap = test_bundle().parent().unwrap().with_file_name("app-clap-edits");
+        std::fs::create_dir_all(clap.join("PulseTest.clap/Contents/MacOS")).unwrap();
+        std::fs::copy(test_bundle().join("Contents/MacOS/PulseTest"), clap.join("PulseTest.clap/Contents/MacOS/PulseTest")).unwrap();
+        for folder in [test_bundle().parent().unwrap().to_path_buf(), clap] {
+            let mut app = PulseApp::headless(crate::project::Project::demo());
+            app.plugin_library.search(&[folder.clone()]);
+            let synth = app.plugin_library.found[0].clone();
+            app.set_plugin_instrument(3, &synth);
+            let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!("{:?}", app.status) };
+            let file = std::env::temp_dir().join(format!("pulse-plugin-edits-{}/P/P.pulse", std::process::id()));
+            app.save_to_path(&file);
+            app.poll_plugin_edits();
+            assert!(!app.is_dirty(), "{folder:?}: saved");
+            app.samples.plugins[&id].set(0, 0.1);
+            app.poll_plugin_edits();
+            assert!(app.is_dirty(), "{folder:?}: a plugin edit is a change");
+            app.save_to_path(&file);
+            app.poll_plugin_edits();
+            assert!(!app.is_dirty(), "{folder:?}: saving keeps it");
+            let mut reopened = PulseApp::headless(crate::project::Project::load(&file).unwrap());
+            reopened.sync_all();
+            reopened.poll_plugin_edits();
+            assert!(!reopened.is_dirty(), "{folder:?}: loading its state is not an edit");
+            assert!((reopened.samples.plugins[&id].value(0) - 0.1).abs() < 1e-6, "{folder:?}: the edit was saved");
+            let _ = std::fs::remove_dir_all(file.parent().unwrap().parent().unwrap());
+        }
     }
 }

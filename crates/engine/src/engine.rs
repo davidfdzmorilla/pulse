@@ -429,6 +429,36 @@ pub struct SharedState {
     count_in: AtomicF64,
     /// Seconds from rendering a sample to hearing it (the output device's latency).
     output_latency: AtomicF64,
+    /// How many times a channel's sound stopped being valid numbers (NaN or
+    /// infinite) and was silenced, and the last one: see [`Fault`].
+    pub faults: AtomicU32,
+    last_fault: AtomicI32,
+}
+
+/// Where a channel's sound stopped being valid numbers (see [`SharedState::faults`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Fault {
+    Track(usize),
+    Return(usize),
+    Master,
+}
+
+impl Fault {
+    fn code(self) -> i32 {
+        match self {
+            Fault::Track(t) => t as i32,
+            Fault::Return(r) => -2 - r as i32,
+            Fault::Master => -1,
+        }
+    }
+
+    fn from_code(code: i32) -> Self {
+        match code {
+            -1 => Fault::Master,
+            c if c < -1 => Fault::Return((-2 - c) as usize),
+            c => Fault::Track(c as usize),
+        }
+    }
 }
 
 impl SharedState {
@@ -453,7 +483,19 @@ impl SharedState {
             master: Peak::default(),
             count_in: AtomicF64::default(),
             output_latency: AtomicF64::default(),
+            faults: AtomicU32::new(0),
+            last_fault: AtomicI32::new(0),
         }
+    }
+
+    /// The channel that went invalid last (see [`SharedState::faults`]).
+    pub fn last_fault(&self) -> Fault {
+        Fault::from_code(self.last_fault.load(Ordering::Relaxed))
+    }
+
+    fn fault(&self, at: Fault) {
+        self.last_fault.store(at.code(), Ordering::Relaxed);
+        self.faults.fetch_add(1, Ordering::Relaxed);
     }
 
     /// Beats of count-in left before recording starts (0: none).
@@ -1050,11 +1092,24 @@ impl Channel {
         peak
     }
 
-    fn run_chain(&mut self, n: usize, ctx: &ProcessContext) {
+    /// Runs the effects. One NaN or infinity (a plugin, a filter that blew up, a
+    /// damaged file) would stay in reverbs and delays and reach everything after
+    /// them for good: then the block is silenced and the effects' memory cleared.
+    /// False if that happened.
+    fn run_chain(&mut self, n: usize, ctx: &ProcessContext) -> bool {
         let (left, right) = (&mut self.left[..n], &mut self.right[..n]);
         for slot in self.chain.iter_mut().filter(|s| s.enabled) {
             slot.processor.process(left, right, ctx);
         }
+        if left.iter().chain(right.iter()).all(|s| s.is_finite()) {
+            return true;
+        }
+        left.fill(0.0);
+        right.fill(0.0);
+        for slot in &mut self.chain {
+            slot.processor.reset();
+        }
+        false
     }
 
     /// Constant-power pan law, unity at center, combined with the fader gain.
@@ -1970,7 +2025,9 @@ impl Engine {
                 channel.right[i] = right[i] + track.audio_right[i];
             }
             feed_keys(&mut channel.chain, &self.ids, &self.key_left, &self.key_right, n);
-            channel.run_chain(n, &ctx);
+            if !channel.run_chain(n, &ctx) {
+                self.shared.fault(Fault::Track(index));
+            }
             // What sidechains listening to it hear: after its effects, before its fader.
             self.key_left[index][..n].copy_from_slice(&channel.left[..n]);
             self.key_right[index][..n].copy_from_slice(&channel.right[..n]);
@@ -2008,7 +2065,9 @@ impl Engine {
 
         for (index, ret) in self.returns.iter_mut().enumerate() {
             feed_keys(&mut ret.chain, &self.ids, &self.key_left, &self.key_right, n);
-            ret.run_chain(n, &ctx);
+            if !ret.run_chain(n, &ctx) {
+                self.shared.fault(Fault::Return(index));
+            }
             let gain = if ret.mute { 0.0 } else { ret.gain };
             let peak = ret.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
             self.shared.returns[index].publish(peak);
@@ -2037,7 +2096,9 @@ impl Engine {
 
         let master = &mut self.master;
         feed_keys(&mut master.chain, &self.ids, &self.key_left, &self.key_right, n);
-        master.run_chain(n, &ctx);
+        if !master.run_chain(n, &ctx) {
+            self.shared.fault(Fault::Master);
+        }
         let (gl, gr) = master.pan_gains(master.gain);
         let (l0, r0) = master.last_gains;
         master.last_gains = (gl, gr);
@@ -2914,6 +2975,28 @@ mod tests {
         assert!((onset(0.0, Some(swing)) as i64 - 8000).abs() < 64);
         assert!((onset(1.0, Some(Groove::default())) as i64 - 6000).abs() < 64);
         assert!((onset(1.0, None) as i64 - 8000).abs() < 64, "without one, the project's");
+    }
+
+    /// One NaN in a track's audio (a damaged float WAV, a plugin that blew up),
+    /// sent to a reverb: the track is silenced for that block and the rest plays
+    /// on. Before, the reverb kept it and the master was NaN for good.
+    #[test]
+    fn an_invalid_sample_never_poisons_the_mix() {
+        let mut h = Harness::new();
+        let mut bad: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        bad[1000] = f32::NAN;
+        let bad = Arc::new(Sample::from_channels(bad.clone(), bad, SR));
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(audio_clip(WarpMode::Off), bad))) });
+        h.send(Command::SetSend { track: 0, send: 0, amount: 0.5 });
+        h.send(Command::ReplaceChain { target: Target::Return(0), chain: build_chain(&[Device::new(Effect::Reverb(Default::default()))], SR) });
+        h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Audio(audio_clip(WarpMode::Off), sine_sample()))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.send(Command::LaunchClip { track: 1, slot: 0 });
+        let audio = h.run_beats(8.0);
+        assert!(audio.iter().all(|s| s.is_finite()), "the output stays valid");
+        assert!(energy(&audio[audio.len() / 2..]) > 100.0, "the healthy track still sounds");
+        assert!(h.shared.faults.load(Ordering::Relaxed) > 0);
+        assert_eq!(h.shared.last_fault(), Fault::Track(0), "and the app is told which one");
     }
 
     #[test]

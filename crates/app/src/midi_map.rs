@@ -119,15 +119,14 @@ fn transport_path() -> PathBuf {
 impl Learn {
     pub fn load() -> Learn {
         let path = transport_path();
-        let transport = std::fs::read_to_string(&path).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+        let transport = crate::store::read_json(&path);
         Learn { transport, path: Some(path), ..Default::default() }
     }
 
     fn save_transport(&self) {
         let Some(path) = &self.path else { return };
-        if let Ok(text) = serde_json::to_string_pretty(&self.transport) {
-            let _ = std::fs::create_dir_all(path.parent().unwrap_or(std::path::Path::new(".")));
-            let _ = std::fs::write(path, text);
+        if let Err(e) = crate::store::write_json(path, &self.transport) {
+            crate::logs::note(&e);
         }
     }
 

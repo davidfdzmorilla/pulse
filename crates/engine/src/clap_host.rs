@@ -144,6 +144,9 @@ struct HostState {
     resize: RefCell<Option<Box<dyn Fn(i32, i32)>>>,
     /// The plugin asked for `on_main_thread`.
     callback: AtomicBool,
+    /// The plugin changed its state or a parameter by itself (its editor): the
+    /// project has unsaved changes. Set from any thread.
+    edited: AtomicBool,
 }
 
 unsafe fn state<'a>(host: *const clap_host) -> &'a HostState {
@@ -223,7 +226,9 @@ unsafe extern "C" fn params_request_flush(_host: *const clap_host) {}
 
 static HOST_PARAMS: clap_host_params = clap_host_params { rescan: Some(params_rescan), clear: Some(params_clear), request_flush: Some(params_request_flush) };
 
-unsafe extern "C" fn state_mark_dirty(_host: *const clap_host) {}
+unsafe extern "C" fn state_mark_dirty(host: *const clap_host) {
+    unsafe { state(host) }.edited.store(true, Ordering::Relaxed);
+}
 
 static HOST_STATE: clap_host_state = clap_host_state { mark_dirty: Some(state_mark_dirty) };
 
@@ -323,7 +328,13 @@ unsafe extern "C" fn events_get(list: *const clap_input_events, index: u32) -> *
     events.get(index as usize).map_or(std::ptr::null(), |e| unsafe { &e.header } as *const _)
 }
 
-unsafe extern "C" fn out_events_push(_list: *const clap_output_events, _event: *const clap_event_header) -> bool {
+/// The plugin's own changes (its editor's) come out as parameter events: they
+/// mark it edited. `ctx` is its [`HostState::edited`] (or null).
+unsafe extern "C" fn out_events_push(list: *const clap_output_events, event: *const clap_event_header) -> bool {
+    let edited = unsafe { (*list).ctx as *const AtomicBool };
+    if !edited.is_null() && !event.is_null() && unsafe { (*event).type_ } == CLAP_EVENT_PARAM_VALUE {
+        unsafe { &*edited }.store(true, Ordering::Relaxed);
+    }
     true
 }
 
@@ -519,7 +530,7 @@ impl ClapProcessor {
             }
         }
         let in_events = clap_input_events { ctx: &mut self.events as *mut Vec<EventSlot> as *mut c_void, size: Some(events_size), get: Some(events_get) };
-        let out_events = clap_output_events { ctx: std::ptr::null_mut(), try_push: Some(out_events_push) };
+        let out_events = clap_output_events { ctx: &self.instance.host_state.edited as *const AtomicBool as *mut c_void, try_push: Some(out_events_push) };
         let process = clap_process {
             steady_time: self.steady,
             frames_count: n as u32,
@@ -598,8 +609,14 @@ impl ClapHandle {
     }
 
     pub fn set(&self, id: u32, value: f64) {
+        self.instance.host_state.edited.store(true, Ordering::Relaxed);
         let _ = self.queue.lock().unwrap().push((id, value.clamp(0.0, 1.0)));
         self.flush();
+    }
+
+    /// Whether the plugin changed since the last call (see [`HostState::edited`]).
+    pub fn take_edited(&self) -> bool {
+        self.instance.host_state.edited.swap(false, Ordering::Relaxed)
     }
 
     /// CLAP plugins have no separate controller: their editor follows what they process.
@@ -621,7 +638,7 @@ impl ClapHandle {
             return;
         }
         let in_events = clap_input_events { ctx: &mut events as *mut Vec<EventSlot> as *mut c_void, size: Some(events_size), get: Some(events_get) };
-        let out_events = clap_output_events { ctx: std::ptr::null_mut(), try_push: Some(out_events_push) };
+        let out_events = clap_output_events { ctx: &self.instance.host_state.edited as *const AtomicBool as *mut c_void, try_push: Some(out_events_push) };
         if let Some(flush) = ext.flush {
             unsafe { flush(self.instance.plugin, &in_events, &out_events) };
         }
@@ -751,7 +768,7 @@ pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Opti
     let _ = MAIN_THREAD.set(std::thread::current().id());
     let library = library(bundle)?;
     let info = scan(bundle)?.into_iter().find(|p| p.cid == id).ok_or_else(|| format!("{} no tiene el plugin {id}", bundle.display()))?;
-    let host_state = Box::new(HostState { resize: RefCell::new(None), callback: AtomicBool::new(false) });
+    let host_state = Box::new(HostState { resize: RefCell::new(None), callback: AtomicBool::new(false), edited: AtomicBool::new(false) });
     let host = Box::new(clap_host {
         clap_version: CLAP_VERSION,
         host_data: &*host_state as *const HostState as *mut c_void,

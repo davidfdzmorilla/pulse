@@ -80,7 +80,7 @@ fn recent_path() -> PathBuf {
 
 /// The saved list of recent projects that still exist.
 pub fn load_recent() -> Vec<PathBuf> {
-    let list: Vec<PathBuf> = std::fs::read_to_string(recent_path()).ok().and_then(|t| serde_json::from_str(&t).ok()).unwrap_or_default();
+    let list: Vec<PathBuf> = crate::store::read_json(&recent_path());
     list.into_iter().filter(|p| p.exists()).take(MAX_RECENT).collect()
 }
 
@@ -386,10 +386,8 @@ impl PulseApp {
         if !self.interactive {
             return;
         }
-        if let Ok(text) = serde_json::to_string_pretty(&self.recent) {
-            let path = recent_path();
-            let _ = std::fs::create_dir_all(path.parent().unwrap_or(Path::new(".")));
-            let _ = std::fs::write(path, text);
+        if let Err(e) = crate::store::write_json(&recent_path(), &self.recent) {
+            crate::logs::note(&e);
         }
     }
 }

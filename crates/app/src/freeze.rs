@@ -188,7 +188,7 @@ impl PulseApp {
         let (name, color, tempo, rate) = (track.name.clone(), track.color, self.project.tempo, self.audio.sample_rate());
         let dir = self.media_dir(crate::library::FROZEN);
         std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
-        let clean: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
+        let clean = crate::files::safe_name(&name);
         let write = |label: &str, (left, right): &(Vec<f32>, Vec<f32>)| -> Result<String, String> {
             let path = crate::library::unique(&dir.join(format!("{} {label}.wav", clean.trim())));
             crate::export::write(&path, left, right, rate as u32, crate::export::BitDepth::Float32, 1.0)?;

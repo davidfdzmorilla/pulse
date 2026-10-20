@@ -22,6 +22,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use vst3::{Class, ComPtr, ComWrapper, Interface, Steinberg::Vst::*, Steinberg::*};
 
@@ -426,6 +427,8 @@ impl IAttributeListTrait for Attributes {
 /// Receives edits made in the plugin's own editor.
 struct ComponentHandler {
     queue: ParamQueue,
+    /// Set by edits in the plugin's editor: the project has unsaved changes.
+    edited: Arc<AtomicBool>,
 }
 
 impl Class for ComponentHandler {
@@ -438,6 +441,7 @@ impl IComponentHandlerTrait for ComponentHandler {
     }
 
     unsafe fn performEdit(&self, id: ParamID, value: ParamValue) -> tresult {
+        self.edited.store(true, Ordering::Relaxed);
         let _ = self.queue.lock().unwrap().push((id, value));
         kResultOk
     }
@@ -447,6 +451,8 @@ impl IComponentHandlerTrait for ComponentHandler {
     }
 
     unsafe fn restartComponent(&self, _flags: int32) -> tresult {
+        // Often a preset loaded in the plugin's own browser.
+        self.edited.store(true, Ordering::Relaxed);
         kResultOk
     }
 }
@@ -705,6 +711,8 @@ struct Instance {
     /// The parameter queue's reading end once no processor is running the plugin
     /// (it was dropped, e.g. with no audio device): then the UI hands changes over.
     idle: Mutex<Option<Consumer<(u32, f64)>>>,
+    /// The plugin changed by itself (see `ComponentHandler::edited`) or was set.
+    edited: Arc<AtomicBool>,
 }
 
 // The COM objects are only used from one thread at a time: the processor from the
@@ -798,6 +806,7 @@ impl Vst3Handle {
 
     /// Sets parameter `id` (normalized) in the controller and, at the next block, the processor.
     pub fn set(&self, id: u32, value: f64) {
+        self.instance.edited.store(true, Ordering::Relaxed);
         let value = value.clamp(0.0, 1.0);
         if let Some(controller) = &self.instance.controller {
             unsafe { controller.setParamNormalized(id, value) };
@@ -823,6 +832,11 @@ impl Vst3Handle {
         data.symbolicSampleSize = SymbolicSampleSizes_::kSample32 as int32;
         data.inputParameterChanges = changes_ptr.as_ptr();
         unsafe { self.instance.processor.process(&mut data) };
+    }
+
+    /// Whether the plugin changed since the last call.
+    fn take_edited(&self) -> bool {
+        self.instance.edited.swap(false, Ordering::Relaxed)
     }
 
     /// The plugin's whole state (component and controller), to restore with [`instantiate`].
@@ -1237,8 +1251,9 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
         }
         let (producer, consumer) = RingBuffer::new(1024);
         let queue: ParamQueue = Arc::new(Mutex::new(producer));
+        let edited = Arc::new(AtomicBool::new(false));
         let handler = controller.as_ref().map(|c| {
-            let handler = ComWrapper::new(ComponentHandler { queue: queue.clone() });
+            let handler = ComWrapper::new(ComponentHandler { queue: queue.clone(), edited: edited.clone() });
             if let Some(ptr) = handler.to_com_ptr::<IComponentHandler>() {
                 c.setComponentHandler(ptr.as_ptr());
             }
@@ -1359,7 +1374,7 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
         let events_ptr = events.to_com_ptr::<IEventList>().ok_or("events")?;
         let changes = ComWrapper::new(ParamChanges::new());
         let changes_ptr = changes.to_com_ptr::<IParameterChanges>().ok_or("changes")?;
-        let instance = Arc::new(Instance { component, processor, controller, separate, connected, _module: module, _host: host, _handler: handler, idle: Mutex::new(None) });
+        let instance = Arc::new(Instance { component, processor, controller, separate, connected, _module: module, _host: host, _handler: handler, idle: Mutex::new(None), edited });
         let processor = Vst3Processor {
             instance: instance.clone(),
             params: Some(consumer),
@@ -1525,6 +1540,13 @@ impl PluginHandle {
     /// The plugin's whole state, to restore with [`instantiate`].
     pub fn state(&self) -> Vec<u8> {
         handle!(&self.inner, h => h.state())
+    }
+
+    /// Whether the plugin changed since the last call: its editor moved a
+    /// parameter, it loaded a preset, or the host set one. Changes like these
+    /// live inside the plugin, so they are the project's unsaved changes.
+    pub fn take_edited(&self) -> bool {
+        handle!(&self.inner, h => h.take_edited())
     }
 
     /// Once a frame, on the UI thread: lets the plugin do what it asked to do there.

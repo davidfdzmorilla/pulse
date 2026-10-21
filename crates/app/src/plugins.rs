@@ -17,6 +17,9 @@ pub struct Library {
     pub found: Vec<PluginInfo>,
     /// Bundles that failed to load in the last search, with why.
     pub failed: Vec<String>,
+    /// Bundles that crashed or hung a search, and when they were last changed:
+    /// left out of the next ones until they change (updated, reinstalled).
+    pub crashed: Vec<Crashed>,
     pub searched: bool,
     /// Instance whose parameter window is open.
     pub window: Option<PluginId>,
@@ -25,6 +28,96 @@ pub struct Library {
 
 fn cache_path() -> PathBuf {
     paths::config_dir().join("plugins.json")
+}
+
+/// A bundle that brought a search down (see [`Library::crashed`]).
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct Crashed {
+    pub path: String,
+    /// Its modification time, in seconds.
+    pub modified: u64,
+}
+
+fn crashed_path() -> PathBuf {
+    paths::config_dir().join("plugins-fallidos.json")
+}
+
+fn modified(bundle: &std::path::Path) -> u64 {
+    std::fs::metadata(bundle).and_then(|m| m.modified()).ok().and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok()).map_or(0, |d| d.as_secs())
+}
+
+fn bundle_name(bundle: &std::path::Path) -> String {
+    bundle.file_stem().map_or_else(|| bundle.display().to_string(), |s| s.to_string_lossy().into_owned())
+}
+
+/// How long a bundle may take to load in a search before it is taken for hung.
+const SCAN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
+/// What `pulse --scan-plugin` writes before its answer (a plugin may print
+/// to the same output while it loads).
+const SCAN_MARK: &str = "PULSE-SCAN ";
+
+/// `pulse --scan-plugin <bundle>`: loads it here, in a process of its own, and
+/// writes what it has (or why not) as one line of JSON. A plugin that crashes
+/// or hangs takes this process down, not Pulse.
+pub fn scan_command(bundle: &std::path::Path) {
+    let answer = match engine::plugin::scan(bundle) {
+        Ok(list) => serde_json::json!({ "found": list.into_iter().map(|p| Cached::of(&p)).collect::<Vec<_>>() }),
+        Err(error) => serde_json::json!({ "error": error }),
+    };
+    println!("{SCAN_MARK}{answer}");
+}
+
+/// What a search learns of one bundle.
+#[derive(Debug, PartialEq)]
+pub enum Scanned {
+    Found(Vec<PluginInfo>),
+    /// It doesn't load, and says why.
+    Failed(String),
+    /// It crashed or hung the process that loaded it.
+    Crashed(String),
+}
+
+/// Loads `bundle` in a process of its own (`exe --scan-plugin <bundle>`),
+/// waiting `timeout` at most.
+pub fn scan_apart(exe: &std::path::Path, bundle: &std::path::Path, timeout: std::time::Duration) -> Scanned {
+    use std::io::Read;
+    let name = bundle_name(bundle);
+    let child = std::process::Command::new(exe).arg("--scan-plugin").arg(bundle).stdin(std::process::Stdio::null()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null()).spawn();
+    let mut child = match child {
+        Ok(child) => child,
+        Err(e) => return Scanned::Failed(format!("«{name}»: no se pudo buscar en él ({e})")),
+    };
+    // Its output read meanwhile, so a chatty plugin can't fill the pipe and stall.
+    let mut stdout = child.stdout.take().expect("piped");
+    let reader = std::thread::spawn(move || {
+        let mut text = String::new();
+        let _ = stdout.read_to_string(&mut text);
+        text
+    });
+    let started = std::time::Instant::now();
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break Some(status),
+            Ok(None) if started.elapsed() < timeout => std::thread::sleep(std::time::Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                break None;
+            }
+        }
+    };
+    let Some(status) = status else {
+        return Scanned::Crashed(format!("«{name}» se quedó colgado al cargarse: se deja fuera"));
+    };
+    let text = reader.join().unwrap_or_default();
+    let answer = text.lines().rev().find_map(|l| l.strip_prefix(SCAN_MARK)).and_then(|l| serde_json::from_str::<serde_json::Value>(l).ok());
+    match answer {
+        Some(answer) if status.success() => match answer.get("found").and_then(|f| serde_json::from_value::<Vec<Cached>>(f.clone()).ok()) {
+            Some(found) => Scanned::Found(found.into_iter().map(Cached::info).collect()),
+            None => Scanned::Failed(answer.get("error").and_then(|e| e.as_str()).unwrap_or("no se pudo cargar").to_string()),
+        },
+        _ => Scanned::Crashed(format!("«{name}» cerró Pulse al cargarse: se deja fuera")),
+    }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -37,31 +130,59 @@ struct Cached {
     instrument: bool,
 }
 
+impl Cached {
+    fn of(p: &PluginInfo) -> Self {
+        Cached { path: p.path.to_string_lossy().into_owned(), cid: p.cid.clone(), name: p.name.clone(), vendor: p.vendor.clone(), category: p.category.clone(), instrument: p.instrument }
+    }
+
+    fn info(self) -> PluginInfo {
+        PluginInfo { path: PathBuf::from(self.path), cid: self.cid, name: self.name, vendor: self.vendor, category: self.category, instrument: self.instrument }
+    }
+}
+
 impl Library {
     /// The list from the last search, if one was saved.
     pub fn load_cache() -> Library {
         let found: Vec<Cached> = crate::store::read_json(&cache_path());
-        Library {
-            searched: !found.is_empty(),
-            found: found
-                .into_iter()
-                .map(|c| PluginInfo { path: PathBuf::from(c.path), cid: c.cid, name: c.name, vendor: c.vendor, category: c.category, instrument: c.instrument })
-                .collect(),
-            ..Default::default()
-        }
+        Library { searched: !found.is_empty(), found: found.into_iter().map(Cached::info).collect(), crashed: crate::store::read_json(&crashed_path()), ..Default::default() }
     }
 
-    /// Looks through `folders` for plugins (loading each bundle once). See [`Library::remember`].
+    /// Looks through `folders` for plugins, each bundle loaded in a process of
+    /// its own (`pulse --scan-plugin`): one that crashes or hangs only takes
+    /// that one down, is said, and is left out of later searches until it
+    /// changes. See [`Library::remember`].
     pub fn search(&mut self, folders: &[PathBuf]) {
+        // (The tests' binary is no Pulse to run: they load in theirs.)
+        let exe = if cfg!(test) { None } else { std::env::current_exe().ok() };
+        self.search_with(folders, exe.as_deref(), SCAN_TIMEOUT);
+    }
+
+    /// [`Library::search`], loading with `exe` (none: in this process).
+    pub fn search_with(&mut self, folders: &[PathBuf], exe: Option<&std::path::Path>, timeout: std::time::Duration) {
         // Searched for plugins: their plugins may load.
         trust(folders);
         self.found.clear();
         self.failed.clear();
         for folder in folders {
             for bundle in engine::plugin::bundles(folder) {
-                match engine::plugin::scan(&bundle) {
-                    Ok(list) => self.found.extend(list),
-                    Err(error) => self.failed.push(error),
+                let path = bundle.to_string_lossy().into_owned();
+                let changed = modified(&bundle);
+                if self.crashed.iter().any(|c| c.path == path && c.modified == changed) {
+                    self.failed.push(format!("«{}» se deja fuera: cerró la búsqueda la última vez (si lo actualizas, se vuelve a probar)", bundle_name(&bundle)));
+                    continue;
+                }
+                self.crashed.retain(|c| c.path != path);
+                let scanned = match exe {
+                    Some(exe) => scan_apart(exe, &bundle, timeout),
+                    None => engine::plugin::scan(&bundle).map_or_else(Scanned::Failed, Scanned::Found),
+                };
+                match scanned {
+                    Scanned::Found(list) => self.found.extend(list),
+                    Scanned::Failed(error) => self.failed.push(error),
+                    Scanned::Crashed(why) => {
+                        self.failed.push(why);
+                        self.crashed.push(Crashed { path, modified: changed });
+                    }
                 }
             }
         }
@@ -72,13 +193,11 @@ impl Library {
     /// Saves the list for the next time Pulse starts (only for the system's folders:
     /// a search anywhere else, as in tests, must not replace it).
     pub fn remember(&self) {
-        let cached: Vec<Cached> = self
-            .found
-            .iter()
-            .map(|p| Cached { path: p.path.to_string_lossy().into_owned(), cid: p.cid.clone(), name: p.name.clone(), vendor: p.vendor.clone(), category: p.category.clone(), instrument: p.instrument })
-            .collect();
-        if let Err(e) = crate::store::write_json(&cache_path(), &cached) {
-            crate::logs::note(&e);
+        let cached: Vec<Cached> = self.found.iter().map(Cached::of).collect();
+        for result in [crate::store::write_json(&cache_path(), &cached), crate::store::write_json(&crashed_path(), &self.crashed)] {
+            if let Err(e) = result {
+                crate::logs::note(&e);
+            }
         }
     }
 }
@@ -415,6 +534,66 @@ pub(crate) mod tests {
     use super::*;
 
     /// The test plugin from crates/testplug, built and bundled.
+    /// A stand-in for `pulse --scan-plugin`: a shell script doing `body`.
+    #[cfg(unix)]
+    fn scanner(dir: &std::path::Path, name: &str, body: &str) -> PathBuf {
+        use std::os::unix::fs::PermissionsExt;
+        let path = dir.join(name);
+        std::fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        path
+    }
+
+    /// A bundle that crashes or hangs the process loading it is said, and only
+    /// that one; the answer of one that loads comes through whatever the
+    /// plugin printed before it.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_that_crashes_or_hangs_only_takes_its_own_process() {
+        let dir = std::env::temp_dir().join(format!("pulse-scan-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let bundle = dir.join("Roto.vst3");
+        let quick = std::time::Duration::from_millis(500);
+        let crash = scanner(&dir, "crash", "kill -SEGV $$");
+        assert!(matches!(scan_apart(&crash, &bundle, quick), Scanned::Crashed(w) if w.contains("«Roto» cerró Pulse")));
+        let hang = scanner(&dir, "hang", "exec sleep 30");
+        let started = std::time::Instant::now();
+        assert!(matches!(scan_apart(&hang, &bundle, quick), Scanned::Crashed(w) if w.contains("colgado")));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5), "it waits only so long");
+        let found = r#"{"found":[{"path":"/x/Roto.vst3","cid":"AB","name":"Roto","vendor":"Pulse","category":"Fx","instrument":false}]}"#;
+        let fine = scanner(&dir, "fine", &format!("echo 'el plugin habla'; echo '{SCAN_MARK}{found}'"));
+        assert!(matches!(scan_apart(&fine, &bundle, quick), Scanned::Found(list) if list.len() == 1 && list[0].name == "Roto"));
+        let refused = scanner(&dir, "refused", &format!("echo '{SCAN_MARK}{{\"error\":\"no es un VST3\"}}'"));
+        assert_eq!(scan_apart(&refused, &bundle, quick), Scanned::Failed("no es un VST3".into()));
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// One that brought a search down is left out of the next ones, until it changes.
+    #[cfg(unix)]
+    #[test]
+    fn a_plugin_that_crashed_a_search_waits_until_it_changes() {
+        let dir = std::env::temp_dir().join(format!("pulse-scan-skip-{}", std::process::id()));
+        let plugins = dir.join("plugins");
+        std::fs::create_dir_all(plugins.join("Roto.vst3")).unwrap();
+        let crash = scanner(&dir, "crash", "kill -SEGV $$");
+        let quick = std::time::Duration::from_millis(500);
+        let mut library = Library::default();
+        library.search_with(std::slice::from_ref(&plugins), Some(&crash), quick);
+        assert_eq!(library.crashed.len(), 1);
+        assert!(library.failed[0].contains("cerró Pulse"), "{:?}", library.failed);
+        // Next time it isn't loaded at all (a scanner that would hang never runs).
+        let hang = scanner(&dir, "hang", "exec sleep 30");
+        let started = std::time::Instant::now();
+        library.search_with(std::slice::from_ref(&plugins), Some(&hang), std::time::Duration::from_secs(20));
+        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(library.failed[0].contains("se deja fuera: cerró la búsqueda la última vez"), "{:?}", library.failed);
+        // Updated, it is tried again.
+        library.crashed[0].modified += 1;
+        library.search_with(std::slice::from_ref(&plugins), Some(&crash), quick);
+        assert!(library.failed[0].contains("cerró Pulse"), "{:?}", library.failed);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     pub(crate) fn test_bundle() -> PathBuf {
         static BUNDLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
         BUNDLE

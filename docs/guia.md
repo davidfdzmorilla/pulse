@@ -627,6 +627,7 @@ Los plugins no usan este menú: guardan su estado con el proyecto.
 ## Plugins VST3 y CLAP
 
 - En el navegador, sección **PLUGINS (VST3 · CLAP)**, pulsa **Buscar plugins VST3**. Busca en las carpetas de plugins del sistema y en las que añadas en Ajustes → Plugins.
+  - Cada plugin se carga para la búsqueda en un proceso aparte: uno que se cuelga o se cierra al cargarse no cierra Pulse. Se dice cuál ha sido, y en las siguientes búsquedas se deja fuera hasta que lo actualices o lo reinstales.
 - Clic en un **instrumento** lo pone en la pista MIDI seleccionada; clic en un **efecto** lo añade al final de la cadena.
 - En el dispositivo del plugin:
   - **Editor** abre la ventana propia del plugin, que flota sobre Pulse.

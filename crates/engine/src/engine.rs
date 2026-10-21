@@ -370,6 +370,10 @@ pub enum Command {
     /// Plays an audio file once over the output (the browser's preview), or stops
     /// the one playing.
     PreviewSample(Option<Arc<Sample>>),
+    /// Plays an audio clip over the output, looping, at the project's tempo (the
+    /// browser's preview of a loop): in time with the song while it plays, from
+    /// its start while stopped. Stops any other preview; `None` stops it.
+    PreviewClip(Option<Box<PlayClip>>),
     /// Audition a note on a track, e.g. while editing in the piano roll.
     PreviewNote {
         track: usize,
@@ -1381,6 +1385,11 @@ pub struct Engine {
     /// The file the browser is previewing, and where in it (frames of the file).
     preview: Option<(Arc<Sample>, f64)>,
     preview_buffer: Vec<f32>,
+    /// The loop the browser is previewing in time (see [`Command::PreviewClip`]),
+    /// and its own beat while the transport is stopped.
+    preview_clip: Option<(Box<PlayClip>, f64)>,
+    preview_left: Vec<f32>,
+    preview_right: Vec<f32>,
     monitor_input: Option<Box<MonitorInput>>,
     /// This block of input, as stereo, for the monitored tracks.
     monitor_left: Vec<f32>,
@@ -1523,6 +1532,9 @@ impl Engine {
             click_buffer: vec![0.0; MAX_BLOCK],
             preview: None,
             preview_buffer: vec![0.0; 2 * MAX_BLOCK],
+            preview_clip: None,
+            preview_left: vec![0.0; MAX_BLOCK],
+            preview_right: vec![0.0; MAX_BLOCK],
             monitor_input: None,
             monitor_left: vec![0.0; MAX_BLOCK],
             monitor_right: vec![0.0; MAX_BLOCK],
@@ -1976,10 +1988,12 @@ impl Engine {
             }
             Command::SetCountIn(beats) => self.count_in_beats = beats.max(0.0),
             Command::PreviewSample(sample) => {
-                if let Some((old, _)) = self.preview.take() {
-                    self.discard(Garbage::Sample(old));
-                }
+                self.stop_previews();
                 self.preview = sample.map(|s| (s, 0.0));
+            }
+            Command::PreviewClip(clip) => {
+                self.stop_previews();
+                self.preview_clip = clip.map(|c| (c, 0.0));
             }
             Command::PreviewNote {
                 track,
@@ -2072,6 +2086,16 @@ impl Engine {
             done += n;
         }
         self.publish();
+    }
+
+    /// Ends the browser's previews, the file and the loop.
+    fn stop_previews(&mut self) {
+        if let Some((old, _)) = self.preview.take() {
+            self.discard(Garbage::Sample(old));
+        }
+        if let Some((old, _)) = self.preview_clip.take() {
+            self.discard(Garbage::Clip(old));
+        }
     }
 
     fn render_block(&mut self, n: usize) {
@@ -2237,6 +2261,23 @@ impl Engine {
         if finished {
             if let Some((old, _)) = self.preview.take() {
                 self.discard(Garbage::Sample(old));
+            }
+        }
+        if let Some((clip, own)) = &mut self.preview_clip {
+            if let PlayClip::Audio(audio, sample) = clip.as_ref() {
+                let (left, right) = (&mut self.preview_left[..n], &mut self.preview_right[..n]);
+                left.fill(0.0);
+                right.fill(0.0);
+                let per_sample = self.tempo / 60.0 / self.sample_rate as f64;
+                // In time with the song (its bars are the loop's), or on its own.
+                let beat = if self.playing { ctx.beat } else { *own };
+                render_audio_clip(audio, sample, 0.0, f64::INFINITY, (false, false), (0, n), beat, per_sample, self.tempo, left, right);
+                *own += n as f64 * per_sample;
+                let preview = &mut self.preview_buffer[..2 * n];
+                for i in 0..n {
+                    preview[2 * i] += left[i] * PREVIEW_GAIN;
+                    preview[2 * i + 1] += right[i] * PREVIEW_GAIN;
+                }
             }
         }
 
@@ -3372,6 +3413,40 @@ mod tests {
         h.run_beats(0.5);
         h.send(Command::PreviewSample(None));
         assert!(energy(&h.run_beats(0.5)) < 1e-6);
+    }
+
+    /// A previewed loop plays at the project's tempo and goes on looping, past
+    /// the end of its file; another preview stops it.
+    #[test]
+    fn a_previewed_loop_follows_the_tempo_and_loops() {
+        let mut h = Harness::new();
+        // The 1 s sine as one beat at 60 BPM: at 120, twice as fast, an octave up.
+        let clip = AudioClip { length: 1.0, original_bpm: 60.0, ..audio_clip(WarpMode::Repitch) };
+        h.send(Command::PreviewClip(Some(Box::new(PlayClip::Audio(clip, sine_sample())))));
+        h.run_beats(4.0);
+        let later = left_channel(&h.run_beats(2.0));
+        assert!((crossings(&later) as f64 - 880.0).abs() < 20.0, "{} Hz", crossings(&later));
+        h.send(Command::PreviewSample(None));
+        assert!(energy(&h.run_beats(0.5)) < 1e-6, "stopped");
+    }
+
+    /// While the song plays, the loop is in time with it: its start on the
+    /// song's beats, not where the preview began.
+    #[test]
+    fn a_previewed_loop_is_in_time_with_the_song() {
+        let mut h = Harness::new();
+        // A click at the file's start, a beat (0.5 s at 120) long.
+        let mut click = vec![0f32; 24_000];
+        click[..48].fill(0.9);
+        let sample = Arc::new(Sample::from_channels(click.clone(), click, 48_000.0));
+        h.send(Command::SetPosition(0.25));
+        h.send(Command::Play);
+        h.run_beats(0.0);
+        h.send(Command::PreviewClip(Some(Box::new(PlayClip::Audio(AudioClip { length: 1.0, ..audio_clip(WarpMode::Repitch) }, sample)))));
+        let audio = left_channel(&h.run_beats(1.0));
+        let first = audio.iter().position(|s| s.abs() > 0.1).unwrap();
+        // The next beat is 0.75 beats away: 0.375 s.
+        assert!((first as i64 - 18_000).abs() < 300, "first click at {first}");
     }
 
     /// Between warp markers the file plays at each stretch's own speed.

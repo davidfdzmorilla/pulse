@@ -140,15 +140,18 @@ impl Sample {
 }
 
 /// Guesses the tempo of a loop from its length: the whole number of bars that puts
-/// it closest to `prefer_bpm`, within 70–180 BPM. Short one-shots return `None`.
+/// it closest to `prefer_bpm`, within 70–180 BPM, of 1, 2, 4, 8… bars (what
+/// loops are cut to; some always fits in that range). Short one-shots return `None`.
 pub fn guess_loop_bpm(duration: f64, prefer_bpm: f64) -> Option<f64> {
     if duration < 1.0 {
         return None;
     }
-    (1..=64)
-        .map(|bars| bars as f64 * 4.0 * 60.0 / duration)
-        .filter(|bpm| (70.0..=180.0).contains(bpm))
-        .min_by(|a, b| (a - prefer_bpm).abs().total_cmp(&(b - prefer_bpm).abs()))
+    let closest = |bars: &mut dyn Iterator<Item = u32>| {
+        bars.map(|bars| bars as f64 * 4.0 * 60.0 / duration)
+            .filter(|bpm| (70.0..=180.0).contains(bpm))
+            .min_by(|a, b| (a - prefer_bpm).abs().total_cmp(&(b - prefer_bpm).abs()))
+    };
+    closest(&mut (0..7).map(|k| 1 << k)).or_else(|| closest(&mut (1..=64)))
 }
 
 #[cfg(test)]
@@ -221,5 +224,7 @@ mod tests {
         // One bar at 96 BPM lasts 2.5 s; the 1-bar reading is the only one in range.
         assert_eq!(guess_loop_bpm(2.5, 120.0), Some(96.0));
         assert_eq!(guess_loop_bpm(0.3, 120.0), None);
+        // 6.4 s: 4 bars at 150, not 3 at 112.5 (closer to 128).
+        assert_eq!(guess_loop_bpm(6.4, 128.0), Some(150.0));
     }
 }

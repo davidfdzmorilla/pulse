@@ -33,6 +33,16 @@ impl Tempo {
     pub fn busy(&self) -> bool {
         !self.jobs.is_empty()
     }
+
+    /// What was found for a file: `None` if it hasn't been analysed.
+    pub fn grid(&self, path: &str) -> Option<Option<Grid>> {
+        self.grids.get(path).cloned()
+    }
+
+    /// Keeps what an analysis found for a file.
+    pub fn remember(&mut self, path: &str, grid: Option<Grid>) {
+        self.grids.insert(path.to_string(), grid);
+    }
 }
 
 /// A clip set to follow the tempo with `grid`, for a file `duration` seconds long:
@@ -50,6 +60,18 @@ pub fn is_drum_loop(name: &str, sample: &Sample) -> bool {
 fn tonal_sound(sample: &Sample) -> bool {
     let mono: Vec<f32> = sample.left.iter().zip(&sample.right).map(|(l, r)| 0.5 * (l + r)).collect();
     crate::loop_key::sounds_tonal(&mono, sample.sample_rate)
+}
+
+/// A loop's tempo from its name («Tops 150», «Bass_128bpm_Am»): a number from 60
+/// to 200 at which the file lasts whole bars.
+pub fn name_bpm(name: &str, duration: f64) -> Option<f64> {
+    name.split(|c: char| !c.is_ascii_digit() && c != '.')
+        .filter_map(|word| word.trim_matches('.').parse::<f64>().ok())
+        .filter(|bpm| (60.0..=200.0).contains(bpm))
+        .find(|bpm| {
+            let bars = duration * bpm / 240.0;
+            bars >= 0.9 && (bars - bars.round()).abs() < 0.02
+        })
 }
 
 pub fn warped(clip: &AudioClip, grid: &Grid, duration: f64) -> AudioClip {
@@ -220,7 +242,7 @@ fn follow_end(lane: &mut [engine::model::ArrangementClip], index: usize, old_end
     }
 }
 
-fn bpm_text(bpm: f64) -> String {
+pub fn bpm_text(bpm: f64) -> String {
     if (bpm - bpm.round()).abs() < 0.005 { format!("{bpm:.0}") } else { format!("{bpm:.2}") }
 }
 
@@ -488,6 +510,15 @@ mod tests {
 
     /// A drum loop comes in in Beats (its hits clean when the tempo differs);
     /// a chord loop in Stretch.
+    #[test]
+    fn a_loops_name_can_tell_its_tempo() {
+        assert_eq!(name_bpm("Tops 150", 6.4), Some(150.0));
+        assert_eq!(name_bpm("Bass_128bpm_Am", 7.5), Some(128.0));
+        assert_eq!(name_bpm("Kick 909 v2", 6.4), None, "909 isn't a tempo");
+        assert_eq!(name_bpm("Loop 140", 6.4), None, "6.4 s aren't whole bars at 140");
+        assert_eq!(name_bpm("Groove 122.5", 7.836734), Some(122.5));
+    }
+
     #[test]
     fn drum_loops_come_in_in_beats_mode() {
         let dir = std::env::temp_dir().join(format!("pulse-beats-mode-{}", std::process::id()));

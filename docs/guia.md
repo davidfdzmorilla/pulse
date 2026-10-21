@@ -449,7 +449,7 @@ Para audios cuyo tempo varía. En la franja bajo la forma de onda (con Warp dist
 
 ## Tempo de los audios
 
-Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadamente un segundo de análisis por minuto de audio). Si encuentra un ritmo claro, el clip pasa a **Stretch** a ese tempo (a **Beats** si es un loop de batería: por su nombre, o porque no tiene tonalidad), empieza en el compás del primer tiempo fuerte y dura compases enteros. Si el tempo varía, pone un marcador de warp en cada compás. Así el audio va al ritmo del metrónomo. Un loop corto (hasta 32 s) dura compases enteros: si el tempo encontrado se queda cerca del que lo hace de 1, 2, 3, 4, 6, 8, 12 o 16 compases justos, se usa ese (un loop de 4 compases a 150 queda a 150, no a 151); si el detector se equivoca más, pero el loop dura compases justos al tempo del proyecto, ese.
+Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadamente un segundo de análisis por minuto de audio). Si encuentra un ritmo claro, el clip pasa a **Stretch** a ese tempo (a **Beats** si es un loop de batería: por su nombre, o porque no tiene tonalidad), empieza en el compás del primer tiempo fuerte y dura compases enteros. Si el tempo varía, pone un marcador de warp en cada compás. Así el audio va al ritmo del metrónomo. Un loop corto (hasta 32 s) dura compases enteros: si el tempo encontrado se queda cerca del que lo hace de 1, 2, 3, 4, 6, 8, 12 o 16 compases justos, se usa ese (un loop de 4 compases a 150 queda a 150, no a 151); si el detector se equivoca más, pero el loop dura compases justos al tempo del proyecto, ese. Mientras se analiza, y si no encuentra un ritmo claro, un audio corto se toma por un loop de compases enteros: al tempo de su nombre si lo dice («Tops 150», «Bass_128bpm») y dura compases justos a él, o de 1, 2, 4 u 8 compases al tempo más cercano al del proyecto.
 
 - **Detectar tempo** (clic derecho en un clip de audio, o «Detectar» en el editor): vuelve a analizarlo.
 - **Usar el tempo de este clip en el proyecto**: pone el proyecto al tempo del clip.
@@ -680,6 +680,8 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
 - **MUESTRAS**: **Añadir muestra…**.
 - **BIBLIOTECA**: busca muestras, proyectos y presets por nombre, y explora las carpetas Samples, Proyectos, Exportaciones, Presets y las tuyas (**Añadir carpeta…**; clic derecho → **Quitar del navegador**).
   - Audio: **clic** lo escucha (otro clic lo para), **doble clic** lo añade a la pista de audio seleccionada, y se puede **arrastrar** a un slot, una pista, un pad o el Sampler.
+  - **A tempo** (arriba, marcado de serie): los loops (hasta 32 s) se escuchan al tempo del proyecto y en bucle, como sonarían en un clip (Beats si son de batería). Si la canción está sonando, entran a tiempo con ella, en su compás. La primera vez que escuchas un archivo tarda un momento en sonar, mientras busca su tempo; al lado de la casilla pone a qué tempo va el loop. Sin marcar, o con archivos más largos, cada archivo suena una vez a su velocidad.
+  - **↑ ↓**: tras hacer clic en un archivo, pasan al anterior o al siguiente y lo escuchan. Un clic fuera del navegador devuelve las flechas al resto de Pulse.
   - Proyectos: doble clic para abrir. Presets: doble clic para aplicar.
 - **PISTAS**: nueva pista MIDI o de audio.
 

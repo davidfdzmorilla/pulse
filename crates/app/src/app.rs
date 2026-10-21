@@ -645,13 +645,13 @@ impl PulseApp {
     }
 
     /// Builds a clip for a file, guessing whether it is a tempo-synced loop or a one-shot.
-    fn new_audio_clip(&self, path: &Path, sample: &Sample, color: [u8; 3]) -> AudioClip {
+    pub(crate) fn new_audio_clip(&self, path: &Path, sample: &Sample, color: [u8; 3]) -> AudioClip {
         let duration = sample.duration();
         let tempo = self.project.tempo;
         let name = path.file_stem().map_or("Audio".into(), |s| s.to_string_lossy().into_owned());
         // A first guess while the tempo is found (see `tempo_ui`): short files are
         // likely loops cut to whole bars; longer ones play as they are.
-        let guess = if duration <= 30.0 { guess_loop_bpm(duration, tempo) } else { None };
+        let guess = if duration <= 30.0 { crate::tempo_ui::name_bpm(&name, duration).or_else(|| guess_loop_bpm(duration, tempo)) } else { None };
         let (warp, original_bpm, length) = match guess {
             Some(bpm) => {
                 let warp = if crate::tempo_ui::is_drum_loop(&name, sample) { WarpMode::Beats } else { WarpMode::Stretch };

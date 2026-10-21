@@ -49,11 +49,55 @@ impl Transport {
     }
 }
 
-/// A controller (CC number, any channel) linked to a control.
+/// A controller (CC number, any channel) linked to a control. One controller
+/// can move several controls, each over its own range.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Mapping {
     pub cc: u8,
     pub control: Control,
+    /// What the controller's bottom and top set the control to (0..1 of its
+    /// range): a part of it, or backwards with `min` above `max`.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub min: f32,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub max: f32,
+    /// Seconds the control takes to follow the controller (0: at once), so a
+    /// jumpy knob or a 0–127 step moves it smoothly.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub smooth: f32,
+}
+
+fn one() -> f32 {
+    1.0
+}
+
+fn is_one(x: &f32) -> bool {
+    *x == 1.0
+}
+
+fn is_zero(x: &f32) -> bool {
+    *x == 0.0
+}
+
+impl Mapping {
+    pub fn new(cc: u8, control: Control) -> Self {
+        Mapping { cc, control, min: 0.0, max: 1.0, smooth: 0.0 }
+    }
+
+    /// Where controller value `value` (0..127) puts the control (0..1).
+    pub fn scaled(&self, value: u8) -> f32 {
+        let (min, max) = (self.min.clamp(0.0, 1.0), self.max.clamp(0.0, 1.0));
+        min + (max - min) * value as f32 / 127.0
+    }
+}
+
+/// A control following its controller over `smooth` seconds.
+#[derive(Clone, Copy, Debug)]
+struct Glide {
+    control: Control,
+    at: f32,
+    to: f32,
+    smooth: f32,
 }
 
 /// What the MIDI input threads and the UI share.
@@ -108,6 +152,13 @@ pub struct Learn {
     pub last_move: Option<Instant>,
     /// Value last seen per controller, to tell presses from releases.
     last_value: Vec<(u8, u8, Instant)>,
+    /// Controls still on their way to where their controller put them, and
+    /// when they last moved.
+    glides: Vec<Glide>,
+    glided: Option<Instant>,
+    /// Linking a controller adds a control to the ones it moves, instead of
+    /// moving it from them.
+    pub add: bool,
     /// Where transport assignments are kept (none in tests and headless apps).
     path: Option<PathBuf>,
 }
@@ -132,7 +183,12 @@ impl Learn {
 
     /// Whether a sweep of a controller is still going on (for undo).
     pub fn moving(&self) -> bool {
-        self.last_move.is_some_and(|t| t.elapsed() < Duration::from_millis(400))
+        self.last_move.is_some_and(|t| t.elapsed() < Duration::from_millis(400)) || !self.glides.is_empty()
+    }
+
+    /// Whether controls are still following their controllers (frames needed).
+    pub fn gliding(&self) -> bool {
+        !self.glides.is_empty()
     }
 }
 
@@ -173,21 +229,38 @@ impl PulseApp {
         }
     }
 
-    /// Links controller `cc` to `control`, replacing what either had.
+    /// Links controller `cc` to `control`, replacing what either had (with
+    /// «add», the controller keeps its other controls too).
     pub fn assign(&mut self, cc: u8, control: Control) {
-        self.project.midi_map.retain(|m| m.cc != cc && m.control != control);
-        self.learn.transport.retain(|m| m.cc != cc && m.control != control);
+        let add = self.learn.add;
+        let keep = |m: &Mapping| m.control != control && (m.cc != cc || add);
+        self.project.midi_map.retain(keep);
+        self.learn.transport.retain(keep);
         match control {
             Control::Transport(_) => {
-                self.learn.transport.push(Mapping { cc, control });
+                self.learn.transport.push(Mapping::new(cc, control));
                 self.learn.save_transport();
             }
-            _ => self.project.midi_map.push(Mapping { cc, control }),
+            _ => self.project.midi_map.push(Mapping::new(cc, control)),
         }
         self.sync_midi_map();
-        self.status = Some(format!("CC {cc} → {}", self.control_name(control)));
+        let count = self.mappings().iter().filter(|m| m.cc == cc).count();
+        self.status = Some(if count > 1 { format!("CC {cc} → {} (y {} más)", self.control_name(control), count - 1) } else { format!("CC {cc} → {}", self.control_name(control)) });
     }
 
+    /// Removes one control from what controller `cc` moves.
+    pub fn unassign_control(&mut self, cc: u8, control: Control) {
+        let keep = |m: &Mapping| !(m.cc == cc && m.control == control);
+        let transport = self.learn.transport.len();
+        self.project.midi_map.retain(keep);
+        self.learn.transport.retain(keep);
+        if self.learn.transport.len() != transport {
+            self.learn.save_transport();
+        }
+        self.sync_midi_map();
+    }
+
+    #[cfg(test)]
     pub fn unassign(&mut self, cc: u8) {
         let transport = self.learn.transport.len();
         self.project.midi_map.retain(|m| m.cc != cc);
@@ -253,26 +326,87 @@ impl PulseApp {
             }
             self.apply_cc(cc, value);
         }
+        self.glide();
     }
 
-    /// A controller moved: sets what it is linked to.
+    /// A controller moved: sets what it is linked to, each over its range,
+    /// at once or gliding there.
     pub fn apply_cc(&mut self, cc: u8, value: u8) {
-        let Some(mapping) = self.mappings().into_iter().find(|m| m.cc == cc) else { return };
-        let normalized = value as f32 / 127.0;
+        let mappings: Vec<Mapping> = self.mappings().into_iter().filter(|m| m.cc == cc).collect();
+        if mappings.is_empty() {
+            return;
+        }
         // Buttons act when pressed (from below the middle to above it, or again after a pause).
         let now = Instant::now();
         let previous = self.learn.last_value.iter().position(|&(c, _, _)| c == cc).map(|i| self.learn.last_value.swap_remove(i));
         self.learn.last_value.push((cc, value, now));
         let pressed = value >= 64 && previous.is_none_or(|(_, v, t)| v < 64 || now.duration_since(t) > Duration::from_millis(150));
-        match mapping.control {
+        for mapping in mappings {
+            let to = mapping.scaled(value);
+            match mapping.control {
+                Control::Transport(action) if pressed => self.transport(action),
+                Control::Transport(_) => {}
+                control if mapping.smooth > 0.0 => {
+                    let glide = match self.learn.glides.iter().position(|g| g.control == control) {
+                        Some(i) => &mut self.learn.glides[i],
+                        None => {
+                            let at = self.control_value(control).unwrap_or(to);
+                            self.learn.glides.push(Glide { control, at, to, smooth: mapping.smooth });
+                            self.learn.glided.get_or_insert(now);
+                            self.learn.glides.last_mut().expect("just pushed")
+                        }
+                    };
+                    (glide.to, glide.smooth) = (to, mapping.smooth);
+                    self.learn.last_move = Some(now);
+                }
+                control => {
+                    self.learn.glides.retain(|g| g.control != control);
+                    self.set_control(control, to);
+                    self.learn.last_move = Some(now);
+                }
+            }
+        }
+    }
+
+    /// Once a frame: moves the gliding controls on towards their controllers.
+    fn glide(&mut self) {
+        let now = Instant::now();
+        let dt = self.learn.glided.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
+        self.learn.glided = (!self.learn.glides.is_empty()).then_some(now);
+        let mut glides = std::mem::take(&mut self.learn.glides);
+        for g in &mut glides {
+            // Most of the way (95 %) in `smooth` seconds, then there.
+            let step = 1.0 - (-3.0 * dt / g.smooth.max(1e-3)).exp();
+            g.at += (g.to - g.at) * step;
+            if (g.to - g.at).abs() < 0.002 {
+                g.at = g.to;
+            }
+            self.set_control(g.control, g.at);
+        }
+        glides.retain(|g| g.at != g.to);
+        self.learn.glides = glides;
+    }
+
+    /// Where a control is, 0..1 of its range.
+    fn control_value(&self, control: Control) -> Option<f32> {
+        match control {
+            Control::Param { target, param } => self.param_info(target, param).map(|info| info.normalize(self.param_value(target, param))),
+            Control::Plugin { id, param } => self.samples.plugins.get(&id).map(|h| h.value(param) as f32),
+            Control::Transport(_) => None,
+        }
+    }
+
+    /// Sets a control to `n`, 0..1 of its range, as moving it by hand does.
+    fn set_control(&mut self, control: Control, n: f32) {
+        match control {
             Control::Param { target, param } => {
-                let Some(info) = self.param_info(target, param) else { return };
-                self.set_param(target, param, info.denormalize(normalized));
-                self.learn.last_move = Some(now);
+                if let Some(info) = self.param_info(target, param) {
+                    self.set_param(target, param, info.denormalize(n));
+                }
             }
             Control::Plugin { id, param } => {
                 if let Some(handle) = self.samples.plugins.get(&id) {
-                    handle.set(param, normalized as f64);
+                    handle.set(param, n as f64);
                 }
                 // Moved by hand: its automation stops playing (and the move can be recorded).
                 if let Some((target, p)) = self.plugin_target_param(id, param) {
@@ -280,9 +414,7 @@ impl PulseApp {
                         self.sync_automation(target);
                     }
                 }
-                self.learn.last_move = Some(now);
             }
-            Control::Transport(action) if pressed => self.transport(action),
             Control::Transport(_) => {}
         }
     }
@@ -327,23 +459,54 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         if mappings.is_empty() {
             ui.label(egui::RichText::new("Sin asignaciones").color(TEXT_DIM));
         }
-        egui::Grid::new("midi_mappings").num_columns(3).striped(true).show(ui, |ui| {
+        egui::Grid::new("midi_mappings").num_columns(6).striped(true).show(ui, |ui| {
+            ui.label(egui::RichText::new("CC").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new("Mueve").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new("Desde").color(TEXT_DIM).size(10.5)).on_hover_text("Dónde pone el control con el knob abajo del todo (en % de su recorrido)");
+            ui.label(egui::RichText::new("Hasta").color(TEXT_DIM).size(10.5)).on_hover_text("Y arriba del todo. «Desde» por encima de «Hasta» lo mueve al revés");
+            ui.label(egui::RichText::new("Suavizado").color(TEXT_DIM).size(10.5)).on_hover_text("Lo que tarda el control en llegar adonde pones el knob: sin saltos aunque el knob vaya a escalones");
+            ui.end_row();
             for m in &mappings {
                 ui.label(format!("CC {}", m.cc));
                 ui.label(app.control_name(m.control));
+                let mut edited = *m;
+                if matches!(m.control, Control::Transport(_)) {
+                    ui.label("");
+                    ui.label("");
+                    ui.label("");
+                } else {
+                    let percent = |ui: &mut egui::Ui, value: &mut f32| {
+                        let mut p = *value * 100.0;
+                        if ui.add(egui::DragValue::new(&mut p).range(0.0..=100.0).speed(0.5).suffix(" %").max_decimals(0)).changed() {
+                            *value = p / 100.0;
+                        }
+                    };
+                    percent(ui, &mut edited.min);
+                    percent(ui, &mut edited.max);
+                    let mut ms = edited.smooth * 1000.0;
+                    if ui.add(egui::DragValue::new(&mut ms).range(0.0..=2000.0).speed(5.0).suffix(" ms").max_decimals(0)).changed() {
+                        edited.smooth = ms / 1000.0;
+                    }
+                }
+                if edited != *m {
+                    if let Some(slot) = app.project.midi_map.iter_mut().find(|x| x.cc == m.cc && x.control == m.control) {
+                        *slot = edited;
+                    }
+                }
                 if ui.small_button("×").on_hover_text("Quitar").clicked() {
-                    remove = Some(m.cc);
+                    remove = Some((m.cc, m.control));
                 }
                 ui.end_row();
             }
         });
+        ui.checkbox(&mut app.learn.add, "Un knob para varios controles").on_hover_text("Al asignar un knob que ya mueve algo, lo añade a lo que mueve en vez de cambiarlo: un solo gesto para el filtro, la reverb y el volumen a la vez");
         ui.separator();
         if ui.button("Terminar").clicked() {
             close = true;
         }
     });
-    if let Some(cc) = remove {
-        app.unassign(cc);
+    if let Some((cc, control)) = remove {
+        app.unassign_control(cc, control);
     }
     if close {
         app.toggle_learn();
@@ -381,7 +544,7 @@ mod tests {
         assert_eq!(app.learn.armed, Some(volume));
         // …and turns knob CC 74.
         assert!(cc(&mut app, 74, 64), "while learning, controllers go to Pulse");
-        assert_eq!(app.project.midi_map, [Mapping { cc: 74, control: volume }]);
+        assert_eq!(app.project.midi_map, [Mapping::new(74, volume)]);
         app.toggle_learn();
 
         // From now on CC 74 moves that fader, and no longer reaches the instrument.
@@ -418,15 +581,83 @@ mod tests {
         let pan = Control::Param { target: Target::Track(1), param: Param::Pan };
         app.set_param(Target::Track(1), Param::Pan, app.param_value(Target::Track(1), Param::Pan));
         app.poll_midi_map();
-        assert_eq!(app.project.midi_map, [Mapping { cc: 10, control: pan }]);
+        assert_eq!(app.project.midi_map, [Mapping::new(10, pan)]);
         assert_eq!(app.learn.armed, None);
         // Turning the linked knob on does not steal the next control touched.
         cc(&mut app, 10, 50);
         assert_eq!(app.learn.pending, None);
         app.set_param(Target::Master, Param::Volume, app.param_value(Target::Master, Param::Volume));
         app.poll_midi_map();
-        assert_eq!(app.project.midi_map, [Mapping { cc: 10, control: pan }]);
+        assert_eq!(app.project.midi_map, [Mapping::new(10, pan)]);
         assert_eq!(app.learn.armed, Some(Control::Param { target: Target::Master, param: Param::Volume }));
+    }
+
+    /// Each control over its own part of its range, or backwards.
+    #[test]
+    fn a_knob_moves_a_control_over_its_range() {
+        let mut app = app();
+        let volume = Control::Param { target: Target::Track(1), param: Param::Volume };
+        app.assign(74, volume);
+        app.project.midi_map[0].min = 0.25;
+        app.project.midi_map[0].max = 0.75;
+        let info = app.param_info(Target::Track(1), Param::Volume).unwrap();
+        let at = |app: &PulseApp| info.normalize(app.param_value(Target::Track(1), Param::Volume));
+        cc(&mut app, 74, 0);
+        assert!((at(&app) - 0.25).abs() < 1e-4);
+        cc(&mut app, 74, 127);
+        assert!((at(&app) - 0.75).abs() < 1e-4);
+        // Backwards: the knob up turns it down.
+        (app.project.midi_map[0].min, app.project.midi_map[0].max) = (1.0, 0.0);
+        cc(&mut app, 74, 127);
+        assert!(at(&app).abs() < 1e-4);
+        // Saved with the project; a mapping from before ranges is the whole range.
+        let text = serde_json::to_string(&app.project.midi_map).unwrap();
+        assert_eq!(serde_json::from_str::<Vec<Mapping>>(&text).unwrap(), app.project.midi_map);
+        let old: Mapping = serde_json::from_str(r#"{"cc": 3, "control": {"Transport": "Play"}}"#).unwrap();
+        assert_eq!(old, Mapping::new(3, Control::Transport(Transport::Play)));
+    }
+
+    /// With «Un knob para varios controles», one knob moves them all; taking
+    /// one away leaves the rest.
+    #[test]
+    fn one_knob_can_move_several_controls() {
+        let mut app = app();
+        let pan = Control::Param { target: Target::Track(0), param: Param::Pan };
+        let volume = Control::Param { target: Target::Master, param: Param::Volume };
+        app.assign(20, pan);
+        app.assign(20, volume);
+        assert_eq!(app.project.midi_map, [Mapping::new(20, volume)], "without it, the knob moves to the new control");
+        app.learn.add = true;
+        app.assign(20, pan);
+        assert_eq!(app.project.midi_map.len(), 2);
+        cc(&mut app, 20, 127);
+        assert_eq!(app.project.tracks[0].mixer.pan, 1.0);
+        assert_eq!(app.project.master.mixer.gain, app.param_info(Target::Master, Param::Volume).unwrap().max);
+        app.unassign_control(20, volume);
+        assert_eq!(app.project.midi_map, [Mapping::new(20, pan)]);
+        assert!(app.learn.shared.take(20, 0), "still taken by the pan");
+    }
+
+    /// Smoothed, the control glides to where the knob went instead of jumping.
+    #[test]
+    fn a_smoothed_control_glides_to_the_knob() {
+        let mut app = app();
+        app.assign(30, Control::Param { target: Target::Track(0), param: Param::Pan });
+        app.project.midi_map[0].smooth = 0.2;
+        cc(&mut app, 30, 0);
+        let pan = |app: &PulseApp| app.project.tracks[0].mixer.pan;
+        let start = pan(&app);
+        assert!(start > -0.5, "it doesn't jump: {start}");
+        assert!(app.learn.gliding());
+        let mut steps = vec![start];
+        for _ in 0..40 {
+            std::thread::sleep(Duration::from_millis(10));
+            app.poll_midi_map();
+            steps.push(pan(&app));
+        }
+        assert!(steps.windows(2).all(|w| w[1] <= w[0]), "always towards it: {steps:?}");
+        assert_eq!(pan(&app), -1.0, "and there in the end");
+        assert!(!app.learn.gliding());
     }
 
     #[test]
@@ -454,7 +685,7 @@ mod tests {
         app.assign(10, control);
         let text = serde_json::to_string(&app.project).unwrap();
         let loaded: Project = serde_json::from_str(&text).unwrap();
-        assert_eq!(loaded.midi_map, [Mapping { cc: 10, control }]);
+        assert_eq!(loaded.midi_map, [Mapping::new(10, control)]);
         let mut reopened = PulseApp::headless(loaded);
         assert!(reopened.learn.shared.take(10, 0));
         reopened.poll_midi_map();
@@ -509,7 +740,7 @@ mod tests {
     #[test]
     fn the_window_lists_the_assignments() {
         let mut app = app();
-        app.project.midi_map.push(Mapping { cc: 7, control: Control::Param { target: Target::Master, param: Param::Volume } });
+        app.project.midi_map.push(Mapping::new(7, Control::Param { target: Target::Master, param: Param::Volume }));
         app.toggle_learn();
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(Default::default(), |ui| window(&mut app, &ui.ctx().clone()));

@@ -133,7 +133,8 @@ fn laid_out_grooved(placed: &ArrangementClip, midi: &MidiClip, groove: &Groove) 
         for (index, n) in midi.notes.iter().enumerate().filter(|(_, n)| n.start < length) {
             let start = lap + n.start;
             if start < placed.length {
-                let (shift, velocity) = groove.apply(index, lap_index, n.start, n.velocity);
+                // The lap as the engine counts it, set apart by where the copy is.
+                let (shift, velocity) = groove.apply(index, lap_index.wrapping_add(engine::copy_salt(placed.start)), n.start, n.velocity);
                 let start = (start + shift).max(0.0);
                 notes.push(Note { start, length: n.length.min(placed.length - start).min(length - n.start).max(MIN_PART / 16.0), velocity, ..n.clone() });
             }

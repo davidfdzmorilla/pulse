@@ -225,7 +225,8 @@ pub fn slice_at(sample: &Sample, (offset, seconds): (f64, f64), bpm: f64, cuts: 
             l[n - 1 - i] *= gain;
             r[n - 1 - i] *= gain;
         }
-        let path: PathBuf = dir.join(format!("{name} {:02}.wav", pad + 1));
+        // The clip's name is the project's text: no `/` or `..` out of `dir`.
+        let path: PathBuf = dir.join(format!("{} {:02}.wav", crate::files::safe_name(name), pad + 1));
         write_wav(&path, &l, &r, sample.sample_rate)?;
         files[pad] = path.to_string_lossy().into_owned();
         let beat = start as f64 / frames_per_beat;
@@ -286,6 +287,24 @@ mod tests {
     use super::*;
 
     const SR: f32 = 48_000.0;
+
+    /// A clip's name (text of the project, maybe someone else's) never takes
+    /// the slices out of their folder.
+    #[test]
+    fn slices_stay_in_their_folder_whatever_the_name() {
+        let root = std::env::temp_dir().join(format!("pulse-slices-name-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let dir = root.join("Proyecto/Trozos");
+        let sample = Sample::from_channels(hits(&[0.0, 0.5], 1.0), hits(&[0.0, 0.5], 1.0), SR);
+        for name in ["../../Fuera/escrito", "..", "a\\..\\..\\b", "con: raros*?"] {
+            let sliced = slice_at(&sample, (0.0, 1.0), 120.0, &[0.0, 0.5], name, &dir, [1, 2, 3]).unwrap();
+            for path in &sliced.files {
+                assert_eq!(Path::new(path).parent(), Some(dir.as_path()), "{name}: {path}");
+            }
+        }
+        assert!(!root.join("Fuera").exists());
+        std::fs::remove_dir_all(&root).ok();
+    }
 
     /// Decaying noise bursts at the given seconds, over a quiet sine "bass".
     fn hits(at: &[f32], seconds: f32) -> Vec<f32> {

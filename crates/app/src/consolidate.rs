@@ -36,8 +36,7 @@ impl PulseApp {
     fn write_consolidated(&self, name: &str, left: &[f32], right: &[f32]) -> Result<PathBuf, String> {
         let dir = self.media_dir(crate::library::CONSOLIDATED);
         std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
-        let clean: String = name.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
-        let path = crate::library::unique(&dir.join(format!("{} (consolidado).wav", clean.trim())));
+        let path = crate::library::unique(&dir.join(format!("{} (consolidado).wav", crate::files::safe_name(name))));
         crate::export::write(&path, left, right, self.audio.sample_rate() as u32, crate::export::BitDepth::Float32, 1.0)?;
         Ok(path)
     }

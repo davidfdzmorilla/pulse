@@ -22,7 +22,7 @@ const MAX_TAIL_SECONDS: f64 = 10.0;
 /// The tail ends once the output stays below this level (-80 dBFS) for a while.
 const SILENCE: f32 = 1e-4;
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum Range {
     Song,
     Loop,
@@ -30,7 +30,7 @@ pub enum Range {
     Sections,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug, serde::Serialize, serde::Deserialize)]
 pub enum BitDepth {
     Int16,
     Int24,
@@ -47,7 +47,40 @@ impl BitDepth {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Debug)]
+/// The kind of file written.
+#[derive(Clone, Copy, PartialEq, Eq, Debug, Default, serde::Serialize, serde::Deserialize)]
+pub enum Format {
+    #[default]
+    Wav,
+    /// Lossless and about half the size (16 or 24 bits).
+    Flac,
+    /// For listening and sharing (CBR at `Settings::mp3_kbps`).
+    Mp3,
+}
+
+impl Format {
+    pub const ALL: [Format; 3] = [Format::Wav, Format::Flac, Format::Mp3];
+
+    pub fn extension(self) -> &'static str {
+        match self {
+            Format::Wav => "wav",
+            Format::Flac => "flac",
+            Format::Mp3 => "mp3",
+        }
+    }
+
+    fn label(self) -> &'static str {
+        match self {
+            Format::Wav => "WAV",
+            Format::Flac => "FLAC",
+            Format::Mp3 => "MP3",
+        }
+    }
+}
+
+/// The export dialog's choices; the last ones are kept in the app's settings.
+#[derive(Clone, Copy, PartialEq, Debug, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct Settings {
     pub range: Range,
     pub stems: bool,
@@ -58,11 +91,14 @@ pub struct Settings {
     /// Stems through the master's effects (as heard), or without them (they
     /// then add up to the mix).
     pub stems_master: bool,
+    pub format: Format,
+    /// MP3's bit rate (kbps).
+    pub mp3_kbps: u32,
 }
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { range: Range::Song, stems: false, bits: BitDepth::Int24, sample_rate: 48_000, normalize: None, stems_master: true }
+        Self { range: Range::Song, stems: false, bits: BitDepth::Int24, sample_rate: 48_000, normalize: None, stems_master: true, format: Format::Wav, mp3_kbps: 320 }
     }
 }
 
@@ -480,6 +516,156 @@ pub fn write(path: &Path, left: &[f32], right: &[f32], sample_rate: u32, bits: B
     Ok(clipped)
 }
 
+/// Where a file to be encoded is first written: beside it, hidden.
+fn temporary(path: &Path) -> PathBuf {
+    let name = path.file_name().map_or_else(|| "export".into(), |n| n.to_string_lossy().into_owned());
+    path.with_file_name(format!(".{name}.tmp.wav"))
+}
+
+/// Encodes the temporary WAVs to the settings' format, a few at a time, and
+/// removes them. The files written; `clipped` counts the samples over full scale.
+fn encode_all(temporaries: Vec<PathBuf>, settings: &Settings, clipped: &mut usize, cancel: &AtomicBool) -> Result<Vec<PathBuf>, String> {
+    let finals: Vec<PathBuf> = temporaries.iter().map(|t| {
+        let name = t.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+        t.with_file_name(name.trim_start_matches('.').trim_end_matches(".tmp.wav"))
+    }).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let results: Vec<std::sync::Mutex<Option<Result<usize, String>>>> = temporaries.iter().map(|_| std::sync::Mutex::new(None)).collect();
+    // FLAC holds a file's frames in memory until it is written: not too many at once.
+    let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(4).min(temporaries.len()).max(1);
+    let work = || loop {
+        let i = next.fetch_add(1, Ordering::Relaxed);
+        let Some(temporary) = temporaries.get(i) else { return };
+        let result = if cancel.load(Ordering::Relaxed) { Err("Exportación cancelada".to_string()) } else { encode(temporary, &finals[i], settings) };
+        if let Ok(mut slot) = results[i].lock() {
+            *slot = Some(result);
+        }
+    };
+    std::thread::scope(|scope| {
+        for _ in 1..threads {
+            scope.spawn(work);
+        }
+        work();
+    });
+    for temporary in &temporaries {
+        let _ = std::fs::remove_file(temporary);
+    }
+    for result in results {
+        *clipped += result.into_inner().ok().flatten().unwrap_or_else(|| Err("Exportación cancelada".into()))?;
+    }
+    Ok(finals)
+}
+
+/// Encodes a 32-bit float WAV to FLAC or MP3 at `to`. How many samples were
+/// over full scale (clipped).
+fn encode(from: &Path, to: &Path, settings: &Settings) -> Result<usize, String> {
+    let reader = hound::WavReader::open(from).map_err(|e| format!("No se pudo leer {}: {e}", from.display()))?;
+    let rate = reader.spec().sample_rate;
+    let mut samples = reader.into_samples::<f32>().map(|s| s.unwrap_or(0.0));
+    let mut clipped = 0;
+    let bytes = match settings.format {
+        Format::Wav => return Ok(0),
+        Format::Flac => {
+            let bits = if settings.bits == BitDepth::Int16 { 16 } else { 24 };
+            let mut source = FloatSource { samples: &mut samples, bits, rate, clipped: 0, seed: 0x1234_5678, buffer: Vec::new() };
+            use flacenc::error::Verify;
+            let config = flacenc::config::Encoder::default().into_verified().map_err(|(_, e)| format!("FLAC: {e}"))?;
+            let block = config.block_size;
+            let stream = flacenc::encode_with_fixed_block_size(&config, &mut source, block).map_err(|e| format!("No se pudo codificar en FLAC: {e}"))?;
+            clipped = source.clipped;
+            let mut sink = flacenc::bitsink::ByteSink::new();
+            use flacenc::component::BitRepr;
+            stream.write(&mut sink).map_err(|e| format!("No se pudo codificar en FLAC: {e:?}"))?;
+            let mut bytes = sink.into_inner();
+            // Every block but the last is `block` long: STREAMINFO's smallest
+            // block size says so, as libFLAC writes it (flacenc puts the last
+            // one's there, and readers then take the stream for variable).
+            if bytes.len() > 12 && &bytes[..4] == b"fLaC" && bytes[4] & 0x7f == 0 {
+                let largest = [bytes[10], bytes[11]];
+                bytes[8..10].copy_from_slice(&largest);
+            }
+            bytes
+        }
+        Format::Mp3 => {
+            let mut encoder = rusty_mp3::Mp3Encoder::new(rusty_mp3::Mp3EncoderConfig { bitrate_kbps: settings.mp3_kbps, vbr_quality: None });
+            let mut out = Vec::new();
+            let mut chunk = Vec::with_capacity(2 * 4096);
+            loop {
+                chunk.clear();
+                chunk.extend(samples.by_ref().take(2 * 4096).map(|s| {
+                    if s.abs() > 1.0 {
+                        clipped += 1;
+                    }
+                    s.clamp(-1.0, 1.0)
+                }));
+                if chunk.is_empty() {
+                    break;
+                }
+                encoder.push_pcm_f32(&chunk, 2, rate).map_err(|e| format!("No se pudo codificar en MP3: {e:?}"))?;
+                while let Ok(packet) = encoder.next_packet() {
+                    out.extend_from_slice(&packet);
+                }
+            }
+            encoder.finish();
+            while let Ok(packet) = encoder.next_packet() {
+                out.extend_from_slice(&packet);
+            }
+            out
+        }
+    };
+    crate::store::write_atomic(to, &bytes)?;
+    Ok(clipped)
+}
+
+/// Float samples as FLAC's integers, with TPDF dither at 16 bits (as WAV).
+struct FloatSource<'a, I: Iterator<Item = f32>> {
+    samples: &'a mut I,
+    bits: usize,
+    rate: u32,
+    clipped: usize,
+    seed: u32,
+    buffer: Vec<i32>,
+}
+
+impl<I: Iterator<Item = f32>> flacenc::source::Source for FloatSource<'_, I> {
+    fn channels(&self) -> usize {
+        2
+    }
+
+    fn bits_per_sample(&self) -> usize {
+        self.bits
+    }
+
+    fn sample_rate(&self) -> usize {
+        self.rate as usize
+    }
+
+    fn read_samples<F: flacenc::source::Fill>(&mut self, block_size: usize, dest: &mut F) -> Result<usize, flacenc::error::SourceError> {
+        let full_scale = if self.bits == 16 { 32_767.0 } else { 8_388_607.0 };
+        self.buffer.clear();
+        for sample in self.samples.by_ref().take(2 * block_size) {
+            let dither = if self.bits == 16 {
+                let mut noise = || {
+                    self.seed ^= self.seed << 13;
+                    self.seed ^= self.seed >> 17;
+                    self.seed ^= self.seed << 5;
+                    self.seed as f32 / u32::MAX as f32
+                };
+                (noise() - noise()) / 32_768.0
+            } else {
+                0.0
+            };
+            let value = sample + dither;
+            if value.abs() > 1.0 {
+                self.clipped += 1;
+            }
+            self.buffer.push((value.clamp(-1.0, 1.0) * full_scale).round() as i32);
+        }
+        dest.fill_interleaved(&self.buffer)?;
+        Ok(self.buffer.len() / 2)
+    }
+}
+
 /// Adds `frames` of silence at the end of a WAV written by [`write`].
 fn pad(path: &Path, frames: usize, bits: BitDepth) -> Result<(), String> {
     let mut writer = hound::WavWriter::append(path).map_err(|e| format!("No se pudo alargar {}: {e}", path.display()))?;
@@ -608,6 +794,14 @@ fn run(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Report, String> {
+    // FLAC and MP3 are written as WAV (32-bit float) first, so stems can be
+    // padded to the same length, then encoded.
+    let format = settings.format;
+    let written_as = |path: &Path| match format {
+        Format::Wav => path.with_extension("wav"),
+        _ => temporary(&path.with_extension(format.extension())),
+    };
+    let bits = if format == Format::Wav { settings.bits } else { BitDepth::Float32 };
     let written = render_each(renders, settings.sample_rate as f32, progress, cancel, |render, left, right| {
         let peak = peak(&left, &right);
         // Stems keep their relative levels, so only the full mix is normalized.
@@ -615,8 +809,9 @@ fn run(
             Some(target) if !settings.stems && peak > 0.0 => 10f32.powf(target / 20.0) / peak,
             _ => 1.0,
         };
-        let clipped = write(&render.path, &left, &right, settings.sample_rate, settings.bits, gain)?;
-        Ok((render.path.clone(), render.group, left.len(), peak, clipped))
+        let path = written_as(&render.path);
+        let clipped = write(&path, &left, &right, settings.sample_rate, bits, gain)?;
+        Ok((path, render.group, left.len(), peak, clipped))
     })
     .map_err(|e| if e == "Cancelado" { "Exportación cancelada".to_string() } else { e })?;
     let mut report = Report::default();
@@ -634,8 +829,12 @@ fn run(
     for (path, &(group, frames)) in report.files.iter().zip(&lengths) {
         let longest = lengths.iter().filter(|(g, _)| *g == group).map(|&(_, n)| n).max().unwrap_or(0);
         if frames < longest {
-            pad(path, longest - frames, settings.bits)?;
+            pad(path, longest - frames, bits)?;
         }
+    }
+    if format != Format::Wav {
+        report.clipped = 0;
+        report.files = encode_all(std::mem::take(&mut report.files), &settings, &mut report.clipped, cancel)?;
     }
     report.peak_db = db(peak_overall);
     progress.store(1f32.to_bits(), Ordering::Relaxed);
@@ -672,6 +871,8 @@ pub struct Dialog {
     /// Only those versions, not what there is now.
     pub only_versions: bool,
     job: Option<Job>,
+    /// The settings were taken from the app's (see `window`).
+    loaded: bool,
 }
 
 impl PulseApp {
@@ -709,8 +910,9 @@ impl PulseApp {
     }
 
     fn start_export(&mut self) {
-        let name = format!("{}.wav", self.file_name());
-        let dialog = rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_directory(crate::library::folder(crate::library::EXPORTS)).set_file_name(&name);
+        let format = self.export.settings.format;
+        let name = format!("{}.{}", self.file_name(), format.extension());
+        let dialog = rfd::FileDialog::new().add_filter(format.label(), &[format.extension()]).set_directory(crate::library::folder(crate::library::EXPORTS)).set_file_name(&name);
         let Some(destination) = crate::files::save_file(dialog) else { return };
         match self.export_renders(&destination) {
             Ok(renders) => self.export.job = Some(Job::start(renders, self.export.settings)),
@@ -732,6 +934,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     }
     if !app.export.open {
         return;
+    }
+    // The choices made last time.
+    if !app.export.loaded {
+        app.export.settings = app.settings.export;
+        app.export.loaded = true;
     }
     let mut open = true;
     egui::Window::new("Exportar audio")
@@ -765,10 +972,33 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 ui.end_row();
                 ui.label("Formato");
                 ui.horizontal(|ui| {
-                    for bits in [BitDepth::Int16, BitDepth::Int24, BitDepth::Float32] {
-                        ui.radio_value(&mut s.bits, bits, bits.label());
+                    for format in Format::ALL {
+                        ui.radio_value(&mut s.format, format, format.label()).on_hover_text(match format {
+                            Format::Wav => "Sin pérdida, el de siempre",
+                            Format::Flac => "Sin pérdida y la mitad de grande (16 o 24 bits)",
+                            Format::Mp3 => "Para escuchar y compartir",
+                        });
                     }
                 });
+                ui.end_row();
+                if s.format == Format::Mp3 {
+                    ui.label("Calidad");
+                    ui.horizontal(|ui| {
+                        for kbps in [192, 256, 320] {
+                            ui.radio_value(&mut s.mp3_kbps, kbps, format!("{kbps} kbps"));
+                        }
+                    });
+                } else {
+                    ui.label("Bits");
+                    ui.horizontal(|ui| {
+                        for bits in [BitDepth::Int16, BitDepth::Int24, BitDepth::Float32] {
+                            if bits == BitDepth::Float32 && s.format == Format::Flac {
+                                continue;
+                            }
+                            ui.radio_value(&mut s.bits, bits, bits.label());
+                        }
+                    });
+                }
                 ui.end_row();
                 ui.label("Frecuencia");
                 ui.horizontal(|ui| {
@@ -831,6 +1061,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 app.start_export();
             }
         });
+    if app.export.settings != app.settings.export {
+        let mut next = app.settings.clone();
+        next.export = app.export.settings;
+        app.set_settings(next);
+    }
     if !open {
         if let Some(job) = &app.export.job {
             job.cancel();
@@ -1159,6 +1394,94 @@ mod tests {
         app.export.settings.range = Range::Sections;
         assert!(app.export_renders(&out).err().unwrap().contains("marcadores"));
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Band energies (dB) of a mono mix: below 200 Hz, 200 Hz–5 kHz, above 5 kHz.
+    fn bands(sample: &engine::Sample) -> [f32; 3] {
+        let rate = sample.sample_rate;
+        let mono: Vec<f32> = sample.left.iter().zip(&sample.right).map(|(l, r)| 0.5 * (l + r)).collect();
+        let one_pole = |cutoff: f32, x: &[f32]| -> Vec<f32> {
+            let a = (-std::f32::consts::TAU * cutoff / rate).exp();
+            let mut y = 0.0;
+            x.iter().map(|&v| { y = v + a * (y - v); y }).collect()
+        };
+        let low = one_pole(200.0, &one_pole(200.0, &mono));
+        let below5k = one_pole(5000.0, &one_pole(5000.0, &mono));
+        let high: Vec<f32> = mono.iter().zip(&below5k).map(|(m, l)| m - l).collect();
+        let mid: Vec<f32> = below5k.iter().zip(&low).map(|(a, b)| a - b).collect();
+        let db = |x: &[f32]| 10.0 * (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32 + 1e-20).log10();
+        [db(&low), db(&mid), db(&high)]
+    }
+
+    /// FLAC holds the same samples as a WAV at its bits; MP3 sounds like it
+    /// (each band within a dB), as long; nothing temporary is left behind.
+    #[test]
+    fn flac_and_mp3_are_written_too() {
+        let dir = std::env::temp_dir().join(format!("pulse-formatos-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = Project::demo();
+        let export = |format: Format| {
+            let settings = Settings { range: Range::Loop, format, ..Default::default() };
+            let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join(format!("Tema.{}", format.extension())));
+            let report = run(renders, settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+            assert_eq!(report.files.len(), 1);
+            assert_eq!(report.files[0].extension().unwrap(), format.extension());
+            engine::Sample::load(&report.files[0]).unwrap()
+        };
+        let wav = export(Format::Wav);
+        let flac = export(Format::Flac);
+        let mp3 = export(Format::Mp3);
+        let names: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        std::fs::remove_dir_all(&dir).ok();
+        let mut sorted = names.clone();
+        sorted.sort();
+        assert_eq!(sorted, ["Tema.flac", "Tema.mp3", "Tema.wav"], "no temporary files: {names:?}");
+        assert_eq!(flac.frames(), wav.frames());
+        let difference = wav.left.iter().zip(&flac.left).chain(wav.right.iter().zip(&flac.right)).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+        assert!(difference < 1e-6, "FLAC at 24 bits is the WAV at 24 bits: {difference}");
+        let seconds = |s: &engine::Sample| s.duration();
+        assert!((seconds(&mp3) - seconds(&wav)).abs() < 0.1, "{} vs {}", seconds(&mp3), seconds(&wav));
+        let (a, b) = (bands(&wav), bands(&mp3));
+        for k in 0..3 {
+            assert!((a[k] - b[k]).abs() < 1.0, "band {k}: WAV {:.1} dB, MP3 {:.1} dB", a[k], b[k]);
+        }
+    }
+
+    /// Stems in FLAC are as long as each other, as in WAV.
+    #[test]
+    fn flac_stems_line_up() {
+        let dir = std::env::temp_dir().join(format!("pulse-stems-flac-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = Project::demo();
+        let settings = Settings { range: Range::Loop, stems: true, format: Format::Flac, bits: BitDepth::Int16, ..Default::default() };
+        let report = run(plan(&project, &mut SampleCache::default(), &settings, &dir.join("Tema.flac")), settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let lengths: Vec<usize> = report.files.iter().map(|f| engine::Sample::load(f).unwrap().frames()).collect();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(lengths.len(), 4);
+        assert!(lengths.iter().all(|&n| n == lengths[0]), "{lengths:?}");
+        assert!(report.files[0].to_string_lossy().ends_with("Tema - 1 Drums.flac"));
+    }
+
+    /// The dialog opens with the choices made last time, and changing them
+    /// keeps them; settings from before have the defaults.
+    #[test]
+    fn the_export_choices_are_remembered() {
+        let mut app = PulseApp::headless(Project::demo());
+        app.settings.export = Settings { format: Format::Mp3, mp3_kbps: 256, stems: true, ..Default::default() };
+        app.export.open = true;
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| window(&mut app, &ui.ctx().clone()));
+        assert_eq!(app.export.settings.format, Format::Mp3);
+        assert_eq!(app.export.settings.mp3_kbps, 256);
+        app.export.settings.range = Range::Sections;
+        let _ = ctx.run_ui(Default::default(), |ui| window(&mut app, &ui.ctx().clone()));
+        assert_eq!(app.settings.export.range, Range::Sections);
+        let text = serde_json::to_string(&app.settings).unwrap();
+        let back: crate::settings::Settings = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.export, app.settings.export);
+        let old: crate::settings::Settings = serde_json::from_str("{}").unwrap();
+        assert_eq!(old.export, Settings::default());
     }
 
     #[test]

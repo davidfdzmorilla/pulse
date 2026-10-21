@@ -761,7 +761,12 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Qué**: **Mezcla completa** o **Una pista por archivo (stems)**: cada pista que suena en solo, con sus envíos y su grupo. No se exportan las pistas desactivadas (ni las de un grupo desactivado) ni los grupos como stem aparte (sus pistas ya pasan por él). **Con la cadena del master** (en stems): quítala para que los stems sumados den la mezcla. Los stems se renderizan a la vez, uno por núcleo del procesador, y cada uno solo con lo que puede sonar en él (su pista, sus grupos y las pistas que escuchan sus sidechains): 16 stems tardan poco más que la canción una vez. Suenan exactamente igual que en solo. Si el proyecto tiene plugins, se renderizan de uno en uno.
 - **Rango**: **Toda la canción**, **Región del loop** o **Por secciones**: un archivo por cada parte de la canción, de un marcador al siguiente (el último, hasta el final), con el número y el nombre del marcador: «Tema - 1 Intro.wav», «Tema - 2 Drop.wav»… Lo que haya antes del primer marcador sale como «Inicio». Cada sección empieza con lo que ya sonaba y acaba con su cola. Con stems, una tanda por sección: «Tema - 2 Drop - 1 Drums.wav».
 - **Versiones** (si el proyecto tiene versiones con nombre): marca las que quieras exportar también, cada una tal como era (su tempo, sus pistas, su mezcla) y con su nombre al final del archivo: «Tema - Con el bajo nuevo.wav». **Solo las versiones** deja fuera lo de ahora.
-- **Formato**: WAV de 16 bits (con dither), 24 o 32 bits; **44.1** o **48 kHz**.
+- **Formato**:
+  - **WAV**: 16 bits (con dither), 24 o 32 bits (float).
+  - **FLAC**: sin pérdida, como el WAV, y más o menos la mitad de grande; 16 o 24 bits.
+  - **MP3**: para escuchar y compartir, a 192, 256 o 320 kbps.
+  - A **44.1** o **48 kHz**, en cualquiera de los tres.
+- El diálogo recuerda lo que elegiste la última vez (formato, rango, stems, normalización…), también entre sesiones.
 - **Normalizar**: pico a un valor (no en stems).
 - Se exporta el **Arrangement** (no la Session), con la cola de reverbs y delays (también los ecos de un delay largo: espera lo que tarda el delay más lento del proyecto antes de dar la cola por terminada). Empieza a todo volumen desde la primera muestra. Al exportar la **Región del loop** se toca desde unos compases antes, así que lo que ya sonaba (notas largas, colas) está desde el principio. Lo exportado suena igual que lo que oyes, con cualquier tamaño de búfer: la automatización se aplica cada 64 muestras, en los mismos puntos. Avisa si la mezcla satura.
 - Por defecto se guarda en la carpeta `Exportaciones`.

@@ -215,6 +215,24 @@ fn plan_from(project: &Project, samples: &mut SampleCache, settings: &Settings, 
     renders
 }
 
+/// Gives renders that would write the same file (two versions with one name,
+/// say) names of their own: «… 2», «… 3». Without telling case apart, as the
+/// disk doesn't on macOS and Windows.
+fn distinct(renders: &mut [Render]) {
+    let mut taken = HashSet::new();
+    for render in renders {
+        let key = |p: &Path| p.to_string_lossy().to_lowercase();
+        if taken.insert(key(&render.path)) {
+            continue;
+        }
+        let stem = render.path.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+        let extension = render.path.extension().map_or_else(String::new, |e| format!(".{}", e.to_string_lossy()));
+        let free = (2..).map(|n| render.path.with_file_name(format!("{stem} {n}{extension}"))).find(|p| !taken.contains(&key(p))).expect("a free name");
+        taken.insert(key(&free));
+        render.path = free;
+    }
+}
+
 /// The versions to export besides what there is now: each one's mix (or
 /// stems), named after it.
 pub fn plan_versions(
@@ -522,13 +540,17 @@ fn temporary(path: &Path) -> PathBuf {
     path.with_file_name(format!(".{name}.tmp.wav"))
 }
 
+/// Where a file written by [`temporary`] goes.
+fn final_of(temporary: &Path) -> PathBuf {
+    let name = temporary.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+    let name = name.strip_prefix('.').unwrap_or(&name);
+    temporary.with_file_name(name.strip_suffix(".tmp.wav").unwrap_or(name))
+}
+
 /// Encodes the temporary WAVs to the settings' format, a few at a time, and
 /// removes them. The files written; `clipped` counts the samples over full scale.
 fn encode_all(temporaries: Vec<PathBuf>, settings: &Settings, clipped: &mut usize, cancel: &AtomicBool) -> Result<Vec<PathBuf>, String> {
-    let finals: Vec<PathBuf> = temporaries.iter().map(|t| {
-        let name = t.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
-        t.with_file_name(name.trim_start_matches('.').trim_end_matches(".tmp.wav"))
-    }).collect();
+    let finals: Vec<PathBuf> = temporaries.iter().map(|t| final_of(t)).collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
     let results: Vec<std::sync::Mutex<Option<Result<usize, String>>>> = temporaries.iter().map(|_| std::sync::Mutex::new(None)).collect();
     // FLAC holds a file's frames in memory until it is written: not too many at once.
@@ -794,13 +816,23 @@ fn run(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Report, String> {
-    // FLAC and MP3 are written as WAV (32-bit float) first, so stems can be
-    // padded to the same length, then encoded.
+    // Everything is written as a hidden WAV beside where it goes, so stems can
+    // be padded to the same length and FLAC and MP3 encoded; the files only
+    // take their names once all are whole. Cancelled or failed, none is left.
     let format = settings.format;
-    let written_as = |path: &Path| match format {
-        Format::Wav => path.with_extension("wav"),
-        _ => temporary(&path.with_extension(format.extension())),
-    };
+    let written_as = |path: &Path| temporary(&path.with_extension(format.extension()));
+    let temporaries: Vec<PathBuf> = renders.iter().map(|r| written_as(&r.path)).collect();
+    let result = write_all(renders, settings, progress, cancel, &written_as);
+    if result.is_err() {
+        for temporary in &temporaries {
+            let _ = std::fs::remove_file(temporary);
+        }
+    }
+    result
+}
+
+fn write_all(renders: Vec<Render>, settings: Settings, progress: &AtomicU32, cancel: &AtomicBool, written_as: &(dyn Fn(&Path) -> PathBuf + Sync)) -> Result<Report, String> {
+    let format = settings.format;
     let bits = if format == Format::Wav { settings.bits } else { BitDepth::Float32 };
     let written = render_each(renders, settings.sample_rate as f32, progress, cancel, |render, left, right| {
         let peak = peak(&left, &right);
@@ -832,7 +864,18 @@ fn run(
             pad(path, longest - frames, bits)?;
         }
     }
-    if format != Format::Wav {
+    if cancel.load(Ordering::Relaxed) {
+        return Err("Exportación cancelada".into());
+    }
+    if format == Format::Wav {
+        let mut finals = Vec::new();
+        for temporary in &report.files {
+            let to = final_of(temporary);
+            std::fs::rename(temporary, &to).map_err(|e| format!("No se pudo guardar {}: {e}", to.display()))?;
+            finals.push(to);
+        }
+        report.files = finals;
+    } else {
         report.clipped = 0;
         report.files = encode_all(std::mem::take(&mut report.files), &settings, &mut report.clipped, cancel)?;
     }
@@ -903,6 +946,7 @@ impl PulseApp {
         let next = renders.iter().map(|r| r.group + 1).max().unwrap_or(0);
         renders.extend(plan_versions(&versions, &mut self.samples, &settings, destination, next));
         self.samples.plugins = live;
+        distinct(&mut renders);
         if renders.is_empty() {
             return Err("Esas versiones no tienen nada que exportar en ese rango".into());
         }
@@ -914,10 +958,46 @@ impl PulseApp {
         let name = format!("{}.{}", self.file_name(), format.extension());
         let dialog = rfd::FileDialog::new().add_filter(format.label(), &[format.extension()]).set_directory(crate::library::folder(crate::library::EXPORTS)).set_file_name(&name);
         let Some(destination) = crate::files::save_file(dialog) else { return };
-        match self.export_renders(&destination) {
-            Ok(renders) => self.export.job = Some(Job::start(renders, self.export.settings)),
-            Err(e) => self.status = Some(e),
+        self.export_to(&destination);
+    }
+
+    /// Starts exporting beside `destination` (already chosen in the save
+    /// dialog, which asked about replacing it), asking first about replacing
+    /// the other files it writes (stems, sections, versions).
+    pub(crate) fn export_to(&mut self, destination: &Path) {
+        let renders = match self.export_renders(destination) {
+            Ok(renders) => renders,
+            Err(e) => {
+                self.status = Some(e);
+                return;
+            }
+        };
+        let extension = self.export.settings.format.extension();
+        let chosen = destination.with_extension(extension);
+        let existing: Vec<PathBuf> = renders.iter().map(|r| r.path.with_extension(extension)).filter(|p| *p != chosen && p.exists()).collect();
+        if !existing.is_empty() && !self.may_replace(&existing) {
+            self.status = Some("Exportación cancelada: no se ha sustituido nada".into());
+            return;
         }
+        self.export.job = Some(Job::start(renders, self.export.settings));
+    }
+
+    fn may_replace(&mut self, existing: &[PathBuf]) -> bool {
+        if let Some(answer) = self.answers.pop_front() {
+            return answer == crate::commands::Answer::Save;
+        }
+        if !self.interactive {
+            return true;
+        }
+        let names: Vec<String> = existing.iter().take(6).map(|p| format!("· {}", p.file_name().unwrap_or_default().to_string_lossy())).collect();
+        let more = if existing.len() > 6 { format!("\n… y {} más", existing.len() - 6) } else { String::new() };
+        let result = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Warning)
+            .set_title("¿Sustituir los archivos que ya existen?")
+            .set_description(format!("En {} ya hay {} archivo(s) con esos nombres:\n{}{more}", existing[0].parent().map_or_else(String::new, |d| d.display().to_string()), existing.len(), names.join("\n")))
+            .set_buttons(rfd::MessageButtons::OkCancelCustom("Sustituir".into(), "Cancelar".into()))
+            .show();
+        matches!(&result, rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes) || matches!(&result, rfd::MessageDialogResult::Custom(label) if label == "Sustituir")
     }
 }
 
@@ -1394,6 +1474,102 @@ mod tests {
         app.export.settings.range = Range::Sections;
         assert!(app.export_renders(&out).err().unwrap().contains("marcadores"));
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Two versions with one name write two files, not one over the other.
+    #[test]
+    fn versions_with_the_same_name_get_files_of_their_own() {
+        let root = std::env::temp_dir().join(format!("pulse-versiones-mismo-nombre-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = root.join("Tema").join("Tema.pulse");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let mut app = PulseApp::headless(Project::demo());
+        app.file = Some(file);
+        app.export.settings = Settings { range: Range::Loop, bits: BitDepth::Int16, ..Default::default() };
+        for tempo in [100.0, 140.0] {
+            app.project.tempo = tempo;
+            app.save_version("Mezcla", "");
+        }
+        let dir = app.versions_dir().unwrap();
+        app.export.versions = crate::versions::list(&dir).into_iter().map(|v| v.file).collect();
+        app.export.only_versions = true;
+        let renders = app.export_renders(&root.join("Exportado.wav")).unwrap();
+        let report = run(renders, app.export.settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let names: Vec<String> = report.files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["Exportado - Mezcla.wav", "Exportado - Mezcla 2.wav"]);
+        let length = |f: &Path| hound::WavReader::open(f).unwrap().duration();
+        assert_ne!(length(&report.files[0]), length(&report.files[1]), "each its own tempo");
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Files appear whole or not at all: a cancelled export leaves nothing (no
+    /// half file, no temporary), and a finished one only its files.
+    #[test]
+    fn a_cancelled_export_leaves_nothing_behind() {
+        for format in [Format::Wav, Format::Flac] {
+            let dir = std::env::temp_dir().join(format!("pulse-export-cancel-{}-{format:?}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            // The whole song: long enough to be cancelled half way.
+            let settings = Settings { stems: true, range: Range::Song, format, ..Default::default() };
+            let project = Project::demo();
+            let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("demo.wav"));
+            let cancel = AtomicBool::new(false);
+            // Cancelled once the first stems are written.
+            let watcher = std::thread::scope(|scope| {
+                scope.spawn(|| {
+                    while std::fs::read_dir(&dir).map_or(0, |d| d.count()) == 0 {
+                        std::thread::yield_now();
+                    }
+                    cancel.store(true, Ordering::Relaxed);
+                });
+                run(renders, settings, &AtomicU32::new(0), &cancel)
+            });
+            assert!(watcher.is_err());
+            let left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
+            assert!(left.is_empty(), "{format:?}: {left:?}");
+
+            let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("demo.wav"));
+            let report = run(renders, settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+            let mut left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().path()).collect();
+            left.sort();
+            let mut files = report.files.clone();
+            files.sort();
+            assert_eq!(left, files, "{format:?}: only the files");
+            std::fs::remove_dir_all(&dir).ok();
+        }
+    }
+
+    /// Stems over the files of an earlier export: asked first; «Cancelar»
+    /// leaves them as they were.
+    #[test]
+    fn replacing_earlier_files_is_asked() {
+        let dir = std::env::temp_dir().join(format!("pulse-export-replace-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = PulseApp::headless(Project::demo());
+        app.export.settings = Settings { stems: true, range: Range::Loop, bits: BitDepth::Int16, ..Default::default() };
+        let destination = dir.join("demo.wav");
+        let names: Vec<PathBuf> = app.export_renders(&destination).unwrap().iter().map(|r| r.path.clone()).collect();
+        // Nothing there yet: not asked (an answer would be left over).
+        app.export_to(&destination);
+        let mut job = app.export.job.take().expect("started");
+        let report = loop {
+            if let Some(done) = job.finished() {
+                break done.unwrap();
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        };
+        assert_eq!(report.files.len(), names.len());
+        std::fs::write(&names[1], b"mio").unwrap();
+        app.answers.push_back(crate::commands::Answer::Cancel);
+        app.export_to(&destination);
+        assert!(app.export.job.is_none() && app.answers.is_empty());
+        assert_eq!(std::fs::read(&names[1]).unwrap(), b"mio");
+        app.answers.push_back(crate::commands::Answer::Save);
+        app.export_to(&destination);
+        assert!(app.export.job.is_some());
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Band energies (dB) of a mono mix: below 200 Hz, 200 Hz–5 kHz, above 5 kHz.

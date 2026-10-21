@@ -775,6 +775,8 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Normalizar**: pico a un valor (no en stems).
 - Se exporta el **Arrangement** (no la Session), con la cola de reverbs y delays (también los ecos de un delay largo: espera lo que tarda el delay más lento del proyecto antes de dar la cola por terminada). Empieza a todo volumen desde la primera muestra. Al exportar la **Región del loop** se toca desde unos compases antes, así que lo que ya sonaba (notas largas, colas) está desde el principio. Lo exportado suena igual que lo que oyes, con cualquier tamaño de búfer: la automatización se aplica cada 64 muestras, en los mismos puntos. Avisa si la mezcla satura.
 - Por defecto se guarda en la carpeta `Exportaciones`.
+- Si al exportar stems, secciones o versiones ya hay archivos con esos nombres (de una exportación anterior), Pulse pregunta antes de sustituirlos. Dos versiones con el mismo nombre salen en archivos distintos («… - Mezcla.wav», «… - Mezcla 2.wav»).
+- Los archivos aparecen enteros o no aparecen: mientras se exporta se escriben ocultos al lado y solo toman su nombre al terminar todos. Si cancelas o falla (disco lleno), no queda nada a medias.
 - Antes de exportar, mira el **Asistente de mezcla y master**.
 
 ## Asistente de mezcla y master

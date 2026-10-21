@@ -1499,6 +1499,11 @@ pub struct Engine {
     preview_clip: Option<(Box<PlayClip>, f64)>,
     preview_left: Vec<f32>,
     preview_right: Vec<f32>,
+    /// Where the in-tempo preview read before the loop jumped back, fading
+    /// out for that many more frames under where it reads now.
+    preview_tail: Option<(f64, usize)>,
+    tail_left: Vec<f32>,
+    tail_right: Vec<f32>,
     monitor_input: Option<Box<MonitorInput>>,
     /// This block of input, as stereo, for the monitored tracks.
     monitor_left: Vec<f32>,
@@ -1644,6 +1649,9 @@ impl Engine {
             preview_clip: None,
             preview_left: vec![0.0; MAX_BLOCK],
             preview_right: vec![0.0; MAX_BLOCK],
+            preview_tail: None,
+            tail_left: vec![0.0; MAX_BLOCK],
+            tail_right: vec![0.0; MAX_BLOCK],
             monitor_input: None,
             monitor_left: vec![0.0; MAX_BLOCK],
             monitor_right: vec![0.0; MAX_BLOCK],
@@ -2418,8 +2426,45 @@ impl Engine {
                 right.fill(0.0);
                 let per_sample = self.tempo / 60.0 / self.sample_rate as f64;
                 // In time with the song (its bars are the loop's), or on its own.
-                let beat = if self.playing { ctx.beat } else { *own };
-                render_audio_clip(audio, sample, 0.0, f64::INFINITY, (false, false), (0, n), beat, per_sample, self.tempo, None, left, right);
+                if self.playing {
+                    // Where the transport loops back, so does the preview, on the
+                    // same frame, cross-fading from where it was (no click).
+                    let fade = (EDGE_FADE * self.sample_rate as f64) as usize;
+                    let (mut frame, mut beat) = (0, ctx.beat);
+                    while frame < n {
+                        let remaining = n - frame;
+                        let wraps = self.loop_enabled && beat < self.loop_end && beat + remaining as f64 * per_sample > self.loop_end;
+                        let frames = if wraps { (((self.loop_end - beat) / per_sample).ceil() as usize).clamp(1, remaining) } else { remaining };
+                        let span = (frame, frame + frames);
+                        render_audio_clip(audio, sample, 0.0, f64::INFINITY, (false, false), span, beat, per_sample, self.tempo, None, left, right);
+                        if let Some((old, left_over)) = &mut self.preview_tail {
+                            let m = (*left_over).min(frames);
+                            let (tl, tr) = (&mut self.tail_left[..n], &mut self.tail_right[..n]);
+                            tl[frame..frame + m].fill(0.0);
+                            tr[frame..frame + m].fill(0.0);
+                            render_audio_clip(audio, sample, 0.0, f64::INFINITY, (false, false), (frame, frame + m), *old, per_sample, self.tempo, None, tl, tr);
+                            for i in frame..frame + m {
+                                let g = (*left_over - (i - frame)) as f32 / fade.max(1) as f32;
+                                left[i] = left[i] * (1.0 - g) + tl[i] * g;
+                                right[i] = right[i] * (1.0 - g) + tr[i] * g;
+                            }
+                            *old += m as f64 * per_sample;
+                            *left_over -= m;
+                            if *left_over == 0 {
+                                self.preview_tail = None;
+                            }
+                        }
+                        beat += frames as f64 * per_sample;
+                        frame += frames;
+                        if wraps {
+                            self.preview_tail = Some((beat, fade));
+                            beat = self.loop_start;
+                        }
+                    }
+                } else {
+                    self.preview_tail = None;
+                    render_audio_clip(audio, sample, 0.0, f64::INFINITY, (false, false), (0, n), *own, per_sample, self.tempo, None, left, right);
+                }
                 *own += n as f64 * per_sample;
                 let preview = &mut self.preview_buffer[..2 * n];
                 for i in 0..n {
@@ -2822,6 +2867,37 @@ mod tests {
         let mut clip = MidiClip::new("test", 4.0, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0, chance: 1.0 });
         Box::new(PlayClip::Midi(clip))
+    }
+
+    /// An in-tempo preview with the transport looping (the loop ending in the
+    /// middle of a block): it jumps back on the frame the transport does,
+    /// cross-fading, without a click.
+    #[test]
+    fn the_preview_follows_the_loop_on_time() {
+        let (mut engine, mut handle) = crate::audio::detached(SR);
+        // A ramp: its value says where it reads. 4 beats at 120 = 2 s.
+        let n = (2.0 * SR) as usize;
+        let ramp: Vec<f32> = (0..n).map(|i| i as f32 / n as f32).collect();
+        let sample = Arc::new(Sample::from_channels(ramp.clone(), ramp, SR));
+        let mut clip = audio_clip(WarpMode::Repitch);
+        clip.length = 4.0;
+        let end = 1.0013;
+        assert!(handle.send(Command::SetQuantize(0.0)));
+        assert!(handle.send(Command::SetLoop { enabled: true, start: 0.0, end }));
+        assert!(handle.send(Command::PreviewClip(Some(Box::new(PlayClip::Audio(clip, sample))))));
+        assert!(handle.send(Command::Play));
+        let mut out = vec![0f32; 64 * 2];
+        let mut all = Vec::new();
+        for _ in 0..(0.8 * SR / 64.0) as usize {
+            engine.process(&mut out, 2);
+            all.extend(out.chunks(2).map(|f| f[0] / PREVIEW_GAIN));
+        }
+        let wrap = (end * 60.0 / 120.0 * SR as f64).ceil() as usize;
+        let fade = (EDGE_FADE * SR as f64) as usize;
+        let steepest = all.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+        assert!(steepest < 0.01, "no jump: {steepest}");
+        assert!(all[wrap - 10] > 0.24, "before the wrap, the loop's end: {}", all[wrap - 10]);
+        assert!(all[wrap + fade + 10] < 0.01, "after it, the start: {}", all[wrap + fade + 10]);
     }
 
     fn energy(samples: &[f32]) -> f32 {

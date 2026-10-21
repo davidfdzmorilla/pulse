@@ -28,6 +28,13 @@ pub fn targets(notes: &[Note], selection: &Selection) -> Vec<usize> {
     }
 }
 
+/// The chance (0..1) the notes at `indices` have of playing each time round.
+pub fn set_chance(notes: &mut [Note], indices: &[usize], chance: f32) {
+    for &i in indices {
+        notes[i].chance = chance.clamp(0.0, 1.0);
+    }
+}
+
 /// Moves note starts towards the grid by `strength` (0..1); optionally their ends too.
 pub fn quantize(notes: &mut [Note], indices: &[usize], grid: f64, strength: f64, ends: bool, clip_length: f64) {
     for &i in indices {
@@ -121,11 +128,32 @@ pub fn in_region(notes: &[Note], (from, to): (f64, f64), pitches: impl Fn(u8) ->
 }
 
 #[cfg(test)]
+mod chance_tests {
+    use super::*;
+
+    /// A chance is set on the notes chosen, saved only when it isn't 100 %,
+    /// and notes from before have 100 %.
+    #[test]
+    fn notes_keep_their_chance() {
+        let mut notes = vec![Note::new(0.0, 0.25, 42, 0.8), Note::new(0.5, 0.25, 42, 0.8)];
+        set_chance(&mut notes, &[1], 0.4);
+        assert_eq!((notes[0].chance, notes[1].chance), (1.0, 0.4));
+        assert!(!serde_json::to_string(&notes[0]).unwrap().contains("chance"));
+        let back: Note = serde_json::from_str(&serde_json::to_string(&notes[1]).unwrap()).unwrap();
+        assert_eq!(back, notes[1]);
+        let old: Note = serde_json::from_str(r#"{"start": 0.0, "length": 1.0, "pitch": 36, "velocity": 1.0}"#).unwrap();
+        assert_eq!(old.chance, 1.0);
+        set_chance(&mut notes, &[0], 7.0);
+        assert_eq!(notes[0].chance, 1.0);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     fn note(start: f64, length: f64, pitch: u8) -> Note {
-        Note { start, length, pitch, velocity: 0.8 }
+        Note { start, length, pitch, velocity: 0.8, chance: 1.0 }
     }
 
     #[test]

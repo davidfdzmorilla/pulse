@@ -72,7 +72,7 @@ fn insert(clip: &mut MidiClip, at: f64, length: f64, chord: &Chord, previous: &[
     let mut added = Vec::new();
     for (i, &pitch) in pitches.iter().enumerate() {
         let velocity = if i == 0 { 0.8 } else { 0.7 };
-        clip.notes.push(Note { start: at, length, pitch, velocity });
+        clip.notes.push(Note { start: at, length, pitch, velocity, chance: 1.0 });
         added.push(clip.notes.len() - 1);
     }
     (added, pitches)
@@ -181,7 +181,7 @@ mod tests {
     use super::*;
 
     fn note(start: f64, length: f64, pitch: u8) -> Note {
-        Note { start, length, pitch, velocity: 0.8 }
+        Note { start, length, pitch, velocity: 0.8, chance: 1.0 }
     }
 
     #[test]

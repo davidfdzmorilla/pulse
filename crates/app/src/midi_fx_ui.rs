@@ -245,7 +245,7 @@ mod tests {
         project.key = key;
         project.tracks.truncate(1);
         let mut clip = MidiClip::new("C", 4.0, [0; 3]);
-        clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 60, velocity: 0.8 });
+        clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 60, velocity: 0.8, chance: 1.0 });
         project.tracks[0].arrangement.push(ArrangementClip { start: 0.0, length: 4.0, clip: Clip::Midi(clip) });
         project.tracks[0].midi_effects = effects;
         let mut samples = crate::sync::SampleCache::default();

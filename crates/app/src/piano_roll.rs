@@ -340,9 +340,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let Some(r) = note_rect(n) else { continue };
             let selected = state.selection.contains(&i);
             let fill = theme::shade(base, if selected { 1.25 } else { 0.5 + 0.5 * n.velocity });
+            // A note that plays only some of the times is paler, with its chance.
+            let fill = if n.chance < 1.0 { fill.gamma_multiply(0.35 + 0.65 * n.chance) } else { fill };
             painter.rect_filled(r, 2.0, fill);
             let outline = if selected { Stroke::new(1.5, Color32::WHITE) } else { Stroke::new(1.0, theme::shade(base, 0.35)) };
             painter.rect_stroke(r, 2.0, outline, StrokeKind::Inside);
+            if n.chance < 1.0 && r.width() > 24.0 && r.height() > 9.0 {
+                painter.text(r.left_center() + vec2(2.0, 0.0), Align2::LEFT_CENTER, format!("{:.0}%", n.chance * 100.0), theme::small(), Color32::WHITE);
+            }
         }
 
         if let Some(Drag::Select { anchor, .. }) = &state.drag {
@@ -390,7 +395,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     (true, None) => pitch_here.and_then(|pitch| {
                         let start = note_edit::snap_down(beat, state.grid);
                         (start < clip.length).then(|| {
-                            clip.notes.push(Note { start, length: state.note_length.min(clip.length - start), pitch, velocity: 0.8 });
+                            clip.notes.push(Note { start, length: state.note_length.min(clip.length - start), pitch, velocity: 0.8, chance: 1.0 });
                             previews.push(pitch);
                             Drag::Draw { index: clip.notes.len() - 1 }
                         })
@@ -434,7 +439,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     if let Some(pitch) = pitch_here {
                         let start = note_edit::snap_down(beat, state.grid);
                         if start < clip.length {
-                            clip.notes.push(Note { start, length: state.note_length.min(clip.length - start), pitch, velocity: 0.8 });
+                            clip.notes.push(Note { start, length: state.note_length.min(clip.length - start), pitch, velocity: 0.8, chance: 1.0 });
                             state.selection = Selection::from([clip.notes.len() - 1]);
                             previews.push(pitch);
                         }
@@ -703,6 +708,17 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         }
         ui.checkbox(&mut state.quantize_ends, "finales").on_hover_text("Cuantiza también el final de las notas");
         ui.separator();
+        label(ui, "Prob.");
+        let shown = targets.first().and_then(|&i| clip.notes.get(i)).map_or(1.0, |n| n.chance);
+        let mut percent = shown * 100.0;
+        if ui
+            .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %").max_decimals(0))
+            .on_hover_text(format!("Probabilidad de {scope}: cuántas de las veces que pasa el loop suenan. Al 50 % un hat suena una vuelta sí y otra no, al azar pero siempre igual al reproducir y al exportar"))
+            .changed()
+        {
+            note_edit::set_chance(&mut clip.notes, &targets, percent / 100.0);
+        }
+        ui.separator();
         let walk = key.filter(|_| state.fold);
         for (text, semitones) in [("-12", -12), ("-1", -1), ("+1", 1), ("+12", 12)] {
             let hint = if walk.is_some() { format!("Transponer {scope} por la escala (↑↓, ⇧ octava)") } else { format!("Transponer {scope} (↑↓, ⇧ octava)") };
@@ -967,9 +983,9 @@ mod tests {
 
     #[test]
     fn pasted_text_round_trips_notes_and_falls_back_to_the_internal_clipboard() {
-        let notes = vec![Note { start: 0.5, length: 0.25, pitch: 64, velocity: 0.7 }];
+        let notes = vec![Note { start: 0.5, length: 0.25, pitch: 64, velocity: 0.7, chance: 1.0 }];
         let text = format!("{CLIPBOARD_PREFIX}{}", serde_json::to_string(&notes).unwrap());
-        let state = State { clipboard: vec![Note { start: 0.0, length: 1.0, pitch: 36, velocity: 1.0 }], ..Default::default() };
+        let state = State { clipboard: vec![Note { start: 0.0, length: 1.0, pitch: 36, velocity: 1.0, chance: 1.0 }], ..Default::default() };
         assert_eq!(pasted_notes(&state, &text), notes);
         assert_eq!(pasted_notes(&state, "texto cualquiera")[0].pitch, 36);
     }
@@ -977,7 +993,7 @@ mod tests {
     #[test]
     fn folded_to_a_scale_notes_walk_it() {
         let e_minor = Scale { tonic: 4, minor: true };
-        let note = |pitch| Note { start: 0.0, length: 1.0, pitch, velocity: 0.8 };
+        let note = |pitch| Note { start: 0.0, length: 1.0, pitch, velocity: 0.8, chance: 1.0 };
         let folded = rows(Some(e_minor), &[note(64)]);
         assert!(folded.iter().all(|p| e_minor.scale()[*p as usize % 12]));
         assert_eq!(folded.len(), 7 * 6 + 1, "six octaves of seven notes, and the top C");
@@ -1029,7 +1045,7 @@ mod tests {
         let clip = ClipRef::Session { track: 1, slot: 0 };
         app.select_clip(clip);
         let Some(Clip::Midi(midi)) = app.project.tracks[1].clips[0].as_mut() else { panic!() };
-        midi.notes = vec![Note { start: 0.0, length: 1.0, pitch: 61, velocity: 0.8 }, Note { start: 1.0, length: 1.0, pitch: 64, velocity: 0.8 }];
+        midi.notes = vec![Note { start: 0.0, length: 1.0, pitch: 61, velocity: 0.8, chance: 1.0 }, Note { start: 1.0, length: 1.0, pitch: 64, velocity: 0.8, chance: 1.0 }];
         let find = |texts: &[(String, Rect)], text: &str| texts.iter().find(|(t, _)| t == text).map(|(_, r)| r.center());
         let view = |app: &mut PulseApp, ui: &mut egui::Ui| show(app, ui);
         assert!(find(&texts(&mut app), "Plegar").is_none());
@@ -1086,7 +1102,7 @@ mod tests {
         let mut project = crate::project::Project::empty();
         let mut track = crate::project::Track::new("Perc", [0; 3], engine::model::InstrumentKind::DrumMachine(Default::default()));
         let mut clip = engine::model::MidiClip::new("3/16", 0.75, [0; 3]);
-        clip.notes.push(engine::model::Note { start: 0.0, length: 0.1, pitch: engine::model::drum_note::RIM, velocity: 1.0 });
+        clip.notes.push(engine::model::Note { start: 0.0, length: 0.1, pitch: engine::model::drum_note::RIM, velocity: 1.0, chance: 1.0 });
         track.clips[0] = Some(engine::model::Clip::Midi(clip));
         project.tracks = vec![track];
         project.quantize = 0.0;

@@ -14,7 +14,7 @@ const SR: f32 = 48_000.0;
 type Stereo = (Vec<f32>, Vec<f32>);
 
 fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
-    Note { start, length, pitch, velocity }
+    Note { start, length, pitch, velocity, chance: 1.0 }
 }
 
 fn lane(param: Param, points: &[(f64, f32)]) -> AutomationLane {

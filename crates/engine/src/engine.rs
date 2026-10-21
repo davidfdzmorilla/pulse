@@ -910,6 +910,10 @@ fn schedule_notes(
     for lap in first_lap..=last_lap {
         let lap_start = lap as f64 * clip.length;
         for (index, note) in clip.notes.iter().enumerate().filter(|(_, n)| n.start < clip.length) {
+            // Some notes play only some of the times round.
+            if !note.plays(index, lap) {
+                continue;
+            }
             let (shift, velocity) = groove.apply(index, lap, note.start, note.velocity);
             // Never before the clip starts.
             let t = (lap_start + note.start + shift).max(0.0);
@@ -2570,7 +2574,7 @@ mod tests {
 
     fn one_note_clip() -> Box<PlayClip> {
         let mut clip = MidiClip::new("test", 4.0, [0, 0, 0]);
-        clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0 });
+        clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0, chance: 1.0 });
         Box::new(PlayClip::Midi(clip))
     }
 
@@ -2668,7 +2672,7 @@ mod tests {
         let mut h = Harness::new();
         h.send(Command::set_instrument(0, InstrumentKind::Drums, 48_000.0));
         let mut clip = MidiClip::new("beat", 1.0, [0, 0, 0]);
-        clip.notes.push(Note { start: 0.0, length: 0.25, pitch: 36, velocity: 1.0 });
+        clip.notes.push(Note { start: 0.0, length: 0.25, pitch: 36, velocity: 1.0, chance: 1.0 });
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
         h.send(Command::LaunchClip { track: 0, slot: 0 });
         h.run_beats(8.0);
@@ -2693,7 +2697,7 @@ mod tests {
 
     fn arrangement_with_note_at(beat: f64) -> Box<Vec<PlacedClip>> {
         let mut clip = MidiClip::new("arr", 4.0, [0, 0, 0]);
-        clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0 });
+        clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0, chance: 1.0 });
         Box::new(vec![PlacedClip::new(beat, 4.0, PlayClip::Midi(clip))])
     }
 
@@ -3075,7 +3079,7 @@ mod tests {
         });
         h.send(Command::SetAutomation { target: Target::Track(0), lanes: Box::new(lanes) });
         let mut clip = MidiClip::new("drone", 4.0, [0, 0, 0]);
-        clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0 });
+        clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
         h.send(Command::LaunchClip { track: 0, slot: 0 });
 
@@ -3161,7 +3165,7 @@ mod tests {
             h.send(Command::SetSwing { amount, grid: 0.25 });
             let mut clip = MidiClip::new("blips", 4.0, [0, 0, 0]);
             for start in [0.0, 0.25] {
-                clip.notes.push(Note { start, length: 0.05, pitch: 72, velocity: 1.0 });
+                clip.notes.push(Note { start, length: 0.05, pitch: 72, velocity: 1.0, chance: 1.0 });
             }
             h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
             h.send(Command::LaunchClip { track: 0, slot: 0 });
@@ -3189,7 +3193,7 @@ mod tests {
             h.send(Command::SetSwing { amount: project, grid: 0.25 });
             let mut clip = MidiClip::new("blips", 4.0, [0, 0, 0]);
             for start in [0.0, 0.25] {
-                clip.notes.push(Note { start, length: 0.05, pitch: 72, velocity: 1.0 });
+                clip.notes.push(Note { start, length: 0.05, pitch: 72, velocity: 1.0, chance: 1.0 });
             }
             clip.groove = groove;
             h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
@@ -3326,7 +3330,7 @@ mod tests {
             h.send(Command::set_instrument(0, base, SR));
             h.send(Command::SetWavetables { track: 0, tables: Box::new(vec![Arc::new(builtin(0)), Arc::new(builtin(3))]) });
             let mut clip = MidiClip::new("A", 4.0, [0, 0, 0]);
-            clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 60, velocity: 1.0 });
+            clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 60, velocity: 1.0, chance: 1.0 });
             h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
             h.send(Command::LaunchClip { track: 0, slot: 0 });
             h.run_beats(0.5);
@@ -3413,6 +3417,26 @@ mod tests {
         h.run_beats(0.5);
         h.send(Command::PreviewSample(None));
         assert!(energy(&h.run_beats(0.5)) < 1e-6);
+    }
+
+    /// A note at 50 % plays about half the laps, the same laps every time the
+    /// song is played; at 100 % every lap, at 0 % never.
+    #[test]
+    fn a_notes_chance_decides_each_lap_the_same_every_time() {
+        let laps = |chance: f32| -> Vec<bool> {
+            let mut h = Harness::new();
+            let mut clip = MidiClip::new("hat", 1.0, [0, 0, 0]);
+            clip.notes.push(Note { chance, ..Note::new(0.0, 0.1, 60, 1.0) });
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            (0..64).map(|_| energy(&h.run_beats(1.0)) > 1e-3).collect()
+        };
+        let half = laps(0.5);
+        let count = half.iter().filter(|&&p| p).count();
+        assert!((20..=44).contains(&count), "about half: {count} of 64");
+        assert_eq!(laps(0.5), half, "the same laps again");
+        assert!(laps(1.0).iter().all(|&p| p));
+        assert!(laps(0.0).iter().all(|&p| !p));
     }
 
     /// A previewed loop plays at the project's tempo and goes on looping, past
@@ -3582,7 +3606,7 @@ mod tests {
     fn arrangement_notes_end_at_the_loop_jump() {
         let mut h = Harness::new();
         let mut clip = MidiClip::new("long", 16.0, [0, 0, 0]);
-        clip.notes.push(Note { start: 1.0, length: 8.0, pitch: 60, velocity: 1.0 });
+        clip.notes.push(Note { start: 1.0, length: 8.0, pitch: 60, velocity: 1.0, chance: 1.0 });
         h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(clip))]) });
         h.send(Command::SetLoop { enabled: true, start: 0.0, end: 2.0 });
         h.send(Command::Play);
@@ -3698,7 +3722,7 @@ mod tests {
         ids[1] = 8;
         h.send(Command::SetTrackIds(ids));
         let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
-        held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0 });
+        held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
         h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
         h.send(Command::SetMute { target: Target::Track(0), mute: true });
@@ -3714,7 +3738,7 @@ mod tests {
         let free = {
             let mut h = Harness::new();
             let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
-            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0 });
+            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
             h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
             h.send(Command::LaunchScene(0));
             energy(&h.run_beats(0.9))
@@ -3736,7 +3760,7 @@ mod tests {
             h.send(Command::SetTrackIds(ids));
             // A soft pad that alone stays under the threshold; a loud note on track 0.
             let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
-            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 0.3 });
+            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 0.3, chance: 1.0 });
             h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
             h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
             h.send(Command::SetMute { target: Target::Track(0), mute: true });

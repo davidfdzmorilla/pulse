@@ -60,7 +60,7 @@ mod tests {
         let mut kick = Track::new("Kick", [200, 0, 0], InstrumentKind::Kick(Default::default()));
         let mut clip = MidiClip::new("4/4", 4.0, [0; 3]);
         for b in 0..4 {
-            clip.notes.push(Note { start: b as f64, length: 0.25, pitch: 36, velocity: 1.0 });
+            clip.notes.push(Note { start: b as f64, length: 0.25, pitch: 36, velocity: 1.0, chance: 1.0 });
         }
         kick.arrangement = vec![ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(clip) }];
         project.tracks = vec![kick];

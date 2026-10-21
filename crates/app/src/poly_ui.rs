@@ -396,7 +396,7 @@ mod tests {
             let mut clip = engine::model::MidiClip::new("MIDI", 8.0, [200, 100, 50]);
             let notes: &[u8] = if preset.mono || preset.seq.on { &[45] } else { &[60, 64, 67] };
             for &pitch in notes {
-                clip.notes.push(engine::model::Note { start: 0.0, length: 7.0, pitch, velocity: 0.9 });
+                clip.notes.push(engine::model::Note { start: 0.0, length: 7.0, pitch, velocity: 0.9, chance: 1.0 });
             }
             track.clips[0] = Some(engine::model::Clip::Midi(clip));
             project.tracks = vec![track];

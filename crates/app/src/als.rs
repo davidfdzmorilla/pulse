@@ -410,7 +410,7 @@ fn notes(clip: Node, window_start: f64, length: f64) -> Vec<Note> {
                 start,
                 length: duration.min(length - start).max(0.01),
                 pitch: pitch.clamp(0.0, 127.0) as u8,
-                velocity: (velocity / 127.0).clamp(0.0, 1.0) as f32,
+                velocity: (velocity / 127.0).clamp(0.0, 1.0) as f32, chance: 1.0,
             });
         }
     }

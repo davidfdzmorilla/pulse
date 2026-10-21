@@ -615,10 +615,10 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
                 let level = if matches!(voice, Hat | Open) { 0.85 } else { 1.0 };
                 let v = (v * level * (0.96 + 0.08 * dice.roll())).clamp(0.05, 1.0);
                 if c == 'r' {
-                    notes.push(Note { start: beat, length: 0.125, pitch, velocity: v });
-                    notes.push(Note { start: beat + 0.125, length: 0.125, pitch, velocity: v * 0.85 });
+                    notes.push(Note { start: beat, length: 0.125, pitch, velocity: v, chance: 1.0 });
+                    notes.push(Note { start: beat + 0.125, length: 0.125, pitch, velocity: v * 0.85, chance: 1.0 });
                 } else {
-                    notes.push(Note { start: beat, length: 0.25, pitch, velocity: v });
+                    notes.push(Note { start: beat, length: 0.25, pitch, velocity: v, chance: 1.0 });
                 }
             }
         }
@@ -655,7 +655,7 @@ fn crash_phrases(kit: &Kit, settings: &Settings, notes: &mut Vec<Note>, length: 
     }
     let mut beat = 0.0;
     while beat < length {
-        notes.push(Note { start: beat, length: 0.25, pitch: crash, velocity: 0.9 });
+        notes.push(Note { start: beat, length: 0.25, pitch: crash, velocity: 0.9, chance: 1.0 });
         beat += 32.0;
     }
 }
@@ -668,7 +668,7 @@ fn follow_bass(kit: &Kit, settings: &Settings, notes: &mut Vec<Note>, bass: &[f6
                 let on_eighth = ((b * 2.0) - (b * 2.0).round()).abs() < 1e-6;
                 let taken = notes.iter().any(|n| n.pitch == kick && (n.start - b).abs() < 0.1);
                 if on_eighth && !taken && b < length {
-                    notes.push(Note { start: b, length: 0.25, pitch: kick, velocity: 0.85 });
+                    notes.push(Note { start: b, length: 0.25, pitch: kick, velocity: 0.85, chance: 1.0 });
                 }
             }
         }
@@ -732,7 +732,7 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
             let base = [0.0, 0.38, 0.8, 1.0][level as usize];
             let base = if matches!(v, Sound::Hat | Sound::Open | Sound::Ride | Sound::Shaker) { base * 0.85 } else { base };
             let velocity = (base * (0.96 + 0.08 * dice.roll())).clamp(0.05, 1.0);
-            notes.push(Note { start: s as f64 * 0.25, length: 0.25, pitch, velocity });
+            notes.push(Note { start: s as f64 * 0.25, length: 0.25, pitch, velocity, chance: 1.0 });
         }
     }
     follow_bass(kit, settings, &mut notes, bass, length);

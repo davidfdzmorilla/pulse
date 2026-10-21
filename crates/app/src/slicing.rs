@@ -230,7 +230,7 @@ pub fn slice_at(sample: &Sample, (offset, seconds): (f64, f64), bpm: f64, cuts: 
         files[pad] = path.to_string_lossy().into_owned();
         let beat = start as f64 / frames_per_beat;
         let next = end as f64 / frames_per_beat;
-        clip.notes.push(Note { start: beat, length: (next - beat).max(1.0 / 32.0), pitch: RACK_FIRST_NOTE + pad as u8, velocity: 1.0 });
+        clip.notes.push(Note { start: beat, length: (next - beat).max(1.0 / 32.0), pitch: RACK_FIRST_NOTE + pad as u8, velocity: 1.0, chance: 1.0 });
     }
     while files.last().is_some_and(String::is_empty) {
         files.pop();

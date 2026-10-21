@@ -301,7 +301,7 @@ Al terminar la grabación aparece **una fila por toma** debajo de la pista, con 
 La última fila del Arrangement es el **Master**. Su **A** muestra su automatización: **Tempo**, volumen, panorama y los knobs de sus efectos.
 
 - **Tempo** hace que la canción cambie de velocidad: puntos a distintos tempos dan saltos (una intro lenta, un estribillo más rápido), y una línea entre dos puntos, un accelerando o un ritardando (con **⌥ + arrastrar** se curva). El carril va de 40 a 240 BPM.
-- Todo sigue el tempo: los clips MIDI, los audios en Stretch, Beats o Re-Pitch, el metrónomo, los delays y los arpegiadores. Los audios con warp **Off** no siguen el tempo (y en un cambio de tempo pueden saltar): en una canción con cambios, ponlos en **Stretch**.
+- Todo sigue el tempo: los clips MIDI, los audios en Stretch, Beats o Re-Pitch, el metrónomo, los delays y los arpegiadores. Los audios con warp **Off** no siguen el tempo: suenan a su velocidad, también durante la automatización de tempo, sin desafinar ni saltar. Si cambias el tempo a mano mientras suenan sí pueden saltar; en una canción con cambios, si quieres que sigan el tempo, ponlos en **Stretch**.
 - Al **exportar**, la canción dura lo que dan sus tempos.
 - Mover el tempo del transporte a mano anula la automatización (lo dice su borde) hasta **▶ Arrangement**.
 

@@ -11,6 +11,11 @@
 #ifndef AppVersion
   #error Falta /DAppVersion=<versión>
 #endif
+; The numbers of the version (one past a release says «0.1.69-3-gabc1234»:
+; this field takes numbers only).
+#ifndef NumericVersion
+  #define NumericVersion AppVersion
+#endif
 #ifndef Stage
   #define Stage "..\..\dist\Pulse"
 #endif
@@ -22,7 +27,7 @@ AppVersion={#AppVersion}
 AppVerName=Pulse {#AppVersion}
 AppPublisher=David Fernández Morilla
 AppCopyright=Copyright © 2026 David Fernández Morilla
-VersionInfoVersion={#AppVersion}
+VersionInfoVersion={#NumericVersion}
 DefaultDirName={autopf}\Pulse
 DefaultGroupName=Pulse
 DisableProgramGroupPage=yes
@@ -70,10 +75,13 @@ Root: HKA; Subkey: "Software\Classes\Pulse.Proyecto\DefaultIcon"; ValueType: str
 Root: HKA; Subkey: "Software\Classes\Pulse.Proyecto\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\pulse.exe"" ""%1"""
 
 [UninstallDelete]
-; What the updater leaves beside pulse.exe: the previous version and its work folder.
+; What the updater leaves beside pulse.exe: the previous version, the one set
+; aside while it swaps, its work folders (one per process) and its write probe.
 Type: files; Name: "{app}\pulse (anterior).exe"
 Type: files; Name: "{app}\.pulse-cambio.exe"
-Type: filesandordirs; Name: "{app}\.pulse-update"
+Type: files; Name: "{app}\.pulse-anterior-vieja.exe"
+Type: filesandordirs; Name: "{app}\.pulse-update-*"
+Type: files; Name: "{app}\.pulse-escritura-*"
 Type: files; Name: "{app}\*.dll.anterior"
 
 [Run]

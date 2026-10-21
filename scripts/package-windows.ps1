@@ -6,7 +6,8 @@
 #     updater downloads);
 #   - Pulse-<version>-windows-x64-setup.exe: the installer, if Inno Setup 6 is
 #     installed (winget install JRSoftware.InnoSetup, or choco install innosetup).
-# The version: -Version, else PULSE_VERSION, else Cargo's. Nothing is published:
+# The version: -Version, else PULSE_VERSION, else git's (the last release and
+# how far past it, as scripts/bundle.sh), else Cargo's. Nothing is published:
 # see docs/BUILD_WINDOWS.md to attach the files to a release.
 #   pwsh scripts/package-windows.ps1 [-Version 0.2.0] [-SkipBuild] [-NoInstaller]
 param(
@@ -18,16 +19,23 @@ $ErrorActionPreference = 'Stop'
 $root = Resolve-Path (Join-Path $PSScriptRoot '..')
 Set-Location $root
 if (-not $Version) {
+    $described = git describe --tags --match 'v[0-9]*' 2>$null
+    if ($LASTEXITCODE -eq 0 -and $described) { $Version = $described.Trim().TrimStart('v') }
+}
+if (-not $Version) {
     $Version = (Select-String -Path 'crates/app/Cargo.toml' -Pattern '^version = "(.+)"' | Select-Object -First 1).Matches[0].Groups[1].Value
 }
 $env:PULSE_VERSION = $Version
 Write-Host "Pulse $Version para Windows x64"
 
 if (-not $SkipBuild) {
-    cargo build --release -p app
+    # The dependencies Cargo.lock names, not newer ones.
+    cargo build --release --locked -p app
     if ($LASTEXITCODE -ne 0) { throw "La compilación falló" }
 }
-$exe = Join-Path $root 'target/release/pulse.exe'
+# Where Cargo built it (CARGO_TARGET_DIR or the config may move it from target\).
+$target = (cargo metadata --format-version 1 --no-deps | ConvertFrom-Json).target_directory
+$exe = Join-Path $target 'release/pulse.exe'
 if (-not (Test-Path $exe)) { throw "No está $exe" }
 
 $dist = Join-Path $root 'dist'
@@ -78,7 +86,11 @@ if (-not $NoInstaller) {
         "$env:LOCALAPPDATA\Programs\Inno Setup 6\ISCC.exe"
     ) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     if ($iscc) {
-        & $iscc "/DAppVersion=$Version" "/DStage=$stage" "/O$dist" 'packaging/windows/pulse.iss'
+        # Its numbers alone, as build.rs puts them in pulse.exe's version resource.
+        $numbers = @($Version -split '[.-]' | Select-Object -First 3 | ForEach-Object { if ($_ -match '^\d+$') { $_ } else { '0' } })
+        while ($numbers.Count -lt 3) { $numbers += '0' }
+        $numeric = ($numbers -join '.') + '.0'
+        & $iscc "/DAppVersion=$Version" "/DNumericVersion=$numeric" "/DStage=$stage" "/O$dist" 'packaging/windows/pulse.iss'
         if ($LASTEXITCODE -ne 0) { throw "Inno Setup falló" }
         Write-Host (Join-Path $dist "Pulse-$Version-windows-x64-setup.exe")
     } else {

@@ -16,8 +16,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: "Versión para el paquete (p. ej. 0.2.0); vacío = la de Cargo"
+        description: "Versión para el paquete (p. ej. 0.2.0); vacío = la de git (la última etiqueta)"
         required: false
+
+# It only reads the repository (and keeps its artifacts).
+permissions:
+  contents: read
 
 concurrency:
   group: windows-${{ github.ref }}
@@ -35,29 +39,32 @@ jobs:
       run:
         shell: pwsh
     steps:
-      - uses: actions/checkout@v4
+      # Actions pinned to a commit (their tag in the comment): a moved tag can't
+      # change what runs here.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
 
+      # The Rust of rust-toolchain.toml (rustup installs it on first use), as in
+      # every other build.
       - name: Rust
         run: |
-          rustup toolchain install stable --profile minimal --component clippy
-          rustup default stable
+          rustup show active-toolchain
           rustc -Vv
           cargo -V
 
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Compilar (todo el workspace)
-        run: cargo build --release --workspace --all-targets 2>&1 | Tee-Object -FilePath build.log; if ($LASTEXITCODE) { exit $LASTEXITCODE }
+        run: cargo build --release --locked --workspace --all-targets 2>&1 | Tee-Object -FilePath build.log; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # Lint for information only: the code keeps its own hand style (no rustfmt,
       # see docs/BUILD_WINDOWS.md) and clippy's suggestions aren't gates yet.
       - name: Clippy (informativo)
         continue-on-error: true
-        run: cargo clippy --release --workspace --all-targets 2>&1 | Tee-Object -FilePath clippy.log
+        run: cargo clippy --release --locked --workspace --all-targets 2>&1 | Tee-Object -FilePath clippy.log
 
       - name: Tests
         run: |
-          cargo test --release --workspace --no-fail-fast 2>&1 | Tee-Object -FilePath tests.log
+          cargo test --release --locked --workspace --no-fail-fast 2>&1 | Tee-Object -FilePath tests.log
           $code = $LASTEXITCODE
           Select-String -Path tests.log -Pattern '^test result|FAILED|panicked' | ForEach-Object { $_.Line }
           exit $code
@@ -123,7 +130,7 @@ jobs:
 
       - name: Guardar paquetes
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: pulse-windows-x64
           path: |
@@ -133,7 +140,7 @@ jobs:
 
       - name: Guardar registros y capturas
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: registros-windows
           path: |

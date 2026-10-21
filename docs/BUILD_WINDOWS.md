@@ -71,9 +71,14 @@ cargo test --release -p engine list_devices -- --ignored --nocapture   # disposi
 ## Empaquetar
 
 ```powershell
-pwsh scripts/package-windows.ps1                 # versión de Cargo
+pwsh scripts/package-windows.ps1                 # la versión de git (la última etiqueta)
 pwsh scripts/package-windows.ps1 -Version 0.2.0  # una versión concreta
 ```
+
+Compila con `--locked` (las dependencias de `Cargo.lock`) y coge `pulse.exe` de
+donde lo deje Cargo, también con `CARGO_TARGET_DIR`. Sin `-Version` ni
+`PULSE_VERSION`, la versión es la de `git describe`, como en macOS; sin git, la
+de `Cargo.toml`.
 
 Deja en `dist\`:
 

@@ -344,6 +344,7 @@ pub struct PulseApp {
     pub show_about: bool,
     pub guide: crate::guide::Guide,
     pub versions: crate::versions::Window,
+    pub macro_window: crate::macros::Window,
     pub mix: crate::mix_assist::Assistant,
     pub arrange: crate::arrange::Window,
     /// Playing with the voice (see `voice_play`).
@@ -527,6 +528,7 @@ impl PulseApp {
             show_about: false,
             guide: Default::default(),
             versions: Default::default(),
+            macro_window: Default::default(),
             mix: Default::default(),
             arrange: Default::default(),
             voice: Default::default(),
@@ -1022,7 +1024,7 @@ impl PulseApp {
         self.touched(crate::midi_map::Control::Param { target, param });
         // Picking a control for MIDI learn sets it to itself: not a move (it would
         // override its automation).
-        if self.learn.on && self.param_value(target, param) == value {
+        if self.picking() && self.param_value(target, param) == value {
             return;
         }
         if let Some((id, p)) = self.plugin_param(target, param) {
@@ -2750,7 +2752,7 @@ impl eframe::App for PulseApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
-        crate::widgets::set_learning(&ctx, self.learn.on);
+        crate::widgets::set_learning(&ctx, self.picking());
         // The menu bar's choices, and the window's close button.
         let chosen = self.menu_bar.as_ref().map(|bar| bar.chosen()).unwrap_or_default();
         for command in chosen {
@@ -2833,6 +2835,7 @@ impl eframe::App for PulseApp {
             ctx.request_repaint();
         }
         crate::midi_map::window(self, &ctx);
+        crate::macros::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
         crate::about::window(self, &ctx);
         crate::guide::window(self, &ctx);

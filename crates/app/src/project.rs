@@ -323,6 +323,9 @@ pub struct Project {
     /// MIDI controllers linked to the project's controls (see `midi_map`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_map: Vec<crate::midi_map::Mapping>,
+    /// Knobs that move several controls at once (see `macros`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub macros: Vec<crate::macros::Macro>,
 }
 
 /// A marker on the Arrangement: where (beat) and its name.
@@ -407,6 +410,7 @@ impl Project {
             punch_out: false,
             key: None,
             markers: Vec::new(),
+            macros: Vec::new(),
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

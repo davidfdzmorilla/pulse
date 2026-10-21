@@ -152,6 +152,9 @@ impl PulseApp {
         for mapping in &mut self.project.midi_map {
             control(&mut mapping.control);
         }
+        for route in self.project.macros.iter_mut().flat_map(|m| &mut m.routes) {
+            control(&mut route.control);
+        }
         if let Some(armed) = &mut self.learn.armed {
             control(armed);
         }

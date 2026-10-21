@@ -113,6 +113,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Separator,
             Run(C::ComputerKeyboard, "Teclado del ordenador  (M)", ""),
             Run(C::MidiAssign, "Asignar controles MIDI", ""),
+            Run(C::Macros, "Macros…", ""),
         ],
     ),
     ("Ventana", &[System("Minimizar", "performMiniaturize:", "m"), System("Zoom", "performZoom:", "")]),

@@ -36,6 +36,7 @@ mod kick_ui;
 mod kits;
 mod library;
 mod logs;
+mod macros;
 mod loop_key;
 mod midi_fx_ui;
 mod midi_map;

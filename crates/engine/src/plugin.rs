@@ -1040,6 +1040,21 @@ impl Vst3Processor {
         self.context.tempo = tempo;
     }
 
+    /// Where the song is at this block's start, and whether it plays.
+    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool) {
+        use ProcessContext_::StatesAndFlags_::{kBarPositionValid, kPlaying};
+        self.context.tempo = tempo;
+        self.context.projectTimeMusic = beat;
+        self.context.barPositionMusic = (beat / 4.0).floor() * 4.0;
+        self.context.projectTimeSamples = (beat * 60.0 / tempo.max(1.0) * self.sample_rate as f64).round() as i64;
+        self.context.state |= kBarPositionValid as u32;
+        if playing {
+            self.context.state |= kPlaying as u32;
+        } else {
+            self.context.state &= !(kPlaying as u32);
+        }
+    }
+
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
         self.note(true, pitch, velocity, 0);
         if gate != HELD && self.pending.len() < MAX_PENDING {
@@ -1195,10 +1210,8 @@ impl Vst3Processor {
         };
         unsafe { self.instance.processor.process(&mut data) };
         self.events.list().clear();
-        self.context.projectTimeSamples += n as i64;
+        // Where the song is comes from the host each block (`set_transport`).
         self.context.continousTimeSamples += n as i64;
-        let beats = n as f64 / self.sample_rate as f64 * self.context.tempo / 60.0;
-        self.context.projectTimeMusic += beats;
     }
 }
 
@@ -1441,6 +1454,12 @@ macro_rules! each {
 impl PluginProcessor {
     pub fn set_tempo(&mut self, tempo: f64) {
         each!(&mut self.inner, p => p.set_tempo(tempo))
+    }
+
+    /// The tempo, where the song is at the block's start and whether it plays:
+    /// what tempo-synced plugins (delays, LFOs, sequencers) follow.
+    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool) {
+        each!(&mut self.inner, p => p.set_transport(tempo, beat, playing))
     }
 
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
@@ -1889,6 +1908,31 @@ pub(crate) mod tests {
         let expected: Vec<f32> = original.iter().map(|x| x * 0.5).collect();
         assert_eq!(l, expected);
         assert_eq!(handle.display(0, 0.25), "0.50x");
+    }
+
+    /// Plugins are told where the song is and whether it plays, each block,
+    /// as the host says: stopped, they don't run on by themselves.
+    #[test]
+    fn plugins_get_the_transport() {
+        use ProcessContext_::StatesAndFlags_::kPlaying;
+        let info = scan(&test_bundle()).unwrap().into_iter().find(|p| !p.instrument).unwrap();
+        let (mut p, _handle) = instantiate(&info.path, &info.cid, 48_000.0, None).unwrap();
+        let (mut l, mut r) = (vec![0f32; 512], vec![0f32; 512]);
+        let context = |p: &PluginProcessor| match &p.inner {
+            Processor::Vst3(v) => v.context,
+            Processor::Clap(_) => unreachable!("the test plugin is VST3"),
+        };
+        p.set_transport(140.0, 17.5, true);
+        p.process(&mut l, &mut r);
+        let c = context(&p);
+        assert_eq!((c.tempo, c.projectTimeMusic, c.barPositionMusic), (140.0, 17.5, 16.0));
+        assert!(c.state & kPlaying as u32 != 0);
+        p.set_transport(140.0, 4.0, false);
+        p.process(&mut l, &mut r);
+        p.process(&mut l, &mut r);
+        let c = context(&p);
+        assert_eq!(c.projectTimeMusic, 4.0, "stopped, it stays where the host says");
+        assert!(c.state & kPlaying as u32 == 0);
     }
 
     /// Every plugin installed on this computer: loads, plays a chord (or processes a

@@ -2260,6 +2260,9 @@ impl Engine {
                 track.midi_fx.process(&mut track.events, n, timing);
             }
             track.instrument.set_tempo(self.tempo);
+            if let Instrument::Plugin(_, Some(plugin)) = &mut track.instrument {
+                plugin.set_transport(self.tempo, ctx.beat, ctx.beats_per_sample > 0.0);
+            }
             let mut cursor = 0;
             for &(frame, _, event) in &track.events {
                 let frame = frame.min(n - 1);

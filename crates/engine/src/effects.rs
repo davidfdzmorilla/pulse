@@ -951,7 +951,7 @@ impl EffectProcessor {
             Self::Limiter(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Utility(fx) => fx.process(l, r),
             Self::Plugin(_, Some(plugin)) => {
-                plugin.set_tempo(ctx.tempo);
+                plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0);
                 plugin.process(l, r);
             }
             Self::Plugin(_, None) => {}

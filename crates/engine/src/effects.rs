@@ -470,6 +470,10 @@ impl Oversampler {
     }
 }
 
+/// How far the low-pass state of a self-oscillating filter goes (it saturates
+/// softly towards it).
+const RING_LIMIT: f32 = 2.0;
+
 pub struct AutoFilter {
     params: AutoFilterParams,
     /// Per channel: the resonant stage, then the first of a 24 dB filter.
@@ -522,8 +526,11 @@ impl AutoFilter {
                     }
                     let (low, band, high) = self.filters[ch].tick(x, &c);
                     if ringing {
-                        // Ringing on its own, the resonance's level stays bounded.
-                        self.filters[ch].ic1 = self.filters[ch].ic1.tanh();
+                        // Ringing on its own, the resonance's level stays bounded:
+                        // both of its states (bounding one alone runs away near the top).
+                        let f = &mut self.filters[ch];
+                        f.ic1 = f.ic1.tanh();
+                        f.ic2 = RING_LIMIT * (f.ic2 / RING_LIMIT).tanh();
                     }
                     *s = match p.mode {
                         FilterMode::LowPass => low,
@@ -1087,6 +1094,51 @@ mod tests {
         let mut r = l.clone();
         fx.process(&mut l, &mut r, &ctx());
         assert!(l[72_000..].iter().all(|s| s.abs() < 1e-3));
+    }
+
+    /// However hard it is pushed (resonance past self-oscillation, the cutoff
+    /// jumping across the whole range or swept fast near the top, drive, loud
+    /// noise), the filter stays at sane levels: it used to run away to 1e12 and
+    /// more, which the engine's NaN guard did not catch.
+    #[test]
+    fn the_auto_filter_never_runs_away() {
+        let mut seed = 1u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 8) as f32 / (1u32 << 23) as f32 - 1.0
+        };
+        let mut worst = (0f32, String::new());
+        for rate in [44_100.0f32, 48_000.0] {
+            let ctx = ProcessContext { sample_rate: rate, tempo: 120.0, beat: 0.0, beats_per_sample: 2.0 / rate as f64 };
+            for mode in [FilterMode::LowPass, FilterMode::HighPass, FilterMode::BandPass] {
+                for (steep, drive_db) in [(false, 0.0), (true, 0.0), (false, 24.0)] {
+                    for resonance in [0.95f32, 1.0, 1.1, 1.2] {
+                        for (cutoff, lfo_amount, jumps) in [(18_000.0f32, 0.0f32, false), (12_000.0, 1.0, false), (1_000.0, 4.0, false), (1_000.0, 0.0, true)] {
+                            for level in [1.0f32, 8.0] {
+                                let params = AutoFilterParams { mode, cutoff, resonance, lfo_beats: 0.0625, lfo_amount, drive_db, steep };
+                                let mut fx = EffectProcessor::new(&Effect::AutoFilter(params), rate);
+                                let mut peak = 0f32;
+                                for block in 0..(2.0 * rate / 16.0) as usize {
+                                    if jumps {
+                                        let cutoff = if block % 2 == 0 { 30.0 } else { 18_000.0 };
+                                        fx.set_params(&Effect::AutoFilter(AutoFilterParams { cutoff, ..params }));
+                                    }
+                                    let mut l: Vec<f32> = (0..16).map(|_| noise() * level).collect();
+                                    let mut r = l.clone();
+                                    fx.process(&mut l, &mut r, &ctx);
+                                    peak = l.iter().chain(&r).fold(peak, |m, s| m.max(s.abs()));
+                                }
+                                let relative = peak / level;
+                                if !(relative <= worst.0) {
+                                    worst = (relative, format!("{rate} {mode:?} steep {steep} drive {drive_db} res {resonance} cutoff {cutoff} lfo {lfo_amount} jumps {jumps} level {level}: peak {peak}"));
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        assert!(worst.0 < 20.0, "{}", worst.1);
     }
 
     /// 24 dB per octave: an octave over the cutoff, about twice as far down.

@@ -1189,14 +1189,16 @@ impl Channel {
 
     /// Runs the effects. One NaN or infinity (a plugin, a filter that blew up, a
     /// damaged file) would stay in reverbs and delays and reach everything after
-    /// them for good: then the block is silenced and the effects' memory cleared.
-    /// False if that happened.
+    /// them for good, and so would a level no sound has (a filter running away
+    /// to 1e12 stays finite): then the block is silenced and the effects' memory
+    /// cleared. False if that happened.
     fn run_chain(&mut self, n: usize, ctx: &ProcessContext) -> bool {
         let (left, right) = (&mut self.left[..n], &mut self.right[..n]);
         for slot in self.chain.iter_mut().filter(|s| s.enabled) {
             slot.processor.process(left, right, ctx);
         }
-        if left.iter().chain(right.iter()).all(|s| s.is_finite()) {
+        // `<` is false for NaN too.
+        if left.iter().chain(right.iter()).all(|s| s.abs() < RUNAWAY) {
             return true;
         }
         left.fill(0.0);
@@ -1214,6 +1216,9 @@ impl Channel {
         (angle.cos() * gain * unity, angle.sin() * gain * unity)
     }
 }
+
+/// A level (+60 dBFS) only a fault reaches.
+const RUNAWAY: f32 = 1000.0;
 
 struct Track {
     channel: Channel,
@@ -1703,7 +1708,9 @@ impl Engine {
                     push_event(&mut track.events, 0, Event::AllNotesOff);
                 }
             }
-            Command::SetTempo(bpm) => self.tempo = bpm.clamp(20.0, 999.0),
+            // NaN would stop the transport for good (clamp keeps it): ignored.
+            Command::SetTempo(bpm) if bpm.is_finite() => self.tempo = bpm.clamp(20.0, 999.0),
+            Command::SetTempo(_) => {}
             Command::SetMetronome(on) => self.metronome = on,
             Command::SetQuantize(beats) => self.quantize = beats.max(0.0),
             Command::SetLoop { enabled, start, end } => {
@@ -2376,7 +2383,7 @@ impl Engine {
         // The master's lanes can hold the tempo.
         let tempo = &mut self.tempo;
         self.master.automate(beat, |param, value| {
-            if param == Param::Tempo {
+            if param == Param::Tempo && value.is_finite() {
                 *tempo = (value as f64).clamp(20.0, 999.0);
             }
         });
@@ -3371,6 +3378,38 @@ mod tests {
         assert!(energy(&audio[audio.len() / 2..]) > 100.0, "the healthy track still sounds");
         assert!(h.shared.faults.load(Ordering::Relaxed) > 0);
         assert_eq!(h.shared.last_fault(), Fault::Track(0), "and the app is told which one");
+    }
+
+    /// A tempo that is not a number is ignored: the transport goes on.
+    #[test]
+    fn a_nan_tempo_is_ignored() {
+        let mut h = Harness::new();
+        h.send(Command::SetTempo(140.0));
+        h.send(Command::Play);
+        h.run_beats(1.0);
+        h.send(Command::SetTempo(f64::NAN));
+        h.send(Command::SetTempo(f64::INFINITY));
+        h.run_beats(1.0);
+        let position = h.shared.position();
+        assert!(position.is_finite() && position > 1.5, "{position}");
+    }
+
+    /// A finite level no sound has (a filter that ran away) is a fault too:
+    /// silenced, and the reverb after it keeps nothing of it.
+    #[test]
+    fn a_runaway_level_is_a_fault() {
+        let mut h = Harness::new();
+        let mut bad: Vec<f32> = (0..48_000).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        bad[1000] = 1e12;
+        let bad = Arc::new(Sample::from_channels(bad.clone(), bad, SR));
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Audio(audio_clip(WarpMode::Off), bad))) });
+        h.send(Command::SetSend { track: 0, send: 0, amount: 0.5 });
+        h.send(Command::ReplaceChain { target: Target::Return(0), chain: build_chain(&[Device::new(Effect::Reverb(Default::default()))], SR) });
+        h.send(Command::SetOutputLimit(false));
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        let audio = h.run_beats(8.0);
+        assert!(audio.iter().all(|s| s.abs() < 2.0), "{}", audio.iter().fold(0f32, |m, s| m.max(s.abs())));
+        assert_eq!(h.shared.last_fault(), Fault::Track(0));
     }
 
     #[test]

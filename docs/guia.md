@@ -515,7 +515,7 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 - **Limiter**: ganancia, techo y release.
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta más CPU y retrasa 36 muestras).
 - **Bitcrusher**: bits y reducción de muestreo.
-- **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos.
+- **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.
 - **Ducker**: bombeo de volumen. Sin sidechain, sincronizado al tempo (**Ritmo**); con **Sidechain**, baja cada vez que suena la pista elegida (**Release**: cuánto tarda en volver, en fracción del tiempo elegido).
 - **Chorus** y **Phaser**.
 - **Delay**: tiempo sincronizado (1/16 a un compás), Ping Pong, feedback y filtro.
@@ -733,7 +733,7 @@ Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`
 - Si Pulse se cierra sin guardar ni preguntar (un fallo, el ordenador se apaga), al abrirlo otra vez pregunta si quieres **Recuperar** los cambios. Vuelve el proyecto tal como estaba en el último autoguardado, marcado como sin guardar: guárdalo con ⌘S para conservarlo. **Descartar** lo aparta como `descartado.pulse` en la misma carpeta, por si acaso, hasta la próxima vez.
 - Mientras grabas audio, lo que entra se va escribiendo a disco en `Samples/Grabaciones` como «Grabación sin terminar…». Al parar se convierte en la toma de siempre y esa copia se borra; si Pulse se cierra a mitad, queda ahí con lo grabado hasta ese momento, y la pregunta de recuperar lo menciona.
 - Si Pulse se cerró mientras reabría el último proyecto al arrancar, la vez siguiente no lo reabre solo (puede ser ese proyecto lo que lo cierra). Ábrelo desde **Abrir recientes** cuando quieras.
-- Si el sonido de una pista deja de ser válido (NaN o infinito, por un archivo dañado o un plugin que falla), Pulse la silencia en ese momento, vacía sus efectos y lo dice en la barra de estado; el resto sigue sonando.
+- Si el sonido de una pista deja de ser válido (NaN, infinito o un nivel absurdo, por encima de +60 dBFS, por un archivo dañado, un plugin que falla o un filtro que se dispara), Pulse la silencia en ese momento, vacía sus efectos y lo dice en la barra de estado; el resto sigue sonando.
 
 ## Versiones del proyecto
 

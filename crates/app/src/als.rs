@@ -114,6 +114,7 @@ pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport
     }
 
     project.scene_names = scene_names(set);
+    project.name_scenes();
     // Live's locators: the markers.
     if let Some(locators) = path(set, &["Locators", "Locators"]) {
         for locator in locators.children().filter(|n| n.has_tag_name("Locator")) {

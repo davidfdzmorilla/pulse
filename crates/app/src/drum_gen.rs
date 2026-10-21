@@ -826,6 +826,18 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
             notes.push(Note { start: s as f64 * 0.25, length: 0.25, pitch, velocity, chance: 1.0 });
         }
     }
+    // The kick the written beat has on the beat stays (a four on the floor
+    // the model left a gap in would not be the style); the rest is the model's.
+    if let Some(kick) = kit.pitch(Sound::Kick).filter(|_| playable[Sound::Kick as usize]) {
+        for s in (0..steps).step_by(4) {
+            let written = seed[s % seed.len()][Sound::Kick as usize] >= 2;
+            let start = s as f64 * 0.25;
+            if written && start < length && !notes.iter().any(|n| n.pitch == kick && (n.start - start).abs() < 1e-9) {
+                notes.push(Note { start, length: 0.25, pitch: kick, velocity: 0.8 * (0.96 + 0.08 * dice.roll()), chance: 1.0 });
+            }
+        }
+        notes.sort_by(|a, b| a.start.total_cmp(&b.start));
+    }
     follow_bass(kit, settings, &mut notes, bass, length);
     Ok((notes, swing(settings.style, settings.level)))
 }
@@ -1148,5 +1160,28 @@ mod tests {
         let small = Kit { kick: Some(36), clap: Some(39), ..Default::default() };
         let (beat, _) = generate(&small, &Settings { style: Style::DrumAndBass, ..Default::default() }, 8.0, &[], 0);
         assert!(beat.iter().any(|n| n.pitch == 39));
+    }
+
+    /// The drum model keeps the four on the floor: wherever the written beat
+    /// has its kick on the beat, so does what it plays (in the 2026-10b audit
+    /// a Hard techno take had three bars of eight with a beat missing). Fills
+    /// that leave a beat out are the written beat's, and stay.
+    #[test]
+    fn the_drum_model_keeps_the_four_on_the_floor() {
+        let kick = drum_note::KICK;
+        let on_beats = |notes: &[Note]| -> Vec<usize> { (0..32).filter(|&b| notes.iter().any(|n| n.pitch == kick && (n.start - b as f64).abs() < 1e-6)).collect() };
+        for style in [Style::Techno, Style::Hardgroove, Style::HardTechno] {
+            for level in [Level::Basic, Level::Intense] {
+                for take in [0, 2] {
+                    let settings = Settings { style, level, bars: 8, sounds: style.sounds(), ..Default::default() };
+                    let (written, _) = generate(&machine(), &settings, 32.0, &[], take);
+                    let (played, _) = generate_ai(&machine(), &Settings { ai: true, ..settings }, 32.0, &[], take).unwrap();
+                    let (written, played) = (on_beats(&written), on_beats(&played));
+                    let missing: Vec<usize> = written.iter().filter(|b| !played.contains(b)).copied().collect();
+                    assert!(missing.is_empty(), "{} {} {take}: no kick on beats {missing:?}", style.label(), level.label());
+                    assert!(written.len() >= 28, "{} {} {take}: a four on the floor ({} beats)", style.label(), level.label(), written.len());
+                }
+            }
+        }
     }
 }

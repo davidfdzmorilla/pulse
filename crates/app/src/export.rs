@@ -263,15 +263,20 @@ fn plan_part(project: &Project, samples: &mut SampleCache, settings: &Settings, 
     let folder = destination.parent().unwrap_or(Path::new("."));
     // What is heard, one track at a time: not the ones switched off (or in a
     // group that is), and not groups, whose tracks come out each through it.
+    // With something soloed, only what the solo lets through (the soloed
+    // tracks and what is in a soloed group): the stems add up to the mix.
+    let any_solo = project.tracks.iter().any(|t| t.solo);
     let heard = |t: usize| {
+        let mut soloed = !any_solo;
         let mut at = Some(t);
         while let Some(i) = at {
             if !project.tracks[i].mixer.active {
                 return false;
             }
+            soloed |= project.tracks[i].solo;
             at = crate::groups::parent(&project.tracks, i);
         }
-        true
+        soloed
     };
     project
         .tracks
@@ -291,6 +296,24 @@ fn plan_part(project: &Project, samples: &mut SampleCache, settings: &Settings, 
             Render { path: folder.join(name), commands: list, track: Some(t), range, song, group, plugins: uses_plugins(&only) }
         })
         .collect()
+}
+
+/// Whether the stems (without the master's chain) add up to the mix: not if a
+/// group or a return has an effect whose sound isn't the sum of what goes in
+/// (compression of its own, saturation, a limiter, a plugin…).
+pub fn stems_add_up(project: &Project) -> bool {
+    use engine::model::Effect;
+    let nonlinear = |d: &engine::model::Device| {
+        d.enabled
+            && match &d.effect {
+                Effect::Compressor(p) => p.sidechain.is_none(),
+                Effect::Saturator(_) | Effect::Bitcrusher(_) | Effect::Limiter(_) | Effect::Plugin(_) => true,
+                Effect::AutoFilter(p) => p.drive_db > 0.0 || p.resonance > 0.95,
+                _ => false,
+            }
+    };
+    let buses = project.tracks.iter().filter(|t| t.is_group()).map(|t| &t.devices).chain(project.returns.iter().map(|r| &r.devices));
+    !buses.flatten().any(nonlinear)
 }
 
 /// The project as track `t`'s stem hears it: the tracks that can't sound in it
@@ -549,7 +572,7 @@ pub fn write(path: &Path, left: &[f32], right: &[f32], sample_rate: u32, bits: B
     let mut writer = hound::WavWriter::create(path, spec).map_err(|e| format!("No se pudo crear {}: {e}", path.display()))?;
     let mut clipped = 0;
     // TPDF dither for 16-bit, from a small xorshift generator.
-    let mut seed: u32 = 0x1234_5678;
+    let mut seed: u32 = dither_seed(path);
     let mut noise = || {
         seed ^= seed << 13;
         seed ^= seed >> 17;
@@ -575,6 +598,19 @@ pub fn write(path: &Path, left: &[f32], right: &[f32], sample_rate: u32, bits: B
     }
     writer.finalize().map_err(|e| e.to_string())?;
     Ok(clipped)
+}
+
+/// The highest an MP3 is normalized to, in dBFS.
+pub const MP3_CEILING_DB: f32 = -1.0;
+
+/// The dither's seed for a file: its own name's, so stems each have their
+/// own noise (summed, it grows as √N, not N), and a FLAC and a WAV of the
+/// same name the same.
+fn dither_seed(path: &Path) -> u32 {
+    let name = final_of(path);
+    let stem = name.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
+    let hash = stem.bytes().fold(0x811c_9dc5u32, |h, b| (h ^ b as u32).wrapping_mul(0x0100_0193));
+    hash | 1
 }
 
 /// Where a file to be encoded is first written: beside it, hidden.
@@ -632,7 +668,7 @@ fn encode(from: &Path, to: &Path, settings: &Settings) -> Result<usize, String> 
         Format::Wav => return Ok(0),
         Format::Flac => {
             let bits = if settings.bits == BitDepth::Int16 { 16 } else { 24 };
-            let mut source = FloatSource { samples: &mut samples, bits, rate, clipped: 0, seed: 0x1234_5678, buffer: Vec::new() };
+            let mut source = FloatSource { samples: &mut samples, bits, rate, clipped: 0, seed: dither_seed(to), buffer: Vec::new() };
             use flacenc::error::Verify;
             let config = flacenc::config::Encoder::default().into_verified().map_err(|(_, e)| format!("FLAC: {e}"))?;
             let block = config.block_size;
@@ -881,7 +917,13 @@ fn write_all(renders: Vec<Render>, settings: Settings, progress: &AtomicU32, can
         let peak = peak(&left, &right);
         // Stems keep their relative levels, so only the full mix is normalized.
         let gain = match settings.normalize {
-            Some(target) if !settings.stems && peak > 0.0 => 10f32.powf(target / 20.0) / peak,
+            Some(target) if !settings.stems && peak > 0.0 => {
+                // MP3 goes over its samples' peak when decoded: −1 dB at most.
+                let target = if format == Format::Mp3 { target.min(MP3_CEILING_DB) } else { target };
+                // At 16 bits the dither adds up to an LSB on top: room for it.
+                let room = if settings.bits == BitDepth::Int16 && format != Format::Mp3 { 1.0 - 2.0 / 32_768.0 } else { 1.0 };
+                10f32.powf(target / 20.0) * room / peak
+            }
             _ => 1.0,
         };
         let path = written_as(&render.path);
@@ -1142,7 +1184,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 ui.end_row();
                 if s.stems {
                     ui.label("Master");
-                    ui.checkbox(&mut s.stems_master, "Con la cadena del master").on_hover_text("Sin ella, los stems sumados dan la mezcla (sin los efectos del master)");
+                    ui.checkbox(&mut s.stems_master, "Con la cadena del master").on_hover_text("Sin ella, los stems sumados dan la mezcla (sin los efectos del master), salvo que un grupo o un retorno compriman o saturen");
                     ui.end_row();
                 }
             });
@@ -1173,7 +1215,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     egui::RichText::new(if app.export.settings.stems_master {
                         "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay, su grupo y la cadena del master."
                     } else {
-                        "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master: sumados dan la mezcla."
+                        if stems_add_up(&app.project) {
+                            "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master: sumados dan la mezcla."
+                        } else {
+                            "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master. Un grupo o un retorno comprime o satura (lo que suena junto se comprime junto), así que sumados se parecen a la mezcla pero no la dan exacta."
+                        }
                     })
                         .color(TEXT_DIM)
                         .size(10.5),
@@ -1559,6 +1605,89 @@ mod tests {
         app.export.settings.range = Range::Sections;
         assert!(app.export_renders(&out).err().unwrap().contains("marcadores"));
         std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// The demo's loop rendered as the mix, and its stems summed.
+    fn mix_and_stem_sum(p: &Project) -> ((Vec<f32>, Vec<f32>), (Vec<f32>, Vec<f32>), usize) {
+        let range = beat_range(p, Range::Loop).unwrap();
+        let commands = sync::project_commands(p, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+        let mix = render(commands, range, Song::of(p), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
+        let settings = Settings { stems: true, stems_master: false, range: Range::Loop, ..Default::default() };
+        let stems = plan(p, &mut SampleCache::default(), &settings, Path::new("/tmp/suma.wav"));
+        let count = stems.len();
+        let mut sum = (vec![0f32; mix.0.len()], vec![0f32; mix.0.len()]);
+        for s in stems {
+            let (l, r) = render(s.commands, s.range, s.song, 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap();
+            for i in 0..sum.0.len().min(l.len()) {
+                sum.0[i] += l[i];
+                sum.1[i] += r[i];
+            }
+        }
+        (mix, sum, count)
+    }
+
+    fn residual_db(a: &(Vec<f32>, Vec<f32>), b: &(Vec<f32>, Vec<f32>)) -> f64 {
+        let (mut sig, mut diff) = (0f64, 0f64);
+        for (x, y) in a.0.iter().zip(&b.0).chain(a.1.iter().zip(&b.1)) {
+            sig += (*x as f64).powi(2);
+            diff += ((x - y) as f64).powi(2);
+        }
+        10.0 * (diff / sig.max(1e-30)).max(1e-30).log10()
+    }
+
+    /// With a track soloed, the mix is that track: its stems are only what
+    /// the solo lets through, and they add up to it.
+    #[test]
+    fn stems_follow_the_solo() {
+        let mut p = Project::demo();
+        p.master.devices.clear();
+        p.tracks[0].solo = true;
+        let (mix, sum, count) = mix_and_stem_sum(&p);
+        assert_eq!(count, 1);
+        assert!(residual_db(&mix, &sum) < -60.0, "{:.1}", residual_db(&mix, &sum));
+    }
+
+    /// A compressed group: the dialog doesn't promise the stems add up.
+    #[test]
+    fn stems_add_up_unless_a_bus_compresses() {
+        let mut p = Project::demo();
+        assert!(stems_add_up(&p));
+        let mut group = crate::project::Track::new_group("Grupo", [0; 3]);
+        group.devices.push(engine::model::Device::new(engine::model::Effect::Compressor(Default::default())));
+        p.tracks.insert(0, group);
+        assert!(!stems_add_up(&p));
+        p.tracks[0].devices[0].enabled = false;
+        p.returns[0].devices.push(engine::model::Device::new(engine::model::Effect::Saturator(Default::default())));
+        assert!(!stems_add_up(&p));
+    }
+
+    /// Each file has its own dither (two stems' noise doesn't add up in step),
+    /// a FLAC and a WAV of one name the same; normalized to 0 dBFS at 16 bits,
+    /// nothing is clipped.
+    #[test]
+    fn dither_is_each_files_own_and_leaves_room() {
+        let dir = std::env::temp_dir().join(format!("pulse-dither-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let silence = vec![0f32; 4_800];
+        let read = |p: &Path| hound::WavReader::open(p).unwrap().into_samples::<i32>().map(|s| s.unwrap()).collect::<Vec<_>>();
+        write(&dir.join("a.wav"), &silence, &silence, 48_000, BitDepth::Int16, 1.0).unwrap();
+        write(&dir.join("b.wav"), &silence, &silence, 48_000, BitDepth::Int16, 1.0).unwrap();
+        assert_ne!(read(&dir.join("a.wav")), read(&dir.join("b.wav")));
+        write(&dir.join(".b.wav.tmp.wav"), &silence, &silence, 48_000, BitDepth::Int16, 1.0).unwrap();
+        assert_eq!(read(&dir.join("b.wav")), read(&dir.join(".b.wav.tmp.wav")), "the same as its final name");
+
+        let p = Project::demo();
+        for format in [Format::Wav, Format::Flac] {
+            let settings = Settings { range: Range::Loop, format, bits: BitDepth::Int16, normalize: Some(0.0), ..Default::default() };
+            let renders = plan(&p, &mut SampleCache::default(), &settings, &dir.join(format!("Tema.{}", format.extension())));
+            let report = run(renders, settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+            assert_eq!(report.clipped, 0, "{format:?}");
+        }
+        let flac = engine::Sample::load(&dir.join("Tema.flac")).unwrap();
+        let wav = engine::Sample::load(&dir.join("Tema.wav")).unwrap();
+        assert_eq!(flac.left, wav.left);
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     /// Two versions with one name write two files, not one over the other.

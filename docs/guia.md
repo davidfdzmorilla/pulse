@@ -764,13 +764,13 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 
 **⇧⌘R** (Archivo → Exportar audio…):
 
-- **Qué**: **Mezcla completa** o **Una pista por archivo (stems)**: cada pista que suena en solo, con sus envíos y su grupo. No se exportan las pistas desactivadas (ni las de un grupo desactivado) ni los grupos como stem aparte (sus pistas ya pasan por él). **Con la cadena del master** (en stems): quítala para que los stems sumados den la mezcla. Los stems se renderizan a la vez, uno por núcleo del procesador, y cada uno solo con lo que puede sonar en él (su pista, sus grupos y las pistas que escuchan sus sidechains): 16 stems tardan poco más que la canción una vez. Suenan exactamente igual que en solo. Si el proyecto tiene plugins, se renderizan de uno en uno.
+- **Qué**: **Mezcla completa** o **Una pista por archivo (stems)**: cada pista que suena en solo, con sus envíos y su grupo. No se exportan las pistas desactivadas (ni las de un grupo desactivado) ni los grupos como stem aparte (sus pistas ya pasan por él). Si tienes alguna pista en solo, solo se exportan las que suenan con ese solo, como en la mezcla. **Con la cadena del master** (en stems): quítala para que los stems sumados den la mezcla; si un grupo o un retorno comprime o satura, sumados se le parecen pero no la dan exacta, y el diálogo lo avisa. Los stems se renderizan a la vez, uno por núcleo del procesador, y cada uno solo con lo que puede sonar en él (su pista, sus grupos y las pistas que escuchan sus sidechains): 16 stems tardan poco más que la canción una vez. Suenan exactamente igual que en solo. Si el proyecto tiene plugins, se renderizan de uno en uno.
 - **Rango**: **Toda la canción**, **Región del loop** o **Por secciones**: un archivo por cada parte de la canción, de un marcador al siguiente (el último, hasta el final), con el número y el nombre del marcador: «Tema - 1 Intro.wav», «Tema - 2 Drop.wav»… Lo que haya antes del primer marcador sale como «Inicio». Cada sección empieza con lo que ya sonaba (también una nota larga que empezó muchos compases antes) y acaba con su cola, y empieza y acaba justo en sus marcadores aunque el tempo esté automatizado. Con stems, una tanda por sección: «Tema - 2 Drop - 1 Drums.wav».
 - **Versiones** (si el proyecto tiene versiones con nombre): marca las que quieras exportar también, cada una tal como era (su tempo, sus pistas, su mezcla) y con su nombre al final del archivo: «Tema - Con el bajo nuevo.wav». **Solo las versiones** deja fuera lo de ahora.
 - **Formato**:
-  - **WAV**: 16 bits (con dither), 24 o 32 bits (float).
+  - **WAV**: 16 bits (con dither, distinto en cada archivo para que el ruido de los stems no se sume en fase), 24 o 32 bits (float).
   - **FLAC**: sin pérdida, como el WAV, y más o menos la mitad de grande; 16 o 24 bits.
-  - **MP3**: para escuchar y compartir, a 192, 256 o 320 kbps.
+  - **MP3**: para escuchar y compartir, a 192, 256 o 320 kbps. Normalizado, como mucho a −1 dBFS: al decodificarlo sube un poco y a 0 saturaría.
   - A **44.1** o **48 kHz**, en cualquiera de los tres.
 - El diálogo recuerda lo que elegiste la última vez (formato, rango, stems, normalización…), también entre sesiones.
 - **Normalizar**: pico a un valor (no en stems).

@@ -107,9 +107,8 @@ fn tables_dir() -> PathBuf {
 fn save_and_use(app: &mut PulseApp) {
     let Some(editor) = &app.table_editor else { return };
     let (track, osc) = (editor.track, editor.osc);
-    let clean: String = editor.name.chars().map(|c| if matches!(c, '/' | '\\' | ':') { '-' } else { c }).collect();
     let dir = tables_dir();
-    let path = dir.join(format!("{}.wav", clean.trim()));
+    let path = dir.join(format!("{}.wav", crate::files::safe_name(&editor.name)));
     let result = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| write_table(&path, &frames(&editor.keys)));
     if let Err(error) = result {
         app.status = Some(error);

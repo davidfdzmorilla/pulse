@@ -59,13 +59,21 @@ impl ImportReport {
     }
 }
 
+/// The most a set's XML may take unpacked (real ones are a few MB).
+const MAX_XML: u64 = 256 << 20;
+
 pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("No se pudo leer: {e}"))?;
     let xml = if bytes.starts_with(&[0x1f, 0x8b]) {
+        // Up to a limit: a few KB can unpack to gigabytes (and fill the memory).
         let mut text = String::new();
         flate2::read::GzDecoder::new(bytes.as_slice())
+            .take(MAX_XML + 1)
             .read_to_string(&mut text)
             .map_err(|e| format!("No se pudo descomprimir el set: {e}"))?;
+        if text.len() as u64 > MAX_XML {
+            return Err(format!("El set descomprimido pasa de {} MB: no parece un set de Live", MAX_XML >> 20));
+        }
         text
     } else {
         String::from_utf8(bytes).map_err(|_| "El archivo no es un set de Ableton Live".to_string())?
@@ -596,6 +604,24 @@ fn find_file(dir: &Path, name: &str, depth: usize) -> Option<PathBuf> {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    /// A small file that unpacks to more than any set (a «zip bomb») is
+    /// refused without filling the memory.
+    #[test]
+    fn a_set_that_unpacks_to_too_much_is_refused() {
+        let path = std::env::temp_dir().join(format!("pulse-als-bomb-{}.als", std::process::id()));
+        let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::best());
+        let zeros = vec![b' '; 1 << 20];
+        for _ in 0..(MAX_XML >> 20) + 4 {
+            gz.write_all(&zeros).unwrap();
+        }
+        let bytes = gz.finish().unwrap();
+        assert!(bytes.len() < 2 << 20, "{}", bytes.len());
+        std::fs::write(&path, bytes).unwrap();
+        let error = import(&path).err().unwrap();
+        assert!(error.contains("no parece un set de Live"), "{error}");
+        std::fs::remove_file(&path).ok();
+    }
 
     /// A trimmed-down set in the layout Live 11 writes.
     const SET: &str = r#"<?xml version="1.0" encoding="UTF-8"?>

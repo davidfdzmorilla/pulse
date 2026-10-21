@@ -8,7 +8,7 @@ use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{Device, DuckerParams, Effect, Eq3Params, LimiterParams, Param};
+use engine::model::{Device, DuckerParams, Effect, Eq3Params, KickDrive, LimiterParams, Param, SaturatorParams};
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -17,6 +17,11 @@ const RATE: f32 = 48_000.0;
 /// The most the assistant drives the master's limiter (dB): past it, a mix is
 /// squashed rather than made louder.
 const MAX_LIMITER_GAIN: f32 = 12.0;
+/// From this loudness (LUFS) on, the master gets a clipper before its limiter
+/// (see `PulseApp::loud_master`): how far it clips (dB), and the limiter's release.
+const LOUD: f64 = -8.5;
+const CLIP_DB: f32 = 3.0;
+const LOUD_RELEASE_MS: f32 = 40.0;
 
 /// Where the song is going, and the loudness and true peak it should have.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -24,22 +29,30 @@ pub enum Target {
     Streaming,
     Apple,
     Club,
+    /// Hard techno and rave: masters as loud as a club takes them.
+    HardTechno,
     Broadcast,
     /// As loud as the reference song.
     Reference,
 }
 
 impl Target {
-    const ALL: [Target; 5] = [Target::Streaming, Target::Apple, Target::Club, Target::Broadcast, Target::Reference];
+    const ALL: [Target; 6] = [Target::Streaming, Target::Apple, Target::Club, Target::HardTechno, Target::Broadcast, Target::Reference];
 
     fn label(self) -> &'static str {
         match self {
             Target::Streaming => "Spotify, YouTube, Tidal (−14 LUFS)",
             Target::Apple => "Apple Music (−16 LUFS)",
             Target::Club => "Club, DJ, SoundCloud (−9 LUFS)",
+            Target::HardTechno => "Hard techno, rave (−7 LUFS)",
             Target::Broadcast => "Radio y TV, EBU R128 (−23 LUFS)",
             Target::Reference => "Como la referencia",
         }
+    }
+
+    /// Whether a platform turns down what goes over its loudness.
+    fn turned_down(self) -> bool {
+        matches!(self, Target::Streaming | Target::Apple | Target::Broadcast)
     }
 
     /// The loudness (LUFS) and the highest true peak (dBTP).
@@ -48,6 +61,7 @@ impl Target {
             Target::Streaming => Some((-14.0, -1.0)),
             Target::Apple => Some((-16.0, -1.0)),
             Target::Club => Some((-9.0, -1.0)),
+            Target::HardTechno => Some((-7.0, -1.0)),
             Target::Broadcast => Some((-23.0, -1.0)),
             Target::Reference => reference.and_then(|r| r.lufs).map(|l| (l, -1.0)),
         }
@@ -210,7 +224,13 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         } else {
             out.push(advice(
                 Level::Note,
-                format!("Sonoridad {} LUFS: {} dB por encima del objetivo ({} LUFS). La plataforma la bajará, y lo que hayas apretado de más solo le quita dinámica", num(lufs), num(-off), num(goal)),
+                format!(
+                    "Sonoridad {} LUFS: {} dB por encima del objetivo ({} LUFS). {}",
+                    num(lufs),
+                    num(-off),
+                    num(goal),
+                    if target.turned_down() { "La plataforma la bajará, y lo que hayas apretado de más solo le quita dinámica" } else { "Más apretada no suena más fuerte en el club: solo pierde pegada" }
+                ),
                 Some(Fix::MasterLimiter { gain_db: off as f32, ceiling_db }),
             ));
         }
@@ -552,11 +572,36 @@ impl PulseApp {
     /// Brings the mix to `goal` LUFS, its true peak at most `max_peak` dBTP,
     /// with the master's limiter, step by step.
     pub fn reach_loudness(&mut self, goal: f64, max_peak: f64, gain_db: f32, ceiling_db: f32) {
+        if goal >= LOUD {
+            self.loud_master(ceiling_db);
+        }
         let before = self.mix.report.as_ref().and_then(|r| r.mix.lufs);
         let was = self.master_limiter_gain();
         self.apply_fix(&Fix::MasterLimiter { gain_db, ceiling_db });
         let applied = self.master_limiter_gain() - was;
         self.mix.chase = Some(Chase { goal, max_peak, steps: 1, last: (applied, before) });
+    }
+
+    /// A master as loud as hard techno's: a clipper takes the peaks (the
+    /// kick's) before the limiter, which then lets go quicker. A limiter alone
+    /// pumps with every kick, louder no more, and lets true peaks through.
+    fn loud_master(&mut self, ceiling_db: f32) {
+        let devices = &mut self.project.master.devices;
+        let limiter = match devices.iter().rposition(|d| matches!(d.effect, Effect::Limiter(_))) {
+            Some(i) => i,
+            None => {
+                devices.push(Device::new(Effect::Limiter(LimiterParams { ceiling_db, ..Default::default() })));
+                devices.len() - 1
+            }
+        };
+        if let Effect::Limiter(l) = &mut devices[limiter].effect {
+            l.release_ms = l.release_ms.min(LOUD_RELEASE_MS);
+        }
+        let clipped = limiter > 0 && matches!(devices[limiter - 1].effect, Effect::Saturator(SaturatorParams { kind: KickDrive::Hard, .. }));
+        if !clipped {
+            let clipper = SaturatorParams { drive_db: CLIP_DB, output_db: -CLIP_DB, mix: 1.0, kind: KickDrive::Hard, oversample: true };
+            devices.insert(limiter, Device::new(Effect::Saturator(clipper)));
+        }
     }
 
     /// The gain of the master's last limiter (0 without one).
@@ -831,6 +876,61 @@ mod tests {
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
         Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks }
+    }
+
+    /// A hard techno track (the Hard techno machine's beat and an acid bass at
+    /// 150) brought to the genre's -7 LUFS with the master's limiter, its
+    /// true peak under -1 dBTP; told when louder than that.
+    #[test]
+    fn a_hard_techno_track_reaches_minus_seven() {
+        use crate::drum_gen::{self, Style};
+        use crate::project::{Project, Track};
+        use engine::model::{ArrangementClip, Clip, InstrumentKind, MidiClip, Note};
+        let mut project = Project::empty();
+        project.tempo = 150.0;
+        let kit = drum_gen::Kit::from_rows(&engine::model::DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
+        let settings = drum_gen::Settings { style: Style::HardTechno, level: drum_gen::Level::Medium, bars: 8, sounds: Style::HardTechno.sounds(), ..Default::default() };
+        let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0);
+        let mut drums = Track::new("Drums", [0; 3], InstrumentKind::DrumMachine(Style::HardTechno.sound()));
+        drums.arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(MidiClip { notes, groove, ..MidiClip::new("Beat", 32.0, [0; 3]) }) });
+        let mut bass = Track::new("Acid", [0; 3], InstrumentKind::Acid(Default::default()));
+        let line: Vec<Note> = (0..128).filter(|s| s % 4 != 0).map(|s| Note { start: s as f64 * 0.25, length: 0.2, pitch: 29 + 12 * (s % 3 == 0) as u8, velocity: 0.9, chance: 1.0 }).collect();
+        bass.arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(MidiClip { notes: line, ..MidiClip::new("Acid", 32.0, [0; 3]) }) });
+        // Saturated, as the genre's drums are: their peaks give way to loudness.
+        drums.devices.push(engine::model::Device::new(Effect::Saturator(engine::model::SaturatorParams { drive_db: 9.0, output_db: -6.0, kind: engine::model::KickDrive::Hard, ..Default::default() })));
+        project.tracks = vec![drums, bass];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 120);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let before = app.mix.report.as_ref().unwrap().mix.lufs.unwrap();
+        app.mix.target = Target::HardTechno;
+        let list = advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None);
+        let Some(Fix::MasterLimiter { gain_db, ceiling_db }) = list.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::MasterLimiter { .. }))) else { panic!("a limiter fix: {list:?}") };
+        app.reach_loudness(-7.0, -1.0, gain_db, ceiling_db);
+        wait(&mut app);
+        let mix = app.mix.report.as_ref().unwrap().mix.clone();
+        let limiter = app.project.master.devices.iter().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(l.gain_db) } else { None });
+        println!("hard techno: {before:.1} → {:.1} LUFS (objetivo -7), pico real {:.1} dBTP, limitador {limiter:?} dB · {:?}", mix.lufs.unwrap(), mix.true_peak, app.status);
+        assert!((mix.lufs.unwrap() - -7.0).abs() <= 1.0, "{:?}", mix.lufs);
+        assert!(mix.true_peak <= -1.0);
+        // A clipper right before the limiter, which lets go quicker.
+        let kinds: Vec<&str> = app.project.master.devices.iter().map(|d| d.effect.label()).collect();
+        assert_eq!(kinds, ["Saturator", "Limiter"]);
+        assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
+        assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
+        // Over it: no platform turns a club track down, so it isn't said.
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new() };
+        let told = advise(&loud, Target::HardTechno, None);
+        assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
 
     #[test]

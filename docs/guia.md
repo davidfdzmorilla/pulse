@@ -800,6 +800,9 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
   - **Sonoridad** por debajo o por encima del destino: **Aplicar** pone un **Limiter** en el master y lo ajusta midiendo cada vez, hasta llegar (y con el pico real por debajo de −1 dBTP). Si la mezcla no da más sin aplastarla, se para y te lo dice: para más volumen, comprime o satura las pistas.
   - **Pistas por encima de 0 dB**: **Aplicar** les baja el volumen.
   - **Graves que chocan**: dos pistas llenando los graves (por debajo de 120 Hz) a la vez. Si una es la batería, **Aplicar** pone a la otra un **Ducker** con **sidechain** de la batería (se aparta cada vez que suena); si no, recorta los graves de la que menos tiene con un **EQ Three**.
+    - Cuenta como batería una Drum Machine, una Drum Rack, el **Kick Designer** (el bombo en su propia pista) y una pista de audio con nombre de batería («Kick», «Tops», «Perc»…).
+    - Si las dos son batería y una es el Kick Designer, el bombo se queda los graves y se recortan los de la otra.
+    - Si una ya se aparta de la otra con un sidechain (el bajo del bombo, o un rumble), no es un choque: lo dice en verde.
   - **Fase**: mezcla o pistas en contrafase, que en mono (un móvil, un club) se pierden.
   - **Dinámica**: muy apretada o con partes muy lejos en volumen.
 - **Referencia**: **Elegir canción…** carga una canción que suene como quieres. Se compara su sonoridad y su **balance de graves, medios y agudos** con el tuyo (en la gráfica por octavas: barras, tu mezcla; línea, la referencia), y **Aplicar** pone un **EQ Three** en el master que lo acerca.

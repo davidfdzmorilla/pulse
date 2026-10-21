@@ -126,6 +126,8 @@ pub struct Report {
     pub peak_db: f32,
     /// Samples that had to be clipped for integer formats.
     pub clipped: usize,
+    /// Stems of sections left out: their track doesn't sound in that part.
+    pub silent: usize,
 }
 
 impl Report {
@@ -139,6 +141,9 @@ impl Report {
         );
         if self.clipped > 0 {
             text.push_str(&format!(" · ¡{} muestras saturadas! Baja el master o normaliza", self.clipped));
+        }
+        if self.silent > 0 {
+            text.push_str(&format!(" · {} stem(s) en silencio, de pistas que no suenan en esa parte, no se escribieron", self.silent));
         }
         if let Some(dir) = self.files.first().and_then(|f| f.parent()) {
             text.push_str(&format!(" · {}", dir.display()));
@@ -1040,6 +1045,11 @@ fn write_all(renders: Vec<Render>, settings: Settings, progress: &AtomicU32, can
     let bits = if format == Format::Wav { settings.bits } else { BitDepth::Float32 };
     let written = render_each(renders, settings.sample_rate as f32, progress, cancel, |render, left, right| {
         let peak = peak(&left, &right);
+        // By sections, a track that doesn't sound in a part has no stem of it
+        // (under -100 dBFS: nothing a file would carry).
+        if settings.range == Range::Sections && render.track.is_some() && peak < 1e-5 {
+            return Ok(None);
+        }
         // Stems keep their relative levels, so only the full mix is normalized.
         let gain = match settings.normalize {
             Some(target) if !settings.stems && peak > 0.0 => {
@@ -1053,13 +1063,14 @@ fn write_all(renders: Vec<Render>, settings: Settings, progress: &AtomicU32, can
         };
         let path = written_as(&render.path);
         let clipped = write(&path, &left, &right, settings.sample_rate, bits, gain)?;
-        Ok((path, render.group, left.len(), peak, clipped))
+        Ok(Some((path, render.group, left.len(), peak, clipped)))
     })
     .map_err(|e| if e == "Cancelado" { "Exportación cancelada".to_string() } else { e })?;
     let mut report = Report::default();
     let mut peak_overall = 0f32;
     let mut lengths = Vec::new();
-    for (path, group, frames, peak, clipped) in written {
+    report.silent = written.iter().filter(|w| w.is_none()).count();
+    for (path, group, frames, peak, clipped) in written.into_iter().flatten() {
         peak_overall = peak_overall.max(peak);
         report.clipped += clipped;
         report.seconds = report.seconds.max(frames as f64 / settings.sample_rate as f64);
@@ -1321,7 +1332,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     "No hay marcadores en la canción: añade alguno (doble clic en la franja de marcadores).".to_string()
                 } else {
                     let names: Vec<&str> = parts.iter().map(|(n, _)| n.as_str()).collect();
-                    format!("{} secciones: {}. Cada una con lo que suena en ella desde antes y su cola.", parts.len(), names.join(", "))
+                    format!("{} secciones: {}. Cada una con lo que suena en ella desde antes y su cola{}.", parts.len(), names.join(", "), if app.export.settings.stems { "; sin los stems de las pistas que no suenan en ella" } else { "" })
                 };
                 ui.label(egui::RichText::new(text).color(TEXT_DIM).size(10.5));
             } else if let Some((start, end)) = beat_range(&app.project, app.export.settings.range) {
@@ -1719,10 +1730,42 @@ mod tests {
         let report = run(plan(&project, &mut SampleCache::default(), &settings, &dir.join("Tema.wav")), settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
         let files: Vec<(String, f64)> = report.files.iter().map(|f| (f.file_name().unwrap().to_string_lossy().into_owned(), length(f))).collect();
         std::fs::remove_dir_all(&dir).ok();
-        assert_eq!(files.len(), 8);
+        // The intro has no bass or lead: their stems are left out (see `sections_leave_out_silent_stems`).
+        assert_eq!(files.len(), 6, "{files:?}");
         assert_eq!(files[0].0, "Tema - 1 Intro - 1 Drums.wav");
-        assert_eq!(files[4].0, "Tema - 2 Drop - 1 Drums.wav");
-        assert!(files[..4].iter().all(|f| f.1 == files[0].1) && files[4..].iter().all(|f| f.1 == files[4].1), "{files:?}");
+        assert_eq!(files[2].0, "Tema - 2 Drop - 1 Drums.wav");
+        assert!(files[..2].iter().all(|f| f.1 == files[0].1) && files[2..].iter().all(|f| f.1 == files[2].1), "{files:?}");
+    }
+
+    /// By sections, a track that doesn't play in a part has no stem of it (in
+    /// the 2026-10b audit, 5 of 35 files were silence); the report says how many.
+    #[test]
+    fn sections_leave_out_silent_stems() {
+        let dir = std::env::temp_dir().join(format!("pulse-secciones-mudas-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = {
+            let mut p = Project::demo();
+            marked(&mut p, &[(0.0, "Intro"), (16.0, "Drop")]);
+            p
+        };
+        // The demo's bass and lead come in with the drop.
+        let bass = project.tracks.iter().position(|t| t.name == "Bass").unwrap();
+        assert!(project.tracks[bass].arrangement.iter().all(|c| c.start >= 16.0));
+        let settings = Settings { range: Range::Sections, stems: true, bits: BitDepth::Int16, ..Default::default() };
+        let report = run(plan(&project, &mut SampleCache::default(), &settings, &dir.join("Tema.wav")), settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let names: Vec<String> = report.files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        let written: Vec<String> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).collect();
+        std::fs::remove_dir_all(&dir).ok();
+        let stem = |section: &str, track: &str| names.iter().any(|n| n.contains(section) && n.ends_with(&format!(" {track}.wav")));
+        assert!(!stem("1 Intro", "Bass") && !stem("1 Intro", "Lead") && stem("2 Drop", "Bass") && stem("2 Drop", "Lead"), "{names:?}");
+        assert!(stem("1 Intro", "Drums") && stem("1 Intro", "Chords"), "{names:?}");
+        assert_eq!(report.silent, 2);
+        assert!(report.summary().contains("2 stem(s) en silencio"), "{}", report.summary());
+        assert_eq!(written.len(), names.len(), "no file left of it: {written:?}");
+        // Exporting the whole song, every stem is there.
+        let settings = Settings { range: Range::Song, ..settings };
+        let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("Tema.wav"));
+        assert!(renders.iter().any(|r| r.track == Some(bass)));
     }
 
     /// Versions chosen in the dialog are exported too, each as it was (its own

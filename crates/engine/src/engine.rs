@@ -958,6 +958,30 @@ fn schedule_notes(
     }
 }
 
+/// Seconds from beat `a` to beat `b` with the tempo `lane` plays (each stretch
+/// between its points integrated, bends and all).
+pub fn seconds_between(lane: &AutomationLane, a: f64, b: f64) -> f64 {
+    if b < a {
+        return -seconds_between(lane, b, a);
+    }
+    let per_beat = |beat: f64| 60.0 / (lane.value_at(beat).unwrap_or(120.0) as f64).clamp(20.0, 999.0);
+    let mut total = 0.0;
+    let mut from = a;
+    let inner = lane.points.iter().map(|p| p.beat).filter(|&x| x > a && x < b);
+    for to in inner.chain(std::iter::once(b)) {
+        // Simpson's rule over 8 steps: within microseconds over a stretch.
+        let steps = 8;
+        let h = (to - from) / steps as f64;
+        let mut sum = per_beat(from) + per_beat(to);
+        for i in 1..steps {
+            sum += per_beat(from + i as f64 * h) * if i % 2 == 1 { 4.0 } else { 2.0 };
+        }
+        total += sum * h / 3.0;
+        from = to;
+    }
+    total
+}
+
 /// Length of the fades applied at clip edges and loop points, in seconds.
 const EDGE_FADE: f64 = 0.003;
 /// Length of the cross-fade between two audio clips that follow on, in seconds.
@@ -976,7 +1000,7 @@ pub fn render_audio(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, r
     let frames = (beats * 60.0 / tempo * rate as f64).round() as usize;
     let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
     let beats_per_sample = tempo / 60.0 / rate as f64;
-    render_audio_clip(clip, sample, 0.0, beats, (false, false), (0, frames), 0.0, beats_per_sample, tempo, &mut left, &mut right);
+    render_audio_clip(clip, sample, 0.0, beats, (false, false), (0, frames), 0.0, beats_per_sample, tempo, None, &mut left, &mut right);
     (left, right)
 }
 
@@ -987,7 +1011,7 @@ pub fn render_placed(placed: &PlacedClip, beat: f64, frames: usize, tempo: f64, 
     let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
     if let PlayClip::Audio(clip, sample) = &placed.clip {
         let beats_per_sample = tempo / 60.0 / rate as f64;
-        render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, (0, frames), beat, beats_per_sample, tempo, &mut left, &mut right);
+        render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, (0, frames), beat, beats_per_sample, tempo, None, &mut left, &mut right);
     }
     (left, right)
 }
@@ -1007,6 +1031,7 @@ fn render_audio_clip(
     beat: f64,
     beats_per_sample: f64,
     tempo: f64,
+    tempo_lane: Option<&AutomationLane>,
     left: &mut [f32],
     right: &mut [f32],
 ) {
@@ -1029,6 +1054,11 @@ fn render_audio_clip(
     // starts where its sound does (a frozen track) plays its first hit
     // untouched from the file's start; the next laps of a loop fade in as always.
     let clean_start = clip.hard_start && clip.file_seconds(first_beat) <= 0.0;
+    // Unwarped, the file plays at its own speed: with the tempo automated, how
+    // far into it is the time since the lap began (the tempo map's), then one
+    // output sample's time per sample. (lap start beat, seconds there, frame)
+    let mut unwarped: Option<(f64, f64, usize)> = None;
+    let seconds_per_sample = beats_per_sample * 60.0 / tempo;
 
     for k in from..to {
         let b = beat + (k - from) as f64 * beats_per_sample;
@@ -1050,7 +1080,23 @@ fn render_audio_clip(
             envelope = (fade_in * (remaining / fade).min(1.0)) as f32;
         }
         let (l, r) = match clip.warp {
-            WarpMode::Off => sample.read((clip.offset + local * 60.0 / tempo) * rate),
+            WarpMode::Off => {
+                let seconds = match tempo_lane {
+                    None => local * 60.0 / tempo,
+                    Some(lane) => {
+                        let lap = b - local;
+                        match unwarped {
+                            Some((at, seconds, frame)) if (at - lap).abs() < 1e-6 => seconds + (k - frame) as f64 * seconds_per_sample,
+                            _ => {
+                                let seconds = seconds_between(lane, lap, b);
+                                unwarped = Some((lap, seconds, k));
+                                seconds
+                            }
+                        }
+                    }
+                };
+                sample.read((clip.offset + seconds) * rate)
+            }
             WarpMode::Repitch => sample.read(clip.file_seconds(first_beat + local) * rate),
             WarpMode::Beats if sample.onsets.get().is_some_and(|o| !o.is_empty()) => {
                 let onsets = sample.onsets.get().map_or(&[][..], |o| o.as_slice());
@@ -1352,7 +1398,7 @@ impl Track {
 
     /// Renders the audio clips sounding during frames `[from, to)`, where `beat`
     /// is the transport position at `from`.
-    fn render_audio(&mut self, (from, to): (usize, usize), beat: f64, beats_per_sample: f64, tempo: f64) {
+    fn render_audio(&mut self, (from, to): (usize, usize), beat: f64, beats_per_sample: f64, tempo: f64, tempo_lane: Option<&AutomationLane>) {
         if to <= from {
             return;
         }
@@ -1360,7 +1406,7 @@ impl Track {
         if let Some(slot) = self.playing {
             if let Some(PlayClip::Audio(clip, sample)) = self.slots[slot].as_deref() {
                 let frames = (from, to);
-                render_audio_clip(clip, sample, self.launch_beat, f64::INFINITY, (false, false), frames, beat, beats_per_sample, tempo, left, right);
+                render_audio_clip(clip, sample, self.launch_beat, f64::INFINITY, (false, false), frames, beat, beats_per_sample, tempo, tempo_lane, left, right);
             }
         } else if self.follows_arrangement {
             let end = beat + (to - from) as f64 * beats_per_sample;
@@ -1370,7 +1416,7 @@ impl Track {
                 let PlayClip::Audio(clip, sample) = &placed.clip else { continue };
                 if placed.start - margin < end && placed.end() + margin > beat {
                     let frames = (from, to);
-                    render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, frames, beat, beats_per_sample, tempo, left, right);
+                    render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, frames, beat, beats_per_sample, tempo, tempo_lane, left, right);
                 }
             }
         }
@@ -2316,7 +2362,7 @@ impl Engine {
                 let per_sample = self.tempo / 60.0 / self.sample_rate as f64;
                 // In time with the song (its bars are the loop's), or on its own.
                 let beat = if self.playing { ctx.beat } else { *own };
-                render_audio_clip(audio, sample, 0.0, f64::INFINITY, (false, false), (0, n), beat, per_sample, self.tempo, left, right);
+                render_audio_clip(audio, sample, 0.0, f64::INFINITY, (false, false), (0, n), beat, per_sample, self.tempo, None, left, right);
                 *own += n as f64 * per_sample;
                 let preview = &mut self.preview_buffer[..2 * n];
                 for i in 0..n {
@@ -2485,15 +2531,16 @@ impl Engine {
         let segment = (timing.segment_frame, timing.segment_end);
         let bps = timing.beats_per_sample;
         let tempo = self.tempo;
+        let tempo_lane = self.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty());
         for (index, track) in self.tracks.iter_mut().enumerate() {
             if track.queued == Queued::Nothing || boundary >= end {
                 track.collect_notes(start, end, timing);
-                track.render_audio(segment, start, bps, tempo);
+                track.render_audio(segment, start, bps, tempo, tempo_lane);
                 continue;
             }
             track.collect_notes(start, boundary, timing);
             let switch = (segment.0 + ((boundary - start) / bps).ceil() as usize).clamp(segment.0, segment.1);
-            track.render_audio((segment.0, switch), start, bps, tempo);
+            track.render_audio((segment.0, switch), start, bps, tempo, tempo_lane);
             // Any switch on a track ends the take it was recording.
             if track.recording.take().is_some() {
                 flush_held(track, index, boundary, &mut self.recorded);
@@ -2518,7 +2565,7 @@ impl Engine {
             push_event(&mut track.events, timing.frame(boundary), Event::AllNotesOff);
             track.collect_notes(boundary, end, timing);
             let switch_beat = start + (switch - segment.0) as f64 * bps;
-            track.render_audio((switch, segment.1), switch_beat, bps, tempo);
+            track.render_audio((switch, segment.1), switch_beat, bps, tempo, tempo_lane);
         }
 
         if self.metronome {
@@ -2807,6 +2854,54 @@ mod tests {
             gain_db: 0.0,
             transpose: 0.0, muted: false,
         }
+    }
+
+    /// An unwarped clip (a recording) plays at its own speed while the tempo
+    /// automation ramps: its pitch stays, and it doesn't jump.
+    #[test]
+    fn unwarped_clips_keep_their_speed_through_tempo_automation() {
+        let freq = 1000.0;
+        let tone: Vec<f32> = (0..60 * 48_000).map(|i| (i as f32 * freq * std::f32::consts::TAU / 48_000.0).sin() * 0.5).collect();
+        let sample = Arc::new(Sample::from_channels(tone.clone(), tone, 48_000.0));
+        let measure = |ramp: bool| {
+            let mut renderer = crate::offline::OfflineRenderer::new(SR);
+            let mut clip = audio_clip(WarpMode::Off);
+            clip.length = 120.0;
+            renderer.send(Command::SetTempo(120.0));
+            renderer.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 120.0, PlayClip::Audio(clip, sample.clone()))]) });
+            if ramp {
+                let points = [(0.0, 120.0), (16.0, 120.0), (48.0, 140.0)].iter().map(|&(beat, value)| crate::model::AutomationPoint { beat, value, curve: 0.0 }).collect();
+                renderer.send(Command::SetAutomation { target: Target::Master, lanes: Box::new(vec![AutomationLane { param: Param::Tempo, points }]) });
+            }
+            renderer.send(Command::SetOutputLimit(false));
+            renderer.send(Command::Play);
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            while renderer.state.position() < 32.0 {
+                renderer.render(500, &mut l, &mut r);
+            }
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            renderer.render(24_000, &mut l, &mut r);
+            let jump = l.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+            (crossings(&l) as f32 * 2.0, jump)
+        };
+        let (steady, steady_jump) = measure(false);
+        let (ramped, ramped_jump) = measure(true);
+        assert!((steady - freq).abs() <= 4.0, "{steady}");
+        assert!((ramped - freq).abs() <= 4.0, "during the ramp: {ramped} Hz");
+        assert!(ramped_jump < steady_jump * 1.2, "{ramped_jump} vs {steady_jump}");
+    }
+
+    /// Seconds over automated tempo: a steady stretch, and a ramp's average.
+    #[test]
+    fn seconds_follow_the_tempo_lane() {
+        let points = [(0.0, 120.0), (16.0, 120.0), (48.0, 140.0)].iter().map(|&(beat, value)| crate::model::AutomationPoint { beat, value, curve: 0.0 }).collect();
+        let lane = AutomationLane { param: Param::Tempo, points };
+        assert!((seconds_between(&lane, 0.0, 16.0) - 8.0).abs() < 1e-9);
+        // 32 beats from 120 to 140 BPM: ∫ 60 / tempo = 60·32/20·ln(140/120).
+        let exact = 60.0 * 32.0 / 20.0 * (140.0f64 / 120.0).ln();
+        assert!((seconds_between(&lane, 16.0, 48.0) - exact).abs() < 1e-5, "{}", seconds_between(&lane, 16.0, 48.0));
+        assert!((seconds_between(&lane, 48.0, 16.0) + exact).abs() < 1e-5);
+        assert!((seconds_between(&lane, 48.0, 60.0) - 12.0 * 60.0 / 140.0).abs() < 1e-9);
     }
 
     /// Counts upward zero crossings: a pitch estimate over a known duration.
@@ -3667,8 +3762,8 @@ mod tests {
         let render = |joined: [(bool, bool); 2]| {
             let (mut l, mut r) = (vec![0.0; 48_000], vec![0.0; 48_000]);
             let per_sample = 2.0 / 48_000.0;
-            render_audio_clip(&clip, &first, 0.0, 1.0, joined[0], (0, 48_000), 0.0, per_sample, 120.0, &mut l, &mut r);
-            render_audio_clip(&later, &second, 1.0, 2.0, joined[1], (0, 48_000), 0.0, per_sample, 120.0, &mut l, &mut r);
+            render_audio_clip(&clip, &first, 0.0, 1.0, joined[0], (0, 48_000), 0.0, per_sample, 120.0, None, &mut l, &mut r);
+            render_audio_clip(&later, &second, 1.0, 2.0, joined[1], (0, 48_000), 0.0, per_sample, 120.0, None, &mut l, &mut r);
             l
         };
         // Around the cut (beat 1 = frame 24000).

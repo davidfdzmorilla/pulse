@@ -1768,7 +1768,7 @@ mod tests {
         let song = crate::test_audio::demo_song();
         let t = app.add_audio_track().unwrap();
         let sample = app.sample(&song.to_string_lossy());
-        let audio = engine::model::AudioClip {
+        let audio = engine::model::AudioClip { hard_start: false,
             name: "Canción".into(),
             color: [1, 2, 3],
             sample: song.to_string_lossy().into_owned(),

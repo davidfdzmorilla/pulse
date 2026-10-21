@@ -25,6 +25,8 @@ mod export;
 mod files;
 #[cfg(test)]
 mod fidelity_tests;
+#[cfg(test)]
+mod freeze_tests;
 mod finite;
 mod groups;
 mod guide;

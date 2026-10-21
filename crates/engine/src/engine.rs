@@ -1017,6 +1017,10 @@ fn render_audio_clip(
     let hi = if joined.1 { limit + half } else { limit };
     let pitch = 2f64.powf(clip.transpose as f64 / 12.0);
     let hop = GRAIN / 2.0;
+    // Fading in is for starting in the middle of a sound. A clip whose file
+    // starts where its sound does (a frozen track) plays its first hit
+    // untouched from the file's start; the next laps of a loop fade in as always.
+    let clean_start = clip.hard_start && clip.file_seconds(first_beat) <= 0.0;
 
     for k in from..to {
         let b = beat + (k - from) as f64 * beats_per_sample;
@@ -1028,13 +1032,14 @@ fn render_audio_clip(
         if crossing {
             // Plays once: past an edge it reads on into the file.
             local = b - origin;
-            let fade_in = if joined.0 { (local + half) / (2.0 * half) } else { local / fade };
+            let fade_in = if joined.0 { (local + half) / (2.0 * half) } else if clean_start { 1.0 } else { local / fade };
             let fade_out = if joined.1 { (limit + half - b) / (2.0 * half) } else { (limit - b) / fade };
             envelope = (fade_in.clamp(0.0, 1.0) * fade_out.clamp(0.0, 1.0)) as f32;
         } else {
             local = (b - origin).rem_euclid(clip.length);
             let remaining = (clip.length - local).min(limit - b);
-            envelope = ((local / fade).min(1.0) * (remaining / fade).min(1.0)) as f32;
+            let fade_in = if clean_start && b - origin < clip.length { 1.0 } else { (local / fade).min(1.0) };
+            envelope = (fade_in * (remaining / fade).min(1.0)) as f32;
         }
         let (l, r) = match clip.warp {
             WarpMode::Off => sample.read((clip.offset + local * 60.0 / tempo) * rate),
@@ -2243,10 +2248,15 @@ impl Engine {
             // Into its group (which comes later in the order), or the master.
             match self.parents[index] {
                 Some(group) => {
+                    // A group left out by a solo isn't heard, but sidechains
+                    // listening to it still hear its tracks (as they hear a
+                    // track's own sound, whatever the solo).
+                    let unheard_group = any_solo && !soloed[group as usize];
+                    let into_bus = if !audible && unheard_group && !channel.mute && !silenced[index] { channel.gain } else { gain };
                     self.bus_left[..n].fill(0.0);
                     self.bus_right[..n].fill(0.0);
-                    let peak = channel.mix_into(n, gain, &mut self.bus_left, &mut self.bus_right);
-                    self.shared.tracks[index].peak.publish(peak);
+                    let peak = channel.mix_into(n, into_bus, &mut self.bus_left, &mut self.bus_right);
+                    self.shared.tracks[index].peak.publish(if audible { peak } else { 0.0 });
                     let into = &mut self.tracks[group as usize];
                     for i in 0..n {
                         into.audio_left[i] += self.bus_left[i];
@@ -2773,7 +2783,7 @@ mod tests {
     }
 
     fn audio_clip(warp: WarpMode) -> AudioClip {
-        AudioClip {
+        AudioClip { hard_start: false,
             envelopes: Vec::new(),
             name: "sine".into(),
             color: [0, 0, 0],

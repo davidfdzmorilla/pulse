@@ -665,7 +665,7 @@ impl PulseApp {
             }
             None => (WarpMode::Off, tempo, ((duration * tempo / 60.0) * 4.0).ceil().max(1.0) / 4.0),
         };
-        AudioClip {
+        AudioClip { hard_start: false,
             envelopes: Vec::new(),
             name,
             color,
@@ -1956,7 +1956,7 @@ impl PulseApp {
         }
         let key = path.to_string_lossy().into_owned();
         self.samples.insert(key.clone(), Arc::new(Sample::from_channels(left, right, rate)));
-        Some(AudioClip {
+        Some(AudioClip { hard_start: false,
             envelopes: Vec::new(),
             name,
             color: self.project.tracks[track].color,

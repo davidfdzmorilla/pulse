@@ -302,7 +302,7 @@ mod tests {
     fn audio_clips_show_their_envelopes_too() {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         let track = app.add_audio_track().unwrap();
-        let mut audio = engine::model::AudioClip {
+        let mut audio = engine::model::AudioClip { hard_start: false,
             name: "a".into(),
             color: [1, 2, 3],
             sample: "/no/such.wav".into(),

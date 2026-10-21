@@ -449,7 +449,7 @@ mod tests {
 
     #[test]
     fn notes_land_on_the_clips_beats() {
-        let audio = AudioClip {
+        let audio = AudioClip { hard_start: false,
             name: "Voz".into(),
             color: [0; 3],
             sample: String::new(),
@@ -478,7 +478,7 @@ mod tests {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         app.project.tempo = 120.0;
         let t = app.add_audio_track().unwrap();
-        let audio = AudioClip {
+        let audio = AudioClip { hard_start: false,
             name: "Melodía".into(),
             color: [1, 2, 3],
             sample: melody.to_string_lossy().into_owned(),
@@ -530,7 +530,7 @@ mod tests {
             }
         }
         let sample = engine::Sample::from_channels(mono.clone(), mono, rate);
-        let audio = AudioClip {
+        let audio = AudioClip { hard_start: false,
             name: "Piano".into(),
             color: [0; 3],
             sample: String::new(),
@@ -591,7 +591,7 @@ mod tests {
     fn a_melody_goes_to_the_project_key() {
         let melody = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../stems/tests/data/melody.wav");
         let sample = engine::Sample::load(&melody).expect("test audio");
-        let audio = AudioClip {
+        let audio = AudioClip { hard_start: false,
             name: "Melodía".into(),
             color: [0; 3],
             sample: String::new(),

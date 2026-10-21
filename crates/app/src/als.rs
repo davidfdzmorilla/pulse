@@ -526,7 +526,7 @@ fn audio_clip(clip: Node, track_color: [u8; 3], timeline_length: Option<f64>, ct
     let name = clip_name(clip)
         .or_else(|| sample.file_stem().map(|s| s.to_string_lossy().into_owned()))
         .unwrap_or_else(|| "Audio".into());
-    let mut audio = AudioClip {
+    let mut audio = AudioClip { hard_start: false,
         envelopes: Vec::new(),
         name,
         color: clip_color(clip, track_color),

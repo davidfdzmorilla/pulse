@@ -74,6 +74,17 @@ pub fn name_bpm(name: &str, duration: f64) -> Option<f64> {
         })
 }
 
+/// A loop's grid: its name's tempo when it has one (a loop named «Tops 150»
+/// that lasts whole bars at 150 is at 150, whatever the detector heard: a loop
+/// of tops without a kick can come out at 245), else the detector's, fitted to
+/// whole bars (see `beats::fit_loop`). None when neither knows.
+pub fn loop_grid(grid: Option<Grid>, name: &str, duration: f64, project_bpm: f64) -> Option<Grid> {
+    match name_bpm(name, duration).filter(|_| duration <= 32.0) {
+        Some(bpm) => Some(Grid { bpm, downbeat: 0.0, beats: grid.map_or(0, |g| g.beats), markers: Vec::new() }),
+        None => grid.map(|g| beats::fit_loop(g, duration, Some(project_bpm))),
+    }
+}
+
 pub fn warped(clip: &AudioClip, grid: &Grid, duration: f64) -> AudioClip {
     let mut new = AudioClip { warp: WarpMode::Stretch, original_bpm: grid.bpm, warp_markers: Vec::new(), ..clip.clone() };
     if grid.markers.len() < 2 {
@@ -140,7 +151,8 @@ impl PulseApp {
 
     fn finish_tempo(&mut self, path: &str, clips: &[ClipRef], outcome: Outcome, manual: bool) {
         let name = std::path::Path::new(path).file_stem().map_or(path.to_string(), |s| s.to_string_lossy().into_owned());
-        let grid = match outcome {
+        let duration = self.sample(path).duration();
+        let grid = match outcome.map(|grid| loop_grid(grid, &name, duration, self.project.tempo)) {
             Ok(Some(grid)) => grid,
             Ok(None) => {
                 self.status = Some(if manual {
@@ -155,8 +167,6 @@ impl PulseApp {
                 return;
             }
         };
-        let duration = self.sample(path).duration();
-        let grid = beats::fit_loop(grid, duration, Some(self.project.tempo));
         let drum_loop = is_drum_loop(&name, &self.sample(path));
         let mut count = 0;
         for &clip in clips {
@@ -204,6 +214,11 @@ impl PulseApp {
     /// A file's tempo: found before, or now (it takes a moment: about a second a
     /// minute of audio). None without a clear beat.
     pub fn file_bpm(&mut self, path: &str) -> Option<f64> {
+        // A loop named with its tempo is at that tempo (see `loop_grid`).
+        let name = std::path::Path::new(path).file_stem().map_or(String::new(), |s| s.to_string_lossy().into_owned());
+        if let Some(bpm) = name_bpm(&name, self.sample(path).duration()).filter(|_| self.sample(path).duration() <= 32.0) {
+            return Some(bpm);
+        }
         if let Some(grid) = self.tempo.grids.get(path) {
             return grid.as_ref().map(|g| g.bpm);
         }
@@ -506,6 +521,58 @@ mod tests {
         assert!(lane.iter().all(|c| matches!(&c.clip, Clip::Audio(a) if a.warp == WarpMode::Stretch)), "both analysed");
         assert_eq!(lane[0].start, 0.0);
         assert!((lane[1].start - lane[0].end()).abs() < 1e-9, "{} vs {}", lane[1].start, lane[0].end());
+    }
+
+    /// A loop's name beats a detector gone wrong: tops without a kick, found at
+    /// 245 BPM (from the 2026-10b audit), are at the 150 of their name; one the
+    /// detector found nothing in too. Without a tempo in the name, the detector's.
+    #[test]
+    fn a_loops_name_beats_an_absurd_detected_tempo() {
+        let found = |bpm: f64| Some(Grid { bpm, downbeat: 0.37, beats: 24, markers: Vec::new() });
+        let six_four = 4.0 * 4.0 * 60.0 / 150.0;
+        assert_eq!(loop_grid(found(245.64), "Tops_150", six_four, 147.0).map(|g| (g.bpm, g.downbeat)), Some((150.0, 0.0)));
+        assert_eq!(loop_grid(None, "Tops_150", six_four / 2.0, 147.0).map(|g| g.bpm), Some(150.0));
+        assert_eq!(loop_grid(found(146.9), "Tops", 4.0 * 4.0 * 60.0 / 145.0, 147.0).map(|g| g.bpm), Some(145.0), "fitted to whole bars");
+        assert_eq!(loop_grid(None, "Tops", six_four, 147.0), None);
+    }
+
+    /// The whole way: a loop of tops at 150 without a kick, imported into a
+    /// project at 147, follows it from 150.
+    #[test]
+    fn imported_tops_named_150_come_in_at_150() {
+        let dir = std::env::temp_dir().join(format!("pulse-tops-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Tops_150.wav");
+        // Four bars of sixteenths of noise, louder on the off-beat (no kick).
+        let rate = 48_000.0f32;
+        let sixteenth = 60.0 / 150.0 / 4.0;
+        let mut seed = 7u64;
+        let tops: Vec<f32> = (0..(64.0 * sixteenth * rate as f64) as usize)
+            .map(|i| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let noise = ((seed >> 33) as f32 / (1u64 << 31) as f32) - 1.0;
+                let t = i as f64 / rate as f64;
+                let step = (t / sixteenth) as usize;
+                let (level, decay) = if step % 4 == 2 { (0.9, 18.0) } else { (0.35, 70.0) };
+                noise * level * (-(t - step as f64 * sixteenth) * decay).exp() as f32
+            })
+            .collect();
+        crate::capture::write_wav(&path, &tops, &tops, rate).unwrap();
+        let mut project = Project::demo();
+        project.tempo = 147.0;
+        let mut app = PulseApp::headless(project);
+        let track = app.add_audio_track().unwrap();
+        app.add_samples(vec![path.clone()], Placement::Arrangement { track, start: 0.0 });
+        let ctx = eframe::egui::Context::default();
+        while app.tempo.busy() {
+            app.follow_tempo(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        assert_eq!(app.file_bpm(&path.to_string_lossy()), Some(150.0), "for slicing too");
+        std::fs::remove_dir_all(&dir).ok();
+        let Clip::Audio(clip) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
+        assert_eq!((clip.original_bpm, clip.length), (150.0, 16.0), "{:?}", app.status);
+        assert!(app.status.as_deref().is_some_and(|s| s.contains("150")), "{:?}", app.status);
     }
 
     /// A drum loop comes in in Beats (its hits clean when the tempo differs);

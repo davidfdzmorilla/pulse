@@ -398,7 +398,9 @@ impl PulseApp {
         let at = (source + 1).min(self.project.tracks.len());
         // Beside its source, in the same group.
         track.depth = self.project.tracks[source].depth;
+        let ids = self.track_ids();
         self.project.tracks.insert(at, track);
+        self.follow_tracks(&ids);
         self.selected_target = Target::Track(at);
         self.sync_all();
         self.select_clip(match clip {

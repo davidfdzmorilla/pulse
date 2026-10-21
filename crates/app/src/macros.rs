@@ -75,7 +75,9 @@ impl PulseApp {
         }
         self.macros_mut()[index].value = value;
         let routes = self.project.macros[index].routes.clone();
-        for route in routes {
+        // Only knobs, faders and parameters: a macro moving a macro (a file can
+        // say so) would never end.
+        for route in routes.into_iter().filter(|r| !matches!(r.control, Control::Macro(_) | Control::Transport(_))) {
             let n = route.min + (route.max - route.min) * value;
             self.set_control(route.control, n.clamp(0.0, 1.0));
         }

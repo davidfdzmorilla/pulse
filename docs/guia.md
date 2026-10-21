@@ -652,6 +652,7 @@ Pulsa **Asignar** en el transporte (o Transporte → Asignar controles MIDI). Se
 - **Suavizado**: lo que tarda el control en llegar adonde pones el knob (hasta 2 s). Quita los escalones de un knob de 0–127 y hace barridos lentos con un gesto rápido.
 - Un CC asignado ya no llega al instrumento.
 - Las asignaciones de parámetros se guardan con el proyecto; las de transporte, para todos los proyectos.
+- Una asignación sigue a su control: si mueves, duplicas, agrupas o borras pistas, o mueves efectos en la cadena, el knob sigue moviendo lo mismo. Si borras la pista o el efecto, su asignación se va con él. Una que ya no apunta a nada (de un proyecto antiguo) sale como «(ya no existe)» y no hace nada; quítala con **×**.
 
 ### Macros
 
@@ -661,6 +662,7 @@ Pulsa **Asignar** en el transporte (o Transporte → Asignar controles MIDI). Se
 - En la lista, **Desde** y **Hasta** dicen dónde pone cada control la macro al mínimo y al máximo (en % de su recorrido). Con Desde mayor que Hasta va al revés: la macro abre un filtro mientras cierra otro. **×** quita uno. **Nombre**: el que verás en el knob.
 - Una macro se puede asignar a un knob MIDI como cualquier control (Asignar, toca la macro y mueve el knob).
 - Al grabar automatización, lo que se graba es el movimiento de cada control que mueve la macro.
+- Como las asignaciones MIDI, lo que mueve una macro la sigue al mover pistas o efectos, y se va si los borras.
 - Las macros se guardan con el proyecto.
 
 ## Teclado del ordenador

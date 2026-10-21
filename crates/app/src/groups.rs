@@ -105,7 +105,9 @@ impl PulseApp {
         let count = self.project.groups_count() + 1;
         let mut group = Track::new_group(format!("Grupo {count}"), color);
         group.depth = depth;
+        let ids = self.track_ids();
         self.project.tracks.insert(first, group);
+        self.follow_tracks(&ids);
         crate::groups::normalize(&mut self.project.tracks);
         self.selected_clip = None;
         self.selected_tracks = vec![first];
@@ -116,15 +118,18 @@ impl PulseApp {
 
     /// Takes a group's tracks out of it, and the group away.
     pub fn ungroup(&mut self, g: usize) {
-        let tracks = &mut self.project.tracks;
-        if !tracks.get(g).is_some_and(|t| t.is_group()) {
+        if !self.project.tracks.get(g).is_some_and(|t| t.is_group()) {
             return;
         }
+        let ids = self.track_ids();
+        let tracks = &mut self.project.tracks;
         let inside = children(tracks, g);
         for t in inside.clone() {
             tracks[t].depth = tracks[t].depth.saturating_sub(1);
         }
         tracks.remove(g);
+        self.follow_tracks(&ids);
+        let tracks = &mut self.project.tracks;
         normalize(tracks);
         self.selected_clip = None;
         self.selected_tracks = (inside.start - 1..inside.end - 1).collect();

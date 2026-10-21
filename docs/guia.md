@@ -304,7 +304,7 @@ La última fila del Arrangement es el **Master**. Su **A** muestra su automatiza
 
 ### Grabar automatización
 
-Con **A** (Armar automatización) encendido en el transporte, al grabar en el Arrangement se graba cualquier control que muevas: con el ratón, con un knob MIDI asignado o en la ventana de un plugin. Lo grabado sustituye a los puntos que había en ese tramo. Al grabar un clip en Session, los controles de esa pista se graban como envolventes del clip.
+Con **A** (Armar automatización) encendido en el transporte, al grabar en el Arrangement se graba cualquier control que muevas: con el ratón, con un knob MIDI asignado o en la ventana de un plugin. Lo grabado sustituye a los puntos que había en ese tramo; con el loop activado, cada pasada sustituye a la anterior donde mueves el control y deja lo de antes donde no lo tocas. Al grabar un clip en Session, los controles de esa pista se graban como envolventes del clip.
 
 ### Envolventes de clip
 
@@ -316,7 +316,7 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 
 ### Barra
 
-- Nombre del clip, **Loop** (1, 2, 4, 8 o 16 compases), **Rejilla** (1/4 a 1/32, con tresillos), **Nota** (longitud de las notas nuevas).
+- Nombre del clip, **Loop** (1, 2, 4, 8 o 16 compases, o cualquier número de semicorcheas en el campo **/16**: un clip de 3/16, 5/16 o 7/16 sobre el 4/4 se desplaza en cada compás, para polirritmos), **Rejilla** (1/4 a 1/32, con tresillos), **Nota** (longitud de las notas nuevas).
 - **Dibujar** (B): modo lápiz.
 - **Groove**: el del proyecto (el swing del transporte) o **uno propio para este clip**, con **Swing** y su rejilla, **Acentos** (contratiempos más suaves) y **Humanizar** (pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta). Tiene grooves listos: Recto, Swing 1/16, MPC 1/16, Shuffle 1/8 y Humano. Se aplica al tocar: las notas no se mueven.
 - **Cuantizar** (⌘U) con su **intensidad** (%) y **finales** (cuantizar también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
@@ -385,7 +385,7 @@ Los audios que añades (arrastrándolos, desde el navegador o con Importar) se p
 - El clip se **transpone por el camino más corto** (como mucho 6 semitonos) a la escala del proyecto. Si uno es mayor y el otro menor, va a la relativa: un loop en mi menor en una canción en sol mayor no se mueve.
 - Si el proyecto aún **no tiene escala**, toma la del primer loop con tonalidad, y los siguientes se ajustan a ella.
 - Si **cambias la escala** del proyecto, todos los loops que la siguen se mueven con ella.
-- Las **baterías** (por su nombre: kick, snare, hat, perc, drum…) y los audios sin tonalidad clara no se tocan.
+- Las **baterías** (por su nombre: kick, snare, hat, perc, drum, tops, groove, shuffle, rumble, fill, conga…) y los audios sin notas que destaquen no se tocan, aunque su nombre diga una tonalidad: un loop de hats «Tops_150_Dm» se queda como está.
 
 En el **Editor de audio** de cada clip, **Tonalidad** muestra la del archivo; **Seguir la escala** lo ajusta o lo deja en la suya; **Detectar** la busca de nuevo. Mover **Transp.** a mano hace que deje de seguir la escala. Para no ajustar los loops nuevos, desmarca **Ajustar los loops nuevos a la escala** en el menú **Escala** del transporte.
 
@@ -447,7 +447,7 @@ Para audios cuyo tempo varía. En la franja bajo la forma de onda (con Warp dist
 
 ## Tempo de los audios
 
-Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadamente un segundo de análisis por minuto de audio). Si encuentra un ritmo claro, el clip pasa a **Stretch** a ese tempo, empieza en el compás del primer tiempo fuerte y dura compases enteros. Si el tempo varía, pone un marcador de warp en cada compás. Así el audio va al ritmo del metrónomo.
+Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadamente un segundo de análisis por minuto de audio). Si encuentra un ritmo claro, el clip pasa a **Stretch** a ese tempo, empieza en el compás del primer tiempo fuerte y dura compases enteros. Si el tempo varía, pone un marcador de warp en cada compás. Así el audio va al ritmo del metrónomo. Un loop corto (hasta 32 s) dura compases enteros: si el tempo encontrado se queda cerca del que lo hace de 1, 2, 3, 4, 6, 8, 12 o 16 compases justos, se usa ese (un loop de 4 compases a 150 queda a 150, no a 151); si el detector se equivoca más, pero el loop dura compases justos al tempo del proyecto, ese.
 
 - **Detectar tempo** (clic derecho en un clip de audio, o «Detectar» en el editor): vuelve a analizarlo.
 - **Usar el tempo de este clip en el proyecto**: pone el proyecto al tempo del clip.
@@ -683,7 +683,7 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
 
 ### Arrastrar desde Finder
 
-- Un audio suelto en un slot o una pista de audio va ahí; en un pad o el Sampler, se carga; en un hueco vacío, crea una pista de audio. Varios archivos van seguidos.
+- Un audio suelto en un slot o una pista de audio va ahí; en un pad o el Sampler, se carga; en un hueco vacío, crea una pista de audio. Varios archivos van seguidos; en Session, si no caben en los 8 slots, siguen en una pista nueva. Una **carpeta** trae los audios que tiene (también en sus carpetas), por nombre. La barra de estado dice cuántos se añadieron y cuáles no se pudieron leer.
 - Un `.pulse` se abre y un `.als` se importa (pregunta antes si hay cambios sin guardar).
 - También funciona abrir con doble clic en Finder o soltar en el icono del Dock.
 

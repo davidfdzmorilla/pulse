@@ -120,6 +120,7 @@ impl PulseApp {
             }
         };
         let duration = self.sample(path).duration();
+        let grid = beats::fit_loop(grid, duration, Some(self.project.tempo));
         let mut count = 0;
         for &clip in clips {
             // Only clips still on that file (the user may have changed them meanwhile).

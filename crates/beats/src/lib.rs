@@ -61,6 +61,45 @@ pub fn detect(left: &[f32], right: &[f32], sample_rate: f32) -> Result<(Vec<f64>
 }
 
 /// The grid of a piece: [`detect`] then [`fit`].
+/// A loop is whole bars long: for a short file, the tempo that makes its length
+/// a whole number of bars (1, 2, 3, 4, 6, 8, 12 or 16) is its tempo when it is
+/// close to the one found (within 3 %; also at half or double, which detectors
+/// often give). If none is, but the file is whole bars at `project_bpm` (within
+/// 0.3 %, as a loop made for the song is: a song with its tail can come close
+/// by chance), that one. The loop then starts on its
+/// first sample. Longer files (songs, takes) keep what was found.
+pub fn fit_loop(grid: Grid, duration: f64, project_bpm: Option<f64>) -> Grid {
+    const LONGEST: f64 = 32.0;
+    const BARS: [f64; 8] = [1.0, 2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0];
+    if duration <= 0.0 || duration > LONGEST {
+        return grid;
+    }
+    let whole = |bars: f64| bars * BEATS_PER_BAR * 60.0 / duration;
+    let near = |bpm: f64, target: f64, within: f64| ((bpm / target) - 1.0).abs() <= within;
+    let fits: Vec<f64> = [grid.bpm, grid.bpm * 2.0, grid.bpm / 2.0]
+        .into_iter()
+        .flat_map(|target| BARS.iter().map(|&b| whole(b)).filter(move |&bpm| (60.0..=200.0).contains(&bpm) && near(bpm, target, 0.03)))
+        .collect();
+    // Half or double time fit as well: the one nearest the song's tempo, else
+    // the one where dance music lives.
+    let distance = |bpm: f64| match project_bpm {
+        Some(project) => (bpm / project).ln().abs(),
+        None if (90.0..=180.0).contains(&bpm) => 0.0,
+        None => 1.0,
+    };
+    let found = fits.into_iter().min_by(|a, b| distance(*a).total_cmp(&distance(*b)));
+    let bpm = found.or_else(|| {
+        let project = project_bpm?;
+        BARS.iter().map(|&b| whole(b)).find(|&bpm| near(bpm, project, 0.003))
+    });
+    let Some(mut bpm) = bpm else { return grid };
+    // Made at a whole tempo, most likely.
+    if (bpm - bpm.round()).abs() < 0.05 {
+        bpm = bpm.round();
+    }
+    Grid { bpm, downbeat: 0.0, markers: Vec::new(), ..grid }
+}
+
 pub fn analyze(left: &[f32], right: &[f32], sample_rate: f32) -> Result<Option<Grid>, String> {
     let (beats, downbeats) = detect(left, right, sample_rate)?;
     Ok(fit(&beats, &downbeats))
@@ -309,5 +348,27 @@ mod tests {
         println!("first beats {:?}", &b[..b.len().min(6)]);
         println!("first downbeats {:?}", &d[..d.len().min(4)]);
     }
-}
 
+    /// What the detector gave for synthetic loops at 150 (2, 4 and 8 bars, and
+    /// tops without a kick), and what they are.
+    #[test]
+    fn short_loops_are_whole_bars_long() {
+        let grid = |bpm: f64, downbeat: f64| Grid { bpm, downbeat, beats: 16, markers: Vec::new() };
+        let bars = |bars: f64, bpm: f64| bars * 4.0 * 60.0 / bpm;
+        for (found, length) in [(152.17, 2.0), (151.12, 4.0), (150.32, 8.0), (75.4, 4.0), (299.0, 4.0)] {
+            let fitted = fit_loop(grid(found, 0.02), bars(length, 150.0), None);
+            assert_eq!(fitted.bpm, 150.0, "{found} over {length} bars");
+            assert_eq!((fitted.downbeat, fitted.start()), (0.0, 0.0));
+        }
+        // Too far from any whole number of bars: only the project's tempo says.
+        let tops = grid(179.3, 0.1);
+        assert_eq!(fit_loop(tops.clone(), bars(4.0, 150.0), None).bpm, 179.3);
+        assert_eq!(fit_loop(tops.clone(), bars(4.0, 150.0), Some(150.0)).bpm, 150.0);
+        assert_eq!(fit_loop(tops, bars(4.0, 150.0), Some(128.0)).bpm, 179.3, "not whole bars at 128");
+        // Not at a whole tempo: kept as it is.
+        assert!((fit_loop(grid(127.9, 0.0), bars(4.0, 127.85), None).bpm - 127.85).abs() < 1e-9);
+        // A song: what was found.
+        let song = Grid { markers: vec![(0.0, 0.0), (4.0, 1.6)], ..grid(150.3, 0.5) };
+        assert_eq!(fit_loop(song.clone(), 240.0, Some(150.0)), song);
+    }
+}

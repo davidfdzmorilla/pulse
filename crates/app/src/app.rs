@@ -133,6 +133,34 @@ impl ClipRef {
 /// File extensions offered when choosing samples.
 pub const AUDIO_EXTENSIONS: [&str; 9] = ["wav", "aif", "aiff", "flac", "mp3", "ogg", "m4a", "caf", "wave"];
 
+/// The audio files in `paths`, a folder giving those in it (and in its
+/// folders), by name; other files are left in `others`.
+pub fn audio_in(paths: Vec<PathBuf>, others: &mut Vec<PathBuf>) -> Vec<PathBuf> {
+    fn walk(dir: &Path, found: &mut Vec<PathBuf>, depth: usize) {
+        let Ok(entries) = std::fs::read_dir(dir) else { return };
+        let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).filter(|p| !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect();
+        entries.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+        for path in entries {
+            if path.is_dir() && depth < 8 {
+                walk(&path, found, depth + 1);
+            } else if is_audio_file(&path) {
+                found.push(path);
+            }
+        }
+    }
+    let mut audio = Vec::new();
+    for path in paths {
+        if path.is_dir() {
+            walk(&path, &mut audio, 0);
+        } else if is_audio_file(&path) {
+            audio.push(path);
+        } else {
+            others.push(path);
+        }
+    }
+    audio
+}
+
 pub fn is_audio_file(path: &Path) -> bool {
     path.extension()
         .and_then(|e| e.to_str())
@@ -679,18 +707,24 @@ impl PulseApp {
             explicit => explicit,
         };
 
-        let mut added = 0;
+        let (mut added, mut unreadable, mut new_tracks) = (0, 0, 0);
         let mut created = Vec::new();
         for path in paths {
             let sample = self.sample(&path.to_string_lossy());
             if sample.frames() == 0 {
+                unreadable += 1;
                 continue;
+            }
+            // The track is full: the rest go on in a new one.
+            if let Placement::Session { slot, .. } = placement {
+                if slot >= NUM_SCENES {
+                    let Some(track) = self.add_audio_track() else { break };
+                    new_tracks += 1;
+                    placement = Placement::Session { track, slot: 0 };
+                }
             }
             match placement {
                 Placement::Session { track, slot } => {
-                    if slot >= NUM_SCENES {
-                        break;
-                    }
                     let clip = self.new_audio_clip(&path, &sample, self.project.tracks[track].color);
                     self.set_clip(track, slot, Some(Clip::Audio(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
@@ -713,13 +747,20 @@ impl PulseApp {
             }
             added += 1;
         }
-        if added > 0 {
-            self.status = Some(format!("{added} muestra(s) añadida(s)"));
-        }
         // Each file's key, so its clips follow the project's, and its tempo.
         self.find_clip_keys(&created);
         for clip in created {
             self.detect_tempo(vec![clip], false);
+        }
+        if added + unreadable > 0 {
+            let mut status = format!("{added} muestra(s) añadida(s)");
+            if new_tracks > 0 {
+                status += &format!(" · {new_tracks} pista(s) nueva(s) para las que no cabían");
+            }
+            if unreadable > 0 {
+                status += &format!(" · {unreadable} archivo(s) no se pudieron leer");
+            }
+            self.status = Some(status + " · analizando su tempo…");
         }
     }
 
@@ -2385,7 +2426,9 @@ impl PulseApp {
     /// Opens `.pulse` projects and imports `.als` sets dropped onto the window.
     pub(crate) fn handle_dropped_files(&mut self, ctx: &egui::Context) {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
-        let (audio, other): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| is_audio_file(p));
+        // A folder brings the audio files in it.
+        let mut other = Vec::new();
+        let audio = audio_in(dropped, &mut other);
         if !audio.is_empty() {
             // Where the mouse is (macOS knows; the drop doesn't say): the slot, lane
             // or pad under it, as when dragging from the browser.
@@ -2730,7 +2773,8 @@ impl eframe::App for PulseApp {
         self.handle_shortcuts(&ctx);
         self.handle_dropped_files(&ctx);
         // Sent by Finder or the Dock: projects open, audio files land as samples.
-        let (audio, opened): (Vec<PathBuf>, Vec<PathBuf>) = crate::open_files::take().into_iter().partition(|p| is_audio_file(p));
+        let mut opened = Vec::new();
+        let audio = audio_in(crate::open_files::take(), &mut opened);
         if !audio.is_empty() {
             self.add_samples(audio, Placement::Auto);
         }
@@ -2846,5 +2890,38 @@ mod window_tests {
         app.open_panel(Panel::Shortcuts);
         assert!(app.show_shortcuts && !app.show_settings && !app.updates.show && !app.export.open);
         assert_eq!(app.wave_window, Some(1), "an editor and a window can be open together");
+    }
+
+    /// A dropped folder brings its audio (in its folders too, by name); in the
+    /// session, files past a track's eight slots go on in a new track (they
+    /// were dropped), and those that can't be read are said.
+    #[test]
+    fn dropped_folders_and_many_files_all_land() {
+        let dir = std::env::temp_dir().join(format!("pulse-drop-folder-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("Más")).unwrap();
+        let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
+        for i in 0..10 {
+            crate::capture::write_wav(&dir.join(format!("Loop {i:02}.wav")), &tone, &tone, 48_000.0).unwrap();
+        }
+        crate::capture::write_wav(&dir.join("Más/Último.wav"), &tone, &tone, 48_000.0).unwrap();
+        std::fs::write(dir.join("Notas.txt"), "x").unwrap();
+        std::fs::write(dir.join("Roto.wav"), "no es audio").unwrap();
+        let mut others = Vec::new();
+        let audio = audio_in(vec![dir.clone()], &mut others);
+        assert_eq!(audio.len(), 12, "{audio:?}");
+        assert!(audio[0].ends_with("Loop 00.wav") && audio[10].ends_with("Más/Último.wav") && audio[11].ends_with("Roto.wav"), "by name, folders in place");
+        assert!(others.is_empty(), "a text file inside a folder isn't a document to open");
+
+        let mut app = PulseApp::headless(Project::demo());
+        app.view = View::Session;
+        let tracks = app.project.tracks.len();
+        app.add_samples(audio, Placement::Auto);
+        let clips = |t: usize| app.project.tracks[t].clips.iter().flatten().count();
+        assert_eq!(app.project.tracks.len(), tracks + 2, "one new track, and one for what didn't fit");
+        assert_eq!((clips(tracks), clips(tracks + 1)), (8, 3));
+        let status = app.status.clone().unwrap();
+        assert!(status.starts_with("11 muestra(s)") && status.contains("1 pista(s) nueva(s)") && status.contains("1 archivo(s) no se pudieron leer"), "{status}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

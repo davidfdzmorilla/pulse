@@ -637,6 +637,16 @@ fn to_scale(notes: &mut [Note], targets: &[usize], scale: Scale) -> usize {
 }
 
 /// The editor's bar; the pitches of any chord written, to preview.
+/// A loop's length as said: «4 comp.» in whole bars, «3/16» otherwise.
+fn length_label(length: f64) -> String {
+    let bars = length / 4.0;
+    if (bars - bars.round()).abs() < 1e-9 && bars >= 1.0 {
+        format!("{bars} comp.")
+    } else {
+        format!("{}/16", (length * 4.0).round() as u32)
+    }
+}
+
 fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool, vary: &mut Option<bool>) -> Vec<u8> {
     let mut previews = Vec::new();
     ui.horizontal_wrapped(|ui| {
@@ -650,13 +660,22 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(110.0));
         label(ui, "Loop");
         let bars = clip.length / 4.0;
-        egui::ComboBox::from_id_salt("clip_length").selected_text(format!("{bars} comp.")).width(70.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt("clip_length").selected_text(length_label(clip.length)).width(70.0).show_ui(ui, |ui| {
             for option in [1.0, 2.0, 4.0, 8.0, 16.0] {
                 if ui.selectable_label(bars == option, format!("{option} comp.")).clicked() {
                     clip.length = option * 4.0;
                 }
             }
         });
+        // Any length in sixteenths: a 3/16 loop over the 4/4 shifts every bar.
+        let mut sixteenths = (clip.length * 4.0).round().max(1.0) as u32;
+        let changed = ui
+            .add(egui::DragValue::new(&mut sixteenths).range(1..=256).speed(0.2).suffix("/16"))
+            .on_hover_text("Longitud del loop en semicorcheas: 3/16, 5/16 o 7/16 sobre un compás de 4/4 hacen polirritmos")
+            .changed();
+        if changed {
+            clip.length = sixteenths as f64 / 4.0;
+        }
         label(ui, "Rejilla");
         combo(ui, "grid", &mut state.grid, &GRIDS);
         label(ui, "Nota");
@@ -1056,6 +1075,39 @@ mod tests {
         let shown = names(&mut app);
         for chord in ["Lam · vi", "Fa · IV", "Do/Sol · I", "Sol · V"] {
             assert!(shown.contains(&chord.to_string()), "{chord}: {shown:?}");
+        }
+    }
+
+    /// Loops of any number of sixteenths, for polyrhythms: a 3/16 clip plays
+    /// every three sixteenths, across the bar lines.
+    #[test]
+    fn a_loop_can_be_any_number_of_sixteenths() {
+        assert_eq!((length_label(4.0), length_label(16.0), length_label(0.75), length_label(5.0)), ("1 comp.".into(), "4 comp.".into(), "3/16".into(), "20/16".into()));
+        let mut project = crate::project::Project::empty();
+        let mut track = crate::project::Track::new("Perc", [0; 3], engine::model::InstrumentKind::DrumMachine(Default::default()));
+        let mut clip = engine::model::MidiClip::new("3/16", 0.75, [0; 3]);
+        clip.notes.push(engine::model::Note { start: 0.0, length: 0.1, pitch: engine::model::drum_note::RIM, velocity: 1.0 });
+        track.clips[0] = Some(engine::model::Clip::Midi(clip));
+        project.tracks = vec![track];
+        project.quantize = 0.0;
+        let mut renderer = engine::OfflineRenderer::new(48_000.0);
+        for command in crate::sync::project_commands(&project, &mut crate::sync::SampleCache::default(), 48_000.0, &Default::default()) {
+            renderer.send(command);
+        }
+        renderer.send(engine::Command::LaunchClip { track: 0, slot: 0 });
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        // Two bars at 120: 4 s.
+        renderer.render(4 * 48_000, &mut left, &mut right);
+        // A hit every three sixteenths (0.75 beats): loud right there, quiet
+        // right before.
+        let window = |beat: f64, beats: f64| {
+            let from = (beat / 2.0 * 48_000.0) as usize;
+            left[from..from + (beats / 2.0 * 48_000.0) as usize].iter().fold(0f32, |m, s| m.max(s.abs()))
+        };
+        for k in 0..10 {
+            let beat = k as f64 * 0.75;
+            assert!(window(beat, 0.05) > 0.2, "a hit at beat {beat}");
+            assert!(window(beat + 0.5, 0.2) < window(beat, 0.05) * 0.5, "and quieter before the next");
         }
     }
 }

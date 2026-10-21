@@ -32,6 +32,7 @@ pub(crate) enum Action {
     StartMarquee(egui::Pos2, egui::Modifiers),
     SelectTarget(Target),
     Consolidate(usize, usize),
+    ToggleClipMuted(usize, usize),
     ToMidi(usize, usize, crate::to_midi::ToMidi),
     Accompany(usize, usize, crate::accompany::Part),
     Freeze(usize),
@@ -384,7 +385,8 @@ fn clip_slot(
 
     match clip {
         Some(clip) => {
-            let color = theme::rgb(clip.color());
+            // Switched off: grey.
+            let color = if clip.muted() { Color32::from_gray(90) } else { theme::rgb(clip.color()) };
             painter.rect_filled(rect, 2.0, if response.hovered() { color } else { theme::shade(color, 0.88) });
             let icon = if is_playing || (is_queued && blink) {
                 PLAY
@@ -507,6 +509,10 @@ fn clip_slot(
                         }
                     }
                 });
+            }
+            if ui.button(if clip.muted() { "Activar clip   0" } else { "Desactivar clip   0" }).on_hover_text("Desactivado, el clip se queda donde está pero no suena").clicked() {
+                actions.push(Action::ToggleClipMuted(t, slot));
+                ui.close();
             }
             if matches!(clip, Clip::Audio(_)) && ui.button("Consolidar").on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
                 actions.push(Action::Consolidate(t, slot));
@@ -718,6 +724,13 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::Unfreeze(t) => app.unfreeze(t),
         Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),
+        Action::ToggleClipMuted(t, slot) => {
+            let clip = ClipRef::Session { track: t, slot };
+            if !app.is_clip_selected(clip) {
+                app.set_clip_selection(vec![clip]);
+            }
+            app.toggle_clips_muted();
+        }
         Action::ToMidi(t, slot, mode) => app.convert_to_midi(ClipRef::Session { track: t, slot }, mode),
         Action::Accompany(t, slot, part) => app.accompany(ClipRef::Session { track: t, slot }, part),
         Action::SelectSlot(t, slot) => {

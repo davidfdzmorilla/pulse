@@ -474,7 +474,8 @@ fn paint_clip(
     ppb: f32,
     tempo: f64,
 ) {
-    let color = theme::rgb(placed.clip.color());
+    // Switched off: grey.
+    let color = if placed.clip.muted() { Color32::from_gray(90) } else { theme::rgb(placed.clip.color()) };
     painter.rect_filled(rect, 2.0, theme::shade(color, 0.45));
     let title = Rect::from_min_size(rect.min, vec2(rect.width(), 14.0));
     painter.rect_filled(title, 2.0, color);
@@ -1117,6 +1118,11 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             app.use_clip_tempo(clip);
             ui.close();
         }
+    }
+    let muted = app.clip(clip).is_some_and(|c| c.muted());
+    if ui.button(label(if muted { "Activar" } else { "Desactivar" }) + "   0").on_hover_text("Desactivado, el clip se queda donde está pero no suena").clicked() {
+        app.toggle_clips_muted();
+        ui.close();
     }
     let all_audio = app.clip_selection().iter().all(|&c| matches!(app.clip(c), Some(Clip::Audio(_))));
     if audio && all_audio && ui.button(label("Consolidar")).on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
@@ -1775,7 +1781,7 @@ mod tests {
             key: None,
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         app.project.tracks[t].arrangement.push(ArrangementClip { start: 8.0, length: audio.length, clip: Clip::Audio(audio) });
         app.sync_arrangement(t);

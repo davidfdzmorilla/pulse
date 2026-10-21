@@ -296,7 +296,7 @@ impl PulseApp {
             key: None,
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes,
+            envelopes, muted: false,
         };
         let mut frozen = Frozen { arrangement: Vec::new(), clips: vec![None; NUM_SCENES], content: job.content };
         if let Some(audio) = &rendered.arrangement {

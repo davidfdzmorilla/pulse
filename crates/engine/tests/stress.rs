@@ -137,7 +137,7 @@ fn audio_clip(warp: WarpMode, length: f64) -> AudioClip {
         takes: Vec::new(),
         key: None,
         gain_db: -6.0,
-        transpose: 0.0,
+        transpose: 0.0, muted: false,
     }
 }
 

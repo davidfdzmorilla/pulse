@@ -72,7 +72,7 @@ fn audio_clip(path: &Path, length: f64, warp: WarpMode) -> AudioClip {
         key: None,
         gain_db: -3.0,
         transpose: 2.0,
-        envelopes: Vec::new(),
+        envelopes: Vec::new(), muted: false,
     }
 }
 

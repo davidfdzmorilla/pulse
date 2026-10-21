@@ -120,6 +120,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 - Solo audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar**.
 - **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
 - **Dividir aquí** (⌘E corta en el cursor), **Unir N clips** (⌘J).
+- **Desactivar clip** (tecla **0**): el clip se queda donde está, en gris, pero no suena (ni sus notas, ni su audio, ni su automatización); tampoco al exportar. Otra vez lo activa. Con varios seleccionados, los desactiva todos (o los activa, si ya lo estaban todos). También en el menú de los clips de Session.
 - **Copiar**, **Cortar**, **Duplicar** (⌘D), **Eliminar** (⌫).
 - Con un solo clip: **Nombre** y **Color**.
 
@@ -838,6 +839,7 @@ Pulse → **Acerca de Pulse** muestra la versión y la licencia. Pulse es softwa
 | ⌘X / ⌘C / ⌘V | Cortar / Copiar / Pegar los clips seleccionados (o las notas seleccionadas en el editor) |
 | ⌘D | Duplicar |
 | ⌘E / ⌘J | Dividir el clip en el cursor / unir clips (Arrangement) |
+| 0 | Desactivar o activar los clips seleccionados |
 | ⌫ | Eliminar |
 | ⌘A | Seleccionar todas las notas |
 | ⌘T / ⇧⌘T | Nueva pista MIDI / de audio |

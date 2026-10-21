@@ -373,7 +373,7 @@ mod tests {
             key: None,
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.0, curve: 0.0 }, AutomationPoint { beat: 8.0, value: 1.0, curve: 0.0 }] }],
+            envelopes: vec![AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.0, curve: 0.0 }, AutomationPoint { beat: 8.0, value: 1.0, curve: 0.0 }] }], muted: false,
         };
         let placed = ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(audio.clone()) };
         let (_, right) = split(&placed, 4.0, 100.0).unwrap();
@@ -448,7 +448,7 @@ mod tests {
                 takes: Vec::new(),
                 gain_db: 0.0,
                 transpose: 0.0,
-                envelopes: Vec::new(),
+                envelopes: Vec::new(), muted: false,
             };
             app.project.tracks[track].arrangement.push(ArrangementClip { start: 4.0, length: 32.0, clip: Clip::Audio(audio) });
             if let Some(beat) = split_at {
@@ -490,7 +490,7 @@ mod tests {
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         let placed = ArrangementClip { start: 4.0, length: 40.0, clip: Clip::Audio(audio) };
         let (left, right) = split(&placed, 10.0, 120.0).unwrap();

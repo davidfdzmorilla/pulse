@@ -186,6 +186,40 @@ impl PulseApp {
         self.set_clip_selection(pasted);
     }
 
+    /// Switches the selected clips off (silent where they are), or on again if
+    /// they all were off (key 0).
+    pub fn toggle_clips_muted(&mut self) {
+        let clips = self.clip_selection();
+        if clips.is_empty() {
+            return;
+        }
+        let mute = clips.iter().any(|&c| self.clip(c).is_some_and(|clip| !clip.muted()));
+        let mut lanes = Vec::new();
+        for &clip in &clips {
+            match clip {
+                ClipRef::Session { track, slot } => {
+                    if let Some(c) = self.project.tracks[track].clips[slot].as_mut() {
+                        c.set_muted(mute);
+                    }
+                    self.sync_clip(track, slot);
+                }
+                ClipRef::Arrangement { track, index } => {
+                    if let Some(placed) = self.project.tracks[track].arrangement.get_mut(index) {
+                        placed.clip.set_muted(mute);
+                    }
+                    if !lanes.contains(&track) {
+                        lanes.push(track);
+                    }
+                }
+            }
+        }
+        for track in lanes {
+            self.sync_arrangement(track);
+        }
+        let what = if clips.len() == 1 { "Clip".to_string() } else { format!("{} clips", clips.len()) };
+        self.status = Some(if mute { format!("{what} desactivado{}: no suena{} (0 lo vuelve a activar)", if clips.len() == 1 { "" } else { "s" }, if clips.len() == 1 { "" } else { "n" }) } else { format!("{what} activado{}", if clips.len() == 1 { "" } else { "s" }) });
+    }
+
     /// The selected clips. The selected one is always among them.
     pub fn clip_selection(&self) -> Vec<ClipRef> {
         let Some(primary) = self.selected_clip.filter(|&c| self.clip(c).is_some()) else { return Vec::new() };
@@ -710,5 +744,51 @@ mod tests {
         app.paste_clips();
         assert_eq!(session_clips(&app), before);
         assert!(app.status.as_deref().unwrap_or("").contains("no caben"));
+    }
+}
+
+#[cfg(test)]
+mod mute_tests {
+    use crate::app::{ClipRef, PulseApp};
+    use crate::project::Project;
+
+    /// The drums' clips switched off: the drums are silent in the export, the
+    /// clips still there; on again, they play. Several at once, and back.
+    #[test]
+    fn switched_off_clips_stay_silent_in_the_export() {
+        let mut app = PulseApp::headless(Project::demo());
+        let drums: Vec<ClipRef> = (0..app.project.tracks[0].arrangement.len()).map(|index| ClipRef::Arrangement { track: 0, index }).collect();
+        assert!(!drums.is_empty());
+        let drums_level = |app: &PulseApp| {
+            let settings = crate::export::Settings { stems: true, range: crate::export::Range::Song, ..Default::default() };
+            let mut renders = crate::export::plan(&app.project, &mut crate::sync::SampleCache::default(), &settings, std::path::Path::new("/tmp/x.wav"));
+            let render = renders.remove(0);
+            assert_eq!(render.track, Some(0));
+            let (l, r) = crate::export::render(render.commands, render.range, render.song, 48_000.0, &std::sync::atomic::AtomicBool::new(false), &|_| {}).unwrap();
+            crate::export::peak(&l, &r)
+        };
+        assert!(drums_level(&app) > 0.05);
+        app.set_clip_selection(drums.clone());
+        app.toggle_clips_muted();
+        assert!(drums.iter().all(|&c| app.clip(c).unwrap().muted()));
+        assert_eq!(app.project.tracks[0].arrangement.len(), drums.len(), "still there");
+        assert!(drums_level(&app) < 1e-4, "silent");
+        // Saved with the project.
+        let back: Project = serde_json::from_str(&serde_json::to_string(&app.project).unwrap()).unwrap();
+        assert!(back.tracks[0].arrangement.iter().all(|a| a.clip.muted()));
+        // One of them on, and then all: they all come on.
+        app.set_clip_selection(vec![drums[0]]);
+        app.toggle_clips_muted();
+        assert!(!app.clip(drums[0]).unwrap().muted());
+        app.set_clip_selection(drums.clone());
+        app.toggle_clips_muted();
+        assert!(drums.iter().all(|&c| app.clip(c).unwrap().muted()), "some on: all go off");
+        app.toggle_clips_muted();
+        assert!(drums.iter().all(|&c| !app.clip(c).unwrap().muted()));
+        assert!(drums_level(&app) > 0.05);
+        // A session clip too.
+        app.set_clip_selection(vec![ClipRef::Session { track: 1, slot: 0 }]);
+        app.toggle_clips_muted();
+        assert!(app.project.tracks[1].clips[0].as_ref().unwrap().muted());
     }
 }

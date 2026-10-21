@@ -267,7 +267,7 @@ mod tests {
             key: None,
             gain_db: -2.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         // 124 BPM, the first downbeat 0.3 s in, 60 s long.
         let grid = Grid { bpm: 124.0, downbeat: 0.3, beats: 120, markers: Vec::new() };
@@ -296,7 +296,7 @@ mod tests {
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         // Bars of 2 s then 2.4 s, the first downbeat 1.1 s in; 10 s long.
         let markers = vec![(0.0, 1.1), (4.0, 3.1), (8.0, 5.5)];

@@ -428,7 +428,7 @@ mod tests {
     /// in two as whole, but for the few milliseconds of the cut's fades.
     #[test]
     fn a_split_clip_sounds_the_same() {
-        let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let song = crate::test_audio::demo_song();
         let render = |split_at: Option<f64>| {
             let mut app = PulseApp::headless(crate::project::Project::empty());
             for track in &mut app.project.tracks {

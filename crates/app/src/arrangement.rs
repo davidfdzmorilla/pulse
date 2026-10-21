@@ -1765,7 +1765,7 @@ mod tests {
     #[ignore = "needs PULSE_STEMS_MODEL"]
     fn separating_from_the_arrangement_menu() {
         let mut app = app();
-        let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let song = crate::test_audio::demo_song();
         let t = app.add_audio_track().unwrap();
         let sample = app.sample(&song.to_string_lossy());
         let audio = engine::model::AudioClip {

@@ -382,11 +382,11 @@ mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
-    /// The whole thing with the real model (PULSE_STEMS_MODEL) on demo.wav.
+    /// The whole thing with the real model (PULSE_STEMS_MODEL) on the demo song.
     #[test]
     #[ignore = "needs PULSE_STEMS_MODEL"]
     fn a_clip_is_separated_into_four_tracks() {
-        let song = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let song = crate::test_audio::demo_song();
         let mut app = PulseApp::headless(Project::demo());
         app.project.tracks.truncate(2);
         let t = app.add_audio_track().unwrap();

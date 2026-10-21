@@ -610,7 +610,7 @@ mod tests {
 
     #[test]
     fn a_dragged_file_lands_where_it_is_let_go() {
-        let song = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let song = crate::test_audio::demo_song();
         let mut app = PulseApp::headless(Project::demo());
         let audio = app.add_audio_track().unwrap();
         let slot = Rect::from_min_max(pos2(100.0, 100.0), pos2(200.0, 120.0));

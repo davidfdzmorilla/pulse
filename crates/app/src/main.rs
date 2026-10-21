@@ -70,6 +70,8 @@ mod sync;
 mod table_editor;
 mod tempo_ui;
 mod theme;
+#[cfg(test)]
+mod test_audio;
 mod to_midi;
 mod tracks;
 mod updates;

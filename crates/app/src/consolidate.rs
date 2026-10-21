@@ -154,7 +154,7 @@ mod tests {
     use crate::project::Project;
 
     fn demo_clip(warp: WarpMode, length: f64, offset: f64) -> AudioClip {
-        let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let song = crate::test_audio::demo_song();
         AudioClip {
             name: "demo".into(),
             color: [0; 3],

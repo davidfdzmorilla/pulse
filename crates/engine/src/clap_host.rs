@@ -360,7 +360,6 @@ pub(crate) struct ClapProcessor {
     /// Notes as CLAP events (otherwise MIDI); whether MIDI controllers reach it.
     clap_notes: bool,
     midi: bool,
-    sample_rate: f32,
 }
 
 unsafe impl Send for ClapProcessor {}
@@ -374,6 +373,23 @@ impl Drop for ClapProcessor {
 impl ClapProcessor {
     pub fn set_tempo(&mut self, tempo: f64) {
         self.transport.tempo = tempo;
+    }
+
+    /// Where the song is at this block's start, and whether it plays.
+    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool) {
+        let t = &mut self.transport;
+        t.tempo = tempo;
+        t.song_pos_beats = (beat * CLAP_BEATTIME_FACTOR as f64).round() as i64;
+        t.song_pos_seconds = (beat * 60.0 / tempo.max(1.0) * clap_sys::fixedpoint::CLAP_SECTIME_FACTOR as f64).round() as i64;
+        let bar = (beat / 4.0).floor();
+        t.bar_start = (bar * 4.0 * CLAP_BEATTIME_FACTOR as f64).round() as i64;
+        t.bar_number = bar as i32;
+        t.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
+        if playing {
+            t.flags |= CLAP_TRANSPORT_IS_PLAYING;
+        } else {
+            t.flags &= !CLAP_TRANSPORT_IS_PLAYING;
+        }
     }
 
     fn push(&mut self, slot: EventSlot) {
@@ -556,8 +572,7 @@ impl ClapProcessor {
         }
         self.events.clear();
         self.steady += n as i64;
-        let beats = n as f64 / self.sample_rate as f64 * self.transport.tempo / 60.0;
-        self.transport.song_pos_beats += (beats * CLAP_BEATTIME_FACTOR as f64) as i64;
+        // Where the song is comes from the host each block (`set_transport`).
     }
 }
 
@@ -928,7 +943,6 @@ pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Opti
         held: [false; 128],
         clap_notes,
         midi,
-        sample_rate,
     };
     Ok((processor, ClapHandle { instance, queue: Mutex::new(producer) }, info.instrument))
 }

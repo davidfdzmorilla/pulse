@@ -215,6 +215,14 @@ const PREVIEW_GAIN: f32 = 0.5;
 /// Things the audio thread no longer needs; the UI thread drops them.
 /// The fields are only held so they are freed off the audio thread.
 #[allow(dead_code)]
+/// Room for commands waiting for the audio thread.
+pub const COMMAND_QUEUE: usize = 4096;
+/// Room for what the audio thread hands back: everything a full command queue
+/// replaces, several times over.
+pub const GARBAGE_QUEUE: usize = 4 * COMMAND_QUEUE;
+/// The most one command hands back.
+const GARBAGE_PER_COMMAND: usize = 2;
+
 pub enum Garbage {
     Clip(Box<PlayClip>),
     Device(ChainSlot),
@@ -1631,7 +1639,8 @@ impl Engine {
 
     /// Hands something back to the UI thread so it is freed there.
     fn discard(&mut self, garbage: Garbage) {
-        // If the queue is full it is freed here; rare, and only costs a free().
+        // Commands wait while the queue is nearly full (see `process`), so this
+        // only frees here if the UI thread stopped collecting for a long while.
         let _ = self.garbage.push(garbage);
     }
 
@@ -2055,7 +2064,11 @@ impl Engine {
             t.events.clear();
         }
         let (position, playing) = (self.position, self.playing);
-        while let Ok(command) = self.commands.pop() {
+        // Only while what they replace can go back to the UI thread to be
+        // freed: the rest wait for the next callback (freeing here could take
+        // milliseconds with a big session).
+        while self.garbage.slots() >= GARBAGE_PER_COMMAND {
+            let Ok(command) = self.commands.pop() else { break };
             self.handle(command);
         }
         if self.position != position || self.playing != playing {
@@ -2543,7 +2556,8 @@ mod tests {
             let (commands, rx) = RingBuffer::new(64);
             let (live, live_rx) = RingBuffer::new(64);
             let (recorded_tx, recorded) = RingBuffer::new(64);
-            let (gtx, grx) = RingBuffer::new(64);
+            // Never collected here: room for all a test replaces.
+            let (gtx, grx) = RingBuffer::new(GARBAGE_QUEUE);
             let (engine, shared) = Engine::new(SR, rx, live_rx, recorded_tx, gtx);
             Self { engine, commands, live, recorded, shared, _garbage: grx }
         }
@@ -2573,6 +2587,47 @@ mod tests {
         fn playing(&self, track: usize) -> i32 {
             self.shared.tracks[track].playing.load(Ordering::Relaxed)
         }
+    }
+
+    /// A whole big session replaced at once (opening a project, undoing a
+    /// delete): everything the audio thread lets go goes back to be freed off
+    /// it, and if there is no room the commands wait for the next callback.
+    #[test]
+    fn replaced_sessions_are_never_freed_on_the_audio_thread() {
+        let (mut engine, mut handle) = crate::audio::detached(SR);
+        let mut out = vec![0f32; 256 * 2];
+        let session = |handle: &mut crate::audio::EngineHandle| {
+            for track in 0..MAX_TRACKS {
+                for slot in 0..NUM_SCENES {
+                    assert!(handle.send(Command::SetClip { track, slot, clip: Some(one_note_clip()) }));
+                }
+            }
+        };
+        session(&mut handle);
+        engine.process(&mut out, 2);
+        assert_eq!(handle.collect_garbage(), 0, "nothing replaced yet");
+        // The same again twice, without the UI collecting in between.
+        session(&mut handle);
+        engine.process(&mut out, 2);
+        session(&mut handle);
+        engine.process(&mut out, 2);
+        assert_eq!(handle.collect_garbage(), 2 * MAX_TRACKS * NUM_SCENES, "all of it handed back");
+
+        // A queue nearly full: the commands wait, nothing is freed here.
+        let (mut engine, mut handle) = crate::audio::detached(SR);
+        session(&mut handle);
+        engine.process(&mut out, 2);
+        for _ in 0..GARBAGE_QUEUE / (MAX_TRACKS * NUM_SCENES) {
+            session(&mut handle);
+            engine.process(&mut out, 2);
+        }
+        session(&mut handle);
+        engine.process(&mut out, 2);
+        let collected = handle.collect_garbage();
+        assert!(collected <= GARBAGE_QUEUE, "{collected}");
+        // Collected, the rest goes through.
+        engine.process(&mut out, 2);
+        assert_eq!(collected + handle.collect_garbage(), (GARBAGE_QUEUE / (MAX_TRACKS * NUM_SCENES) + 1) * MAX_TRACKS * NUM_SCENES);
     }
 
     fn one_note_clip() -> Box<PlayClip> {

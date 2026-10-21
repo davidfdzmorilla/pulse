@@ -23,7 +23,7 @@ impl OfflineRenderer {
         let (commands, command_rx) = RingBuffer::new(8192);
         let (live, live_rx) = RingBuffer::new(16);
         let (recorded_tx, recorded) = RingBuffer::new(16);
-        let (garbage_tx, garbage) = RingBuffer::new(8192);
+        let (garbage_tx, garbage) = RingBuffer::new(2 * 8192);
         let (engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);
         Self {
             engine,

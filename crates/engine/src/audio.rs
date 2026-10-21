@@ -44,9 +44,10 @@ impl EngineHandle {
         std::iter::from_fn(|| self.recorded.pop().ok()).collect()
     }
 
-    /// Frees whatever the audio thread has replaced (clips, devices, chains). Call regularly from the UI thread.
-    pub fn collect_garbage(&mut self) {
-        while self.garbage.pop().is_ok() {}
+    /// Frees whatever the audio thread has replaced (clips, devices, chains),
+    /// and says how many. Call regularly from the UI thread.
+    pub fn collect_garbage(&mut self) -> usize {
+        std::iter::from_fn(|| self.garbage.pop().ok()).count()
     }
 }
 
@@ -182,8 +183,8 @@ pub fn start_with(settings: &AudioSettings) -> Result<(AudioOutput, EngineHandle
 /// An engine and its handle with no audio device: whoever holds the engine calls
 /// [`Engine::process`] (tests drive it by hand).
 pub fn detached(sample_rate: f32) -> (Engine, EngineHandle) {
-    let (command_tx, command_rx) = RingBuffer::new(4096);
-    let (garbage_tx, garbage_rx) = RingBuffer::new(1024);
+    let (command_tx, command_rx) = RingBuffer::new(crate::engine::COMMAND_QUEUE);
+    let (garbage_tx, garbage_rx) = RingBuffer::new(crate::engine::GARBAGE_QUEUE);
     let (live_tx, live_rx) = RingBuffer::new(1024);
     let (recorded_tx, recorded_rx) = RingBuffer::new(4096);
     let (engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);

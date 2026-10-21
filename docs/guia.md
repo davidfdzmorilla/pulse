@@ -120,7 +120,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 - Solo audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar**.
 - **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
 - **Dividir aquí** (⌘E corta en el cursor), **Unir N clips** (⌘J).
-- **Desactivar clip** (tecla **0**): el clip se queda donde está, en gris, pero no suena (ni sus notas, ni su audio, ni su automatización); tampoco al exportar. Otra vez lo activa. Con varios seleccionados, los desactiva todos (o los activa, si ya lo estaban todos). También en el menú de los clips de Session.
+- **Desactivar clip** (tecla **0**): el clip se queda donde está, en gris, pero no suena (ni sus notas, ni su audio, ni su automatización); tampoco al exportar. Otra vez lo activa. Si lo desactivas (o mueves, recortas o borras un clip de audio) mientras suena, se apaga con un fundido corto, sin clic. Con varios seleccionados, los desactiva todos (o los activa, si ya lo estaban todos). También en el menú de los clips de Session.
 - **Copiar**, **Cortar**, **Duplicar** (⌘D), **Eliminar** (⌫).
 - Con un solo clip: **Nombre** y **Color**.
 

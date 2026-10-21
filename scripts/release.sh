@@ -7,10 +7,11 @@
 # builds and signs Pulse.app (scripts/bundle.sh) and publishes it all at once:
 # the release is made as a draft with Pulse-X.Y.Z.zip and the titles merged
 # since the last version as its notes, the zip is downloaded back and checked
-# (its SHA-256, its signature, its version), and only then is it published,
-# which makes the tag. If anything fails before, the draft goes and nothing
-# is left: no tag without a release, no number skipped.
-set -euo pipefail
+# (its SHA-256, its signature and who signed it, its version, the binary's),
+# and only then is it published, which makes the tag. If anything fails
+# before, or it is stopped (Ctrl-C), the draft goes and nothing is left: no
+# tag without a release, no number skipped.
+set -Eeuo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 part=${1:-patch}
@@ -66,38 +67,54 @@ export PULSE_VERSION=$version
 cargo test --release --locked --workspace --quiet
 scripts/bundle.sh
 out=${PULSE_BUNDLE_DIR:-$HOME/Library/Caches/Pulse/bundle}
-codesign --verify --strict "$out/Pulse.app"
+# Signed, and by the certificate the installed copies trust (an ad hoc
+# signature only if asked for: they would all refuse it).
+checked() {
+    codesign --verify --strict "$1"
+    if [ "${PULSE_ALLOW_ADHOC:-}" != 1 ] && ! codesign -dvv "$1" 2>&1 | grep -q '^Authority=Pulse Local Signing$'; then
+        echo "$1 no está firmado con «Pulse Local Signing»" >&2
+        return 1
+    fi
+    [ "$("$1/Contents/MacOS/pulse" --version)" = "$version" ]
+}
+checked "$out/Pulse.app"
+# Without the extended attributes macOS adds (they come out as ._ files
+# anywhere else).
 zip="$out/Pulse-$version.zip"
 rm -f "$zip"
-ditto -c -k --keepParent "$out/Pulse.app" "$zip"
+ditto -c -k --norsrc --noextattr --keepParent "$out/Pulse.app" "$zip"
 # Its debugging symbols, published beside it and kept here, to read crash
 # reports of this version back to the line (scripts/simbolos.py).
 symbols="$out/Pulse-$version-simbolos.zip"
 rm -f "$symbols"
-ditto -c -k --keepParent "$out/pulse.dSYM" "$symbols"
+ditto -c -k --norsrc --noextattr --keepParent "$out/pulse.dSYM" "$symbols"
 kept="$HOME/Library/Caches/Pulse/simbolos/$version"
 mkdir -p "$kept"
 rm -rf "$kept/pulse.dSYM"
 cp -R "$out/pulse.dSYM" "$kept/"
 
-# A draft first: nothing public, no tag yet.
+# A draft first: nothing public, no tag yet. From before it is made, anything
+# that fails or stops the script takes it away again (also a create that left
+# it half uploaded, or Ctrl-C).
 tag="v$version"
-gh release create "$tag" "$zip" "$symbols" --draft --target "$(git rev-parse HEAD)" --title "Pulse $version" --notes "$notes"
 check=$(mktemp -d)
 discard() {
+    trap - ERR INT TERM
     echo "No se publicó: se quita el borrador." >&2
-    gh release delete "$tag" --yes >/dev/null 2>&1 || true
+    gh release delete "$tag" --yes --cleanup-tag >/dev/null 2>&1 || true
     rm -rf "$check"
 }
 trap discard ERR
+trap 'discard; exit 130' INT TERM
+gh release create "$tag" "$zip" "$symbols" --draft --target "$(git rev-parse HEAD)" --title "Pulse $version" --notes "$notes"
 # What GitHub has is what was built: the same bytes, signed, the version.
 gh release download "$tag" --pattern "Pulse-$version.zip" --dir "$check"
 [ "$(shasum -a 256 "$check/Pulse-$version.zip" | cut -d' ' -f1)" = "$(shasum -a 256 "$zip" | cut -d' ' -f1)" ]
 ditto -x -k "$check/Pulse-$version.zip" "$check"
-codesign --verify --strict "$check/Pulse.app"
+checked "$check/Pulse.app"
 [ "$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$check/Pulse.app/Contents/Info.plist")" = "$version" ]
 gh release edit "$tag" --draft=false --latest
-trap - ERR
+trap - ERR INT TERM
 rm -rf "$check"
 git fetch --quiet --tags --force origin
 echo "Publicada Pulse $version"

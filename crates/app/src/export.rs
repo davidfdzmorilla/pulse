@@ -333,7 +333,7 @@ pub fn only(project: &Project, t: usize) -> Project {
         from.push((group, false));
         at = crate::groups::parent(tracks, group);
     }
-    from.extend(project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]).flat_map(|d| listens(tracks, d)).map(|s| (s, true)));
+    from.extend(project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]).flat_map(|d| listens(tracks, d, None)).map(|s| (s, true)));
     let keep = needed(project, from);
     let mut only = project.clone();
     for (track, _) in only.tracks.iter_mut().zip(&keep).filter(|(_, k)| !**k) {
@@ -344,8 +344,9 @@ pub fn only(project: &Project, t: usize) -> Project {
     only
 }
 
-/// The tracks (indices) a chain's sidechains listen to.
-fn listens(tracks: &[Track], devices: &[engine::model::Device]) -> Vec<usize> {
+/// The tracks (indices) a chain's sidechains listen to (and, given the track
+/// it belongs to, the one it plays the sound of).
+fn listens(tracks: &[Track], devices: &[engine::model::Device], from: Option<u32>) -> Vec<usize> {
     use engine::model::Effect;
     devices
         .iter()
@@ -354,6 +355,7 @@ fn listens(tracks: &[Track], devices: &[engine::model::Device]) -> Vec<usize> {
             Effect::Ducker(p) => p.sidechain,
             _ => None,
         })
+        .chain(from)
         .filter_map(|id| tracks.iter().position(|o| o.id == id && id != 0))
         .collect()
 }
@@ -372,7 +374,7 @@ fn needed(project: &Project, mut from: Vec<(usize, bool)>) -> Vec<bool> {
         keep[i] = true;
         // What a frozen track's effects listened to is in its audio already,
         // but keeping it costs nothing it wouldn't otherwise.
-        from.extend(listens(tracks, &tracks[i].devices).into_iter().map(|s| (s, true)));
+        from.extend(listens(tracks, &tracks[i].devices, tracks[i].audio_from).into_iter().map(|s| (s, true)));
         if all {
             whole[i] = true;
             from.extend(crate::groups::children(tracks, i).map(|c| (c, true)));
@@ -385,7 +387,7 @@ fn needed(project: &Project, mut from: Vec<(usize, bool)>) -> Vec<bool> {
 /// its effects listen to, what those listen to, and a group's tracks.
 pub fn sources(project: &Project, t: usize) -> Vec<usize> {
     let Some(track) = project.tracks.get(t) else { return Vec::new() };
-    let keep = needed(project, listens(&project.tracks, &track.devices).into_iter().map(|s| (s, true)).collect());
+    let keep = needed(project, listens(&project.tracks, &track.devices, track.audio_from).into_iter().map(|s| (s, true)).collect());
     keep.iter().enumerate().filter(|&(i, &k)| k && i != t).map(|(i, _)| i).collect()
 }
 

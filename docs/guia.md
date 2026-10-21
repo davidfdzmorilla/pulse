@@ -160,7 +160,11 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 
 ### Congelar
 
-**Crear rumble** (clic derecho en la cabecera de una pista, normalmente la del bombo) añade debajo una copia que toca lo mismo por una reverb larga solo húmeda, una saturación Tube con 4× y un filtro de 24 dB a 180 Hz, con un Ducker que se aparta cuando suena la original: el rumble del techno. Ajusta la reverb, el drive o el filtro a tu gusto.
+**Crear rumble** (clic derecho en la cabecera de una pista, normalmente la del bombo) añade debajo una pista que toca lo que suena en la del bombo por una reverb larga solo húmeda, una saturación Tube con 4× y un filtro de 24 dB a 180 Hz, con un Ducker que se aparta en cada golpe: el rumble del techno.
+- **Sigue al bombo**: no tiene clips propios, así que si cambias, quitas o lanzas otros bombos, el rumble los sigue, y si silencias la pista del bombo se silencia con ella. Cuando el bombo para (en un break), suena aún un compás más o menos y se apaga.
+- **Nivel**: la saturación iguala su volumen; queda unos 5 dB por debajo de un bombo de hard techno. Con un bombo más flojo, baja su fader.
+- Ajusta la reverb, el drive o el filtro a tu gusto. No se puede congelar, porque no tiene clips propios.
+- Un proyecto con un rumble se abre solo con esta versión de Pulse o una más nueva.
 
 **Congelar pista** (clic derecho en la cabecera) renderiza a audio lo que suenan su instrumento y sus efectos, y la pista pasa a sonar ese audio: deja de gastar CPU. El volumen, el panorama y los envíos siguen en vivo.
 

@@ -109,3 +109,89 @@ fn the_sidechain_pumps_on_every_kick_of_the_genre() {
     }
 }
 
+
+fn lufs(left: &[f32], right: &[f32]) -> f64 {
+    stems::loudness::integrated(left, right, SR).unwrap_or(f64::NEG_INFINITY)
+}
+
+/// «Crear rumble» on a kick track: its level next to the kick, how much it
+/// breathes between the kicks, and that it follows the kick when it changes.
+#[test]
+fn a_rumble_is_loud_enough_breathes_and_follows_its_kick() {
+    let kit = drum_gen::Kit::from_rows(&DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
+    let settings = drum_gen::Settings { style: Style::HardTechno, level: Level::Medium, bars: 8, sounds: Style::HardTechno.sounds(), ..Default::default() };
+    let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0);
+    let cases = [
+        ("Kick Designer «Hard · Kick»", kick_designer("Hard · Kick"), four_on_the_floor(8, 36)),
+        ("Kick Designer «Techno · Rumble»", kick_designer("Techno · Rumble"), four_on_the_floor(8, 36)),
+        ("Kick Designer «Init»", kick_designer("Init"), four_on_the_floor(8, 36)),
+        ("Drum Machine Hard techno", InstrumentKind::DrumMachine(Style::HardTechno.sound()), MidiClip { notes, groove, ..MidiClip::new("Beat", 32.0, [0; 3]) }),
+    ];
+    for (name, instrument, clip) in cases {
+        let mut project = Project::empty();
+        project.tempo = 150.0;
+        project.tracks = vec![track("Kick", instrument, clip)];
+        let mut app = crate::app::PulseApp::headless(project);
+        app.make_rumble(0);
+        let only = |app: &crate::app::PulseApp, keep: usize| {
+            let mut p = app.project.clone();
+            p.tracks[1 - keep].mixer.gain = 0.0;
+            render(&p, 32.0)
+        };
+        let (kl, kr) = only(&app, 0);
+        let (rl, rr) = only(&app, 1);
+        let (kick, rumble) = (lufs(&kl[..], &kr[..]), lufs(&rl[..], &rr[..]));
+        // Each beat from the third bar on, split in eighths.
+        let beat = (60.0 / 150.0 * SR as f64) as usize;
+        let step = beat / 8;
+        let by_eighths: Vec<f64> = (0..8).map(|k| db((8..32).map(|b| rms(&rl[b * beat + k * step..][..step])).sum::<f64>() / 24.0)).collect();
+        let top = by_eighths.iter().cloned().fold(f64::MIN, f64::max);
+        let shown: Vec<String> = by_eighths.iter().map(|v| format!("{:.0}", v - top)).collect();
+        println!("{name}: bombo {kick:.1} LUFS, rumble {rumble:.1} LUFS, rumble por octavos de tiempo {shown:?}");
+        // The saturation evens its level out: a few dB under a hard techno kick
+        // (about as loud as a softer one).
+        if name.starts_with("Kick Designer «Hard") || name.contains("Techno ·") {
+            assert!(rumble > kick - 7.0 && rumble < kick - 2.0, "{name}: the rumble sits a few dB under the kick: {rumble:.1} vs {kick:.1}");
+        }
+        // Down within the first quarter of the beat (a clipped kick is told
+        // by its sweep, a few milliseconds in).
+        assert!(by_eighths[0].min(by_eighths[1]) < top - 6.0, "{name}: it ducks on each kick: {shown:?}");
+    }
+}
+
+#[test]
+fn a_rumble_follows_its_kick_when_the_kick_changes() {
+    let mut project = Project::empty();
+    project.tempo = 150.0;
+    project.tracks = vec![track("Kick", kick_designer("Hard · Kick"), four_on_the_floor(8, 36))];
+    let mut app = crate::app::PulseApp::headless(project);
+    app.make_rumble(0);
+    assert_eq!(app.project.tracks[1].name, "Kick Rumble");
+    assert!(app.project.tracks[1].arrangement.is_empty(), "it plays the kick's sound, not a copy of its clips");
+    let rumble = |project: &Project| {
+        let mut p = project.clone();
+        p.tracks[0].mixer.gain = 0.0;
+        render(&p, 32.0)
+    };
+    let beat = (60.0 / 150.0 * SR as f64) as usize;
+    let last_bar = |l: &[f32]| rms(&l[30 * beat..32 * beat]);
+    let (before, _) = rumble(&app.project);
+    // No kicks in the last two bars: it rings on for about a bar, then stops.
+    let mut edited = app.project.clone();
+    let Clip::Midi(clip) = &mut edited.tracks[0].arrangement[0].clip else { unreachable!() };
+    clip.notes.retain(|n| n.start < 24.0);
+    let (after, _) = rumble(&edited);
+    println!("rumble en la segunda mitad del último compás (más de un compás tras el último bombo): {:.1} dB con bombos, {:.1} dB sin ellos", db(last_bar(&before)), db(last_bar(&after)));
+    assert!(last_bar(&after) < last_bar(&before) * 0.1, "it stops with the kick");
+    // Muting the kick track mutes its rumble too.
+    let mut muted = app.project.clone();
+    muted.tracks[0].mixer.active = false;
+    let (l, _) = rumble(&muted);
+    assert!(rms(&l) < 1e-4, "muted with the kick: {}", rms(&l));
+    // It is saved and comes back linked; such a project tells an older Pulse to update.
+    let json = app.project.to_json().unwrap();
+    assert!(json.contains("\"format\": 3"));
+    let loaded = Project::from_json(&json).unwrap();
+    assert_eq!(loaded.tracks[1].audio_from, Some(loaded.tracks[0].id));
+}
+

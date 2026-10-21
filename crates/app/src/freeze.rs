@@ -215,6 +215,10 @@ impl PulseApp {
             return;
         }
         let Some(track) = self.project.tracks.get(t) else { return };
+        if track.audio_from.is_some() {
+            self.status = Some(format!("«{}» toca lo que suena en otra pista (un rumble), no clips propios: no se puede congelar", track.name));
+            return;
+        }
         if track.is_audio() && track.devices.is_empty() {
             self.status = Some("Una pista de audio sin efectos no gasta nada: no hace falta congelarla".into());
             return;

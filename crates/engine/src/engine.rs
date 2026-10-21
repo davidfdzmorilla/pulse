@@ -275,6 +275,10 @@ pub enum Command {
     SetGroups([Option<u8>; MAX_TRACKS]),
     /// Each track's id (what sidechains name their source by; 0 for none).
     SetTrackIds([u32; MAX_TRACKS]),
+    /// Each track also plays the sound of the track with that id (0: none),
+    /// after that one's effects and before its fader, quiet when that one is
+    /// muted: a rumble that follows its kick.
+    SetAudioFrom([u32; MAX_TRACKS]),
     /// A MIDI track's MIDI effects, in order (keys already filled in).
     SetMidiEffects { track: usize, devices: [Option<crate::model::MidiDevice>; crate::model::MAX_MIDI_EFFECTS] },
     LaunchScene(usize),
@@ -1333,6 +1337,9 @@ struct Track {
     record_start: f64,
     /// Live notes being captured: (start beat, velocity) per pitch.
     held: [Option<(f64, f32)>; 128],
+    /// The track (by id; 0 for none) whose sound it plays too, after that
+    /// one's effects and before its fader (see [`Command::SetAudioFrom`]).
+    audio_from: u32,
 }
 
 fn is_permutation(order: &[usize]) -> bool {
@@ -1384,6 +1391,7 @@ impl Track {
             recording: None,
             record_start: 0.0,
             held: [None; 128],
+            audio_from: 0,
         }
     }
 
@@ -1521,6 +1529,8 @@ pub struct Engine {
     ids: [u32; MAX_TRACKS],
     key_left: Vec<Vec<f32>>,
     key_right: Vec<Vec<f32>>,
+    /// Each track muted this block, itself or by a group (what `audio_from` follows).
+    mutes: [bool; MAX_TRACKS],
 }
 
 /// Gives the sidechained effects of a chain their sources' sound.
@@ -1668,6 +1678,7 @@ impl Engine {
             ids: [0; MAX_TRACKS],
             key_left: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
             key_right: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
+            mutes: [false; MAX_TRACKS],
         };
         (engine, shared)
     }
@@ -1904,6 +1915,11 @@ impl Engine {
                 }
             }
             Command::SetTrackIds(ids) => self.ids = ids,
+            Command::SetAudioFrom(sources) => {
+                for (track, source) in self.tracks.iter_mut().zip(sources) {
+                    track.audio_from = source;
+                }
+            }
             Command::SetMidiEffects { track, devices } => {
                 if let Some(t) = self.tracks.get_mut(track) {
                     t.midi_fx.set(devices);
@@ -2280,7 +2296,7 @@ impl Engine {
         // Which tracks each listens to (sidechains), to process those first.
         let mut wants = [0u64; MAX_TRACKS];
         for (i, track) in self.tracks.iter().enumerate() {
-            for id in track.channel.chain.iter().filter_map(|slot| slot.processor.sidechain()) {
+            for id in track.channel.chain.iter().filter_map(|slot| slot.processor.sidechain()).chain(Some(track.audio_from)) {
                 if let Some(source) = self.ids.iter().position(|&x| x == id && id != 0) {
                     wants[i] |= 1 << source;
                 }
@@ -2304,6 +2320,12 @@ impl Engine {
             }
             false
         });
+        for (mute, track) in self.mutes.iter_mut().zip(&self.tracks) {
+            *mute = track.channel.mute;
+        }
+        for (i, mute) in self.mutes.iter_mut().enumerate() {
+            *mute |= silenced[i];
+        }
         let sr = self.sample_rate;
         for k in 0..MAX_TRACKS {
             let index = self.order[k];
@@ -2344,6 +2366,16 @@ impl Engine {
             for i in 0..n {
                 channel.left[i] = left[i] + track.audio_left[i];
                 channel.right[i] = right[i] + track.audio_right[i];
+            }
+            // The sound of the track it follows, unless that one is muted.
+            let from = track.audio_from;
+            if let Some(source) = self.ids.iter().position(|&x| x == from && from != 0).filter(|&s| s != index) {
+                if !self.mutes[source] {
+                    for i in 0..n {
+                        channel.left[i] += self.key_left[source][i];
+                        channel.right[i] += self.key_right[source][i];
+                    }
+                }
             }
             feed_keys(&mut channel.chain, &self.ids, &self.key_left, &self.key_right, n);
             if !channel.run_chain(n, &ctx) {

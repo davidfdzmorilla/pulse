@@ -130,6 +130,10 @@ pub struct Track {
     /// What its notes go through before its instrument (see `midi_fx_ui`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_effects: Vec<engine::model::MidiDevice>,
+    /// The track (by id) whose sound it plays too, after that one's effects and
+    /// before its fader, quiet when that one is muted: a rumble follows its kick.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_from: Option<u32>,
 }
 
 impl Track {
@@ -154,6 +158,7 @@ impl Track {
             folded: false,
             id: 0,
             midi_effects: Vec::new(),
+            audio_from: None,
         }
     }
 
@@ -259,7 +264,10 @@ pub struct MasterTrack {
 /// sounding different don't need it; for those, `saved_by` makes it ask before
 /// saving over the file.
 /// 2: 16 scenes (an older Pulse, which reads 8, says to update instead of failing).
-pub const FORMAT: u32 = 2;
+/// 3: a track that plays another's sound (`audio_from`, a rumble): only
+/// projects that have one are written as 3, so the rest still open in a Pulse
+/// that reads 2.
+pub const FORMAT: u32 = 3;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -501,7 +509,8 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            object.insert(FORMAT_KEY.into(), FORMAT.into());
+            let format = if self.tracks.iter().any(|t| t.audio_from.is_some()) { FORMAT } else { 2 };
+            object.insert(FORMAT_KEY.into(), format.into());
             object.insert(SAVED_BY_KEY.into(), crate::updates::VERSION.into());
         }
         let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
@@ -791,7 +800,7 @@ mod tests {
             assert_eq!(project.tracks.len(), 4, "{name}");
             assert!(project.tracks.iter().any(|t| !t.arrangement.is_empty() || t.clips.iter().any(|c| c.is_some())), "{name}");
             // And they save in the current format.
-            assert!(project.to_json().unwrap().contains(&format!("\"format\": {FORMAT}")));
+            assert!(project.to_json().unwrap().contains("\"format\": 2"));
         }
     }
 

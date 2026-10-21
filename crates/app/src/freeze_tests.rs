@@ -178,3 +178,22 @@ fn a_frozen_track_exports_its_tail_and_first_hit() {
     assert!(null_db(&cut(&before, 0, song), &cut(&after, 0, song)) < -40.0);
 }
 
+
+/// A rumble plays its kick track's sound: its stem and soloed it sounds as in
+/// the mix. It has no clips of its own to freeze, and says so.
+#[test]
+fn a_rumble_exports_as_heard_and_is_not_frozen() {
+    let mut p = Project::empty();
+    p.tracks = vec![drums(16.0)];
+    let mut app = PulseApp::headless(p);
+    app.make_rumble(0);
+    let p = app.project.clone();
+    let range = (0.0, 16.0);
+    let rumble = whole_soloed(&p, 1, range);
+    assert!(rumble.0.iter().any(|s| s.abs() > 0.01), "the rumble sounds soloed");
+    let stem = stem_of(&p, 1, &Settings { stems: true, ..Default::default() });
+    assert!(null_db(&rumble, &stem) < -60.0, "stem: {:.1} dB", null_db(&rumble, &stem));
+    app.freeze(1);
+    assert!(app.freeze_job.is_none() && app.project.tracks[1].frozen.is_none());
+    assert!(app.status.as_deref().is_some_and(|s| s.contains("no se puede congelar")), "{:?}", app.status);
+}

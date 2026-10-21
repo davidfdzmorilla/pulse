@@ -1,13 +1,21 @@
-//! «Crear rumble»: the techno rumble from a kick track. A copy of the track (it
-//! plays the same hits) through a long, all-wet reverb, a tube saturation and a
-//! steep low-pass, ducking to the original: what is left is a low, distorted
-//! tail that breathes between the kicks.
+//! «Crear rumble»: the techno rumble from a kick track. A track that plays the
+//! kick track's sound (it follows it: edits, launches, mutes) through a
+//! long, all-wet reverb, a tube saturation and a steep low-pass, ducking to
+//! the kick: what is left is a low, distorted tail that breathes between the
+//! kicks and rings out for about a bar after the last one.
 
 use crate::app::PulseApp;
+use crate::project::{Monitor, Track};
 use engine::model::{AutoFilterParams, Device, DuckerParams, Effect, FilterMode, KickDrive, ReverbParams, SaturatorParams};
 
 impl PulseApp {
-    /// A rumble track right under track `t`, playing what it plays.
+    /// The name of the track whose sound track `t` plays (see `Track::audio_from`).
+    pub fn follows(&self, t: usize) -> Option<&str> {
+        let id = self.project.tracks.get(t)?.audio_from?;
+        self.project.tracks.iter().find(|o| o.id == id).map(|o| o.name.as_str())
+    }
+
+    /// A rumble track right under track `t`, playing its sound.
     pub fn make_rumble(&mut self, t: usize) {
         if t >= self.project.tracks.len() || self.project.tracks[t].is_group() {
             return;
@@ -17,14 +25,14 @@ impl PulseApp {
             return;
         }
         let before = self.project.clone();
-        self.capture_plugins();
-        let source = self.project.tracks[t].id;
-        let mut rumble = self.copy_track(t);
-        rumble.name = format!("{} Rumble", self.project.tracks[t].name);
-        (rumble.id, rumble.solo, rumble.armed, rumble.frozen) = (0, false, false, None);
-        rumble.mixer.gain *= 0.8;
-        rumble.sends = Default::default();
-        rumble.devices.extend(chain(source));
+        let kick = &self.project.tracks[t];
+        // An audio track with no clips that plays the kick track's sound (after
+        // its effects): whatever the kick does, the rumble does too.
+        let mut rumble = Track::new_audio(format!("{} Rumble", kick.name), kick.color);
+        (rumble.depth, rumble.monitor, rumble.audio_from) = (kick.depth, Monitor::Off, Some(kick.id));
+        rumble.devices.extend(chain(kick.id));
+        // The saturation evens its level out: at 0 dB it sits about 5 dB under a hard techno kick.
+        rumble.mixer.gain = 1.0;
         let ids = self.track_ids();
         self.project.tracks.insert(t + 1, rumble);
         self.follow_tracks(&ids);
@@ -32,14 +40,14 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         // The tracks after it moved: those go again; the rest play on.
         self.sync_from(&before);
-        self.status = Some(format!("«{}»: reverb, saturación Tube y filtro de 24 dB a 180 Hz, apartándose cuando suena «{}»", self.project.tracks[t + 1].name, self.project.tracks[t].name));
+        self.status = Some(format!("«{}» toca lo que suena en «{}» por una reverb, saturación Tube y un filtro de 24 dB a 180 Hz, y se aparta en cada golpe", self.project.tracks[t + 1].name, self.project.tracks[t].name));
     }
 }
 
 /// The rumble's effects, after the copied track's own; ducking to track `source`.
 pub fn chain(source: u32) -> [Device; 4] {
     [
-        Device::new(Effect::Reverb(ReverbParams { size: 0.92, damping: 0.6, width: 0.4, mix: 1.0 })),
+        Device::new(Effect::Reverb(ReverbParams { size: 0.85, damping: 0.6, width: 0.4, mix: 1.0 })),
         Device::new(Effect::Saturator(SaturatorParams { drive_db: 18.0, output_db: -12.0, mix: 1.0, kind: KickDrive::Tube, oversample: true })),
         Device::new(Effect::AutoFilter(AutoFilterParams { mode: FilterMode::LowPass, cutoff: 180.0, resonance: 0.35, steep: true, drive_db: 3.0, ..Default::default() })),
         Device::new(Effect::Ducker(DuckerParams { depth: 0.9, release: 0.5, rate_beats: 1.0, sidechain: Some(source), ..Default::default() })),

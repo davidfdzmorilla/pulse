@@ -956,7 +956,7 @@ mod tests {
         let mut track = crate::project::Track::new("Lead", [200, 100, 50], InstrumentKind::Wavetable(WaveParams::presets()[1].1));
         let mut clip = engine::model::MidiClip::new("MIDI", 4.0, [200, 100, 50]);
         for pitch in [60, 64, 67] {
-            clip.notes.push(engine::model::Note { start: 0.0, length: 2.0, pitch, velocity: 0.9 });
+            clip.notes.push(engine::model::Note { start: 0.0, length: 2.0, pitch, velocity: 0.9, chance: 1.0 });
         }
         track.clips[0] = Some(engine::model::Clip::Midi(clip));
         project.tracks = vec![track];
@@ -1092,7 +1092,7 @@ mod tests {
             for (i, &pitch) in notes.iter().enumerate() {
                 let start = if preset.mono { i as f64 * 0.75 } else { 0.0 };
                 let length = if preset.mono { 0.7 } else { 2.5 };
-                clip.notes.push(engine::model::Note { start, length, pitch, velocity: 0.9 });
+                clip.notes.push(engine::model::Note { start, length, pitch, velocity: 0.9, chance: 1.0 });
             }
             track.clips[0] = Some(engine::model::Clip::Midi(clip));
             project.tracks = vec![track];

@@ -332,7 +332,7 @@ mod tests {
     use engine::model::{Param, WarpMarker, WarpMode};
 
     fn note(start: f64, pitch: u8) -> Note {
-        Note { start, length: 0.5, pitch, velocity: 0.8 }
+        Note { start, length: 0.5, pitch, velocity: 0.8, chance: 1.0 }
     }
 
     fn midi(notes: Vec<Note>, length: f64) -> Clip {

@@ -167,7 +167,7 @@ mod tests {
 
     fn clip() -> Clip {
         let mut midi = MidiClip::new("Riff", 4.0, [0; 3]);
-        midi.notes = vec![Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0 }, Note { start: 2.0, length: 1.0, pitch: 64, velocity: 1.0 }];
+        midi.notes = vec![Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0, chance: 1.0 }, Note { start: 2.0, length: 1.0, pitch: 64, velocity: 1.0, chance: 1.0 }];
         Clip::Midi(midi)
     }
 

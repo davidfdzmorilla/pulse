@@ -68,7 +68,7 @@ fn local_notes(notes: &[RecordedNote], start: f64, length: f64) -> Vec<Note> {
             start: n.start - start,
             length: n.length,
             pitch: n.pitch,
-            velocity: n.velocity,
+            velocity: n.velocity, chance: 1.0,
         })
         // A note played a hair early (the downbeat, or after latency compensation) is its first.
         .filter(|n| n.start >= -EARLY && n.start < length)

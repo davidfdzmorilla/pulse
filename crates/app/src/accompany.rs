@@ -108,7 +108,7 @@ fn bass_of(chord: &Chord) -> u8 {
 }
 
 fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
-    Note { start, length, pitch, velocity }
+    Note { start, length, pitch, velocity, chance: 1.0 }
 }
 
 /// The notes of `part` over `chords` (start and end beats, and the chord), for

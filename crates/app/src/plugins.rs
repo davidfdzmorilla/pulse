@@ -438,7 +438,7 @@ pub(crate) mod tests {
         app.capture_plugins();
         let mut project = app.project.clone();
         let mut clip = engine::model::MidiClip::new("A", 4.0, [0, 0, 0]);
-        clip.notes.push(engine::model::Note { start: 0.0, length: 4.0, pitch: 69, velocity: 1.0 });
+        clip.notes.push(engine::model::Note { start: 0.0, length: 4.0, pitch: 69, velocity: 1.0, chance: 1.0 });
         project.tracks[3].clips[0] = Some(engine::model::Clip::Midi(clip));
         let mut renderer = engine::OfflineRenderer::new(48_000.0);
         let mut samples = crate::sync::SampleCache::default();
@@ -767,7 +767,7 @@ pub(crate) mod tests {
             track.mixer.gain = if t == 3 { 1.0 } else { 0.0 };
         }
         let mut clip = engine::model::MidiClip::new("A", 4.0, [0, 0, 0]);
-        clip.notes.push(engine::model::Note { start: 0.0, length: 4.0, pitch: 69, velocity: 1.0 });
+        clip.notes.push(engine::model::Note { start: 0.0, length: 4.0, pitch: 69, velocity: 1.0, chance: 1.0 });
         app.project.tracks[3].clips[0] = Some(engine::model::Clip::Midi(clip));
         app.sync_all();
         let synth = app.plugin_library.found[0].clone();

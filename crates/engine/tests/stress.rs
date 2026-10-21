@@ -149,7 +149,7 @@ fn busy_clip(root: u8, drums: bool) -> MidiClip {
             let start = step as f64 * 0.25;
             for (pitch, every) in [(36u8, 4), (38, 8), (42, 1), (46, 2), (39, 16)] {
                 if step % every == 0 {
-                    clip.notes.push(Note { start, length: 0.2, pitch, velocity: 0.8 });
+                    clip.notes.push(Note { start, length: 0.2, pitch, velocity: 0.8, chance: 1.0 });
                 }
             }
         }
@@ -157,11 +157,11 @@ fn busy_clip(root: u8, drums: bool) -> MidiClip {
         for step in 0..32 {
             let start = step as f64 * 0.5;
             for interval in [0u8, 4, 7, 11] {
-                clip.notes.push(Note { start, length: 0.45, pitch: root + interval, velocity: 0.7 });
+                clip.notes.push(Note { start, length: 0.45, pitch: root + interval, velocity: 0.7, chance: 1.0 });
             }
         }
         for step in 0..64 {
-            clip.notes.push(Note { start: step as f64 * 0.25, length: 0.2, pitch: root + 12 + (step % 7) as u8, velocity: 0.6 });
+            clip.notes.push(Note { start: step as f64 * 0.25, length: 0.2, pitch: root + 12 + (step % 7) as u8, velocity: 0.6, chance: 1.0 });
         }
     }
     clip
@@ -824,7 +824,7 @@ fn a_tiny_clip_length_does_not_stall_the_audio_thread() {
     for length in [1e-2, 1e-4, 1e-6, 1e-8] {
         let (mut engine, mut handle) = detached(SR);
         let mut clip = MidiClip::new("tiny", length, [0, 0, 0]);
-        clip.notes.push(Note { start: 0.0, length: length / 2.0, pitch: 60, velocity: 0.5 });
+        clip.notes.push(Note { start: 0.0, length: length / 2.0, pitch: 60, velocity: 0.5, chance: 1.0 });
         send(&mut engine, &mut handle, Command::SetQuantize(0.0));
         send(&mut engine, &mut handle, Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
         send(&mut engine, &mut handle, Command::LaunchClip { track: 0, slot: 0 });
@@ -890,7 +890,7 @@ fn a_reloaded_plugin_instrument_is_the_one_that_plays() {
         send(&mut engine, &mut handle, Command::set_plugin(0, PluginId(1), p1));
         send(&mut engine, &mut handle, Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 1e6, PlayClip::Midi({
             let mut c = MidiClip::new("held", 1e6, [0, 0, 0]);
-            c.notes.push(Note { start: 0.0, length: 1e5, pitch: 69, velocity: 1.0 });
+            c.notes.push(Note { start: 0.0, length: 1e5, pitch: 69, velocity: 1.0, chance: 1.0 });
             c
         }))]) });
         send(&mut engine, &mut handle, Command::Play);

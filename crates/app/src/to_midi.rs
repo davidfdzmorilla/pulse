@@ -155,7 +155,7 @@ pub fn clip_notes(events: &[NoteEvent], audio: &AudioClip, tempo: f64, drums: bo
             }
             let start = start.max(0.0);
             let velocity = if drums { e.amplitude.clamp(0.2, 1.0) } else { (e.amplitude * 1.25).clamp(0.25, 1.0) };
-            Some(Note { start, length: (end.min(audio.length) - start).max(1.0 / 16.0), pitch: e.pitch, velocity })
+            Some(Note { start, length: (end.min(audio.length) - start).max(1.0 / 16.0), pitch: e.pitch, velocity, chance: 1.0 })
         })
         .collect();
     notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
@@ -567,16 +567,16 @@ mod tests {
         // E minor, A minor, B minor, E minor (E G B, A C E, B D F#, E G B).
         for (bar, chord) in [[52u8, 55, 59], [45, 48, 52], [47, 50, 54], [52, 55, 59]].iter().enumerate() {
             for &pitch in chord {
-                clip.notes.push(Note { start: bar as f64 * 2.0, length: 2.0, pitch, velocity: 0.8 });
+                clip.notes.push(Note { start: bar as f64 * 2.0, length: 2.0, pitch, velocity: 0.8, chance: 1.0 });
             }
         }
-        clip.notes.push(Note { start: 7.0, length: 1.0, pitch: 64, velocity: 0.8 });
+        clip.notes.push(Note { start: 7.0, length: 1.0, pitch: 64, velocity: 0.8, chance: 1.0 });
         let synth = crate::project::Track::new("Synth", [0; 3], InstrumentKind::Synth(SynthParams::default()));
         app.project.tracks.push(synth);
         app.project.tracks.last_mut().unwrap().clips[0] = Some(Clip::Midi(clip));
         // A drum clip full of Cs and F#s must not count.
         let mut drums = crate::project::Track::new("Drums", [0; 3], InstrumentKind::DrumMachine(Default::default()));
-        let hits = (0..32).map(|i| Note { start: i as f64 * 0.25, length: 0.25, pitch: if i % 2 == 0 { 36 } else { 42 }, velocity: 0.8 }).collect();
+        let hits = (0..32).map(|i| Note { start: i as f64 * 0.25, length: 0.25, pitch: if i % 2 == 0 { 36 } else { 42 }, velocity: 0.8, chance: 1.0 }).collect();
         drums.clips[0] = Some(Clip::Midi(MidiClip { notes: hits, ..MidiClip::new("Ritmo", 8.0, [0; 3]) }));
         app.project.tracks.push(drums);
         app.detect_key();

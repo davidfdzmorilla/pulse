@@ -237,7 +237,7 @@ fn roll(pitch: u8, color: [u8; 3]) -> MidiClip {
     let mut beat = 0.0;
     while beat < 4.0 - 1e-9 {
         let step = if beat < 2.0 { 0.5 } else { 0.25 };
-        clip.notes.push(Note { start: beat, length: step * 0.8, pitch, velocity: (0.45 + 0.13 * beat as f32).min(1.0) });
+        clip.notes.push(Note { start: beat, length: step * 0.8, pitch, velocity: (0.45 + 0.13 * beat as f32).min(1.0), chance: 1.0 });
         beat += step;
     }
     clip

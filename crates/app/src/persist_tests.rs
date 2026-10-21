@@ -45,7 +45,7 @@ fn write_wav(path: &Path, seconds: f32, freq: f32) {
 }
 
 fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
-    Note { start, length, pitch, velocity }
+    Note { start, length, pitch, velocity, chance: 1.0 }
 }
 
 fn midi(name: &str, length: f64, notes: Vec<Note>) -> MidiClip {

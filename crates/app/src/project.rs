@@ -690,7 +690,7 @@ fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
         start,
         length,
         pitch,
-        velocity,
+        velocity, chance: 1.0,
     }
 }
 

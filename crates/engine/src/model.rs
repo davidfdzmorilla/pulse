@@ -9,6 +9,37 @@ pub struct Note {
     pub length: f64,
     pub pitch: u8,
     pub velocity: f32,
+    /// How likely it is to play each time round, 0..1 (see `Note::plays`).
+    #[serde(default = "always", skip_serializing_if = "is_always")]
+    pub chance: f32,
+}
+
+fn always() -> f32 {
+    1.0
+}
+
+fn is_always(chance: &f32) -> bool {
+    *chance >= 1.0
+}
+
+impl Note {
+    pub fn new(start: f64, length: f64, pitch: u8, velocity: f32) -> Self {
+        Note { start, length, pitch, velocity, chance: 1.0 }
+    }
+
+    /// Whether the note plays on lap `lap` of its clip, as note `index`: by
+    /// chance, but the same chance every time (playing, exporting, freezing).
+    pub fn plays(&self, index: usize, lap: i64) -> bool {
+        if self.chance >= 1.0 {
+            return true;
+        }
+        let mut x = (lap as u64).wrapping_mul(0x9e37_79b9_7f4a_7c15) ^ ((index as u64) << 32) ^ ((self.pitch as u64) << 56) ^ self.start.to_bits();
+        // splitmix64's finish.
+        x = (x ^ (x >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        x = (x ^ (x >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        x ^= x >> 31;
+        ((x >> 40) as f32 / (1u64 << 24) as f32) < self.chance
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

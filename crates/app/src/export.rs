@@ -1121,7 +1121,7 @@ mod tests {
         let mut project = Project::empty();
         let mut track = crate::project::Track::new("Pad", [0, 0, 0], InstrumentKind::SuperSaw(Default::default()));
         let mut clip = MidiClip::new("A", 16.0, [0, 0, 0]);
-        clip.notes.push(Note { start: 0.0, length: 16.0, pitch: 57, velocity: 0.8 });
+        clip.notes.push(Note { start: 0.0, length: 16.0, pitch: 57, velocity: 0.8, chance: 1.0 });
         track.arrangement.push(ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(clip) });
         project.tracks = vec![track];
         (project.loop_start, project.loop_end) = (8.0, 12.0);
@@ -1143,7 +1143,7 @@ mod tests {
         project.tempo = 120.0;
         let mut track = crate::project::Track::new("Synth", [0, 0, 0], InstrumentKind::Synth(Default::default()));
         let mut clip = MidiClip::new("A", 1.0, [0, 0, 0]);
-        clip.notes.push(Note { start: 0.0, length: 0.25, pitch: 60, velocity: 1.0 });
+        clip.notes.push(Note { start: 0.0, length: 0.25, pitch: 60, velocity: 1.0, chance: 1.0 });
         track.arrangement.push(ArrangementClip { start: 0.0, length: 1.0, clip: Clip::Midi(clip) });
         // 4 beats at 120: an echo every 2 s.
         track.devices.push(Device::new(Effect::Delay(DelayParams { time_beats: 4.0, feedback: 0.5, mix: 0.5, ping_pong: false, ..Default::default() })));
@@ -1558,7 +1558,7 @@ mod playback {
         let mut track = Track::new(format!("{} MIDI", index + 1), PALETTE[1], InstrumentKind::Synth(SynthParams::default()));
         let mut clip = MidiClip::new("MIDI", 4.0, PALETTE[1]);
         for pitch in [60, 64, 67] {
-            clip.notes.push(Note { start: 0.0, length: 2.0, pitch, velocity: 0.8 });
+            clip.notes.push(Note { start: 0.0, length: 2.0, pitch, velocity: 0.8, chance: 1.0 });
         }
         track.clips[0] = Some(Clip::Midi(clip));
         project.tracks.push(track);
@@ -1597,7 +1597,7 @@ mod playback {
     fn clip_with(pitches: &[u8]) -> Clip {
         let mut clip = MidiClip::new("MIDI", 4.0, PALETTE[1]);
         for (i, &pitch) in pitches.iter().enumerate() {
-            clip.notes.push(Note { start: i as f64 * 0.25, length: 0.25, pitch, velocity: 1.0 });
+            clip.notes.push(Note { start: i as f64 * 0.25, length: 0.25, pitch, velocity: 1.0, chance: 1.0 });
         }
         Clip::Midi(clip)
     }

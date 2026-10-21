@@ -856,3 +856,125 @@ fn audit_cross_version() {
     missing_keys(&serde_json::from_str(&text).unwrap(), &resaved, String::new(), &mut lost);
     println!("AUDIT cross: keys lost when the new version re-saves: {lost:?}");
 }
+
+/// Saving the first time moves the recordings out of «Sin guardar»; undoing
+/// right after must undo the last edit, and never bring back the old paths
+/// (the files are gone from there: the clips would go silent).
+#[test]
+fn undo_after_the_first_save_keeps_the_recordings() {
+    let dir = fresh("undo-first-save");
+    let take = crate::library::root().join(crate::library::UNSAVED).join(crate::library::RECORDINGS).join(format!("Toma deshacer {}.wav", std::process::id()));
+    write_wav(&take, 1.0, 220.0);
+    let mut app = PulseApp::headless(Project::empty());
+    app.project.tracks[0] = Track::new_audio("Voz", [1, 2, 3]);
+    app.project.tracks[0].arrangement.push(ArrangementClip { start: 0.0, length: 2.0, clip: Clip::Audio(audio_clip(&take, 2.0, WarpMode::Off)) });
+    app.commit_history();
+    app.project.tempo = 121.0;
+    app.commit_history();
+    let file = dir.join("Tema/Tema.pulse");
+    app.save_to_path(&file);
+    let sample = |app: &PulseApp| match &app.project.tracks[0].arrangement[0].clip {
+        Clip::Audio(a) => PathBuf::from(&a.sample),
+        _ => unreachable!(),
+    };
+    assert!(!take.exists(), "moved into the project's folder");
+    assert!(sample(&app).starts_with(dir.join("Tema")));
+    app.undo();
+    assert_eq!(app.project.tempo, Project::empty().tempo, "the first ⌘Z undoes the tempo");
+    assert!(sample(&app).is_file(), "and the clip still points at its file: {}", sample(&app).display());
+    app.undo();
+    if let Some(clip) = app.project.tracks[0].arrangement.first() {
+        assert!(matches!(&clip.clip, Clip::Audio(a) if Path::new(&a.sample).is_file()));
+    }
+    app.redo();
+    app.redo();
+    assert_eq!(app.project.tempo, 121.0);
+    app.save_to_path(&file);
+    assert!(crate::library::missing_files(&Project::load(&file).unwrap()).is_empty());
+}
+
+/// A path that only looks as if it were in «Sin guardar» (`..` out of it) is
+/// copied into the project, never moved out of the user's folder.
+#[test]
+fn saving_never_moves_files_from_outside_unsaved() {
+    let dir = fresh("collect-dotdot");
+    let mine = dir.join("Mi música/bajo.wav");
+    write_wav(&mine, 0.5, 110.0);
+    let unsaved = crate::library::root().join(crate::library::UNSAVED);
+    std::fs::create_dir_all(&unsaved).unwrap();
+    // From «Sin guardar» up to the root, then down to the file.
+    let ups = unsaved.canonicalize().unwrap().components().count() - 1;
+    let sneaky = (0..ups).fold(unsaved.clone(), |p, _| p.join("..")).join(mine.canonicalize().unwrap().strip_prefix("/").unwrap());
+    assert!(sneaky.starts_with(&unsaved) && sneaky.is_file());
+    let mut project = Project::empty();
+    project.tracks[0] = Track::new_audio("Bajo", [1, 2, 3]);
+    project.tracks[0].arrangement.push(ArrangementClip { start: 0.0, length: 2.0, clip: Clip::Audio(audio_clip(&sneaky, 2.0, WarpMode::Off)) });
+    let target = dir.join("Tema");
+    let (report, _) = crate::library::collect_renaming(&mut project, &target);
+    assert_eq!((report.copied, report.moved), (1, 0));
+    assert!(mine.is_file(), "the user's file stays where it was");
+    let Clip::Audio(a) = &project.tracks[0].arrangement[0].clip else { unreachable!() };
+    assert!(Path::new(&a.sample).starts_with(&target), "{}", a.sample);
+}
+
+/// A value from a newer Pulse (an export format it doesn't know) leaves out
+/// that value only: the rest of the settings stay, and a copy of the file too.
+#[test]
+fn unknown_values_in_settings_keep_the_rest() {
+    let dir = fresh("settings-unknown");
+    let path = dir.join("settings.json");
+    let mut s = crate::settings::Settings::default();
+    s.library = Some(PathBuf::from("/Volumes/Musica/Pulse"));
+    s.plugin_folders = vec![PathBuf::from("/Volumes/Plugins")];
+    s.record_offset_ms = 12.5;
+    s.export.mp3_kbps = 192;
+    let mut v = serde_json::to_value(&s).unwrap();
+    v["export"]["format"] = "Ogg".into();
+    v["a_future_setting"] = 7.into();
+    std::fs::write(&path, v.to_string()).unwrap();
+    let read: crate::settings::Settings = crate::store::read_json(&path);
+    assert_eq!(read.library, s.library);
+    assert_eq!(read.plugin_folders, s.plugin_folders);
+    assert_eq!(read.record_offset_ms, 12.5);
+    assert_eq!(read.export.mp3_kbps, 192, "the rest of `export` too");
+    assert_eq!(read.export.format, crate::settings::Settings::default().export.format);
+    assert_eq!(read.unknown.get("a_future_setting"), Some(&serde_json::json!(7)));
+    assert!(path.exists() && dir.join("settings.json (dañado)").exists(), "the original is kept beside it");
+
+    // Lists: the entries that read stay.
+    let midi = dir.join("midi.json");
+    std::fs::write(&midi, serde_json::json!([{"cc": 1, "control": {"Transport": "Play"}}, {"cc": 2, "control": {"Transport": "TapTempo"}}, {"cc": 3, "control": {"Transport": "Stop"}}]).to_string()).unwrap();
+    let read: Vec<crate::midi_map::Mapping> = crate::store::read_json(&midi);
+    assert_eq!(read.iter().map(|m| m.cc).collect::<Vec<_>>(), [1, 3]);
+    let versions = dir.join("Versiones");
+    std::fs::create_dir_all(&versions).unwrap();
+    std::fs::write(versions.join("versiones.json"), serde_json::json!([{"file": "1.pulse", "name": "A", "created": 1}, {"file": "2.pulse", "name": "B"}, {"file": "3.pulse", "name": "C", "created": 3}]).to_string()).unwrap();
+    assert_eq!(crate::versions::list(&versions).iter().map(|v| v.name.as_str()).collect::<Vec<_>>(), ["A", "C"]);
+    // Nothing readable at all: set aside, as before.
+    let broken = dir.join("recientes.json");
+    std::fs::write(&broken, "{no es json").unwrap();
+    let read: Vec<PathBuf> = crate::store::read_json(&broken);
+    assert!(read.is_empty() && !broken.exists() && dir.join("recientes.json (dañado)").exists());
+}
+
+/// A recovery copy that can't be opened is moved aside: the next autosave
+/// doesn't write over it.
+#[test]
+fn an_unreadable_recovery_copy_is_kept() {
+    let dir = fresh("recovery-unreadable");
+    let recovery = crate::recovery::Recovery::new(dir.join("Recuperación"));
+    let info = crate::recovery::Info { original: None, saved_at: 1, version: "9.0.0".into() };
+    recovery.write(&Project::demo(), &info).unwrap();
+    let mut text = std::fs::read_to_string(recovery.project_path()).unwrap();
+    text = text.replacen("\"format\": 2", "\"format\": 99", 1);
+    std::fs::write(recovery.project_path(), &text).unwrap();
+    let mut app = PulseApp::headless(Project::demo());
+    app.recovery = Some(recovery.clone());
+    app.answers.push_back(crate::commands::Answer::Save);
+    assert!(!app.offer_recovery());
+    let status = app.status.clone().unwrap_or_default();
+    assert!(status.contains("la copia queda en"), "{status}");
+    let kept = dir.join("Recuperación/autoguardado.pulse (dañado)");
+    assert_eq!(std::fs::read_to_string(&kept).unwrap(), text);
+    assert_eq!(recovery.pending(), None);
+}

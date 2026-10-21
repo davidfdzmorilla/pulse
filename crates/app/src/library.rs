@@ -160,8 +160,18 @@ pub struct Collected {
 /// Brings every audio file the project uses into `dir/Samples`: files of an unsaved
 /// project (in `Sin guardar`) are moved, the rest copied. The project then points
 /// at them. Files already in `dir` stay.
+#[cfg(test)]
 pub fn collect(project: &mut Project, dir: &Path) -> Collected {
-    let unsaved = root().join(UNSAVED);
+    collect_renaming(project, dir).0
+}
+
+/// [`collect`], also saying where each file it brought went (old path → new),
+/// to point earlier states of the project (undo) at them too.
+pub fn collect_renaming(project: &mut Project, dir: &Path) -> (Collected, HashMap<String, String>) {
+    // Without links or `..`: a path that only looks as if it were in «Sin
+    // guardar» (`Sin guardar/../../Música/x.wav`) must be copied, never moved.
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let unsaved = real(&root().join(UNSAVED));
     let mut done: HashMap<String, String> = HashMap::new();
     let mut report = Collected::default();
     let mut emptied: Vec<PathBuf> = Vec::new();
@@ -170,8 +180,8 @@ pub fn collect(project: &mut Project, dir: &Path) -> Collected {
             *file = new.clone();
             continue;
         }
-        let source = PathBuf::from(file.as_str());
-        if source.starts_with(dir) {
+        let source = real(Path::new(file.as_str()));
+        if source.starts_with(dir) || source.starts_with(real(dir)) {
             continue;
         }
         if !source.is_file() {
@@ -211,7 +221,16 @@ pub fn collect(project: &mut Project, dir: &Path) -> Collected {
             dir = dir.parent().unwrap_or(&unsaved);
         }
     }
-    report
+    (report, done)
+}
+
+/// Points the project's audio files at their new places (`renamed`: old path → new).
+pub fn rename_files(project: &mut Project, renamed: &HashMap<String, String>) {
+    for file in files_mut(project) {
+        if let Some(new) = renamed.get(file.as_str()) {
+            *file = new.clone();
+        }
+    }
 }
 
 /// `path`, or `path 2`, `path 3`… if taken.

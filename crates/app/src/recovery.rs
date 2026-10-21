@@ -77,6 +77,14 @@ impl Recovery {
         Project::load(&self.project_path())
     }
 
+    /// A copy that could not be opened (from a newer Pulse, or damaged) is moved
+    /// out of the way, so the next autosave doesn't write over it.
+    pub fn set_aside(&self) -> Option<PathBuf> {
+        let aside = crate::store::set_aside(&self.project_path());
+        let _ = std::fs::remove_file(self.dir.join(INFO));
+        aside
+    }
+
     /// No unsaved changes are left to recover.
     pub fn clear(&self) {
         let _ = std::fs::remove_file(self.dir.join(INFO));
@@ -197,7 +205,8 @@ impl PulseApp {
         let project = match recovery.load() {
             Ok(project) => project,
             Err(e) => {
-                self.status = Some(format!("No se pudieron recuperar los cambios: {e}"));
+                let kept = recovery.set_aside().map_or_else(String::new, |p| format!(" · la copia queda en {}", p.display()));
+                self.status = Some(format!("No se pudieron recuperar los cambios: {e}{kept}"));
                 return false;
             }
         };

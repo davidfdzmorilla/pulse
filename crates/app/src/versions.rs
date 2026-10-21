@@ -283,7 +283,8 @@ impl PulseApp {
             }
         };
         self.capture_plugins();
-        let _ = add(&dir, &self.project, &format!("Antes de volver a «{}»", version.name), "", true);
+        // Named, so the automatic ones that come after never push it out.
+        let _ = add(&dir, &self.project, &format!("Antes de volver a «{}»", version.name), "", false);
         self.history.commit(&self.project, false);
         self.project = project;
         self.history.commit(&self.project, false);
@@ -533,6 +534,7 @@ mod tests {
         assert_eq!(app.project.tempo, Project::demo().tempo);
         let last = list(&dir).last().cloned().unwrap();
         assert_eq!(last.name, "Antes de volver a «Original»");
+        assert!(!last.auto, "named: the automatic ones never push it out");
         assert_eq!(load(&dir, &last).unwrap().tempo, 95.0, "what there was is kept");
         app.undo();
         assert_eq!(app.project.tempo, 95.0);

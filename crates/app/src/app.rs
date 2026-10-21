@@ -278,6 +278,8 @@ pub struct PulseApp {
     pub capture: Option<InputCapture>,
     /// The input could not be opened: not retried every frame.
     pub capture_failed: bool,
+    /// A take of the recording under way could not be written: its safety copy stays.
+    pub take_failed: bool,
     /// Tab pressed this frame (with shift?), kept from egui's focus navigation.
     tab_pressed: Option<bool>,
     pub export: crate::export::Dialog,
@@ -497,6 +499,7 @@ impl PulseApp {
             clip_automation: Vec::new(),
             capture: None,
             capture_failed: false,
+            take_failed: false,
             tab_pressed: None,
             overridden: HashSet::new(),
             selected_pad: 0,
@@ -1862,6 +1865,13 @@ impl PulseApp {
                         crate::logs::note(&e);
                     }
                 }
+                // A take that could not be written: the copy is all there is of it.
+                (false, true) if self.take_failed => {
+                    self.take_failed = false;
+                    if let Some(kept) = capture.keep_safety() {
+                        self.status = Some(format!("No se pudo guardar la toma: la grabación entera queda en {}", kept.display()));
+                    }
+                }
                 (false, true) => capture.finish_safety(),
                 _ => {}
             }
@@ -1926,6 +1936,7 @@ impl PulseApp {
             .expect("a free name");
         if let Err(error) = write_wav(&path, &left, &right, rate) {
             self.status = Some(error);
+            self.take_failed = true;
             return None;
         }
         let key = path.to_string_lossy().into_owned();
@@ -2503,9 +2514,11 @@ impl PulseApp {
         let collected = match path.parent().filter(|_| crate::library::in_own_folder(&path)) {
             Some(dir) => {
                 let before = self.project.clone();
-                let collected = crate::library::collect(&mut self.project, dir);
+                let (collected, renamed) = crate::library::collect_renaming(&mut self.project, dir);
                 if self.project != before {
-                    self.history.commit(&self.project, false);
+                    // Not a step of its own: every state to undo to points at the
+                    // files where they are now (the moved ones are gone from before).
+                    self.history.rewrite(|p| crate::library::rename_files(p, &renamed));
                     self.sync_all();
                 }
                 Some(collected)

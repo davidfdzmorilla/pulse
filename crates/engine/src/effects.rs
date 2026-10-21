@@ -479,6 +479,10 @@ pub struct AutoFilter {
     /// Per channel: the resonant stage, then the first of a 24 dB filter.
     filters: [Svf; 2],
     first: [Svf; 2],
+    /// The coefficients in use (the resonant stage's, the first stage's) and
+    /// samples until the LFO moves them again.
+    coefs: Option<(SvfCoefs, Option<SvfCoefs>)>,
+    until: usize,
 }
 
 impl AutoFilter {
@@ -499,47 +503,51 @@ impl AutoFilter {
         let k = Self::damping(p.resonance);
         let ringing = p.resonance > Self::SELF_OSCILLATION;
         let drive = (p.drive_db > 0.0).then(|| db_to_gain(p.drive_db));
-        let mut offset = 0;
-        for (ca, cb) in l.chunks_mut(Self::CONTROL_RATE).zip(r.chunks_mut(Self::CONTROL_RATE)) {
-            // LFO locked to the transport so it stays in time with the music.
-            let beat = ctx.beat + offset as f64 * ctx.beats_per_sample;
-            let phase = (beat / p.lfo_beats.max(0.0625)).fract() as f32;
-            let lfo = (phase * TAU).sin();
-            let cutoff = p.cutoff * 2f32.powf(lfo * p.lfo_amount);
-            let c = SvfCoefs::new(cutoff, k, ctx.sample_rate);
-            // 24 dB: a first stage without resonance (a fourth-order Butterworth's).
-            let first = p.steep.then(|| SvfCoefs::new(cutoff, 1.848, ctx.sample_rate));
-            for (ch, buf) in [ca, cb].into_iter().enumerate() {
-                for s in buf.iter_mut() {
-                    let mut x = *s;
-                    if let Some(g) = drive {
-                        // Driven: louder into a soft clip, about as loud out.
-                        x = (x * g).tanh() / g.sqrt();
-                    }
-                    if let Some(first) = &first {
-                        let (low, band, high) = self.first[ch].tick(x, first);
-                        x = match p.mode {
-                            FilterMode::LowPass => low,
-                            FilterMode::HighPass => high,
-                            FilterMode::BandPass => band,
-                        };
-                    }
-                    let (low, band, high) = self.filters[ch].tick(x, &c);
-                    if ringing {
-                        // Ringing on its own, the resonance's level stays bounded:
-                        // both of its states (bounding one alone runs away near the top).
-                        let f = &mut self.filters[ch];
-                        f.ic1 = f.ic1.tanh();
-                        f.ic2 = RING_LIMIT * (f.ic2 / RING_LIMIT).tanh();
-                    }
-                    *s = match p.mode {
+        for i in 0..l.len().min(r.len()) {
+            // Every CONTROL_RATE samples of its own count (not of the block's,
+            // so any buffer size sounds the same): the LFO moves the cutoff.
+            if self.until == 0 || self.coefs.is_none() {
+                // LFO locked to the transport so it stays in time with the music.
+                let beat = ctx.beat + i as f64 * ctx.beats_per_sample;
+                let phase = (beat / p.lfo_beats.max(0.0625)).fract() as f32;
+                let lfo = (phase * TAU).sin();
+                let cutoff = p.cutoff * 2f32.powf(lfo * p.lfo_amount);
+                // 24 dB: a first stage without resonance (a fourth-order Butterworth's).
+                let first = p.steep.then(|| SvfCoefs::new(cutoff, 1.848, ctx.sample_rate));
+                self.coefs = Some((SvfCoefs::new(cutoff, k, ctx.sample_rate), first));
+                self.until = Self::CONTROL_RATE;
+            }
+            self.until -= 1;
+            let Some((c, first)) = self.coefs else { continue };
+            let first = first.filter(|_| p.steep);
+            for (ch, s) in [&mut l[i], &mut r[i]].into_iter().enumerate() {
+                let mut x = *s;
+                if let Some(g) = drive {
+                    // Driven: louder into a soft clip, about as loud out.
+                    x = (x * g).tanh() / g.sqrt();
+                }
+                if let Some(first) = &first {
+                    let (low, band, high) = self.first[ch].tick(x, first);
+                    x = match p.mode {
                         FilterMode::LowPass => low,
                         FilterMode::HighPass => high,
                         FilterMode::BandPass => band,
                     };
                 }
+                let (low, band, high) = self.filters[ch].tick(x, &c);
+                if ringing {
+                    // Ringing on its own, the resonance's level stays bounded:
+                    // both of its states (bounding one alone runs away near the top).
+                    let f = &mut self.filters[ch];
+                    f.ic1 = f.ic1.tanh();
+                    f.ic2 = RING_LIMIT * (f.ic2 / RING_LIMIT).tanh();
+                }
+                *s = match p.mode {
+                    FilterMode::LowPass => low,
+                    FilterMode::HighPass => high,
+                    FilterMode::BandPass => band,
+                };
             }
-            offset += Self::CONTROL_RATE;
         }
     }
 }
@@ -587,15 +595,20 @@ pub struct Phaser {
     stages: [[(f32, f32); PHASER_STAGES]; 2],
     feedback: [f32; 2],
     phase: f32,
+    /// The allpasses' coefficients, and samples until the LFO moves them
+    /// again (its own count: any buffer size sounds the same).
+    coefs: [f32; 2],
+    until: usize,
 }
 
 impl Phaser {
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
         let p = self.params;
         let inc = p.rate / sr;
-        let mut coefs = [0f32; 2];
-        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
-            if i % 16 == 0 {
+        let mut coefs = self.coefs;
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            if self.until == 0 {
+                self.until = 16;
                 // The notches sweep up to two octaves either side of the center.
                 for (ch, coef) in coefs.iter_mut().enumerate() {
                     let lfo = ((self.phase + ch as f32 * 0.25) * TAU).sin();
@@ -604,6 +617,7 @@ impl Phaser {
                     *coef = (t - 1.0) / (t + 1.0);
                 }
             }
+            self.until -= 1;
             self.phase = (self.phase + inc) % 1.0;
             for (ch, sample) in [a, b].into_iter().enumerate() {
                 let mut x = *sample + self.feedback[ch] * p.feedback;
@@ -617,6 +631,7 @@ impl Phaser {
                 *sample += (x - *sample) * p.mix;
             }
         }
+        self.coefs = coefs;
     }
 }
 
@@ -791,6 +806,8 @@ impl EffectProcessor {
                 params,
                 filters: Default::default(),
                 first: Default::default(),
+                coefs: None,
+                until: 0,
             }),
             Effect::Chorus(params) => Self::Chorus(Chorus::new(params, sample_rate)),
             Effect::Phaser(params) => Self::Phaser(Phaser {
@@ -798,6 +815,8 @@ impl EffectProcessor {
                 stages: [[(0.0, 0.0); PHASER_STAGES]; 2],
                 feedback: [0.0; 2],
                 phase: 0.0,
+                coefs: [0.0; 2],
+                until: 0,
             }),
             Effect::Bitcrusher(params) => Self::Bitcrusher(Bitcrusher { params, counter: 0.0, held: [0.0; 2] }),
             Effect::Ducker(params) => Self::Ducker(Ducker { params, key: Key::new(), envelope: 0.0 }),
@@ -907,6 +926,8 @@ impl EffectProcessor {
             Self::AutoFilter(fx) => {
                 fx.filters = Default::default();
                 fx.first = Default::default();
+                fx.coefs = None;
+                fx.until = 0;
             }
             Self::Chorus(fx) => {
                 fx.lines.iter_mut().for_each(|line| line.fill(0.0));
@@ -917,6 +938,7 @@ impl EffectProcessor {
                 fx.stages = [[(0.0, 0.0); PHASER_STAGES]; 2];
                 fx.feedback = [0.0; 2];
                 fx.phase = 0.0;
+                fx.until = 0;
             }
             Self::Bitcrusher(fx) => {
                 fx.counter = 0.0;

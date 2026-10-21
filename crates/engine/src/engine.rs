@@ -2760,6 +2760,64 @@ mod tests {
         assert_eq!(collected + handle.collect_garbage(), (GARBAGE_QUEUE / (MAX_TRACKS * NUM_SCENES) + 1) * MAX_TRACKS * NUM_SCENES);
     }
 
+    /// The same song rendered in callbacks of any size sounds the same, sample
+    /// for sample: every instrument (but the Polychrome, see below) and every
+    /// effect, also the ones whose settings move.
+    #[test]
+    fn the_buffer_size_never_changes_the_sound() {
+        use crate::model::{AutoFilterParams, Device, Effect, Groove};
+        let busy = || {
+            let mut clip = MidiClip::new("busy", 4.0, [0, 0, 0]);
+            for (i, pitch) in [48u8, 55, 60, 64, 67, 72, 52, 59].iter().enumerate() {
+                clip.notes.push(Note { start: i as f64 * 0.5, length: 0.4 + 0.1 * (i % 3) as f64, pitch: *pitch, velocity: 0.6 + 0.05 * i as f32, chance: 1.0 });
+            }
+            clip.groove = Some(Groove { grid: 0.25, swing: 0.3, accent: 0.2, humanize: 0.5 });
+            clip
+        };
+        let render = |kind: Option<InstrumentKind>, chain: Vec<Device>, sizes: &[usize]| {
+            let (mut engine, mut handle) = crate::audio::detached(SR);
+            if let Some(kind) = kind {
+                assert!(handle.send(Command::set_instrument(0, kind, SR)));
+            }
+            assert!(handle.send(Command::SetWavetables { track: 0, tables: Box::new(vec![Arc::new(crate::wavetable::builtin(0)), Arc::new(crate::wavetable::builtin(3))]) }));
+            assert!(handle.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(busy()))]) }));
+            assert!(handle.send(Command::ReplaceChain { target: Target::Track(0), chain: build_chain(&chain, SR) }));
+            assert!(handle.send(Command::SetOutputLimit(false)));
+            assert!(handle.send(Command::Play));
+            let total = 3 * 48_000;
+            let mut out = Vec::with_capacity(2 * total);
+            let mut k = 0;
+            while out.len() < 2 * total {
+                let n = sizes[k % sizes.len()];
+                k += 1;
+                let mut block = vec![0f32; 2 * n];
+                engine.process(&mut block, 2);
+                handle.collect_garbage();
+                out.extend(block);
+            }
+            out.truncate(2 * total);
+            out
+        };
+        let odd = [1usize, 63, 64, 500, 1024, 4096, 37];
+        let mut differ = Vec::new();
+        for kind in InstrumentKind::catalog() {
+            if render(Some(kind), vec![], &[1024]) != render(Some(kind), vec![], &odd) {
+                differ.push(kind.label().to_string());
+            }
+        }
+        let filter = Device::new(Effect::AutoFilter(AutoFilterParams { steep: true, resonance: 0.9, drive_db: 6.0, lfo_amount: 2.0, lfo_beats: 0.5, ..Default::default() }));
+        for effect in Effect::catalog().into_iter().map(Device::new).chain([filter]) {
+            if render(None, vec![effect], &[1024]) != render(None, vec![effect], &odd) {
+                differ.push(effect.effect.label().to_string());
+            }
+        }
+        // Known: the Polychrome evaluates its modulation over each piece it is
+        // asked for (glides, smooth random and drift integrate over it), so a
+        // buffer that isn't a multiple of 64 moves those updates by under 32
+        // samples: inaudible, but not the same samples.
+        assert_eq!(differ, ["Polychrome Synth"], "depend on the buffer size");
+    }
+
     fn one_note_clip() -> Box<PlayClip> {
         let mut clip = MidiClip::new("test", 4.0, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: 1.0, pitch: 60, velocity: 1.0, chance: 1.0 });

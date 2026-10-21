@@ -9,14 +9,25 @@ use engine::model::{Device, Effect, InstrumentKind};
 use engine::Target;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 /// What the browser keeps between frames.
 #[derive(Default)]
 pub struct State {
     pub search: String,
-    /// The file being heard, since when, and for how long.
+    /// The file being heard, since when, and for how long (for ever: a loop).
     previewing: Option<(PathBuf, Instant, f64)>,
+    /// The tempo it is heard at, a loop in time with the project's.
+    pub in_tempo: Option<f64>,
+    /// A file whose tempo is being found before it is heard.
+    analysing: Option<(PathBuf, Arc<Mutex<Option<Option<beats::Grid>>>>)>,
+    /// The files shown this frame, in order (for ↑ and ↓).
+    shown: Vec<PathBuf>,
+    /// The last click was in the browser: ↑ and ↓ move through its files.
+    keys: bool,
+    /// The selection moved with the keys: shown in the list.
+    scroll: bool,
     /// The row clicked last.
     selected: Option<PathBuf>,
     /// Folder listings, refreshed every couple of seconds while shown.
@@ -31,6 +42,9 @@ struct Entry {
     name: String,
     dir: bool,
 }
+
+/// Files up to this long are heard as loops at the project's tempo.
+const LOOP_SECONDS: f64 = 32.0;
 
 /// What can be dragged out of the browser.
 #[derive(Clone, Debug)]
@@ -160,6 +174,8 @@ fn item(ui: &mut egui::Ui, icon: &str, label: &str, hint: &str) -> bool {
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
+    let panel = ui.max_rect();
+    app.browser.shown.clear();
     ui.label(RichText::new("Navegador").strong());
     let target = app.selected_target;
     ui.label(
@@ -241,14 +257,69 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         });
     });
+    keys(app, ui, panel);
+}
+
+/// ↑ and ↓ after a click in the browser: the file before or after the one
+/// selected, heard if it is audio. A click elsewhere gives the keys back.
+fn keys(app: &mut PulseApp, ui: &egui::Ui, panel: egui::Rect) {
+    let ctx = ui.ctx();
+    if ctx.input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !panel.contains(p))) {
+        app.browser.keys = false;
+    }
+    if !app.browser.keys || ctx.memory(|m| m.focused().is_some()) {
+        return;
+    }
+    let (up, down) = ctx.input_mut(|i| (i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp), i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)));
+    let step: isize = if down { 1 } else if up { -1 } else { return };
+    if let Some(next) = app.browser.next_file(step) {
+        app.browser.selected = Some(next.clone());
+        app.browser.scroll = true;
+        if kind(&next) == Some(Kind::Audio) {
+            app.preview(Some(&next));
+        }
+    }
+}
+
+impl State {
+    /// The file `step` rows from the one selected among those shown (the first
+    /// or last if none is).
+    fn next_file(&self, step: isize) -> Option<PathBuf> {
+        let at = self.selected.as_ref().and_then(|s| self.shown.iter().position(|p| p == s));
+        let index = match at {
+            Some(i) => (i as isize + step).clamp(0, self.shown.len() as isize - 1) as usize,
+            None if step > 0 => 0,
+            None => self.shown.len().checked_sub(1)?,
+        };
+        self.shown.get(index).cloned()
+    }
 }
 
 /// Pulse's folder and the user's places: a search over all of them, or their folders.
 fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
+    ui.horizontal(|ui| {
+        let mut on = app.settings.preview_in_tempo;
+        let response = ui.checkbox(&mut on, RichText::new("A tempo").size(10.5)).on_hover_text("Los loops se escuchan al tempo del proyecto, en bucle y, si la canción suena, a tiempo con ella. Sin marcar, cada archivo suena una vez a su velocidad");
+        if response.changed() {
+            let mut next = app.settings.clone();
+            next.preview_in_tempo = on;
+            app.set_settings(next);
+            if let Some(path) = app.browser.previewing().map(Path::to_path_buf) {
+                app.preview(Some(&path));
+            }
+        }
+        if let Some(bpm) = app.browser.in_tempo {
+            ui.label(RichText::new(format!("loop a {} BPM", crate::tempo_ui::bpm_text(bpm))).color(TEXT_DIM).size(10.5));
+        }
+    });
     ui.add(egui::TextEdit::singleline(&mut app.browser.search).hint_text("Buscar muestras, proyectos, presets").desired_width(f32::INFINITY));
+    app.hear_analysed();
     // A preview that has played to its end is over.
     if app.browser.previewing.as_ref().is_some_and(|(_, at, length)| at.elapsed().as_secs_f64() > *length) {
         app.browser.previewing = None;
+    }
+    if app.browser.analysing.is_some() {
+        ui.ctx().request_repaint_after(Duration::from_millis(50));
     }
     let root = crate::library::root();
     let mut places: Vec<(String, PathBuf)> = [
@@ -332,8 +403,12 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
     let sense = if kind == Kind::Audio { Sense::click_and_drag() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), sense);
     crate::widgets::name(&response, egui::WidgetType::Button, &name);
+    app.browser.shown.push(path.to_path_buf());
     let playing = app.browser.previewing() == Some(path);
     let selected = app.browser.selected.as_deref() == Some(path);
+    if selected && std::mem::take(&mut app.browser.scroll) {
+        response.scroll_to_me(None);
+    }
     if selected || response.hovered() {
         ui.painter().rect_filled(rect, 2.0, if selected { theme::CONTROL_HOVER } else { theme::CONTROL });
     }
@@ -349,7 +424,7 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
     let galley = ui.painter().layout_job(job);
     ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, TEXT);
     let hint = match kind {
-        Kind::Audio => "Clic: escuchar (otra vez: parar) · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
+        Kind::Audio => "Clic: escuchar (otra vez: parar) · ↑ ↓: el anterior o el siguiente · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
         Kind::Project => "Doble clic: abrir el proyecto",
         Kind::Preset => "Doble clic: aplicar el preset a la pista seleccionada",
     };
@@ -369,6 +444,7 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
         }
     } else if response.clicked() {
         app.browser.selected = Some(path.to_path_buf());
+        app.browser.keys = true;
         if kind == Kind::Audio {
             app.preview((!playing).then_some(path));
         }
@@ -376,17 +452,84 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
 }
 
 impl PulseApp {
-    /// Hears a file over the output (or stops the one playing).
+    /// Hears a file over the output (or stops the one playing). With «A
+    /// tempo», a loop plays at the project's tempo, looping, once its tempo is
+    /// known (found in the background the first time: a moment).
     pub fn preview(&mut self, path: Option<&Path>) {
+        self.browser.analysing = None;
+        self.browser.in_tempo = None;
         let sample = path.map(|p| self.sample(&p.to_string_lossy())).filter(|s| s.frames() > 0);
-        self.browser.previewing = match (path, &sample) {
-            (Some(path), Some(s)) => Some((path.to_path_buf(), Instant::now(), s.duration())),
-            _ => None,
+        let (Some(path), Some(sample)) = (path, sample) else {
+            if path.is_some() {
+                self.status = Some("No se pudo leer el archivo".into());
+            }
+            self.browser.previewing = None;
+            self.audio.send(engine::Command::PreviewSample(None));
+            return;
         };
-        if path.is_some() && sample.is_none() {
-            self.status = Some("No se pudo leer el archivo".into());
+        if self.settings.preview_in_tempo && sample.duration() <= LOOP_SECONDS {
+            let key = path.to_string_lossy().into_owned();
+            match self.tempo.grid(&key) {
+                Some(grid) => {
+                    if self.hear_in_tempo(path, &sample, grid) {
+                        return;
+                    }
+                }
+                None => {
+                    // Silent until its tempo is known (see `hear_analysed`).
+                    let result = Arc::new(Mutex::new(None));
+                    let shared = result.clone();
+                    let file = sample.clone();
+                    std::thread::spawn(move || {
+                        let grid = beats::analyze(&file.left, &file.right, file.sample_rate).ok().flatten();
+                        if let Ok(mut slot) = shared.lock() {
+                            *slot = Some(grid);
+                        }
+                    });
+                    self.browser.analysing = Some((path.to_path_buf(), result));
+                    self.browser.previewing = Some((path.to_path_buf(), Instant::now(), f64::INFINITY));
+                    self.audio.send(engine::Command::PreviewSample(None));
+                    return;
+                }
+            }
         }
-        self.audio.send(engine::Command::PreviewSample(sample));
+        self.browser.previewing = Some((path.to_path_buf(), Instant::now(), sample.duration()));
+        self.audio.send(engine::Command::PreviewSample(Some(sample)));
+    }
+
+    /// Once the tempo of the file about to be heard is found: heard.
+    pub(crate) fn hear_analysed(&mut self) {
+        let done = self.browser.analysing.as_ref().and_then(|(path, result)| Some((path.clone(), result.lock().ok()?.clone()?)));
+        let Some((path, grid)) = done else { return };
+        self.tempo.remember(&path.to_string_lossy(), grid);
+        self.browser.analysing = None;
+        if self.browser.previewing() == Some(path.as_path()) {
+            self.preview(Some(&path));
+        }
+    }
+
+    /// Plays a loop at the project's tempo, looping, as a clip of it would
+    /// (whole bars, Beats for drums). Without a tempo found, one whose length
+    /// is whole bars at a likely tempo is taken as that, as when importing it;
+    /// false if it isn't a loop.
+    fn hear_in_tempo(&mut self, path: &Path, sample: &Arc<engine::Sample>, grid: Option<beats::Grid>) -> bool {
+        use engine::model::WarpMode;
+        let duration = sample.duration();
+        let name = path.file_stem().map_or(String::new(), |s| s.to_string_lossy().into_owned());
+        let guess = self.new_audio_clip(path, sample, [0; 3]);
+        let mut clip = match grid {
+            Some(grid) => crate::tempo_ui::warped(&guess, &beats::fit_loop(grid, duration, Some(self.project.tempo)), duration),
+            None if guess.warp != WarpMode::Off => guess,
+            None => return false,
+        };
+        if clip.warp == WarpMode::Stretch && crate::tempo_ui::is_drum_loop(&name, sample) {
+            clip.warp = WarpMode::Beats;
+        }
+        self.browser.in_tempo = Some(clip.original_bpm);
+        let playing = crate::sync::play_clip(&engine::model::Clip::Audio(clip), &mut self.samples);
+        self.browser.previewing = Some((path.to_path_buf(), Instant::now(), f64::INFINITY));
+        self.audio.send(engine::Command::PreviewClip(Some(Box::new(playing))));
+        true
     }
 
     /// Applies a user preset file to the selected MIDI track.
@@ -517,5 +660,92 @@ mod tests {
         let listed: Vec<String> = read(&dir).into_iter().map(|e| e.name).collect();
         assert_eq!(listed, vec!["Baterías", "Mi tema.pulse"]);
         std::fs::remove_dir_all(&dir).ok();
+    }
+}
+
+#[cfg(test)]
+mod preview_tests {
+    use super::*;
+    use crate::project::Project;
+
+    /// Four bars of hats at 150 BPM: a hit on every sixteenth.
+    fn tops(path: &Path, seconds_more: f64) {
+        let rate = 48_000.0;
+        let sixteenth = 60.0 / 150.0 / 4.0;
+        let frames = ((64.0 * sixteenth + seconds_more) * rate as f64) as usize;
+        let mut seed = 7u64;
+        let tops: Vec<f32> = (0..frames)
+            .map(|i| {
+                seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+                let noise = ((seed >> 33) as f32 / (1u64 << 31) as f32) - 1.0;
+                let t = i as f64 / rate as f64;
+                let step = (t / sixteenth) as usize;
+                let level = if step % 4 == 0 { 0.9 } else { 0.4 };
+                noise * level * (-(t - step as f64 * sixteenth) * 60.0).exp() as f32
+            })
+            .collect();
+        crate::capture::write_wav(path, &tops, &tops, rate).unwrap();
+    }
+
+    fn wait(app: &mut PulseApp) {
+        for _ in 0..500 {
+            app.hear_analysed();
+            if app.browser.analysing.is_none() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        panic!("the analysis didn't finish");
+    }
+
+    /// A loop is heard at the project's tempo, looping, once its tempo is
+    /// found; the next time at once. Without «A tempo», once at its own speed.
+    #[test]
+    fn loops_are_heard_in_tempo() {
+        let dir = std::env::temp_dir().join(format!("pulse-preescucha-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Tops 150.wav");
+        tops(&path, 0.0);
+        let mut app = PulseApp::headless(Project::empty());
+        app.project.tempo = 128.0;
+        app.preview(Some(&path));
+        assert_eq!(app.browser.in_tempo, None, "silent while its tempo is found");
+        assert!(app.browser.analysing.is_some());
+        wait(&mut app);
+        assert_eq!(app.browser.in_tempo, Some(150.0));
+        assert_eq!(app.browser.previewing(), Some(path.as_path()));
+        assert!(app.browser.previewing.as_ref().unwrap().2.is_infinite(), "a loop goes on");
+        app.preview(None);
+        app.preview(Some(&path));
+        assert_eq!(app.browser.in_tempo, Some(150.0), "known: at once");
+        // Not «A tempo»: once, as it is.
+        app.settings.preview_in_tempo = false;
+        app.preview(Some(&path));
+        assert_eq!(app.browser.in_tempo, None);
+        assert!((app.browser.previewing.as_ref().unwrap().2 - 6.4).abs() < 0.01);
+        // A file longer than a loop is heard as it is.
+        app.settings.preview_in_tempo = true;
+        let long = dir.join("Largo.wav");
+        tops(&long, 30.0);
+        app.preview(Some(&long));
+        assert!(app.browser.analysing.is_none() && app.browser.in_tempo.is_none());
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// ↑ and ↓ go through the files shown, from the one selected, and stop at
+    /// the ends.
+    #[test]
+    fn the_arrows_go_through_the_files() {
+        let mut state = State::default();
+        state.shown = ["a.wav", "b.wav", "c.pulse"].map(PathBuf::from).to_vec();
+        assert_eq!(state.next_file(1), Some(PathBuf::from("a.wav")), "nothing selected: the first");
+        assert_eq!(state.next_file(-1), Some(PathBuf::from("c.pulse")), "or the last");
+        state.selected = Some(PathBuf::from("b.wav"));
+        assert_eq!(state.next_file(1), Some(PathBuf::from("c.pulse")));
+        assert_eq!(state.next_file(-1), Some(PathBuf::from("a.wav")));
+        state.selected = Some(PathBuf::from("c.pulse"));
+        assert_eq!(state.next_file(1), Some(PathBuf::from("c.pulse")));
+        state.shown.clear();
+        assert_eq!(state.next_file(1), None);
     }
 }

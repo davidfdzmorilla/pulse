@@ -327,3 +327,38 @@ fn undo_and_adding_a_track_while_playing_are_not_heard() {
     assert!(undone < -60.0, "undo and redo are heard: {undone:.1} dB");
     assert!(added < -60.0, "adding a track is heard: {added:.1} dB");
 }
+
+/// Played twice live (stop, back to the start, play), a random arpeggio and
+/// a SuperSaw pad sound the same both times, as they do exported.
+#[test]
+fn chance_in_the_sound_repeats_on_every_play() {
+    for arp in [true, false] {
+        let mut p = Project::empty();
+        let mut t = Track::new("Pad", [0; 3], if arp { InstrumentKind::Synth(Default::default()) } else { InstrumentKind::SuperSaw(Default::default()) });
+        t.arrangement = vec![ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Midi(midi("chords", 8.0, vec![note(0.0, 4.0, 57, 0.7), note(0.0, 4.0, 64, 0.7), note(4.0, 4.0, 60, 0.7)])) }];
+        if arp {
+            t.midi_effects.push(MidiDevice::new(MidiEffect::Arpeggiator(ArpeggiatorParams { mode: ArpMode::Random, octaves: 3, ..Default::default() })));
+        }
+        p.tracks = vec![t];
+        let frames = (8.0 * 60.0 / p.tempo * SR as f64) as usize;
+        let mut renderer = OfflineRenderer::new(SR);
+        for c in sync::project_commands(&p, &mut SampleCache::default(), SR, &HashSet::new()) {
+            renderer.send(c);
+        }
+        let mut takes = Vec::new();
+        for _ in 0..2 {
+            for c in [Command::SetOutputLimit(false), Command::BackToArrangement, Command::SetPosition(0.0), Command::Play] {
+                renderer.send(c);
+            }
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            renderer.render(frames, &mut l, &mut r);
+            renderer.send(Command::Stop);
+            let (mut a, mut b) = (Vec::new(), Vec::new());
+            renderer.render(5 * 48_000, &mut a, &mut b);
+            takes.push(l);
+        }
+        let diff = takes[0].iter().zip(&takes[1]).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        let first = takes[0].iter().zip(&takes[1]).position(|(a, b)| a != b);
+        assert!(takes[0] == takes[1], "{}: {diff:e} from {first:?}", if arp { "arpeggio" } else { "SuperSaw" });
+    }
+}

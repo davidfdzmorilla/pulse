@@ -306,6 +306,11 @@ fn arpeggiate(events: &EventQueue, out: &mut EventQueue, state: &mut ArpState, p
             }
             (_, Some(s)) => {
                 state.expire(state.clock + s as u64);
+                // Playing, a random step's luck is its place on the grid: the
+                // song plays the same notes every time, live or exported.
+                if playing {
+                    state.seed = (grid as i64 as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15).rotate_right(29) as u32 | 1;
+                }
                 if let Some((pitch, velocity)) = state.next(p) {
                     push_event(out, s, Event::NoteOn { pitch, velocity, gate });
                 }

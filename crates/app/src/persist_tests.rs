@@ -574,7 +574,7 @@ fn try_open(text: &str) -> Result<String, String> {
                     let range = (range.0, range.1.min(range.0 + 2.0));
                     let mut s = crate::sync::SampleCache::default();
                     let mut rs = crate::export::plan(&p, &mut s, &Default::default(), Path::new("/dev/null"));
-                    let _ = crate::export::render(rs.remove(0).commands, range, crate::export::Song { tempo: p.tempo.clamp(20.0, 999.0), ring_out: 0.5 }, RATE, &AtomicBool::new(false), &|_| {});
+                    let _ = crate::export::render(rs.remove(0).commands, range, crate::export::Song { tempo: p.tempo.clamp(20.0, 999.0), ring_out: 0.5, held: 0.0 }, RATE, &AtomicBool::new(false), &|_| {});
                 }
                 let _ = p.to_json();
                 "opened".into()

@@ -258,7 +258,8 @@ pub struct MasterTrack {
 /// instead. Fields added with a default that an older Pulse can miss without
 /// sounding different don't need it; for those, `saved_by` makes it ask before
 /// saving over the file.
-pub const FORMAT: u32 = 1;
+/// 2: 16 scenes (an older Pulse, which reads 8, says to update instead of failing).
+pub const FORMAT: u32 = 2;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -277,7 +278,8 @@ fn scenes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[Option<C
 
 fn migrate(_value: &mut serde_json::Value, format: u64) {
     // Format 0 (no number) and 1 are the same: the number was added in 1.
-    if format < 1 {}
+    // 1 had 8 scenes: read as 16 (see `scenes`).
+    if format < 2 {}
 }
 
 /// Which Pulse saved a project's file. Not its content: projects that differ

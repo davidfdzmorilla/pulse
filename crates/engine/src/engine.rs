@@ -901,11 +901,23 @@ pub fn swing_offset(start: f64, grid: f64, amount: f32) -> f64 {
     grid * amount as f64 / 3.0
 }
 
+/// What tells apart the laps of copies of a clip on the Arrangement, so each
+/// copy takes its own chances (and humanizing): one at the song's start takes
+/// lap 0 as it always did, as do the Session's.
+pub fn copy_salt(start: f64) -> i64 {
+    if start == 0.0 {
+        return 0;
+    }
+    ((start * 960.0).round() as i64).wrapping_mul(0x2545_f491_4f6c_dd1d)
+}
+
 /// Schedules note-ons of `clip` (looping, local time 0 at `origin`) that start in
-/// `[from, to)`, with swing applied. Notes are cut short at `limit`.
+/// `[from, to)`, with swing applied. Notes are cut short at `limit`. `salt` sets
+/// apart its laps from another copy's (see `copy_salt`).
 fn schedule_notes(
     clip: &MidiClip,
     origin: f64,
+    salt: i64,
     from: f64,
     to: f64,
     limit: f64,
@@ -930,10 +942,10 @@ fn schedule_notes(
         let lap_start = lap as f64 * clip.length;
         for (index, note) in clip.notes.iter().enumerate().filter(|(_, n)| n.start < clip.length) {
             // Some notes play only some of the times round.
-            if !note.plays(index, lap) {
+            if !note.plays(index, lap.wrapping_add(salt)) {
                 continue;
             }
-            let (shift, velocity) = groove.apply(index, lap, note.start, note.velocity);
+            let (shift, velocity) = groove.apply(index, lap.wrapping_add(salt), note.start, note.velocity);
             // Never before the clip starts.
             let t = (lap_start + note.start + shift).max(0.0);
             if t < local_from || t >= local_to {
@@ -1391,7 +1403,7 @@ impl Track {
     fn collect_notes(&mut self, from: f64, to: f64, timing: &Timing) {
         if let Some(slot) = self.playing {
             if let Some(PlayClip::Midi(clip)) = self.slots[slot].as_deref() {
-                schedule_notes(clip, self.launch_beat, from, to, f64::INFINITY, timing, &mut self.events);
+                schedule_notes(clip, self.launch_beat, 0, from, to, f64::INFINITY, timing, &mut self.events);
             }
         } else if self.follows_arrangement {
             for placed in self.arrangement.iter() {
@@ -1400,7 +1412,7 @@ impl Track {
                 if start < end {
                     // Cut at the loop's end, where the transport jumps back: they end by
                     // themselves, and notes played live go on sounding across it.
-                    schedule_notes(clip, placed.start, start, end, placed.end().min(timing.loop_end), timing, &mut self.events);
+                    schedule_notes(clip, placed.start, copy_salt(placed.start), start, end, placed.end().min(timing.loop_end), timing, &mut self.events);
                 }
             }
         }
@@ -3862,6 +3874,38 @@ mod tests {
         assert_eq!(laps(0.5), half, "the same laps again");
         assert!(laps(1.0).iter().all(|&p| p));
         assert!(laps(0.0).iter().all(|&p| !p));
+    }
+
+    /// Two copies of a clip on the Arrangement take their chances each: the
+    /// second plays other notes than the first (from the 2026-10b audit, where
+    /// they were the same), and the same ones every time. The first, at the
+    /// song's start, plays as a Session clip does.
+    #[test]
+    fn copies_of_a_clip_take_their_own_chances() {
+        // Sixteen hats at 50 %, one per sixteenth of a four-beat clip.
+        let mut clip = MidiClip::new("hats", 4.0, [0, 0, 0]);
+        for k in 0..16 {
+            clip.notes.push(Note { chance: 0.5, ..Note::new(k as f64 * 0.25, 0.1, 60, 1.0) });
+        }
+        let heard = |placed: Vec<PlacedClip>| -> Vec<bool> {
+            let mut h = Harness::new();
+            h.send(Command::SetArrangement { track: 0, clips: Box::new(placed) });
+            h.send(Command::Play);
+            (0..32).map(|_| energy(&h.run_beats(0.25)) > 1e-3).collect()
+        };
+        let copies = || vec![PlacedClip::new(0.0, 4.0, PlayClip::Midi(clip.clone())), PlacedClip::new(4.0, 4.0, PlayClip::Midi(clip.clone()))];
+        let both = heard(copies());
+        let (first, second) = both.split_at(16);
+        let differ = first.iter().zip(second).filter(|(a, b)| a != b).count();
+        assert!(differ >= 3, "{differ} of 16 sixteenths differ: {first:?} {second:?}");
+        assert_eq!(heard(copies()), both, "the same every time");
+        let session = {
+            let mut h = Harness::new();
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip.clone()))) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            (0..16).map(|_| energy(&h.run_beats(0.25)) > 1e-3).collect::<Vec<_>>()
+        };
+        assert_eq!(first, &session[..], "the first copy plays as before");
     }
 
     /// A clip switched off stays where it is, silent, with its automation;

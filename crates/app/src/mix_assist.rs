@@ -8,7 +8,7 @@ use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{Device, DuckerParams, Effect, Eq3Params, LimiterParams};
+use engine::model::{Device, DuckerParams, Effect, Eq3Params, LimiterParams, Param};
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -553,7 +553,18 @@ impl PulseApp {
                         e.mid_db = (e.mid_db + mid).clamp(-15.0, 15.0);
                         e.high_db = (e.high_db + high).clamp(-15.0, 15.0);
                     }
-                    None => devices.insert(at, Device::new(Effect::Eq3(Eq3Params { low_db: *low, mid_db: *mid, high_db: *high, ..Default::default() }))),
+                    None => {
+                        devices.insert(at, Device::new(Effect::Eq3(Eq3Params { low_db: *low, mid_db: *mid, high_db: *high, ..Default::default() })));
+                        // What pointed at the devices after it moves one along.
+                        let shift = |param: Param| match param {
+                            Param::Device { device, param } if device >= at => Param::Device { device: device + 1, param },
+                            other => other,
+                        };
+                        for lane in &mut self.project.master.automation {
+                            lane.param = shift(lane.param);
+                        }
+                        self.retarget(|t, param| Some((t, if t == engine::Target::Master { shift(param) } else { param })));
+                    }
                 }
                 self.status = Some("EQ Three del master ajustado a la referencia".into());
             }

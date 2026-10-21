@@ -1230,6 +1230,11 @@ impl PulseApp {
                 }
             }
             self.sync_automation(target);
+            self.retarget(|t, param| match param {
+                Param::Device { device, .. } if t == target && device == index => None,
+                Param::Device { device, param } if t == target && device > index => Some((t, Param::Device { device: device - 1, param })),
+                other => Some((t, other)),
+            });
         }
     }
 
@@ -1254,6 +1259,11 @@ impl PulseApp {
             }
             self.sync_chain(target);
             self.sync_automation(target);
+            let swap = |device: usize| if device == from { to } else if device == to { from } else { device };
+            self.retarget(|t, param| match param {
+                Param::Device { device, param } if t == target => Some((t, Param::Device { device: swap(device), param })),
+                other => Some((t, other)),
+            });
         }
     }
 
@@ -1699,7 +1709,9 @@ impl PulseApp {
         if self.project.tracks.len() <= block.len() || track >= self.project.tracks.len() {
             return;
         }
+        let ids = self.track_ids();
         self.project.tracks.drain(block);
+        self.follow_tracks(&ids);
         crate::groups::normalize(&mut self.project.tracks);
         self.selected_clip = None;
         self.selected_target = Target::Track(track.min(self.project.tracks.len() - 1));
@@ -1718,7 +1730,9 @@ impl PulseApp {
         let mut copies: Vec<Track> = block.map(|t| self.copy_track(t)).collect();
         copies[0].name = format!("{} copia", copies[0].name);
         let at = end;
+        let ids = self.track_ids();
         self.project.tracks.splice(at..at, copies);
+        self.follow_tracks(&ids);
         self.selected_target = Target::Track(at);
         self.sync_all();
     }
@@ -2258,6 +2272,8 @@ impl PulseApp {
 
     /// After undo or redo: the engine gets what changed from `before`.
     fn after_project_replaced(&mut self, before: Option<&Project>) {
+        // A knob still gliding would move back what was just undone.
+        self.stop_glides();
         if self.selected_clip.is_some_and(|c| self.clip(c).is_none()) {
             self.selected_clip = None;
         }

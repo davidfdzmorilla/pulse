@@ -309,7 +309,9 @@ impl PulseApp {
         };
         // Beside its source, in the same group.
         track.depth = self.project.tracks[source].depth;
+        let ids = self.track_ids();
         self.project.tracks.insert(source + 1, track);
+        self.follow_tracks(&ids);
         self.selected_target = Target::Track(source + 1);
         self.sync_all();
         self.select_clip(new);

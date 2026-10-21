@@ -25,8 +25,9 @@ impl PulseApp {
         rumble.mixer.gain *= 0.8;
         rumble.sends = Default::default();
         rumble.devices.extend(chain(source));
+        let ids = self.track_ids();
         self.project.tracks.insert(t + 1, rumble);
-        self.project.assign_ids();
+        self.follow_tracks(&ids);
         self.selected_target = engine::Target::Track(t + 1);
         self.history.commit(&self.project, false);
         // The tracks after it moved: those go again; the rest play on.

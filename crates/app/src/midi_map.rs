@@ -215,6 +215,64 @@ impl PulseApp {
         });
     }
 
+    /// Whether what a control names is there (a file, or an old assignment,
+    /// can name a track or a device that is gone).
+    pub fn control_exists(&self, control: Control) -> bool {
+        let Control::Param { target, param } = control else { return true };
+        let devices = match target {
+            Target::Track(t) => self.project.tracks.get(t).map(|t| &t.devices),
+            Target::Return(r) => self.project.returns.get(r).map(|r| &r.devices),
+            Target::Master => Some(&self.project.master.devices),
+        };
+        match (devices, param) {
+            (None, _) => false,
+            (Some(devices), Param::Device { device, .. }) => device < devices.len(),
+            (Some(_), Param::Send(i)) => i < engine::NUM_RETURNS,
+            _ => true,
+        }
+    }
+
+    /// Moves what MIDI controllers and macros point at along with a change in
+    /// the tracks or a chain: `to` says where each control went (`None`: it is
+    /// gone, and so is what pointed at it).
+    pub(crate) fn retarget(&mut self, to: impl Fn(Target, Param) -> Option<(Target, Param)>) {
+        let moved = |control: Control| match control {
+            Control::Param { target, param } => to(target, param).map(|(target, param)| Control::Param { target, param }),
+            other => Some(other),
+        };
+        self.project.midi_map = self.project.midi_map.iter().filter_map(|m| Some(Mapping { control: moved(m.control)?, ..*m })).collect();
+        for m in &mut self.project.macros {
+            m.routes = m.routes.iter().filter_map(|r| Some(crate::macros::Route { control: moved(r.control)?, ..*r })).collect();
+        }
+        self.learn.armed = self.learn.armed.and_then(moved);
+        self.learn.glides = self.learn.glides.iter().filter_map(|g| Some(Glide { control: moved(g.control)?, ..*g })).collect();
+        self.sync_midi_map();
+    }
+
+    /// Controls stop gliding where they are.
+    pub(crate) fn stop_glides(&mut self) {
+        self.learn.glides.clear();
+        self.learn.glided = None;
+    }
+
+    /// The tracks' ids, to follow them with [`PulseApp::follow_tracks`].
+    pub(crate) fn track_ids(&self) -> Vec<u32> {
+        self.project.tracks.iter().map(|t| t.id).collect()
+    }
+
+    /// After tracks were added, removed or moved: what pointed at a track
+    /// (`ids` were theirs before) points at it where it is now.
+    pub(crate) fn follow_tracks(&mut self, ids: &[u32]) {
+        self.project.assign_ids();
+        let now = self.track_ids();
+        // A copy keeps its original's id until `assign_ids`, after the original.
+        let new = |old: usize| ids.get(old).and_then(|id| now.iter().position(|n| n == id));
+        self.retarget(|target, param| match target {
+            Target::Track(t) => new(t).map(|t| (Target::Track(t), param)),
+            other => Some((other, param)),
+        });
+    }
+
     /// Every assignment: the project's and the transport ones.
     pub fn mappings(&self) -> Vec<Mapping> {
         self.project.midi_map.iter().chain(&self.learn.transport).copied().collect()
@@ -274,6 +332,9 @@ impl PulseApp {
     }
 
     pub fn control_name(&self, control: Control) -> String {
+        if !self.control_exists(control) {
+            return "(ya no existe)".into();
+        }
         match control {
             Control::Param { target, param } => format!("{} · {}", self.target_name(target), self.param_name(target, param)),
             Control::Plugin { id, param } => {
@@ -401,6 +462,9 @@ impl PulseApp {
 
     /// Where a control is, 0..1 of its range.
     fn control_value(&self, control: Control) -> Option<f32> {
+        if !self.control_exists(control) {
+            return None;
+        }
         match control {
             Control::Param { target, param } => self.param_info(target, param).map(|info| info.normalize(self.param_value(target, param))),
             Control::Plugin { id, param } => self.samples.plugins.get(&id).map(|h| h.value(param) as f32),
@@ -411,6 +475,9 @@ impl PulseApp {
 
     /// Sets a control to `n`, 0..1 of its range, as moving it by hand does.
     pub(crate) fn set_control(&mut self, control: Control, n: f32) {
+        if !self.control_exists(control) {
+            return;
+        }
         match control {
             Control::Param { target, param } => {
                 if let Some(info) = self.param_info(target, param) {
@@ -759,5 +826,142 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(Default::default(), |ui| window(&mut app, &ui.ctx().clone()));
         assert!(app.control_name(app.project.midi_map[0].control).contains("Volumen"));
+    }
+
+    fn param(t: usize, param: Param) -> Control {
+        Control::Param { target: Target::Track(t), param }
+    }
+
+    fn routes(app: &PulseApp) -> Vec<Control> {
+        app.project.macros.iter().flat_map(|m| &m.routes).map(|r| r.control).collect()
+    }
+
+    #[test]
+    fn assignments_follow_their_tracks() {
+        let mut app = app();
+        assert!(app.project.tracks.len() >= 4 && app.project.tracks.iter().all(|t| !t.is_group()));
+        let (second, third) = (app.project.tracks[2].name.clone(), app.project.tracks[3].name.clone());
+        app.project.midi_map = vec![Mapping::new(20, param(1, Param::Volume)), Mapping::new(21, param(2, Param::Pan))];
+        app.add_to_macro(0, param(3, Param::Instrument(0)));
+
+        // Deleting track 2: its controller goes; the rest move up with their tracks.
+        app.delete_track(1);
+        assert_eq!(app.project.midi_map, [Mapping::new(21, param(1, Param::Pan))]);
+        assert_eq!(app.project.tracks[1].name, second);
+        assert_eq!(routes(&app), [param(2, Param::Instrument(0))]);
+        assert_eq!(app.project.tracks[2].name, third);
+        app.set_macro(0, 0.5);
+        assert!(app.control_name(routes(&app)[0]).starts_with(&third));
+
+        // A copy before them pushes them down.
+        app.duplicate_track(0);
+        assert_eq!(app.project.midi_map[0].control, param(2, Param::Pan));
+        assert_eq!(routes(&app), [param(3, Param::Instrument(0))]);
+
+        // In a group and out of it.
+        app.selected_tracks = vec![2];
+        app.selected_target = Target::Track(2);
+        app.group_selected();
+        assert!(app.project.tracks[2].is_group());
+        assert_eq!(app.project.midi_map[0].control, param(3, Param::Pan));
+        assert_eq!(app.project.tracks[3].name, second);
+        app.ungroup(2);
+        assert_eq!(app.project.midi_map[0].control, param(2, Param::Pan));
+        assert_eq!(routes(&app), [param(3, Param::Instrument(0))]);
+
+        // Undo puts back the assignments as they were with the tracks.
+        app.history.commit(&app.project, false);
+        let kept = app.project.midi_map.clone();
+        app.delete_track(2);
+        assert!(app.project.midi_map.is_empty());
+        app.history.commit(&app.project, false);
+        app.undo();
+        assert_eq!(app.project.midi_map, kept);
+    }
+
+    #[test]
+    fn assignments_follow_their_devices() {
+        let mut app = app();
+        let target = Target::Track(1);
+        app.project.tracks[1].devices.clear();
+        app.sync_all();
+        for effect in [engine::model::Effect::Saturator(Default::default()), engine::model::Effect::AutoFilter(Default::default()), engine::model::Effect::Delay(Default::default())] {
+            app.add_device(target, engine::model::Device::new(effect));
+        }
+        let device = |d: usize| param(1, Param::Device { device: d, param: 0 });
+        app.project.midi_map = vec![Mapping::new(30, device(1)), Mapping::new(31, device(2))];
+        app.add_to_macro(0, device(0));
+
+        app.move_device(target, 0, 1);
+        assert_eq!(app.project.midi_map.iter().map(|m| m.control).collect::<Vec<_>>(), [device(0), device(2)]);
+        assert_eq!(routes(&app), [device(1)]);
+        app.remove_device(target, 0);
+        assert_eq!(app.project.midi_map.iter().map(|m| m.control).collect::<Vec<_>>(), [device(1)]);
+        assert_eq!(routes(&app), [device(0)]);
+        assert!(matches!(app.project.tracks[1].devices[0].effect, engine::model::Effect::Saturator(_)));
+    }
+
+    #[test]
+    fn assignments_to_what_is_not_there_do_nothing() {
+        let mut app = app();
+        let gone = [
+            param(60, Param::Volume),
+            param(60, Param::Instrument(2)),
+            param(0, Param::Device { device: 40, param: 3 }),
+            param(0, Param::Send(7)),
+            Control::Param { target: Target::Return(9), param: Param::Pan },
+        ];
+        app.project.midi_map = gone.iter().map(|&c| Mapping { smooth: 0.2, ..Mapping::new(40, c) }).collect();
+        app.project.macros = vec![crate::macros::Macro { name: "M".into(), value: 0.0, routes: gone.iter().map(|&control| crate::macros::Route { control, min: 0.0, max: 1.0 }).collect() }];
+        let before = app.project.clone();
+        app.apply_cc(40, 100);
+        app.poll_midi_map();
+        app.set_macro(0, 0.7);
+        for c in gone {
+            assert_eq!(app.control_name(c), "(ya no existe)");
+        }
+        app.project.macros[0].value = 0.0;
+        assert_eq!(app.project.tracks, before.tracks);
+        // The window lists them, to take them away.
+        app.learn.on = true;
+        app.macro_window.open = true;
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| {
+            window(&mut app, &ui.ctx().clone());
+            crate::macros::window(&mut app, &ui.ctx().clone());
+        });
+        app.unassign_control(40, gone[0]);
+        assert_eq!(app.project.midi_map.len(), gone.len() - 1);
+    }
+
+    #[test]
+    fn a_macro_moving_itself_stops() {
+        let mut app = app();
+        let route = |control| crate::macros::Route { control, min: 0.0, max: 1.0 };
+        app.project.macros = vec![
+            crate::macros::Macro { name: "Bucle".into(), value: 0.0, routes: vec![route(Control::Macro(0)), route(Control::Macro(1)), route(param(0, Param::Pan))] },
+            crate::macros::Macro { name: "Otra".into(), value: 0.0, routes: vec![route(Control::Macro(0))] },
+        ];
+        app.set_macro(0, 1.0);
+        assert_eq!(app.project.tracks[0].mixer.pan, 1.0);
+        assert_eq!(app.macro_value(1), 0.0);
+    }
+
+    #[test]
+    fn undo_stops_a_gliding_knob() {
+        let mut app = app();
+        app.project.midi_map = vec![Mapping { smooth: 5.0, ..Mapping::new(50, param(0, Param::Volume)) }];
+        app.history.commit(&app.project, false);
+        let gain = app.project.tracks[0].mixer.gain;
+        app.apply_cc(50, 0);
+        std::thread::sleep(Duration::from_millis(30));
+        app.poll_midi_map();
+        assert!(app.project.tracks[0].mixer.gain < gain);
+        app.history.commit(&app.project, false);
+        app.undo();
+        assert_eq!(app.project.tracks[0].mixer.gain, gain);
+        std::thread::sleep(Duration::from_millis(30));
+        app.poll_midi_map();
+        assert_eq!(app.project.tracks[0].mixer.gain, gain, "no glide after undo");
     }
 }

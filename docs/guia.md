@@ -651,6 +651,16 @@ Pulsa **Asignar** en el transporte (o Transporte → Asignar controles MIDI). Se
 - Un CC asignado ya no llega al instrumento.
 - Las asignaciones de parámetros se guardan con el proyecto; las de transporte, para todos los proyectos.
 
+### Macros
+
+**Transporte → Macros…** abre ocho knobs del proyecto. Cada uno mueve a la vez los controles que le asignes, cada control con su recorrido: un solo gesto para abrir el filtro, subir la reverb y meter saturación en el break.
+
+- Pulsa **controles** bajo una macro y toca los knobs, faders o parámetros de plugin que quieras que mueva (se marcan con un borde; el clic los elige sin cambiarlos). Pulsa otra vez para terminar.
+- En la lista, **Desde** y **Hasta** dicen dónde pone cada control la macro al mínimo y al máximo (en % de su recorrido). Con Desde mayor que Hasta va al revés: la macro abre un filtro mientras cierra otro. **×** quita uno. **Nombre**: el que verás en el knob.
+- Una macro se puede asignar a un knob MIDI como cualquier control (Asignar, toca la macro y mueve el knob).
+- Al grabar automatización, lo que se graba es el movimiento de cada control que mueve la macro.
+- Las macros se guardan con el proyecto.
+
 ## Teclado del ordenador
 
 Pulsa **M** (o el botón **Teclado**) para tocar con el teclado del ordenador:

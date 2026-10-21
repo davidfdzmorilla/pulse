@@ -23,6 +23,8 @@ pub enum Control {
     Param { target: Target, param: Param },
     Plugin { id: PluginId, param: u32 },
     Transport(Transport),
+    /// One of the project's macros (see `macros`).
+    Macro(u8),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -195,7 +197,7 @@ impl Learn {
 impl PulseApp {
     /// Remembers the control the user touched, to link it while learning.
     pub fn touched(&self, control: Control) {
-        if self.learn.on {
+        if self.picking() {
             self.touched_control.set(Some(control));
         }
     }
@@ -279,13 +281,23 @@ impl PulseApp {
                 format!("{} · {name}", self.plugin_name(id))
             }
             Control::Transport(t) => t.label().into(),
+            Control::Macro(i) => {
+                let i = i as usize;
+                let name = self.project.macros.get(i).map_or_else(|| format!("Macro {}", i + 1), |m| m.label(i));
+                if name.starts_with("Macro ") { name } else { format!("Macro {} · {name}", i + 1) }
+            }
         }
     }
 
     /// Once a frame: links or applies the controllers that came in.
     pub fn poll_midi_map(&mut self) {
         let log = std::env::var_os("PULSE_MIDI_LOG").is_some();
-        if let Some(control) = self.touched_control.take() {
+        let touched = self.touched_control.take();
+        // Setting up a macro: what is touched joins it.
+        if let (Some(control), Some(index), false) = (touched, self.macro_window.picking, self.learn.on) {
+            self.add_to_macro(index, control);
+        }
+        if let Some(control) = touched.filter(|_| self.learn.on) {
             if log {
                 eprintln!("[asignar] elegido: {}", self.control_name(control));
             }
@@ -393,11 +405,12 @@ impl PulseApp {
             Control::Param { target, param } => self.param_info(target, param).map(|info| info.normalize(self.param_value(target, param))),
             Control::Plugin { id, param } => self.samples.plugins.get(&id).map(|h| h.value(param) as f32),
             Control::Transport(_) => None,
+            Control::Macro(i) => Some(self.macro_value(i as usize)),
         }
     }
 
     /// Sets a control to `n`, 0..1 of its range, as moving it by hand does.
-    fn set_control(&mut self, control: Control, n: f32) {
+    pub(crate) fn set_control(&mut self, control: Control, n: f32) {
         match control {
             Control::Param { target, param } => {
                 if let Some(info) = self.param_info(target, param) {
@@ -416,6 +429,7 @@ impl PulseApp {
                 }
             }
             Control::Transport(_) => {}
+            Control::Macro(i) => self.set_macro(i as usize, n),
         }
     }
 

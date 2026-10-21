@@ -396,6 +396,7 @@ impl PulseApp {
         crate::library::set_root(settings.library.clone());
         let mut app = Self::with_audio(Project::demo(), Audio::start(&settings.audio));
         app.settings = settings;
+        crate::plugins::set_trusted(&app.settings.plugin_folders);
         app.plugin_library = crate::plugins::Library::load_cache();
         app.learn = crate::midi_map::Learn::load();
         // Screenshots (a debug aid) leave the user's settings and recent projects alone.

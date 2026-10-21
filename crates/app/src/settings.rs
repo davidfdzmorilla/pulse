@@ -119,7 +119,15 @@ impl PulseApp {
             crate::library::prepare();
         }
         let count_in = settings.count_in_bars != self.settings.count_in_bars;
+        let plugin_folders = settings.plugin_folders != self.settings.plugin_folders;
         self.settings = settings;
+        if plugin_folders {
+            crate::plugins::set_trusted(&self.settings.plugin_folders);
+            // Plugins left out for being elsewhere may load now.
+            if self.project.plugins.iter().any(|p| !self.samples.plugins.contains_key(&p.id)) {
+                self.sync_all();
+            }
+        }
         if count_in {
             self.audio.send(engine::Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
         }

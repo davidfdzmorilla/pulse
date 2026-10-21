@@ -627,6 +627,7 @@ Los plugins no usan este menú: guardan su estado con el proyecto.
   - 6 knobs con sus parámetros principales (primero los automatizados).
 - Todos sus parámetros se pueden automatizar y asignar a un controlador MIDI. Su estado se guarda con el proyecto.
 - Si un plugin ya no está instalado, su dispositivo lo avisa y no suena.
+- Un proyecto solo carga plugins de tus carpetas de plugins: las del sistema y las de Ajustes → Plugins. Un plugin es código que se ejecuta dentro de Pulse, así que si un proyecto (por ejemplo, de otra persona) apunta a uno en otra carpeta, Pulse no lo carga y lo avisa. Si te fías de él, añade su carpeta en Ajustes → Plugins y se carga al momento.
 - Las carpetas del sistema: en macOS, `/Library/Audio/Plug-Ins/VST3` y `CLAP` (y las de tu usuario en `~/Library`); en Windows, `C:\Program Files\Common Files\VST3` y `CLAP` (y las de tu usuario en `%LOCALAPPDATA%\Programs\Common`). Pulse para Windows es de 64 bits: los plugins de 32 bits no se cargan.
 
 ## Controladores MIDI

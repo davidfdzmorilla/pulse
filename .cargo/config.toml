@@ -5,3 +5,9 @@
 # load if a DirectML session were ever created.
 [target.x86_64-pc-windows-msvc]
 rustflags = ["-C", "link-arg=/DELAYLOAD:DirectML.dll", "-C", "link-arg=/DELAYLOAD:DXCORE.dll", "-C", "link-arg=delayimp.lib"]
+
+# macOS: the ONNX Runtime linked in (for stems and audio to MIDI) is built for
+# macOS 13.4 and later, so Pulse says so (Info.plist's LSMinimumSystemVersion
+# too) instead of failing on older ones.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "13.4"

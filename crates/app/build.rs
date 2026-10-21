@@ -4,6 +4,21 @@
 
 fn main() {
     println!("cargo:rerun-if-env-changed=PULSE_VERSION");
+    // Builds of our own are named after git: the last release and how far past
+    // it ("0.1.63-5-gabc1234"), not Cargo's number, which isn't kept up. And the
+    // commit, for the error log.
+    for file in ["HEAD", "packed-refs", "refs/tags"] {
+        println!("cargo:rerun-if-changed=../../.git/{file}");
+    }
+    let git = |args: &[&str]| {
+        std::process::Command::new("git").args(args).output().ok().filter(|o| o.status.success()).and_then(|o| String::from_utf8(o.stdout).ok()).map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+    };
+    if let Some(described) = git(&["describe", "--tags", "--match", "v[0-9]*"]) {
+        println!("cargo:rustc-env=PULSE_GIT_VERSION={}", described.trim_start_matches('v'));
+    }
+    if let Some(commit) = git(&["rev-parse", "--short=10", "HEAD"]) {
+        println!("cargo:rustc-env=PULSE_COMMIT={commit}");
+    }
     println!("cargo:rerun-if-changed=../../packaging/windows/pulse.ico");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;

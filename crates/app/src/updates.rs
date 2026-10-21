@@ -113,8 +113,11 @@ impl Release {
     }
 
     /// This system's package (the macOS one is the zip that isn't Windows').
+    /// This system's package: by its exact name, so other files of the release
+    /// (the debugging symbols, `Pulse-X.Y.Z-simbolos.zip`) are never taken for it.
     fn zip(&self) -> Option<&Asset> {
-        self.assets.iter().find(|a| a.name.ends_with(PACKAGE) && (cfg!(windows) || !a.name.contains("-windows-")))
+        let name = format!("Pulse-{}{PACKAGE}", self.version());
+        self.assets.iter().find(|a| a.name == name)
     }
 }
 
@@ -959,6 +962,13 @@ mod tests {
         let release: Release = serde_json::from_str(json).unwrap();
         assert_eq!(release.version(), "0.2.0");
         assert_eq!(release.zip().map(|a| a.name.as_str()), Some("Pulse-0.2.0.zip"));
+        // The symbols beside it are not the package, whatever their order.
+        let symbols = Asset { name: "Pulse-0.2.0-simbolos.zip".into(), url: String::new(), size: 1, digest: None };
+        let mut with_symbols = release.clone();
+        with_symbols.assets.insert(0, symbols);
+        if !cfg!(windows) {
+            assert_eq!(with_symbols.zip().map(|a| a.name.as_str()), Some("Pulse-0.2.0.zip"));
+        }
         assert!(newer(release.version(), "0.1.0"));
     }
 

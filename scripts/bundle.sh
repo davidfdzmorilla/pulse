@@ -15,14 +15,22 @@ version=${version:-$(grep -m1 '^version' "$root/crates/app/Cargo.toml" | cut -d'
 export PULSE_VERSION=$version
 identity=${PULSE_SIGN_IDENTITY:-Pulse Local Signing}
 
-# The dependencies Cargo.lock names, not newer ones.
-cargo build --release --locked --manifest-path "$root/Cargo.toml" -p app
+# The dependencies Cargo.lock names, not newer ones; the published build, with
+# its debugging symbols apart (Cargo.toml's dist profile).
+cargo build --profile dist --locked --manifest-path "$root/Cargo.toml" -p app
 out=${PULSE_BUNDLE_DIR:-$HOME/Library/Caches/Pulse/bundle}
 mkdir -p "$out"
 app="$out/Pulse.app"
 rm -rf "$app"
 mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-cp "$root/target/release/pulse" "$app/Contents/MacOS/pulse"
+cp "$root/target/dist/pulse" "$app/Contents/MacOS/pulse"
+# The symbols beside the app, not in it (scripts/release.sh publishes them).
+rm -rf "$out/pulse.dSYM"
+cp -RL "$root/target/dist/pulse.dSYM" "$out/pulse.dSYM"  # (a link into target/dist/deps)
+if [ "$(dwarfdump --uuid "$app/Contents/MacOS/pulse" | cut -d' ' -f2)" != "$(dwarfdump --uuid "$out/pulse.dSYM" | cut -d' ' -f2)" ]; then
+    echo "Los símbolos no son de este pulse" >&2
+    exit 1
+fi
 cp "$root/packaging/Pulse.icns" "$app/Contents/Resources/Pulse.icns"
 cp "$root/LICENSE" "$app/Contents/Resources/LICENSE.txt"
 cp "$root/packaging/THIRD_PARTY_NOTICES.txt" "$app/Contents/Resources/THIRD_PARTY_NOTICES.txt"

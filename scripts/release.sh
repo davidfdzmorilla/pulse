@@ -70,10 +70,19 @@ codesign --verify --strict "$out/Pulse.app"
 zip="$out/Pulse-$version.zip"
 rm -f "$zip"
 ditto -c -k --keepParent "$out/Pulse.app" "$zip"
+# Its debugging symbols, published beside it and kept here, to read crash
+# reports of this version back to the line (scripts/simbolos.py).
+symbols="$out/Pulse-$version-simbolos.zip"
+rm -f "$symbols"
+ditto -c -k --keepParent "$out/pulse.dSYM" "$symbols"
+kept="$HOME/Library/Caches/Pulse/simbolos/$version"
+mkdir -p "$kept"
+rm -rf "$kept/pulse.dSYM"
+cp -R "$out/pulse.dSYM" "$kept/"
 
 # A draft first: nothing public, no tag yet.
 tag="v$version"
-gh release create "$tag" "$zip" --draft --target "$(git rev-parse HEAD)" --title "Pulse $version" --notes "$notes"
+gh release create "$tag" "$zip" "$symbols" --draft --target "$(git rev-parse HEAD)" --title "Pulse $version" --notes "$notes"
 check=$(mktemp -d)
 discard() {
     echo "No se publicó: se quita el borrador." >&2

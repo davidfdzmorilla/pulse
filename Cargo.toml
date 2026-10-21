@@ -7,3 +7,11 @@ opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+# What is published (scripts/bundle.sh): the release build, with the code's
+# lines kept apart, in pulse.dSYM (macOS), so a crash report can be read back
+# to the line (scripts/simbolos.py). Everyday builds and tests stay as they are.
+[profile.dist]
+inherits = "release"
+debug = "line-tables-only"
+split-debuginfo = "packed"

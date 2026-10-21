@@ -9,13 +9,31 @@ scripts/release.sh            # 0.1.63 → 0.1.64 (minor / major para las otras 
 
 El script comprueba que `main` está al día y limpio, que la última etiqueta es
 la última publicación, y que está el certificado de firma. Pasa las pruebas
-(`--locked`), hace y firma `Pulse.app` (`scripts/bundle.sh`), y lo publica de una
+(`--locked`), hace y firma `Pulse.app` (`scripts/bundle.sh`) con sus símbolos de
+depuración aparte (ver «Leer un informe de fallo»), y lo publica de una
 vez: primero como borrador, descarga lo subido y comprueba su SHA-256, su firma y
 su versión, y solo entonces lo publica, que es cuando se crea la etiqueta. Si
 algo falla antes, borra el borrador: no quedan etiquetas sin publicación ni
 números saltados. Las notas son los títulos de los pull requests fusionados.
 
 El paquete de Windows se hace aparte: [BUILD_WINDOWS.md](BUILD_WINDOWS.md).
+
+## Leer un informe de fallo
+
+Si Pulse se cierra de golpe en macOS, queda un informe en Consola → Informes de
+fallos (`~/Library/Logs/DiagnosticReports/pulse-*.ips`). Cada publicación lleva
+sus símbolos de depuración (`Pulse-X.Y.Z-simbolos.zip`, que `release.sh` sube y
+guarda también en `~/Library/Caches/Pulse/simbolos/X.Y.Z`); con ellos:
+
+```bash
+python3 scripts/simbolos.py pulse-2026-10-21-101500.ips
+```
+
+dice, hilo por hilo (el que falló primero), cada función de Pulse con su
+archivo y línea, y lo que estaba expandido dentro. Si no tiene los símbolos de
+esa versión, los descarga de su publicación. Los símbolos salen del perfil
+`dist` de `Cargo.toml` (el de publicar): las compilaciones de cada día y las
+pruebas no cambian.
 
 ## El certificado de firma
 

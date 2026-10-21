@@ -26,8 +26,9 @@ VersionInfoVersion={#AppVersion}
 DefaultDirName={autopf}\Pulse
 DefaultGroupName=Pulse
 DisableProgramGroupPage=yes
+; Only for this user: in Program Files the updater couldn't replace pulse.exe
+; (it runs without administrator rights), so that choice isn't offered.
 PrivilegesRequired=lowest
-PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0.17763

@@ -744,7 +744,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 
 **⇧⌘R** (Archivo → Exportar audio…):
 
-- **Qué**: **Mezcla completa** o **Una pista por archivo (stems)**: cada pista que suena en solo, con sus envíos y su grupo. No se exportan las pistas desactivadas (ni las de un grupo desactivado) ni los grupos como stem aparte (sus pistas ya pasan por él). **Con la cadena del master** (en stems): quítala para que los stems sumados den la mezcla.
+- **Qué**: **Mezcla completa** o **Una pista por archivo (stems)**: cada pista que suena en solo, con sus envíos y su grupo. No se exportan las pistas desactivadas (ni las de un grupo desactivado) ni los grupos como stem aparte (sus pistas ya pasan por él). **Con la cadena del master** (en stems): quítala para que los stems sumados den la mezcla. Los stems se renderizan a la vez, uno por núcleo del procesador, y cada uno solo con lo que puede sonar en él (su pista, sus grupos y las pistas que escuchan sus sidechains): 16 stems tardan poco más que la canción una vez. Suenan exactamente igual que en solo. Si el proyecto tiene plugins, se renderizan de uno en uno.
 - **Rango**: **Toda la canción** o **Región del loop**.
 - **Formato**: WAV de 16 bits (con dither), 24 o 32 bits; **44.1** o **48 kHz**.
 - **Normalizar**: pico a un valor (no en stems).
@@ -756,7 +756,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 
 **Archivo → Asistente de mezcla y master…** te dice cómo suena tu mezcla y qué arreglar antes de publicarla, con un botón **Aplicar** en cada consejo.
 
-- **Analizar la mezcla**: toca la canción (o el loop) sin sonido, más rápido que en tiempo real, la mezcla entera y cada pista sola, y las mide:
+- **Analizar la mezcla**: toca la canción (o el loop) sin sonido, más rápido que en tiempo real, la mezcla entera y cada pista sola (a la vez, una por núcleo), y las mide:
   - **Sonoridad** (LUFS integrados, la medida que usan Spotify, YouTube o Apple Music para igualar el volumen de las canciones).
   - **Pico real** (dBTP: también entre muestras, donde nace la distorsión al pasar a MP3 o AAC).
   - **Rango** (LU: cuánto cambia de volumen entre partes), **lo más fuerte** (3 segundos) y **estéreo** (correlación: 1 mono, por debajo de 0 se pierde en mono).

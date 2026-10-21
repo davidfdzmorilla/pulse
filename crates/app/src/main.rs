@@ -54,6 +54,7 @@ mod presets;
 mod project;
 mod recording;
 mod recovery;
+mod rumble;
 mod sample_editor;
 mod session;
 mod session_rec;

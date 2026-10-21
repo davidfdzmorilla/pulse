@@ -159,6 +159,8 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 
 ### Congelar
 
+**Crear rumble** (clic derecho en la cabecera de una pista, normalmente la del bombo) añade debajo una copia que toca lo mismo por una reverb larga solo húmeda, una saturación Tube con 4× y un filtro de 24 dB a 180 Hz, con un Ducker que se aparta cuando suena la original: el rumble del techno. Ajusta la reverb, el drive o el filtro a tu gusto.
+
 **Congelar pista** (clic derecho en la cabecera) renderiza a audio lo que suenan su instrumento y sus efectos, y la pista pasa a sonar ese audio: deja de gastar CPU. El volumen, el panorama y los envíos siguen en vivo.
 
 - Una pista congelada lleva un marco azul y ✱. Su instrumento y efectos no se pueden editar.
@@ -509,9 +511,9 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 - **EQ Three**: graves, medios y agudos, con sus frecuencias de corte.
 - **Compressor**: umbral, ratio, ataque, release y ganancia, y **Sidechain** (ver abajo).
 - **Limiter**: ganancia, techo y release.
-- **Saturator**: drive y salida.
+- **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta más CPU y retrasa 36 muestras).
 - **Bitcrusher**: bits y reducción de muestreo.
-- **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo.
+- **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos.
 - **Ducker**: bombeo de volumen. Sin sidechain, sincronizado al tempo (**Ritmo**); con **Sidechain**, baja cada vez que suena la pista elegida (**Release**: cuánto tarda en volver, en fracción del tiempo elegido).
 - **Chorus** y **Phaser**.
 - **Delay**: tiempo sincronizado (1/16 a un compás), Ping Pong, feedback y filtro.

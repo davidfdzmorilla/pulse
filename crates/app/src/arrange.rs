@@ -49,10 +49,27 @@ fn has(name: &str, words: &[&str]) -> bool {
     words.iter().any(|w| lower.contains(w))
 }
 
-/// A track's role: from its instrument, its name, and how low its notes are.
+/// A track's role: from its instrument, its name (or its audio loops'), and
+/// how low its notes are.
 pub fn role(track: &Track) -> Role {
-    if track.is_drums() || has(&track.name, &["drum", "bater", "kick", "bombo", "perc", "hat", "snare", "caja", "beat"]) {
+    if track.is_drums() || matches!(track.instrument, InstrumentKind::Kick(_)) || has(&track.name, &["drum", "bater", "kick", "bombo", "perc", "hat", "snare", "caja", "beat"]) {
         return Role::Drums;
+    }
+    // Audio: what its loops are. Drum loops come in in Beats, or say so in
+    // their name («Tops_150»); a loop that says nothing is harmony.
+    let loops: Vec<&engine::model::AudioClip> = track.clips.iter().flatten().filter_map(|c| if let Clip::Audio(a) = c { Some(a) } else { None }).collect();
+    if !loops.is_empty() {
+        let file = |a: &engine::model::AudioClip| std::path::Path::new(&a.sample).file_stem().map_or(String::new(), |s| s.to_string_lossy().into_owned());
+        let says = |words: &[&str]| loops.iter().any(|a| has(&a.name, words) || has(&file(a), words));
+        if loops.iter().any(|a| a.warp == engine::model::WarpMode::Beats || crate::loop_key::is_drums(&a.name) || crate::loop_key::is_drums(&file(a))) {
+            return Role::Drums;
+        }
+        if says(&["bass", "bajo", "sub"]) {
+            return Role::Bass;
+        }
+        if says(&["lead", "melod", "vox", "voz", "vocal"]) {
+            return Role::Lead;
+        }
     }
     if matches!(track.instrument, InstrumentKind::Acid(_)) || has(&track.name, &["bass", "bajo", "sub"]) {
         return Role::Bass;
@@ -165,6 +182,23 @@ const MAIN_WORDS: [&str; 5] = ["drop", "chorus", "estribillo", "coro", "hook"];
 const VERSE_WORDS: [&str; 4] = ["verse", "estrofa", "verso", "groove"];
 const LIGHT_WORDS: [&str; 6] = ["intro", "break", "outro", "final", "puente", "bridge"];
 
+/// The words of a scene named for a section itself: a «Break» scene is the
+/// break, whatever else there is.
+fn section_words(section: &str) -> &'static [&'static str] {
+    match section {
+        "Intro" => &["intro"],
+        "Subida" => &["subida", "build", "riser"],
+        "Drop" => &["drop"],
+        "Break" => &["break"],
+        "Outro" => &["outro"],
+        "Estrofa" => &["estrofa", "verse", "verso"],
+        "Estribillo" => &["estribillo", "chorus", "coro"],
+        "Puente" => &["puente", "bridge"],
+        "Final" => &["final", "outro", "end"],
+        _ => &[],
+    }
+}
+
 /// The scenes that have clips, fullest first, by the energy of their tracks.
 fn scenes_by_energy(tracks: &[Track], roles: &[Role]) -> Vec<usize> {
     let energy = |s: usize| -> f64 {
@@ -192,11 +226,13 @@ pub fn plan(tracks: &[Track], scene_names: &[String], template: Template) -> Vec
         .shapes()
         .iter()
         .map(|shape| {
-            let scene = match shape.base {
+            // A scene named for the section is its scene; else the one its
+            // energy asks for.
+            let scene = named(section_words(shape.name)).unwrap_or(match shape.base {
                 Base::Main => main,
                 Base::Verse => verse,
                 Base::Light => light,
-            };
+            });
             let tracks = tracks
                 .iter()
                 .zip(&roles)
@@ -216,19 +252,33 @@ pub fn plan(tracks: &[Track], scene_names: &[String], template: Template) -> Vec
         .collect()
 }
 
-/// The note a drum track's snare is: the one played most on beats 2 and 4.
+/// The note a drum track's snare is: its snare or clap if they play on beats
+/// 2 and 4; else the one played most on 2 and 4 more than on 1 and 3 (not a
+/// kick on every beat, which would roll the kick).
 fn snare(track: &Track) -> u8 {
-    let mut count = [0u32; 128];
+    use engine::model::drum_note::{CLAP, KICK, SNARE};
+    let (mut backbeat, mut downbeat) = ([0i32; 128], [0i32; 128]);
     for clip in track.clips.iter().flatten() {
         if let Clip::Midi(m) = clip {
             for n in &m.notes {
-                if (n.start.rem_euclid(2.0) - 1.0).abs() < 0.1 {
-                    count[n.pitch as usize & 127] += 1;
+                let at = n.start.rem_euclid(2.0);
+                if (at - 1.0).abs() < 0.1 {
+                    backbeat[n.pitch as usize & 127] += 1;
+                } else if at < 0.1 || at > 1.9 {
+                    downbeat[n.pitch as usize & 127] += 1;
                 }
             }
         }
     }
-    (0..128).max_by_key(|&p| count[p]).filter(|&p| count[p] > 0).map_or(38, |p| p as u8)
+    if let Some(p) = [SNARE, CLAP].into_iter().filter(|&p| backbeat[p as usize] > 0).max_by_key(|&p| backbeat[p as usize]) {
+        return p;
+    }
+    (0..128)
+        .filter(|&p| p != KICK as usize && p != 35)
+        .map(|p| (p, backbeat[p] - downbeat[p]))
+        .filter(|&(_, score)| score > 0)
+        .max_by_key(|&(_, score)| score)
+        .map_or(SNARE, |(p, _)| p as u8)
 }
 
 /// A bar's snare roll: eighths, then sixteenths, getting louder.
@@ -259,11 +309,14 @@ impl PulseApp {
             self.project.markers.push(crate::project::SongMarker { beat: start, name: section.name.clone() });
             // A cut: the last beat silent, before what comes next.
             let cut = if section.cut && k + 1 < sections.len() { 1.0 } else { 0.0 };
+            // A build's last bar is the roll alone: the kick and the other
+            // drums stop under it.
+            let rolling = section.roll && section.bars > 1 && section.tracks.iter().enumerate().any(|(t, s)| s.is_some() && self.project.tracks.get(t).is_some_and(|t| t.is_drums()));
             for (t, &source) in section.tracks.iter().enumerate() {
                 let Some(track) = self.project.tracks.get_mut(t) else { continue };
                 let Some(clip) = source.and_then(|s| track.clips.get(s).cloned().flatten()) else { continue };
-                let rolls = section.roll && track.is_drums() && matches!(clip, Clip::Midi(_)) && section.bars > 1;
-                let body = if rolls { length - 4.0 } else { length - cut };
+                let rolls = rolling && track.is_drums() && matches!(clip, Clip::Midi(_));
+                let body = if rolling && role(track) == Role::Drums { length - 4.0 } else { length - cut };
                 track.arrangement.push(ArrangementClip { start, length: body, clip: clip.clone() });
                 if rolls {
                     let pitch = snare(track);
@@ -423,6 +476,81 @@ mod tests {
         // Without clips, nothing.
         let empty = Project::empty();
         assert!(plan(&empty.tracks, &empty.scene_names, Template::Pop).is_empty());
+    }
+
+    /// A hard techno track in scenes (from the 2026-10b audit): its kick on a
+    /// Kick Designer track, the rest of the beat (claps rolling, no kick) on a
+    /// Drum Machine, an acid bass, stabs, and a loop of tops on an audio track
+    /// with no name. The tops are drums, the «Break» scene is the break, the
+    /// build rolls the clap, and the kick stops under the roll.
+    #[test]
+    fn a_hard_techno_song_in_scenes() {
+        use crate::drum_gen::{self, Level, Style};
+        use engine::model::{AudioClip, KickParams, WarpMode};
+        let mut project = Project::empty();
+        project.tempo = 147.0;
+        let kit = drum_gen::Kit::from_rows(&engine::model::DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
+        let mut drums = Track::new("Drums", [0; 3], InstrumentKind::DrumMachine(Style::HardTechno.sound()));
+        let mut sounds = Style::HardTechno.sounds();
+        sounds[drum_gen::Sound::Kick as usize] = false;
+        for (scene, level) in [(0, Level::Basic), (1, Level::Medium), (2, Level::Intense)] {
+            let settings = drum_gen::Settings { style: Style::HardTechno, level, bars: 4, sounds, ..Default::default() };
+            let (notes, groove) = drum_gen::generate(&kit, &settings, 16.0, &[], 0);
+            drums.clips[scene] = Some(Clip::Midi(MidiClip { notes, groove, ..MidiClip::new("Beat", 16.0, [0; 3]) }));
+        }
+        let mut kick = Track::new("Bd", [0; 3], InstrumentKind::Kick(KickParams::presets().into_iter().find(|(n, _)| *n == "Hard · Kick").unwrap().1));
+        let mut four = MidiClip::new("4/4", 16.0, [0; 3]);
+        four.notes = (0..16).map(|b| Note { start: b as f64, length: 0.25, pitch: 36, velocity: 1.0, chance: 1.0 }).collect();
+        for scene in 0..3 {
+            kick.clips[scene] = Some(Clip::Midi(four.clone()));
+        }
+        let mut bass = Track::new("Acid", [0; 3], InstrumentKind::Acid(Default::default()));
+        bass.clips[1] = Some(Clip::Midi(MidiClip { notes: vec![Note { start: 0.5, length: 0.25, pitch: 29, velocity: 1.0, chance: 1.0 }], ..MidiClip::new("Bass", 16.0, [0; 3]) }));
+        bass.clips[2] = bass.clips[1].clone();
+        let mut stab = Track::new("Stab", [0; 3], InstrumentKind::Synth(Default::default()));
+        let chord: Vec<Note> = [65u8, 68, 72].iter().map(|&p| Note { start: 0.5, length: 0.25, pitch: p, velocity: 0.8, chance: 1.0 }).collect();
+        stab.clips[2] = Some(Clip::Midi(MidiClip { notes: chord, ..MidiClip::new("Stab", 16.0, [0; 3]) }));
+        stab.clips[3] = stab.clips[2].clone();
+        let mut audio = Track::new_audio("6 Audio", [0; 3]);
+        let tops = AudioClip {
+            hard_start: false,
+            name: "Tops_150".into(),
+            color: [0; 3],
+            sample: "/loops/Tops_150.wav".into(),
+            length: 16.0,
+            offset: 0.0,
+            warp: WarpMode::Beats,
+            original_bpm: 150.0,
+            warp_markers: Vec::new(),
+            takes: Vec::new(),
+            key: None,
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+            muted: false,
+        };
+        for scene in 0..3 {
+            audio.clips[scene] = Some(Clip::Audio(tops.clone()));
+        }
+        project.tracks = vec![kick, drums, bass, stab, audio];
+        for (scene, name) in ["Intro", "Groove", "Drop", "Break"].into_iter().enumerate() {
+            project.scene_names[scene] = name.into();
+        }
+        assert_eq!(project.tracks.iter().map(role).collect::<Vec<_>>(), [Role::Drums, Role::Drums, Role::Bass, Role::Harmony, Role::Drums]);
+        let sections = plan(&project.tracks, &project.scene_names, Template::Electronic);
+        let brk = sections.iter().find(|s| s.name == "Break").unwrap();
+        assert_eq!(brk.scene, 3, "the «Break» scene");
+        assert_eq!(brk.tracks, [None, None, None, Some(3), None], "no drums or bass: the stabs");
+        let mut app = PulseApp::headless(project);
+        app.lay_out(&sections);
+        let roll = app.project.tracks[1].arrangement.iter().find_map(|a| if let Clip::Midi(m) = &a.clip { (m.name == "Redoble").then(|| m.notes[0].pitch) } else { None });
+        assert_eq!(roll, Some(engine::model::drum_note::CLAP), "the claps roll, not a kick");
+        // The first build (bars 17 to 24): the kick and the tops stop for its last bar.
+        let (build_end, last_bar) = (24.0 * 4.0, 23.0 * 4.0);
+        for t in [0, 4] {
+            let lane = &app.project.tracks[t].arrangement;
+            assert!(lane.iter().all(|c| c.start >= build_end || c.end() <= last_bar + 1e-9), "{}: {:?}", app.project.tracks[t].name, lane.iter().map(|c| (c.start, c.end())).collect::<Vec<_>>());
+        }
     }
 
     #[test]

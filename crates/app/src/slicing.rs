@@ -76,8 +76,11 @@ fn onset_strength(left: &[f32], right: &[f32]) -> Vec<f32> {
         // Treble bands count more: hats and cymbals carry little energy but sharp attacks.
         flux[h] = (0..BANDS).map(|b| (db(levels[h][b]) - db(levels[h - 1][b])).max(0.0) * (0.5 + 1.5 * b as f32 / BANDS as f32)).sum();
     }
-    // The very start counts as a hit when it is not silent.
-    flux[0] = (0..BANDS).map(|b| db(levels[0][b]) + 60.0).sum();
+    // The very start counts as a hit when it is not silent (an empty file, a
+    // missing one, has none).
+    if let Some(first) = levels.first() {
+        flux[0] = (0..BANDS).map(|b| db(first[b]) + 60.0).sum();
+    }
     flux
 }
 
@@ -285,6 +288,14 @@ impl crate::app::PulseApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A missing or empty file has no hits, and no crash (a drum loop in Beats
+    /// whose file is gone).
+    #[test]
+    fn an_empty_file_has_one_hit_at_the_start() {
+        assert_eq!(transients(&[], &[], 48_000.0, usize::MAX), vec![0]);
+        assert!(onset_strength(&[], &[]).is_empty());
+    }
 
     const SR: f32 = 48_000.0;
 

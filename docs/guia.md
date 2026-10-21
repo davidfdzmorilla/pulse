@@ -789,9 +789,11 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
   - **Sonoridad** (LUFS integrados, la medida que usan Spotify, YouTube o Apple Music para igualar el volumen de las canciones).
   - **Pico real** (dBTP: también entre muestras, donde nace la distorsión al pasar a MP3 o AAC).
   - **Rango** (LU: cuánto cambia de volumen entre partes), **lo más fuerte** (3 segundos) y **estéreo** (correlación: 1 mono, por debajo de 0 se pierde en mono).
-- **Destino**: Spotify / YouTube / Tidal (−14 LUFS), Apple Music (−16), club / DJ / SoundCloud (−9), radio y TV (−23), o **como la referencia**. Todos con el pico real por debajo de −1 dBTP.
+- **Destino**: Spotify / YouTube / Tidal (−14 LUFS), Apple Music (−16), club / DJ / SoundCloud (−9), **hard techno / rave (−7)**, radio y TV (−23), o **como la referencia**. Todos con el pico real por debajo de −1 dBTP.
 - **Consejos**:
   - **Sonoridad** por debajo o por encima del destino: **Aplicar** pone un **Limiter** en el master y lo ajusta midiendo cada vez, hasta llegar (y con el pico real por debajo de −1 dBTP). Si la mezcla no da más sin aplastarla, se para y te lo dice: para más volumen, comprime o satura las pistas.
+    - Para destinos de −8,5 LUFS o más fuertes (hard techno), pone además un **Saturator Hard 4×** justo antes del Limiter, que recorta 3 dB de los picos (los del bombo), y le acorta el release a 40 ms. Es como se masteriza el género: el limitador solo, con un bombo cada 400 ms, bombea en vez de subir el volumen y deja pasar picos reales.
+    - Por encima del destino, en uno de streaming te avisa de que la plataforma la bajará; en uno de club, de que más apretada solo pierde pegada.
   - **Pistas por encima de 0 dB**: **Aplicar** les baja el volumen.
   - **Graves que chocan**: dos pistas llenando los graves (por debajo de 120 Hz) a la vez. Si una es la batería, **Aplicar** pone a la otra un **Ducker** con **sidechain** de la batería (se aparta cada vez que suena); si no, recorta los graves de la que menos tiene con un **EQ Three**.
   - **Fase**: mezcla o pistas en contrafase, que en mono (un móvil, un club) se pierden.

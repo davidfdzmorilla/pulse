@@ -7,10 +7,14 @@ license = "GPL-3.0-or-later"
 [dependencies]
 eframe = "0.36.2"
 engine = { version = "0.1.0", path = "../engine" }
+# FLAC export, in Rust.
+flacenc = { version = "0.5.1", default-features = false }
 flate2 = "1.1.10"
 hound = "3.5.1"
 midir = "0.11.1"
 rfd = "0.17.2"
+# MP3 export, in Rust (no C to build on each system).
+rusty_mp3 = "1.0.1"
 roxmltree = "0.21.1"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"

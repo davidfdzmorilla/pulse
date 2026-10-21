@@ -299,7 +299,7 @@ mod tests {
         }
         app.project.tempo = 120.0;
         let volume = Control::Param { target: Target::Track(1), param: Param::Volume };
-        app.project.midi_map.push(Mapping { cc: 74, control: volume });
+        app.project.midi_map.push(Mapping::new(74, volume));
         app.sync_all();
         let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
             let mut buffer = vec![0.0; 1024];
@@ -346,8 +346,8 @@ mod tests {
             track.automation.clear();
         }
         app.project.tempo = 120.0;
-        app.project.midi_map.push(Mapping { cc: 74, control: Control::Param { target: Target::Track(1), param: Param::Volume } });
-        app.project.midi_map.push(Mapping { cc: 20, control: Control::Transport(Transport::AutomationArm) });
+        app.project.midi_map.push(Mapping::new(74, Control::Param { target: Target::Track(1), param: Param::Volume }));
+        app.project.midi_map.push(Mapping::new(20, Control::Transport(Transport::AutomationArm)));
         app.sync_all();
         let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
             let mut buffer = vec![0.0; 1024];
@@ -413,7 +413,7 @@ mod tests {
             track.clips = Default::default();
         }
         app.project.tempo = 120.0;
-        app.project.midi_map.push(Mapping { cc: 74, control: Control::Param { target: Target::Track(1), param: Param::Volume } });
+        app.project.midi_map.push(Mapping::new(74, Control::Param { target: Target::Track(1), param: Param::Volume }));
         app.sync_all();
         let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
             let mut buffer = vec![0.0; 1024];

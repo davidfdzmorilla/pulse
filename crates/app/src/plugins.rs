@@ -490,7 +490,7 @@ pub(crate) mod tests {
         app.set_plugin_instrument(3, &synth);
         let InstrumentKind::Plugin(id) = app.project.tracks[3].instrument else { panic!("a plugin instrument") };
         let level = app.samples.plugins.get(&id).unwrap().params()[0].id;
-        app.project.midi_map.push(crate::midi_map::Mapping { cc: 71, control: crate::midi_map::Control::Plugin { id, param: level } });
+        app.project.midi_map.push(crate::midi_map::Mapping::new(71, crate::midi_map::Control::Plugin { id, param: level }));
         app.start_automation_take();
         app.record_automation(1.0);
         for (beat, value) in [(2.0, 100), (3.0, 20)] {

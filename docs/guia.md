@@ -644,8 +644,10 @@ Pulsa **Asignar** en el transporte (o Transporte → Asignar controles MIDI). Se
 - Toca un control de Pulse (knob, fader, parámetro de plugin o botón de transporte) y mueve un knob o pulsa un botón del controlador. **El orden da igual**: si mueves primero el knob, tienes 10 segundos para tocar el control.
 - Los controles asignables se marcan con un borde mientras está activo; hacer clic los elige sin cambiarlos.
 - Se pueden asignar Reproducir, Parar, Grabar, Loop, Metrónomo y Armar automatización.
-- Un CC por control: asignar uno que ya se usa lo mueve.
+- Un CC por control: asignar uno que ya se usa lo mueve. Con **Un knob para varios controles** marcado, lo añade a lo que ya mueve: un solo knob para abrir el filtro, subir la reverb y bajar el volumen a la vez.
 - La lista muestra las asignaciones; **×** quita una. **Terminar** sale.
+- **Desde** y **Hasta**: la parte del recorrido del control que cubre el knob (en %). Por ejemplo, un filtro de 20 % a 70 % para que no se cierre del todo ni se abra entero. Con **Desde** por encima de **Hasta**, el knob lo mueve al revés.
+- **Suavizado**: lo que tarda el control en llegar adonde pones el knob (hasta 2 s). Quita los escalones de un knob de 0–127 y hace barridos lentos con un gesto rápido.
 - Un CC asignado ya no llega al instrumento.
 - Las asignaciones de parámetros se guardan con el proyecto; las de transporte, para todos los proyectos.
 

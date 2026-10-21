@@ -2829,6 +2829,9 @@ impl eframe::App for PulseApp {
         self.poll_plugin_edits();
         self.show_plugin_automation();
         self.poll_midi_map();
+        if self.learn.gliding() {
+            ctx.request_repaint();
+        }
         crate::midi_map::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
         crate::about::window(self, &ctx);

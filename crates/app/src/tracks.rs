@@ -315,7 +315,7 @@ pub(crate) mod tests {
         app.click_track(2, command());
         app.selected_clip = Some(ClipRef::Session { track: 2, slot: 0 });
         app.arrangement.automation.insert(0, engine::model::Param::Volume);
-        app.project.midi_map.push(crate::midi_map::Mapping { cc: 20, control: Control::Param { target: Target::Track(2), param: engine::model::Param::Pan } });
+        app.project.midi_map.push(crate::midi_map::Mapping::new(20, Control::Param { target: Target::Track(2), param: engine::model::Param::Pan }));
         app.kick_window = Some(1);
 
         assert!(app.move_tracks(&[0, 2], n), "to the end");

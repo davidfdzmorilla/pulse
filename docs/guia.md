@@ -516,7 +516,9 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta más CPU y retrasa 36 muestras).
 - **Bitcrusher**: bits y reducción de muestreo.
 - **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.
-- **Ducker**: bombeo de volumen. Sin sidechain, sincronizado al tempo (**Ritmo**); con **Sidechain**, baja cada vez que suena la pista elegida (**Release**: cuánto tarda en volver, en fracción del tiempo elegido).
+- **Ducker**: bombeo de volumen. Sin sidechain, sincronizado al tempo (**Ritmo**). Con **Sidechain**, bombea con cada golpe de la pista elegida: baja de golpe y vuelve en **Release** (fracción del tiempo elegido), aunque la cola del bombo siga sonando, así que con bombos largos de 140–150 BPM también respira entre golpe y golpe.
+  - **Threshold**: el golpe más flojo que lo hace bombear (del todo a partir de 12 dB por encima). Súbelo si bombea con cosas que no son el bombo.
+  - **Solo graves** (activado por defecto): solo escucha por debajo de 600 Hz, así que bombea con el bombo y no con los charles o las palmas de la misma pista. Quítalo con un bombo de hardstyle, cuya cola suena tan fuerte en graves como el golpe. Con la Drum Machine entera como sidechain, los toms graves y las congas también lo mueven un poco: si molesta, usa una pista solo con el bombo.
 - **Chorus** y **Phaser**.
 - **Delay**: tiempo sincronizado (1/16 a un compás), Ping Pong, feedback y filtro.
 - **Reverb**: tamaño, amortiguación y anchura.

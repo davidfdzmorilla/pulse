@@ -365,7 +365,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Chorus(_) => (4, 0),
         Effect::Phaser(_) => (5, 0),
         Effect::Bitcrusher(_) => (3, 0),
-        Effect::Ducker(_) => (2, 1),
+        Effect::Ducker(_) => (3, 1),
         Effect::Limiter(_) => (3, 0),
         Effect::Utility(_) => (2, 0),
         Effect::Plugin(_) => (PLUGIN_KNOBS, 1),
@@ -445,6 +445,9 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 beats_combo(ui, &format!("ducker{index}"), &mut p.rate_beats, &[0.25, 0.5, 1.0, 2.0, 4.0]);
                 if !sources.is_empty() {
                     sidechain_combo(ui, &format!("duck_sc{index}"), &mut p.sidechain, sources);
+                }
+                if p.sidechain.is_some() {
+                    ui.checkbox(&mut p.lows, "Solo graves").on_hover_text("Escucha solo por debajo de 600 Hz: bombea con el bombo y no con los charles o las palmas de la misma pista. Quítalo con un bombo de hardstyle");
                 }
             });
         }

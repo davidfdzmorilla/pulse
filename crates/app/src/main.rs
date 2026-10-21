@@ -27,6 +27,8 @@ mod files;
 mod fidelity_tests;
 #[cfg(test)]
 mod freeze_tests;
+#[cfg(test)]
+mod genre_tests;
 mod finite;
 mod groups;
 mod guide;

@@ -1413,15 +1413,25 @@ pub struct DuckerParams {
     pub release: f32,
     /// Ducking period in beats (1 = every quarter note).
     pub rate_beats: f64,
-    /// Sidechain: the track (by its id) that makes it duck when it sounds, instead
-    /// of the beat (its release then lasts `release` of the period).
+    /// Sidechain: the track (by its id) whose hits make it pump, instead of the
+    /// beat: each hit ducks it and it comes back over `release` of the period.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<u32>,
+    /// With a sidechain, the quietest hit that still makes it pump (fully from 12 dB above).
+    #[serde(default = "ducker_threshold")]
+    pub threshold_db: f32,
+    /// With a sidechain, listen only below 600 Hz: the kick, not the hats or claps.
+    #[serde(default = "yes")]
+    pub lows: bool,
+}
+
+fn ducker_threshold() -> f32 {
+    -36.0
 }
 
 impl Default for DuckerParams {
     fn default() -> Self {
-        Self { depth: 0.7, release: 0.6, rate_beats: 1.0, sidechain: None }
+        Self { depth: 0.7, release: 0.6, rate_beats: 1.0, sidechain: None, threshold_db: ducker_threshold(), lows: true }
     }
 }
 
@@ -1800,9 +1810,10 @@ const BITCRUSHER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::log("Downsample", 1.0, 40.0, 4.0, Times),
     ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
 ];
-const DUCKER_PARAMS: [ParamInfo; 2] = [
+const DUCKER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Depth", 0.0, 1.0, 0.7, Percent),
     ParamInfo::linear("Release", 0.05, 1.0, 0.6, Percent),
+    ParamInfo::linear("Threshold", -60.0, 0.0, -36.0, Decibels),
 ];
 const LIMITER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Gain", 0.0, 24.0, 0.0, Decibels),
@@ -2241,6 +2252,7 @@ impl Effect {
             (Effect::Bitcrusher(p), 2) => &mut p.mix,
             (Effect::Ducker(p), 0) => &mut p.depth,
             (Effect::Ducker(p), 1) => &mut p.release,
+            (Effect::Ducker(p), 2) => &mut p.threshold_db,
             (Effect::Limiter(p), 0) => &mut p.gain_db,
             (Effect::Limiter(p), 1) => &mut p.ceiling_db,
             (Effect::Limiter(p), 2) => &mut p.release_ms,

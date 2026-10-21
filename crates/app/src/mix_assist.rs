@@ -536,7 +536,7 @@ impl PulseApp {
             Fix::Duck { track, name, source, source_name } if track_ok(self, *track, name) => {
                 // Listening to the drums; a quarter of a beat to come back.
                 let sidechain = self.project.tracks.iter().any(|t| t.id == *source).then_some(*source);
-                self.project.tracks[*track].devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.6, release: 0.25, rate_beats: 1.0, sidechain })));
+                self.project.tracks[*track].devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.6, release: 0.25, rate_beats: 1.0, sidechain, ..Default::default() })));
                 self.status = Some(format!("Ducker en «{name}» con sidechain de «{source_name}»: se aparta cada vez que suena"));
             }
             Fix::CutLows { track, name } if track_ok(self, *track, name) => {

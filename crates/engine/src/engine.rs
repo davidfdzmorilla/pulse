@@ -4163,7 +4163,8 @@ mod tests {
     }
 
     /// Track 1 plays on, with a ducker; track 0 (muted, as a sidechain source
-    /// needs not be heard) plays a note now and then.
+    /// needs not be heard) plays a note half a beat in. The level of track 1
+    /// just after that note.
     fn sidechained(sidechain: Option<u32>) -> f32 {
         let mut h = Harness::new();
         let mut ids = [0u32; MAX_TRACKS];
@@ -4173,31 +4174,27 @@ mod tests {
         let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
         held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
         h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
-        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        let mut hit = MidiClip::new("hit", 4.0, [0, 0, 0]);
+        hit.notes.push(Note { start: 0.5, length: 0.25, pitch: 60, velocity: 1.0, chance: 1.0 });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(hit))) });
         h.send(Command::SetMute { target: Target::Track(0), mute: true });
-        let ducker = Device::new(Effect::Ducker(crate::model::DuckerParams { depth: 1.0, sidechain, ..Default::default() }));
+        let params = crate::model::DuckerParams { depth: 1.0, release: 0.2, sidechain, ..Default::default() };
+        let ducker = Device::new(Effect::Ducker(params));
         h.send(Command::InsertDevice { target: Target::Track(1), index: 0, slot: ChainSlot::new(&ducker, SR) });
         h.send(Command::LaunchScene(0));
-        // While track 0's note sounds (its first beat).
-        energy(&h.run_beats(0.9))
+        h.run_beats(0.52);
+        energy(&h.run_beats(0.1))
     }
 
     #[test]
     fn a_sidechain_ducks_when_its_source_sounds() {
-        let free = {
-            let mut h = Harness::new();
-            let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
-            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
-            h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
-            h.send(Command::LaunchScene(0));
-            energy(&h.run_beats(0.9))
-        };
+        let free = sidechained(None);
         let ducked = sidechained(Some(7));
         // A source that does not exist: nothing to listen to, so the tempo-synced
-        // pump instead (it ducks at the start of each beat, much less overall).
+        // pump instead, which is back up half a beat in.
         let missing = sidechained(Some(99));
         assert!(ducked < free * 0.3, "ducked by the source: {ducked} vs {free}");
-        assert!(missing > ducked * 2.0, "{missing} vs {ducked}");
+        assert!(missing > free * 0.9, "{missing} vs {free}");
     }
 
     #[test]

@@ -771,7 +771,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Formato**:
   - **WAV**: 16 bits (con dither, distinto en cada archivo para que el ruido de los stems no se sume en fase), 24 o 32 bits (float).
   - **FLAC**: sin pérdida, como el WAV, y más o menos la mitad de grande; 16 o 24 bits.
-  - **MP3**: para escuchar y compartir, a 192, 256 o 320 kbps. Normalizado, como mucho a −1 dBFS: al decodificarlo sube un poco y a 0 saturaría.
+  - **MP3**: para escuchar y compartir, a 192, 256 o 320 kbps. Normalizado, como mucho a −1 dBFS: al decodificarlo sube un poco y a 0 saturaría. Lleva la información para reproducirse sin huecos: empieza y acaba en la misma muestra que el WAV (sin el silencio que añade el codificador), así que encaja en una sesión o en un loop.
   - A **44.1** o **48 kHz**, en cualquiera de los tres.
 - El diálogo recuerda lo que elegiste la última vez (formato, rango, stems, normalización…), también entre sesiones.
 - **Normalizar**: pico a un valor (no en stems).

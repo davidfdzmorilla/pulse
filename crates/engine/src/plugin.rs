@@ -89,9 +89,20 @@ pub fn is_clap(path: &Path) -> bool {
     path.extension().is_some_and(|e| e.eq_ignore_ascii_case("clap"))
 }
 
-/// Every `.vst3` and `.clap` bundle under `folder`, however deep.
+/// Every `.vst3` and `.clap` bundle under `folder`, up to `MAX_DEPTH` folders deep.
 pub fn bundles(folder: &Path) -> Vec<PathBuf> {
+    bundles_under(folder, 0)
+}
+
+/// Folders inside folders this deep at most: a link to a folder above would
+/// otherwise go round for ever.
+const MAX_DEPTH: usize = 8;
+
+fn bundles_under(folder: &Path, depth: usize) -> Vec<PathBuf> {
     let mut found = Vec::new();
+    if depth > MAX_DEPTH {
+        return found;
+    }
     let Ok(entries) = std::fs::read_dir(folder) else { return found };
     let mut entries: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
     entries.sort();
@@ -99,7 +110,7 @@ pub fn bundles(folder: &Path) -> Vec<PathBuf> {
         if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("vst3") || e.eq_ignore_ascii_case("clap")) {
             found.push(path);
         } else if path.is_dir() {
-            found.extend(bundles(&path));
+            found.extend(bundles_under(&path, depth + 1));
         }
     }
     found
@@ -1642,6 +1653,20 @@ pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// A folder holding a link to the folder above it: the search ends.
+    #[cfg(unix)]
+    #[test]
+    fn searching_ends_with_a_link_going_round() {
+        let root = std::env::temp_dir().join(format!("pulse-plugin-loop-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("a/Synth.vst3")).unwrap();
+        std::os::unix::fs::symlink(&root, root.join("a/vuelta")).unwrap();
+        let found = bundles(&root);
+        assert!(found.contains(&root.join("a/Synth.vst3")));
+        assert!(found.len() <= MAX_DEPTH + 1, "{}", found.len());
+        let _ = std::fs::remove_dir_all(&root);
+    }
 
     /// Builds the test plugin (crates/testplug) and wraps it in a `.vst3` bundle.
     pub(crate) fn test_bundle() -> PathBuf {

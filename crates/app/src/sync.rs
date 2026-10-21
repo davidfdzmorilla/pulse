@@ -202,6 +202,10 @@ pub fn load_plugin(project: &Project, id: PluginId, samples: &mut SampleCache, s
         samples.errors.push(format!("Falta el plugin {}", id.0));
         return None;
     };
+    if !crate::plugins::trusted(Path::new(&plugin.path)) {
+        samples.errors.push(format!("«{}» no se carga: está en {}, fuera de tus carpetas de plugins. Si te fías de él, añade su carpeta en Ajustes → Plugins.", plugin.name, plugin.path));
+        return None;
+    }
     let state = crate::plugins::decode(&plugin.state);
     match engine::plugin::instantiate(Path::new(&plugin.path), &plugin.cid, sample_rate, state.as_deref().filter(|s| !s.is_empty())) {
         Ok((processor, handle)) => {

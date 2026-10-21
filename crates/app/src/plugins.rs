@@ -53,6 +53,8 @@ impl Library {
 
     /// Looks through `folders` for plugins (loading each bundle once). See [`Library::remember`].
     pub fn search(&mut self, folders: &[PathBuf]) {
+        // Searched for plugins: their plugins may load.
+        trust(folders);
         self.found.clear();
         self.failed.clear();
         for folder in folders {
@@ -98,6 +100,40 @@ pub fn encode(bytes: &[u8]) -> String {
         }
     }
     text
+}
+
+/// The folders a project may load plugins from: the system's, the ones in
+/// Ajustes and the ones searched. A plugin is code that runs inside Pulse, so a
+/// project (maybe someone else's) can't name one anywhere else.
+static TRUSTED: std::sync::Mutex<Vec<PathBuf>> = std::sync::Mutex::new(Vec::new());
+
+/// Makes `folders` (with the system's) the ones plugins load from.
+pub fn set_trusted(folders: &[PathBuf]) {
+    if let Ok(mut trusted) = TRUSTED.lock() {
+        trusted.clear();
+    }
+    trust(&engine::plugin::default_folders());
+    trust(folders);
+}
+
+/// Adds `folders` to the ones plugins load from.
+pub fn trust(folders: &[PathBuf]) {
+    let Ok(mut trusted) = TRUSTED.lock() else { return };
+    for folder in folders.iter().filter_map(|f| f.canonicalize().ok()) {
+        if !trusted.contains(&folder) {
+            trusted.push(folder);
+        }
+    }
+}
+
+/// Whether a project may load the plugin at `path`: it is in one of the
+/// trusted folders, with links and `..` followed. One that isn't there at all
+/// fails to load anyway, saying so.
+pub fn trusted(path: &std::path::Path) -> bool {
+    let Ok(path) = path.canonicalize() else { return true };
+    let system = engine::plugin::default_folders().into_iter().filter_map(|f| f.canonicalize().ok());
+    let trusted = TRUSTED.lock().map(|t| t.clone()).unwrap_or_default();
+    trusted.into_iter().chain(system).any(|folder| path.starts_with(folder))
 }
 
 pub fn decode(text: &str) -> Option<Vec<u8>> {
@@ -420,6 +456,55 @@ pub(crate) mod tests {
         }
         assert_eq!(encode(b"Pulse"), "UHVsc2U=");
         assert!(decode("no válido").is_none());
+    }
+
+    fn copy_dir(from: &std::path::Path, to: &std::path::Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                copy_dir(&path, &to.join(entry.file_name()));
+            } else {
+                std::fs::copy(&path, to.join(entry.file_name())).unwrap();
+            }
+        }
+    }
+
+    /// A project names its plugins by path: one outside the plugin folders (a
+    /// project from someone else, say) is not loaded until its folder is added.
+    #[test]
+    fn projects_load_plugins_only_from_trusted_folders() {
+        let app = app();
+        let info = app.plugin_library.found[0].clone();
+        let folders = test_bundle().parent().unwrap().parent().unwrap().to_path_buf();
+        let elsewhere = folders.join(format!("untrusted-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&elsewhere);
+        copy_dir(&test_bundle(), &elsewhere.join("PulseTest.vst3"));
+        let load = |path: PathBuf| {
+            let mut project = crate::project::Project::demo();
+            let id = PluginId(77);
+            project.plugins.push(PluginRef { id, path: path.to_string_lossy().into_owned(), cid: info.cid.clone(), name: "Raro".into(), vendor: String::new(), state: String::new() });
+            let mut samples = crate::sync::SampleCache::default();
+            let loaded = crate::sync::load_plugin(&project, id, &mut samples, 48_000.0).is_some();
+            (loaded, samples.errors)
+        };
+
+        let (loaded, errors) = load(elsewhere.join("PulseTest.vst3"));
+        assert!(!loaded);
+        assert!(errors[0].contains("«Raro» no se carga") && errors[0].contains("Ajustes → Plugins"), "{errors:?}");
+        // Nor by going up from a trusted folder.
+        let sneaky = test_bundle().parent().unwrap().join("..").join(elsewhere.file_name().unwrap()).join("PulseTest.vst3");
+        assert!(!load(sneaky).0);
+        // The ones in the plugin folders load, as before.
+        assert!(load(test_bundle()).0);
+        // A missing one fails as missing.
+        let (loaded, errors) = load(elsewhere.join("Falta.vst3"));
+        assert!(!loaded && !errors[0].contains("Ajustes"));
+
+        // Added as a plugin folder (in Ajustes, or searched): it loads.
+        trust(&[elsewhere.clone()]);
+        assert!(load(elsewhere.join("PulseTest.vst3")).0);
+        let _ = std::fs::remove_dir_all(&elsewhere);
     }
 
     fn app() -> PulseApp {

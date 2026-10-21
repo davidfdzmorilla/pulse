@@ -124,6 +124,16 @@ impl InputCapture {
         }
     }
 
+    /// The recording ended but a take could not be written: the copy stays
+    /// (whole, readable) where it is, and is offered at the next start.
+    pub fn keep_safety(&mut self) -> Option<PathBuf> {
+        let safety = self.safety.take()?;
+        if let Err(e) = safety.writer.finalize() {
+            crate::logs::note(&format!("La copia de seguridad de la grabación ({}) no se cerró bien: {e}", safety.path.display()));
+        }
+        Some(safety.path)
+    }
+
     /// The safety copy being written, if recording.
     pub fn safety_path(&self) -> Option<&Path> {
         self.safety.as_ref().map(|s| s.path.as_path())

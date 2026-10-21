@@ -42,6 +42,14 @@ impl History {
         true
     }
 
+    /// Changes every state kept (to undo, to redo, the last one), as when
+    /// files moved: undoing must not bring back paths that are gone.
+    pub fn rewrite(&mut self, change: impl Fn(&mut Project)) {
+        for project in self.undo.iter_mut().chain(&mut self.redo).chain(std::iter::once(&mut self.baseline)) {
+            change(project);
+        }
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

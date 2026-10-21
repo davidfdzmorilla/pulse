@@ -470,7 +470,7 @@ En el editor de audio, **Trocear** (Transitorios, 1/16, 1/8 o 1/4) y **A Drum Pa
 Clic derecho en un clip de audio → **Separar en stems…** (o el botón del editor). Crea cuatro pistas nuevas debajo, **Batería**, **Bajo**, **Resto** y **Voz**, con el mismo clip en el mismo sitio, y desactiva la original para que suene igual: cada pista nueva es una copia de la original, con sus efectos, su volumen, panorama, envíos, automatización y grupo, y el clip conserva sus envolventes.
 
 - Se hace en este Mac, sin enviar nada a internet, y puedes seguir trabajando mientras tanto. **Cancelar** la detiene.
-- La primera vez descarga el modelo (174 MB) de GitHub: hace falta acceso a GitHub (`gh auth login`).
+- La primera vez descarga el modelo (174 MB) de GitHub, sin cuenta. Si la conexión se corta o cancelas, la próxima vez sigue desde donde se quedó.
 - Una separación a la vez, y hacen falta 4 pistas libres (máximo 64).
 
 ## Audio a MIDI
@@ -812,7 +812,10 @@ Pulse busca versiones nuevas al arrancar y cada 6 horas (también en Pulse → *
 - Al terminar, **Reiniciar ahora** (pregunta antes si hay cambios sin guardar).
 - La versión anterior se guarda como «Pulse (anterior)»: **Volver a la versión anterior** la recupera.
 - La primera vez que arranca una versión nueva enseña sus novedades.
-- Hace falta acceso a GitHub (`gh auth login` o un token en «Acceso a GitHub»; se guarda en el llavero en macOS y en el Administrador de credenciales en Windows).
+- No hace falta cuenta de GitHub: el repositorio es público. **Acceso a GitHub (opcional)** solo sirve si GitHub dice que hay demasiadas consultas (tiene un límite por hora): usa la sesión de `gh auth login` o un token pegado ahí (se guarda en el llavero en macOS y en el Administrador de credenciales en Windows). Si el token caduca, Pulse sigue sin él.
+- Solo se anuncian las versiones que traen paquete para tu sistema.
+- Si Pulse no puede reemplazarse donde está, lo dice antes de descargar nada: abierto sin moverlo de Descargas (macOS lo ejecuta desde una copia temporal: muévelo a Aplicaciones) o en una carpeta en la que tu usuario no puede escribir.
+- Si algo falla al cambiar de versión, todo queda como estaba, también la versión anterior guardada.
 - Si vuelves a una versión anterior y abres un proyecto guardado con una más nueva, la barra de estado lo dice, y antes de guardarlo encima Pulse pregunta: esa versión no conoce lo nuevo y se perdería. **Guardar como…** guarda una copia sin tocar el original. Los ajustes que no conoce se conservan.
 - En Windows se sustituye `pulse.exe` y el anterior queda como «pulse (anterior).exe» en la carpeta de instalación. Antes de instalarla, Pulse comprueba que la descarga es la publicada (su huella SHA-256) y que es la versión anunciada.
 

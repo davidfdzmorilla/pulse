@@ -222,36 +222,16 @@ fn unique(path: &Path) -> PathBuf {
 /// Downloads the model from the project's GitHub release, checking its size and SHA-256.
 fn download_model(dest: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Result<(), String> {
     set(stage, Stage::Download(0.0));
-    let token = crate::updates::token().ok_or("Para descargar el modelo hace falta acceso a GitHub: inicia sesión con «gh auth login»")?;
-    let release = crate::updates::release_at(&token, &format!("tags/{MODEL_TAG}")).map_err(|e| format!("No se encontró el modelo de separación: {e}"))?;
+    let token = crate::updates::token();
+    let release = crate::updates::release_at(token.as_deref(), &format!("tags/{MODEL_TAG}")).map_err(|e| format!("No se encontró el modelo de separación: {e}"))?;
     let asset = release.assets.iter().find(|a| a.name == MODEL_FILE).ok_or("La publicación del modelo no tiene el archivo")?;
     let dir = dest.parent().ok_or("Carpeta del modelo no válida")?;
     std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    // What an earlier try left is kept: the download goes on from there.
     let partial = dest.with_extension("part");
-    let _ = std::fs::remove_file(&partial);
-    let mut child = crate::updates::spawn_curl(&asset.url, &token, "application/octet-stream", Some(&partial))?;
-    let status = loop {
-        if cancel.load(Ordering::Relaxed) {
-            let _ = child.kill();
-            let _ = child.wait();
-            let _ = std::fs::remove_file(&partial);
-            return Err(CANCELLED.into());
-        }
-        if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
-            break status;
-        }
-        let size = std::fs::metadata(&partial).map_or(0, |m| m.len());
-        set(stage, Stage::Download(size as f32 / MODEL_SIZE as f32));
-        std::thread::sleep(std::time::Duration::from_millis(200));
-    };
-    if !status.success() {
-        let mut error = String::new();
-        if let Some(mut stderr) = child.stderr.take() {
-            use std::io::Read;
-            let _ = stderr.read_to_string(&mut error);
-        }
-        let _ = std::fs::remove_file(&partial);
-        return Err(format!("No se pudo descargar el modelo: {}", crate::updates::curl_error(&error)));
+    // Unless it is all there already (or more: something else, found below).
+    if std::fs::metadata(&partial).map_or(0, |m| m.len()) < MODEL_SIZE {
+        fetch(&asset.url, token.as_deref(), &partial, stage, cancel)?;
     }
     let size = std::fs::metadata(&partial).map_or(0, |m| m.len());
     let hash = sha256(&partial)?;
@@ -260,6 +240,42 @@ fn download_model(dest: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Res
         return Err("El modelo descargado no es el esperado (tamaño o huella distintos); vuelve a intentarlo".into());
     }
     std::fs::rename(&partial, dest).map_err(|e| e.to_string())
+}
+
+/// Downloads `url` into `partial`, going on from what it has, with the
+/// progress in `stage`. A token GitHub turns down is left out (the repository
+/// is public). Cancelled, what came stays for next time.
+fn fetch(url: &str, token: Option<&str>, partial: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Result<(), String> {
+    let attempt = |token: Option<&str>| -> Result<Result<(), String>, String> {
+        let mut child = crate::updates::spawn_curl(url, token, "application/octet-stream", Some(partial), true)?;
+        let status = loop {
+            if cancel.load(Ordering::Relaxed) {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(CANCELLED.into());
+            }
+            if let Some(status) = child.try_wait().map_err(|e| e.to_string())? {
+                break status;
+            }
+            let size = std::fs::metadata(partial).map_or(0, |m| m.len());
+            set(stage, Stage::Download(size as f32 / MODEL_SIZE as f32));
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        };
+        if status.success() {
+            return Ok(Ok(()));
+        }
+        let mut error = String::new();
+        if let Some(mut stderr) = child.stderr.take() {
+            use std::io::Read;
+            let _ = stderr.read_to_string(&mut error);
+        }
+        Ok(Err(error))
+    };
+    match attempt(token)? {
+        Err(e) if token.is_some() && crate::updates::refused(&e) => attempt(None)?,
+        result => result,
+    }
+    .map_err(|e| format!("No se pudo descargar el modelo (se seguirá desde aquí la próxima vez): {}", crate::updates::curl_error(&e)))
 }
 
 /// A file's SHA-256, in hex.

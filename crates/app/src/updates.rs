@@ -1,4 +1,4 @@
-//! Updates from the project's private GitHub repository. Each release there has a
+//! Updates from the project's GitHub repository (public). Each release there has a
 //! `Pulse-<version>.zip` with the signed Pulse.app (see `scripts/release.sh`).
 //!
 //! Pulse looks for the latest release every time it starts, every few hours while
@@ -7,8 +7,10 @@
 //! it downloads the zip, checks that the app inside is that version and signed
 //! like this one, keeps this version as "Pulse (anterior).app" next to it, puts
 //! the new one in its place and restarts. "Volver a la versión anterior" swaps
-//! them back. GitHub is reached with `curl`; the token comes from the GitHub CLI
-//! (`gh auth token`) or one pasted in the window, kept in the login keychain.
+//! them back. GitHub is reached with `curl`, with no account needed; a token,
+//! if there is one (the GitHub CLI's, `gh auth token`, or one pasted in the
+//! window, kept in the login keychain), is sent too, and left out if GitHub
+//! turns it down (expired, revoked).
 //!
 //! On Windows the release has `Pulse-<version>-windows-x64.zip` (see
 //! `scripts/package-windows.ps1`) and what is replaced is `pulse.exe` itself
@@ -17,7 +19,7 @@
 //! it, and the program inside must say it is that version (its version
 //! resource). There is no signing certificate yet, so a download is checked for
 //! being the file published, not for who made it. `curl.exe` and `tar.exe` come
-//! with Windows 10 and 11; the token pasted in the window is kept in Windows'
+//! with Windows 10 and 11; a token pasted in the window is kept in Windows'
 //! Credential Manager.
 
 use crate::app::PulseApp;
@@ -47,6 +49,14 @@ const PARKED: &str = ".Pulse-cambio.app";
 const PREVIOUS: &str = "pulse (anterior).exe";
 #[cfg(windows)]
 const PARKED: &str = ".pulse-cambio.exe";
+/// The previous version kept before, while a new one goes in (see [`swap_in`]).
+#[cfg(not(windows))]
+const OLDER: &str = ".Pulse-anterior-vieja.app";
+#[cfg(windows)]
+const OLDER: &str = ".pulse-anterior-vieja.exe";
+/// Pulse's signing identifier (Info.plist's CFBundleIdentifier).
+#[cfg(not(windows))]
+const BUNDLE_ID: &str = "io.github.davidfdzmorilla.pulse";
 /// The end of the name of this system's release asset.
 #[cfg(not(windows))]
 const PACKAGE: &str = ".zip";
@@ -178,13 +188,19 @@ fn output(command: &mut Command) -> Option<String> {
     (out.status.success() && !text.is_empty()).then_some(text)
 }
 
-/// Starts curl with the token in its configuration (read from stdin, so it never
-/// shows in the process list), writing the body to `to` if given.
-pub(crate) fn spawn_curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<std::process::Child, String> {
+/// Starts curl, with the token (if any) in its configuration (read from stdin,
+/// so it never shows in the process list), writing the body to `to` if given;
+/// `resume`: going on from what `to` already has. A slow line is fine as long
+/// as it moves (under 1 KB/s for a minute is given up), and a dropped one is
+/// tried again.
+pub(crate) fn spawn_curl(url: &str, token: Option<&str>, accept: &str, to: Option<&Path>, resume: bool) -> Result<std::process::Child, String> {
     let mut command = command(system::curl());
-    command.args(["--silent", "--show-error", "--fail", "--location", "--max-time", "3600", "--config", "-"]);
+    command.args(["--silent", "--show-error", "--fail", "--location", "--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "60", "--retry", "3", "--config", "-"]);
     if let Some(path) = to {
         command.arg("--output").arg(path);
+        if resume {
+            command.args(["--continue-at", "-"]);
+        }
     }
     let mut child = command
         .arg(url)
@@ -195,31 +211,50 @@ pub(crate) fn spawn_curl(url: &str, token: &str, accept: &str, to: Option<&Path>
         .map_err(|e| format!("No se pudo ejecutar curl: {e}"))?;
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
-        let config = format!(
-            "header = \"Authorization: Bearer {token}\"\nheader = \"Accept: {accept}\"\nheader = \"X-GitHub-Api-Version: 2022-11-28\"\nuser-agent = \"Pulse/{VERSION}\"\n"
-        );
+        let config = curl_config(token, accept);
         stdin.write_all(config.as_bytes()).map_err(|e| e.to_string())?;
     }
     Ok(child)
 }
 
-/// Runs curl (see [`spawn_curl`]). Returns the body, or writes it to `to`.
-fn curl(url: &str, token: &str, accept: &str, to: Option<&Path>) -> Result<Vec<u8>, String> {
-    let child = spawn_curl(url, token, accept, to)?;
-    let out = child.wait_with_output().map_err(|e| e.to_string())?;
-    if out.status.success() {
-        Ok(out.stdout)
-    } else {
-        Err(curl_error(&String::from_utf8_lossy(&out.stderr)))
+/// curl's configuration: the headers, with the token's only if there is one.
+fn curl_config(token: Option<&str>, accept: &str) -> String {
+    let authorization = token.map_or_else(String::new, |token| format!("header = \"Authorization: Bearer {token}\"\n"));
+    format!("{authorization}header = \"Accept: {accept}\"\nheader = \"X-GitHub-Api-Version: 2022-11-28\"\nuser-agent = \"Pulse/{VERSION}\"\n")
+}
+
+/// Whether a release is news here: newer than this one, with a package for
+/// this system (a release only for macOS isn't one on Windows, and back).
+fn news(release: &Release) -> bool {
+    newer(release.version(), VERSION) && release.zip().is_some()
+}
+
+/// Runs curl (see [`spawn_curl`]). Returns the body, or writes it to `to`. A
+/// token GitHub turns down (expired, revoked) is left out and it asks again:
+/// the repository is public.
+fn curl(url: &str, token: Option<&str>, accept: &str, to: Option<&Path>) -> Result<Vec<u8>, String> {
+    let run = |token: Option<&str>| -> Result<Vec<u8>, String> {
+        let out = spawn_curl(url, token, accept, to, false)?.wait_with_output().map_err(|e| e.to_string())?;
+        if out.status.success() { Ok(out.stdout) } else { Err(String::from_utf8_lossy(&out.stderr).into_owned()) }
+    };
+    match run(token) {
+        Err(e) if token.is_some() && refused(&e) => run(None),
+        result => result,
     }
+    .map_err(|e| curl_error(&e))
+}
+
+/// Whether curl's error is GitHub turning the request down (not a missing page).
+pub(crate) fn refused(error: &str) -> bool {
+    error.contains("401") || error.contains("403")
 }
 
 /// curl's error, in words.
 pub(crate) fn curl_error(error: &str) -> String {
     if error.contains("404") {
-        format!("No se encontró en {REPOSITORY} (o el token no tiene acceso)")
-    } else if error.contains("401") || error.contains("403") {
-        "GitHub no acepta el token: inicia sesión con «gh auth login» o pega uno nuevo".to_string()
+        format!("No se encontró en {REPOSITORY}")
+    } else if refused(error) {
+        "GitHub no responde a más consultas por ahora (tiene un límite por hora): prueba dentro de un rato, o pega un token en «Acceso a GitHub»".to_string()
     } else if error.contains("resolve host") || error.contains("connect") {
         "Sin conexión con GitHub".to_string()
     } else {
@@ -227,12 +262,12 @@ pub(crate) fn curl_error(error: &str) -> String {
     }
 }
 
-fn latest_release(token: &str) -> Result<Release, String> {
+fn latest_release(token: Option<&str>) -> Result<Release, String> {
     release_at(token, "latest")
 }
 
 /// `which`: "latest" or "tags/v1.2.3".
-pub(crate) fn release_at(token: &str, which: &str) -> Result<Release, String> {
+pub(crate) fn release_at(token: Option<&str>, which: &str) -> Result<Release, String> {
     let body = curl(&format!("https://api.github.com/repos/{REPOSITORY}/releases/{which}"), token, "application/vnd.github+json", None)?;
     serde_json::from_slice(&body).map_err(|e| format!("Respuesta de GitHub no válida: {e}"))
 }
@@ -295,14 +330,19 @@ fn signer(bundle: &Path, strict: bool) -> Result<String, String> {
 /// Checks that `new` is validly signed with the very certificate `ours` was (its
 /// designated requirement names the certificate's hash, not just its name). An
 /// ad hoc signed `ours` (a build that was never signed properly) accepts any valid
-/// signature.
+/// signature of Pulse (its identifier).
 #[cfg(not(windows))]
 fn same_signer(ours: &Path, new: &Path) -> Result<(), String> {
     let theirs = signer(new, true)?;
     // A broken signature here must not open the door to any download.
     let mine = signer(ours, false).map_err(|e| format!("No se puede comprobar esta versión de Pulse: {e}"))?;
     if mine == "adhoc" {
-        return Ok(());
+        let pulse = Command::new("/usr/bin/codesign")
+            .args(["--verify", &format!("-R=identifier \"{BUNDLE_ID}\"")])
+            .arg(new)
+            .output()
+            .map_err(|e| e.to_string())?;
+        return if pulse.status.success() { Ok(()) } else { Err("La descarga no es Pulse (otro identificador de firma): no se instala".into()) };
     }
     let requirement = output(Command::new("/usr/bin/codesign").args(["-d", "-r-"]).arg(ours))
         .and_then(|text| text.lines().find_map(|l| l.strip_prefix("designated => ").map(str::to_string)))
@@ -321,17 +361,32 @@ fn same_signer(ours: &Path, new: &Path) -> Result<(), String> {
 }
 
 /// Puts `new` where `current` is, keeping `current` as "Pulse (anterior).app"
-/// beside it (replacing an older one). If anything fails, `current` stays.
+/// beside it (replacing an older one). If anything fails, everything stays as
+/// it was: `current`, and the previous version kept before (set aside first,
+/// removed only once the new one is in).
 pub fn swap_in(current: &Path, new: &Path) -> Result<(), String> {
     let previous = current.with_file_name(PREVIOUS);
-    if previous.exists() {
-        remove(&previous).map_err(|e| format!("No se pudo quitar la versión anterior guardada: {e}"))?;
+    let older = current.with_file_name(OLDER);
+    let _ = remove(&older);
+    let had_previous = previous.exists();
+    if had_previous {
+        std::fs::rename(&previous, &older).map_err(|e| format!("No se pudo apartar la versión anterior guardada: {e}"))?;
     }
-    std::fs::rename(current, &previous).map_err(|e| format!("No se pudo apartar esta versión: {e}"))?;
+    let undo_previous = || {
+        if had_previous {
+            let _ = std::fs::rename(&older, &previous);
+        }
+    };
+    if let Err(e) = std::fs::rename(current, &previous) {
+        undo_previous();
+        return Err(format!("No se pudo apartar esta versión: {e}"));
+    }
     if let Err(e) = std::fs::rename(new, current) {
         let _ = std::fs::rename(&previous, current);
+        undo_previous();
         return Err(format!("No se pudo instalar la nueva versión: {e}"));
     }
+    let _ = remove(&older);
     Ok(())
 }
 
@@ -357,10 +412,12 @@ fn remove(path: &Path) -> std::io::Result<()> {
 }
 
 /// Downloads a release and installs it over `bundle`. Returns the new version.
-fn install(release: &Release, bundle: &Path, token: &str) -> Result<String, String> {
+fn install(release: &Release, bundle: &Path, token: Option<&str>) -> Result<String, String> {
     let asset = release.zip().ok_or("La versión publicada no tiene ningún .zip")?;
-    // Next to the bundle, so the final move stays on the same disk.
-    let work = bundle.with_file_name(".pulse-update");
+    replaceable(bundle)?;
+    // Next to the bundle, so the final move stays on the same disk (one per
+    // process: two Pulses open don't share it).
+    let work = bundle.with_file_name(format!(".pulse-update-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
     std::fs::create_dir_all(&work).map_err(|e| format!("No se pudo preparar la descarga: {e}"))?;
     let result = (|| {
@@ -382,6 +439,24 @@ fn install(release: &Release, bundle: &Path, token: &str) -> Result<String, Stri
     })();
     let _ = std::fs::remove_dir_all(&work);
     result
+}
+
+/// Whether Pulse can replace itself where it is, or why not in words: opened
+/// straight from Downloads (macOS runs it from a hidden read-only copy) or from
+/// a folder this user can't write.
+fn replaceable(bundle: &Path) -> Result<(), String> {
+    if bundle.to_string_lossy().contains("/AppTranslocation/") {
+        return Err("Pulse se está ejecutando desde una copia temporal de macOS (se abrió sin moverlo de Descargas): muévelo a Aplicaciones, ábrelo desde ahí y vuelve a intentarlo".into());
+    }
+    let dir = bundle.parent().ok_or("No se sabe dónde está Pulse")?;
+    let probe = dir.join(format!(".pulse-escritura-{}", std::process::id()));
+    match std::fs::write(&probe, b"") {
+        Ok(()) => {
+            let _ = std::fs::remove_file(&probe);
+            Ok(())
+        }
+        Err(_) => Err(format!("No se puede escribir en {} (la carpeta de Pulse): instala Pulse en una carpeta tuya, como Aplicaciones de tu usuario, o actualiza a mano", dir.display())),
+    }
 }
 
 use system::relaunch;
@@ -406,12 +481,21 @@ mod system {
     }
 
     /// Keeps a token in the login keychain.
+    /// The token goes to `security` through its standard input (`-i`), so it
+    /// never shows in the process list.
     pub fn remember_token(token: &str) -> Result<(), String> {
-        let status = Command::new("/usr/bin/security")
-            .args(["add-generic-password", "-U", "-s", KEYCHAIN_SERVICE, "-a", "github", "-w", token])
-            .status()
-            .map_err(|e| e.to_string())?;
-        if status.success() { Ok(()) } else { Err("No se pudo guardar el token en el llavero".into()) }
+        use std::io::Write;
+        // GitHub's tokens are letters, digits and underscores; anything else isn't one.
+        if token.is_empty() || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+            return Err("Eso no parece un token de GitHub".into());
+        }
+        let mut child = Command::new("/usr/bin/security").arg("-i").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
+        if let Some(mut stdin) = child.stdin.take() {
+            writeln!(stdin, "add-generic-password -U -s \"{KEYCHAIN_SERVICE}\" -a github -w {token}").map_err(|e| e.to_string())?;
+        }
+        let out = child.wait_with_output().map_err(|e| e.to_string())?;
+        // `-i` exits well whatever the command did: its complaints are on stderr.
+        if out.status.success() && out.stderr.is_empty() { Ok(()) } else { Err("No se pudo guardar el token en el llavero".into()) }
     }
 
     /// The bundle's version, from its Info.plist.
@@ -584,7 +668,7 @@ impl PulseApp {
         self.updates.announce = true;
         let shared = self.updates.state.clone();
         std::thread::spawn(move || {
-            if let Some(release) = token().and_then(|token| release_at(&token, &format!("tags/v{VERSION}")).ok()) {
+            if let Ok(release) = release_at(token().as_deref(), &format!("tags/v{VERSION}")) {
                 set(&shared, State::WhatsNew(release));
             }
         });
@@ -625,13 +709,11 @@ impl PulseApp {
         self.updates.last_check = Some(std::time::Instant::now());
         let shared = self.updates.state.clone();
         std::thread::spawn(move || {
-            let state = match token() {
-                None => State::Failed("Falta el acceso a GitHub: inicia sesión con «gh auth login» o pega un token aquí".into()),
-                Some(token) => match latest_release(&token) {
-                    Ok(release) if newer(release.version(), VERSION) => State::Available(release),
-                    Ok(_) => State::UpToDate,
-                    Err(e) => State::Failed(e),
-                },
+            let state = match latest_release(token().as_deref()) {
+                // Only a version with a package for this system is news.
+                Ok(release) if news(&release) => State::Available(release),
+                Ok(_) => State::UpToDate,
+                Err(e) => State::Failed(e),
             };
             set(&shared, state);
         });
@@ -645,12 +727,9 @@ impl PulseApp {
         self.updates.set(State::Downloading(release.clone()));
         let shared = self.updates.state.clone();
         std::thread::spawn(move || {
-            let state = match token() {
-                None => State::Failed("Falta el acceso a GitHub".into()),
-                Some(token) => match install(&release, &bundle, &token) {
-                    Ok(version) => State::Installed(version),
-                    Err(e) => State::Failed(e),
-                },
+            let state = match install(&release, &bundle, token().as_deref()) {
+                Ok(version) => State::Installed(version),
+                Err(e) => State::Failed(e),
             };
             set(&shared, state);
         });
@@ -783,12 +862,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         if ui.checkbox(&mut check, "Buscar actualizaciones al arrancar").changed() {
             action = Some(Action::CheckOnStart(check));
         }
-        ui.collapsing("Acceso a GitHub", |ui| {
+        ui.collapsing("Acceso a GitHub (opcional)", |ui| {
             ui.label(
                 egui::RichText::new(if cfg!(windows) {
-                    "Pulse usa la sesión de GitHub CLI («gh auth login»). Si no la tienes, pega un token con permiso de lectura del repositorio; se guarda en el Administrador de credenciales de Windows."
+                    "No hace falta: el repositorio es público. Solo si GitHub dice que hay demasiadas consultas: Pulse usa la sesión de GitHub CLI («gh auth login») o un token que pegues aquí (se guarda en el Administrador de credenciales de Windows)."
                 } else {
-                    "Pulse usa la sesión de GitHub CLI («gh auth login»). Si no la tienes, pega un token con permiso de lectura del repositorio; se guarda en el llavero."
+                    "No hace falta: el repositorio es público. Solo si GitHub dice que hay demasiadas consultas: Pulse usa la sesión de GitHub CLI («gh auth login») o un token que pegues aquí (se guarda en el llavero)."
                 })
                     .color(TEXT_DIM)
                     .size(10.5),
@@ -942,11 +1021,53 @@ mod tests {
         // Back and forth.
         swap_back(&current).unwrap();
         assert_eq!((read(&current), read(&dir.join(PREVIOUS))), (Some("2".into()), Some("3".into())));
-        // A missing new version leaves the current one in place.
+        // A missing new version leaves the current one in place, and the
+        // previous one kept, nothing else beside them.
         assert!(swap_in(&current, &dir.join("missing.app")).is_err());
-        assert_eq!(read(&current), Some("2".into()));
+        assert_eq!((read(&current), read(&dir.join(PREVIOUS))), (Some("2".into()), Some("3".into())));
+        assert!(!dir.join(OLDER).exists());
         std::fs::remove_dir_all(&dir).ok();
         assert!(swap_back(&current).is_err());
+    }
+
+    /// Without a token no Authorization header goes; with one, it does.
+    #[test]
+    fn a_token_is_only_sent_when_there_is_one() {
+        assert!(!curl_config(None, "application/json").contains("Authorization"));
+        assert!(curl_config(Some("ghp_abc"), "application/json").contains("Authorization: Bearer ghp_abc"));
+        assert!(refused("curl: (22) The requested URL returned error: 401") && refused("error: 403") && !refused("error: 404"));
+        assert!(curl_error("error: 403").contains("límite"));
+    }
+
+    /// A newer release with nothing for this system isn't announced.
+    #[test]
+    fn releases_without_a_package_here_are_not_news() {
+        let asset = |name: &str| Asset { name: name.into(), url: String::new(), size: 1, digest: None };
+        let here = if cfg!(windows) { "Pulse-99.0.0-windows-x64.zip" } else { "Pulse-99.0.0.zip" };
+        let other = if cfg!(windows) { "Pulse-99.0.0.zip" } else { "Pulse-99.0.0-windows-x64.zip" };
+        let release = |assets: Vec<Asset>| Release { tag_name: "v99.0.0".into(), body: None, assets };
+        assert!(news(&release(vec![asset(here)])));
+        assert!(!news(&release(vec![asset(other)])), "only for the other system");
+        assert!(!news(&release(Vec::new())));
+        assert!(!news(&Release { tag_name: format!("v{VERSION}"), body: None, assets: vec![asset(here)] }), "not newer");
+    }
+
+    /// Pulse says why it can't replace itself before downloading anything:
+    /// run from macOS's temporary copy, or from a folder it can't write.
+    #[cfg(unix)]
+    #[test]
+    fn where_pulse_cannot_replace_itself_it_says_why() {
+        use std::os::unix::fs::PermissionsExt;
+        let error = replaceable(Path::new("/private/var/folders/x/T/AppTranslocation/ABC/d/Pulse.app")).unwrap_err();
+        assert!(error.contains("Aplicaciones"), "{error}");
+        let dir = std::env::temp_dir().join(format!("pulse-solo-lectura-{}", std::process::id()));
+        std::fs::create_dir_all(dir.join("Pulse.app")).unwrap();
+        assert!(replaceable(&dir.join("Pulse.app")).is_ok());
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o555)).unwrap();
+        let error = replaceable(&dir.join("Pulse.app"));
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(error.unwrap_err().contains("No se puede escribir"));
     }
 
     #[test]
@@ -1028,8 +1149,8 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[ignore = "diagnostic: talks to GitHub and downloads the latest release"]
     fn update_a_copy_from_github() {
-        let token = token().expect("gh auth token");
-        let release = latest_release(&token).unwrap();
+        // No token: the repository is public.
+        let release = latest_release(None).unwrap();
         println!("última publicada: {} ({:?})", release.version(), release.zip().map(|a| &a.name));
         let dir = std::env::temp_dir().join(format!("pulse-update-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -1037,11 +1158,11 @@ mod tests {
         let bundle = dir.join("Pulse.app");
         let installed = PathBuf::from(std::env::var("HOME").unwrap()).join("Applications/Pulse.app");
         assert!(Command::new("/usr/bin/ditto").arg(&installed).arg(&bundle).status().unwrap().success());
-        let result = install(&release, &bundle, &token);
+        let result = install(&release, &bundle, None);
         println!("instalación: {result:?}");
         println!("en su sitio: {:?} · anterior: {:?}", bundle_version(&bundle), bundle_version(&dir.join(PREVIOUS)));
         println!("volver: {:?} → {:?}", swap_back(&bundle), bundle_version(&bundle));
-        println!("restos de la descarga: {}", dir.join(".pulse-update").exists());
+        println!("restos de la descarga: {}", dir.join(format!(".pulse-update-{}", std::process::id())).exists());
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(result, Ok(release.version().to_string()));
     }

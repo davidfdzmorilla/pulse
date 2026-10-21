@@ -165,8 +165,8 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 **Congelar pista** (clic derecho en la cabecera) renderiza a audio lo que suenan su instrumento y sus efectos, y la pista pasa a sonar ese audio: deja de gastar CPU. El volumen, el panorama y los envíos siguen en vivo.
 
 - Una pista congelada lleva un marco azul y ✱. Su instrumento y efectos no se pueden editar.
-- **Descongelar pista** (o el botón «Descongelar» en el panel de abajo) vuelve a lo de antes. Si cambias el contenido de una pista congelada, se descongela sola; también si cambias el tempo, el swing o la tonalidad del proyecto, o la pista de la que escucha su sidechain.
-- Suena como antes también con sidechain (la pista que lo dispara se tiene en cuenta al congelar) y con cambios de tempo (el audio congelado sigue la automatización de tempo tal como sonaba). Las envolventes de volumen, panorama y envíos de los clips de Session siguen en vivo; las de los clips del Arrangement quedan grabadas en el audio.
+- **Descongelar pista** (o el botón «Descongelar» en el panel de abajo) vuelve a lo de antes. Si cambias el contenido de una pista congelada, se descongela sola; también si cambias el tempo, el swing o la tonalidad del proyecto, o lo que escucha su sidechain (también si esa pista escucha a otra, o es un grupo y cambias sus pistas).
+- Suena como antes también con sidechain (lo que lo dispara se tiene en cuenta al congelar: un grupo con todas sus pistas, y la pista que dispara a la que lo dispara) y con cambios de tempo (el audio congelado sigue la automatización de tempo tal como sonaba). Las envolventes de volumen, panorama y envíos de los clips de Session siguen en vivo; las de los clips del Arrangement quedan grabadas en el audio. El primer golpe suena entero (sin el fundido de entrada de los clips) y, al exportar, la cola congelada (reverb, delay) se exporta completa.
 - **Convertir en audio**: la pista pasa a ser una pista de audio con lo congelado, para siempre.
 - Solo se congela una pista a la vez. Una pista de audio sin efectos no necesita congelarse.
 
@@ -537,6 +537,7 @@ Se combinan: **Acorde + Arpegiador** arpegia acordes tocando una sola nota. Al g
 El **Compressor** y el **Ducker** pueden escuchar a otra pista en vez de a la suya: elige cuál en **Sidechain**. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
 
 - Escucha el sonido de la pista elegida **tras sus efectos y antes de su fader**: funciona aunque esa pista esté silenciada o con el fader abajo (puedes tener un bombo solo para disparar el sidechain).
+- Puede escuchar a un **grupo**: oye la suma de sus pistas tras los efectos del grupo. Sigue funcionando con otra pista en solo, en los stems y al congelar.
 - La fuente se recuerda aunque muevas, agrupes o renombres las pistas.
 - Vale también en pistas de grupos, retornos y el Master.
 

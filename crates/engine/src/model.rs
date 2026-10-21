@@ -188,6 +188,10 @@ pub struct AudioClip {
     /// Switched off: it stays where it is, silent.
     #[serde(default, skip_serializing_if = "is_default")]
     pub muted: bool,
+    /// Its first hit plays untouched, with no fade-in: the file starts where
+    /// the sound starts (a frozen track, rendered from the song's start).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub hard_start: bool,
 }
 
 /// The key an audio file is in.
@@ -6749,7 +6753,7 @@ mod tests {
 
     #[test]
     fn warp_markers_map_beats_to_the_file_and_back() {
-        let mut clip = AudioClip {
+        let mut clip = AudioClip { hard_start: false,
             name: "x".into(),
             color: [0; 3],
             sample: "x.wav".into(),

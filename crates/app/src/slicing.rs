@@ -411,7 +411,7 @@ mod tests {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         app.project.tempo = 120.0;
         let t = app.add_audio_track().unwrap();
-        app.project.tracks[t].clips[0] = Some(Clip::Audio(AudioClip {
+        app.project.tracks[t].clips[0] = Some(Clip::Audio(AudioClip { hard_start: false,
             name: "Break".into(),
             color: [1, 2, 3],
             sample: path.to_string_lossy().into_owned(),

@@ -291,7 +291,7 @@ mod tests {
     use engine::model::{AudioClip, Clip, WarpMode};
 
     fn audio(path: &Path) -> Clip {
-        Clip::Audio(AudioClip {
+        Clip::Audio(AudioClip { hard_start: false,
             name: "a".into(),
             color: [0; 3],
             sample: path.to_string_lossy().into_owned(),

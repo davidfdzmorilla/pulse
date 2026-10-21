@@ -254,7 +254,7 @@ mod tests {
 
     #[test]
     fn a_clip_follows_with_whole_bars_from_the_bar_line() {
-        let clip = AudioClip {
+        let clip = AudioClip { hard_start: false,
             name: "x".into(),
             color: [0; 3],
             sample: "/x.wav".into(),
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn a_varying_tempo_is_warped_bar_by_bar() {
-        let clip = AudioClip {
+        let clip = AudioClip { hard_start: false,
             name: "x".into(),
             color: [0; 3],
             sample: "/x.wav".into(),

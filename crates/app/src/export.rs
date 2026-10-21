@@ -153,7 +153,8 @@ pub fn beat_range(project: &Project, range: Range) -> Option<(f64, f64)> {
     match range {
         Range::Loop => (project.loop_end > project.loop_start).then_some((project.loop_start, project.loop_end)),
         Range::Song | Range::Sections => {
-            let end = project.tracks.iter().map(|t| t.arrangement_end()).fold(0.0, f64::max);
+            // A frozen track's audio, with its tail, is part of the song.
+            let end = project.tracks.iter().map(|t| crate::freeze::playing(t).arrangement_end()).fold(0.0, f64::max);
             (end > 0.0).then_some((0.0, end))
         }
     }
@@ -300,35 +301,17 @@ fn plan_part(project: &Project, samples: &mut SampleCache, settings: &Settings, 
 /// silent, their sends too, and a track's sound doesn't depend on another's
 /// (there is no latency compensation between them).
 pub fn only(project: &Project, t: usize) -> Project {
-    use engine::model::Effect;
     let tracks = &project.tracks;
-    let listens = |devices: &[engine::model::Device]| -> Vec<usize> {
-        devices
-            .iter()
-            .filter_map(|d| match &d.effect {
-                Effect::Compressor(p) => p.sidechain,
-                Effect::Ducker(p) => p.sidechain,
-                _ => None,
-            })
-            .filter_map(|id| tracks.iter().position(|o| o.id == id && id != 0))
-            .collect()
-    };
-    let mut keep = vec![false; tracks.len()];
-    let mut queue = vec![t];
+    // The track and what it holds (a group's tracks), then the groups it is
+    // in: only them, not their other tracks.
+    let mut from = vec![(t, true)];
     let mut at = crate::groups::parent(tracks, t);
     while let Some(group) = at {
-        queue.push(group);
+        from.push((group, false));
         at = crate::groups::parent(tracks, group);
     }
-    queue.extend(project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]).flat_map(|d| listens(d)));
-    while let Some(i) = queue.pop() {
-        if i < keep.len() && !keep[i] {
-            keep[i] = true;
-            // What a frozen track's effects listened to is in its audio already,
-            // but keeping it costs nothing it wouldn't otherwise.
-            queue.extend(listens(&tracks[i].devices));
-        }
-    }
+    from.extend(project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]).flat_map(|d| listens(tracks, d)).map(|s| (s, true)));
+    let keep = needed(project, from);
     let mut only = project.clone();
     for (track, _) in only.tracks.iter_mut().zip(&keep).filter(|(_, k)| !**k) {
         let mut empty = Track::new(track.name.clone(), track.color, InstrumentKind::Synth(Default::default()));
@@ -336,6 +319,51 @@ pub fn only(project: &Project, t: usize) -> Project {
         *track = empty;
     }
     only
+}
+
+/// The tracks (indices) a chain's sidechains listen to.
+fn listens(tracks: &[Track], devices: &[engine::model::Device]) -> Vec<usize> {
+    use engine::model::Effect;
+    devices
+        .iter()
+        .filter_map(|d| match &d.effect {
+            Effect::Compressor(p) => p.sidechain,
+            Effect::Ducker(p) => p.sidechain,
+            _ => None,
+        })
+        .filter_map(|id| tracks.iter().position(|o| o.id == id && id != 0))
+        .collect()
+}
+
+/// Which tracks must play for `from` to sound as in the song: each of them
+/// (with, if `true`, everything inside it when it is a group), and what their
+/// sidechains listen to, in turn: a group listened to, with all its tracks.
+fn needed(project: &Project, mut from: Vec<(usize, bool)>) -> Vec<bool> {
+    let tracks = &project.tracks;
+    let mut keep = vec![false; tracks.len()];
+    let mut whole = vec![false; tracks.len()];
+    while let Some((i, all)) = from.pop() {
+        if i >= keep.len() || (keep[i] && (whole[i] || !all)) {
+            continue;
+        }
+        keep[i] = true;
+        // What a frozen track's effects listened to is in its audio already,
+        // but keeping it costs nothing it wouldn't otherwise.
+        from.extend(listens(tracks, &tracks[i].devices).into_iter().map(|s| (s, true)));
+        if all {
+            whole[i] = true;
+            from.extend(crate::groups::children(tracks, i).map(|c| (c, true)));
+        }
+    }
+    keep
+}
+
+/// The tracks (indices) track `t`'s sound depends on through sidechains: what
+/// its effects listen to, what those listen to, and a group's tracks.
+pub fn sources(project: &Project, t: usize) -> Vec<usize> {
+    let Some(track) = project.tracks.get(t) else { return Vec::new() };
+    let keep = needed(project, listens(&project.tracks, &track.devices).into_iter().map(|s| (s, true)).collect());
+    keep.iter().enumerate().filter(|&(i, &k)| k && i != t).map(|(i, _)| i).collect()
 }
 
 /// Whether anything in the project is a plugin.

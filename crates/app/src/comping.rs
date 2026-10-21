@@ -141,7 +141,7 @@ mod tests {
         ArrangementClip {
             start: 4.0,
             length: 4.0,
-            clip: Clip::Audio(AudioClip {
+            clip: Clip::Audio(AudioClip { hard_start: false,
                 name: "Toma 3".into(),
                 color: [200, 100, 50],
                 sample: "c.wav".into(),

@@ -45,27 +45,10 @@ pub fn content(project: &Project, t: usize) -> u64 {
     let tempo: Vec<&AutomationLane> = project.master.automation.iter().filter(|l| l.param == Param::Tempo).collect();
     let mut text = own(track);
     text += &serde_json::to_string(&(project.tempo, project.swing, project.swing_grid, &project.key, tempo)).unwrap_or_default();
-    for source in sidechain_sources(project, t) {
+    for source in crate::export::sources(project, t) {
         text += &own(&project.tracks[source]);
     }
     text.bytes().fold(0xcbf2_9ce4_8422_2325u64, |hash, byte| (hash ^ byte as u64).wrapping_mul(0x0100_0000_01b3))
-}
-
-/// The tracks (indices) whose sound track `t`'s effects listen to (sidechains).
-fn sidechain_sources(project: &Project, t: usize) -> Vec<usize> {
-    use engine::model::Effect;
-    let Some(track) = project.tracks.get(t) else { return Vec::new() };
-    let mut ids: Vec<u32> = track
-        .devices
-        .iter()
-        .filter_map(|d| match &d.effect {
-            Effect::Compressor(p) => p.sidechain,
-            Effect::Ducker(p) => p.sidechain,
-            _ => None,
-        })
-        .collect();
-    ids.dedup();
-    ids.iter().filter_map(|id| project.tracks.iter().position(|o| o.id == *id)).filter(|&s| s != t).collect()
 }
 
 /// After opening a project: its frozen tracks are taken as up to date.
@@ -145,32 +128,46 @@ struct Rendered {
     map: Vec<(f64, usize)>,
 }
 
-/// The project as a freeze renders track `t`: only it, its mixer flat (unity,
-/// centre, no sends, its lanes left out), the master plain but with its tempo.
-/// The tracks its sidechains listen to play too, silent, so it still ducks.
-/// Its session clips' mixer envelopes stay out: they still move the frozen clips.
+/// The project as a freeze renders track `t`: it soloed, with its mixer flat
+/// (unity, centre, no sends, its lanes left out), through its groups made
+/// plain (no effects, unity), the master plain but with its tempo. What its
+/// sidechains listen to plays too, unheard (soloed out), with groups, their
+/// tracks, and sources of sources, so it ducks as in the song. Its session
+/// clips' mixer envelopes stay out: they still move the frozen clips.
 fn solo_project(project: &Project, t: usize) -> Project {
-    let mut render = project.clone();
-    let flat = |mut track: Track, heard: bool| {
+    let mut render = crate::export::only(project, t);
+    let flat = |track: &mut Track| {
         track.mixer.gain = 1.0;
         track.mixer.pan = 0.0;
-        track.mixer.active = heard;
-        track.solo = false;
-        track.armed = false;
-        track.depth = 0;
+        track.mixer.active = true;
         track.sends = Default::default();
         track.automation.retain(|l| !mixer_param(l.param));
-        track
     };
-    let mut track = flat(render.tracks[t].clone(), true);
+    for track in &mut render.tracks {
+        track.solo = false;
+        track.armed = false;
+    }
+    let mut at = crate::groups::parent(&render.tracks, t);
+    while let Some(group) = at {
+        let group_track = &mut render.tracks[group];
+        flat(group_track);
+        group_track.devices.clear();
+        group_track.automation.clear();
+        at = crate::groups::parent(&render.tracks, group);
+    }
+    let track = &mut render.tracks[t];
+    flat(track);
+    track.solo = true;
     for clip in track.clips.iter_mut().flatten() {
         match clip {
             Clip::Midi(m) => m.envelopes.retain(|l| !mixer_param(l.param)),
             Clip::Audio(a) => a.envelopes.retain(|l| !mixer_param(l.param)),
         }
     }
-    let sources = sidechain_sources(project, t).into_iter().map(|s| flat(playing(&project.tracks[s]).into_owned(), false));
-    render.tracks = std::iter::once(track).chain(sources).collect();
+    for ret in &mut render.returns {
+        ret.devices.clear();
+        ret.automation.clear();
+    }
     render.master.devices.clear();
     render.master.automation.retain(|l| l.param == Param::Tempo);
     render.master.mixer.gain = 1.0;
@@ -229,9 +226,9 @@ impl PulseApp {
         self.capture_plugins();
         let live = std::mem::take(&mut self.samples.plugins);
         let commands = |app: &mut PulseApp| crate::sync::project_commands(&render, &mut app.samples, rate, &HashSet::new());
-        let end = render.tracks[0].arrangement.iter().map(|c| c.end()).fold(0.0, f64::max);
+        let end = render.tracks[t].arrangement.iter().map(|c| c.end()).fold(0.0, f64::max);
         let arrangement = (end > 0.0).then(|| (commands(self), end));
-        let clips: Vec<Option<(Vec<Command>, f64)>> = (0..NUM_SCENES).map(|s| render.tracks[0].clips[s].as_ref().map(|c| (commands(self), c.length().max(0.25)))).collect();
+        let clips: Vec<Option<(Vec<Command>, f64)>> = (0..NUM_SCENES).map(|s| render.tracks[t].clips[s].as_ref().map(|c| (commands(self), c.length().max(0.25)))).collect();
         self.samples.plugins = live;
         let result = Arc::new(Mutex::new(None));
         let shared = result.clone();
@@ -283,7 +280,7 @@ impl PulseApp {
         // them as they are. A song that changes tempo was rendered following it:
         // warp markers on every beat put each beat where it was rendered, and
         // Re-Pitch plays it as it is (at 1:1).
-        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>, warp: WarpMode| AudioClip {
+        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>, warp: WarpMode| AudioClip { hard_start: false,
             name,
             color,
             sample,
@@ -314,6 +311,9 @@ impl PulseApp {
                 ArrangementClip { start: 0.0, length: beats, clip: Clip::Audio(clip(format!("{name} (congelada)"), sample, beats, Vec::new(), WarpMode::Stretch)) }
             };
             placed.length = placed.length.max(job.end);
+            if let Clip::Audio(audio) = &mut placed.clip {
+                audio.hard_start = true;
+            }
             frozen.arrangement.push(placed);
         }
         for (slot, audio) in rendered.clips.iter().enumerate() {

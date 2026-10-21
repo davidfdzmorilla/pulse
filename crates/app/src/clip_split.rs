@@ -360,7 +360,7 @@ mod tests {
 
     #[test]
     fn an_audio_clip_split_starts_later_in_its_file() {
-        let audio = AudioClip {
+        let audio = AudioClip { hard_start: false,
             name: "a".into(),
             color: [0; 3],
             sample: "/a.wav".into(),
@@ -435,7 +435,7 @@ mod tests {
                 track.mixer.active = false;
             }
             let track = app.add_audio_track().unwrap();
-            let audio = AudioClip {
+            let audio = AudioClip { hard_start: false,
                 name: "demo".into(),
                 color: [0; 3],
                 sample: song.to_string_lossy().into_owned(),
@@ -477,7 +477,7 @@ mod tests {
     /// the clip editor shows); a looping one keeps its loop.
     #[test]
     fn the_parts_of_a_clip_are_only_their_pieces() {
-        let audio = AudioClip {
+        let audio = AudioClip { hard_start: false,
             name: "a".into(),
             color: [0; 3],
             sample: "/a.wav".into(),

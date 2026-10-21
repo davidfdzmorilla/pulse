@@ -41,6 +41,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.heading(format!("Pulse {}", crate::updates::VERSION));
+            ui.label(egui::RichText::new(crate::logs::system()).color(TEXT_DIM).size(10.5)).on_hover_text("Con qué se compiló y dónde corre: dilo si avisas de un fallo");
             ui.label(COPYRIGHT);
             ui.add_space(6.0);
             ui.label(NOTICE);

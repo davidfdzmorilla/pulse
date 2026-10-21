@@ -12,10 +12,11 @@ cargo run --release
 
 Los proyectos se guardan como `.pulse` (JSON). `cargo test --release` ejecuta las pruebas, que no necesitan tarjeta de sonido.
 
-Sistemas: macOS (Apple Silicon) y Windows 10/11 x64, este pendiente de verificar
+Sistemas: macOS 13.4 o posterior (Apple Silicon) y Windows 10/11 x64, este pendiente de verificar
 en un equipo real. Qué funciona en cada uno: [`docs/PLATFORM_SUPPORT.md`](docs/PLATFORM_SUPPORT.md).
-En Windows: [compilar](docs/BUILD_WINDOWS.md), [instalar](docs/INSTALL_WINDOWS.md)
-y [estado](docs/WINDOWS_SUPPORT.md).
+En macOS: [instalar](docs/INSTALL_MACOS.md). En Windows: [compilar](docs/BUILD_WINDOWS.md),
+[instalar](docs/INSTALL_WINDOWS.md) y [estado](docs/WINDOWS_SUPPORT.md). Publicar una
+versión: [`docs/PUBLICAR.md`](docs/PUBLICAR.md).
 
 ## Uso
 

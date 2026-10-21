@@ -33,10 +33,17 @@ use std::sync::{Arc, Mutex};
 /// The repository releases come from.
 pub const REPOSITORY: &str = "davidfdzmorilla/pulse";
 /// This build's version: the release's (scripts/release.sh sets PULSE_VERSION from
-/// the new tag), or Cargo's for builds of our own.
-pub const VERSION: &str = match option_env!("PULSE_VERSION") {
-    Some(version) => version,
-    None => env!("CARGO_PKG_VERSION"),
+/// the new tag), or, for builds of our own, git's (the last release and how far
+/// past it, see build.rs), or Cargo's without git.
+pub const VERSION: &str = match (option_env!("PULSE_VERSION"), option_env!("PULSE_GIT_VERSION")) {
+    (Some(version), _) => version,
+    (None, Some(version)) => version,
+    (None, None) => env!("CARGO_PKG_VERSION"),
+};
+/// The commit it was built from, if known.
+pub const COMMIT: &str = match option_env!("PULSE_COMMIT") {
+    Some(commit) => commit,
+    None => "?",
 };
 /// The keychain's (macOS) or Credential Manager's (Windows) name for the token.
 const KEYCHAIN_SERVICE: &str = "Pulse GitHub";

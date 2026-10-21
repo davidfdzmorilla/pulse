@@ -7,12 +7,16 @@
 # Usage: scripts/bundle.sh
 set -euo pipefail
 root=$(cd "$(dirname "$0")/.." && pwd)
-# The version: PULSE_VERSION (set by scripts/release.sh), else Cargo's.
-version=${PULSE_VERSION:-$(grep -m1 '^version' "$root/crates/app/Cargo.toml" | cut -d'"' -f2)}
+# The version: PULSE_VERSION (set by scripts/release.sh), else git's (the last
+# release and how far past it, as the app names itself: see build.rs).
+described=$(git -C "$root" describe --tags --match 'v[0-9]*' 2>/dev/null || true)
+version=${PULSE_VERSION:-${described#v}}
+version=${version:-$(grep -m1 '^version' "$root/crates/app/Cargo.toml" | cut -d'"' -f2)}
 export PULSE_VERSION=$version
 identity=${PULSE_SIGN_IDENTITY:-Pulse Local Signing}
 
-cargo build --release --manifest-path "$root/Cargo.toml" -p app
+# The dependencies Cargo.lock names, not newer ones.
+cargo build --release --locked --manifest-path "$root/Cargo.toml" -p app
 out=${PULSE_BUNDLE_DIR:-$HOME/Library/Caches/Pulse/bundle}
 mkdir -p "$out"
 app="$out/Pulse.app"

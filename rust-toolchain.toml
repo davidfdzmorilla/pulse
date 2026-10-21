@@ -1,0 +1,7 @@
+# The Rust every build of Pulse uses (releases, CI, a fresh clone), so the
+# same code builds the same way whatever day it is built. rustup installs it,
+# with what macOS and Windows builds need.
+[toolchain]
+channel = "1.99.0"
+components = ["clippy"]
+targets = ["aarch64-apple-darwin", "x86_64-pc-windows-msvc"]

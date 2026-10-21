@@ -517,8 +517,8 @@ impl PulseApp {
         let duration = sample.duration();
         let name = path.file_stem().map_or(String::new(), |s| s.to_string_lossy().into_owned());
         let guess = self.new_audio_clip(path, sample, [0; 3]);
-        let mut clip = match grid {
-            Some(grid) => crate::tempo_ui::warped(&guess, &beats::fit_loop(grid, duration, Some(self.project.tempo)), duration),
+        let mut clip = match crate::tempo_ui::loop_grid(grid, &name, duration, self.project.tempo) {
+            Some(grid) => crate::tempo_ui::warped(&guess, &grid, duration),
             None if guess.warp != WarpMode::Off => guess,
             None => return false,
         };

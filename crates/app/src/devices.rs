@@ -548,6 +548,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                                 for (k, label) in ["Tune", "Decay", "Level"].into_iter().enumerate() {
                                     knob(ui, actions, voice * 3 + k, label, 18.0);
                                 }
+                                knob(ui, actions, engine::model::DRUM_SOUNDS * 3 + voice, "Drive", 18.0);
                             });
                         });
                         if voice % 4 == 3 {

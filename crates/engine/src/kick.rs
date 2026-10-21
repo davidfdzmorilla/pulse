@@ -73,7 +73,7 @@ pub fn length_ms(p: &KickParams) -> f32 {
     p.attack.max(0.05) + p.hold + p.decay.max(1.0)
 }
 
-fn distort(x: f32, mode: KickDrive, drive: f32) -> f32 {
+pub(crate) fn distort(x: f32, mode: KickDrive, drive: f32) -> f32 {
     if drive <= 0.0 {
         return x;
     }

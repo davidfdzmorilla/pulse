@@ -1019,6 +1019,9 @@ pub struct DrumParams {
     pub decay: [f32; DRUM_SOUNDS],
     #[serde(deserialize_with = "drum_levels")]
     pub level: [f32; DRUM_SOUNDS],
+    /// How hard each sound is driven into a soft saturation (0: clean).
+    #[serde(default, skip_serializing_if = "clean")]
+    pub drive: [f32; DRUM_SOUNDS],
     /// Which machine it sounds like.
     #[serde(default, skip_serializing_if = "is_classic")]
     pub model: DrumModel,
@@ -1026,8 +1029,12 @@ pub struct DrumParams {
 
 impl Default for DrumParams {
     fn default() -> Self {
-        Self { tune: [0.0; DRUM_SOUNDS], decay: [1.0; DRUM_SOUNDS], level: [0.8; DRUM_SOUNDS], model: DrumModel::Classic }
+        Self { tune: [0.0; DRUM_SOUNDS], decay: [1.0; DRUM_SOUNDS], level: [0.8; DRUM_SOUNDS], drive: [0.0; DRUM_SOUNDS], model: DrumModel::Classic }
     }
+}
+
+fn clean(drive: &[f32; DRUM_SOUNDS]) -> bool {
+    drive.iter().all(|&d| d == 0.0)
 }
 
 /// A drum machine's values for its sounds; projects from when it had eight get
@@ -1920,31 +1927,34 @@ const RACK_PARAMS: [ParamInfo; RACK_PADS * 4] = {
     }
     table
 };
-const DRUM_PARAMS: [ParamInfo; DRUM_SOUNDS * 3] = {
+/// Tune, decay and level of each sound in turn, then the drives (added later:
+/// the first ones keep their numbers in saved automation).
+const DRUM_PARAMS: [ParamInfo; DRUM_SOUNDS * 4] = {
     let names = [
-        ["Kick Tune", "Kick Decay", "Kick Level"],
-        ["Rim Tune", "Rim Decay", "Rim Level"],
-        ["Snare Tune", "Snare Decay", "Snare Level"],
-        ["Clap Tune", "Clap Decay", "Clap Level"],
-        ["CH Tune", "CH Decay", "CH Level"],
-        ["OH Tune", "OH Decay", "OH Level"],
-        ["Tom Tune", "Tom Decay", "Tom Level"],
-        ["Bell Tune", "Bell Decay", "Bell Level"],
-        ["Mid Tom Tune", "Mid Tom Decay", "Mid Tom Level"],
-        ["High Tom Tune", "High Tom Decay", "High Tom Level"],
-        ["Crash Tune", "Crash Decay", "Crash Level"],
-        ["Ride Tune", "Ride Decay", "Ride Level"],
-        ["Shaker Tune", "Shaker Decay", "Shaker Level"],
-        ["Tamb Tune", "Tamb Decay", "Tamb Level"],
-        ["Conga Tune", "Conga Decay", "Conga Level"],
-        ["Clave Tune", "Clave Decay", "Clave Level"],
+        ["Kick Tune", "Kick Decay", "Kick Level", "Kick Drive"],
+        ["Rim Tune", "Rim Decay", "Rim Level", "Rim Drive"],
+        ["Snare Tune", "Snare Decay", "Snare Level", "Snare Drive"],
+        ["Clap Tune", "Clap Decay", "Clap Level", "Clap Drive"],
+        ["CH Tune", "CH Decay", "CH Level", "CH Drive"],
+        ["OH Tune", "OH Decay", "OH Level", "OH Drive"],
+        ["Tom Tune", "Tom Decay", "Tom Level", "Tom Drive"],
+        ["Bell Tune", "Bell Decay", "Bell Level", "Bell Drive"],
+        ["Mid Tom Tune", "Mid Tom Decay", "Mid Tom Level", "Mid Tom Drive"],
+        ["High Tom Tune", "High Tom Decay", "High Tom Level", "High Tom Drive"],
+        ["Crash Tune", "Crash Decay", "Crash Level", "Crash Drive"],
+        ["Ride Tune", "Ride Decay", "Ride Level", "Ride Drive"],
+        ["Shaker Tune", "Shaker Decay", "Shaker Level", "Shaker Drive"],
+        ["Tamb Tune", "Tamb Decay", "Tamb Level", "Tamb Drive"],
+        ["Conga Tune", "Conga Decay", "Conga Level", "Conga Drive"],
+        ["Clave Tune", "Clave Decay", "Clave Level", "Clave Drive"],
     ];
-    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); DRUM_SOUNDS * 3];
+    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); DRUM_SOUNDS * 4];
     let mut voice = 0;
     while voice < DRUM_SOUNDS {
         table[voice * 3] = ParamInfo::linear(names[voice][0], -12.0, 12.0, 0.0, Semitones);
         table[voice * 3 + 1] = ParamInfo::log(names[voice][1], 0.25, 4.0, 1.0, Times);
         table[voice * 3 + 2] = ParamInfo::linear(names[voice][2], 0.0, 1.0, 0.8, Percent);
+        table[DRUM_SOUNDS * 3 + voice] = ParamInfo::linear(names[voice][3], 0.0, 1.0, 0.0, Percent);
         voice += 1;
     }
     table
@@ -2056,6 +2066,7 @@ impl InstrumentKind {
             InstrumentKind::Synth(p) => return p.param_mut(index),
             InstrumentKind::Drums | InstrumentKind::Plugin(_) => return None,
             InstrumentKind::DrumMachine(p) => match index % 3 {
+                _ if index >= DRUM_SOUNDS * 3 => p.drive.get_mut(index - DRUM_SOUNDS * 3)?,
                 0 => p.tune.get_mut(index / 3)?,
                 1 => p.decay.get_mut(index / 3)?,
                 _ => p.level.get_mut(index / 3)?,

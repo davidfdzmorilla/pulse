@@ -172,12 +172,14 @@ impl Style {
                 set(CONGA, 0.0, 1.0, 0.6);
             }
             Style::HardTechno => {
-                // Deep and long: the kick carries the bass.
-                set(KICK, -3.0, 1.6, 0.95);
+                // Deep and long, and clipped: the kick carries the bass, and its
+                // distortion is what cuts through.
+                set(KICK, -3.0, 1.6, 0.7);
                 set(CLAP, -1.0, 1.3, 0.75);
                 set(CLOSED_HAT, 2.0, 0.6, 0.6);
                 set(OPEN_HAT, 1.0, 0.7, 0.65);
                 set(RIM, 1.0, 0.8, 0.55);
+                p.drive[voice(KICK)] = 0.6;
             }
         }
         // The 909 hits harder than the 808: 2 dB down, so a full kit (a crash
@@ -940,6 +942,35 @@ mod tests {
         crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
         let peak = l.iter().chain(&r).fold(0.0f32, |p, s| p.max(s.abs()));
         format!("{name}: pico {:.1} dBFS", 20.0 * peak.log10())
+    }
+
+    /// The Hard techno machine's kick is clipped: as much presence (1–4 kHz
+    /// against its lows) as the Kick Designer's «Hard · Kick», a little louder
+    /// than it was clean. The other styles stay clean.
+    #[test]
+    fn the_hard_techno_kick_is_distorted() {
+        let measure = |p: engine::model::DrumParams| {
+            let (hit, _) = engine::render_drum_hit(p, engine::model::drum_note::KICK, 48_000.0);
+            // Four on the floor at 150, each kick cutting the last.
+            let beat = (60.0 / 150.0 * 48_000.0) as usize;
+            let mut l = vec![0.0f32; 32 * beat];
+            for b in 0..32 {
+                let n = hit.len().min(beat);
+                l[b * beat..b * beat + n].copy_from_slice(&hit[..n]);
+            }
+            let bands = stems::loudness::bands(&l, &l, 48_000.0);
+            let mean = |b: &[f64]| 10.0 * (b.iter().map(|d| 10f64.powf(d / 10.0)).sum::<f64>() / b.len() as f64).log10();
+            (mean(&bands[0..2]) - mean(&bands[5..8]), stems::loudness::integrated(&l, &l, 48_000.0).unwrap())
+        };
+        let hard = Style::HardTechno.sound();
+        // As it was: clean, at 0.95 (less the 909's 2 dB).
+        let mut clean = engine::model::DrumParams { drive: [0.0; engine::model::DRUM_SOUNDS], ..hard };
+        clean.level[0] = 0.95 * 0.8;
+        let ((presence, lufs), (clean_presence, clean_lufs)) = (measure(hard), measure(clean));
+        println!("bombo Hard techno: graves frente a 1–4 kHz {presence:.1} dB ({clean_presence:.1} antes), {lufs:.1} LUFS ({clean_lufs:.1} antes)");
+        assert!(presence < 22.0 && presence < clean_presence - 6.0, "{presence:.1} vs {clean_presence:.1}");
+        assert!(lufs > clean_lufs && lufs < clean_lufs + 3.0, "{lufs:.1} vs {clean_lufs:.1}");
+        assert!(Style::ALL.iter().filter(|&&s| s != Style::HardTechno).all(|s| s.sound().drive == [0.0; engine::model::DRUM_SOUNDS]));
     }
 
     /// Renders beats to WAVs in `PULSE_OUT` (for listening): every level and take

@@ -87,7 +87,19 @@ pub struct State {
     drum_takes: u64,
     /// Why the drum model couldn't play, shown in the menu.
     drum_error: Option<String>,
+    /// The drum model playing a beat in the background (it takes a moment), for
+    /// the clip that asked, with the settings it was asked with.
+    drum_job: Option<DrumJob>,
 }
+
+type Beat = Result<(Vec<Note>, Option<engine::model::Groove>), String>;
+
+struct DrumJob {
+    clip: ClipRef,
+    settings: crate::drum_gen::Settings,
+    result: std::sync::Arc<std::sync::Mutex<Option<Beat>>>,
+}
+
 
 impl Default for State {
     fn default() -> Self {
@@ -111,6 +123,7 @@ impl Default for State {
             drums: Default::default(),
             drum_takes: 0,
             drum_error: None,
+            drum_job: None,
         }
     }
 }
@@ -222,7 +235,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut previews: Vec<u8> = Vec::new();
 
     previews.extend(toolbar(ui, state, clip, key, is_drums, &mut vary));
-    let (tempo, machine) = drums.as_ref().map_or((None, None), |(kit, bass)| drum_menu(ui, state, clip, kit, bass, drum_machine.is_some()));
+    let (tempo, machine) = drums.as_ref().map_or((None, None), |(kit, bass)| drum_menu(ui, state, clip, clip_ref, kit, bass, drum_machine.is_some()));
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
     if keys_enabled {
@@ -753,12 +766,27 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
 /// «Generar ritmo»: a beat in a style for this drum clip (see `drum_gen`); each
 /// «Otra versión» the style's next take. Returns a tempo to set the project to,
 /// if asked.
-fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &crate::drum_gen::Kit, bass: &[f64], machine: bool) -> (Option<f64>, Option<engine::model::DrumParams>) {
+#[allow(clippy::too_many_arguments)]
+fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref: ClipRef, kit: &crate::drum_gen::Kit, bass: &[f64], machine: bool) -> (Option<f64>, Option<engine::model::DrumParams>) {
     use crate::drum_gen::{Level, Style};
     let mut tempo = None;
     let mut model = None;
+    // The drum model's beat for this clip, once it has played it.
+    if state.drum_job.as_ref().is_some_and(|job| job.clip == clip_ref) {
+        let done = state.drum_job.as_ref().and_then(|job| job.result.lock().ok()?.take());
+        match done {
+            Some(beat) => {
+                let job = state.drum_job.take().expect("checked");
+                if let Some(sound) = take_beat(state, clip, &job.settings, beat).filter(|_| machine) {
+                    model = Some(sound);
+                }
+            }
+            None => ui.ctx().request_repaint_after(std::time::Duration::from_millis(100)),
+        }
+    }
+    let generating = state.drum_job.is_some();
     ui.horizontal(|ui| {
-        widgets::field_menu_button(ui, "Generar ritmo", |ui| {
+        widgets::field_menu_button(ui, if generating { "Generando…" } else { "Generar ritmo" }, |ui| {
             ui.set_min_width(320.0);
             let before = state.drums.clone();
             let settings = &mut state.drums;
@@ -824,29 +852,41 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
                 n if state.drums.ai => format!("Otra versión ({n})"),
                 n => format!("Otra versión ({} de {takes})", (n as usize - 1) % takes + 1),
             };
-            if ui.button(label).on_hover_text(crate::theme::keys("Sustituye las notas del clip (⌘Z las recupera)")).clicked() {
+            let clicked = ui
+                .add_enabled(state.drum_job.is_none(), egui::Button::new(label))
+                .on_hover_text(crate::theme::keys("Sustituye las notas del clip (⌘Z las recupera)"))
+                .on_disabled_hover_text("La IA está tocando la anterior")
+                .clicked();
+            if clicked {
                 let take = state.drum_takes;
                 state.drum_takes += 1;
-                let bass = if state.drums.follow_bass { bass } else { &[] };
-                clip.length = state.drums.bars as f64 * 4.0;
-                let beat = if state.drums.ai {
-                    crate::drum_gen::generate_ai(kit, &state.drums, state.drums.bars as f64 * 4.0, bass, take)
-                } else {
-                    Ok(crate::drum_gen::generate(kit, &state.drums, state.drums.bars as f64 * 4.0, bass, take))
-                };
+                let bass: Vec<f64> = if state.drums.follow_bass { bass.to_vec() } else { Vec::new() };
+                let length = state.drums.bars as f64 * 4.0;
                 state.drum_error = None;
-                match beat {
-                    Ok((notes, swing)) => {
-                        clip.length = state.drums.bars as f64 * 4.0;
-                        clip.notes = notes;
-                        clip.groove = swing;
-                        state.selection.clear();
-                        if machine && state.drums.machine {
-                            model = Some(state.drums.style.sound());
+                if state.drums.ai {
+                    // The model takes a moment: on its own thread, so Pulse goes on.
+                    let result = std::sync::Arc::new(std::sync::Mutex::new(None));
+                    let (shared, kit, settings) = (result.clone(), *kit, state.drums.clone());
+                    std::thread::spawn(move || {
+                        let beat = crate::drum_gen::generate_ai(&kit, &settings, length, &bass, take);
+                        if let Ok(mut slot) = shared.lock() {
+                            *slot = Some(beat);
                         }
+                    });
+                    state.drum_job = Some(DrumJob { clip: clip_ref, settings: state.drums.clone(), result });
+                } else {
+                    let settings = state.drums.clone();
+                    let beat = Ok(crate::drum_gen::generate(kit, &settings, length, &bass, take));
+                    if let Some(sound) = take_beat(state, clip, &settings, beat).filter(|_| machine) {
+                        model = Some(sound);
                     }
-                    Err(e) => state.drum_error = Some(e),
                 }
+            }
+            if state.drum_job.is_some() {
+                ui.horizontal(|ui| {
+                    ui.spinner();
+                    ui.label(egui::RichText::new("La IA está tocando la base…").color(TEXT_DIM).size(10.5));
+                });
             }
             if let Some(e) = &state.drum_error {
                 ui.colored_label(Color32::LIGHT_RED, e);
@@ -854,6 +894,24 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, kit: &cr
         });
     });
     (tempo, model)
+}
+
+/// A beat written into the clip (or why it couldn't be); the machine sound to
+/// switch to, if the settings ask for the style's.
+fn take_beat(state: &mut State, clip: &mut MidiClip, settings: &crate::drum_gen::Settings, beat: Beat) -> Option<engine::model::DrumParams> {
+    match beat {
+        Ok((notes, swing)) => {
+            clip.length = settings.bars as f64 * 4.0;
+            clip.notes = notes;
+            clip.groove = swing;
+            state.selection.clear();
+            settings.machine.then(|| settings.style.sound())
+        }
+        Err(e) => {
+            state.drum_error = Some(e);
+            None
+        }
+    }
 }
 
 /// «Groove»: the clip follows the project's swing, or has its own groove
@@ -1063,6 +1121,48 @@ mod tests {
         click(&mut app, view, fit, egui::Modifiers::NONE);
         let Some(Clip::Midi(midi)) = app.clip(clip) else { panic!() };
         assert_eq!(midi.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60, 64], "C# to C, E stays");
+    }
+
+    /// The drum model plays in the background: while it does, the editor says
+    /// so and goes on; its beat lands in the clip that asked (not another one
+    /// shown meanwhile), and the machine takes the style's sound.
+    #[test]
+    fn the_drum_models_beat_lands_in_its_clip_when_ready() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let asked = ClipRef::Session { track: 0, slot: 0 };
+        let other = ClipRef::Session { track: 0, slot: 1 };
+        if app.clip(other).is_none() {
+            let copy = app.project.tracks[0].clips[0].clone();
+            app.set_clip(0, 1, copy);
+        }
+        let settings = crate::drum_gen::Settings { style: crate::drum_gen::Style::Trap, bars: 2, ai: true, ..Default::default() };
+        let result = std::sync::Arc::new(std::sync::Mutex::new(None));
+        app.piano_roll.drum_job = Some(DrumJob { clip: asked, settings, result: result.clone() });
+        app.select_clip(asked);
+        let shown = texts(&mut app);
+        assert!(shown.iter().any(|(t, _)| t == "Generando…"), "it says so");
+        let before = app.clip(asked).cloned();
+        assert_eq!(app.clip(asked).cloned(), before, "nothing yet");
+        // Ready while another clip is shown: it waits for its own.
+        let beat = vec![Note::new(0.0, 0.25, engine::model::drum_note::KICK, 1.0), Note::new(4.0, 0.25, engine::model::drum_note::KICK, 1.0)];
+        *result.lock().unwrap() = Some(Ok((beat.clone(), None)));
+        app.select_clip(other);
+        let _ = texts(&mut app);
+        assert!(app.piano_roll.drum_job.is_some());
+        app.select_clip(asked);
+        let _ = texts(&mut app);
+        assert!(app.piano_roll.drum_job.is_none());
+        let Some(Clip::Midi(midi)) = app.clip(asked) else { panic!() };
+        assert_eq!((midi.notes.clone(), midi.length), (beat, 8.0));
+        let engine::model::InstrumentKind::DrumMachine(params) = app.project.tracks[0].instrument else { panic!() };
+        assert_eq!(params, crate::drum_gen::Style::Trap.sound(), "the style's machine");
+        // An error is shown, the clip untouched.
+        let result = std::sync::Arc::new(std::sync::Mutex::new(Some(Err("Falta el modelo".to_string()))));
+        app.piano_roll.drum_job = Some(DrumJob { clip: asked, settings: Default::default(), result });
+        let _ = texts(&mut app);
+        assert_eq!(app.piano_roll.drum_error.as_deref(), Some("Falta el modelo"));
+        let Some(Clip::Midi(midi)) = app.clip(asked) else { panic!() };
+        assert_eq!(midi.notes.len(), 2);
     }
 
     /// A drum clip's editor has «Generar ritmo»; a bass clip's, not.

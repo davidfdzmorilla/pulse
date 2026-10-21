@@ -1308,6 +1308,12 @@ struct Track {
     /// they had before: it comes back when the clip ends.
     envelope_held: [Option<(Param, f32)>; MAX_HELD],
     arrangement: Box<Vec<PlacedClip>>,
+    /// The arrangement it played before an edit, fading out under the new one
+    /// for `fade.0` more frames (of `fade.1`): no click where the sound changed.
+    replaced: Option<Box<Vec<PlacedClip>>>,
+    fade: (usize, usize),
+    fade_left: Vec<f32>,
+    fade_right: Vec<f32>,
     follows_arrangement: bool,
     buffer: Vec<f32>,
     buffer_right: Vec<f32>,
@@ -1361,6 +1367,10 @@ impl Track {
             base_sends: [0.0; NUM_RETURNS],
             envelope_held: [None; MAX_HELD],
             arrangement: Box::default(),
+            replaced: None,
+            fade: (0, 0),
+            fade_left: vec![0.0; MAX_BLOCK],
+            fade_right: vec![0.0; MAX_BLOCK],
             follows_arrangement: true,
             buffer: vec![0.0; MAX_BLOCK],
             buffer_right: vec![0.0; MAX_BLOCK],
@@ -1412,11 +1422,31 @@ impl Track {
             let end = beat + (to - from) as f64 * beats_per_sample;
             // Half a cross-fade either side, for clips playing on past their edges.
             let margin = CROSSFADE * tempo / 60.0;
+            let sounding = |placed: &PlacedClip| placed.start - margin < end && placed.end() + margin > beat;
             for placed in self.arrangement.iter() {
                 let PlayClip::Audio(clip, sample) = &placed.clip else { continue };
-                if placed.start - margin < end && placed.end() + margin > beat {
+                if sounding(placed) {
                     let frames = (from, to);
                     render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, frames, beat, beats_per_sample, tempo, tempo_lane, left, right);
+                }
+            }
+            // Just edited: what played before fades out as the new fades in.
+            if let Some(old) = self.replaced.as_deref().filter(|_| self.fade.0 > 0) {
+                let (fl, fr) = (&mut self.fade_left, &mut self.fade_right);
+                fl[from..to].fill(0.0);
+                fr[from..to].fill(0.0);
+                for placed in old.iter() {
+                    let PlayClip::Audio(clip, sample) = &placed.clip else { continue };
+                    if sounding(placed) {
+                        render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, (from, to), beat, beats_per_sample, tempo, tempo_lane, fl, fr);
+                    }
+                }
+                let (remaining, total) = &mut self.fade;
+                for k in from..to {
+                    let g = *remaining as f32 / (*total).max(1) as f32;
+                    left[k] = left[k] * (1.0 - g) + fl[k] * g;
+                    right[k] = right[k] * (1.0 - g) + fr[k] * g;
+                    *remaining = remaining.saturating_sub(1);
                 }
             }
         }
@@ -1899,13 +1929,24 @@ impl Engine {
                 }
             }
             Command::SetArrangement { track, mut clips } => {
+                let fade = (EDGE_FADE * 1.5 * self.sample_rate as f64) as usize;
+                let playing = self.playing;
                 let Some(t) = self.tracks.get_mut(track) else { return };
                 std::mem::swap(&mut t.arrangement, &mut clips);
                 if t.playing.is_none() {
                     // Edits under the playhead must not leave hanging notes.
                     t.instrument.all_notes_off();
                 }
-                self.discard(Garbage::Arrangement(clips));
+                // Audio that was sounding fades out instead of stopping dead.
+                let audio = clips.iter().any(|c| matches!(c.clip, PlayClip::Audio(..)));
+                if playing && t.playing.is_none() && t.follows_arrangement && audio {
+                    t.fade = (fade, fade);
+                    if let Some(older) = t.replaced.replace(clips) {
+                        self.discard(Garbage::Arrangement(older));
+                    }
+                } else {
+                    self.discard(Garbage::Arrangement(clips));
+                }
             }
             Command::SetInstrument { track, mut instrument } => {
                 self.forget_held(track, |p| matches!(p, Param::Instrument(_)));
@@ -2144,6 +2185,14 @@ impl Engine {
         }
         if self.position != position || self.playing != playing {
             self.automate_now = true;
+        }
+        // Arrangements done fading out go back to be freed off this thread.
+        for i in 0..self.tracks.len() {
+            if self.tracks[i].fade.0 == 0 && self.garbage.slots() > 0 {
+                if let Some(old) = self.tracks[i].replaced.take() {
+                    self.discard(Garbage::Arrangement(old));
+                }
+            }
         }
         while let Ok(note) = self.live.pop() {
             self.handle_live(note);
@@ -2910,6 +2959,29 @@ mod tests {
         assert!((seconds_between(&lane, 16.0, 48.0) - exact).abs() < 1e-5, "{}", seconds_between(&lane, 16.0, 48.0));
         assert!((seconds_between(&lane, 48.0, 16.0) + exact).abs() < 1e-5);
         assert!((seconds_between(&lane, 48.0, 60.0) - 12.0 * 60.0 / 140.0).abs() < 1e-9);
+    }
+
+    /// Switching off an audio clip that is sounding (or any edit under the
+    /// playhead) fades it out over a few milliseconds: no click.
+    #[test]
+    fn editing_a_sounding_audio_clip_does_not_click() {
+        let mut h = Harness::new();
+        let mut clip = audio_clip(WarpMode::Off);
+        clip.length = 8.0;
+        let sample = sine_sample();
+        h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 8.0, PlayClip::Audio(clip.clone(), sample.clone()))]) });
+        h.send(Command::SetOutputLimit(false));
+        h.send(Command::Play);
+        let mut audio = h.run_beats(1.0);
+        clip.muted = true;
+        h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 8.0, PlayClip::Audio(clip, sample))]) });
+        audio.extend(h.run_beats(0.5));
+        // A 440 Hz sine at 0.5 moves at most this much between samples (stereo, panned centre).
+        let steepest = std::f32::consts::TAU * 440.0 / SR * 0.5 * 1.01;
+        let jump = audio.chunks(2).map(|f| f[0]).collect::<Vec<_>>().windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+        assert!(jump <= steepest, "{jump} > {steepest}");
+        assert!(audio[audio.len() - 2000..].iter().all(|s| *s == 0.0), "and then it is silent");
+        assert!(h.engine.tracks[0].replaced.is_none(), "what faded out was let go");
     }
 
     /// Counts upward zero crossings: a pitch estimate over a known duration.

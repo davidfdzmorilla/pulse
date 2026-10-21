@@ -38,10 +38,15 @@ pub enum Style {
     PopRock,
     Reggaeton,
     Breakbeat,
+    /// Driving and percussive (Ben Sims, Oscar Mulero's grooves): toms and
+    /// congas rolling over the kick, hats that come and go.
+    Hardgroove,
+    /// Fast and hard: a deep, long kick, sometimes galloping, claps rolling.
+    HardTechno,
 }
 
 impl Style {
-    pub const ALL: [Style; 8] = [Style::House, Style::Techno, Style::Trap, Style::DrumAndBass, Style::BoomBap, Style::PopRock, Style::Reggaeton, Style::Breakbeat];
+    pub const ALL: [Style; 10] = [Style::House, Style::Techno, Style::Hardgroove, Style::HardTechno, Style::Trap, Style::DrumAndBass, Style::BoomBap, Style::PopRock, Style::Reggaeton, Style::Breakbeat];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -53,6 +58,8 @@ impl Style {
             Style::PopRock => "Pop / Rock",
             Style::Reggaeton => "Reggaetón",
             Style::Breakbeat => "Breakbeat",
+            Style::Hardgroove => "Hardgroove",
+            Style::HardTechno => "Hard techno",
         }
     }
 
@@ -67,6 +74,8 @@ impl Style {
             Style::PopRock => 110,
             Style::Reggaeton => 95,
             Style::Breakbeat => 130,
+            Style::Hardgroove => 142,
+            Style::HardTechno => 152,
         }
     }
 }
@@ -85,6 +94,8 @@ impl Style {
             Style::PopRock => &[Kick, Snare, Hat, Open, Ride, Crash, LowTom, MidTom, HighTom, Tambourine],
             Style::Reggaeton => &[Kick, Snare, Hat, Open, Rim, Shaker, Conga],
             Style::Breakbeat => &[Kick, Snare, Hat, Open, Ride, Crash, Rim, LowTom, MidTom, HighTom],
+            Style::Hardgroove => &[Kick, Clap, Hat, Open, Rim, LowTom, MidTom, HighTom, Conga, Shaker],
+            Style::HardTechno => &[Kick, Clap, Hat, Open, Rim, Crash],
         };
         let mut sounds = [false; stems::drums::VOICES];
         for &sound in list {
@@ -149,6 +160,24 @@ impl Style {
                 set(KICK, 0.0, 0.7, 0.8);
                 set(SNARE, 2.0, 0.9, 0.8);
                 set(CRASH, 0.0, 1.0, 0.5);
+            }
+            Style::Hardgroove => {
+                set(KICK, -1.0, 0.9, 0.9);
+                set(CLAP, 0.0, 0.8, 0.6);
+                set(CLOSED_HAT, 1.0, 0.6, 0.6);
+                set(OPEN_HAT, 0.0, 0.5, 0.6);
+                set(LOW_TOM, -2.0, 0.8, 0.7);
+                set(MID_TOM, -2.0, 0.8, 0.65);
+                set(HIGH_TOM, -2.0, 0.8, 0.6);
+                set(CONGA, 0.0, 1.0, 0.6);
+            }
+            Style::HardTechno => {
+                // Deep and long: the kick carries the bass.
+                set(KICK, -3.0, 1.6, 0.95);
+                set(CLAP, -1.0, 1.3, 0.75);
+                set(CLOSED_HAT, 2.0, 0.6, 0.6);
+                set(OPEN_HAT, 1.0, 0.7, 0.65);
+                set(RIM, 1.0, 0.8, 0.55);
             }
         }
         // The 909 hits harder than the 808: 2 dB down, so a full kit (a crash
@@ -271,7 +300,8 @@ enum V {
 }
 
 /// A bar written out: for each sound sixteen steps, `.` silent, `X` accented,
-/// `x` normal, `o` soft, `g` a ghost note, `r` a roll (two thirty-seconds).
+/// `x` normal, `o` soft, `g` a ghost note, `r` a roll (two thirty-seconds),
+/// `p` a soft note that plays only some times round (see `Note::chance`).
 type Bar = &'static [(V, &'static str)];
 
 /// A groove: its main bar, and the one that turns the phrase around (every
@@ -284,6 +314,7 @@ struct Take {
 use V::*;
 
 const FOUR: &str = "X...X...X...X...";
+const OFF: &str = "..x...x...x...x.";
 
 /// The takes of a style at a level (one or more to choose among), written by
 /// hand: what makes the style what it is, and what a drummer adds as it gets busier.
@@ -474,6 +505,59 @@ fn takes(style: Style, level: Level) -> &'static [Take] {
                 b: &[(Kick, "X.........XX...."), (Back, "....X..g....X.gg"), (Hat, "xoxoxoxoxoxoxoxo")],
             },
         ],
+        // Hardgroove: the kick on every beat and the open hat between, with
+        // toms and congas rolling over them; hats and percussion that come and
+        // go (some only some times round), a light swing.
+        (Style::Hardgroove, Level::Basic) => &[Take {
+            a: &[(Kick, FOUR), (Open, OFF), (Back, "....o.......o..."), (Perc, "..o..o....o..o..")],
+            b: &[(Kick, FOUR), (Open, OFF), (Back, "....o.......o..."), (Perc, "..o..o....o..ooo")],
+        }],
+        (Style::Hardgroove, Level::Medium) => &[
+            Take {
+                a: &[(Kick, FOUR), (Open, OFF), (Hat, "p.g.p.g.p.g.p.g."), (Back, "....x.......x..."), (Tom, "...o..o....o..o."), (Perc, "o..o..o.o..o..o.")],
+                b: &[(Kick, FOUR), (Open, OFF), (Hat, "p.g.p.g.p.g.p.g."), (Back, "....x.......x..."), (Tom, "...o..o....o.oo."), (Perc, "o..o..o.o..o.ooo")],
+            },
+            Take {
+                a: &[(Kick, FOUR), (Open, OFF), (Hat, "xpxpxpxpxpxpxpxp"), (Rim, "...o.....o..o..."), (Perc, "..o...o...o..oo.")],
+                b: &[(Kick, FOUR), (Open, OFF), (Hat, "xpxpxpxpxpxpxpxp"), (Rim, "...o.....o..o.oo"), (Perc, "..o...o...o..oo."), (Back, "............o...")],
+            },
+        ],
+        (Style::Hardgroove, Level::Intense) => &[
+            Take {
+                a: &[(Kick, FOUR), (Open, OFF), (Hat, "pgpgpgpgpgpgpgpg"), (Back, "....x..g....x..g"), (Tom, "o..o..o..o..o.o."), (Perc, ".o.oo.o..o.oo.o."), (Rim, "......p......p..")],
+                b: &[(Kick, FOUR), (Open, OFF), (Hat, "pgpgpgpgpgpgpgpg"), (Back, "....x..g....x.gg"), (Tom, "o..o..o..o..oooo"), (Perc, ".o.oo.o..o.oo.o."), (Rim, "......p......p..")],
+            },
+            Take {
+                a: &[(Kick, "X...X...X...X.g."), (Open, OFF), (Hat, "xpxxxpxxxpxxxpxx"), (Back, "....x.......x..."), (Tom, "..o..o..o..o..o."), (Perc, "o.p.o.p.o.p.o.p.")],
+                b: &[(Kick, "X...X...X...X.gg"), (Open, OFF), (Hat, "xpxxxpxxxpxxxp.."), (Back, "....x.......x.o."), (Tom, "..o..o..o..o.ooo"), (Perc, "o.p.o.p.o.p.o.p.")],
+            },
+        ],
+        // Hard techno: a hard kick on every beat (galloping as it gets busier),
+        // the open hat between, claps on 2 and 4 that roll at the turnaround.
+        (Style::HardTechno, Level::Basic) => &[Take {
+            a: &[(Kick, FOUR), (Open, OFF), (Back, "....X.......X...")],
+            b: &[(Kick, FOUR), (Open, OFF), (Back, "....X.......X.xx")],
+        }],
+        (Style::HardTechno, Level::Medium) => &[
+            Take {
+                a: &[(Kick, FOUR), (Open, OFF), (Hat, "gxg.gxg.gxg.gxg."), (Back, "....X.......X...")],
+                b: &[(Kick, FOUR), (Open, OFF), (Hat, "gxg.gxg.gxg.gxg."), (Back, "....X.......X.xx")],
+            },
+            Take {
+                a: &[(Kick, FOUR), (Open, OFF), (Hat, "xpxpxpxpxpxpxpxp"), (Back, "....X.......X..."), (Rim, "..p.......p.....")],
+                b: &[(Kick, FOUR), (Open, OFF), (Hat, "xpxpxpxpxpxpxprr"), (Back, "....X.......X..."), (Rim, "..p.......p..o.o")],
+            },
+        ],
+        (Style::HardTechno, Level::Intense) => &[
+            Take {
+                a: &[(Kick, "X..xX...X..xX..."), (Open, OFF), (Hat, "xxpxxxpxxxpxxxpx"), (Back, "....X..o....X..o"), (Rim, "..p.......p..p..")],
+                b: &[(Kick, "X..xX...X..xX.xx"), (Open, OFF), (Hat, "xxpxxxpxxxpxxxpx"), (Back, "....X..o....X.rr"), (Rim, "..p.......p..p..")],
+            },
+            Take {
+                a: &[(Kick, FOUR), (Open, OFF), (Hat, "xpxpxpxpxpxpxpxp"), (Back, "..o.X.o...o.X.o.")],
+                b: &[(Kick, FOUR), (Open, OFF), (Hat, "xpxpxpxpxpxpxpxp"), (Back, "..o.X.o...o.Xrrr")],
+            },
+        ],
         (Style::Breakbeat, Level::Intense) => &[
             Take {
                 a: &[(Kick, "X.X.......XX...."), (Back, "....X..g.X..X..g"), (Hat, "x.x.x.x.x.x.x.x."), (Open, "..............x.")],
@@ -500,6 +584,9 @@ fn fill(style: Style) -> Option<(Bar, bool)> {
         Style::PopRock => Some((&[(Back, "............xX.."), (Tom, "..............xX")], false)),
         Style::Reggaeton => None,
         Style::Breakbeat => Some((&[(Back, "............gXXX")], false)),
+        Style::Hardgroove => Some((&[(Tom, "............xoXx"), (Perc, "............o.o.")], false)),
+        // A clap roll over the kick into the next phrase.
+        Style::HardTechno => Some((&[(Back, "............rrrr")], false)),
     }
 }
 
@@ -509,6 +596,7 @@ fn swing(style: Style, level: Level) -> Option<engine::model::Groove> {
     match (style, level) {
         (Style::BoomBap, _) => Some(Groove { grid: 0.25, swing: 0.5, accent: 0.0, humanize: 0.3 }),
         (Style::House, Level::Medium | Level::Intense) => Some(Groove { grid: 0.25, swing: 0.15, accent: 0.0, humanize: 0.15 }),
+        (Style::Hardgroove, Level::Medium | Level::Intense) => Some(Groove { grid: 0.25, swing: 0.2, accent: 0.0, humanize: 0.1 }),
         _ => None,
     }
 }
@@ -538,7 +626,7 @@ impl Style {
         use engine::model::DrumModel::*;
         match self {
             Style::Trap | Style::BoomBap | Style::Reggaeton => Tr808,
-            Style::House | Style::Techno | Style::Breakbeat | Style::DrumAndBass | Style::PopRock => Tr909,
+            Style::House | Style::Techno | Style::Hardgroove | Style::HardTechno | Style::Breakbeat | Style::DrumAndBass | Style::PopRock => Tr909,
         }
     }
 }
@@ -567,6 +655,7 @@ fn velocity(c: char) -> Option<f32> {
         'x' | 'r' => Some(0.8),
         'o' => Some(0.6),
         'g' => Some(0.38),
+        'p' => Some(0.5),
         _ => None,
     }
 }
@@ -614,11 +703,13 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
                 // Hats a little under the rest, and every hit a hair different.
                 let level = if matches!(voice, Hat | Open) { 0.85 } else { 1.0 };
                 let v = (v * level * (0.96 + 0.08 * dice.roll())).clamp(0.05, 1.0);
+                // Some times round only.
+                let chance = if c == 'p' { 0.55 } else { 1.0 };
                 if c == 'r' {
                     notes.push(Note { start: beat, length: 0.125, pitch, velocity: v, chance: 1.0 });
                     notes.push(Note { start: beat + 0.125, length: 0.125, pitch, velocity: v * 0.85, chance: 1.0 });
                 } else {
-                    notes.push(Note { start: beat, length: 0.25, pitch, velocity: v, chance: 1.0 });
+                    notes.push(Note { start: beat, length: 0.25, pitch, velocity: v, chance });
                 }
             }
         }
@@ -633,7 +724,7 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
 fn sound_of(settings: &Settings, v: V) -> Option<Sound> {
     let on = |s: Sound| settings.sounds[s as usize];
     let first = |list: &[Sound]| list.iter().copied().find(|&s| on(s));
-    let back_clap = matches!(settings.style, Style::House | Style::Techno | Style::Trap);
+    let back_clap = matches!(settings.style, Style::House | Style::Techno | Style::Hardgroove | Style::HardTechno | Style::Trap);
     match v {
         Kick => first(&[Sound::Kick]),
         Back if back_clap => first(&[Sound::Clap, Sound::Snare, Sound::Rim]),
@@ -696,7 +787,7 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
                 let level = match c {
                     'X' => 3,
                     'x' | 'o' | 'r' => 2,
-                    'g' => 1,
+                    'g' | 'p' => 1,
                     _ => continue,
                 };
                 let cell = &mut seed[bar * 16 + s][sound as usize];
@@ -924,7 +1015,7 @@ mod tests {
                     for bar in [take.a, take.b] {
                         for (_, steps) in bar {
                             assert_eq!(steps.len(), 16, "{style:?} {level:?}: {steps}");
-                            assert!(steps.chars().all(|c| ".Xxogr".contains(c)), "{steps}");
+                            assert!(steps.chars().all(|c| ".Xxogrp".contains(c)), "{steps}");
                         }
                     }
                 }
@@ -950,6 +1041,32 @@ mod tests {
                 assert!(b.iter().any(|n| n.pitch == drum_note::KICK && n.start == 0.0), "{style:?} {level:?}");
             }
         }
+    }
+
+    /// Hardgroove rolls toms and congas over the four on the floor, with hats
+    /// that play only some times round; hard techno's kick gallops when busy
+    /// and its claps roll at the end of a phrase. Both on the 909.
+    #[test]
+    fn hardgroove_and_hard_techno_have_their_backbone() {
+        let own = |style: Style, level: Level| generate(&machine(), &Settings { style, level, fills: false, sounds: style.sounds(), ..Settings::default() }, 4.0, &[], 0).0;
+        let groove = own(Style::Hardgroove, Level::Medium);
+        assert_eq!(hits(&groove, drum_note::KICK, 0), vec![0, 4, 8, 12]);
+        assert_eq!(hits(&groove, drum_note::OPEN_HAT, 0), vec![2, 6, 10, 14]);
+        assert!(!hits(&groove, drum_note::LOW_TOM, 0).is_empty() && !hits(&groove, drum_note::CONGA, 0).is_empty(), "toms and congas");
+        assert!(groove.iter().any(|n| n.chance < 1.0), "hats that come and go");
+        assert!(groove.iter().filter(|n| n.pitch == drum_note::KICK).all(|n| n.chance == 1.0), "the kick always");
+        let hard = beat(Style::HardTechno, Level::Intense, false, 1.0);
+        assert_eq!(hits(&hard, drum_note::KICK, 0), vec![0, 3, 4, 8, 11, 12], "galloping");
+        assert_eq!(hits(&hard, drum_note::CLAP, 0), vec![4, 7, 12, 15]);
+        let phrase = beat(Style::HardTechno, Level::Basic, true, 4.0);
+        let rolled = phrase.iter().filter(|n| n.pitch == drum_note::CLAP && n.start >= 15.0).count();
+        assert_eq!(rolled, 8, "a clap roll in the last beat");
+        assert_eq!(hits(&phrase, drum_note::KICK, 3), vec![0, 4, 8, 12], "over the kick");
+        for style in [Style::Hardgroove, Style::HardTechno] {
+            assert_eq!(style.machine(), engine::model::DrumModel::Tr909);
+            assert!(style.tempo() >= 140);
+        }
+        assert!(swing(Style::Hardgroove, Level::Medium).is_some());
     }
 
     #[test]

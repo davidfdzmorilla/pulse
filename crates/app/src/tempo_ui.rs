@@ -38,6 +38,20 @@ impl Tempo {
 /// A clip set to follow the tempo with `grid`, for a file `duration` seconds long:
 /// from the bar line at or before the file's start, whole bars long, between
 /// warp markers on every bar if its tempo varies.
+/// A drum loop, which keeps its hits clean in Beats: one up to 32 s that its
+/// name says is drums, or one up to 16 s (a loop, not a mix) without pitches
+/// that stand out.
+pub fn is_drum_loop(name: &str, sample: &Sample) -> bool {
+    let duration = sample.duration();
+    (duration <= 32.0 && crate::loop_key::is_drums(name)) || (duration <= 16.0 && !tonal_sound(sample))
+}
+
+/// Whether a file has pitches that stand out (a loop without is drums).
+fn tonal_sound(sample: &Sample) -> bool {
+    let mono: Vec<f32> = sample.left.iter().zip(&sample.right).map(|(l, r)| 0.5 * (l + r)).collect();
+    crate::loop_key::sounds_tonal(&mono, sample.sample_rate)
+}
+
 pub fn warped(clip: &AudioClip, grid: &Grid, duration: f64) -> AudioClip {
     let mut new = AudioClip { warp: WarpMode::Stretch, original_bpm: grid.bpm, warp_markers: Vec::new(), ..clip.clone() };
     if grid.markers.len() < 2 {
@@ -121,6 +135,7 @@ impl PulseApp {
         };
         let duration = self.sample(path).duration();
         let grid = beats::fit_loop(grid, duration, Some(self.project.tempo));
+        let drum_loop = is_drum_loop(&name, &self.sample(path));
         let mut count = 0;
         for &clip in clips {
             // Only clips still on that file (the user may have changed them meanwhile).
@@ -128,7 +143,10 @@ impl PulseApp {
             if audio.sample != path {
                 continue;
             }
-            let new = warped(&audio, &grid, duration);
+            let mut new = warped(&audio, &grid, duration);
+            if drum_loop && new.warp == WarpMode::Stretch {
+                new.warp = WarpMode::Beats;
+            }
             match clip {
                 ClipRef::Session { track, slot } => self.set_clip(track, slot, Some(Clip::Audio(new))),
                 ClipRef::Arrangement { track, index } => {
@@ -466,5 +484,54 @@ mod tests {
         assert!(lane.iter().all(|c| matches!(&c.clip, Clip::Audio(a) if a.warp == WarpMode::Stretch)), "both analysed");
         assert_eq!(lane[0].start, 0.0);
         assert!((lane[1].start - lane[0].end()).abs() < 1e-9, "{} vs {}", lane[1].start, lane[0].end());
+    }
+
+    /// A drum loop comes in in Beats (its hits clean when the tempo differs);
+    /// a chord loop in Stretch.
+    #[test]
+    fn drum_loops_come_in_in_beats_mode() {
+        let dir = std::env::temp_dir().join(format!("pulse-beats-mode-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let rate = 48_000.0;
+        // Four bars at 150: a hit on every sixteenth, an accent on the beats.
+        let sixteenth = 60.0 / 150.0 / 4.0;
+        let frames = (64.0 * sixteenth * rate as f64) as usize;
+        let mut seed = 7u64;
+        let mut noise = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            ((seed >> 33) as f32 / (1u64 << 31) as f32) - 1.0
+        };
+        let tops: Vec<f32> = (0..frames)
+            .map(|i| {
+                let t = i as f64 / rate as f64;
+                let step = (t / sixteenth) as usize;
+                let into = t - step as f64 * sixteenth;
+                let level = if step % 4 == 0 { 0.9 } else { 0.4 };
+                noise() * level * (-into * 60.0).exp() as f32
+            })
+            .collect();
+        let chords: Vec<f32> = (0..frames).map(|i| [220.0f32, 261.63, 329.63].iter().map(|f| (i as f32 / rate * f * std::f32::consts::TAU).sin()).sum::<f32>() * 0.2).collect();
+        let (hats, pad) = (dir.join("Tops_150.wav"), dir.join("Pad_150_Am.wav"));
+        crate::capture::write_wav(&hats, &tops, &tops, rate).unwrap();
+        crate::capture::write_wav(&pad, &chords, &chords, rate).unwrap();
+        let mut app = PulseApp::headless(Project::demo());
+        app.project.tempo = 140.0;
+        app.view = crate::app::View::Arrangement;
+        let track = app.add_audio_track().unwrap();
+        app.add_samples(vec![hats, pad], Placement::Arrangement { track, start: 0.0 });
+        let ctx = eframe::egui::Context::default();
+        let started = std::time::Instant::now();
+        while app.tempo.busy() {
+            app.follow_tempo(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            assert!(started.elapsed().as_secs() < 60);
+        }
+        let warp = |i: usize| match &app.project.tracks[track].arrangement[i].clip {
+            Clip::Audio(a) => (a.warp, a.original_bpm),
+            _ => panic!(),
+        };
+        assert_eq!(warp(0), (WarpMode::Beats, 150.0), "{:?}", app.status);
+        assert_eq!(warp(1).0, WarpMode::Stretch);
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

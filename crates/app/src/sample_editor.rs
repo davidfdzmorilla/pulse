@@ -191,6 +191,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     WarpMode::Off => "Off: suena a su velocidad original, sin seguir el tempo.",
                     WarpMode::Repitch => "Re-Pitch: sigue el tempo cambiando la velocidad y el tono.",
                     WarpMode::Stretch => "Stretch: sigue el tempo manteniendo el tono.",
+                    WarpMode::Beats => "Beats: para baterías. Cada golpe empieza donde le toca y suena a su velocidad, sin eco.",
                 })
                 .color(TEXT_DIM)
                 .size(10.5),

@@ -72,7 +72,7 @@ fn parse_key(word: &str) -> Option<(u8, Option<bool>)> {
 
 /// Whether a file's name says it is drums: one of its words (split at
 /// capitals too: «KickLoopB») is one of [`DRUM_WORDS`] or begins like it.
-fn is_drums(name: &str) -> bool {
+pub(crate) fn is_drums(name: &str) -> bool {
     let mut words = Vec::new();
     let mut word = String::new();
     for c in name.chars() {
@@ -85,6 +85,18 @@ fn is_drums(name: &str) -> bool {
     }
     words.push(word);
     words.iter().map(|w| w.to_lowercase()).any(|w| w == "beat" || DRUM_WORDS.iter().any(|d| w.starts_with(d)))
+}
+
+/// Whether some pitches stand out in `chroma` (see [`TONAL`]).
+fn tonal(chroma: &[f64; 12]) -> bool {
+    let mean = chroma.iter().sum::<f64>() / 12.0;
+    chroma.iter().cloned().fold(0.0, f64::max) >= TONAL * mean
+}
+
+/// Whether a sound has pitches that stand out at all (drums, hats and noise
+/// don't).
+pub fn sounds_tonal(mono: &[f32], rate: f32) -> bool {
+    tonal(&stems::key::chroma(mono, rate))
 }
 
 /// The semitones (-6..=5) that move a loop in `from` into `to`: to its tonic,
@@ -109,8 +121,7 @@ pub fn file_key(name: &str, mono: &[f32], rate: f32, project: Option<Key>) -> Op
     }
     let chroma = stems::key::chroma(mono, rate);
     // Without pitches that stand out it has no key, whatever its name says.
-    let mean = chroma.iter().sum::<f64>() / 12.0;
-    if chroma.iter().cloned().fold(0.0, f64::max) < TONAL * mean {
+    if !tonal(&chroma) {
         return None;
     }
     let heard = stems::key::Key::detect_clearly(&chroma).filter(|(_, clarity)| *clarity >= CLEAR);

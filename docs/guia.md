@@ -298,7 +298,7 @@ Al terminar la grabación aparece **una fila por toma** debajo de la pista, con 
 La última fila del Arrangement es el **Master**. Su **A** muestra su automatización: **Tempo**, volumen, panorama y los knobs de sus efectos.
 
 - **Tempo** hace que la canción cambie de velocidad: puntos a distintos tempos dan saltos (una intro lenta, un estribillo más rápido), y una línea entre dos puntos, un accelerando o un ritardando (con **⌥ + arrastrar** se curva). El carril va de 40 a 240 BPM.
-- Todo sigue el tempo: los clips MIDI, los audios en Stretch o Re-Pitch, el metrónomo, los delays y los arpegiadores. Los audios con warp **Off** no siguen el tempo (y en un cambio de tempo pueden saltar): en una canción con cambios, ponlos en **Stretch**.
+- Todo sigue el tempo: los clips MIDI, los audios en Stretch, Beats o Re-Pitch, el metrónomo, los delays y los arpegiadores. Los audios con warp **Off** no siguen el tempo (y en un cambio de tempo pueden saltar): en una canción con cambios, ponlos en **Stretch**.
 - Al **exportar**, la canción dura lo que dan sus tempos.
 - Mover el tempo del transporte a mano anula la automatización (lo dice su borde) hasta **▶ Arrangement**.
 
@@ -428,7 +428,7 @@ Cada parte llega con un instrumento que le va (Acid para los bajos, FM para los 
 
 Se abre al seleccionar un clip de audio.
 
-- **Warp**: **Off** (a su velocidad, sin seguir el tempo), **Re-Pitch** (sigue el tempo cambiando velocidad y tono) o **Stretch** (sigue el tempo manteniendo el tono).
+- **Warp**: **Off** (a su velocidad, sin seguir el tempo), **Re-Pitch** (sigue el tempo cambiando velocidad y tono) **Stretch** (sigue el tempo manteniendo el tono) o **Beats** (para baterías: cada golpe empieza donde le toca y suena a su velocidad, sin el eco que deja Stretch al cambiar mucho el tempo; entre golpes, si el tempo es más lento, queda un silencio corto).
 - **BPM original** con **÷2** y **×2**.
 - **Longitud** en tiempos y **Ajustar al archivo**.
 - **Ver**: **El clip** o **Archivo entero**. En «Archivo entero», clic o arrastrar en la forma de onda mueve el **inicio** del clip.
@@ -447,7 +447,7 @@ Para audios cuyo tempo varía. En la franja bajo la forma de onda (con Warp dist
 
 ## Tempo de los audios
 
-Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadamente un segundo de análisis por minuto de audio). Si encuentra un ritmo claro, el clip pasa a **Stretch** a ese tempo, empieza en el compás del primer tiempo fuerte y dura compases enteros. Si el tempo varía, pone un marcador de warp en cada compás. Así el audio va al ritmo del metrónomo. Un loop corto (hasta 32 s) dura compases enteros: si el tempo encontrado se queda cerca del que lo hace de 1, 2, 3, 4, 6, 8, 12 o 16 compases justos, se usa ese (un loop de 4 compases a 150 queda a 150, no a 151); si el detector se equivoca más, pero el loop dura compases justos al tempo del proyecto, ese.
+Al importar o soltar un audio, Pulse busca su tempo y sus compases (aproximadamente un segundo de análisis por minuto de audio). Si encuentra un ritmo claro, el clip pasa a **Stretch** a ese tempo (a **Beats** si es un loop de batería: por su nombre, o porque no tiene tonalidad), empieza en el compás del primer tiempo fuerte y dura compases enteros. Si el tempo varía, pone un marcador de warp en cada compás. Así el audio va al ritmo del metrónomo. Un loop corto (hasta 32 s) dura compases enteros: si el tempo encontrado se queda cerca del que lo hace de 1, 2, 3, 4, 6, 8, 12 o 16 compases justos, se usa ese (un loop de 4 compases a 150 queda a 150, no a 151); si el detector se equivoca más, pero el loop dura compases justos al tempo del proyecto, ese.
 
 - **Detectar tempo** (clic derecho en un clip de audio, o «Detectar» en el editor): vuelve a analizarlo.
 - **Usar el tempo de este clip en el proyecto**: pone el proyecto al tempo del clip.

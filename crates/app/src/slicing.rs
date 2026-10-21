@@ -81,6 +81,12 @@ fn onset_strength(left: &[f32], right: &[f32]) -> Vec<f32> {
     flux
 }
 
+/// Finds where `sample`'s hits start, once, for the Beats warp mode (see
+/// `engine::Sample::onsets`).
+pub fn find_onsets(sample: &engine::Sample) {
+    sample.onsets.get_or_init(|| transients(&sample.left, &sample.right, sample.sample_rate, usize::MAX).into_iter().map(|f| f as f64 / sample.sample_rate as f64).collect());
+}
+
 /// Frame offsets where hits start in `left`/`right`, at most `max`, always
 /// including 0. Peaks of the spectral flux above a local, adaptive threshold.
 pub fn transients(left: &[f32], right: &[f32], sample_rate: f32, max: usize) -> Vec<usize> {

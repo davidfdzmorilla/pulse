@@ -194,6 +194,13 @@ impl SuperSaw {
         Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0 }
     }
 
+    /// Starts its luck over (the transport starts): the song's notes start
+    /// with the same phases every time it is played from the same place.
+    pub fn reseed(&mut self) {
+        self.seed = 0x2545_F491;
+        self.counter = 0;
+    }
+
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
     pub fn set_pitch(&mut self, ratio: f32) {
         self.pitch = ratio;
@@ -223,6 +230,11 @@ impl SuperSaw {
             *phase = self.random();
         }
         let voice = &mut self.voices[index];
+        // A voice at rest starts clean: its filters stopped where its last
+        // note faded out (and would color this one's start).
+        if voice.env.stage == Stage::Idle {
+            voice.filters = [Svf::default(); 2];
+        }
         voice.gate = Gate::new(pitch, velocity, gate, self.counter);
         voice.phases = phases;
         voice.env.trigger();

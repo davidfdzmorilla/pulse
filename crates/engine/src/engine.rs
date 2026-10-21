@@ -1721,6 +1721,11 @@ impl Engine {
         if !self.playing && self.counting.is_none() {
             self.playing = true;
             self.position = self.start_marker;
+            for track in &mut self.tracks {
+                if let Instrument::SuperSaw(s) = &mut track.instrument {
+                    s.reseed();
+                }
+            }
         }
     }
 

@@ -332,16 +332,13 @@ enum Measured {
 impl PulseApp {
     /// Renders and measures the mix and each track (in the background).
     pub fn analyze_mix(&mut self) {
-        let range = match export::beat_range(&self.project, self.mix.range) {
-            Some(r) => r,
-            None => {
-                self.status = Some(match self.mix.range {
-                    Range::Song => "El Arrangement está vacío: coloca clips en él para analizar la canción (o analiza el loop)".into(),
-                    Range::Loop => "El loop está vacío".into(),
-                });
-                return;
-            }
-        };
+        if export::beat_range(&self.project, self.mix.range).is_none() {
+            self.status = Some(match self.mix.range {
+                Range::Song | Range::Sections => "El Arrangement está vacío: coloca clips en él para analizar la canción (o analiza el loop)".into(),
+                Range::Loop => "El loop está vacío".into(),
+            });
+            return;
+        }
         self.capture_plugins();
         let settings = export::Settings { range: self.mix.range, stems: true, sample_rate: RATE as u32, ..Default::default() };
         let live = std::mem::take(&mut self.samples.plugins);
@@ -349,13 +346,12 @@ impl PulseApp {
         let tracks = export::plan(&self.project, &mut self.samples, &settings, std::path::Path::new("mezcla.wav"));
         self.samples.plugins = live;
         let names: Vec<(String, bool, u32)> = self.project.tracks.iter().map(|t| (t.name.clone(), t.is_drums(), t.id)).collect();
-        let song = export::Song::of(&self.project);
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
             // The mix and every track at once (see `export::render_each`).
             let renders: Vec<_> = mix.into_iter().chain(tracks).collect();
-            let measured = export::render_each(renders, range, song, RATE, &p, &c, |render, left, right| {
+            let measured = export::render_each(renders, RATE, &p, &c, |render, left, right| {
                 Ok(match render.track {
                     None => Measured::Mix(Measures::of(&left, &right, RATE)),
                     Some(index) => {

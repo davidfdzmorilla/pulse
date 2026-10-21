@@ -460,7 +460,7 @@ mod tests {
             key: None,
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         // At 120 BPM half a second is a beat; the clip starts 1 s into the file.
         let notes = clip_notes(&[note(1.0, 1.5, 60, 0.6), note(2.0, 3.0, 64, 0.6), note(6.0, 7.0, 67, 0.6)], &audio, 100.0, false);
@@ -489,7 +489,7 @@ mod tests {
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         app.project.tracks[t].clips[2] = Some(Clip::Audio(audio));
         let tracks = app.project.tracks.len();
@@ -541,7 +541,7 @@ mod tests {
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         let context = Context { audio: Vec::new(), midi: [0.0; 12], key: None };
         let (events, key) = convert(&sample, &audio, 120.0, ToMidi::Chords, &context, &Mutex::new(0.0)).unwrap();
@@ -602,7 +602,7 @@ mod tests {
             takes: Vec::new(),
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         // C E G C, in tune: C# major is not what they sound in, but it is chosen.
         let c_sharp = stems::key::Key { tonic: 1, minor: false };

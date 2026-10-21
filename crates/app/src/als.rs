@@ -442,7 +442,7 @@ fn session_clip(clip: Node, track_color: [u8; 3]) -> MidiClip {
         name: clip_name(clip).unwrap_or_else(|| "MIDI".into()),
         length,
         notes: notes(clip, start, length),
-        color: clip_color(clip, track_color),
+        color: clip_color(clip, track_color), muted: false,
     }
 }
 
@@ -530,7 +530,7 @@ fn audio_clip(clip: Node, track_color: [u8; 3], timeline_length: Option<f64>, ct
         takes: Vec::new(),
         key: None,
         gain_db: if volume > 0.0 { (20.0 * volume.log10()) as f32 } else { -70.0 },
-        transpose: number(clip, &["PitchCoarse"]).unwrap_or(0.0) as f32,
+        transpose: number(clip, &["PitchCoarse"]).unwrap_or(0.0) as f32, muted: false,
     };
     if audio.has_markers() {
         audio.offset = audio.file_seconds(loop_start).max(0.0);

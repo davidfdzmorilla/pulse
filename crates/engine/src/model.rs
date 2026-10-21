@@ -55,6 +55,9 @@ pub struct MidiClip {
     /// The clip's own groove; none: the project's swing.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub groove: Option<Groove>,
+    /// Switched off: it stays where it is, silent (see [`Clip::muted`]).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub muted: bool,
 }
 
 /// How a clip's notes are played off the grid, as Live's grooves: swing on the
@@ -118,7 +121,7 @@ impl MidiClip {
             name: name.into(),
             length,
             notes: Vec::new(),
-            color,
+            color, muted: false,
         }
     }
 }
@@ -182,6 +185,9 @@ pub struct AudioClip {
     /// clip is transposed to follow the project's.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<ClipKey>,
+    /// Switched off: it stays where it is, silent.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub muted: bool,
 }
 
 /// The key an audio file is in.
@@ -304,6 +310,21 @@ impl Clip {
         match self {
             Clip::Midi(c) => &mut c.envelopes,
             Clip::Audio(c) => &mut c.envelopes,
+        }
+    }
+
+    /// Switched off: it stays, silent (its notes, audio and envelopes).
+    pub fn muted(&self) -> bool {
+        match self {
+            Clip::Midi(c) => c.muted,
+            Clip::Audio(c) => c.muted,
+        }
+    }
+
+    pub fn set_muted(&mut self, muted: bool) {
+        match self {
+            Clip::Midi(c) => c.muted = muted,
+            Clip::Audio(c) => c.muted = muted,
         }
     }
 
@@ -6741,7 +6762,7 @@ mod tests {
             key: None,
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         // Without markers: the original tempo.
         assert!((clip.source_seconds(2.0, 90.0) - 1.3).abs() < 1e-12);

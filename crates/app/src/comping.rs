@@ -154,7 +154,7 @@ mod tests {
                 envelopes: Vec::new(),
                 warp_markers: Vec::new(),
                 takes: vec!["a.wav".into(), "b.wav".into(), "c.wav".into()],
-                key: None,
+                key: None, muted: false,
             }),
         }
     }

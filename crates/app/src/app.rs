@@ -674,7 +674,7 @@ impl PulseApp {
             takes: Vec::new(),
             key: None,
             gain_db: 0.0,
-            transpose: 0.0,
+            transpose: 0.0, muted: false,
         }
     }
 
@@ -1944,7 +1944,7 @@ impl PulseApp {
             key: None,
             takes: Vec::new(),
             gain_db: 0.0,
-            transpose: 0.0,
+            transpose: 0.0, muted: false,
         })
     }
 
@@ -2152,7 +2152,7 @@ impl PulseApp {
                     let count = notes.len();
                     let notes = self.quantize_take(notes, start, length);
                     let t = &self.project.tracks[track];
-                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes, groove: None };
+                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes, groove: None, muted: false };
                     self.set_clip(track, slot, Some(Clip::Midi(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
                     let automation = match moved {
@@ -2166,7 +2166,7 @@ impl PulseApp {
                     let notes = self.quantize_take(notes, start, length);
                     let Some(t) = self.project.tracks.get_mut(track) else { continue };
                     let count = notes.len();
-                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color, envelopes: Vec::new(), groove: None };
+                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color, envelopes: Vec::new(), groove: None, muted: false };
                     t.arrangement.push(ArrangementClip { start, length, clip: Clip::Midi(clip) });
                     let index = t.arrangement.len() - 1;
                     self.sync_arrangement(track);
@@ -2593,10 +2593,14 @@ impl PulseApp {
                 cmd && i.modifiers.alt && i.key_pressed(egui::Key::S),
                 cmd && !shift && i.key_pressed(egui::Key::G),
                 cmd && shift && i.key_pressed(egui::Key::G),
+                !cmd && i.key_pressed(egui::Key::Num0),
             ]
         });
-        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record, versions, group, ungroup] =
+        let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record, versions, group, ungroup, mute_clips] =
             input;
+        if mute_clips {
+            self.toggle_clips_muted();
+        }
         self.tab_pressed = None;
         // Without a system menu bar the menus' other shortcuts are read here.
         if !self.has_menu_bar() {

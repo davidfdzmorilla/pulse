@@ -701,7 +701,7 @@ fn clip(name: &str, length: f64, color: [u8; 3], notes: Vec<Note>) -> Option<Cli
         name: name.into(),
         length,
         notes,
-        color,
+        color, muted: false,
     }))
 }
 

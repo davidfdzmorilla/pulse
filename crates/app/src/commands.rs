@@ -86,7 +86,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 33] = [
+pub const SHORTCUTS: [(&str, &str); 34] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -99,6 +99,7 @@ pub const SHORTCUTS: [(&str, &str); 33] = [
     ("⌘X / ⌘C / ⌘V", "Cortar / Copiar / Pegar los clips seleccionados (o las notas seleccionadas en el editor)"),
     ("⌘D", "Duplicar"),
     ("⌘E / ⌘J", "Dividir el clip en el cursor / unir clips (Arrangement)"),
+    ("0", "Desactivar o activar los clips seleccionados"),
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),
     ("⌘T / ⇧⌘T", "Nueva pista MIDI / de audio"),

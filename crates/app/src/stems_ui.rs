@@ -298,7 +298,7 @@ mod tests {
             key: None,
             gain_db: -3.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         }
     }
 

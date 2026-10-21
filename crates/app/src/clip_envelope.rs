@@ -315,7 +315,7 @@ mod tests {
             key: None,
             gain_db: 0.0,
             transpose: 0.0,
-            envelopes: Vec::new(),
+            envelopes: Vec::new(), muted: false,
         };
         audio.envelopes.push(engine::model::AutomationLane { param: Param::Pan, points: vec![engine::model::AutomationPoint { beat: 1.0, value: -1.0, curve: 0.0 }] });
         app.set_clip(track, 0, Some(Clip::Audio(audio)));

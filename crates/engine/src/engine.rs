@@ -113,11 +113,12 @@ impl PlayClip {
         }
     }
 
-    /// The clip's automation, in clip time.
+    /// The clip's automation, in clip time (none while it is switched off).
     pub fn envelopes(&self) -> &[AutomationLane] {
         match self {
-            PlayClip::Midi(c) => &c.envelopes,
-            PlayClip::Audio(c, _) => &c.envelopes,
+            PlayClip::Midi(c) if !c.muted => &c.envelopes,
+            PlayClip::Audio(c, _) if !c.muted => &c.envelopes,
+            _ => &[],
         }
     }
 }
@@ -894,8 +895,8 @@ fn schedule_notes(
     events: &mut EventQueue,
 ) {
     // A clip a 1000th of a beat long (only from a file edited by hand) would
-    // take a lap per thousandth: too short to play.
-    if clip.length < 1e-3 || to <= from {
+    // take a lap per thousandth: too short to play. One switched off is silent.
+    if clip.length < 1e-3 || to <= from || clip.muted {
         return;
     }
     let local_from = from - origin;
@@ -991,7 +992,7 @@ fn render_audio_clip(
     left: &mut [f32],
     right: &mut [f32],
 ) {
-    if sample.frames() == 0 || clip.length <= 0.0 {
+    if sample.frames() == 0 || clip.length <= 0.0 || clip.muted {
         return;
     }
     // Warped, beats inside the clip map to file time through its warp markers (or
@@ -2721,7 +2722,7 @@ mod tests {
             takes: Vec::new(),
             key: None,
             gain_db: 0.0,
-            transpose: 0.0,
+            transpose: 0.0, muted: false,
         }
     }
 
@@ -3437,6 +3438,30 @@ mod tests {
         assert_eq!(laps(0.5), half, "the same laps again");
         assert!(laps(1.0).iter().all(|&p| p));
         assert!(laps(0.0).iter().all(|&p| !p));
+    }
+
+    /// A clip switched off stays where it is, silent, with its automation;
+    /// switched on again it plays.
+    #[test]
+    fn a_switched_off_clip_is_silent() {
+        let run = |muted: bool, audio: bool| {
+            let mut h = Harness::new();
+            let clip = if audio {
+                PlayClip::Audio(AudioClip { muted, ..audio_clip(WarpMode::Repitch) }, sine_sample())
+            } else {
+                let mut midi = MidiClip::new("a", 1.0, [0, 0, 0]);
+                midi.notes.push(Note::new(0.0, 0.5, 60, 1.0));
+                midi.muted = muted;
+                PlayClip::Midi(midi)
+            };
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(clip)) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            energy(&h.run_beats(2.0))
+        };
+        for audio in [false, true] {
+            assert!(run(false, audio) > 1.0, "audio {audio}: on, it sounds");
+            assert!(run(true, audio) < 1e-9, "audio {audio}: off, silent");
+        }
     }
 
     /// A previewed loop plays at the project's tempo and goes on looping, past

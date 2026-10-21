@@ -9,10 +9,11 @@ en un Windows real.**
 1. Descarga `Pulse-<versión>-windows-x64-setup.exe` de la publicación.
 2. Ábrelo. Pulse no está firmado con un certificado, así que SmartScreen avisa
    («Windows protegió su PC»): **Más información → Ejecutar de todas formas**.
-3. Por defecto se instala solo para tu usuario, sin permisos de administrador,
-   en `%LOCALAPPDATA%\Programs\Pulse`. Al principio se puede elegir instalarlo
-   para todos los usuarios, en Archivos de programa. Esa instalación necesita
-   administrador también para actualizarse, así que mejor la de tu usuario.
+3. Se instala para tu usuario, sin permisos de administrador, en
+   `%LOCALAPPDATA%\Programs\Pulse`, donde Pulse puede actualizarse solo. No se
+   ofrece instalarlo para todos los usuarios (en Archivos de programa): ahí
+   Pulse no podría actualizarse. Si alguna instalación antigua está ahí, Pulse
+   lo dice al actualizar: desinstálala e instala la nueva.
 4. Crea un acceso en el menú Inicio (y en el escritorio si lo marcas), y asocia
    los archivos `.pulse` a Pulse.
 

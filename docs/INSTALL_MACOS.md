@@ -34,8 +34,9 @@ Pulse no instala ninguna que no lo esté. La versión anterior queda como
 - Ajustes, kits y modelos: `~/Library/Application Support/Pulse`.
 - Si Pulse falla: `~/Library/Logs/Pulse/pulse.log`; y si se cierra de golpe
   (un plugin, por ejemplo), macOS guarda un informe en **Consola → Informes de
-  fallos** (`~/Library/Logs/DiagnosticReports/pulse-*.ips`). Con eso y la
-  versión (Pulse → Acerca de) se puede saber qué pasó.
+  fallos** (`~/Library/Logs/DiagnosticReports/pulse-*.ips`). Ese archivo dice
+  en qué línea del código falló (con `scripts/simbolos.py`, ver
+  [PUBLICAR.md](PUBLICAR.md)): mándalo si avisas de un fallo.
 
 ## Desinstalar
 

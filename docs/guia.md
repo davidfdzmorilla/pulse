@@ -517,7 +517,7 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 - **EQ Three**: graves, medios y agudos, con sus frecuencias de corte.
 - **Compressor**: umbral, ratio, ataque, release y ganancia, y **Sidechain** (ver abajo).
 - **Limiter**: ganancia, techo y release.
-- **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta más CPU y retrasa 36 muestras).
+- **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras).
 - **Bitcrusher**: bits y reducción de muestreo.
 - **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.
 - **Ducker**: bombeo de volumen. Sin sidechain, sincronizado al tempo (**Ritmo**). Con **Sidechain**, bombea con cada golpe de la pista elegida: baja de golpe y vuelve en **Release** (fracción del tiempo elegido), aunque la cola del bombo siga sonando, así que con bombos largos de 140–150 BPM también respira entre golpe y golpe.

@@ -436,7 +436,7 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                         ui.selectable_value(&mut p.kind, kind, kind.label());
                     }
                 });
-                ui.checkbox(&mut p.oversample, "4×").on_hover_text("Trabaja a cuatro veces la frecuencia de muestreo: sin el aliasing (agudos sucios) de mucho drive. Gasta más CPU y retrasa 36 muestras");
+                ui.checkbox(&mut p.oversample, "4×").on_hover_text("Trabaja a cuatro veces la frecuencia de muestreo: sin el aliasing (agudos sucios) de mucho drive. Gasta algo más de CPU (menos de un 1 % de un núcleo) y retrasa 36 muestras");
             });
         }
         Effect::Ducker(p) => {

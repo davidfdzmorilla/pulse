@@ -586,7 +586,11 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     } else {
         "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
     };
-    let response = response.on_hover_text(crate::theme::keys(hint));
+    let hint = match app.follows(t) {
+        Some(source) => format!("Toca lo que suena en «{source}», después de sus efectos (un rumble: no tiene clips propios, sigue a esa pista y se silencia con ella) · {hint}"),
+        None => hint.to_string(),
+    };
+    let response = response.on_hover_text(crate::theme::keys(&hint));
     // Inside groups: indented, a bar of each group's colour.
     let indent = app.project.tracks[t].depth as f32 * 4.0;
     let arrow = Rect::from_min_size(rect.min + vec2(indent + 8.0, 4.0), vec2(14.0, 16.0));

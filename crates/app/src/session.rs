@@ -307,7 +307,11 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     } else {
         "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
     };
-    let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag()).on_hover_text(crate::theme::keys(hint));
+    let hint = match app.follows(t) {
+        Some(source) => format!("Toca lo que suena en «{source}», después de sus efectos (un rumble: no tiene clips propios, sigue a esa pista y se silencia con ella) · {hint}"),
+        None => hint.to_string(),
+    };
+    let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag()).on_hover_text(crate::theme::keys(&hint));
     group_marks(app, ui.painter(), t, response.rect);
     // The fold arrow.
     let on_arrow = response.interact_pointer_pos().is_some_and(|p| p.x < response.rect.left() + 18.0);

@@ -699,7 +699,7 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
 - **MUESTRAS**: **Añadir muestra…**.
 - **BIBLIOTECA**: busca muestras, proyectos y presets por nombre, y explora las carpetas Samples, Proyectos, Exportaciones, Presets y las tuyas (**Añadir carpeta…**; clic derecho → **Quitar del navegador**).
   - Audio: **clic** lo escucha (otro clic lo para), **doble clic** lo añade a la pista de audio seleccionada, y se puede **arrastrar** a un slot, una pista, un pad o el Sampler.
-  - **A tempo** (arriba, marcado de serie): los loops (hasta 32 s) se escuchan al tempo del proyecto y en bucle, como sonarían en un clip (Beats si son de batería). Si la canción está sonando, entran a tiempo con ella, en su compás. La primera vez que escuchas un archivo tarda un momento en sonar, mientras busca su tempo; al lado de la casilla pone a qué tempo va el loop. Sin marcar, o con archivos más largos, cada archivo suena una vez a su velocidad.
+  - **A tempo** (arriba, marcado de serie): los loops (hasta 32 s) se escuchan al tempo del proyecto y en bucle, como sonarían en un clip (Beats si son de batería). Si la canción está sonando, entran a tiempo con ella, en su compás, y con el loop activado vuelven atrás con ella, en el mismo instante y sin clic. La primera vez que escuchas un archivo tarda un momento en sonar, mientras busca su tempo; al lado de la casilla pone a qué tempo va el loop. Sin marcar, o con archivos más largos, cada archivo suena una vez a su velocidad.
   - **↑ ↓**: tras hacer clic en un archivo, pasan al anterior o al siguiente y lo escuchan. Un clic fuera del navegador devuelve las flechas al resto de Pulse.
   - Proyectos: doble clic para abrir. Presets: doble clic para aplicar.
 - **PISTAS**: nueva pista MIDI o de audio.

@@ -181,7 +181,8 @@ impl ModelKit {
         let metal_on = self.voices[4].active || self.voices[5].active || self.voices[7].active;
         let cymbal_on = self.voices[10].active || self.voices[11].active || self.voices[13].active;
         for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
-            let mut s = 0.0;
+            // Each sound on its own, for its drive.
+            let mut per = [0f32; DRUM_SOUNDS];
             let noise = self.noise();
             // The six squares, shared by hats and cowbell.
             let mut metal = [0f32; 6];
@@ -219,7 +220,7 @@ impl ModelKit {
                     let click = if t < 0.001 { 0.7 } else { 0.0 };
                     body + click
                 };
-                s += out * v.velocity * p.level[0] * 1.1;
+                per[0] += out * v.velocity * p.level[0] * 1.1;
                 v.t += dt;
                 v.active = v.t < length(0, if is_909 { 0.32 } else { 0.4 }) * 7.0;
             }
@@ -233,7 +234,7 @@ impl ModelKit {
                 v.phases[1] = (v.phases[1] + f2 * tune(1) * dt) % 1.0;
                 let tone = (v.phases[0] * TAU).sin() * 0.7 + (v.phases[1] * TAU).sin() * 0.5;
                 let ring = v.filters[0].tick(tone + noise * 0.2) * decay(t, length(1, if is_909 { 0.006 } else { 0.009 }));
-                s += ring * v.velocity * p.level[1] * 1.4;
+                per[1] += ring * v.velocity * p.level[1] * 1.4;
                 v.t += dt;
                 v.active = v.t < length(1, 0.01) * 8.0;
             }
@@ -249,7 +250,7 @@ impl ModelKit {
                 let tone = (v.phases[0] * TAU).sin() * decay(t, 0.08) * 0.55 + (v.phases[1] * TAU).sin() * decay(t, 0.05) * 0.35;
                 let shaped = v.filters[0].tick(noise);
                 let snappy = v.filters[1].tick(shaped) * decay(t, length(2, if is_909 { 0.16 } else { 0.12 })) * if is_909 { 0.9 } else { 0.7 };
-                s += (tone + snappy) * v.velocity * p.level[2] * 1.1;
+                per[2] += (tone + snappy) * v.velocity * p.level[2] * 1.1;
                 v.t += dt;
                 v.active = v.t < length(2, 0.16) * 7.0;
             }
@@ -262,7 +263,7 @@ impl ModelKit {
                 let tail = if t >= 0.03 { decay(t - 0.03, length(3, if is_909 { 0.19 } else { 0.14 })) * 0.7 } else { 0.0 };
                 let band = v.filters[0].tick(noise);
                 let clap = v.filters[1].tick(band) * (bursts + tail);
-                s += clap * v.velocity * p.level[3] * 2.4;
+                per[3] += clap * v.velocity * p.level[3] * 2.4;
                 v.t += dt;
                 v.active = v.t < 0.03 + length(3, 0.19) * 7.0;
             }
@@ -286,7 +287,7 @@ impl ModelKit {
                 };
                 // A quick start, then the decay.
                 let attack = (t / 0.0008).min(1.0);
-                s += out * attack * decay(t, tau) * v.velocity * p.level[voice];
+                per[voice] += out * attack * decay(t, tau) * v.velocity * p.level[voice];
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -305,7 +306,7 @@ impl ModelKit {
                 let tau = length(voice, 0.24 / pitch);
                 let body = (v.phases[0] * TAU).sin() * decay(t, tau);
                 let breath = v.filters[0].tick(noise) * decay(t, 0.03) * 0.25;
-                s += (body + breath) * v.velocity * p.level[voice];
+                per[voice] += (body + breath) * v.velocity * p.level[voice];
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -318,7 +319,7 @@ impl ModelKit {
                 v.phases[1] = (v.phases[1] + 800.0 * tune(7) * dt) % 1.0;
                 let tone = square(v.phases[0]) * 0.5 + square(v.phases[1]) * 0.5;
                 let env = 0.7 * decay(t, 0.012) + 0.3 * decay(t, length(7, 0.22));
-                s += v.filters[0].tick(tone) * env * v.velocity * p.level[7] * 1.4;
+                per[7] += v.filters[0].tick(tone) * env * v.velocity * p.level[7] * 1.4;
                 v.t += dt;
                 v.active = v.t < length(7, 0.22) * 7.0;
             }
@@ -332,7 +333,7 @@ impl ModelKit {
                 let high = v.filters[0].tick(source);
                 let out = high * 0.6 + v.filters[1].tick(high) * 1.2;
                 let env = (t / 0.001).min(1.0) * (0.5 * decay(t, 0.04) + 0.5 * decay(t, tau));
-                s += out * env * v.velocity * p.level[10];
+                per[10] += out * env * v.velocity * p.level[10];
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -345,7 +346,7 @@ impl ModelKit {
                 let source = cymbal * 0.85 + noise * 0.15;
                 let out = v.filters[0].tick(source) * 1.4 + v.filters[1].tick(source) * 0.3;
                 let env = (t / 0.0008).min(1.0) * (0.45 * decay(t, 0.015) + 0.55 * decay(t, tau));
-                s += out * env * v.velocity * p.level[11] * 1.2;
+                per[11] += out * env * v.velocity * p.level[11] * 1.2;
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -358,7 +359,7 @@ impl ModelKit {
                 let banded = v.filters[0].tick(noise);
                 let out = v.filters[1].tick(banded);
                 let env = (t / 0.006).min(1.0) * decay(t, tau);
-                s += out * env * v.velocity * p.level[12] * 2.2;
+                per[12] += out * env * v.velocity * p.level[12] * 2.2;
                 v.t += dt;
                 v.active = v.t < 0.006 + tau * 7.0;
             }
@@ -371,7 +372,7 @@ impl ModelKit {
                 let strokes: f32 = [0.0, 0.007, 0.016].iter().filter(|&&k| t >= k).map(|&k| decay(t - k, 0.004)).sum();
                 let high = v.filters[0].tick(cymbal * 0.5 + noise * 0.5);
                 let out = v.filters[1].tick(high);
-                s += out * (strokes * 0.6 + decay(t, tau) * 0.5) * v.velocity * p.level[13] * 2.4;
+                per[13] += out * (strokes * 0.6 + decay(t, tau) * 0.5) * v.velocity * p.level[13] * 2.4;
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -385,7 +386,7 @@ impl ModelKit {
                 v.phases[0] = (v.phases[0] + freq * dt) % 1.0;
                 let body = (v.phases[0] * TAU).sin() * decay(t, tau);
                 let slap = v.filters[0].tick(noise) * decay(t, 0.004) * 0.4;
-                s += (body + slap) * v.velocity * p.level[14];
+                per[14] += (body + slap) * v.velocity * p.level[14];
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -396,11 +397,12 @@ impl ModelKit {
                 let t = v.t;
                 let tau = length(15, 0.025);
                 v.phases[0] = (v.phases[0] + 2500.0 * tune(15) * dt) % 1.0;
-                s += (v.phases[0] * TAU).sin() * decay(t, tau) * v.velocity * p.level[15] * 0.9;
+                per[15] += (v.phases[0] * TAU).sin() * decay(t, tau) * v.velocity * p.level[15] * 0.9;
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
 
+            let s = driven(&per, p);
             // Headroom: kick and clap often land together.
             let out = (s * 0.55).clamp(-1.5, 1.5);
             *out_l += out;
@@ -409,11 +411,41 @@ impl ModelKit {
     }
 }
 
+/// The sounds mixed, each through its drive: a hard clip (a hard techno kick)
+/// of the sound before its level, so the level stays its volume, normalised so
+/// a full-scale hit keeps its peak.
+pub(crate) fn driven(sounds: &[f32; DRUM_SOUNDS], p: &DrumParams) -> f32 {
+    let mut sum = 0.0;
+    for ((&x, &drive), &level) in sounds.iter().zip(&p.drive).zip(&p.level) {
+        sum += if drive > 0.0 && level > 0.0 { crate::kick::distort(x / level, crate::model::KickDrive::Hard, drive) * level } else { x };
+    }
+    sum
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     const SR: f32 = 48_000.0;
+
+    /// A driven kick is clipped (louder between its peaks, which stay), and its
+    /// level is still its volume: half the level, half the sound.
+    #[test]
+    fn drive_clips_and_the_level_stays_the_volume() {
+        let kick = |drive: f32, level: f32| {
+            let mut p = DrumParams { model: DrumModel::Tr909, ..Default::default() };
+            (p.drive[0], p.level[0]) = (drive, level);
+            crate::instruments::render_drum_hit(p, crate::model::drum_note::KICK, SR).0
+        };
+        let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let (clean, driven, half) = (kick(0.0, 0.8), kick(0.6, 0.8), kick(0.6, 0.4));
+        let n = clean.len().min(driven.len());
+        assert!(rms(&driven[..n]) > rms(&clean[..n]) * 1.5, "{} vs {}", rms(&driven[..n]), rms(&clean[..n]));
+        assert!(peak(&driven) <= peak(&clean) * 1.01);
+        let m = driven.len().min(half.len());
+        assert!(driven[..m].iter().zip(&half[..m]).all(|(a, b)| (a * 0.5 - b).abs() < 1e-5));
+    }
 
     fn render(model: DrumModel, voice: usize, base: f32, seconds: f32) -> Vec<f32> {
         let p = DrumParams::default();

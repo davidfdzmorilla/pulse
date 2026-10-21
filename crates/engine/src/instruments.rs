@@ -648,7 +648,7 @@ impl DrumMachine {
         let any_metal = self.hits[4].active || self.hits[5].active || self.hits[7].active;
 
         for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
-            let mut s = 0.0;
+            let mut per = [0f32; crate::model::DRUM_SOUNDS];
             let noise = self.noise();
 
             // Shared metallic oscillators for the hats and the cowbell.
@@ -667,7 +667,7 @@ impl DrumMachine {
                 k.phase = (k.phase + freq * dt) % 1.0;
                 let click = if k.t < 0.003 { noise * 0.4 } else { 0.0 };
                 let body = ((k.phase * TAU).sin() * 1.4).tanh();
-                s += (body + click) * k.env * k.velocity * p.level[0];
+                per[0] += (body + click) * k.env * k.velocity * p.level[0];
                 k.env *= decays[0];
                 k.t += dt;
                 k.active = k.env > 1e-4;
@@ -678,7 +678,7 @@ impl DrumMachine {
                 r.phase = (r.phase + 1700.0 * tune(1) * dt) % 1.0;
                 r.phase2 = (r.phase2 + 470.0 * tune(1) * dt) % 1.0;
                 let tone = (r.phase * TAU).sin() * 0.6 + (r.phase2 * TAU).sin() * 0.4;
-                s += (tone + r.highpass(noise, 0.7) * 0.3) * r.env * r.velocity * p.level[1];
+                per[1] += (tone + r.highpass(noise, 0.7) * 0.3) * r.env * r.velocity * p.level[1];
                 r.env *= decays[1];
                 r.active = r.env > 1e-4;
             }
@@ -689,7 +689,7 @@ impl DrumMachine {
                 sn.phase2 = (sn.phase2 + 330.0 * tune(2) * dt) % 1.0;
                 let tone = ((sn.phase * TAU).sin() + (sn.phase2 * TAU).sin() * 0.5) * (-sn.t * 22.0).exp() * 0.45;
                 let snappy = sn.highpass(noise, 0.85) * 0.6;
-                s += (tone + snappy) * sn.env * sn.velocity * p.level[2];
+                per[2] += (tone + snappy) * sn.env * sn.velocity * p.level[2];
                 sn.env *= decays[2];
                 sn.t += dt;
                 sn.active = sn.env > 1e-4;
@@ -699,7 +699,7 @@ impl DrumMachine {
             if c.active {
                 // Three quick bursts followed by a tail.
                 let burst = if c.t < 0.03 { (1.0 - ((c.t * 100.0) % 1.0)).powi(2) } else { 1.0 };
-                s += c.highpass(noise, 0.75 + 0.1 * (tune(3) - 1.0).clamp(-1.0, 1.0)) * c.env * burst * c.velocity * p.level[3] * 0.7;
+                per[3] += c.highpass(noise, 0.75 + 0.1 * (tune(3) - 1.0).clamp(-1.0, 1.0)) * c.env * burst * c.velocity * p.level[3] * 0.7;
                 c.env *= decays[3];
                 c.t += dt;
                 c.active = c.env > 1e-4;
@@ -716,14 +716,15 @@ impl DrumMachine {
             }
             if hats != 0.0 || any_metal {
                 let (_, _, high) = self.hat_filter.tick(hats, hat_g, 1.2);
-                s += high * 0.5;
+                // Both hats, through the closed one's drive.
+                per[4] += high * 0.5;
             }
 
             let tom = &mut self.hits[6];
             if tom.active {
                 let freq = 95.0 * tom.base * tune(6) * (1.0 + 0.6 * (-tom.t * 18.0).exp());
                 tom.phase = (tom.phase + freq * dt) % 1.0;
-                s += (tom.phase * TAU).sin() * tom.env * tom.velocity * p.level[6] * 0.9;
+                per[6] += (tom.phase * TAU).sin() * tom.env * tom.velocity * p.level[6] * 0.9;
                 tom.env *= decays[6];
                 tom.t += dt;
                 tom.active = tom.env > 1e-4;
@@ -735,11 +736,12 @@ impl DrumMachine {
                 bell.phase2 = (bell.phase2 + 800.0 * tune(7) * dt) % 1.0;
                 let tone = (if bell.phase < 0.5 { 1.0 } else { -1.0 }) + (if bell.phase2 < 0.5 { 1.0 } else { -1.0 });
                 let (_, band, _) = self.bell_filter.tick(tone * 0.5, bell_g, 0.8);
-                s += band * bell.env * bell.velocity * p.level[7];
+                per[7] += band * bell.env * bell.velocity * p.level[7];
                 bell.env *= decays[7];
                 bell.active = bell.env > 1e-4;
             }
 
+            let s = crate::drumkit::driven(&per, &p);
             // -6 dB of headroom: kick and clap often land together.
             let out = s * 0.5;
             *out_l += out;

@@ -42,7 +42,7 @@ pub fn chain(source: u32) -> [Device; 4] {
         Device::new(Effect::Reverb(ReverbParams { size: 0.92, damping: 0.6, width: 0.4, mix: 1.0 })),
         Device::new(Effect::Saturator(SaturatorParams { drive_db: 18.0, output_db: -12.0, mix: 1.0, kind: KickDrive::Tube, oversample: true })),
         Device::new(Effect::AutoFilter(AutoFilterParams { mode: FilterMode::LowPass, cutoff: 180.0, resonance: 0.35, steep: true, drive_db: 3.0, ..Default::default() })),
-        Device::new(Effect::Ducker(DuckerParams { depth: 0.9, release: 0.5, rate_beats: 1.0, sidechain: Some(source) })),
+        Device::new(Effect::Ducker(DuckerParams { depth: 0.9, release: 0.5, rate_beats: 1.0, sidechain: Some(source), ..Default::default() })),
     ]
 }
 

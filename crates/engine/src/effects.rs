@@ -92,23 +92,25 @@ pub struct Compressor {
     key: Key,
 }
 
-/// The sound of a sidechain's source for this block (the louder channel), when
-/// the engine has fed it.
+/// The sound of a sidechain's source for this block (the louder channel, and
+/// the mono sum), when the engine has fed it.
 pub struct Key {
     level: Vec<f32>,
+    mono: Vec<f32>,
     fed: bool,
 }
 
 impl Key {
     /// Room for a block; call off the audio thread.
     fn new() -> Self {
-        Self { level: vec![0.0; 4096], fed: false }
+        Self { level: vec![0.0; 4096], mono: vec![0.0; 4096], fed: false }
     }
 
     fn feed(&mut self, left: &[f32], right: &[f32]) {
         let n = left.len().min(right.len()).min(self.level.len());
         for i in 0..n {
             self.level[i] = left[i].abs().max(right[i].abs());
+            self.mono[i] = 0.5 * (left[i] + right[i]);
         }
         self.fed = true;
     }
@@ -660,8 +662,65 @@ impl Bitcrusher {
 pub struct Ducker {
     params: DuckerParams,
     key: Key,
-    /// The sidechain's followed level.
-    envelope: f32,
+    hits: Hits,
+}
+
+/// Finds the hits in a sidechain: a band of it that jumps well above where
+/// it was a moment ago. A new kick shows in its pitch sweep and click even
+/// when the last one's tail is still loud, so each kick pumps once.
+#[derive(Clone, Copy)]
+struct Hits {
+    /// Butterworth filters that split the key into four bands: under 150 Hz,
+    /// 150–600, 600–3000 and over (the middle ones fall at 24 dB an octave
+    /// below, so a loud kick tail stays out of them).
+    split: [Svf; 8],
+    /// Each band's power, quick and slow.
+    fast: [f32; 4],
+    slow: [f32; 4],
+    /// The key's peak level, for the threshold.
+    peak: f32,
+    /// The pitch under 600 Hz, from its zero crossings: which side it is on
+    /// (past half its level), samples since the last crossing, and the
+    /// usual time between them. A kick starts with a sweep from high up, so the
+    /// crossings come several times quicker, even when a distorted tail is
+    /// as loud in every band as the hit.
+    side: f32,
+    since_crossing: f32,
+    half_period: f32,
+    /// Short half periods in a row (two, a whole cycle, make a hit: not one noisy crossing).
+    quick: u8,
+    armed: bool,
+    /// Seconds since the last hit (infinite before the first).
+    since: f32,
+    /// How far down it already was when the hit came, so a hit during the
+    /// release goes on from there instead of jumping up.
+    from: f32,
+    /// How strong the hit is: 0 at the threshold, 1 from 12 dB above.
+    amount: f32,
+}
+
+impl Hits {
+    const IDLE: Self = Self {
+        split: [Svf { ic1: 0.0, ic2: 0.0 }; 8],
+        fast: [0.0; 4],
+        slow: [0.0; 4],
+        peak: 0.0,
+        side: 0.0,
+        since_crossing: 0.0,
+        half_period: f32::INFINITY,
+        quick: 0,
+        armed: true,
+        since: f32::INFINITY,
+        from: 0.0,
+        amount: 0.0,
+    };
+    const SPLITS: [f32; 3] = [150.0, 600.0, 3000.0];
+    /// A hit is a band's power at least this many times what it was (+6 dB).
+    const JUMP: f32 = 4.0;
+    /// Seconds to wait before another hit can count.
+    const GAP: f32 = 0.05;
+    /// Seconds during which a hit's strength can still grow.
+    const RISE: f32 = 0.01;
 }
 
 impl Ducker {
@@ -679,24 +738,96 @@ impl Ducker {
         1.0 - p.depth * duck as f32
     }
 
+    /// How far down (0..1) the pump is `since` seconds after a hit, for a period of `period` seconds.
+    fn shape(&self, hits: &Hits, period: f32) -> f32 {
+        if !hits.since.is_finite() {
+            return 0.0;
+        }
+        let attack = (Self::ATTACK as f32 * period).min(0.005);
+        if hits.since < attack {
+            hits.from + (1.0 - hits.from) * hits.since / attack
+        } else {
+            let t = ((hits.since - attack) / (self.params.release.max(0.05) * period)).min(1.0);
+            1.0 - t * t * (3.0 - 2.0 * t)
+        }
+    }
+
     fn process(&mut self, l: &mut [f32], r: &mut [f32], ctx: &ProcessContext) {
-        // With a sidechain it ducks when that sounds: from -40 dBFS, all the way
-        // by -10; its release is `release` of the period.
+        // With a sidechain each hit of that track makes it pump: down at once
+        // and back up over `release` of the period, whatever the hit's tail does.
         let p = self.params;
         if self.key.take(l.len()) {
-            let attack = (-1.0 / (0.001 * ctx.sample_rate)).exp();
-            let seconds = (p.release.max(0.05) as f64 * p.rate_beats.max(0.0625) * 60.0 / ctx.tempo.max(1.0)) as f32;
-            let release = (-1.0 / (seconds * ctx.sample_rate)).exp();
+            let sr = ctx.sample_rate;
+            let dt = 1.0 / sr;
+            let split = Hits::SPLITS.map(|hz| SvfCoefs::new(hz, BUTTERWORTH_K, sr));
+            let fast = 1.0 - (-1.0 / (0.005 * sr)).exp();
+            let slow = 1.0 - (-1.0 / (0.04 * sr)).exp();
+            let (peak_up, peak_down) = (1.0 - (-1.0 / (0.0005 * sr)).exp(), (-1.0 / (0.03 * sr)).exp());
+            let threshold = db_to_gain(p.threshold_db);
+            // With `lows` only the two bands under 600 Hz count: a kick's body and
+            // sweep, not the hats or claps.
+            let bands = if p.lows { 2 } else { 4 };
+            let period = (p.rate_beats.max(0.0625) * 60.0 / ctx.tempo.max(1.0)) as f32;
+            let mut h = self.hits;
             for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
-                let level = self.key.level[i];
-                let coef = if level > self.envelope { attack } else { release };
-                self.envelope = level + coef * (self.envelope - level);
-                let db = 20.0 * self.envelope.max(1e-6).log10();
-                let duck = ((db + 40.0) / 30.0).clamp(0.0, 1.0);
-                let g = 1.0 - p.depth * duck;
+                let x = self.key.mono[i];
+                let f = &mut h.split;
+                let low = f[0].tick(x, &split[0]).0;
+                let below_600 = f[1].tick(x, &split[1]).0;
+                let mid = f[2].tick(below_600, &split[0]).2;
+                let mid = f[3].tick(mid, &split[0]).2;
+                let upper = f[4].tick(x, &split[2]).0;
+                let upper = f[5].tick(upper, &split[1]).2;
+                let upper = f[6].tick(upper, &split[1]).2;
+                let high = f[7].tick(x, &split[2]).2;
+                let band = [low, mid, upper, high];
+                let mut jump = false;
+                for k in 0..4 {
+                    h.fast[k] += (band[k] * band[k] - h.fast[k]) * fast;
+                    if k < bands && h.fast[k] > h.slow[k] * Hits::JUMP && h.fast[k] > threshold * threshold * 0.1 {
+                        jump = true;
+                    }
+                    h.slow[k] += (h.fast[k] - h.slow[k]) * slow;
+                }
+                let level = if p.lows { below_600.abs() } else { self.key.level[i] };
+                h.peak = if level > h.peak { h.peak + (level - h.peak) * peak_up } else { level + (h.peak - level) * peak_down };
+                // A crossing (past half the level either way, so a quieter conga
+                // riding on a kick's tail makes none): its half
+                // period much shorter than they have been is a new hit's sweep.
+                h.since_crossing += 1.0;
+                let side = if below_600 > 0.5 * h.peak { 1.0 } else if below_600 < -0.5 * h.peak { -1.0 } else { h.side };
+                if side != h.side {
+                    if h.side != 0.0 {
+                        h.quick = if h.since_crossing < 0.4 * h.half_period { h.quick.saturating_add(1) } else { 0 };
+                        // (Listening to all of it, a high band shows the hit already.)
+                        if h.quick >= 2 && p.lows {
+                            jump = true;
+                        }
+                        h.half_period = if h.half_period.is_finite() { h.half_period + (h.since_crossing - h.half_period) * 0.2 } else { h.since_crossing };
+                    }
+                    (h.side, h.since_crossing) = (side, 0.0);
+                }
+                h.since += dt;
+                let strength = ((20.0 * (h.peak.max(1e-9) / threshold).log10()) / 12.0).clamp(0.0, 1.0);
+                if h.armed && jump && h.peak > threshold {
+                    let down = h.amount * self.shape(&h, period);
+                    h.amount = strength.max(1e-3);
+                    h.from = (down / h.amount).min(1.0);
+                    h.since = 0.0;
+                    h.armed = false;
+                } else {
+                    if h.since < Hits::RISE {
+                        h.amount = h.amount.max(strength);
+                    }
+                    if !h.armed && h.since > Hits::GAP && !jump {
+                        h.armed = true;
+                    }
+                }
+                let g = 1.0 - p.depth * h.amount * self.shape(&h, period);
                 *a *= g;
                 *b *= g;
             }
+            self.hits = h;
             return;
         }
         // Synced to the transport: nothing to pump while stopped.
@@ -819,7 +950,7 @@ impl EffectProcessor {
                 until: 0,
             }),
             Effect::Bitcrusher(params) => Self::Bitcrusher(Bitcrusher { params, counter: 0.0, held: [0.0; 2] }),
-            Effect::Ducker(params) => Self::Ducker(Ducker { params, key: Key::new(), envelope: 0.0 }),
+            Effect::Ducker(params) => Self::Ducker(Ducker { params, key: Key::new(), hits: Hits::IDLE }),
             Effect::Limiter(params) => Self::Limiter(Limiter::new(params, sample_rate)),
             Effect::Utility(params) => Self::Utility(Utility { params }),
             Effect::Plugin(id) => Self::Plugin(id, None),
@@ -949,7 +1080,7 @@ impl EffectProcessor {
                 fx.position = 0;
                 fx.gain = 1.0;
             }
-            Self::Ducker(fx) => fx.envelope = 0.0,
+            Self::Ducker(fx) => fx.hits = Hits::IDLE,
             Self::Saturator(fx) => {
                 fx.over = [Oversampler::new(), Oversampler::new()];
                 fx.dry = [[0.0; Oversampler::LATENCY]; 2];
@@ -1058,6 +1189,91 @@ mod tests {
         let mut r = l.clone();
         fx.process(&mut l, &mut r, &stopped);
         assert!(l.iter().all(|&s| s == 1.0));
+    }
+
+    #[test]
+    fn a_keyed_ducker_pumps_once_on_every_kick_designer_kick() {
+        // Kicks at 150 BPM, each cutting the last one's tail as the instrument
+        // does; clean, and clipped hard (a hard techno kick: its tail as loud in
+        // every low band as its hit).
+        let sr = 48_000.0;
+        let beat = (60.0 / 150.0 * sr) as usize;
+        for (name, params) in crate::model::KickParams::presets() {
+            let mut kick = crate::kick::KickSynth::new(params, sr);
+            kick.set_tempo(150.0);
+            let (mut kl, mut kr) = (vec![0.0f32; 8 * beat], vec![0.0f32; 8 * beat]);
+            for b in 0..8 {
+                kick.note_on(36, 1.0);
+                for (l, r) in kl[b * beat..(b + 1) * beat].chunks_mut(256).zip(kr[b * beat..(b + 1) * beat].chunks_mut(256)) {
+                    kick.render(&[], l, r);
+                }
+            }
+            // (A hardstyle tail is distorted already; a long 808 or trap sub
+            // clipped is a square restarting, with no sweep to tell its hits by.)
+            let sub = name.starts_with("808") || name.starts_with("Trap");
+            for clipped in [false, true].into_iter().filter(|&c| !c || !(name.contains("Hardstyle") || sub)) {
+            if clipped {
+                for x in kl.iter_mut().chain(kr.iter_mut()) {
+                    *x = (*x * 8.0).clamp(-0.9, 0.9);
+                }
+            }
+            // A hardstyle tail is as loud under 600 Hz as its hit: it needs the whole sound.
+            let lows = !name.contains("Hardstyle");
+            let params = crate::model::DuckerParams { depth: 0.6, release: 0.25, sidechain: Some(1), lows, ..Default::default() };
+            let mut fx = EffectProcessor::new(&Effect::Ducker(params), sr);
+            let ctx = ProcessContext { tempo: 150.0, ..ctx() };
+            let mut gain = Vec::new();
+            for (bl, br) in kl.chunks(256).zip(kr.chunks(256)) {
+                fx.feed_key(bl, br);
+                let mut l = vec![1.0f32; bl.len()];
+                let mut r = l.clone();
+                fx.process(&mut l, &mut r, &ctx);
+                gain.extend(l);
+            }
+            // The lowest gain in each eighth of a beat, from the second beat on.
+            let step = beat / 8;
+            for b in 1..8 {
+                let lowest: Vec<f32> = (0..8).map(|k| gain[b * beat + k * step..][..step].iter().cloned().fold(1.0, f32::min)).collect();
+                assert!(lowest[0] < 0.45, "{name} (clipped {clipped}): ducks at once on kick {b}: {lowest:.2?}");
+                assert!(lowest[5..].iter().all(|&g| g > 0.98), "{name} (clipped {clipped}): back up before kick {}: {lowest:.2?}", b + 1);
+            }
+            }
+        }
+    }
+
+    #[test]
+    fn a_keyed_ducker_ignores_hats_with_lows_only() {
+        let sr = 48_000.0;
+        // Bright noise bursts of 30 ms (noise differenced twice: a hat's
+        // highs), one on every eighth at 150 BPM.
+        let eighth = (30.0 / 150.0 * sr) as usize;
+        let mut seed = 1u32;
+        let (mut x1, mut d1) = (0.0f32, 0.0f32);
+        let hats: Vec<f32> = (0..16 * eighth)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 9) as f32 / (1u32 << 23) as f32 * 2.0 - 1.0;
+                let d = noise - x1;
+                let bright = 0.25 * (d - d1);
+                (x1, d1) = (noise, d);
+                let t = (i % eighth) as f32 / sr;
+                bright * 0.8 * (-t / 0.03).exp()
+            })
+            .collect();
+        for (lows, pumps) in [(true, false), (false, true)] {
+            let params = crate::model::DuckerParams { depth: 0.6, release: 0.25, sidechain: Some(1), lows, ..Default::default() };
+            let mut fx = EffectProcessor::new(&Effect::Ducker(params), sr);
+            let ctx = ProcessContext { tempo: 150.0, ..ctx() };
+            let mut lowest = 1.0f32;
+            for block in hats.chunks(256) {
+                fx.feed_key(block, block);
+                let mut l = vec![1.0f32; block.len()];
+                let mut r = l.clone();
+                fx.process(&mut l, &mut r, &ctx);
+                lowest = l.iter().cloned().fold(lowest, f32::min);
+            }
+            assert_eq!(lowest < 0.8, pumps, "lows only {lows}: lowest gain {lowest}");
+        }
     }
 
     #[test]

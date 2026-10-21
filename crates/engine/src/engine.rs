@@ -464,6 +464,8 @@ pub struct SharedState {
     pub playing: AtomicBool,
     pub arrangement_recording: AtomicBool,
     position: AtomicF64,
+    /// The tempo playing (automation included), BPM.
+    tempo: AtomicF64,
     pub tracks: [TrackStatus; MAX_TRACKS],
     pub returns: [Peak; NUM_RETURNS],
     pub master: Peak,
@@ -509,6 +511,7 @@ impl SharedState {
             playing: AtomicBool::new(false),
             arrangement_recording: AtomicBool::new(false),
             position: AtomicF64::default(),
+            tempo: AtomicF64::default(),
             tracks: std::array::from_fn(|_| TrackStatus {
                 playing: AtomicI32::new(NONE),
                 queued: AtomicI32::new(NONE),
@@ -557,6 +560,11 @@ impl SharedState {
     /// Transport position in beats.
     pub fn position(&self) -> f64 {
         self.position.load()
+    }
+
+    /// The tempo playing now, with its automation (0 before the first block).
+    pub fn tempo(&self) -> f64 {
+        self.tempo.load()
     }
 }
 
@@ -2527,6 +2535,7 @@ impl Engine {
         s.arrangement_recording.store(self.arrangement_record, Ordering::Relaxed);
         s.count_in.store(self.counting.map_or(0.0, |done| (self.count_in_beats - done).max(0.0)));
         s.position.store(self.position);
+        s.tempo.store(self.tempo);
         for (track, status) in self.tracks.iter().zip(&s.tracks) {
             let queued = match track.queued {
                 Queued::Nothing => NONE,

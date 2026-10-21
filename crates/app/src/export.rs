@@ -381,9 +381,10 @@ fn sanitize(name: &str) -> String {
 /// Beats a render of part of the song starts before it (see [`render_mapped`]).
 const PREROLL_BEATS: f64 = 16.0;
 
-/// Where a render that has to start at `start` begins playing.
-fn preroll(start: f64) -> f64 {
-    (start - PREROLL_BEATS).max(0.0)
+/// Where a render that has to start at `start` begins playing: early enough
+/// for the longest note of the song to be sounding already.
+fn preroll(start: f64, song: Song) -> f64 {
+    (start - PREROLL_BEATS.max(song.held + 1.0)).max(0.0)
 }
 
 /// What a render needs to know of the song besides its commands.
@@ -393,11 +394,22 @@ pub struct Song {
     /// Seconds of silence after which the tail is over: longer than the gap
     /// between a delay's echoes (see [`Song::of`]).
     pub ring_out: f64,
+    /// The longest a note of the arrangement lasts, in beats.
+    pub held: f64,
 }
 
 impl Song {
     pub fn of(project: &crate::project::Project) -> Self {
-        Song { tempo: project.tempo, ring_out: ring_out(project) }
+        let held = project
+            .tracks
+            .iter()
+            .flat_map(|t| &t.arrangement)
+            .filter_map(|placed| match &placed.clip {
+                engine::model::Clip::Midi(m) => m.notes.iter().map(|n| n.length.min(placed.length)).reduce(f64::max),
+                _ => None,
+            })
+            .fold(0.0, f64::max);
+        Song { tempo: project.tempo, ring_out: ring_out(project), held }
     }
 }
 
@@ -455,7 +467,7 @@ pub fn render_mapped(
         Command::SetLoop { enabled: false, start: 0.0, end: 0.0 },
         Command::SetOutputLimit(false),
         Command::BackToArrangement,
-        Command::SetPosition(preroll(start)),
+        Command::SetPosition(preroll(start, song)),
         Command::Play,
     ] {
         renderer.send(command);
@@ -464,11 +476,14 @@ pub fn render_mapped(
     // From a few bars before (a region of the song): what sounds into it, held
     // notes and the effects' tails, is in it. That part is then dropped.
     let (mut left, mut right) = (Vec::new(), Vec::new());
+    // Steps sized at the tempo playing (automation included), so they land
+    // on `start` and `end`, not before or past them.
+    let playing = |renderer: &OfflineRenderer| Some(renderer.state.tempo()).filter(|&t| t > 0.0).unwrap_or(tempo);
     while renderer.state.position() < start - 1e-9 {
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        let frames = ((start - renderer.state.position()) * 60.0 / tempo * sample_rate as f64).ceil() as usize;
+        let frames = ((start - renderer.state.position()) * 60.0 / playing(&renderer) * sample_rate as f64).ceil() as usize;
         renderer.render(frames.clamp(1, chunk), &mut left, &mut right);
     }
 
@@ -488,7 +503,7 @@ pub fn render_mapped(
         if at >= end - 1e-9 || left.len() >= most {
             break;
         }
-        let left_frames = ((end - at) * 60.0 / tempo * sample_rate as f64).ceil() as usize;
+        let left_frames = ((end - at) * 60.0 / playing(&renderer) * sample_rate as f64).ceil() as usize;
         renderer.render(chunk.min(left_frames.max(1)), &mut left, &mut right);
         progress(((renderer.state.position() - start) / (end - start)).clamp(0.0, 1.0) as f32);
     }
@@ -1289,7 +1304,7 @@ mod tests {
         let (mut renders, range, tempo) = render_demo(&settings);
         let render = renders.remove(0);
         let cancel = AtomicBool::new(false);
-        let (left, right) = super::render(render.commands, range, Song { tempo, ring_out: 0.5 }, 48_000.0, &cancel, &|_| {}).unwrap();
+        let (left, right) = super::render(render.commands, range, Song { tempo, ring_out: 0.5, held: 0.0 }, 48_000.0, &cancel, &|_| {}).unwrap();
 
         let song_frames = (range.1 - range.0) * 60.0 / tempo * 48_000.0;
         assert!(left.len() as f64 >= song_frames, "the whole song is rendered");
@@ -1333,7 +1348,7 @@ mod tests {
         // The bass only plays from bar 5: its stem is silent over the first four bars.
         let bass = renders.into_iter().nth(1).unwrap();
         let cancel = AtomicBool::new(false);
-        let (left, _) = super::render(bass.commands, (0.0, 16.0), Song { tempo, ring_out: 0.5 }, 48_000.0, &cancel, &|_| {}).unwrap();
+        let (left, _) = super::render(bass.commands, (0.0, 16.0), Song { tempo, ring_out: 0.5, held: 0.0 }, 48_000.0, &cancel, &|_| {}).unwrap();
         let first_bars = (16.0 * 60.0 / tempo * 48_000.0) as usize;
         assert!(left[..first_bars].iter().all(|s| s.abs() < 1e-3), "only the bass should be in its stem");
     }
@@ -1426,6 +1441,48 @@ mod tests {
 
     fn marked(project: &mut Project, marks: &[(f64, &str)]) {
         project.markers = marks.iter().map(|&(beat, name)| crate::project::SongMarker { beat, name: name.into() }).collect();
+    }
+
+    /// A pad note held from the song's start past a marker far later: the
+    /// section from that marker starts with it sounding, as the song does.
+    #[test]
+    fn a_section_starts_with_notes_held_from_long_before() {
+        use engine::model::{ArrangementClip, Clip, MidiClip, Note};
+        let mut p = Project::empty();
+        let mut pad = crate::project::Track::new("Pad", [0; 3], InstrumentKind::SuperSaw(Default::default()));
+        let notes = vec![Note { start: 0.0, length: 48.0, pitch: 57, velocity: 0.8, chance: 1.0 }];
+        pad.arrangement = vec![ArrangementClip { start: 0.0, length: 48.0, clip: Clip::Midi(MidiClip { notes, ..MidiClip::new("pad", 48.0, [0; 3]) }) }];
+        p.tracks = vec![pad];
+        marked(&mut p, &[(0.0, "A"), (32.0, "B")]);
+        let render_range = |range| {
+            let commands = sync::project_commands(&p, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+            render(commands, range, Song::of(&p), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap()
+        };
+        let whole = render_range((0.0, 48.0));
+        let section = render_range(sections(&p)[1].1);
+        let at = (32.0 * 60.0 / p.tempo * 48_000.0) as usize;
+        let loudest = |x: &[f32]| x[..48_000].iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(loudest(&section.0) > 0.5 * loudest(&whole.0[at..]), "{} vs {}", loudest(&section.0), loudest(&whole.0[at..]));
+    }
+
+    /// With the tempo automated away from the project's, each section's file
+    /// starts on its marker and ends on the next.
+    #[test]
+    fn sections_land_on_their_markers_with_tempo_automation() {
+        let mut p = Project::demo();
+        p.tempo = 120.0;
+        p.master.automation = vec![engine::model::AutomationLane { param: engine::model::Param::Tempo, points: [(0.0, 173.0), (64.0, 173.0)].iter().map(|&(beat, value)| engine::model::AutomationPoint { beat, value, curve: 0.0 }).collect() }];
+        marked(&mut p, &[(0.0, "A"), (8.0, "B"), (12.0, "C")]);
+        assert_eq!(sections(&p).len(), 3);
+        for (name, range) in sections(&p) {
+            let commands = sync::project_commands(&p, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+            let mut map = Vec::new();
+            render_mapped(commands, range, Song::of(&p), 48_000.0, &AtomicBool::new(false), &|_| {}, &mut map).unwrap();
+            let (first, last) = (map.first().unwrap().0, map.last().unwrap().0);
+            // Within a sample at 173 BPM.
+            let sample = 173.0 / 60.0 / 48_000.0;
+            assert!((first - range.0).abs() <= sample && (last - range.1).abs() <= sample, "{name}: {first}..{last} for {range:?}");
+        }
     }
 
     /// The song's parts, from marker to marker, the last to the end; what is

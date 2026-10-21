@@ -5,7 +5,8 @@
 //! rendering, so the true peak can be reported and the mix normalized.
 
 use crate::app::PulseApp;
-use crate::project::Project;
+use crate::project::{Project, Track};
+use engine::model::InstrumentKind;
 use crate::sync::{self, SampleCache};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
@@ -69,6 +70,8 @@ pub struct Render {
     pub commands: Vec<Command>,
     /// The track a stem is of (none for the mix).
     pub track: Option<usize>,
+    /// It plays plugins (see [`threads`]).
+    pub plugins: bool,
 }
 
 #[derive(Debug, Default)]
@@ -122,7 +125,7 @@ pub fn plan(
     // Exports always play the automation as written, ignoring knobs moved by hand.
     let commands = |samples: &mut SampleCache| sync::project_commands(project, samples, sample_rate, &HashSet::new());
     if !settings.stems {
-        return vec![Render { path: destination.to_path_buf(), commands: commands(samples), track: None }];
+        return vec![Render { path: destination.to_path_buf(), commands: commands(samples), track: None, plugins: uses_plugins(project) }];
     }
     let base = destination.file_stem().map_or("Pulse".into(), |s| s.to_string_lossy().into_owned());
     let folder = destination.parent().unwrap_or(Path::new("."));
@@ -144,16 +147,71 @@ pub fn plan(
         .enumerate()
         .filter(|&(t, track)| !track.is_group() && heard(t))
         .map(|(t, track)| {
-            let mut list = commands(samples);
+            // Only what can be heard in it: the rest is rendered as empty tracks.
+            let only = only(project, t);
+            let mut list = sync::project_commands(&only, samples, sample_rate, &HashSet::new());
             // Soloing one track keeps its sends, so its reverb and delay are part of the stem.
             list.extend((0..MAX_TRACKS).map(|other| Command::SetSolo { track: other, solo: other == t }));
             if !settings.stems_master {
                 list.push(Command::ReplaceChain { target: engine::Target::Master, chain: Box::default() });
             }
             let name = format!("{base} - {} {}.wav", t + 1, sanitize(&track.name));
-            Render { path: folder.join(name), commands: list, track: Some(t) }
+            Render { path: folder.join(name), commands: list, track: Some(t), plugins: uses_plugins(&only) }
         })
         .collect()
+}
+
+/// The project as track `t`'s stem hears it: the tracks that can't sound in it
+/// are left empty, so rendering it costs little more than the track itself.
+/// What stays: the track, the groups it is in, and the tracks whose sound
+/// their effects, the returns' or the master's listen to (sidechains), and
+/// theirs in turn. Nothing else reaches a soloed track's stem: the others are
+/// silent, their sends too, and a track's sound doesn't depend on another's
+/// (there is no latency compensation between them).
+pub fn only(project: &Project, t: usize) -> Project {
+    use engine::model::Effect;
+    let tracks = &project.tracks;
+    let listens = |devices: &[engine::model::Device]| -> Vec<usize> {
+        devices
+            .iter()
+            .filter_map(|d| match &d.effect {
+                Effect::Compressor(p) => p.sidechain,
+                Effect::Ducker(p) => p.sidechain,
+                _ => None,
+            })
+            .filter_map(|id| tracks.iter().position(|o| o.id == id && id != 0))
+            .collect()
+    };
+    let mut keep = vec![false; tracks.len()];
+    let mut queue = vec![t];
+    let mut at = crate::groups::parent(tracks, t);
+    while let Some(group) = at {
+        queue.push(group);
+        at = crate::groups::parent(tracks, group);
+    }
+    queue.extend(project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]).flat_map(|d| listens(d)));
+    while let Some(i) = queue.pop() {
+        if i < keep.len() && !keep[i] {
+            keep[i] = true;
+            // What a frozen track's effects listened to is in its audio already,
+            // but keeping it costs nothing it wouldn't otherwise.
+            queue.extend(listens(&tracks[i].devices));
+        }
+    }
+    let mut only = project.clone();
+    for (track, _) in only.tracks.iter_mut().zip(&keep).filter(|(_, k)| !**k) {
+        let mut empty = Track::new(track.name.clone(), track.color, InstrumentKind::Synth(Default::default()));
+        (empty.kind, empty.depth, empty.id) = (track.kind, track.depth, track.id);
+        *track = empty;
+    }
+    only
+}
+
+/// Whether anything in the project is a plugin.
+fn uses_plugins(project: &Project) -> bool {
+    let effects = |devices: &[engine::model::Device]| devices.iter().any(|d| matches!(d.effect, engine::model::Effect::Plugin(_)));
+    project.tracks.iter().any(|t| matches!(t.instrument, InstrumentKind::Plugin(_)) || effects(&t.devices))
+        || project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]).any(|d| effects(d))
 }
 
 fn sanitize(name: &str) -> String {
@@ -392,6 +450,83 @@ impl Job {
     }
 }
 
+/// Renders at once on as many threads as the computer has cores: each render
+/// has its own engine. Not with plugins, which aren't all safe to run on
+/// several threads at the same time.
+fn threads(renders: &[Render]) -> usize {
+    if renders.iter().any(|r| r.plugins) {
+        return 1;
+    }
+    std::thread::available_parallelism().map_or(1, |n| n.get()).min(renders.len()).max(1)
+}
+
+/// Renders each of `renders` (on [`threads`] threads) and hands it to `each`
+/// as it finishes, with what it was. The results in the order of `renders`, or
+/// the first error: a cancellation, or one `each` returned (which stops the rest).
+pub fn render_each<T: Send>(
+    renders: Vec<Render>,
+    range: (f64, f64),
+    song: Song,
+    sample_rate: f32,
+    progress: &AtomicU32,
+    cancel: &AtomicBool,
+    each: impl Fn(&Render, Vec<f32>, Vec<f32>) -> Result<T, String> + Sync,
+) -> Result<Vec<T>, String> {
+    const CANCELLED: &str = "Cancelado";
+    let count = renders.len().max(1);
+    let threads = threads(&renders);
+    // How far each render has got, 0..1, to add up into the progress.
+    let done: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
+    let next = std::sync::atomic::AtomicUsize::new(0);
+    let queue: Vec<std::sync::Mutex<Option<Render>>> = renders.into_iter().map(|r| std::sync::Mutex::new(Some(r))).collect();
+    let results: Vec<std::sync::Mutex<Option<Result<T, String>>>> = (0..queue.len()).map(|_| std::sync::Mutex::new(None)).collect();
+    let work = || loop {
+        let index = next.fetch_add(1, Ordering::Relaxed);
+        let Some(mut render) = queue.get(index).and_then(|r| r.lock().ok()?.take()) else { return };
+        let step = |p: f32| {
+            done[index].store(p.to_bits(), Ordering::Relaxed);
+            let total: f32 = done.iter().map(|d| f32::from_bits(d.load(Ordering::Relaxed))).sum();
+            progress.store((total / count as f32).to_bits(), Ordering::Relaxed);
+        };
+        let commands = std::mem::take(&mut render.commands);
+        let result = match self::render(commands, range, song, sample_rate, cancel, &step) {
+            None => Err(CANCELLED.to_string()),
+            Some((left, right)) => each(&render, left, right),
+        };
+        let failed = result.is_err();
+        if let Ok(mut slot) = results[index].lock() {
+            *slot = Some(result);
+        }
+        if failed {
+            cancel.store(true, Ordering::Relaxed);
+            return;
+        }
+    };
+    std::thread::scope(|scope| {
+        for _ in 1..threads {
+            scope.spawn(work);
+        }
+        work();
+    });
+    let mut out = Vec::new();
+    let mut error: Option<String> = None;
+    for result in results.into_iter().map(|r| r.into_inner().ok().flatten()) {
+        match result {
+            Some(Ok(value)) => out.push(value),
+            // What went wrong, rather than the cancellation it caused.
+            Some(Err(e)) if e != CANCELLED => error = error.filter(|e| e != CANCELLED).or(Some(e)),
+            _ => error = error.or(Some(CANCELLED.to_string())),
+        }
+    }
+    match error {
+        Some(e) => Err(e),
+        None => {
+            progress.store(1f32.to_bits(), Ordering::Relaxed);
+            Ok(out)
+        }
+    }
+}
+
 fn run(
     renders: Vec<Render>,
     range: (f64, f64),
@@ -400,25 +535,25 @@ fn run(
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Report, String> {
-    let count = renders.len().max(1);
-    let mut report = Report::default();
-    let mut peak_overall = 0f32;
-    let mut lengths = Vec::new();
-    for (index, Render { path, commands, .. }) in renders.into_iter().enumerate() {
-        let step = |p: f32| progress.store(((index as f32 + p) / count as f32).to_bits(), Ordering::Relaxed);
-        let Some((left, right)) = render(commands, range, song, settings.sample_rate as f32, cancel, &step) else {
-            return Err("Exportación cancelada".into());
-        };
+    let written = render_each(renders, range, song, settings.sample_rate as f32, progress, cancel, |render, left, right| {
         let peak = peak(&left, &right);
-        peak_overall = peak_overall.max(peak);
         // Stems keep their relative levels, so only the full mix is normalized.
         let gain = match settings.normalize {
             Some(target) if !settings.stems && peak > 0.0 => 10f32.powf(target / 20.0) / peak,
             _ => 1.0,
         };
-        report.clipped += write(&path, &left, &right, settings.sample_rate, settings.bits, gain)?;
-        report.seconds = report.seconds.max(left.len() as f64 / settings.sample_rate as f64);
-        lengths.push(left.len());
+        let clipped = write(&render.path, &left, &right, settings.sample_rate, settings.bits, gain)?;
+        Ok((render.path.clone(), left.len(), peak, clipped))
+    })
+    .map_err(|e| if e == "Cancelado" { "Exportación cancelada".to_string() } else { e })?;
+    let mut report = Report::default();
+    let mut peak_overall = 0f32;
+    let mut lengths = Vec::new();
+    for (path, frames, peak, clipped) in written {
+        peak_overall = peak_overall.max(peak);
+        report.clipped += clipped;
+        report.seconds = report.seconds.max(frames as f64 / settings.sample_rate as f64);
+        lengths.push(frames);
         report.files.push(path);
     }
     // Stems as long as the longest (each ends with its own tail), so they line up
@@ -719,6 +854,93 @@ mod tests {
         assert!(left[..first_bars].iter().all(|s| s.abs() < 1e-3), "only the bass should be in its stem");
     }
 
+    /// The demo with a group around keys and lead (compressed), a ducker on the
+    /// bass listening to the drums, and a compressor on the master listening to
+    /// the bass: everything that makes one track's stem depend on another.
+    fn tangled_demo() -> Project {
+        use engine::model::{CompressorParams, Device, DuckerParams, Effect};
+        let mut project = Project::demo();
+        let mut group = crate::project::Track::new_group("Grupo", [0, 0, 0]);
+        group.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -24.0, ratio: 6.0, ..Default::default() })));
+        project.tracks.insert(2, group);
+        project.tracks[3].depth = 1;
+        project.tracks[4].depth = 1;
+        project.assign_ids();
+        let drums = project.tracks[0].id;
+        project.tracks[1].devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.9, sidechain: Some(drums), ..Default::default() })));
+        let bass = project.tracks[1].id;
+        project.master.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -30.0, ratio: 4.0, sidechain: Some(bass), ..Default::default() })));
+        project
+    }
+
+    /// What each stem keeps of the project: itself, its groups and what is
+    /// listened to; the rest is left empty.
+    #[test]
+    fn a_stem_keeps_only_what_it_can_hear() {
+        let project = tangled_demo();
+        let kept = |t: usize| -> Vec<usize> {
+            let only = only(&project, t);
+            (0..only.tracks.len()).filter(|&i| only.tracks[i] == project.tracks[i]).collect()
+        };
+        // The master listens to the bass, the bass to the drums: in every stem.
+        assert_eq!(kept(0), [0, 1]);
+        assert_eq!(kept(1), [0, 1]);
+        assert_eq!(kept(3), [0, 1, 2, 3], "chords: its group too");
+        assert_eq!(kept(4), [0, 1, 2, 4], "lead: not the chords beside it");
+        // The emptied ones stay where they were, with their ids and groups.
+        let only = only(&project, 0);
+        assert!(only.tracks[2].is_group() && only.tracks[2].devices.is_empty());
+        assert_eq!((only.tracks[3].depth, only.tracks[3].id), (1, project.tracks[3].id));
+        assert!(only.tracks[3].arrangement.is_empty() && only.tracks[3].clips.iter().all(|c| c.is_none()));
+    }
+
+    /// Rendered with only what it hears, each stem is the same, sample for
+    /// sample, as rendered with the whole project.
+    #[test]
+    fn stems_sound_the_same_with_only_what_they_hear() {
+        let project = tangled_demo();
+        let range = (8.0, 24.0);
+        let song = Song::of(&project);
+        let mut samples = SampleCache::default();
+        let settings = Settings { stems: true, ..Default::default() };
+        let renders = plan(&project, &mut samples, &settings, Path::new("/tmp/pulse-iguales.wav"));
+        assert_eq!(renders.iter().map(|r| r.track.unwrap()).collect::<Vec<_>>(), [0, 1, 3, 4]);
+        for render in renders {
+            let t = render.track.unwrap();
+            let mut whole = sync::project_commands(&project, &mut samples, 48_000.0, &HashSet::new());
+            whole.extend((0..MAX_TRACKS).map(|other| Command::SetSolo { track: other, solo: other == t }));
+            let cancel = AtomicBool::new(false);
+            let (l1, r1) = super::render(whole, range, song, 48_000.0, &cancel, &|_| {}).unwrap();
+            let (l2, r2) = super::render(render.commands, range, song, 48_000.0, &cancel, &|_| {}).unwrap();
+            assert!(peak(&l1, &r1) > 0.01, "track {t} sounds");
+            assert_eq!(l1.len(), l2.len(), "track {t}");
+            let difference = l1.iter().zip(&l2).chain(r1.iter().zip(&r2)).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+            assert!(difference == 0.0, "track {t}: differs by {difference}");
+        }
+    }
+
+    /// Stems render on several threads and come out in order, all of them.
+    #[test]
+    fn stems_render_side_by_side() {
+        let dir = std::env::temp_dir().join(format!("pulse-stems-hilos-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let project = tangled_demo();
+        let settings = Settings { stems: true, range: Range::Loop, ..Default::default() };
+        let range = beat_range(&project, settings.range).unwrap();
+        let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("demo.wav"));
+        assert!(threads(&renders) > 1 || std::thread::available_parallelism().map_or(1, |n| n.get()) == 1);
+        let progress = AtomicU32::new(0);
+        let report = run(renders, range, Song::of(&project), settings, &progress, &AtomicBool::new(false)).unwrap();
+        let names: Vec<String> = report.files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["demo - 1 Drums.wav", "demo - 2 Bass.wav", "demo - 4 Chords.wav", "demo - 5 Lead.wav"]);
+        assert_eq!(f32::from_bits(progress.load(Ordering::Relaxed)), 1.0);
+        // Cancelled, it says so and stops all of them.
+        let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("otra.wav"));
+        let error = run(renders, range, Song::of(&project), settings, &AtomicU32::new(0), &AtomicBool::new(true)).unwrap_err();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(error, "Exportación cancelada");
+    }
+
     #[test]
     fn written_files_have_the_requested_format_and_normalization() {
         let dir = std::env::temp_dir().join(format!("pulse-export-{}", std::process::id()));
@@ -928,3 +1150,4 @@ mod playback {
         }
     }
 }
+

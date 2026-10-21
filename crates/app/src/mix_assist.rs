@@ -323,6 +323,12 @@ impl Default for Assistant {
     }
 }
 
+/// One render of the analysis, measured.
+enum Measured {
+    Mix(Measures),
+    Track(TrackMeasures),
+}
+
 impl PulseApp {
     /// Renders and measures the mix and each track (in the background).
     pub fn analyze_mix(&mut self) {
@@ -347,23 +353,14 @@ impl PulseApp {
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
+            // The mix and every track at once (see `export::render_each`).
             let renders: Vec<_> = mix.into_iter().chain(tracks).collect();
-            let count = renders.len();
-            let mut report: Option<Report> = None;
-            let mut outcome = Ok(());
-            for (k, render) in renders.into_iter().enumerate() {
-                let track = render.track;
-                let step = |f: f32| p.store(((k as f32 + f) / count as f32).to_bits(), Ordering::Relaxed);
-                let Some((left, right)) = export::render(render.commands, range, song, RATE, &c, &step) else {
-                    outcome = Err("Análisis cancelado".to_string());
-                    break;
-                };
-                match report.as_mut() {
-                    None => report = Some(Report { mix: Measures::of(&left, &right, RATE), tracks: Vec::new() }),
-                    Some(report) => {
-                        let index = track.unwrap_or(k - 1);
+            let measured = export::render_each(renders, range, song, RATE, &p, &c, |render, left, right| {
+                Ok(match render.track {
+                    None => Measured::Mix(Measures::of(&left, &right, RATE)),
+                    Some(index) => {
                         let (name, drums, id) = names.get(index).cloned().unwrap_or_default();
-                        report.tracks.push(TrackMeasures {
+                        Measured::Track(TrackMeasures {
                             index,
                             id,
                             name,
@@ -372,12 +369,18 @@ impl PulseApp {
                             lufs: loudness::integrated(&left, &right, RATE),
                             correlation: loudness::correlation(&left, &right),
                             low_end: loudness::low_end(&left, &right, RATE),
-                        });
+                        })
                     }
-                }
-            }
+                })
+            });
+            let outcome = measured.map_err(|_| "Análisis cancelado".to_string()).and_then(|all| {
+                let mut all = all.into_iter();
+                let Some(Measured::Mix(mix)) = all.next() else { return Err("Nada que analizar".to_string()) };
+                let tracks = all.filter_map(|t| if let Measured::Track(t) = t { Some(t) } else { None }).collect();
+                Ok(Report { mix, tracks })
+            });
             if let Ok(mut slot) = r.lock() {
-                *slot = Some(outcome.and_then(|_| report.ok_or_else(|| "Nada que analizar".to_string())));
+                *slot = Some(outcome);
             }
         });
         self.mix.job = Some(Job { progress, cancel, result });

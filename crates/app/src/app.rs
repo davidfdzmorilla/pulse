@@ -2804,6 +2804,7 @@ impl eframe::App for PulseApp {
         }
         self.autosave_now_and_then(&ctx);
         self.audio.collect_garbage();
+        crate::export::drop_later();
         self.report_faults();
         if let Some(state) = self.audio.state() {
             let dt = ctx.input(|i| i.stable_dt).min(0.1);

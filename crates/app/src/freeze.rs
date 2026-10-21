@@ -178,8 +178,9 @@ fn solo_project(project: &Project, t: usize) -> Project {
 
 /// Renders session clip `slot` of the only track as a loop: two laps, the second
 /// kept (its start has the end's tail, as when it loops).
-fn render_loop(commands: Vec<Command>, slot: usize, beats: f64, tempo: f64, rate: f32) -> (Vec<f32>, Vec<f32>) {
-    let mut renderer = engine::OfflineRenderer::new(rate);
+fn render_loop(commands: Vec<Command>, slot: usize, beats: f64, tempo: f64, rate: f32, plugins: bool) -> (Vec<f32>, Vec<f32>) {
+    // Its plugins are ended on the UI thread.
+    let mut renderer = crate::export::OnUi::new(engine::OfflineRenderer::new(rate), plugins);
     for command in commands {
         renderer.send(command);
     }
@@ -236,7 +237,7 @@ impl PulseApp {
             let cancel = AtomicBool::new(false);
             let mut map = Vec::new();
             let arrangement = arrangement.and_then(|(commands, end)| crate::export::render_mapped(commands, (0.0, end), song, rate, &cancel, &|_| {}, &mut map));
-            let clips = clips.into_iter().enumerate().map(|(slot, c)| c.map(|(commands, beats)| render_loop(commands, slot, beats, tempo, rate))).collect();
+            let clips = clips.into_iter().enumerate().map(|(slot, c)| c.map(|(commands, beats)| render_loop(commands, slot, beats, tempo, rate, song.plugins))).collect();
             if let Ok(mut r) = shared.lock() {
                 *r = Some(Ok(Rendered { arrangement, clips, map }));
             }

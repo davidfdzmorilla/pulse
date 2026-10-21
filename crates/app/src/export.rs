@@ -390,7 +390,52 @@ pub fn sources(project: &Project, t: usize) -> Vec<usize> {
 }
 
 /// Whether anything in the project is a plugin.
-fn uses_plugins(project: &Project) -> bool {
+/// Things the UI thread lets go of, from other threads: a VST3 plugin must be
+/// ended on the thread that made it (some crash otherwise).
+static LATER: std::sync::Mutex<Vec<Box<dyn Send>>> = std::sync::Mutex::new(Vec::new());
+
+/// Lets go, here, of what other threads left to be let go of on this one (the
+/// UI thread: every frame).
+pub fn drop_later() {
+    let later = LATER.lock().map(|mut l| std::mem::take(&mut *l)).unwrap_or_default();
+    drop(later);
+}
+
+/// Holds something with plugins in it (a renderer) on another thread; let go
+/// of, it goes to the UI thread to be dropped there (see [`drop_later`]).
+pub struct OnUi<T: Send + 'static>(Option<T>, bool);
+
+impl<T: Send + 'static> OnUi<T> {
+    /// `plugins`: whether it holds any (if not, it is just dropped).
+    pub fn new(value: T, plugins: bool) -> Self {
+        OnUi(Some(value), plugins)
+    }
+}
+
+impl<T: Send + 'static> std::ops::Deref for OnUi<T> {
+    type Target = T;
+    fn deref(&self) -> &T {
+        self.0.as_ref().expect("held until dropped")
+    }
+}
+
+impl<T: Send + 'static> std::ops::DerefMut for OnUi<T> {
+    fn deref_mut(&mut self) -> &mut T {
+        self.0.as_mut().expect("held until dropped")
+    }
+}
+
+impl<T: Send + 'static> Drop for OnUi<T> {
+    fn drop(&mut self) {
+        if let Some(value) = self.0.take().filter(|_| self.1) {
+            if let Ok(mut later) = LATER.lock() {
+                later.push(Box::new(value));
+            }
+        }
+    }
+}
+
+pub(crate) fn uses_plugins(project: &Project) -> bool {
     let effects = |devices: &[engine::model::Device]| devices.iter().any(|d| matches!(d.effect, engine::model::Effect::Plugin(_)));
     project.tracks.iter().any(|t| matches!(t.instrument, InstrumentKind::Plugin(_)) || effects(&t.devices))
         || project.returns.iter().map(|r| &r.devices).chain([&project.master.devices]).any(|d| effects(d))
@@ -419,6 +464,8 @@ pub struct Song {
     pub ring_out: f64,
     /// The longest a note of the arrangement lasts, in beats.
     pub held: f64,
+    /// It has plugins: they are let go of on the UI thread (see [`OnUi`]).
+    pub plugins: bool,
 }
 
 impl Song {
@@ -432,7 +479,7 @@ impl Song {
                 _ => None,
             })
             .fold(0.0, f64::max);
-        Song { tempo: project.tempo, ring_out: ring_out(project), held }
+        Song { tempo: project.tempo, ring_out: ring_out(project), held, plugins: uses_plugins(project) }
     }
 }
 
@@ -481,7 +528,8 @@ pub fn render_mapped(
     map: &mut Vec<(f64, usize)>,
 ) -> Option<(Vec<f32>, Vec<f32>)> {
     let tempo = song.tempo;
-    let mut renderer = OfflineRenderer::new(sample_rate);
+    // Its plugins are ended on the UI thread, whatever this one is.
+    let mut renderer = OnUi::new(OfflineRenderer::new(sample_rate), song.plugins);
     for command in commands {
         renderer.send(command);
     }
@@ -942,6 +990,11 @@ pub fn render_each<T: Send>(
         }
         work();
     });
+    // Renders never started (cancelled): their plugins end on the UI thread.
+    for render in queue.into_iter().filter_map(|r| r.into_inner().ok().flatten()) {
+        let plugins = render.plugins;
+        drop(OnUi::new(render, plugins));
+    }
     let mut out = Vec::new();
     let mut error: Option<String> = None;
     for result in results.into_iter().map(|r| r.into_inner().ok().flatten()) {
@@ -1056,8 +1109,9 @@ pub fn render_from_command_line(output: &Path, project: Option<&Path>) -> Result
         eprintln!("{error}");
     }
     let progress = AtomicU32::new(0);
-    let report = run(renders, settings, &progress, &AtomicBool::new(false))?;
-    Ok(report.summary())
+    let report = run(renders, settings, &progress, &AtomicBool::new(false));
+    drop_later();
+    Ok(report?.summary())
 }
 
 // ----- Dialog ---------------------------------------------------------------------------
@@ -1422,7 +1476,7 @@ mod tests {
         let (mut renders, range, tempo) = render_demo(&settings);
         let render = renders.remove(0);
         let cancel = AtomicBool::new(false);
-        let (left, right) = super::render(render.commands, range, Song { tempo, ring_out: 0.5, held: 0.0 }, 48_000.0, &cancel, &|_| {}).unwrap();
+        let (left, right) = super::render(render.commands, range, Song { tempo, ring_out: 0.5, held: 0.0, plugins: false }, 48_000.0, &cancel, &|_| {}).unwrap();
 
         let song_frames = (range.1 - range.0) * 60.0 / tempo * 48_000.0;
         assert!(left.len() as f64 >= song_frames, "the whole song is rendered");
@@ -1466,7 +1520,7 @@ mod tests {
         // The bass only plays from bar 5: its stem is silent over the first four bars.
         let bass = renders.into_iter().nth(1).unwrap();
         let cancel = AtomicBool::new(false);
-        let (left, _) = super::render(bass.commands, (0.0, 16.0), Song { tempo, ring_out: 0.5, held: 0.0 }, 48_000.0, &cancel, &|_| {}).unwrap();
+        let (left, _) = super::render(bass.commands, (0.0, 16.0), Song { tempo, ring_out: 0.5, held: 0.0, plugins: false }, 48_000.0, &cancel, &|_| {}).unwrap();
         let first_bars = (16.0 * 60.0 / tempo * 48_000.0) as usize;
         assert!(left[..first_bars].iter().all(|s| s.abs() < 1e-3), "only the bass should be in its stem");
     }
@@ -1555,6 +1609,33 @@ mod tests {
         let error = run(renders, settings, &AtomicU32::new(0), &AtomicBool::new(true)).unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(error, "Exportación cancelada");
+    }
+
+    /// What holds plugins, let go of on a render's thread, is dropped on the
+    /// UI thread (VST3 plugins must end where they were made); without
+    /// plugins, right away.
+    #[test]
+    fn plugins_end_on_the_ui_thread() {
+        struct Tracker(std::sync::Arc<std::sync::Mutex<Option<std::thread::ThreadId>>>);
+        impl Drop for Tracker {
+            fn drop(&mut self) {
+                *self.0.lock().unwrap() = Some(std::thread::current().id());
+            }
+        }
+        let (with, without) = (std::sync::Arc::new(std::sync::Mutex::new(None)), std::sync::Arc::new(std::sync::Mutex::new(None)));
+        let (a, b) = (with.clone(), without.clone());
+        let worker = std::thread::spawn(move || {
+            drop(OnUi::new(Tracker(a), true));
+            drop(OnUi::new(Tracker(b), false));
+            std::thread::current().id()
+        })
+        .join()
+        .unwrap();
+        assert_eq!(*without.lock().unwrap(), Some(worker), "no plugins: dropped there");
+        while with.lock().unwrap().is_none() {
+            drop_later();
+        }
+        assert_ne!(*with.lock().unwrap(), Some(worker), "with plugins: not on the render's thread");
     }
 
     fn marked(project: &mut Project, marks: &[(f64, &str)]) {

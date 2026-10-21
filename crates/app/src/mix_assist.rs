@@ -87,7 +87,11 @@ pub struct TrackMeasures {
     /// Its id (what a sidechain names it by).
     pub id: u32,
     pub name: String,
+    /// Drums (see [`is_drums`]); `kick` if it is a kick of its own (the Kick Designer).
     pub drums: bool,
+    pub kick: bool,
+    /// The tracks (ids) its sidechains listen to.
+    pub listens: Vec<u32>,
     pub peak: f64,
     pub lufs: Option<f64>,
     pub correlation: f64,
@@ -168,6 +172,21 @@ fn low_end_clashes(tracks: &[TrackMeasures]) -> Vec<(usize, usize, f64)> {
     out
 }
 
+/// Whether the assistant takes a track for drums: a drum instrument, the Kick
+/// Designer, or an audio track named like drums («Kick», «Tops», «Perc»…).
+fn is_drums(track: &crate::project::Track) -> bool {
+    track.is_drums() || matches!(track.instrument, engine::model::InstrumentKind::Kick(_)) || (track.is_audio() && crate::loop_key::is_drums(&track.name))
+}
+
+/// The tracks (ids) a track's sidechains listen to.
+fn listens(track: &crate::project::Track) -> Vec<u32> {
+    track.devices.iter().filter_map(|d| match d.effect {
+        Effect::Compressor(p) => p.sidechain,
+        Effect::Ducker(p) => p.sidechain,
+        _ => None,
+    }).collect()
+}
+
 /// What to do about the mix for `target`.
 pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> Vec<Advice> {
     let mut out = Vec::new();
@@ -217,18 +236,48 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     // Two tracks in the low end at once.
     for (i, j, share) in low_end_clashes(&report.tracks) {
         let (a, b) = (&report.tracks[i], &report.tracks[j]);
+        // One already makes room for the other (a bass or a rumble ducking to the kick).
+        if let Some((ducks, to)) = [(a, b), (b, a)].into_iter().find(|(x, y)| x.listens.contains(&y.id)) {
+            out.push(advice(Level::Good, format!("«{}» se aparta cuando suena «{}»: sus graves no se tapan", ducks.name, to.name), None));
+            continue;
+        }
         let text = format!("«{}» y «{}» llenan los graves a la vez el {:.0} % del tiempo: se tapan y la mezcla se embarra", a.name, b.name, share * 100.0);
-        // A kick against the rest: the rest ducks. Otherwise the one with less
-        // low end gives it up.
+        // A kick against the rest: the rest ducks. Two drum tracks: a kick of
+        // its own keeps the low end. Otherwise the one with less gives it up.
+        // Drums that duck to another track themselves (a rumble to its kick)
+        // pass the ducking on to that one: the bass makes room for the kick.
+        let duck = |to: &TrackMeasures, drums: &TrackMeasures| {
+            let leader = drums.listens.iter().find_map(|id| report.tracks.iter().find(|t| t.id == *id)).unwrap_or(drums);
+            Some(Fix::Duck { track: to.index, name: to.name.clone(), source: leader.id, source_name: leader.name.clone() })
+        };
         let fix = match (a.drums, b.drums) {
-            (true, false) => Some(Fix::Duck { track: b.index, name: b.name.clone(), source: a.id, source_name: a.name.clone() }),
-            (false, true) => Some(Fix::Duck { track: a.index, name: a.name.clone(), source: b.id, source_name: b.name.clone() }),
+            (true, false) => duck(b, a),
+            (false, true) => duck(a, b),
+            (true, true) if a.kick != b.kick => {
+                let other = if a.kick { b } else { a };
+                Some(Fix::CutLows { track: other.index, name: other.name.clone() })
+            }
             _ => {
                 let mean = |t: &TrackMeasures| t.low_end.iter().sum::<f64>() / t.low_end.len().max(1) as f64;
                 let lesser = if mean(a) < mean(b) { a } else { b };
                 Some(Fix::CutLows { track: lesser.index, name: lesser.name.clone() })
             }
         };
+        // Ducking already to the one it would duck to (the bass to the kick,
+        // against the kick's rumble): fine. The same fix from another clash
+        // once is enough.
+        if let Some(Fix::Duck { track, source, source_name, name }) = &fix {
+            if report.tracks.iter().any(|t| t.index == *track && t.listens.contains(source)) {
+                let text = format!("«{name}» se aparta cuando suena «{source_name}»: sus graves no se tapan");
+                if !out.iter().any(|a| a.text == text) {
+                    out.push(advice(Level::Good, text, None));
+                }
+                continue;
+            }
+        }
+        if fix.is_some() && out.iter().any(|a| a.fix == fix) {
+            continue;
+        }
         out.push(advice(Level::Warning, text, fix));
     }
     // Stereo.
@@ -345,7 +394,12 @@ impl PulseApp {
         let mix = export::plan(&self.project, &mut self.samples, &export::Settings { stems: false, ..settings }, std::path::Path::new("mezcla.wav"));
         let tracks = export::plan(&self.project, &mut self.samples, &settings, std::path::Path::new("mezcla.wav"));
         self.samples.plugins = live;
-        let names: Vec<(String, bool, u32)> = self.project.tracks.iter().map(|t| (t.name.clone(), t.is_drums(), t.id)).collect();
+        let names: Vec<(String, bool, bool, u32, Vec<u32>)> = self
+            .project
+            .tracks
+            .iter()
+            .map(|t| (t.name.clone(), is_drums(t), matches!(t.instrument, engine::model::InstrumentKind::Kick(_)), t.id, listens(t)))
+            .collect();
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -355,12 +409,14 @@ impl PulseApp {
                 Ok(match render.track {
                     None => Measured::Mix(Measures::of(&left, &right, RATE)),
                     Some(index) => {
-                        let (name, drums, id) = names.get(index).cloned().unwrap_or_default();
+                        let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
                         Measured::Track(TrackMeasures {
                             index,
                             id,
                             name,
                             drums,
+                            kick,
+                            listens,
                             peak: loudness::sample_peak(&left, &right),
                             lufs: loudness::integrated(&left, &right, RATE),
                             correlation: loudness::correlation(&left, &right),
@@ -770,7 +826,7 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, peak, lufs: Some(-20.0), correlation: 0.9, low_end: low }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
@@ -893,5 +949,85 @@ mod tests {
         }
         assert!(texts.iter().any(|t| t.ends_with(" LUFS")));
         assert!(app.project.master.devices.iter().any(|d| matches!(d.effect, Effect::Limiter(_))));
+    }
+
+    /// Two drum tracks in the low end at once: the kick of its own keeps it, the
+    /// other drums give it up. A track already ducking to the other is fine.
+    #[test]
+    fn the_kick_keeps_the_low_end_over_other_drums() {
+        let on = vec![-10.0; 100];
+        let kick = TrackMeasures { kick: true, ..track(0, "Kick", true, -3.0, on.clone()) };
+        let list = advise(&report(-9.0, -1.5, vec![track(1, "Drums", true, -6.0, on.clone()), kick.clone()]), Target::Club, None);
+        assert!(list.iter().any(|a| a.fix == Some(Fix::CutLows { track: 1, name: "Drums".into() })), "{list:?}");
+        let rumble = TrackMeasures { listens: vec![kick.id], ..track(2, "Kick Rumble", true, -10.0, on.clone()) };
+        let list = advise(&report(-9.0, -1.5, vec![kick.clone(), rumble]), Target::Club, None);
+        assert!(list.iter().all(|a| a.fix.is_none()), "{list:?}");
+        assert!(list.iter().any(|a| a.text == "«Kick Rumble» se aparta cuando suena «Kick»: sus graves no se tapan"));
+        // A bass against the kick and against its rumble: it ducks to the kick, once.
+        let rumble = TrackMeasures { listens: vec![kick.id], ..track(2, "Kick Rumble", true, -10.0, on.clone()) };
+        let bass = track(3, "Bass", false, -6.0, on);
+        let list = advise(&report(-9.0, -1.5, vec![kick.clone(), rumble, bass]), Target::Club, None);
+        let ducks: Vec<&Fix> = list.iter().filter_map(|a| a.fix.as_ref()).filter(|f| matches!(f, Fix::Duck { .. })).collect();
+        assert_eq!(ducks, [&Fix::Duck { track: 3, name: "Bass".into(), source: kick.id, source_name: "Kick".into() }], "{list:?}");
+        // Once it does, against the rumble too it is fine.
+        let rumble = TrackMeasures { listens: vec![kick.id], ..track(2, "Kick Rumble", true, -10.0, vec![-10.0; 100]) };
+        let bass = TrackMeasures { listens: vec![kick.id], ..track(3, "Bass", false, -6.0, vec![-10.0; 100]) };
+        let list = advise(&report(-9.0, -1.5, vec![kick.clone(), rumble, bass]), Target::Club, None);
+        assert!(list.iter().all(|a| a.fix.is_none()), "{list:?}");
+    }
+
+    /// A hard techno kick on its own track (the Kick Designer) and a bass: the
+    /// assistant takes the kick for drums and has the bass duck to it; once it
+    /// does, the clash is gone. A rumble ducking to its kick is no clash either.
+    #[test]
+    fn a_kick_designer_track_is_drums_and_the_bass_ducks_to_it() {
+        use crate::project::{Project, Track};
+        use engine::model::{ArrangementClip, Clip, InstrumentKind, KickParams, MidiClip, Note};
+        let mut project = Project::empty();
+        project.tempo = 150.0;
+        let mut kick = Track::new("Kick", [200, 0, 0], InstrumentKind::Kick(KickParams::presets().into_iter().find(|(n, _)| *n == "Hard · Kick").unwrap().1));
+        let mut beat = MidiClip::new("4/4", 32.0, [0; 3]);
+        beat.notes = (0..32).map(|b| Note { start: b as f64, length: 0.25, pitch: 36, velocity: 1.0, chance: 1.0 }).collect();
+        kick.arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(beat) });
+        let mut bass = Track::new("Bass", [0, 200, 0], InstrumentKind::Acid(engine::model::AcidParams { cutoff: 300.0, ..Default::default() }));
+        let mut line = MidiClip::new("Bass", 32.0, [0; 3]);
+        line.notes = (0..128).filter(|s| s % 4 != 0).map(|s| Note { start: s as f64 * 0.25, length: 0.2, pitch: 29, velocity: 0.9, chance: 1.0 }).collect();
+        bass.arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(line) });
+        project.tracks = vec![kick, bass];
+        let mut app = PulseApp::headless(project);
+        app.make_rumble(0);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 120);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let report = app.mix.report.clone().unwrap();
+        let kick = report.tracks.iter().find(|t| t.name == "Kick").unwrap();
+        assert!(kick.drums && kick.kick);
+        let advice = advise(&report, Target::Club, None);
+        for a in &advice {
+            println!("{} → {:?}", a.text, a.fix);
+        }
+        let duck = advice.iter().find_map(|a| match &a.fix {
+            Some(Fix::Duck { name, source_name, .. }) if name == "Bass" && source_name == "Kick" => a.fix.clone(),
+            _ => None,
+        });
+        assert!(duck.is_some(), "the bass ducks to the kick");
+        assert!(!advice.iter().any(|a| matches!(&a.fix, Some(Fix::CutLows { name, .. }) if name.contains("Kick"))), "no kick (or its rumble) loses its lows");
+        assert!(!advice.iter().any(|a| a.fix.is_some() && a.text.contains("Rumble")), "the rumble ducks to its kick already");
+        // Applied, the bass listens to the kick: it says so instead of the clash.
+        app.apply_fix(&duck.unwrap());
+        assert!(listens(&app.project.tracks[2]).contains(&app.project.tracks[0].id));
+        app.mix.report = None;
+        app.analyze_mix();
+        wait(&mut app);
+        let advice = advise(&app.mix.report.clone().unwrap(), Target::Club, None);
+        assert!(!advice.iter().any(|a| matches!(a.fix, Some(Fix::Duck { .. }))), "{advice:?}");
     }
 }

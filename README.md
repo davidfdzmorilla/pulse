@@ -78,7 +78,7 @@ la publicación `modelo-htdemucs-1` del repositorio y se guarda en
 `Models` dentro de la carpeta de datos (`~/Library/Application Support/Pulse` en
 macOS, `%LOCALAPPDATA%\Pulse` en Windows).
 
-Para regenerarlo (en un entorno de Python con `demucs onnx onnxruntime soundfile`):
+Para regenerarlo (en un entorno de Python con `demucs onnx onnxruntime soundfile`; `demo.wav` es la canción demo de Pulse, `target/release/pulse --render demo.wav`):
 
     python scripts/stems/export_htdemucs.py salida/
     python scripts/stems/make_reference.py salida/ demo.wav

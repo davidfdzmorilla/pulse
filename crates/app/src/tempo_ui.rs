@@ -314,7 +314,7 @@ mod tests {
     /// The real thing: Pulse's demo song (120 BPM) imported into a 100 BPM project.
     #[test]
     fn an_imported_song_follows_the_project() {
-        let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let song = crate::test_audio::demo_song();
         let mut app = PulseApp::headless(Project::demo());
         app.project.tempo = 100.0;
         app.view = crate::app::View::Arrangement;
@@ -350,7 +350,7 @@ mod tests {
     /// from the clip's start, has the song's beats at 100 BPM on the project's bars.
     #[test]
     fn a_warped_song_plays_in_time_with_the_project() {
-        let song = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../demo.wav");
+        let song = crate::test_audio::demo_song();
         let mut app = PulseApp::headless(Project::demo());
         app.project.tempo = 100.0;
         // Only the song: the demo's own tracks silent.

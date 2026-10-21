@@ -51,7 +51,7 @@ En la barra de estado, a la derecha, aparece «↑ Pulse X disponible» cuando h
 
 ## Session
 
-Una columna por pista, con 8 slots (escenas). A la derecha, el botón **+** (nueva pista MIDI), los retornos **A Reverb** y **B Delay** y la columna **Master** con las escenas.
+Una columna por pista, con hasta 16 slots (escenas): se ven las que usas y una vacía más, 8 como mínimo; al poner un clip en la última, aparece otra. A la derecha, el botón **+** (nueva pista MIDI), los retornos **A Reverb** y **B Delay** y la columna **Master** con las escenas.
 
 ### Clips
 
@@ -701,7 +701,7 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
 
 ### Arrastrar desde Finder
 
-- Un audio suelto en un slot o una pista de audio va ahí; en un pad o el Sampler, se carga; en un hueco vacío, crea una pista de audio. Varios archivos van seguidos; en Session, si no caben en los 8 slots, siguen en una pista nueva. Una **carpeta** trae los audios que tiene (también en sus carpetas), por nombre. La barra de estado dice cuántos se añadieron y cuáles no se pudieron leer.
+- Un audio suelto en un slot o una pista de audio va ahí; en un pad o el Sampler, se carga; en un hueco vacío, crea una pista de audio. Varios archivos van seguidos; en Session, si no caben en los 16 slots, siguen en una pista nueva. Una **carpeta** trae los audios que tiene (también en sus carpetas), por nombre. La barra de estado dice cuántos se añadieron y cuáles no se pudieron leer.
 - Un `.pulse` se abre y un `.als` se importa (pregunta antes si hay cambios sin guardar).
 - También funciona abrir con doble clic en Finder o soltar en el icono del Dock.
 

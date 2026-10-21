@@ -104,6 +104,7 @@ pub struct Track {
     pub monitor: Monitor,
     pub sends: [f32; NUM_RETURNS],
     pub devices: Vec<Device>,
+    #[serde(deserialize_with = "scenes")]
     pub clips: [Option<Clip>; NUM_SCENES],
     pub arrangement: Vec<ArrangementClip>,
     #[serde(default)]
@@ -257,15 +258,28 @@ pub struct MasterTrack {
 /// instead. Fields added with a default that an older Pulse can miss without
 /// sounding different don't need it; for those, `saved_by` makes it ask before
 /// saving over the file.
-pub const FORMAT: u32 = 1;
+/// 2: 16 scenes (an older Pulse, which reads 8, says to update instead of failing).
+pub const FORMAT: u32 = 2;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
 
 /// Converts a project file from `format` to the current one.
+/// A track's clip slots as saved: as many as there were scenes then (8 before
+/// there were 16), the rest empty; more than there are now are left out.
+fn scenes<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[Option<Clip>; NUM_SCENES], D::Error> {
+    let saved: Vec<Option<Clip>> = Vec::deserialize(deserializer)?;
+    let mut clips: [Option<Clip>; NUM_SCENES] = Default::default();
+    for (slot, clip) in clips.iter_mut().zip(saved) {
+        *slot = clip;
+    }
+    Ok(clips)
+}
+
 fn migrate(_value: &mut serde_json::Value, format: u64) {
     // Format 0 (no number) and 1 are the same: the number was added in 1.
-    if format < 1 {}
+    // 1 had 8 scenes: read as 16 (see `scenes`).
+    if format < 2 {}
 }
 
 /// Which Pulse saved a project's file. Not its content: projects that differ
@@ -444,6 +458,13 @@ impl Project {
     }
 
     /// Reads a saved project, bringing files from older versions of Pulse up to date.
+    /// A name for every scene: the ones saved, and their numbers for the rest.
+    pub fn name_scenes(&mut self) {
+        let named = self.scene_names.len();
+        self.scene_names.truncate(NUM_SCENES);
+        self.scene_names.extend((named..NUM_SCENES).map(|i| (i + 1).to_string()));
+    }
+
     pub fn from_json(text: &str) -> Result<Self, String> {
         let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("Archivo no válido: {e}"))?;
         // Files from before the format number are format 0.
@@ -466,6 +487,7 @@ impl Project {
             project.tempo = 120.0;
         }
         project.saved_by = SavedBy(saved_by);
+        project.name_scenes();
         Ok(project)
     }
 

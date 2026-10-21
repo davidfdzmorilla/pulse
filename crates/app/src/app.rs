@@ -2914,7 +2914,7 @@ mod window_tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(dir.join("Más")).unwrap();
         let tone: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.3).collect();
-        for i in 0..10 {
+        for i in 0..18 {
             crate::capture::write_wav(&dir.join(format!("Loop {i:02}.wav")), &tone, &tone, 48_000.0).unwrap();
         }
         crate::capture::write_wav(&dir.join("Más/Último.wav"), &tone, &tone, 48_000.0).unwrap();
@@ -2922,8 +2922,8 @@ mod window_tests {
         std::fs::write(dir.join("Roto.wav"), "no es audio").unwrap();
         let mut others = Vec::new();
         let audio = audio_in(vec![dir.clone()], &mut others);
-        assert_eq!(audio.len(), 12, "{audio:?}");
-        assert!(audio[0].ends_with("Loop 00.wav") && audio[10].ends_with("Más/Último.wav") && audio[11].ends_with("Roto.wav"), "by name, folders in place");
+        assert_eq!(audio.len(), 20, "{audio:?}");
+        assert!(audio[0].ends_with("Loop 00.wav") && audio[18].ends_with("Más/Último.wav") && audio[19].ends_with("Roto.wav"), "by name, folders in place");
         assert!(others.is_empty(), "a text file inside a folder isn't a document to open");
 
         let mut app = PulseApp::headless(Project::demo());
@@ -2932,9 +2932,9 @@ mod window_tests {
         app.add_samples(audio, Placement::Auto);
         let clips = |t: usize| app.project.tracks[t].clips.iter().flatten().count();
         assert_eq!(app.project.tracks.len(), tracks + 2, "one new track, and one for what didn't fit");
-        assert_eq!((clips(tracks), clips(tracks + 1)), (8, 3));
+        assert_eq!((clips(tracks), clips(tracks + 1)), (NUM_SCENES, 19 - NUM_SCENES));
         let status = app.status.clone().unwrap();
-        assert!(status.starts_with("11 muestra(s)") && status.contains("1 pista(s) nueva(s)") && status.contains("1 archivo(s) no se pudieron leer"), "{status}");
+        assert!(status.starts_with("19 muestra(s)") && status.contains("1 pista(s) nueva(s)") && status.contains("1 archivo(s) no se pudieron leer"), "{status}");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

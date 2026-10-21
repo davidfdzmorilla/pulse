@@ -23,7 +23,9 @@ use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub const MAX_TRACKS: usize = 64;
-pub const NUM_SCENES: usize = 8;
+/// Scenes (rows of clip slots) in the Session. Projects saved with fewer
+/// (8, before) open with the rest empty.
+pub const NUM_SCENES: usize = 16;
 pub const NUM_RETURNS: usize = 2;
 /// Devices per chain; insertions beyond this are rejected so the chain never reallocates.
 pub const MAX_CHAIN: usize = 16;

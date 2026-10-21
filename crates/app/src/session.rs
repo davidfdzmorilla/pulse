@@ -77,6 +77,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut headers = Vec::new();
     let mut slots = Vec::new();
 
+    let rows = shown_scenes(&app.project);
     egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
@@ -110,7 +111,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 ui.vertical(|ui| {
                     ui.set_width(COL_W);
                     headers.push((t, track_header(app, ui, t, &mut actions)));
-                    for slot in 0..NUM_SCENES {
+                    for slot in 0..rows {
                         if is_group {
                             group_slot(app, ui, t, slot, state.as_deref(), &mut actions);
                         } else {
@@ -147,7 +148,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     if header(ui, &name, color, app.selected_target == target, Sense::click()).clicked() {
                         actions.push(Action::SelectTarget(target));
                     }
-                    let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (NUM_SCENES as f32 + 1.0) - 1.0), Sense::hover());
+                    let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (rows as f32 + 1.0) - 1.0), Sense::hover());
                     ui.painter().rect_filled(rect, 2.0, theme::shade(SLOT, 0.8));
                     ui.add_space(6.0);
                     mixer_strip(app, ui, target);
@@ -161,7 +162,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 if header(ui, "Master", theme::CONTROL_HOVER, app.selected_target == target, Sense::click()).clicked() {
                     actions.push(Action::SelectTarget(target));
                 }
-                for slot in 0..NUM_SCENES {
+                for slot in 0..rows {
                     scene_cell(app, ui, slot, &mut actions);
                 }
                 if stop_cell(ui, false, "Parar todos los clips").clicked() {
@@ -191,6 +192,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
     app.drop_targets.slots = slots.iter().map(|&(t, s, r)| (t, s, r.intersect(ui.clip_rect()))).collect();
     app.update_clip_gesture(ui, &clips, &lanes, &slots);
+}
+
+/// How many scenes the Session shows: the ones in use and an empty one after
+/// them to fill, at least 8, up to all of them.
+pub fn shown_scenes(project: &crate::project::Project) -> usize {
+    let used = project.tracks.iter().filter_map(|t| t.clips.iter().rposition(Option::is_some)).max().map_or(0, |last| last + 1);
+    (used + 1).clamp(8, NUM_SCENES)
 }
 
 fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: Sense) -> egui::Response {
@@ -783,5 +791,60 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::SeparateStems(t, slot) => app.separate_stems(ClipRef::Session { track: t, slot }),
         Action::DetectTempo(t, slot) => app.detect_tempo(vec![ClipRef::Session { track: t, slot }], true),
         Action::UseClipTempo(t, slot) => app.use_clip_tempo(ClipRef::Session { track: t, slot }),
+    }
+}
+
+#[cfg(test)]
+mod scene_tests {
+    use super::*;
+    use crate::project::Project;
+
+    /// Projects from when there were 8 scenes open with 16, their clips and
+    /// names where they were and the rest empty.
+    #[test]
+    fn projects_with_eight_scenes_open_with_sixteen() {
+        for fixture in [include_str!("../fixtures/format0-demo.pulse"), include_str!("../fixtures/format1-demo.pulse")] {
+            let saved: serde_json::Value = serde_json::from_str(fixture).unwrap();
+            assert_eq!(saved["tracks"][0]["clips"].as_array().unwrap().len(), 8);
+            let project = Project::from_json(fixture).unwrap();
+            assert_eq!(project.scene_names.len(), NUM_SCENES);
+            assert_eq!(project.scene_names[15], "16");
+            for (t, track) in project.tracks.iter().enumerate() {
+                for slot in 0..8 {
+                    assert_eq!(track.clips[slot].is_some(), !saved["tracks"][t]["clips"][slot].is_null());
+                }
+                assert!(track.clips[8..].iter().all(Option::is_none));
+            }
+            // Saved again and opened: the same.
+            assert_eq!(Project::from_json(&project.to_json().unwrap()).unwrap(), project);
+        }
+    }
+
+    /// The Session shows the scenes in use and one more, 8 at least.
+    #[test]
+    fn the_session_shows_the_scenes_in_use_and_one_more() {
+        let mut project = Project::demo();
+        assert_eq!(shown_scenes(&project), 8);
+        project.tracks[0].clips[10] = project.tracks[0].clips[0].clone();
+        assert_eq!(shown_scenes(&project), 12);
+        project.tracks[1].clips[15] = project.tracks[1].clips[0].clone();
+        assert_eq!(shown_scenes(&project), NUM_SCENES);
+    }
+
+    /// A clip in the 13th scene plays when that scene is launched.
+    #[test]
+    fn a_high_scene_launches() {
+        let mut app = PulseApp::headless(Project::demo());
+        let clip = app.project.tracks[1].clips[0].clone();
+        app.set_clip(1, 12, clip);
+        let mut renderer = engine::OfflineRenderer::new(48_000.0);
+        for command in crate::sync::project_commands(&app.project, &mut crate::sync::SampleCache::default(), 48_000.0, &Default::default()) {
+            renderer.send(command);
+        }
+        renderer.send(Command::LaunchScene(12));
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        renderer.render(48_000, &mut l, &mut r);
+        assert_eq!(renderer.state.tracks[1].playing.load(std::sync::atomic::Ordering::Relaxed), 12);
+        assert!(crate::export::peak(&l, &r) > 0.01);
     }
 }

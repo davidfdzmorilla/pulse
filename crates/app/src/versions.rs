@@ -237,7 +237,7 @@ pub struct Window {
 
 impl PulseApp {
     /// Where this project's versions are, or why it has none yet.
-    fn versions_dir(&self) -> Result<PathBuf, String> {
+    pub(crate) fn versions_dir(&self) -> Result<PathBuf, String> {
         match &self.file {
             None => Err(crate::theme::keys("Guarda el proyecto (⌘S) para poder guardar versiones")),
             Some(file) => folder(file).ok_or_else(|| "Usa «Guardar como…» para dar al proyecto su carpeta: las versiones se guardan en ella".into()),

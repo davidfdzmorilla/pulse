@@ -26,6 +26,8 @@ const SILENCE: f32 = 1e-4;
 pub enum Range {
     Song,
     Loop,
+    /// One file for each part of the song between its markers.
+    Sections,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -70,6 +72,12 @@ pub struct Render {
     pub commands: Vec<Command>,
     /// The track a stem is of (none for the mix).
     pub track: Option<usize>,
+    /// The beats it plays, and what it needs of the song.
+    pub range: (f64, f64),
+    pub song: Song,
+    /// Files of the same group (the stems of one section of one version) are
+    /// padded to the same length.
+    pub group: usize,
     /// It plays plugins (see [`threads`]).
     pub plugins: bool,
 }
@@ -103,29 +111,98 @@ impl Report {
     }
 }
 
-/// The beat range to render, or `None` if there is nothing on the arrangement.
+/// The beat range to render, or `None` if there is nothing on the arrangement
+/// (for [`Range::Sections`], the whole song).
 pub fn beat_range(project: &Project, range: Range) -> Option<(f64, f64)> {
     match range {
         Range::Loop => (project.loop_end > project.loop_start).then_some((project.loop_start, project.loop_end)),
-        Range::Song => {
+        Range::Song | Range::Sections => {
             let end = project.tracks.iter().map(|t| t.arrangement_end()).fold(0.0, f64::max);
             (end > 0.0).then_some((0.0, end))
         }
     }
 }
 
-/// Builds the renders for the settings: the mix, or one solo render per track.
+/// The parts of the song between its markers, named after them: from each
+/// marker to the next, the last to the end of the song. What comes before the
+/// first marker is «Inicio». Empty if the song is, or has no markers in it.
+pub fn sections(project: &Project) -> Vec<(String, (f64, f64))> {
+    let Some((_, end)) = beat_range(project, Range::Song) else { return Vec::new() };
+    let mut markers: Vec<_> = project.markers.iter().filter(|m| m.beat < end - 1e-9).collect();
+    markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    if markers.is_empty() {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if markers[0].beat > 1e-9 {
+        out.push(("Inicio".to_string(), (0.0, markers[0].beat)));
+    }
+    for (i, marker) in markers.iter().enumerate() {
+        let to = markers.get(i + 1).map_or(end, |next| next.beat);
+        // Two markers in the same place: the part is the second's.
+        if to > marker.beat + 1e-9 {
+            let name = if marker.name.trim().is_empty() { format!("Sección {}", i + 1) } else { marker.name.clone() };
+            out.push((name, (marker.beat.max(0.0), to)));
+        }
+    }
+    out
+}
+
+/// `destination` with `label` added to its name: «Tema.wav» → «Tema - Drop.wav».
+fn labelled(destination: &Path, label: &str) -> PathBuf {
+    let base = destination.file_stem().map_or("Pulse".into(), |s| s.to_string_lossy().into_owned());
+    destination.with_file_name(format!("{base} - {}.wav", sanitize(label)))
+}
+
+/// Builds the renders for the settings: the mix, or one solo render per track,
+/// of the song, the loop, or each section.
 pub fn plan(
     project: &Project,
     samples: &mut SampleCache,
     settings: &Settings,
     destination: &Path,
 ) -> Vec<Render> {
+    plan_from(project, samples, settings, destination, 0)
+}
+
+/// [`plan`], numbering its groups from `group`.
+fn plan_from(project: &Project, samples: &mut SampleCache, settings: &Settings, destination: &Path, group: usize) -> Vec<Render> {
+    let parts: Vec<(Option<String>, (f64, f64))> = match settings.range {
+        Range::Sections => sections(project).into_iter().enumerate().map(|(i, (name, range))| (Some(format!("{} {name}", i + 1)), range)).collect(),
+        range => beat_range(project, range).map(|r| (None, r)).into_iter().collect(),
+    };
+    let mut renders = Vec::new();
+    for (k, (label, range)) in parts.into_iter().enumerate() {
+        let destination = label.map_or_else(|| destination.to_path_buf(), |l| labelled(destination, &l));
+        renders.extend(plan_part(project, samples, settings, &destination, range, group + k));
+    }
+    renders
+}
+
+/// The versions to export besides what there is now: each one's mix (or
+/// stems), named after it.
+pub fn plan_versions(
+    versions: &[(String, Project)],
+    samples: &mut SampleCache,
+    settings: &Settings,
+    destination: &Path,
+    group: usize,
+) -> Vec<Render> {
+    let mut renders = Vec::new();
+    for (name, project) in versions {
+        let first = group + renders.iter().map(|r: &Render| r.group + 1).max().unwrap_or(0);
+        renders.extend(plan_from(project, samples, settings, &labelled(destination, name), first));
+    }
+    renders
+}
+
+fn plan_part(project: &Project, samples: &mut SampleCache, settings: &Settings, destination: &Path, range: (f64, f64), group: usize) -> Vec<Render> {
     let sample_rate = settings.sample_rate as f32;
+    let song = Song::of(project);
     // Exports always play the automation as written, ignoring knobs moved by hand.
-    let commands = |samples: &mut SampleCache| sync::project_commands(project, samples, sample_rate, &HashSet::new());
     if !settings.stems {
-        return vec![Render { path: destination.to_path_buf(), commands: commands(samples), track: None, plugins: uses_plugins(project) }];
+        let commands = sync::project_commands(project, samples, sample_rate, &HashSet::new());
+        return vec![Render { path: destination.to_path_buf(), commands, track: None, range, song, group, plugins: uses_plugins(project) }];
     }
     let base = destination.file_stem().map_or("Pulse".into(), |s| s.to_string_lossy().into_owned());
     let folder = destination.parent().unwrap_or(Path::new("."));
@@ -156,7 +233,7 @@ pub fn plan(
                 list.push(Command::ReplaceChain { target: engine::Target::Master, chain: Box::default() });
             }
             let name = format!("{base} - {} {}.wav", t + 1, sanitize(&track.name));
-            Render { path: folder.join(name), commands: list, track: Some(t), plugins: uses_plugins(&only) }
+            Render { path: folder.join(name), commands: list, track: Some(t), range, song, group, plugins: uses_plugins(&only) }
         })
         .collect()
 }
@@ -424,11 +501,11 @@ pub struct Job {
 }
 
 impl Job {
-    pub fn start(renders: Vec<Render>, range: (f64, f64), song: Song, settings: Settings) -> Self {
+    pub fn start(renders: Vec<Render>, settings: Settings) -> Self {
         let progress = Arc::new(AtomicU32::new(0));
         let cancel = Arc::new(AtomicBool::new(false));
         let (shared_progress, shared_cancel) = (progress.clone(), cancel.clone());
-        let handle = std::thread::spawn(move || run(renders, range, song, settings, &shared_progress, &shared_cancel));
+        let handle = std::thread::spawn(move || run(renders, settings, &shared_progress, &shared_cancel));
         Self { progress, cancel, handle: Some(handle) }
     }
 
@@ -465,8 +542,6 @@ fn threads(renders: &[Render]) -> usize {
 /// the first error: a cancellation, or one `each` returned (which stops the rest).
 pub fn render_each<T: Send>(
     renders: Vec<Render>,
-    range: (f64, f64),
-    song: Song,
     sample_rate: f32,
     progress: &AtomicU32,
     cancel: &AtomicBool,
@@ -489,7 +564,7 @@ pub fn render_each<T: Send>(
             progress.store((total / count as f32).to_bits(), Ordering::Relaxed);
         };
         let commands = std::mem::take(&mut render.commands);
-        let result = match self::render(commands, range, song, sample_rate, cancel, &step) {
+        let result = match self::render(commands, render.range, render.song, sample_rate, cancel, &step) {
             None => Err(CANCELLED.to_string()),
             Some((left, right)) => each(&render, left, right),
         };
@@ -529,13 +604,11 @@ pub fn render_each<T: Send>(
 
 fn run(
     renders: Vec<Render>,
-    range: (f64, f64),
-    song: Song,
     settings: Settings,
     progress: &AtomicU32,
     cancel: &AtomicBool,
 ) -> Result<Report, String> {
-    let written = render_each(renders, range, song, settings.sample_rate as f32, progress, cancel, |render, left, right| {
+    let written = render_each(renders, settings.sample_rate as f32, progress, cancel, |render, left, right| {
         let peak = peak(&left, &right);
         // Stems keep their relative levels, so only the full mix is normalized.
         let gain = match settings.normalize {
@@ -543,23 +616,23 @@ fn run(
             _ => 1.0,
         };
         let clipped = write(&render.path, &left, &right, settings.sample_rate, settings.bits, gain)?;
-        Ok((render.path.clone(), left.len(), peak, clipped))
+        Ok((render.path.clone(), render.group, left.len(), peak, clipped))
     })
     .map_err(|e| if e == "Cancelado" { "Exportación cancelada".to_string() } else { e })?;
     let mut report = Report::default();
     let mut peak_overall = 0f32;
     let mut lengths = Vec::new();
-    for (path, frames, peak, clipped) in written {
+    for (path, group, frames, peak, clipped) in written {
         peak_overall = peak_overall.max(peak);
         report.clipped += clipped;
         report.seconds = report.seconds.max(frames as f64 / settings.sample_rate as f64);
-        lengths.push(frames);
+        lengths.push((group, frames));
         report.files.push(path);
     }
-    // Stems as long as the longest (each ends with its own tail), so they line up
-    // end to end too in another program.
-    let longest = lengths.iter().copied().max().unwrap_or(0);
-    for (path, &frames) in report.files.iter().zip(&lengths) {
+    // Stems as long as the longest of theirs (each ends with its own tail), so
+    // they line up end to end too in another program.
+    for (path, &(group, frames)) in report.files.iter().zip(&lengths) {
+        let longest = lengths.iter().filter(|(g, _)| *g == group).map(|&(_, n)| n).max().unwrap_or(0);
         if frames < longest {
             pad(path, longest - frames, settings.bits)?;
         }
@@ -577,14 +650,14 @@ pub fn render_from_command_line(output: &Path, project: Option<&Path>) -> Result
         None => Project::demo(),
     };
     let settings = Settings::default();
-    let range = beat_range(&project, settings.range).ok_or("El Arrangement está vacío")?;
+    beat_range(&project, settings.range).ok_or("El Arrangement está vacío")?;
     let mut samples = SampleCache::default();
     let renders = plan(&project, &mut samples, &settings, output);
     if let Some(error) = samples.errors.first() {
         eprintln!("{error}");
     }
     let progress = AtomicU32::new(0);
-    let report = run(renders, range, Song::of(&project), settings, &progress, &AtomicBool::new(false))?;
+    let report = run(renders, settings, &progress, &AtomicBool::new(false))?;
     Ok(report.summary())
 }
 
@@ -594,25 +667,55 @@ pub fn render_from_command_line(output: &Path, project: Option<&Path>) -> Result
 pub struct Dialog {
     pub open: bool,
     pub settings: Settings,
+    /// Saved versions (their files) to export too, each named after itself.
+    pub versions: std::collections::BTreeSet<String>,
+    /// Only those versions, not what there is now.
+    pub only_versions: bool,
     job: Option<Job>,
 }
 
 impl PulseApp {
-    fn start_export(&mut self) {
+    /// What the export dialog's settings make: what there is now and the
+    /// versions chosen, to files beside `destination`.
+    pub(crate) fn export_renders(&mut self, destination: &Path) -> Result<Vec<Render>, String> {
         let settings = self.export.settings;
-        let Some(range) = beat_range(&self.project, settings.range) else {
-            self.status = Some("El Arrangement está vacío: coloca clips en él (o copia clips de la sesión) para exportar".into());
-            return;
-        };
-        let name = format!("{}.wav", self.file_name());
-        let dialog = rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_directory(crate::library::folder(crate::library::EXPORTS)).set_file_name(&name);
-        let Some(destination) = crate::files::save_file(dialog) else { return };
+        let mut versions = Vec::new();
+        if !self.export.versions.is_empty() {
+            let dir = self.versions_dir()?;
+            for version in crate::versions::list(&dir).into_iter().filter(|v| self.export.versions.contains(&v.file)) {
+                versions.push((version.name.clone(), crate::versions::load(&dir, &version)?));
+            }
+        }
+        let now = !self.export.only_versions || versions.is_empty();
+        if now {
+            if beat_range(&self.project, settings.range).is_none() {
+                return Err("El Arrangement está vacío: coloca clips en él (o copia clips de la sesión) para exportar".into());
+            }
+            if settings.range == Range::Sections && sections(&self.project).is_empty() {
+                return Err("No hay marcadores en la canción: añade alguno (doble clic en la franja de marcadores) para exportar por secciones".into());
+            }
+        }
         self.capture_plugins();
         // The renders load plugin instances of their own; the live ones stay as they are.
         let live = std::mem::take(&mut self.samples.plugins);
-        let renders = plan(&self.project, &mut self.samples, &settings, &destination);
+        let mut renders = if now { plan(&self.project, &mut self.samples, &settings, destination) } else { Vec::new() };
+        let next = renders.iter().map(|r| r.group + 1).max().unwrap_or(0);
+        renders.extend(plan_versions(&versions, &mut self.samples, &settings, destination, next));
         self.samples.plugins = live;
-        self.export.job = Some(Job::start(renders, range, Song::of(&self.project), settings));
+        if renders.is_empty() {
+            return Err("Esas versiones no tienen nada que exportar en ese rango".into());
+        }
+        Ok(renders)
+    }
+
+    fn start_export(&mut self) {
+        let name = format!("{}.wav", self.file_name());
+        let dialog = rfd::FileDialog::new().add_filter("WAV", &["wav"]).set_directory(crate::library::folder(crate::library::EXPORTS)).set_file_name(&name);
+        let Some(destination) = crate::files::save_file(dialog) else { return };
+        match self.export_renders(&destination) {
+            Ok(renders) => self.export.job = Some(Job::start(renders, self.export.settings)),
+            Err(e) => self.status = Some(e),
+        }
     }
 }
 
@@ -657,6 +760,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut s.range, Range::Song, "Toda la canción");
                     ui.radio_value(&mut s.range, Range::Loop, "Región del loop");
+                    ui.radio_value(&mut s.range, Range::Sections, "Por secciones").on_hover_text("Un archivo por cada parte de la canción, de un marcador al siguiente");
                 });
                 ui.end_row();
                 ui.label("Formato");
@@ -689,7 +793,17 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     ui.end_row();
                 }
             });
-            if let Some((start, end)) = beat_range(&app.project, app.export.settings.range) {
+            versions_list(app, ui);
+            if app.export.settings.range == Range::Sections {
+                let parts = sections(&app.project);
+                let text = if parts.is_empty() {
+                    "No hay marcadores en la canción: añade alguno (doble clic en la franja de marcadores).".to_string()
+                } else {
+                    let names: Vec<&str> = parts.iter().map(|(n, _)| n.as_str()).collect();
+                    format!("{} secciones: {}. Cada una con lo que suena en ella desde antes y su cola.", parts.len(), names.join(", "))
+                };
+                ui.label(egui::RichText::new(text).color(TEXT_DIM).size(10.5));
+            } else if let Some((start, end)) = beat_range(&app.project, app.export.settings.range) {
                 let seconds = (end - start) * 60.0 / app.project.tempo;
                 ui.label(
                     egui::RichText::new(format!(
@@ -723,6 +837,33 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         }
         app.export.open = false;
     }
+}
+
+/// The saved versions to export too, when the project has any.
+fn versions_list(app: &mut PulseApp, ui: &mut egui::Ui) {
+    let Ok(dir) = app.versions_dir() else { return };
+    // Named ones: the ones made on saving are too many to choose from.
+    let versions: Vec<_> = crate::versions::list(&dir).into_iter().filter(|v| !v.auto).collect();
+    let d = &mut app.export;
+    d.versions.retain(|f| versions.iter().any(|v| &v.file == f));
+    if versions.is_empty() {
+        return;
+    }
+    ui.add_space(4.0);
+    egui::CollapsingHeader::new(format!("Versiones ({} marcadas)", d.versions.len())).id_salt("export_versions").show(ui, |ui| {
+        ui.label(egui::RichText::new("Las marcadas se exportan también, cada una con su nombre al final del archivo.").color(TEXT_DIM).size(10.5));
+        for v in versions.iter().rev() {
+            let mut on = d.versions.contains(&v.file);
+            if ui.checkbox(&mut on, &v.name).changed() {
+                if on {
+                    d.versions.insert(v.file.clone());
+                } else {
+                    d.versions.remove(&v.file);
+                }
+            }
+        }
+        ui.add_enabled(!d.versions.is_empty(), egui::Checkbox::new(&mut d.only_versions, "Solo las versiones (no lo de ahora)"));
+    });
 }
 
 #[cfg(test)]
@@ -832,7 +973,7 @@ mod tests {
         let mut samples = SampleCache::default();
         let range = beat_range(&project, settings.range).unwrap();
         let renders = plan(&project, &mut samples, &settings, &dir.join("demo.wav"));
-        let report = run(renders, range, Song::of(&project), settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let report = run(renders, settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
         let lengths: Vec<u32> = report.files.iter().map(|f| hound::WavReader::open(f).unwrap().duration()).collect();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(lengths.len(), 4);
@@ -926,19 +1067,98 @@ mod tests {
         std::fs::create_dir_all(&dir).unwrap();
         let project = tangled_demo();
         let settings = Settings { stems: true, range: Range::Loop, ..Default::default() };
-        let range = beat_range(&project, settings.range).unwrap();
         let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("demo.wav"));
         assert!(threads(&renders) > 1 || std::thread::available_parallelism().map_or(1, |n| n.get()) == 1);
         let progress = AtomicU32::new(0);
-        let report = run(renders, range, Song::of(&project), settings, &progress, &AtomicBool::new(false)).unwrap();
+        let report = run(renders, settings, &progress, &AtomicBool::new(false)).unwrap();
         let names: Vec<String> = report.files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
         assert_eq!(names, ["demo - 1 Drums.wav", "demo - 2 Bass.wav", "demo - 4 Chords.wav", "demo - 5 Lead.wav"]);
         assert_eq!(f32::from_bits(progress.load(Ordering::Relaxed)), 1.0);
         // Cancelled, it says so and stops all of them.
         let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("otra.wav"));
-        let error = run(renders, range, Song::of(&project), settings, &AtomicU32::new(0), &AtomicBool::new(true)).unwrap_err();
+        let error = run(renders, settings, &AtomicU32::new(0), &AtomicBool::new(true)).unwrap_err();
         std::fs::remove_dir_all(&dir).ok();
         assert_eq!(error, "Exportación cancelada");
+    }
+
+    fn marked(project: &mut Project, marks: &[(f64, &str)]) {
+        project.markers = marks.iter().map(|&(beat, name)| crate::project::SongMarker { beat, name: name.into() }).collect();
+    }
+
+    /// The song's parts, from marker to marker, the last to the end; what is
+    /// before the first is «Inicio», and markers past the end are left out.
+    #[test]
+    fn sections_go_from_marker_to_marker() {
+        let mut project = Project::demo();
+        let (_, end) = beat_range(&project, Range::Song).unwrap();
+        assert!(sections(&project).is_empty(), "no markers, no sections");
+        marked(&mut project, &[(16.0, "Drop"), (4.0, "Intro"), (end + 8.0, "Después"), (16.0, "")]);
+        let parts = sections(&project);
+        assert_eq!(parts, [("Inicio".to_string(), (0.0, 4.0)), ("Intro".to_string(), (4.0, 16.0)), ("Sección 3".to_string(), (16.0, end))]);
+    }
+
+    /// Exported by sections, each is a file of its own, as long as its part
+    /// (plus its tail); its stems are as long as each other, not as the others'.
+    #[test]
+    fn each_section_is_a_file() {
+        let dir = std::env::temp_dir().join(format!("pulse-secciones-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut project = Project::demo();
+        marked(&mut project, &[(0.0, "Intro"), (16.0, "Drop")]);
+        let (_, end) = beat_range(&project, Range::Song).unwrap();
+        let seconds = |beats: f64| beats * 60.0 / project.tempo;
+        let settings = Settings { range: Range::Sections, bits: BitDepth::Int16, ..Default::default() };
+        let report = run(plan(&project, &mut SampleCache::default(), &settings, &dir.join("Tema.wav")), settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let names: Vec<String> = report.files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["Tema - 1 Intro.wav", "Tema - 2 Drop.wav"]);
+        let length = |f: &Path| hound::WavReader::open(f).unwrap().duration() as f64 / 48_000.0;
+        let (intro, drop) = (length(&report.files[0]), length(&report.files[1]));
+        assert!(intro >= seconds(16.0) && intro < seconds(16.0) + 10.0, "{intro}");
+        assert!(drop >= seconds(end - 16.0) && drop < seconds(end - 16.0) + 10.0, "{drop}");
+        // Stems by section: «Tema - 1 Intro - 1 Drums.wav»…, the same length within a section.
+        let settings = Settings { stems: true, ..settings };
+        let report = run(plan(&project, &mut SampleCache::default(), &settings, &dir.join("Tema.wav")), settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let files: Vec<(String, f64)> = report.files.iter().map(|f| (f.file_name().unwrap().to_string_lossy().into_owned(), length(f))).collect();
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(files.len(), 8);
+        assert_eq!(files[0].0, "Tema - 1 Intro - 1 Drums.wav");
+        assert_eq!(files[4].0, "Tema - 2 Drop - 1 Drums.wav");
+        assert!(files[..4].iter().all(|f| f.1 == files[0].1) && files[4..].iter().all(|f| f.1 == files[4].1), "{files:?}");
+    }
+
+    /// Versions chosen in the dialog are exported too, each as it was (its own
+    /// tempo) and named after itself; or only them.
+    #[test]
+    fn chosen_versions_are_exported_too() {
+        let root = std::env::temp_dir().join(format!("pulse-versiones-export-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let file = root.join("Tema").join("Tema.pulse");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let mut app = PulseApp::headless(Project::demo());
+        app.file = Some(file);
+        app.project.tempo = 100.0;
+        app.save_version("Lenta", "");
+        app.project.tempo = 140.0;
+        let dir = app.versions_dir().unwrap();
+        let lenta = crate::versions::list(&dir)[0].file.clone();
+        app.export.settings = Settings { bits: BitDepth::Int16, ..Default::default() };
+        app.export.versions.insert(lenta);
+        let out = root.join("Exportado.wav");
+        let renders = app.export_renders(&out).unwrap();
+        let report = run(renders, app.export.settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+        let names: Vec<String> = report.files.iter().map(|f| f.file_name().unwrap().to_string_lossy().into_owned()).collect();
+        assert_eq!(names, ["Exportado.wav", "Exportado - Lenta.wav"]);
+        let length = |f: &Path| hound::WavReader::open(f).unwrap().duration() as f64;
+        let (now, slow) = (length(&report.files[0]), length(&report.files[1]));
+        // The same song at 100 instead of 140 BPM (the tails aside).
+        assert!((slow / now - 1.4).abs() < 0.1, "{slow} / {now}");
+        app.export.only_versions = true;
+        assert_eq!(app.export_renders(&out).unwrap().len(), 1);
+        // Sections with no markers: said, nothing done.
+        app.export.only_versions = false;
+        app.export.settings.range = Range::Sections;
+        assert!(app.export_renders(&out).err().unwrap().contains("marcadores"));
+        std::fs::remove_dir_all(&root).ok();
     }
 
     #[test]

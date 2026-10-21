@@ -691,6 +691,7 @@ fn encode(from: &Path, to: &Path, settings: &Settings) -> Result<usize, String> 
             let mut encoder = rusty_mp3::Mp3Encoder::new(rusty_mp3::Mp3EncoderConfig { bitrate_kbps: settings.mp3_kbps, vbr_quality: None });
             let mut out = Vec::new();
             let mut chunk = Vec::with_capacity(2 * 4096);
+            let mut frames = 0;
             loop {
                 chunk.clear();
                 chunk.extend(samples.by_ref().take(2 * 4096).map(|s| {
@@ -702,20 +703,91 @@ fn encode(from: &Path, to: &Path, settings: &Settings) -> Result<usize, String> 
                 if chunk.is_empty() {
                     break;
                 }
+                frames += chunk.len() / 2;
                 encoder.push_pcm_f32(&chunk, 2, rate).map_err(|e| format!("No se pudo codificar en MP3: {e:?}"))?;
-                while let Ok(packet) = encoder.next_packet() {
-                    out.extend_from_slice(&packet);
-                }
             }
+            // Silence after the end: what is still inside the encoder's delay
+            // gets encoded too (the tag then says to drop the silence).
+            let flush = vec![0f32; 2 * 2 * 1152];
+            encoder.push_pcm_f32(&flush, 2, rate).map_err(|e| format!("No se pudo codificar en MP3: {e:?}"))?;
+            // Only once it is all in: the Info frame goes first, before every other.
             encoder.finish();
             while let Ok(packet) = encoder.next_packet() {
                 out.extend_from_slice(&packet);
             }
+            gapless_tag(&mut out, frames);
             out
         }
     };
     crate::store::write_atomic(to, &bytes)?;
     Ok(clipped)
+}
+
+/// Samples the MP3 encoder puts before the music (its analysis window); a
+/// decoder adds 529 of its own.
+const MP3_ENCODER_DELAY: usize = 528;
+
+/// Completes the MP3's Info frame with the LAME extension players read to play
+/// it gapless: how many samples to skip at the start (the encoder's delay) and
+/// at the end (the last frame's padding), so it lines up with the WAV sample
+/// for sample and is as long. Also counts only the frames with audio, as the
+/// format wants. Left as it is if the first frame isn't that Info frame.
+fn gapless_tag(bytes: &mut [u8], samples: usize) {
+    if bytes.len() < 4 || bytes[0] != 0xFF || bytes[1] & 0xFE != 0xFA {
+        return; // MPEG-1 Layer III only, as the encoder writes.
+    }
+    let crc = bytes[1] & 1 == 0;
+    let mono = bytes[3] >> 6 == 3;
+    let at = 4 + if crc { 2 } else { 0 } + if mono { 17 } else { 32 };
+    let rate = match (bytes[2] >> 2) & 3 { 0 => 44_100, 1 => 48_000, 2 => 32_000, _ => return };
+    let kbps = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320, 0][(bytes[2] >> 4) as usize];
+    let size = 144 * kbps * 1000 / rate + ((bytes[2] >> 1) & 1) as usize;
+    if bytes.len() < size || (&bytes[at..at + 4] != b"Info" && &bytes[at..at + 4] != b"Xing") {
+        return;
+    }
+    let flags = u32::from_be_bytes([bytes[at + 4], bytes[at + 5], bytes[at + 6], bytes[at + 7]]);
+    if flags & 1 == 0 {
+        return;
+    }
+    let mut lame = at + 8;
+    // The frame count: without the Info frame itself.
+    let counted = u32::from_be_bytes([bytes[lame], bytes[lame + 1], bytes[lame + 2], bytes[lame + 3]]);
+    let audio_frames = counted.saturating_sub(1);
+    bytes[lame..lame + 4].copy_from_slice(&audio_frames.to_be_bytes());
+    lame += 4;
+    if flags & 2 != 0 {
+        lame += 4;
+    }
+    if flags & 4 != 0 {
+        lame += 100;
+    }
+    if flags & 8 != 0 {
+        lame += 4;
+    }
+    if lame + 36 > size {
+        return;
+    }
+    let decoded = audio_frames as usize * 1152;
+    let start = MP3_ENCODER_DELAY;
+    let end = decoded.saturating_sub(start + 529 + samples) + 529;
+    let mut tag = [0u8; 36];
+    tag[..9].copy_from_slice(b"LAMEPulse");
+    tag[9] = 0x01; // revision 0, CBR
+    tag[20] = kbps.min(255) as u8;
+    let trim = ((start.min(4095) as u32) << 12) | end.min(4095) as u32;
+    tag[21..24].copy_from_slice(&trim.to_be_bytes()[1..]);
+    tag[28..32].copy_from_slice(&(bytes.len() as u32).to_be_bytes());
+    bytes[lame..lame + 36].copy_from_slice(&tag);
+    // CRC-16 (ANSI, reflected, from 0) of the frame up to the tag's own CRC.
+    let crc_at = lame + 34;
+    let crc = bytes[..crc_at].iter().fold(0u16, |mut crc, &b| {
+        crc ^= b as u16;
+        for _ in 0..8 {
+            crc = if crc & 1 != 0 { (crc >> 1) ^ 0xA001 } else { crc >> 1 };
+        }
+        crc
+    });
+    bytes[crc_at..crc_at + 2].copy_from_slice(&crc.to_be_bytes());
 }
 
 /// Float samples as FLAC's integers, with TPDF dither at 16 bits (as WAV).
@@ -1687,6 +1759,35 @@ mod tests {
         let flac = engine::Sample::load(&dir.join("Tema.flac")).unwrap();
         let wav = engine::Sample::load(&dir.join("Tema.wav")).unwrap();
         assert_eq!(flac.left, wav.left);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// The MP3 lines up with the WAV, sample for sample, and is as long: its
+    /// LAME tag says how much the encoder added at each end (gapless).
+    #[test]
+    fn mp3_starts_and_ends_with_the_wav() {
+        let dir = std::env::temp_dir().join(format!("pulse-mp3-gapless-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = Project::demo();
+        for rate in [48_000u32, 44_100] {
+            let export_as = |format: Format| {
+                let settings = Settings { range: Range::Loop, format, sample_rate: rate, bits: BitDepth::Float32, ..Default::default() };
+                let renders = plan(&p, &mut SampleCache::default(), &settings, &dir.join(format!("t{rate}.{}", format.extension())));
+                let report = run(renders, settings, &AtomicU32::new(0), &AtomicBool::new(false)).unwrap();
+                engine::Sample::load(&report.files[0]).unwrap()
+            };
+            let (wav, mp3) = (export_as(Format::Wav), export_as(Format::Mp3));
+            assert_eq!(mp3.frames(), wav.frames(), "{rate} Hz: as long");
+            let from = wav.frames() / 3;
+            let lag = (-2000i64..2000)
+                .max_by(|&a, &b| {
+                    let score = |lag: i64| (from..from + 8192).map(|i| wav.left[i] as f64 * mp3.left[(i as i64 + lag) as usize] as f64).sum::<f64>();
+                    score(a).total_cmp(&score(b))
+                })
+                .unwrap();
+            assert_eq!(lag, 0, "{rate} Hz: the MP3 starts with the WAV");
+        }
         std::fs::remove_dir_all(&dir).ok();
     }
 

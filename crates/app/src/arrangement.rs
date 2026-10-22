@@ -47,6 +47,42 @@ enum Drag {
     Bend { track: usize, param: Param, index: usize, start: f32, from_y: f32 },
     /// Choosing a take over a stretch: from `anchor` to `to` (beats) in its lane.
     Comp { track: usize, take: usize, anchor: f64, to: f64 },
+    /// An audio clip's fade-in (or fade-out, `out`) handle.
+    Fade { track: usize, index: usize, out: bool },
+}
+
+/// Size of the fade handles at an audio clip's top corners.
+const FADE_HANDLE: f32 = 7.0;
+
+/// Where a clip drawn in `rect` has its fade handles: (in, out), just under
+/// its title, at the end of each fade.
+fn fade_handles(rect: Rect, fades: engine::model::Fades, ppb: f32) -> [Rect; 2] {
+    let y = rect.top() + 15.0;
+    let x_in = (rect.left() + fades.fade_in as f32 * ppb).min(rect.right() - FADE_HANDLE);
+    let x_out = (rect.right() - fades.fade_out as f32 * ppb).max(rect.left() + FADE_HANDLE);
+    [
+        Rect::from_min_size(pos2(x_in, y), vec2(FADE_HANDLE, FADE_HANDLE)),
+        Rect::from_min_size(pos2(x_out - FADE_HANDLE, y), vec2(FADE_HANDLE, FADE_HANDLE)),
+    ]
+}
+
+/// The fade handle of a selected audio clip of track `t` under `pos`: (clip, out).
+fn fade_at(app: &PulseApp, t: usize, pos: egui::Pos2, clip_top: f32, ppb: f32, origin_x: f32) -> Option<(usize, bool)> {
+    app.project.tracks[t].arrangement.iter().enumerate().rev().find_map(|(index, placed)| {
+        let Clip::Audio(audio) = &placed.clip else { return None };
+        if !app.is_clip_selected(ClipRef::Arrangement { track: t, index }) {
+            return None;
+        }
+        let rect = Rect::from_min_max(pos2(origin_x + placed.start as f32 * ppb, clip_top), pos2(origin_x + placed.end() as f32 * ppb, clip_top + LANE_H - 2.0));
+        let [fade_in, fade_out] = fade_handles(rect, audio.fades, ppb);
+        if fade_in.expand(3.0).contains(pos) {
+            Some((index, false))
+        } else if fade_out.expand(3.0).contains(pos) {
+            Some((index, true))
+        } else {
+            None
+        }
+    })
 }
 
 pub struct State {
@@ -520,6 +556,7 @@ fn paint_clip(
                 return;
             };
             paint_wave(&clipped, rect, body, audio, sample, ppb, tempo, theme::shade(color, 1.25));
+            paint_fades(&clipped, rect, body, audio.fades.fitted(placed.length), selected, ppb);
             // Warp markers, where they fall in each lap of the clip.
             if audio.warp != engine::model::WarpMode::Off {
                 let first = audio.file_beat(audio.offset);
@@ -549,6 +586,40 @@ fn paint_clip(
     }
     if selected {
         widgets::outline(painter, rect, theme::SELECT);
+    }
+}
+
+/// An audio clip's fades over its waveform (the curve its volume follows, the
+/// silence outside it shaded), and, selected, the handles that set them.
+fn paint_fades(clipped: &egui::Painter, rect: Rect, body: Rect, fades: engine::model::Fades, selected: bool, ppb: f32) {
+    let shade = Color32::from_black_alpha(110);
+    let line = Stroke::new(1.2, Color32::from_white_alpha(200));
+    for (length, out) in [(fades.fade_in, false), (fades.fade_out, true)] {
+        let width = length as f32 * ppb;
+        if width < 1.0 {
+            continue;
+        }
+        let steps = (width / 3.0).clamp(4.0, 48.0) as usize;
+        let curve: Vec<egui::Pos2> = (0..=steps)
+            .map(|i| {
+                let x = i as f32 / steps as f32;
+                let gain = (x * std::f32::consts::FRAC_PI_2).sin();
+                let at = if out { rect.right() - width * x } else { rect.left() + width * x };
+                pos2(at, body.bottom() - gain * body.height())
+            })
+            .collect();
+        // Above the curve: what the fade takes away.
+        for pair in curve.windows(2) {
+            let (a, b) = (pair[0], pair[1]);
+            clipped.add(egui::Shape::convex_polygon(vec![pos2(a.x, body.top()), pos2(b.x, body.top()), b, a], shade, Stroke::NONE));
+        }
+        clipped.add(egui::Shape::line(curve, line));
+    }
+    if selected {
+        for handle in fade_handles(rect, fades, ppb) {
+            clipped.rect_filled(handle, 1.0, Color32::WHITE);
+            clipped.rect_stroke(handle, 1.0, Stroke::new(1.0, Color32::from_black_alpha(160)), egui::StrokeKind::Inside);
+        }
     }
 }
 
@@ -1255,12 +1326,26 @@ fn handle_pointer(
         return;
     }
 
-    // Cursor feedback for resizing.
+    // Where the clips of the lane under the pointer start, for their fade handles.
+    let fade = lane.and_then(|t| fade_at(app, t, pos, lanes_top + layout.rows[t].0 + 1.0, ppb, origin_x).map(|(index, out)| (t, index, out)));
+    // Cursor feedback for resizing (and fading).
     if app.arrangement.drag.is_none() {
         if let Some(t) = lane {
-            if let Some((_, true)) = clip_at(app, t, beat, pos.x, ppb, origin_x) {
+            if fade.is_some() || matches!(clip_at(app, t, beat, pos.x, ppb, origin_x), Some((_, true))) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
+        }
+    }
+    if let Some((t, index, _)) = fade.filter(|_| app.arrangement.drag.is_none()) {
+        let hint = "Arrastrar: fundido (entrada o salida) · doble clic: quitarlo";
+        response.clone().on_hover_text_at_pointer(hint);
+        if response.double_clicked() {
+            if let Some(Clip::Audio(audio)) = app.project.tracks[t].arrangement.get_mut(index).map(|p| &mut p.clip) {
+                let out = fade.is_some_and(|f| f.2);
+                if out { audio.fades.fade_out = 0.0 } else { audio.fades.fade_in = 0.0 }
+                app.sync_arrangement(t);
+            }
+            return;
         }
     }
 
@@ -1271,6 +1356,8 @@ fn handle_pointer(
         } else if pos.y < lanes_top {
             app.audio.send(Command::SetPosition(snap(beat, unit)));
             Some(Drag::Scrub)
+        } else if let Some((track, index, out)) = fade {
+            Some(Drag::Fade { track, index, out })
         } else if let Some(t) = lane {
             let modifiers = ui.input(|i| i.modifiers);
             match clip_at(app, t, beat, pos.x, ppb, origin_x) {
@@ -1390,6 +1477,23 @@ fn handle_pointer(
             }
             Some(Drag::Scrub) => {
                 app.audio.send(Command::SetPosition(snap(beat, unit)));
+            }
+            Some(Drag::Fade { track, index, out }) => {
+                let Some(placed) = app.project.tracks[track].arrangement.get_mut(index) else { return };
+                let (start, end, length) = (placed.start, placed.end(), placed.length);
+                let Clip::Audio(audio) = &mut placed.clip else { return };
+                let mut fades = audio.fades.fitted(length);
+                // Free, not on the grid; ⇧ snaps it to the grid.
+                let at = if ui.input(|i| i.modifiers.shift) { snap(beat, unit) } else { beat };
+                if out {
+                    fades.fade_out = (end - at).clamp(0.0, length - fades.fade_in);
+                } else {
+                    fades.fade_in = (at - start).clamp(0.0, length - fades.fade_out);
+                }
+                if fades != audio.fades {
+                    audio.fades = fades;
+                    app.sync_arrangement(track);
+                }
             }
             Some(Drag::Point { .. } | Drag::Bend { .. } | Drag::Comp { .. } | Drag::Marker { .. }) | None => {}
         }
@@ -1784,7 +1888,7 @@ mod tests {
         let song = crate::test_audio::demo_song();
         let t = app.add_audio_track().unwrap();
         let sample = app.sample(&song.to_string_lossy());
-        let audio = engine::model::AudioClip { hard_start: false,
+        let audio = engine::model::AudioClip { hard_start: false, fades: Default::default(),
             name: "Canción".into(),
             color: [1, 2, 3],
             sample: song.to_string_lossy().into_owned(),

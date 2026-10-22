@@ -290,7 +290,7 @@ impl PulseApp {
         // them as they are. A song that changes tempo was rendered following it:
         // warp markers on every beat put each beat where it was rendered, and
         // Re-Pitch plays it as it is (at 1:1).
-        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>, warp: WarpMode| AudioClip { hard_start: false,
+        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>, warp: WarpMode| AudioClip { hard_start: false, fades: Default::default(),
             name,
             color,
             sample,

@@ -170,6 +170,14 @@ mod tests {
         let text = project.to_json().unwrap();
         let value: serde_json::Value = serde_json::from_str(&text).unwrap();
         assert_eq!(value["format"], 5, "an older Pulse asks to be updated");
+        // Fades: 6 (a Pulse that reads 5 would play the clip without them).
+        let mut faded = Project::demo();
+        let mut clip = engine::model::AudioClip { hard_start: false, fades: engine::model::Fades { fade_in: 1.0, fade_out: 0.0 }, name: "a".into(), color: [0; 3], sample: "a.wav".into(), length: 4.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        faded.tracks[0].arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 4.0, clip: Clip::Audio(clip.clone()) });
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&faded.to_json().unwrap()).unwrap()["format"], 6);
+        clip.fades = engine::model::Fades::NONE;
+        faded.tracks[0].arrangement.last_mut().unwrap().clip = Clip::Audio(clip);
+        assert!(serde_json::from_str::<serde_json::Value>(&faded.to_json().unwrap()).unwrap()["format"].as_u64().unwrap() < 5);
         assert_eq!(value["tracks"][0]["sends"].as_array().unwrap().len(), 3);
         let again = Project::from_json(&text).unwrap();
         assert_eq!(again.returns.len(), 3);

@@ -279,7 +279,9 @@ pub struct MasterTrack {
 /// would play the whole kit twice. Only projects that have one.
 /// 5: other than two returns: a Pulse that reads 4 has two, always. Only
 /// projects that have more or fewer.
-pub const FORMAT: u32 = 5;
+/// 6: audio clips with fades: a Pulse that reads 5 would play them without.
+/// Only projects that have one.
+pub const FORMAT: u32 = 6;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -434,6 +436,12 @@ impl Project {
         self.plugins.iter().find(|p| p.id == id)
     }
 
+    /// Whether any audio clip fades in or out.
+    pub fn has_fades(&self) -> bool {
+        let fades = |clip: &Clip| matches!(clip, Clip::Audio(a) if a.fades != engine::model::Fades::NONE);
+        self.tracks.iter().any(|t| t.clips.iter().flatten().any(fades) || t.arrangement.iter().any(|p| fades(&p.clip)))
+    }
+
     /// An id no plugin of the project uses yet.
     pub fn new_plugin_id(&self) -> PluginId {
         PluginId(self.plugins.iter().map(|p| p.id.0 + 1).max().unwrap_or(1))
@@ -544,8 +552,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.returns.len() != 2 {
+            let format = if self.has_fades() {
                 FORMAT
+            } else if self.returns.len() != 2 {
+                5
             } else if self.tracks.iter().any(|t| t.sounds_from != 0) {
                 4
             } else if self.tracks.iter().any(|t| t.audio_from.is_some()) {

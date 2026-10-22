@@ -64,6 +64,8 @@ impl PulseApp {
             gain_db: 0.0,
             transpose: 0.0,
             envelopes: laid_out(&audio.envelopes, audio.length.max(1e-6), beats),
+            // Its fades are in the file now.
+            fades: engine::model::Fades::NONE,
             ..audio.clone()
         })
     }
@@ -150,6 +152,8 @@ impl PulseApp {
                 gain_db: 0.0,
                 transpose: 0.0,
                 envelopes,
+                // Its fades are in the file now.
+                fades: engine::model::Fades::NONE,
                 ..audio.clone()
             };
             match clip {
@@ -208,6 +212,8 @@ impl PulseApp {
             transpose: 0.0,
             // The pieces' envelopes still move the mixer and effects, along it.
             envelopes: crate::clip_split::join_envelopes(parts, start, &|p| self.envelope_base(track, p)),
+            // Its fades are in the file now.
+            fades: engine::model::Fades::NONE,
             ..base.clone()
         };
         Ok(ArrangementClip { start, length: end - start, clip: Clip::Audio(clip) })
@@ -221,7 +227,7 @@ mod tests {
 
     fn demo_clip(warp: WarpMode, length: f64, offset: f64) -> AudioClip {
         let song = crate::test_audio::demo_song();
-        AudioClip { hard_start: false,
+        AudioClip { hard_start: false, fades: Default::default(),
             name: "demo".into(),
             color: [0; 3],
             sample: song.to_string_lossy().into_owned(),
@@ -283,6 +289,27 @@ mod tests {
         let worst = before.iter().zip(&after).enumerate().filter(|(i, _)| *i > edge && *i + edge < before.len()).map(|(_, (a, b))| (a - b).abs()).fold(0f32, f32::max);
         assert!(before.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.05);
         assert!(worst < 1e-3, "{worst}");
+        std::fs::remove_file(&new.sample).ok();
+    }
+
+    /// Its fades go into the consolidated file, once: the new clip has none
+    /// and sounds as the old one did.
+    #[test]
+    fn a_consolidated_clip_keeps_its_fades_once() {
+        let mut clip = demo_clip(WarpMode::Repitch, 8.0, 3.0);
+        clip.fades = engine::model::Fades { fade_in: 2.0, fade_out: 1.0 };
+        let (mut app, track) = app_with(vec![ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(clip) }]);
+        let before = render(&app, 8.0);
+        app.consolidate(vec![ClipRef::Arrangement { track, index: 0 }]);
+        let Clip::Audio(new) = app.project.tracks[track].arrangement[0].clip.clone() else { panic!() };
+        assert_eq!(new.fades, engine::model::Fades::NONE);
+        let after = render(&app, 8.0);
+        let edge = 48_000 / 50;
+        let worst = before.iter().zip(&after).enumerate().filter(|(i, _)| *i > edge && *i + edge < before.len()).map(|(_, (a, b))| (a - b).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-3, "{worst}");
+        // It starts silent and swells: the fade-in is in the file.
+        let quarter = |from: usize| before[from..from + 2_000].iter().map(|s| s.abs()).fold(0f32, f32::max);
+        assert!(quarter(edge) < quarter(48_000) * 0.5);
         std::fs::remove_file(&new.sample).ok();
     }
 

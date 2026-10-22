@@ -301,7 +301,7 @@ mod tests {
     }
 
     fn audio_clip(path: &str) -> AudioClip {
-        AudioClip { hard_start: false,
+        AudioClip { hard_start: false, fades: Default::default(),
             name: "Canción".into(),
             color: [1, 2, 3],
             sample: path.into(),

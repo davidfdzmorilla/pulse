@@ -111,6 +111,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 - **Clic**: selecciona el clip y lo abre en el editor. **⌘ clic / ⇧ clic**: varios.
 - **Arrastrar**: mueve los clips seleccionados, también a otras pistas del mismo tipo. **⌥ + arrastrar** los copia.
 - **Borde derecho** (el cursor cambia a ↔): cambia la longitud. Si el clip es más largo que su contenido, este se repite en bucle (unas líneas marcan cada vuelta).
+- **Fundidos** (clips de audio): un clip seleccionado muestra dos cuadraditos blancos bajo su título, en las esquinas. Arrastra el de la izquierda hacia dentro para que entre desde el silencio y el de la derecha para que se vaya a él. La curva que sigue el volumen se dibuja sobre la onda, con lo que quita sombreado. Van libres (con **⇧**, por la rejilla), y **doble clic** en uno lo quita. Se miden en tiempos, así que siguen al tempo. Usan una curva de igual potencia, sin bajón a mitad. Juntos nunca ocupan más que el clip. Un proyecto con fundidos pide actualizar en versiones anteriores de Pulse, que lo harían sonar sin ellos.
 - **Arrastrar en un hueco**: recuadro de selección de clips y pistas (⌘ o ⇧ añaden).
 - Suelta archivos de audio en una pista de audio para ponerlos en ese tiempo, o en un hueco vacío para crear una pista nueva.
 
@@ -198,7 +199,8 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 
 - **⌘E — Dividir clip**: corta los clips seleccionados del Arrangement por el cursor. **Dividir aquí** (clic derecho) corta donde hiciste clic. Cada parte sigue sonando lo mismo que antes; no se tocan los archivos. Una nota MIDI que cruza el corte termina en él y lo que le quedaba se toca al principio de la parte derecha (vuelve a oírse su ataque).
 - **⌘J — Unir clips**: dos o más clips de la misma pista en uno, del principio del primero al final del último. Los MIDI juntan sus notas; los de audio se renderizan a un archivo nuevo, con silencio en los huecos.
-- **Consolidar** (clic derecho en un clip de audio): lo que suena el clip (con su warp, transposición y ganancia) pasa a un archivo de audio nuevo solo con su trozo. Pierde sus tomas.
+- **Consolidar** (clic derecho en un clip de audio): lo que suena el clip (con su warp, transposición, ganancia y fundidos) pasa a un archivo de audio nuevo solo con su trozo. Pierde sus tomas, y sus fundidos quedan en el archivo (el clip nuevo no tiene, para no aplicarlos dos veces). Lo mismo al unir e invertir.
+- Al **dividir** un clip con fundidos, la parte izquierda conserva el de entrada y la derecha el de salida.
 - Dos clips de audio seguidos (sin hueco entre ellos, como las partes de un clip dividido o los trozos de tomas) se funden entre sí durante 10 ms en el corte, en vez de bajar cada uno a silencio. Al unirlos, el archivo nuevo conserva ese fundido.
 - **Invertir** (clic derecho en un clip de audio, también varios): lo que suena el clip, del final al principio, en un archivo nuevo, «… (invertido)». Sus envolventes de clip se dan la vuelta con él. Invertirlo otra vez lo devuelve a como sonaba, con su nombre. Para un platillo, una voz o un golpe que crece hasta el cambio, como los efectos «reverse».
 - Por ahora unir, consolidar e invertir no aplican los efectos de la pista.
@@ -462,6 +464,7 @@ Se abre al seleccionar un clip de audio.
 - **Longitud** en tiempos y **Ajustar al archivo**.
 - **Ver**: **El clip** o **Archivo entero**. En «Archivo entero», clic o arrastrar en la forma de onda mueve el **inicio** del clip.
 - **Inicio** en segundos (puede ser negativo, para empezar en un compás antes del archivo).
+- **Fundidos**: **entrada** y **salida** en tiempos, los mismos que las asas del Arrangement. En Session se aplican en cada vuelta del bucle.
 - **Gain** (−36 a +12 dB) y **Transp.** (±24 semitonos, solo en Stretch).
 - **Tonalidad** del audio, **Seguir la escala** y **Detectar** (ver «Loops en tu tonalidad»).
 - **Marcadores** de warp y **Quitar**. **Trocear → A Drum Pads**. **Tempo: Detectar / Usar en el proyecto**. **Separar en stems**.

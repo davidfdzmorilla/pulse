@@ -124,7 +124,7 @@ fn loop_sample() -> Arc<Sample> {
 }
 
 fn audio_clip(warp: WarpMode, length: f64) -> AudioClip {
-    AudioClip { hard_start: false,
+    AudioClip { hard_start: false, fades: Default::default(),
         envelopes: Vec::new(),
         name: "loop".into(),
         color: [0, 0, 0],

@@ -55,13 +55,13 @@ la barra de estado lo dice y la ruta se conserva.
 
 ## Actualizar
 
-- Pulse busca versiones nuevas al arrancar (necesita acceso a GitHub: `gh auth
-  login` de GitHub CLI, o un token en Ayuda → Buscar actualizaciones → «Acceso a
-  GitHub», que se guarda en el Administrador de credenciales).
-- **Descargar e instalar** baja el zip de Windows y comprueba su huella SHA-256 y
-  su versión. Después cambia `pulse.exe` (y el runtime de Visual C++ si cambió) y
-  guarda el anterior como `pulse (anterior).exe`. **Volver a la versión
-  anterior** los intercambia.
+- Pulse busca versiones nuevas al arrancar, en las publicaciones de GitHub del
+  repositorio, que es público: no hace falta cuenta ni token.
+- **Descargar e instalar** baja el zip de Windows (solo por HTTPS) y comprueba su
+  huella SHA-256 y su versión. Después pone al día el runtime de Visual C++ si
+  cambió y cambia `pulse.exe`, guardando el anterior como `pulse (anterior).exe`.
+  Si algo falla a medias, queda el `pulse.exe` de antes, que funciona con el
+  runtime nuevo. **Volver a la versión anterior** los intercambia.
 - También se puede actualizar ejecutando el instalador de la versión nueva
   encima. Proyectos y ajustes no se tocan.
 

@@ -205,7 +205,10 @@ fn output(command: &mut Command) -> Option<String> {
 /// tried again.
 pub(crate) fn spawn_curl(url: &str, token: Option<&str>, accept: &str, to: Option<&Path>, resume: bool) -> Result<std::process::Child, String> {
     let mut command = command(system::curl());
-    command.args(["--silent", "--show-error", "--fail", "--location", "--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "60", "--retry", "3", "--config", "-"]);
+    // Only HTTPS, also where GitHub redirects to (its downloads go to another
+    // host), and a few redirects at most.
+    command.args(["--silent", "--show-error", "--fail", "--location", "--proto", "=https", "--proto-redir", "=https", "--max-redirs", "5"]);
+    command.args(["--connect-timeout", "20", "--speed-limit", "1024", "--speed-time", "60", "--retry", "3", "--config", "-"]);
     if let Some(path) = to {
         command.arg("--output").arg(path);
         if resume {
@@ -442,9 +445,12 @@ fn install(release: &Release, bundle: &Path, token: Option<&str>) -> Result<Stri
         }
         #[cfg(not(windows))]
         same_signer(bundle, &new)?;
-        swap_in(bundle, &new)?;
+        // The runtime DLLs first: if that fails, this pulse.exe stays, and it
+        // runs with newer ones. The other way round, a failure would leave the
+        // new pulse.exe with the old DLLs.
         #[cfg(windows)]
         system::update_libraries(new.parent().unwrap_or(&work), bundle.parent().unwrap_or(Path::new(".")))?;
+        swap_in(bundle, &new)?;
         Ok(version)
     })();
     let _ = std::fs::remove_dir_all(&work);

@@ -11,10 +11,20 @@ El script comprueba que `main` está al día y limpio, que la última etiqueta e
 la última publicación, y que está el certificado de firma. Pasa las pruebas
 (`--locked`), hace y firma `Pulse.app` (`scripts/bundle.sh`) con sus símbolos de
 depuración aparte (ver «Leer un informe de fallo»), y lo publica de una
-vez: primero como borrador, descarga lo subido y comprueba su SHA-256, su firma y
-su versión, y solo entonces lo publica, que es cuando se crea la etiqueta. Si
-algo falla antes, borra el borrador: no quedan etiquetas sin publicación ni
-números saltados. Las notas son los títulos de los pull requests fusionados.
+vez: primero como borrador, descarga lo subido y comprueba su SHA-256, su firma
+(y que es de «Pulse Local Signing»), su versión y la del binario
+(`pulse --version`), y solo entonces lo publica, que es cuando se crea la
+etiqueta. Si algo falla antes, también al crear el borrador, o lo paras con
+Ctrl-C, borra el borrador: no quedan etiquetas sin publicación ni números
+saltados. Las notas son los títulos de los pull requests fusionados.
+
+`bundle.sh` coge el binario de donde lo haya dejado Cargo (también con
+`CARGO_TARGET_DIR`) y comprueba que dice la versión que se publica, así que
+nunca empaqueta uno viejo. Las rutas de este Mac (el repositorio, el registro de
+Cargo) se escriben relativas al compilar y el binario va sin sus símbolos de
+depuración (`strip -S`, están en el dSYM): no lleva ninguna ruta de tu carpeta
+personal, y si la llevara, `bundle.sh` para. Los zips van sin los atributos
+extendidos de macOS, que fuera de él salen como archivos `._`.
 
 El paquete de Windows se hace aparte: [BUILD_WINDOWS.md](BUILD_WINDOWS.md).
 

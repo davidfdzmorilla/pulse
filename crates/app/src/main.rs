@@ -103,8 +103,16 @@ fn attach_console() {
 }
 
 fn main() -> eframe::Result {
-    logs::install();
     let args: Vec<String> = std::env::args().collect();
+    // What this build is (scripts/bundle.sh checks it is the one just built):
+    // nothing else runs, not even the logs.
+    if args.get(1).map(String::as_str) == Some("--version") {
+        #[cfg(windows)]
+        attach_console();
+        println!("{}", updates::VERSION);
+        return Ok(());
+    }
+    logs::install();
     #[cfg(windows)]
     if args.get(1).is_some_and(|a| a.starts_with("--")) {
         attach_console();

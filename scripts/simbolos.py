@@ -52,7 +52,9 @@ def find_dsym(uuid, version):
         for dsym in candidates:
             if uuid in uuid_of(dsym):
                 return dsym
-    if not version:
+    # Only a version number: it goes into a URL and a folder name, and a
+    # report can say anything.
+    if not version or not re.fullmatch(r"\d+\.\d+\.\d+", version):
         return None
     # Not here: that version's, from its release.
     url = f"https://github.com/{REPOSITORY}/releases/download/v{version}/Pulse-{version}-simbolos.zip"

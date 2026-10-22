@@ -5,6 +5,8 @@
 //!   every audio file it uses in `Samples/` (imported, recorded, stems, slices,
 //!   consolidated),
 //!   so it can be moved or copied to another Mac whole;
+//! - `Plantillas/<name>/<name>.pulse`, projects to start new ones from (see
+//!   `templates`), with their samples, as projects are;
 //! - `Exportaciones/`, `Presets/`, `Wavetables/` and `Samples/` (the user's own);
 //! - `Sin guardar/`: what a project not saved yet records or makes; saving moves
 //!   it into the project's folder.
@@ -23,6 +25,7 @@ pub const PRESETS: &str = "Presets";
 pub const WAVETABLES: &str = "Wavetables";
 pub const SAMPLES: &str = "Samples";
 pub const UNSAVED: &str = "Sin guardar";
+pub const TEMPLATES: &str = "Plantillas";
 
 /// Where a project's media go, inside its `Samples/` folder.
 pub const IMPORTED: &str = "Importados";
@@ -70,7 +73,7 @@ pub fn folder(name: &str) -> PathBuf {
 /// Creates the folders, and brings in presets and wavetables kept in Application
 /// Support by older versions (copied: projects may point at those wavetables).
 pub fn prepare() {
-    for name in [PROJECTS, EXPORTS, PRESETS, WAVETABLES, SAMPLES] {
+    for name in [PROJECTS, TEMPLATES, EXPORTS, PRESETS, WAVETABLES, SAMPLES] {
         folder(name);
     }
     let old = paths::data_dir();
@@ -168,6 +171,16 @@ pub fn collect(project: &mut Project, dir: &Path) -> Collected {
 /// [`collect`], also saying where each file it brought went (old path → new),
 /// to point earlier states of the project (undo) at them too.
 pub fn collect_renaming(project: &mut Project, dir: &Path) -> (Collected, HashMap<String, String>) {
+    gather(project, dir, true)
+}
+
+/// [`collect`], copying every file: what the project it came from uses stays
+/// where it is (a template is saved from a project that goes on).
+pub fn collect_copies(project: &mut Project, dir: &Path) -> Collected {
+    gather(project, dir, false).0
+}
+
+fn gather(project: &mut Project, dir: &Path, may_move: bool) -> (Collected, HashMap<String, String>) {
     // Without links or `..`: a path that only looks as if it were in «Sin
     // guardar» (`Sin guardar/../../Música/x.wav`) must be copied, never moved.
     let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
@@ -200,7 +213,7 @@ pub fn collect_renaming(project: &mut Project, dir: &Path) -> (Collected, HashMa
         if let Some(parent) = target.parent() {
             let _ = std::fs::create_dir_all(parent);
         }
-        let moved = kind.is_none() && std::fs::rename(&source, &target).is_ok();
+        let moved = may_move && kind.is_none() && std::fs::rename(&source, &target).is_ok();
         if moved {
             report.moved += 1;
             emptied.extend(source.parent().map(Path::to_path_buf));

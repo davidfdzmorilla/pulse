@@ -413,6 +413,19 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
                             }
                         });
                     }
+                    Item::Templates => {
+                        ui.menu_button("Nuevo desde plantilla", |ui| {
+                            for (i, template) in app.templates.iter().enumerate() {
+                                if i == crate::templates::BUILT_IN.len() {
+                                    ui.separator();
+                                }
+                                if ui.button(&template.name).clicked() {
+                                    chosen = Some(crate::commands::Command::NewFromTemplate(i));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    }
                     Item::System(..) => {}
                 }
             }

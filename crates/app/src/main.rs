@@ -74,6 +74,7 @@ mod store;
 mod sync;
 mod table_editor;
 mod tempo_ui;
+mod templates;
 mod theme;
 #[cfg(test)]
 mod test_audio;

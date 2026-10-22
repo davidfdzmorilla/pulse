@@ -14,12 +14,14 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     New,
+    NewFromTemplate(usize),
     Open,
     OpenRecent(usize),
     ClearRecent,
     Revert,
     Save,
     SaveAs,
+    SaveAsTemplate,
     Versions,
     MixAssistant,
     ImportLive,
@@ -139,6 +141,7 @@ impl PulseApp {
             Command::Redo => self.can_redo(),
             Command::Revert => self.file.is_some() && self.is_dirty(),
             Command::OpenRecent(i) => i < self.recent.len(),
+            Command::NewFromTemplate(i) => i < self.templates.len(),
             Command::ClearRecent => !self.recent.is_empty(),
             Command::Cut | Command::Copy | Command::Duplicate | Command::Delete => clip_selected || editing_notes,
             Command::Split | Command::Join => matches!(self.selected_clip, Some(crate::app::ClipRef::Arrangement { .. })),
@@ -172,7 +175,12 @@ impl PulseApp {
         match command {
             Command::New => {
                 if self.may_discard() {
-                    self.new_project();
+                    self.new_default();
+                }
+            }
+            Command::NewFromTemplate(i) => {
+                if self.may_discard() {
+                    self.new_from_template(i);
                 }
             }
             Command::Open => {
@@ -200,6 +208,7 @@ impl PulseApp {
             }
             Command::Save => self.save(),
             Command::SaveAs => self.save_as(),
+            Command::SaveAsTemplate => self.save_as_template(),
             Command::Versions => self.open_panel(crate::app::Panel::Versions),
             Command::MixAssistant => self.open_panel(crate::app::Panel::Mix),
             Command::ImportLive => {

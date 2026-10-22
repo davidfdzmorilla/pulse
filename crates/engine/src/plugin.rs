@@ -91,16 +91,18 @@ pub fn is_clap(path: &Path) -> bool {
 
 /// Every `.vst3` and `.clap` bundle under `folder`, up to `MAX_DEPTH` folders deep.
 pub fn bundles(folder: &Path) -> Vec<PathBuf> {
-    bundles_under(folder, 0)
+    let mut seen = std::collections::HashSet::new();
+    bundles_under(folder, 0, &mut seen)
 }
 
-/// Folders inside folders this deep at most: a link to a folder above would
-/// otherwise go round for ever.
+/// Folders inside folders this deep at most.
 const MAX_DEPTH: usize = 8;
 
-fn bundles_under(folder: &Path, depth: usize) -> Vec<PathBuf> {
+/// Each folder once, by where it really is: links to folders above, or two
+/// links to each other, would otherwise go round (or branch) for ever.
+fn bundles_under(folder: &Path, depth: usize, seen: &mut std::collections::HashSet<PathBuf>) -> Vec<PathBuf> {
     let mut found = Vec::new();
-    if depth > MAX_DEPTH {
+    if depth > MAX_DEPTH || !seen.insert(folder.canonicalize().unwrap_or_else(|_| folder.to_path_buf())) {
         return found;
     }
     let Ok(entries) = std::fs::read_dir(folder) else { return found };
@@ -110,7 +112,7 @@ fn bundles_under(folder: &Path, depth: usize) -> Vec<PathBuf> {
         if path.extension().is_some_and(|e| e.eq_ignore_ascii_case("vst3") || e.eq_ignore_ascii_case("clap")) {
             found.push(path);
         } else if path.is_dir() {
-            found.extend(bundles_under(&path, depth + 1));
+            found.extend(bundles_under(&path, depth + 1, seen));
         }
     }
     found
@@ -1672,6 +1674,25 @@ pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+
+    /// Links that go round (to the folder above, to each other) are looked
+    /// through once: each bundle found once, and quickly.
+    #[cfg(unix)]
+    #[test]
+    fn linked_folders_are_searched_once() {
+        let dir = std::env::temp_dir().join(format!("pulse-bundles-links-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("a/Uno.vst3")).unwrap();
+        std::fs::create_dir_all(dir.join("b")).unwrap();
+        std::os::unix::fs::symlink(&dir, dir.join("a/arriba")).unwrap();
+        std::os::unix::fs::symlink(dir.join("b"), dir.join("a/a-b")).unwrap();
+        std::os::unix::fs::symlink(dir.join("a"), dir.join("b/b-a")).unwrap();
+        let started = std::time::Instant::now();
+        let found = bundles(&dir);
+        std::fs::remove_dir_all(&dir).ok();
+        assert_eq!(found.len(), 1, "{found:?}");
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    }
 
     /// A folder holding a link to the folder above it: the search ends.
     #[cfg(unix)]

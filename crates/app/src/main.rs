@@ -117,6 +117,13 @@ fn main() -> eframe::Result {
     if args.get(1).is_some_and(|a| a.starts_with("--")) {
         attach_console();
     }
+    // One plugin loaded on its own, for a search (see `plugins::scan_apart`).
+    if args.get(1).map(String::as_str) == Some("--scan-plugin") {
+        if let Some(bundle) = args.get(2) {
+            plugins::scan_command(std::path::Path::new(bundle));
+        }
+        return Ok(());
+    }
     if args.get(1).map(String::as_str) == Some("--render") {
         let Some(output) = args.get(2) else {
             eprintln!("Uso: pulse --render <salida.wav> [proyecto.pulse]");

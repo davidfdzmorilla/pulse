@@ -12,6 +12,8 @@
 # before, or it is stopped (Ctrl-C), the draft goes and nothing is left: no
 # tag without a release, no number skipped.
 set -Eeuo pipefail
+# With pipefail, never `cmd | grep -q`: grep stops at the first match, cmd dies
+# of SIGPIPE and the pipe fails although it matched. `grep … >/dev/null` reads it all.
 root=$(cd "$(dirname "$0")/.." && pwd)
 cd "$root"
 part=${1:-patch}
@@ -30,7 +32,7 @@ if [ "$(git rev-parse HEAD)" != "$(git rev-parse origin/main)" ]; then
     echo "main no está al día con GitHub: git pull" >&2
     exit 1
 fi
-if ! security find-identity -p codesigning | grep -q '"Pulse Local Signing"' && [ "${PULSE_ALLOW_ADHOC:-}" != 1 ]; then
+if ! security find-identity -p codesigning | grep '"Pulse Local Signing"' >/dev/null && [ "${PULSE_ALLOW_ADHOC:-}" != 1 ]; then
     echo "Falta el certificado «Pulse Local Signing»: la versión saldría con firma ad hoc." >&2
     echo "(PULSE_ALLOW_ADHOC=1 para publicarla igualmente.)" >&2
     exit 1
@@ -71,7 +73,7 @@ out=${PULSE_BUNDLE_DIR:-$HOME/Library/Caches/Pulse/bundle}
 # signature only if asked for: they would all refuse it).
 checked() {
     codesign --verify --strict "$1"
-    if [ "${PULSE_ALLOW_ADHOC:-}" != 1 ] && ! codesign -dvv "$1" 2>&1 | grep -q '^Authority=Pulse Local Signing$'; then
+    if [ "${PULSE_ALLOW_ADHOC:-}" != 1 ] && ! codesign -dvv "$1" 2>&1 | grep '^Authority=Pulse Local Signing$' >/dev/null; then
         echo "$1 no está firmado con «Pulse Local Signing»" >&2
         return 1
     fi

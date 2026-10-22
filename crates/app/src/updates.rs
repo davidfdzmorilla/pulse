@@ -993,10 +993,12 @@ mod tests {
     fn releases_are_read_from_githubs_answer() {
         let json = r#"{"tag_name":"v0.2.0","name":"Pulse 0.2.0","body":"- Algo nuevo","assets":[
             {"name":"notes.txt","url":"https://api.github.com/x/1","size":3},
-            {"name":"Pulse-0.2.0.zip","url":"https://api.github.com/repos/o/r/releases/assets/2","size":12000000,"extra":1}]}"#;
+            {"name":"Pulse-0.2.0.zip","url":"https://api.github.com/repos/o/r/releases/assets/2","size":12000000,"extra":1},
+            {"name":"Pulse-0.2.0-windows-x64.zip","url":"https://api.github.com/repos/o/r/releases/assets/3","size":9000000}]}"#;
         let release: Release = serde_json::from_str(json).unwrap();
         assert_eq!(release.version(), "0.2.0");
-        assert_eq!(release.zip().map(|a| a.name.as_str()), Some("Pulse-0.2.0.zip"));
+        let package = if cfg!(windows) { "Pulse-0.2.0-windows-x64.zip" } else { "Pulse-0.2.0.zip" };
+        assert_eq!(release.zip().map(|a| a.name.as_str()), Some(package));
         // The symbols beside it are not the package, whatever their order.
         let symbols = Asset { name: "Pulse-0.2.0-simbolos.zip".into(), url: String::new(), size: 1, digest: None };
         let mut with_symbols = release.clone();

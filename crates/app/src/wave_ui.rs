@@ -686,10 +686,10 @@ pub(crate) fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &m
                         ui.vertical(|ui| {
                             ui.horizontal(|ui| {
                                 ui.checkbox(&mut edited.enabled, egui::RichText::new(device.effect.label()).strong());
-                                if slot > 0 && ui.small_button("◀").clicked() {
+                                if slot > 0 && ui.small_button("◄").clicked() {
                                     swap = Some(slot - 1);
                                 }
-                                if slot + 1 < WAVE_FX && base.fx[slot + 1].is_some() && ui.small_button("▶").clicked() {
+                                if slot + 1 < WAVE_FX && base.fx[slot + 1].is_some() && ui.small_button("►").clicked() {
                                     swap = Some(slot + 1);
                                 }
                                 remove = ui.small_button("×").clicked();
@@ -810,7 +810,7 @@ pub fn compact(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, ac
             OscKind::Sample | OscKind::Granular => sample_view(app, ui, t, 0, &shown, vec2(190.0, 100.0)),
             OscKind::Analog | OscKind::Harmonic => cycle_view(ui, &shown.osc[0], vec2(190.0, 100.0)),
         }
-        if ui.small_button("▶").on_hover_text("Escuchar").clicked() {
+        if ui.small_button("►").on_hover_text("Escuchar").clicked() {
             actions.push(Action::Preview(60));
         }
     });
@@ -858,7 +858,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     knob(app, ui, t, MACROS + m, &format!("Macro {}", m + 1), 24.0, &mut actions);
                 }
                 ui.add_space(12.0);
-                if ui.button("▶ Escuchar").clicked() {
+                if ui.button("► Escuchar").clicked() {
                     actions.push(Action::Preview(60));
                 }
             });

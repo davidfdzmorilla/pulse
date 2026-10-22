@@ -806,7 +806,7 @@ fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usiz
                 painter.text(
                     rect.left_top() + vec2(8.0, 4.0),
                     Align2::LEFT_TOP,
-                    "Anulada a mano · ▶ Arrangement la reactiva",
+                    "Anulada a mano · ► Arrangement la reactiva",
                     theme::small(),
                     TEXT_DIM,
                 );

@@ -74,12 +74,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
         // Tempo and launch settings.
         // With tempo automation, what plays now; moved by hand, it overrides it
-        // (until «▶ Arrangement»), as any automated control.
+        // (until «► Arrangement»), as any automated control.
         let automated = app.automation_state(engine::Target::Master, engine::model::Param::Tempo);
         let mut bpm = app.display_value(engine::Target::Master, engine::model::Param::Tempo) as f64;
         let hint = match automated {
-            Some(false) => "Tempo: lo marca la automatización del Master. Moverlo a mano la anula hasta «▶ Arrangement»",
-            Some(true) => "Tempo puesto a mano: la automatización está anulada («▶ Arrangement» la reactiva)",
+            Some(false) => "Tempo: lo marca la automatización del Master. Moverlo a mano la anula hasta «► Arrangement»",
+            Some(true) => "Tempo puesto a mano: la automatización está anulada («► Arrangement» la reactiva)",
             None => "Tempo (arrastra o escribe)",
         };
         let tempo = ui
@@ -181,7 +181,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
         ui.add_space(12.0);
         let needed = app.back_to_arrangement_needed();
-        if widgets::flat_button(ui, "▶ Arrangement", needed, vec2(104.0, 22.0))
+        if widgets::flat_button(ui, "► Arrangement", needed, vec2(104.0, 22.0))
             .on_hover_text("Volver al Arrangement: las pistas dejan los clips de sesión y la automatización que hayas\nmovido a mano vuelve a funcionar")
             .clicked()
         {

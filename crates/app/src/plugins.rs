@@ -594,6 +594,13 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(&dir).ok();
     }
 
+    /// Puts a plugin's library in `bundle`, where this system looks for it.
+    pub(crate) fn put(library: &std::path::Path, bundle: &std::path::Path) {
+        let binary = engine::plugin::binary(bundle);
+        std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
+        std::fs::copy(library, &binary).unwrap();
+    }
+
     pub(crate) fn test_bundle() -> PathBuf {
         static BUNDLE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
         BUNDLE
@@ -606,9 +613,7 @@ pub(crate) mod tests {
                 let library = target.join("release").join(if cfg!(target_os = "macos") { "libpulse_testplug.dylib" } else if cfg!(target_os = "windows") { "pulse_testplug.dll" } else { "libpulse_testplug.so" });
                 // A folder of its own, as a plugins folder would be.
                 let bundle = target.join("app-plugins/PulseTest.vst3");
-                let binary = bundle.join("Contents/MacOS/PulseTest");
-                std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-                std::fs::copy(&library, &binary).unwrap();
+                put(&library, &bundle);
                 bundle
             })
             .clone()
@@ -918,8 +923,7 @@ pub(crate) mod tests {
         // The test plugin as a .clap, in a folder of its own.
         let folder = test_bundle().parent().unwrap().with_file_name("app-clap");
         let bundle = folder.join("PulseTest.clap");
-        std::fs::create_dir_all(bundle.join("Contents/MacOS")).unwrap();
-        std::fs::copy(test_bundle().join("Contents/MacOS/PulseTest"), bundle.join("Contents/MacOS/PulseTest")).unwrap();
+        put(&engine::plugin::binary(&test_bundle()), &bundle);
         let mut app = PulseApp::headless(crate::project::Project::demo());
         app.plugin_library.search(&[folder]);
         let names: Vec<&str> = app.plugin_library.found.iter().map(|p| p.name.as_str()).collect();
@@ -991,8 +995,7 @@ pub(crate) mod tests {
     #[test]
     fn plugin_edits_are_unsaved_changes() {
         let clap = test_bundle().parent().unwrap().with_file_name("app-clap-edits");
-        std::fs::create_dir_all(clap.join("PulseTest.clap/Contents/MacOS")).unwrap();
-        std::fs::copy(test_bundle().join("Contents/MacOS/PulseTest"), clap.join("PulseTest.clap/Contents/MacOS/PulseTest")).unwrap();
+        put(&engine::plugin::binary(&test_bundle()), &clap.join("PulseTest.clap"));
         for folder in [test_bundle().parent().unwrap().to_path_buf(), clap] {
             let mut app = PulseApp::headless(crate::project::Project::demo());
             app.plugin_library.search(&[folder.clone()]);

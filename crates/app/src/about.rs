@@ -76,7 +76,9 @@ mod tests {
 
     #[test]
     fn the_licence_is_the_gpl_3() {
-        assert!(LICENSE.starts_with("                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007"));
+        // Git may check it out with Windows line ends.
+        let licence = LICENSE.replace("\r\n", "\n");
+        assert!(licence.starts_with("                    GNU GENERAL PUBLIC LICENSE\n                       Version 3, 29 June 2007"));
         assert!(LICENSE.contains("END OF TERMS AND CONDITIONS"));
         let manifest = include_str!("../Cargo.toml");
         assert!(manifest.contains("license = \"GPL-3.0-or-later\""));

@@ -2,8 +2,6 @@
 //! bundle in: the real binary with Pulse's test plugin, and with a bundle that
 //! isn't one.
 
-#![cfg(target_os = "macos")]
-
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -14,10 +12,11 @@ fn test_bundle() -> PathBuf {
     let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
     let status = Command::new(cargo).args(["build", "--release", "-p", "pulse-testplug", "--target-dir"]).arg(&target).current_dir(&root).status().expect("cargo build");
     assert!(status.success());
+    let library = if cfg!(target_os = "macos") { "libpulse_testplug.dylib" } else if cfg!(windows) { "pulse_testplug.dll" } else { "libpulse_testplug.so" };
     let bundle = target.join("scan-plugins/PulseTest.vst3");
-    let binary = bundle.join("Contents/MacOS/PulseTest");
+    let binary = engine::plugin::binary(&bundle);
     std::fs::create_dir_all(binary.parent().unwrap()).unwrap();
-    std::fs::copy(target.join("release/libpulse_testplug.dylib"), &binary).unwrap();
+    std::fs::copy(target.join("release").join(library), &binary).unwrap();
     bundle
 }
 
@@ -36,9 +35,9 @@ fn pulse_scans_a_plugin_in_its_own_process() {
     assert_eq!(found[0]["path"].as_str(), Some(bundle.to_str().unwrap()));
     // Not a plugin: said, not a crash.
     let dir = std::env::temp_dir().join(format!("pulse-scan-bad-{}", std::process::id()));
-    let fake = dir.join("Falso.vst3/Contents/MacOS");
-    std::fs::create_dir_all(&fake).unwrap();
-    std::fs::write(fake.join("Falso"), b"no soy una biblioteca").unwrap();
+    let fake = engine::plugin::binary(&dir.join("Falso.vst3"));
+    std::fs::create_dir_all(fake.parent().unwrap()).unwrap();
+    std::fs::write(&fake, b"no soy una biblioteca").unwrap();
     let answer: serde_json::Value = serde_json::from_str(&scan(&dir.join("Falso.vst3"))).unwrap();
     std::fs::remove_dir_all(&dir).ok();
     assert!(answer["error"].as_str().is_some_and(|e| !e.is_empty()), "{answer}");

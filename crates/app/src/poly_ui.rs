@@ -294,7 +294,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     knob(app, ui, t, 60 + m, &format!("Macro {}", m + 1), 24.0, &mut actions);
                 }
                 ui.add_space(12.0);
-                if ui.button("▶ Escuchar").clicked() {
+                if ui.button("► Escuchar").clicked() {
                     actions.push(Action::Preview(60));
                 }
             });

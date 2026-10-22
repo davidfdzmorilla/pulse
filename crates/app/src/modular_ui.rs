@@ -836,7 +836,7 @@ pub fn compact(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, ac
             let module = p.modules[m];
             ui.label(egui::RichText::new(format!("{} {}", m + 1, module.kind.label())).size(10.5).color(module_color(module.kind)));
         }
-        if ui.small_button("▶").on_hover_text("Escuchar").clicked() {
+        if ui.small_button("►").on_hover_text("Escuchar").clicked() {
             actions.push(Action::Preview(60));
         }
     });
@@ -901,7 +901,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 devices::preset_menu(app, ui, t, &mut actions);
-                if ui.button("▶ Escuchar").clicked() {
+                if ui.button("► Escuchar").clicked() {
                     actions.push(Action::Preview(60));
                 }
             });

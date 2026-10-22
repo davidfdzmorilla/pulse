@@ -894,9 +894,11 @@ mod tests {
         assert_eq!(clip.length, 8.0);
         // Both clips are found by file name inside the set folder, even though the
         // session clip's absolute path points to another computer.
-        assert!(clip.sample.ends_with("Samples/Imported/break.wav"));
+        // By components: Windows writes the path found with «\\».
+        let found = |sample: &str| std::path::Path::new(sample).ends_with("Samples/Imported/break.wav");
+        assert!(found(&clip.sample), "{}", clip.sample);
         let Some(Clip::Audio(session)) = &project.tracks[0].clips[0] else { panic!("expected an audio clip") };
-        assert!(session.sample.ends_with("Samples/Imported/break.wav"));
+        assert!(found(&session.sample), "{}", session.sample);
         assert_eq!(report.missing_samples, 0);
     }
 

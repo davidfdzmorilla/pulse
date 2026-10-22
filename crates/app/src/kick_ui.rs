@@ -431,7 +431,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     ui.ctx().memory_mut(|m| m.data.insert_temp(snap_id, snap));
                 }
                 ui.separator();
-                if ui.button("▶ Escuchar").clicked() {
+                if ui.button("► Escuchar").clicked() {
                     actions.push(Action::Preview(60));
                 }
                 if ui.button("Exportar WAV…").on_hover_text("Guarda un golpe como archivo de audio").clicked() {

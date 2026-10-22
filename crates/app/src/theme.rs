@@ -204,6 +204,12 @@ mod glyph_tests {
                 }
             }
         }
+        // And the guide, shown inside the app: all of its text.
+        for line in include_str!("../../../docs/guia.md").lines() {
+            for c in line.chars().filter(|c| !c.is_ascii()) {
+                used.entry(c).or_insert_with(|| format!("guia.md: {}", line.trim()));
+            }
+        }
         let missing: Vec<String> = ctx.fonts_mut(|f| {
             used.iter().filter(|(c, _)| !f.has_glyph(&body(), **c)).map(|(c, at)| format!("{c} (U+{:04X}) en {at}", *c as u32)).collect()
         });

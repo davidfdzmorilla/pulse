@@ -784,7 +784,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.horizontal_wrapped(|ui| {
             let (mark, color) = match a.level {
                 Level::Good => ("●", PLAY),
-                Level::Warning => ("⚠", METER_RED),
+                Level::Warning => ("▲", METER_RED),
                 Level::Note => ("•", ACCENT),
             };
             ui.label(RichText::new(mark).color(color));

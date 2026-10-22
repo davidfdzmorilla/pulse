@@ -413,7 +413,7 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
         ui.painter().rect_filled(rect, 2.0, if selected { theme::CONTROL_HOVER } else { theme::CONTROL });
     }
     let icon = match kind {
-        Kind::Audio if playing => "▶",
+        Kind::Audio if playing => "►",
         Kind::Audio => "♪",
         Kind::Project => "◆",
         Kind::Preset => "☰",

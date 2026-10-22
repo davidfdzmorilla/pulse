@@ -97,35 +97,31 @@ pub fn named_keys(text: &str) -> String {
 }
 
 /// The system's interface, fixed-width and symbol fonts (macOS: San Francisco and
-/// Apple Symbols; Windows: Segoe UI, Consolas, Segoe UI Symbol and Segoe UI
-/// Emoji, which has the symbols that are also emoji since Windows 10: ▶ ◀ ⚠;
-/// egui draws its plain outlines, not its colours).
-fn system_fonts() -> ([std::path::PathBuf; 2], Vec<std::path::PathBuf>) {
+/// Apple Symbols; Windows: Segoe UI, Consolas and Segoe UI Symbol).
+fn system_fonts() -> [std::path::PathBuf; 3] {
     if cfg!(windows) {
         let fonts = std::env::var_os("WINDIR").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from).join("Fonts");
-        (["segoeui.ttf", "consola.ttf"].map(|f| fonts.join(f)), ["seguisym.ttf", "seguiemj.ttf"].map(|f| fonts.join(f)).to_vec())
+        ["segoeui.ttf", "consola.ttf", "seguisym.ttf"].map(|f| fonts.join(f))
     } else {
-        (["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/SFNSMono.ttf"].map(std::path::PathBuf::from), vec!["/System/Library/Fonts/Apple Symbols.ttf".into()])
+        ["/System/Library/Fonts/SFNS.ttf", "/System/Library/Fonts/SFNSMono.ttf", "/System/Library/Fonts/Apple Symbols.ttf"].map(std::path::PathBuf::from)
     }
 }
 
 /// Uses the system's fonts when available; egui's bundled font otherwise.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
-    let ([system, mono], symbols) = system_fonts();
+    let [system, mono, symbols] = system_fonts();
     for (name, path) in [("system", system), ("system-mono", mono)] {
         let Ok(bytes) = std::fs::read(path) else { continue };
         fonts.font_data.insert(name.into(), Arc::new(FontData::from_owned(bytes)));
         let family = if name == "system" { FontFamily::Proportional } else { FontFamily::Monospace };
         fonts.families.entry(family).or_default().insert(0, name.into());
     }
-    // Symbols neither has (✎ ⤢ ✔ ⬆ …), from the system's symbol fonts, last.
-    for (i, path) in symbols.into_iter().enumerate() {
-        let Ok(bytes) = std::fs::read(path) else { continue };
-        let name = format!("symbols-{i}");
-        fonts.font_data.insert(name.clone(), Arc::new(FontData::from_owned(bytes)));
+    // Symbols neither has (✎ ⤢ ✔ ⬆ …), from the system's symbol font, last.
+    if let Ok(bytes) = std::fs::read(symbols) {
+        fonts.font_data.insert("symbols".into(), Arc::new(FontData::from_owned(bytes)));
         for family in [FontFamily::Proportional, FontFamily::Monospace] {
-            fonts.families.entry(family).or_default().push(name.clone());
+            fonts.families.entry(family).or_default().push("symbols".into());
         }
     }
     ctx.set_fonts(fonts);
@@ -206,6 +202,12 @@ mod glyph_tests {
                         }
                     }
                 }
+            }
+        }
+        // And the guide, shown inside the app: all of its text.
+        for line in include_str!("../../../docs/guia.md").lines() {
+            for c in line.chars().filter(|c| !c.is_ascii()) {
+                used.entry(c).or_insert_with(|| format!("guia.md: {}", line.trim()));
             }
         }
         let missing: Vec<String> = ctx.fonts_mut(|f| {

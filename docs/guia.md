@@ -19,7 +19,7 @@ Pulse tiene dos vistas: **Session**, para lanzar clips en bucle e improvisar, y 
 - Crea una pista MIDI con **⌘T** y elige un instrumento en el navegador (clic en INSTRUMENTOS).
 - Haz doble clic en un slot vacío de la pista: se crea un clip MIDI de un compás y se abre en el editor.
 - Haz doble clic en el editor para poner notas, o pulsa **M** y toca con el teclado del ordenador.
-- Pulsa el ▶ del clip para lanzarlo, y **Espacio** para parar.
+- Pulsa el ► del clip para lanzarlo, y **Espacio** para parar.
 
 La primera vez Pulse abre una canción de demostración (Drums, Bass, Chords, Lead). Después abre el último proyecto (se puede cambiar en Ajustes).
 
@@ -27,11 +27,11 @@ La primera vez Pulse abre una canción de demostración (Drums, Bass, Chords, Le
 
 La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a dos filas.
 
-- **Tempo**: arrastra o escribe (20–999 BPM). Con automatización de tempo (ver «Cambios de tempo») muestra el que suena, con un borde rojo; moverlo a mano la anula hasta **▶ Arrangement**.
+- **Tempo**: arrastra o escribe (20–999 BPM). Con automatización de tempo (ver «Cambios de tempo») muestra el que suena, con un borde rojo; moverlo a mano la anula hasta **► Arrangement**.
 - **●** junto al tempo: **metrónomo**.
 - **Cuantización de lanzamiento**: cuándo arrancan los clips que lanzas (Ninguna, 1/16 … 1 Compás, 2 Compases). Por defecto, 1 Compás.
 - **Posición** (compás. tiempo. semicorchea). Durante la cuenta atrás muestra «Cuenta N».
-- **▶ Reproducir** y **■ Parar** (Espacio). Parar detiene todo, incluida la grabación, y vuelve al marcador de inicio.
+- **► Reproducir** y **■ Parar** (Espacio). Parar detiene todo, incluida la grabación, y vuelve al marcador de inicio.
 - **● Grabar** (F9): graba en el Arrangement (ver «Grabar»).
 - **Cuenta atrás**: Sin cuenta, 1, 2 o 4 compases de metrónomo antes de grabar.
 - **A — Armar automatización**: si está encendido, al grabar se graban los controles que muevas.
@@ -40,7 +40,7 @@ La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a do
 - **Rec Q**: cuantiza el inicio de las notas MIDI grabadas (Off, 1/4, 1/8, 1/8T, 1/16, 1/16T, 1/32).
 - **Swing** (0–100 %) y su rejilla (1/8 o 1/16): retrasa los contratiempos al reproducir, sin cambiar las notas. 100 % es un shuffle de tresillo. También se aplica al exportar. Vale para todos los clips MIDI, salvo los que tengan su propio groove (ver «Editor MIDI»).
 - **Escala**: la tonalidad de la canción (ver «Tonalidad y escala»), y si los loops nuevos se ajustan a ella.
-- **▶ Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
+- **► Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
 - **Teclado**: el teclado del ordenador como teclado MIDI (M).
 - **Voz**: tocar cantando, tarareando o silbando al micrófono (ver «Tocar con la voz»).
 - **MIDI**: encendido si hay teclados MIDI conectados. Clic para volver a buscarlos.
@@ -55,7 +55,7 @@ Una columna por pista, con hasta 16 slots (escenas): se ven las que usas y una v
 
 ### Clips
 
-- **▶** de un clip lo lanza en el siguiente punto de cuantización (y arranca el transporte si estaba parado). Mientras espera, el ▶ parpadea. Una barra abajo muestra por dónde va.
+- **►** de un clip lo lanza en el siguiente punto de cuantización (y arranca el transporte si estaba parado). Mientras espera, el ► parpadea. Una barra abajo muestra por dónde va.
 - **Clic en el clip**: lo selecciona y lo abre en el editor.
 - **⌘ clic / ⇧ clic**: añade o quita clips de la selección.
 - **Doble clic en un slot vacío**: en una pista MIDI crea un clip vacío de un compás; en una de audio abre el selector de archivos.
@@ -134,7 +134,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 - Botones: **número** (activador: apagado = silencio), **S** (solo), **●** (armar), **In/Auto/Off** (monitorización, solo audio; cada clic pasa al siguiente modo) y **A** (carril de automatización).
 - Clic derecho: **Nombre**, **Color**, **Mostrar/Ocultar automatización**, **Mostrar/Ocultar tomas**, **Duplicar**, **Eliminar** y **Congelar**.
 
-Las pistas que están tocando clips de Session se ven oscurecidas: **▶ Arrangement** las devuelve.
+Las pistas que están tocando clips de Session se ven oscurecidas: **► Arrangement** las devuelve.
 
 ## Pistas
 
@@ -226,7 +226,7 @@ Mientras grabas en el Arrangement (F9), los clips de Session que suenan quedan e
 - Así puedes improvisar una canción lanzando clips y escenas, y que quede montada en el Arrangement.
 - Si solo hay clips de Session sonando, grabar no arma ninguna pista.
 - Lo que hubiera en el Arrangement de esa pista en ese tramo se sustituye.
-- Cuando terminas, las pistas siguen tocando la Session: pulsa **▶ Arrangement** para escuchar lo grabado.
+- Cuando terminas, las pistas siguen tocando la Session: pulsa **► Arrangement** para escuchar lo grabado.
 - Con el loop activado, cada clip se escribe una sola vez. El punch in/out también se aplica.
 
 ### Punch in / out
@@ -298,7 +298,7 @@ Al terminar la grabación aparece **una fila por toma** debajo de la pista, con 
 - **Clic**: añade un punto. **Arrastrar**: lo mueve. **Doble clic**: lo borra.
 - **⌥ + arrastrar** un tramo entre dos puntos lo **curva**: hacia arriba abomba la curva hacia arriba, hacia abajo la hunde. Sirve para fundidos y subidas más naturales. **⌥ + doble clic** en el tramo lo vuelve recto.
 - **Borrar automatización** (en la cabecera o con clic derecho en el carril) y **Ocultar carril**.
-- Los controles automatizados llevan un punto rojo y se mueven solos. Si mueves uno a mano, su automatización queda **anulada** (punto hueco, carril gris) hasta que pulses **▶ Arrangement**.
+- Los controles automatizados llevan un punto rojo y se mueven solos. Si mueves uno a mano, su automatización queda **anulada** (punto hueco, carril gris) hasta que pulses **► Arrangement**.
 
 ### Master y cambios de tempo
 
@@ -307,7 +307,7 @@ La última fila del Arrangement es el **Master**. Su **A** muestra su automatiza
 - **Tempo** hace que la canción cambie de velocidad: puntos a distintos tempos dan saltos (una intro lenta, un estribillo más rápido), y una línea entre dos puntos, un accelerando o un ritardando (con **⌥ + arrastrar** se curva). El carril va de 40 a 240 BPM.
 - Todo sigue el tempo: los clips MIDI, los audios en Stretch, Beats o Re-Pitch, el metrónomo, los delays y los arpegiadores. Los audios con warp **Off** no siguen el tempo: suenan a su velocidad, también durante la automatización de tempo, sin desafinar ni saltar. Si cambias el tempo a mano mientras suenan sí pueden saltar; en una canción con cambios, si quieres que sigan el tempo, ponlos en **Stretch**.
 - Al **exportar**, la canción dura lo que dan sus tempos.
-- Mover el tempo del transporte a mano anula la automatización (lo dice su borde) hasta **▶ Arrangement**.
+- Mover el tempo del transporte a mano anula la automatización (lo dice su borde) hasta **► Arrangement**.
 
 ### Grabar automatización
 
@@ -510,7 +510,7 @@ Arrastra arriba o abajo; **⇧** para ajuste fino; **doble clic** vuelve al valo
 La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la pista, el retorno o el Master seleccionado: en pistas MIDI el instrumento y después los efectos, de izquierda a derecha.
 
 - **Añadir**: clic en un efecto del navegador (EFECTOS DE AUDIO) lo pone al final de la cadena. Clic en un instrumento sustituye el de la pista MIDI seleccionada.
-- En cada efecto: el **punto** lo activa o desactiva, **◀ ▶** lo mueven y **×** lo quita.
+- En cada efecto: el **punto** lo activa o desactiva, **◄ ►** lo mueven y **×** lo quita.
 
 ### Efectos
 
@@ -530,7 +530,7 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 
 ### Efectos MIDI
 
-Cambian las notas antes de que lleguen al instrumento (en pistas MIDI). Se añaden desde el navegador (**EFECTOS MIDI**) con la pista seleccionada y aparecen en Dispositivos, antes del instrumento; hasta 4 por pista, en orden (el punto los activa, **◀ ▶** los mueven, **×** los quita).
+Cambian las notas antes de que lleguen al instrumento (en pistas MIDI). Se añaden desde el navegador (**EFECTOS MIDI**) con la pista seleccionada y aparecen en Dispositivos, antes del instrumento; hasta 4 por pista, en orden (el punto los activa, **◄ ►** los mueven, **×** los quita).
 
 - **Arpegiador**: toca las notas que mantienes una a una, en tiempo. **Orden**: arriba, abajo, arriba y abajo, como se tocan o al azar. **Ritmo**: de 1/4 a 1/32, con tresillos. **Octavas** (1–4) y **Duración** de cada nota. Con el transporte en marcha va con la rejilla; parado, empieza al tocar y sigue el tempo. **Al azar**, con el transporte en marcha, cada paso de la rejilla tiene siempre su nota: la canción suena igual cada vez que la tocas y al exportarla. Funciona con el teclado y con los clips.
 - **Acorde**: cada nota se convierte en un acorde. **En la escala**: le añade su tercera y su quinta (y **séptima**) de la escala, así que los acordes encajan con la canción (en do mayor, un re da re–fa–la, un sol da sol–si–re). La escala puede ser la del proyecto o una propia. Sin «En la escala»: los **semitonos añadidos**, con atajos (Mayor, Menor, Quinta, Octava, Sus4, Séptima). **Velocidad añadidas**: lo fuerte de las notas nuevas.

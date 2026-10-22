@@ -110,10 +110,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
                 if ui.small_button("×").on_hover_text("Eliminar").clicked() {
                     changes.push(Change::Remove(index));
                 }
-                if index + 1 < count && ui.small_button("▶").on_hover_text("Mover a la derecha").clicked() {
+                if index + 1 < count && ui.small_button("►").on_hover_text("Mover a la derecha").clicked() {
                     changes.push(Change::Move(index, index + 1));
                 }
-                if index > 0 && ui.small_button("◀").on_hover_text("Mover a la izquierda").clicked() {
+                if index > 0 && ui.small_button("◄").on_hover_text("Mover a la izquierda").clicked() {
                     changes.push(Change::Move(index, index - 1));
                 }
             },

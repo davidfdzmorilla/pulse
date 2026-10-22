@@ -479,7 +479,7 @@ fn clip_slot(
     }
 
     let hint = match (clip.is_some(), app.project.tracks[t].is_audio()) {
-        (true, _) => "▶ lanza · clic: editar · ⌘ clic: añadir a la selección · arrastrar: mover (⌥ copia) · clic derecho: más opciones",
+        (true, _) => "► lanza · clic: editar · ⌘ clic: añadir a la selección · arrastrar: mover (⌥ copia) · clic derecho: más opciones",
         (false, false) if armed => "● graba un clip nuevo · doble clic: clip MIDI vacío",
         (false, false) => "Doble clic: nuevo clip MIDI · arrastrar: seleccionar con un recuadro",
         (false, true) => "Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)",

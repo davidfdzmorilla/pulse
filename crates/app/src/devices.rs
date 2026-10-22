@@ -172,10 +172,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         if ui.small_button("×").on_hover_text("Eliminar").clicked() {
                             header_actions.push(Action::Remove(index));
                         }
-                        if index + 1 < count && ui.small_button("▶").on_hover_text("Mover a la derecha").clicked() {
+                        if index + 1 < count && ui.small_button("►").on_hover_text("Mover a la derecha").clicked() {
                             header_actions.push(Action::Move(index, index + 1));
                         }
-                        if index > 0 && ui.small_button("◀").on_hover_text("Mover a la izquierda").clicked() {
+                        if index > 0 && ui.small_button("◄").on_hover_text("Mover a la izquierda").clicked() {
                             header_actions.push(Action::Move(index, index - 1));
                         }
                     },
@@ -607,7 +607,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                             if let Some(params) = zone_menu(app, ui, t, &base) {
                                 actions.push(Action::Instrument(InstrumentKind::Sampler(params)));
                             }
-                        } else if ui.small_button("▶").on_hover_text("Escuchar en la nota raíz").clicked() {
+                        } else if ui.small_button("►").on_hover_text("Escuchar en la nota raíz").clicked() {
                             actions.push(Action::Preview(base.root.round() as u8));
                         }
                     });
@@ -742,7 +742,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         if mode != base.drive_mode || follow != base.key_follow {
                             body_actions.push(Action::Instrument(InstrumentKind::Kick(KickParams { drive_mode: mode, key_follow: follow, ..base })));
                         }
-                        if ui.small_button("▶").on_hover_text("Escuchar").clicked() {
+                        if ui.small_button("►").on_hover_text("Escuchar").clicked() {
                             body_actions.push(Action::Preview(60));
                         }
                     });

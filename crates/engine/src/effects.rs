@@ -337,9 +337,10 @@ impl Saturator {
         let p = self.params;
         let drive = db_to_gain(p.drive_db);
         let out = db_to_gain(p.output_db);
+        let steps = crush_steps(p.drive_db);
         if !p.oversample {
             for s in l.iter_mut().chain(r.iter_mut()) {
-                let wet = shape(*s, p.kind, drive, p.drive_db) * out;
+                let wet = shape(*s, p.kind, drive, steps) * out;
                 *s += (wet - *s) * p.mix;
             }
             return;
@@ -349,7 +350,7 @@ impl Saturator {
                 let x = buf[i];
                 let mut up = self.over[ch].up(x);
                 for y in &mut up {
-                    *y = shape(*y, p.kind, drive, p.drive_db);
+                    *y = shape(*y, p.kind, drive, steps);
                 }
                 let wet = self.over[ch].down(up) * out;
                 let dry = std::mem::replace(&mut self.dry[ch][self.at], x);
@@ -360,9 +361,15 @@ impl Saturator {
     }
 }
 
-/// A sample through a saturation `kind` at gain `drive` (`drive_db` in dB).
-/// Soft is the tanh the Saturator always had.
-fn shape(x: f32, kind: KickDrive, drive: f32, drive_db: f32) -> f32 {
+/// Crush's levels at `drive_db`: the same for a whole block.
+fn crush_steps(drive_db: f32) -> f32 {
+    2f32.powf(12.0 - (drive_db / 36.0).clamp(0.0, 1.0) * 10.0)
+}
+
+/// A sample through a saturation `kind` at gain `drive`, with Crush's
+/// levels (see [`crush_steps`]). Soft is the tanh the Saturator always had.
+#[inline]
+fn shape(x: f32, kind: KickDrive, drive: f32, steps: f32) -> f32 {
     let x = x * drive;
     match kind {
         KickDrive::Soft => x.tanh(),
@@ -372,10 +379,7 @@ fn shape(x: f32, kind: KickDrive, drive: f32, drive_db: f32) -> f32 {
         KickDrive::Tube => {
             if x >= 0.0 { x.tanh() } else { 2.0 * (x * 0.5).tanh() }
         }
-        KickDrive::Crush => {
-            let steps = 2f32.powf(12.0 - (drive_db / 36.0).clamp(0.0, 1.0) * 10.0);
-            (x.clamp(-1.0, 1.0) * steps).round() / steps
-        }
+        KickDrive::Crush => (x.clamp(-1.0, 1.0) * steps).round() / steps,
     }
 }
 
@@ -384,12 +388,41 @@ fn shape(x: f32, kind: KickDrive, drive: f32, drive_db: f32) -> f32 {
 /// up, and the same to filter before coming down. Its delay is a whole number of
 /// samples ([`Oversampler::LATENCY`]).
 pub struct Oversampler {
-    /// The last inputs (a ring).
-    input: [f32; Self::PHASE_TAPS],
+    /// The last inputs, twice over (each written at its place and one ring
+    /// further), so the last ones are always side by side: no modulo per tap.
+    input: [f32; 2 * Self::PHASE_TAPS],
     input_at: usize,
-    /// The last oversampled values (a ring).
-    output: [f32; Self::TAPS],
+    /// The last oversampled values, the same way.
+    output: [f32; 2 * Self::TAPS],
     output_at: usize,
+    /// The low-pass split in its four phases (for going up), and its first
+    /// half (it is symmetric: going down adds each pair of samples first).
+    phases: &'static Phases,
+}
+
+/// [`Oversampler::taps`] as the oversampler uses them.
+struct Phases {
+    up: [[f32; Oversampler::PHASE_TAPS]; Oversampler::FACTOR],
+    half: [f32; Oversampler::TAPS / 2 + 1],
+}
+
+/// The dot product of two slices of the same length, in eight lanes the
+/// compiler keeps in vector registers.
+#[inline]
+fn dot(a: &[f32], b: &[f32]) -> f32 {
+    let mut lanes = [0f32; 8];
+    let (ca, cb) = (a.chunks_exact(8), b.chunks_exact(8));
+    let (ra, rb) = (ca.remainder(), cb.remainder());
+    for (x, y) in ca.zip(cb) {
+        for k in 0..8 {
+            lanes[k] += x[k] * y[k];
+        }
+    }
+    let mut sum = ((lanes[0] + lanes[4]) + (lanes[1] + lanes[5])) + ((lanes[2] + lanes[6]) + (lanes[3] + lanes[7]));
+    for (x, y) in ra.iter().zip(rb) {
+        sum += x * y;
+    }
+    sum
 }
 
 impl Oversampler {
@@ -401,14 +434,35 @@ impl Oversampler {
     pub const LATENCY: usize = 36;
 
     fn new() -> Self {
-        Self { input: [0.0; Self::PHASE_TAPS], input_at: 0, output: [0.0; Self::TAPS], output_at: 0 }
+        Self { input: [0.0; 2 * Self::PHASE_TAPS], input_at: 0, output: [0.0; 2 * Self::TAPS], output_at: 0, phases: Self::phases() }
+    }
+
+    fn phases() -> &'static Phases {
+        static PHASES: std::sync::OnceLock<Phases> = std::sync::OnceLock::new();
+        PHASES.get_or_init(|| {
+            let taps = Self::taps();
+            let mut up = [[0f32; Self::PHASE_TAPS]; Self::FACTOR];
+            for (phase, row) in up.iter_mut().enumerate() {
+                for (j, tap) in row.iter_mut().enumerate() {
+                    // Zero-stuffing leaves a quarter of the level: four times the taps.
+                    *tap = taps.get(phase + Self::FACTOR * j).map_or(0.0, |t| t * Self::FACTOR as f32);
+                }
+            }
+            let mut half = [0f32; Self::TAPS / 2 + 1];
+            half.copy_from_slice(&taps[..Self::TAPS / 2 + 1]);
+            Phases { up, half }
+        })
     }
 
     /// The low-pass, at about 21 kHz for 48 kHz (0.44 of the base Nyquist), with
     /// a Kaiser window (β 7).
     fn taps() -> &'static [f32; 145] {
         static TAPS: std::sync::OnceLock<[f32; 145]> = std::sync::OnceLock::new();
-        TAPS.get_or_init(|| {
+        TAPS.get_or_init(Self::design)
+    }
+
+    fn design() -> [f32; 145] {
+        {
             // The modified Bessel function I0, by its series.
             let bessel = |x: f64| {
                 let (mut sum, mut term) = (1.0, 1.0);
@@ -433,40 +487,43 @@ impl Oversampler {
             let sum: f32 = taps.iter().sum();
             taps.iter_mut().for_each(|t| *t /= sum);
             taps
-        })
+        }
     }
 
     /// One input sample as four at the higher rate.
+    #[inline]
     fn up(&mut self, x: f32) -> [f32; 4] {
-        self.input_at = (self.input_at + Self::PHASE_TAPS - 1) % Self::PHASE_TAPS;
+        const P: usize = Oversampler::PHASE_TAPS;
+        self.input_at = (self.input_at + P - 1) % P;
         self.input[self.input_at] = x;
-        let taps = Self::taps();
-        let mut out = [0f32; 4];
-        for (phase, y) in out.iter_mut().enumerate() {
-            let mut sum = 0.0;
-            for j in 0..Self::PHASE_TAPS {
-                let k = phase + Self::FACTOR * j;
-                if k < Self::TAPS {
-                    sum += taps[k] * self.input[(self.input_at + j) % Self::PHASE_TAPS];
-                }
-            }
-            // Zero-stuffing leaves a quarter of the level.
-            *y = sum * Self::FACTOR as f32;
-        }
-        out
+        self.input[self.input_at + P] = x;
+        let window = &self.input[self.input_at..self.input_at + P];
+        let up = &self.phases.up;
+        [dot(&up[0], window), dot(&up[1], window), dot(&up[2], window), dot(&up[3], window)]
     }
 
     /// Four samples at the higher rate as one at the base rate: taken at the
     /// first of them, so the delay is whole base samples.
+    #[inline]
     fn down(&mut self, xs: [f32; 4]) -> f32 {
-        let mut out = 0.0;
-        for (i, x) in xs.into_iter().enumerate() {
-            self.output_at = (self.output_at + Self::TAPS - 1) % Self::TAPS;
-            self.output[self.output_at] = x;
-            if i == 0 {
-                let taps = Self::taps();
-                out = (0..Self::TAPS).map(|k| taps[k] * self.output[(self.output_at + k) % Self::TAPS]).sum();
-            }
+        const T: usize = Oversampler::TAPS;
+        let push = |o: &mut Self, x: f32| {
+            o.output_at = (o.output_at + T - 1) % T;
+            o.output[o.output_at] = x;
+            o.output[o.output_at + T] = x;
+        };
+        // The first one in, and the window ending at it, before the other three go in.
+        push(self, xs[0]);
+        let window = &self.output[self.output_at..self.output_at + T];
+        // Symmetric taps: each pair from the two ends shares one.
+        let mut pairs = [0f32; T / 2 + 1];
+        for k in 0..T / 2 {
+            pairs[k] = window[k] + window[T - 1 - k];
+        }
+        pairs[T / 2] = window[T / 2];
+        let out = dot(&self.phases.half, &pairs);
+        for &x in &xs[1..] {
+            push(self, x);
         }
         out
     }
@@ -1397,6 +1454,97 @@ mod tests {
 
     /// Hard clipping a 5 kHz sine makes harmonics up past Nyquist, which fold
     /// back (to 13 and 3 kHz here); oversampled, they stay out.
+    /// The oversampler as it first was (one tap at a time, rings read with a
+    /// modulo): what the quicker one must still give.
+    struct PlainOversampler {
+        input: [f32; Oversampler::PHASE_TAPS],
+        input_at: usize,
+        output: [f32; Oversampler::TAPS],
+        output_at: usize,
+    }
+
+    impl PlainOversampler {
+        fn new() -> Self {
+            Self { input: [0.0; Oversampler::PHASE_TAPS], input_at: 0, output: [0.0; Oversampler::TAPS], output_at: 0 }
+        }
+
+        fn up(&mut self, x: f32) -> [f32; 4] {
+            const P: usize = Oversampler::PHASE_TAPS;
+            self.input_at = (self.input_at + P - 1) % P;
+            self.input[self.input_at] = x;
+            let taps = &Oversampler::design();
+            let mut out = [0f32; 4];
+            for (phase, y) in out.iter_mut().enumerate() {
+                let mut sum = 0.0;
+                for j in 0..P {
+                    let k = phase + 4 * j;
+                    if k < Oversampler::TAPS {
+                        sum += taps[k] * self.input[(self.input_at + j) % P];
+                    }
+                }
+                *y = sum * 4.0;
+            }
+            out
+        }
+
+        fn down(&mut self, xs: [f32; 4]) -> f32 {
+            const T: usize = Oversampler::TAPS;
+            let taps = &Oversampler::design();
+            let mut out = 0.0;
+            for (i, x) in xs.into_iter().enumerate() {
+                self.output_at = (self.output_at + T - 1) % T;
+                self.output[self.output_at] = x;
+                if i == 0 {
+                    out = (0..T).map(|k| taps[k] * self.output[(self.output_at + k) % T]).sum();
+                }
+            }
+            out
+        }
+    }
+
+    /// The quick oversampler gives what the plain one did, to float rounding.
+    #[test]
+    fn the_quick_oversampler_sounds_as_the_plain_one() {
+        let (mut quick, mut plain) = (Oversampler::new(), PlainOversampler::new());
+        let mut seed = 3u32;
+        let mut worst = 0f32;
+        for i in 0..48_000 {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            let noise = (seed >> 9) as f32 / (1u32 << 23) as f32 * 2.0 - 1.0;
+            let x = 0.8 * (i as f32 * 0.05).sin() + 0.2 * noise;
+            let (a, b) = (quick.up(x), plain.up(x));
+            for k in 0..4 {
+                worst = worst.max((a[k] - b[k]).abs());
+            }
+            // Through a hard clip, as the Saturator does.
+            let clip = |v: [f32; 4]| v.map(|y| (y * 3.0).clamp(-1.0, 1.0));
+            worst = worst.max((quick.down(clip(a)) - plain.down(clip(b))).abs());
+        }
+        assert!(worst < 2e-6, "{worst}");
+    }
+
+    /// How long the 4× Saturator takes (`cargo test --release -p engine -- --ignored --nocapture saturator_cost`).
+    #[test]
+    #[ignore]
+    fn saturator_cost() {
+        let sr = 48_000.0;
+        let params = crate::model::SaturatorParams { drive_db: 12.0, kind: crate::model::KickDrive::Tube, oversample: true, ..Default::default() };
+        let mut fx = EffectProcessor::new(&Effect::Saturator(params), sr);
+        let (mut l, mut r) = (vec![0.0f32; 256], vec![0.0f32; 256]);
+        let seconds = 20.0;
+        let blocks = (seconds * sr / 256.0) as usize;
+        let start = std::time::Instant::now();
+        for b in 0..blocks {
+            for (i, (a, c)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+                *a = ((b * 256 + i) as f32 * 0.03).sin() * 0.7;
+                *c = *a;
+            }
+            fx.process(&mut l, &mut r, &ctx());
+        }
+        let share = start.elapsed().as_secs_f64() / seconds as f64 * 100.0;
+        println!("Saturator 4×: {share:.3} % de un núcleo (estéreo, 48 kHz)");
+    }
+
     #[test]
     fn oversampling_keeps_aliases_out() {
         let aliases = |oversample: bool| {

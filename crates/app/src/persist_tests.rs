@@ -903,8 +903,10 @@ fn saving_never_moves_files_from_outside_unsaved() {
     let unsaved = crate::library::root().join(crate::library::UNSAVED);
     std::fs::create_dir_all(&unsaved).unwrap();
     // From «Sin guardar» up to the root, then down to the file.
-    let ups = unsaved.canonicalize().unwrap().components().count() - 1;
-    let sneaky = (0..ups).fold(unsaved.clone(), |p, _| p.join("..")).join(mine.canonicalize().unwrap().strip_prefix("/").unwrap());
+    // Folder names only: on Windows a path also starts with its drive.
+    let names = |p: &std::path::Path| -> std::path::PathBuf { p.canonicalize().unwrap().components().filter(|c| matches!(c, std::path::Component::Normal(_))).collect() };
+    let ups = names(&unsaved).components().count();
+    let sneaky = (0..ups).fold(unsaved.clone(), |p, _| p.join("..")).join(names(&mine));
     assert!(sneaky.starts_with(&unsaved) && sneaky.is_file());
     let mut project = Project::empty();
     project.tracks[0] = Track::new_audio("Bajo", [1, 2, 3]);

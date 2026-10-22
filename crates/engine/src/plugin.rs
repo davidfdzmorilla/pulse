@@ -198,8 +198,9 @@ fn modules() -> &'static Mutex<HashMap<PathBuf, Arc<Module>>> {
     MODULES.get_or_init(Default::default)
 }
 
-/// The binary inside a bundle (or the path itself if it is a plain library).
-pub(crate) fn binary(bundle: &Path) -> PathBuf {
+/// The binary inside a bundle (or the path itself if it is a plain library),
+/// where each system keeps it: `Contents/MacOS`, `Contents/x86_64-win`…
+pub fn binary(bundle: &Path) -> PathBuf {
     if bundle.is_file() {
         return bundle.to_path_buf();
     }

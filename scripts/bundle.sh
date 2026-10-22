@@ -6,6 +6,8 @@
 # sync attributes on the bundle, and codesign refuses to sign it then.
 # Usage: scripts/bundle.sh
 set -euo pipefail
+# With pipefail, never `cmd | grep -q`: grep stops at the first match, cmd dies
+# of SIGPIPE and the pipe fails although it matched. `grep … >/dev/null` reads it all.
 root=$(cd "$(dirname "$0")/.." && pwd)
 # The version: PULSE_VERSION (set by scripts/release.sh), else git's (the last
 # release and how far past it, as the app names itself: see build.rs).
@@ -46,7 +48,7 @@ fi
 # Without its debugging symbols (they are in the dSYM): smaller, and none of
 # the paths the object files had. The UUID stays, so the dSYM still fits.
 strip -S "$app/Contents/MacOS/pulse"
-if strings "$app/Contents/MacOS/pulse" | grep -q -F "$HOME/"; then
+if strings "$app/Contents/MacOS/pulse" | grep -F "$HOME/" >/dev/null; then
     echo "El binario aún lleva rutas de $HOME:" >&2
     strings "$app/Contents/MacOS/pulse" | grep -F "$HOME/" | head -5 >&2
     exit 1
@@ -58,7 +60,7 @@ sed "s/@VERSION@/$version/g" "$root/packaging/Info.plist" > "$app/Contents/Info.
 plutil -lint "$app/Contents/Info.plist" >/dev/null
 xattr -cr "$app"
 
-if security find-identity -p codesigning | grep -q "\"$identity\""; then
+if security find-identity -p codesigning | grep "\"$identity\"" >/dev/null; then
     codesign --force --sign "$identity" "$app"
     echo "Pulse ${version} firmado con «${identity}»: $app"
 else

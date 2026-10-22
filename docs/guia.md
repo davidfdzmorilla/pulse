@@ -67,7 +67,7 @@ Una columna por pista, con hasta 16 slots (escenas): se ven las que usas y una v
 
 - **Lanzar**.
 - **Copiar al Arrangement**: lo pone al final del Arrangement de su pista, en un compás.
-- Solo audio: **Separar en stems…**, **Consolidar**, **Detectar tempo** y **Usar el tempo de este clip en el proyecto**.
+- Solo audio: **Separar en stems…**, **Consolidar**, **Invertir**, **Detectar tempo** y **Usar el tempo de este clip en el proyecto**.
 - **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
 - **Duplicar** (⌘D): al siguiente slot libre de abajo.
 - **Eliminar** (Supr o ⌫).
@@ -102,7 +102,7 @@ La línea de tiempo. Arriba la **franja del loop**, debajo la **regla** con los 
 La franja bajo la del loop tiene los **marcadores**: las partes de la canción con su nombre.
 
 - **Doble clic** en la franja: un marcador nuevo ahí. **Clic** en uno: el cursor salta a él. **Arrastrar**: lo mueve (por la rejilla).
-- **Clic derecho** en un marcador: renombrarlo, **Ir aquí** o eliminarlo; en la franja vacía, **Añadir marcador aquí**.
+- **Clic derecho** en un marcador: renombrarlo, **Ir aquí**, eliminarlo o poner una **Transición aquí ▸** (ver «Transiciones»); en la franja vacía, **Añadir marcador aquí** y **Transición aquí ▸** en el compás más cercano.
 - El **Arreglo automático** pone uno en cada parte, y al importar de Live llegan sus locators.
 
 ### Clips
@@ -117,7 +117,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 ### Menú del clip (clic derecho)
 
 - **Tomas** (en grabaciones en bucle): elegir la toma que suena y **Mostrar las tomas en filas…** (ver «Tomas y comping»).
-- Solo audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar**.
+- Solo audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar**, **Invertir**.
 - **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
 - **Dividir aquí** (⌘E corta en el cursor), **Unir N clips** (⌘J).
 - **Desactivar clip** (tecla **0**): el clip se queda donde está, en gris, pero no suena (ni sus notas, ni su audio, ni su automatización); tampoco al exportar. Otra vez lo activa. Si lo desactivas (o mueves, recortas o borras un clip de audio) mientras suena, se apaga con un fundido corto, sin clic. Con varios seleccionados, los desactiva todos (o los activa, si ya lo estaban todos). También en el menú de los clips de Session.
@@ -128,6 +128,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 
 - **Pegar aquí**, si hay algo copiado.
 - **Añadir muestra aquí…** (audio) o **Nuevo clip MIDI aquí** (MIDI).
+- **Transición aquí ▸**: una subida, una bajada, un impacto o un platillo invertido en el compás más cercano (ver «Transiciones»).
 
 ### Cabecera de pista
 
@@ -199,7 +200,19 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 - **⌘J — Unir clips**: dos o más clips de la misma pista en uno, del principio del primero al final del último. Los MIDI juntan sus notas; los de audio se renderizan a un archivo nuevo, con silencio en los huecos.
 - **Consolidar** (clic derecho en un clip de audio): lo que suena el clip (con su warp, transposición y ganancia) pasa a un archivo de audio nuevo solo con su trozo. Pierde sus tomas.
 - Dos clips de audio seguidos (sin hueco entre ellos, como las partes de un clip dividido o los trozos de tomas) se funden entre sí durante 10 ms en el corte, en vez de bajar cada uno a silencio. Al unirlos, el archivo nuevo conserva ese fundido.
-- Por ahora unir y consolidar no aplican los efectos de la pista.
+- **Invertir** (clic derecho en un clip de audio, también varios): lo que suena el clip, del final al principio, en un archivo nuevo, «… (invertido)». Sus envolventes de clip se dan la vuelta con él. Invertirlo otra vez lo devuelve a como sonaba, con su nombre. Para un platillo, una voz o un golpe que crece hasta el cambio, como los efectos «reverse».
+- Por ahora unir, consolidar e invertir no aplican los efectos de la pista.
+
+## Transiciones
+
+Efectos para los cambios de sección, hechos a la medida de tu canción: clic derecho en un marcador, en la franja de marcadores o en un hueco de una pista del Arrangement → **Transición aquí ▸**.
+
+- **Subida** (1, 2, 4 u 8 compases): ruido y un tono que suben de grave a agudo y de suave a fuerte, y terminan justo en ese compás. El riser de antes del drop.
+- **Bajada** (1, 2 o 4 compases): lo contrario, desde ese compás: cae y se apaga (downlifter).
+- **Impacto**: un golpe grave que baja de tono, con ruido y cola, de dos compases, desde ese compás.
+- **Platillo invertido** (1, 2 o 4 compases): un platillo al revés que crece hasta ese compás.
+
+Cada una es un clip de audio a tu tempo, en una pista **Transiciones** (se crea la primera vez y las siguientes van a ella). Si cambias el tempo, la sigue. El tono va en la tonalidad del proyecto, si tiene, y en La si no. Suenan a −6 dBFS: bájalas con el fader de la pista y dales reverb o delay con los envíos. Si una subida no cabe entera antes del principio de la canción, empieza en el principio. Los archivos van a `Samples/Transiciones` del proyecto.
 
 ## Arreglo automático
 

@@ -3,7 +3,7 @@
 //!
 //! - `Proyectos/<name>/<name>.pulse`, each project in a folder of its own with
 //!   every audio file it uses in `Samples/` (imported, recorded, stems, slices,
-//!   consolidated),
+//!   consolidated, transitions),
 //!   so it can be moved or copied to another Mac whole;
 //! - `Plantillas/<name>/<name>.pulse`, projects to start new ones from (see
 //!   `templates`), with their samples, as projects are;
@@ -34,6 +34,7 @@ pub const STEMS: &str = "Stems";
 pub const SLICES: &str = "Trozos";
 pub const CONSOLIDATED: &str = "Consolidados";
 pub const FROZEN: &str = "Congelados";
+pub const TRANSITIONS: &str = "Transiciones";
 
 /// The folder chosen in Settings, if not the default.
 static CHOSEN: RwLock<Option<PathBuf>> = RwLock::new(None);

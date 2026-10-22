@@ -39,6 +39,7 @@ pub(crate) enum Action {
     StartMarquee(egui::Pos2, egui::Modifiers),
     SelectTarget(Target),
     Consolidate(usize, usize),
+    Reverse(usize, usize),
     ToggleClipMuted(usize, usize),
     ToMidi(usize, usize, crate::to_midi::ToMidi),
     Accompany(usize, usize, crate::accompany::Part),
@@ -579,6 +580,9 @@ fn clip_slot(
             }
             if matches!(clip, Clip::Audio(_)) && ui.button("Consolidar").on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
                 actions.push(Action::Consolidate(t, slot));
+            }
+            if matches!(clip, Clip::Audio(_)) && ui.button("Invertir").on_hover_text("Lo que suena el clip, del final al principio, en un archivo nuevo (otra vez lo devuelve)").clicked() {
+                actions.push(Action::Reverse(t, slot));
                 ui.close();
             }
             if matches!(clip, Clip::Audio(_)) {
@@ -796,6 +800,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::Unfreeze(t) => app.unfreeze(t),
         Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),
+        Action::Reverse(t, slot) => app.reverse_clips(vec![ClipRef::Session { track: t, slot }]),
         Action::ToggleClipMuted(t, slot) => {
             let clip = ClipRef::Session { track: t, slot };
             if !app.is_clip_selected(clip) {

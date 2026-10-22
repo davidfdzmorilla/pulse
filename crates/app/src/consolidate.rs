@@ -101,6 +101,73 @@ impl PulseApp {
         });
     }
 
+    /// Turns each of `clips` that is audio round: what it sounds, from its end
+    /// to its start, in a new file (its envelopes turned round too). Again,
+    /// and it plays forwards.
+    pub fn reverse_clips(&mut self, clips: Vec<ClipRef>) {
+        let mut done = 0;
+        for clip in clips {
+            let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { continue };
+            let beats = match clip {
+                ClipRef::Session { .. } => audio.length,
+                ClipRef::Arrangement { track, index } => self.project.tracks[track].arrangement[index].length,
+            };
+            let sample = self.sample(&audio.sample);
+            if sample.frames() == 0 {
+                self.status = Some(format!("No se encuentra el audio de «{}»", audio.name));
+                return;
+            }
+            let tempo = self.project.tempo;
+            let (mut left, mut right) = engine::render_audio(&audio, &sample, beats, tempo, self.audio.sample_rate());
+            left.reverse();
+            right.reverse();
+            let name = match audio.name.strip_suffix(" (invertido)") {
+                Some(forwards) => forwards.to_string(),
+                None => format!("{} (invertido)", audio.name),
+            };
+            let path = match self.write_consolidated(&name, &left, &right) {
+                Ok(path) => path,
+                Err(error) => {
+                    self.status = Some(error);
+                    return;
+                }
+            };
+            let mut envelopes = laid_out(&audio.envelopes, audio.length.max(1e-6), beats);
+            for lane in &mut envelopes {
+                for point in &mut lane.points {
+                    point.beat = beats - point.beat;
+                }
+                lane.points.reverse();
+            }
+            let new = AudioClip {
+                name,
+                sample: path.to_string_lossy().into_owned(),
+                offset: 0.0,
+                length: beats,
+                original_bpm: tempo,
+                warp_markers: Vec::new(),
+                takes: Vec::new(),
+                gain_db: 0.0,
+                transpose: 0.0,
+                envelopes,
+                ..audio.clone()
+            };
+            match clip {
+                ClipRef::Session { track, slot } => self.set_clip(track, slot, Some(Clip::Audio(new))),
+                ClipRef::Arrangement { track, index } => {
+                    self.project.tracks[track].arrangement[index].clip = Clip::Audio(new);
+                    self.sync_arrangement(track);
+                }
+            }
+            done += 1;
+        }
+        self.status = Some(match done {
+            0 => "Invertir es para clips de audio".into(),
+            1 => "Clip invertido: suena del final al principio, desde un archivo nuevo".into(),
+            n => format!("{n} clips invertidos"),
+        });
+    }
+
     /// Audio clips of one track rendered together into one file, from the first's
     /// start to the last's end (gaps silent); the clip that plays it.
     pub(crate) fn join_audio(&mut self, track: usize, parts: &[ArrangementClip]) -> Result<ArrangementClip, String> {
@@ -217,6 +284,47 @@ mod tests {
         assert!(before.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.05);
         assert!(worst < 1e-3, "{worst}");
         std::fs::remove_file(&new.sample).ok();
+    }
+
+    /// Reversed, a clip plays what it sounded from its end to its start; reversed
+    /// again, forwards as it did, with its name back.
+    #[test]
+    fn a_reversed_clip_plays_backwards_and_back_again() {
+        let clip = |offset| ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(demo_clip(WarpMode::Repitch, 8.0, offset)) };
+        let (mut app, track) = app_with(vec![clip(3.0), clip(3.0)]);
+        app.project.tracks[track].arrangement[1].start = 8.0;
+        let mut lane = AutomationLane::new(engine::model::Param::Volume);
+        lane.points.push(engine::model::AutomationPoint { beat: 1.0, value: 0.2, curve: 0.0 });
+        if let Clip::Audio(a) = &mut app.project.tracks[track].arrangement[0].clip {
+            a.envelopes.push(lane);
+        }
+        app.consolidate(vec![ClipRef::Arrangement { track, index: 1 }]);
+        app.reverse_clips(vec![ClipRef::Arrangement { track, index: 0 }]);
+        let lane = app.project.tracks[track].arrangement.clone();
+        let (Clip::Audio(forwards), Clip::Audio(backwards)) = (&lane[1].clip, &lane[0].clip) else { panic!() };
+        assert_eq!(backwards.name, "demo (invertido)");
+        assert_eq!(backwards.envelopes[0].points[0].beat, 7.0, "the envelope turned round too");
+        let load = |path: &str| engine::Sample::load(std::path::Path::new(path)).unwrap();
+        let (a, b) = (load(&forwards.sample), load(&backwards.sample));
+        let mut turned = b.left.clone();
+        turned.reverse();
+        assert!(a.left.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.05);
+        assert_eq!(turned, a.left);
+
+        let first = backwards.sample.clone();
+        app.reverse_clips(vec![ClipRef::Arrangement { track, index: 0 }]);
+        let Clip::Audio(again) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
+        assert_eq!(again.name, "demo");
+        assert_eq!(again.envelopes[0].points[0].beat, 1.0);
+        // The same but for the few ms of the edges' fades (rendered once more).
+        let edge = 48_000 / 50;
+        let back = load(&again.sample).left;
+        assert_eq!(back.len(), a.left.len());
+        let worst = back.iter().zip(&a.left).enumerate().filter(|(i, _)| *i > edge && *i + edge < back.len()).map(|(_, (x, y))| (x - y).abs()).fold(0f32, f32::max);
+        assert!(worst < 1e-6, "{worst}");
+        for file in [&forwards.sample, &first, &again.sample.clone()] {
+            std::fs::remove_file(file).ok();
+        }
     }
 
     /// Audio clips in a row (with a gap) join into one file.

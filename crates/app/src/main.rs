@@ -84,6 +84,7 @@ mod tracks;
 mod updates;
 mod voice_play;
 mod versions;
+mod transitions;
 mod transport;
 mod wave_ui;
 mod widgets;

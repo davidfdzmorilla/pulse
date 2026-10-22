@@ -119,6 +119,13 @@ impl Release {
         let name = format!("Pulse-{}{PACKAGE}", self.version());
         self.assets.iter().find(|a| a.name == name)
     }
+
+    /// Pulse's own signature of the zip (`<zip>.firma`, see the `firma` crate).
+    #[cfg_attr(not(windows), allow(dead_code))]
+    fn signature(&self) -> Option<&Asset> {
+        let name = format!("{}.firma", self.zip()?.name);
+        self.assets.iter().find(|a| a.name == name)
+    }
 }
 
 /// The updater: its state (shared with the thread doing the work) and window.
@@ -317,6 +324,21 @@ fn check_digest(file: &Path, asset: &Asset) -> Result<(), String> {
     if actual.eq_ignore_ascii_case(expected) { Ok(()) } else { Err("La descarga no coincide con la publicada (SHA-256 distinto): no se instala".into()) }
 }
 
+/// Whether `zip` is signed by Pulse's own key (`signature`, the text of its
+/// `.firma`): on Windows nothing else says who made a download, as the code
+/// signature does on macOS. GitHub's SHA-256 only says it arrived whole.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn check_signature(zip: &Path, signature: &str) -> Result<(), String> {
+    check_signature_with(&firma::PUBLIC_KEY, zip, signature)
+}
+
+/// [`check_signature`] against the key `public`.
+#[cfg_attr(not(windows), allow(dead_code))]
+fn check_signature_with(public: &[u8; 32], zip: &Path, signature: &str) -> Result<(), String> {
+    let data = std::fs::read(zip).map_err(|e| format!("No se pudo leer la descarga: {e}"))?;
+    firma::verify(public, &data, signature).map_err(|e| format!("{e}: no se instala"))
+}
+
 /// Who signed a bundle ("adhoc" for ad hoc signatures), if the signature is valid.
 #[cfg(not(windows))]
 /// `strict` also refuses stray file attributes: right for a fresh download, but
@@ -437,6 +459,13 @@ fn install(release: &Release, bundle: &Path, token: Option<&str>) -> Result<Stri
         let zip = work.join(&asset.name);
         curl(&asset.url, token, "application/octet-stream", Some(&zip))?;
         check_digest(&zip, asset)?;
+        // On Windows, signed by Pulse's key or not installed.
+        #[cfg(windows)]
+        {
+            let signature = release.signature().ok_or("La versión publicada no está firmada por Pulse: no se instala")?;
+            let text = curl(&signature.url, token, "application/octet-stream", None)?;
+            check_signature(&zip, &String::from_utf8_lossy(&text))?;
+        }
         system::unzip(&zip, &work)?;
         let new = work.join(system::IN_PACKAGE);
         let version = bundle_version(&new).ok_or(format!("La descarga no contiene {}", system::IN_PACKAGE))?;
@@ -994,6 +1023,31 @@ mod tests {
         // Without a digest only Windows refuses (macOS checks the signature instead).
         assert_eq!(check_digest(&file, &with(None)).is_err(), cfg!(windows));
         std::fs::remove_file(&file).unwrap();
+    }
+
+    /// The Windows zip is installed only signed by Pulse's key: its own
+    /// signature, of that very zip, beside it in the release.
+    #[test]
+    fn a_download_must_carry_pulses_signature() {
+        let dir = std::env::temp_dir().join(format!("pulse-firma-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let zip = dir.join("Pulse-0.2.0-windows-x64.zip");
+        std::fs::write(&zip, b"el paquete").unwrap();
+        let ours = [3u8; 32];
+        let signed = firma::sign(&ours, b"el paquete");
+        assert_eq!(check_signature_with(&firma::public_of(&ours), &zip, &signed), Ok(()));
+        assert!(check_signature_with(&firma::public_of(&[4u8; 32]), &zip, &signed).is_err(), "another key's");
+        std::fs::write(&zip, b"otro paquete").unwrap();
+        assert!(check_signature_with(&firma::public_of(&ours), &zip, &signed).is_err(), "a changed zip");
+        // Against the key built in, a signature made with any other is refused.
+        assert!(check_signature(&zip, &firma::sign(&ours, b"otro paquete")).unwrap_err().ends_with("no se instala"));
+        std::fs::remove_dir_all(&dir).ok();
+        // The signature is found beside the zip in the release.
+        let asset = |name: &str| Asset { name: name.into(), url: String::new(), size: 1, digest: None };
+        let release = Release { tag_name: "v0.2.0".into(), body: None, assets: vec![asset(&format!("Pulse-0.2.0{PACKAGE}")), asset(&format!("Pulse-0.2.0{PACKAGE}.firma"))] };
+        assert_eq!(release.signature().map(|a| a.name.as_str()), Some(format!("Pulse-0.2.0{PACKAGE}.firma").as_str()));
+        let unsigned = Release { assets: release.assets[..1].to_vec(), ..release.clone() };
+        assert!(unsigned.signature().is_none());
     }
 
     #[test]

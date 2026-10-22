@@ -1,0 +1,16 @@
+[package]
+name = "firma"
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+publish = false
+
+[lib]
+path = "src/lib.rs"
+
+[[bin]]
+name = "pulse-firma"
+path = "src/main.rs"
+
+[dependencies]
+ed25519-dalek = { version = "2.2.0", default-features = false, features = ["std", "fast", "zeroize"] }

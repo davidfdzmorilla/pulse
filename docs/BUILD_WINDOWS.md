@@ -102,13 +102,21 @@ macOS. El zip de Windows se añade a esa misma publicación:
 ```powershell
 git checkout v0.2.0
 pwsh scripts/package-windows.ps1 -Version 0.2.0
-gh release upload v0.2.0 dist\Pulse-0.2.0-windows-x64.zip dist\Pulse-0.2.0-windows-x64-setup.exe
+```
+
+El zip se firma con la clave de Pulse, que está en el Mac (ver
+[PUBLICAR.md](PUBLICAR.md#la-firma-de-las-versiones-de-windows)). Lleva el zip
+al Mac y, desde el repositorio:
+
+```bash
+cargo run --release -p firma -- firmar ~/.pulse-firma/clave-actualizaciones Pulse-0.2.0-windows-x64.zip
+gh release upload v0.2.0 Pulse-0.2.0-windows-x64.zip Pulse-0.2.0-windows-x64.zip.firma Pulse-0.2.0-windows-x64-setup.exe
 ```
 
 El nombre importa: el actualizador de Windows busca el archivo que acaba en
-`-windows-x64.zip`, y el de macOS ignora los que llevan `-windows-`. GitHub
-calcula la huella SHA-256 de cada archivo subido. El actualizador de Windows no
-instala nada sin ella.
+`-windows-x64.zip` y su firma, el mismo nombre con `.firma`; el de macOS ignora
+los que llevan `-windows-`. El actualizador de Windows no instala nada sin la
+huella SHA-256 que calcula GitHub ni sin la firma de Pulse.
 
 La CI también puede hacer el paquete. En Actions → Windows → Run workflow, con
 la versión: los archivos quedan como artefactos del trabajo y no se publican.

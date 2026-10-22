@@ -72,6 +72,31 @@ Si se perdiera sin copia: crea otro con el mismo nombre (Acceso a Llaveros →
 Asistente para certificados → Crear un certificado, tipo «Firma de código»),
 publica, y avisa de que esa versión hay que descargarla a mano.
 
+## La firma de las versiones de Windows
+
+En Windows no hay firma de código propia (como el certificado de macOS), así que
+cada zip de Windows lleva una firma Ed25519 de Pulse al lado,
+`Pulse-X.Y.Z-windows-x64.zip.firma`. El actualizador de Windows no instala un zip
+sin ella o con una que no sea de la clave de Pulse: con la cuenta de GitHub sola
+(su contraseña, un token) no se puede poner un programa en los ordenadores de
+quien usa Pulse.
+
+- **La clave privada** está en `~/.pulse-firma/clave-actualizaciones`, fuera del
+  repositorio y del llavero, legible solo por tu usuario. **Haz una copia** en
+  un sitio seguro (un disco cifrado, un gestor de contraseñas: son 64 caracteres
+  de texto). Si se pierde, las copias instaladas no aceptarán más
+  actualizaciones de Windows hasta que se instale a mano una versión con una
+  clave nueva. Si alguien la copia, puede firmar como Pulse: entonces cambia la
+  clave y publica una versión con la nueva.
+- **La clave pública** va dentro de Pulse (`crates/firma/src/lib.rs`,
+  `PUBLIC_KEY`).
+- **Firmar:** `cargo run --release -p firma -- firmar ~/.pulse-firma/clave-actualizaciones <zip>`
+  escribe `<zip>.firma`, y antes comprueba que la clave es la de Pulse.
+  **Comprobar:** `cargo run --release -p firma -- comprobar <zip>`.
+- **Una clave nueva** (si se pierde o se filtra): `pulse-firma clave <archivo>`
+  la crea, sin sobrescribir ninguna, y escribe la línea de `PUBLIC_KEY` para
+  `lib.rs`.
+
 ## Compilar igual siempre
 
 - `rust-toolchain.toml` fija la versión de Rust: rustup la instala sola.

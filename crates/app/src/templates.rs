@@ -91,7 +91,7 @@ fn built_in(name: &str) -> Option<Project> {
             let mut chords = Track::new("Acordes", PALETTE[6], InstrumentKind::SuperSaw(SuperSawParams { gain: 0.3, ..Default::default() }));
             chords.sends[0] = 0.3;
             let mut lead = Track::new("Melodía", PALETTE[11], InstrumentKind::Fm(FmParams::default()));
-            lead.sends = [0.15, 0.25];
+            lead.sends[..2].copy_from_slice(&[0.15, 0.25]);
             project.tracks = vec![drums, bass, chords, lead];
         }
         "Grabar voz" => {

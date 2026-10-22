@@ -273,7 +273,7 @@ fn what_plays_does_not_depend_on_the_buffer_size() {
 fn playing_through(action: &dyn Fn(&mut PulseApp)) -> Vec<f32> {
     let mut project = Project::demo();
     for track in &mut project.tracks {
-        track.sends = [0.5, 0.3];
+        track.sends[..2].copy_from_slice(&[0.5, 0.3]);
         if let Some(clip) = track.clips[0].clone() {
             track.arrangement = vec![ArrangementClip { start: 0.0, length: 32.0, clip }];
         }

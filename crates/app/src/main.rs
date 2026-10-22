@@ -60,6 +60,7 @@ mod presets;
 mod project;
 mod recording;
 mod recovery;
+mod returns;
 mod rumble;
 mod sample_editor;
 mod session;

@@ -140,7 +140,7 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         t.arrangement = vec![ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Midi(c) }, ArrangementClip { start: 8.5, length: 4.0, clip: t.clips[1].clone().unwrap() }];
         t.devices.push(Device::new(effects[i % effects.len()]));
         t.devices.push(Device { effect: effects[(i + 5) % effects.len()], enabled: i % 2 == 0 });
-        t.sends = [0.1 * (i % 4) as f32, 0.05 * (i % 3) as f32];
+        t.sends[..2].copy_from_slice(&[0.1 * (i % 4) as f32, 0.05 * (i % 3) as f32]);
         t.mixer.pan = (i as f32 - 5.0) / 10.0;
         t.automation.push(lane(Param::Pan, &[(0.0, -0.5, 0.0), (12.0, 0.5, -0.4)]));
         t.automation.push(lane(Param::Device { device: 0, param: 0 }, &[(0.0, 0.2, 0.0), (6.0, 0.8, 0.0)]));
@@ -180,7 +180,7 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         ArrangementClip { start: 8.0, length: 4.0, clip: Clip::Audio(marked) },
         ArrangementClip { start: 12.0, length: 2.0, clip: Clip::Audio(audio_clip(&wav_b, 2.0, WarpMode::Off)) },
     ];
-    audio.sends = [0.3, 0.2];
+    audio.sends[..2].copy_from_slice(&[0.3, 0.2]);
     tracks.push(audio);
     // A group with two tracks inside, one with a compressor side-chained to the drums.
     let mut group = Track::new_group("Grupo", PALETTE[9]);

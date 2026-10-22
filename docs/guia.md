@@ -51,7 +51,7 @@ En la barra de estado, a la derecha, aparece «↑ Pulse X disponible» cuando h
 
 ## Session
 
-Una columna por pista, con hasta 16 slots (escenas): se ven las que usas y una vacía más, 8 como mínimo; al poner un clip en la última, aparece otra. A la derecha, el botón **+** (nueva pista MIDI), los retornos **A Reverb** y **B Delay** y la columna **Master** con las escenas.
+Una columna por pista, con hasta 16 slots (escenas): se ven las que usas y una vacía más, 8 como mínimo; al poner un clip en la última, aparece otra. A la derecha, el botón **+** (nueva pista MIDI), los retornos (**A Reverb** y **B Delay** en un proyecto nuevo) con su **+** (nuevo retorno) y la columna **Master** con las escenas.
 
 ### Clips
 
@@ -504,10 +504,18 @@ La melodía sigue el tono de la voz fotograma a fotograma (pYIN, el método de l
 Está debajo de cada columna en Session.
 
 - **In / Auto / Off** (pistas de audio): monitorización.
-- **A** y **B**: envíos a los retornos (A Reverb, B Delay). **Pan**: panorama.
+- **A**, **B**…: envíos a los retornos, uno por retorno, de dos en dos. **Pan**: panorama.
 - **Fader** de volumen con medidor (doble clic = 0 dB, ⇧ = fino).
 - **Número** (activador; apagado = silencio), **S** (solo) y **●** (armar).
 - Los retornos y el Master tienen su cadena de efectos: haz clic en su cabecera y mira la pestaña Dispositivos.
+
+### Retornos
+
+Un proyecto nuevo trae dos, **A Reverb** y **B Delay**, y puede tener hasta 12 (de la A a la L), o ninguno.
+
+- **Crear → Retorno** (**⌥⌘T**) o el **+** a la derecha de los retornos añade uno vacío, «C Retorno»: ponle efectos en Dispositivos y súbele los envíos de las pistas.
+- Clic derecho en su cabecera → **Eliminar retorno**. Las pistas dejan de enviarle sonido y se van su automatización de envío, sus envolventes de clip y los controles MIDI y macros que lo movían. Los retornos de después suben una letra, y los nombres que empiezan por su letra la cambian («C Delay» pasa a «B Delay»).
+- Un proyecto con dos retornos se sigue abriendo en versiones anteriores de Pulse. Con más o con menos, las anteriores piden actualizar.
 
 ### Knobs
 
@@ -780,7 +788,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 
 **⌘I** (Archivo → Importar set de Live) o arrastra un `.als` a la ventana. Sustituye el proyecto actual; el `.als` no se toca.
 
-- Se importan: tempo, loop, escenas, pistas MIDI y de audio (nombre, color, volumen, panorama, envíos, activador, solo) y los clips de Session y del Arrangement, con sus notas o sus muestras y su warp.
+- Se importan: tempo, loop, escenas, pistas MIDI y de audio (nombre, color, volumen, panorama, envíos, activador, solo), los nombres y el volumen de los retornos (los dos primeros conservan la reverb y el delay de Pulse; los demás, hasta 12, llegan vacíos) y los clips de Session y del Arrangement, con sus notas o sus muestras y su warp.
 - Los Drum Racks con muestras pasan al Drum Pads de Pulse; Simpler y Sampler, al Sampler.
 - Los **grupos** llegan como grupos de Pulse, con sus pistas dentro y su mezclador.
 - Los **locators** llegan como marcadores.
@@ -884,6 +892,7 @@ Pulse → **Acerca de Pulse** muestra la versión y la licencia. Pulse es softwa
 | ⌫ | Eliminar |
 | ⌘A | Seleccionar todas las notas |
 | ⌘T / ⇧⌘T | Nueva pista MIDI / de audio |
+| ⌥⌘T | Nuevo retorno |
 | ⌘G | Agrupar las pistas seleccionadas |
 | ⇧⌘G | Desagrupar el grupo seleccionado |
 | ⌘ clic / ⇧ clic | Seleccionar varias pistas (en sus cabeceras) o varios clips |

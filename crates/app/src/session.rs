@@ -6,14 +6,21 @@ use crate::theme::{self, ACCENT, PLAY, SLOT, SLOT_HOVER, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense};
 use engine::model::{Clip, MidiClip, Param, PAN_PARAM, SEND_PARAM};
-use engine::{Command, Target, NONE, NUM_RETURNS, NUM_SCENES, QUEUED_STOP};
+use engine::{Command, Target, NONE, MAX_RETURNS, NUM_SCENES, QUEUED_STOP};
 use std::sync::atomic::Ordering;
 
 const COL_W: f32 = 108.0;
 const HEADER_H: f32 = 22.0;
 const SLOT_H: f32 = 22.0;
 const LAUNCH_W: f32 = 18.0;
-const SENDS_H: f32 = 56.0;
+/// One row of send knobs (two to a row).
+const SENDS_ROW_H: f32 = 50.0;
+
+/// The height of the send knobs: two to a row, as many rows as the returns
+/// need (one at least, as with none).
+fn sends_h(returns: usize) -> f32 {
+    returns.div_ceil(2).max(1) as f32 * SENDS_ROW_H + 6.0
+}
 const PAN_H: f32 = 58.0;
 const FADER_H: f32 = 120.0;
 const MONITOR_H: f32 = 16.0;
@@ -53,6 +60,8 @@ pub(crate) enum Action {
     LaunchScene(usize),
     StopAll,
     AddTrack,
+    AddReturn,
+    DeleteReturn(usize),
     Record(usize, usize),
     StopRecording(usize),
     DeleteTrack(usize),
@@ -141,19 +150,38 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             });
             ui.add_space(10.0);
 
-            for r in 0..NUM_RETURNS {
+            for r in 0..app.project.returns.len() {
                 ui.vertical(|ui| {
                     ui.set_width(COL_W);
                     let target = Target::Return(r);
                     let name = app.project.returns[r].name.clone();
                     let color = theme::rgb(app.project.returns[r].color);
-                    if header(ui, &name, color, app.selected_target == target, Sense::click()).clicked() {
+                    let response = header(ui, &name, color, app.selected_target == target, Sense::click());
+                    if response.clicked() {
                         actions.push(Action::SelectTarget(target));
                     }
+                    response.context_menu(|ui| {
+                        if ui.button("Eliminar retorno").on_hover_text("Las pistas dejan de enviarle sonido; los retornos de después suben una letra").clicked() {
+                            actions.push(Action::DeleteReturn(r));
+                            ui.close();
+                        }
+                    });
                     let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (rows as f32 + 1.0) - 1.0), Sense::hover());
                     ui.painter().rect_filled(rect, 2.0, theme::shade(SLOT, 0.8));
                     ui.add_space(6.0);
                     mixer_strip(app, ui, target);
+                });
+            }
+            if app.project.returns.len() < MAX_RETURNS {
+                ui.vertical(|ui| {
+                    let (rect, response) = ui.allocate_exact_size(vec2(26.0, HEADER_H), Sense::click());
+                    widgets::name(&response, egui::WidgetType::Button, "Nuevo retorno");
+                    let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
+                    ui.painter().rect_filled(rect, 2.0, fill);
+                    ui.painter().text(rect.center(), Align2::CENTER_CENTER, "+", theme::body(), TEXT);
+                    if response.on_hover_text(crate::theme::keys("Nuevo retorno (⌥⌘T)")).clicked() {
+                        actions.push(Action::AddReturn);
+                    }
                 });
             }
             ui.add_space(10.0);
@@ -654,21 +682,29 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
     let mut changes: Vec<(Param, f32)> = Vec::new();
     match target {
         Target::Track(_) => {
-            ui.horizontal(|ui| {
-                ui.spacing_mut().item_spacing.x = 0.0;
-                ui.set_height(SENDS_H);
-                for send in 0..NUM_RETURNS {
-                    let param = Param::Send(send);
-                    let value = app.display_value(target, param);
-                    let state = app.automation_state(target, param);
-                    if let Some(v) = widgets::param_knob(ui, &SEND_PARAM, value, ["A", "B"][send], 22.0, state) {
-                        changes.push((param, v));
-                    }
+            let returns = app.project.returns.len();
+            ui.vertical(|ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                ui.set_height(sends_h(returns));
+                for row in 0..returns.div_ceil(2) {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 0.0;
+                        ui.set_height(SENDS_ROW_H);
+                        for send in row * 2..(row * 2 + 2).min(returns) {
+                            let param = Param::Send(send);
+                            let value = app.display_value(target, param);
+                            let state = app.automation_state(target, param);
+                            let letter = crate::project::return_letter(send).to_string();
+                            if let Some(v) = widgets::param_knob(ui, &SEND_PARAM, value, &letter, 22.0, state) {
+                                changes.push((param, v));
+                            }
+                        }
+                    });
                 }
             });
         }
         _ => {
-            ui.add_space(SENDS_H + 1.0);
+            ui.add_space(sends_h(app.project.returns.len()) + 1.0);
         }
     }
 
@@ -700,7 +736,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
         ui.spacing_mut().item_spacing.x = 2.0;
         let label = match target {
             Target::Track(t) => (t + 1).to_string(),
-            Target::Return(r) => ["A", "B"][r].to_string(),
+            Target::Return(r) => crate::project::return_letter(r).to_string(),
             Target::Master => String::new(),
         };
         if target == Target::Master {
@@ -810,6 +846,8 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::LaunchScene(slot) => app.audio.send(Command::LaunchScene(slot)),
         Action::StopAll => app.audio.send(Command::StopAllClips),
         Action::AddTrack => app.add_track(),
+        Action::AddReturn => app.add_return(),
+        Action::DeleteReturn(r) => app.delete_return(r),
         Action::DeleteTrack(t) if app.is_track_selected(t) => app.delete_selected_tracks(),
         Action::DeleteTrack(t) => app.delete_track(t),
         Action::Record(t, slot) => app.record_slot(t, slot),

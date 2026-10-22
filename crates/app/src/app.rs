@@ -15,7 +15,7 @@ use engine::model::{
 use engine::{
     build_chain, guess_loop_bpm, AudioOutput, ChainSlot, Command, EngineHandle, LiveInput,
     RecordedNote, Sample, SharedState,
-    Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES,
+    Target, MAX_TRACKS, MAX_RETURNS, NUM_SCENES,
 };
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
@@ -201,13 +201,13 @@ pub enum Placement {
 
 pub struct Meters {
     pub tracks: [f32; MAX_TRACKS],
-    pub returns: [f32; NUM_RETURNS],
+    pub returns: [f32; MAX_RETURNS],
     pub master: f32,
 }
 
 impl Default for Meters {
     fn default() -> Self {
-        Self { tracks: [0.0; MAX_TRACKS], returns: [0.0; NUM_RETURNS], master: 0.0 }
+        Self { tracks: [0.0; MAX_TRACKS], returns: [0.0; MAX_RETURNS], master: 0.0 }
     }
 }
 
@@ -908,7 +908,7 @@ impl PulseApp {
                 return Some((Target::Track(t), Param::Instrument(param as usize)));
             }
         }
-        let targets = (0..self.project.tracks.len()).map(Target::Track).chain((0..NUM_RETURNS).map(Target::Return)).chain([Target::Master]);
+        let targets = (0..self.project.tracks.len()).map(Target::Track).chain((0..self.project.returns.len()).map(Target::Return)).chain([Target::Master]);
         for target in targets {
             if let Some(device) = self.devices(target).iter().position(|d| d.effect == Effect::Plugin(id)) {
                 return Some((target, Param::Device { device, param: param as usize }));
@@ -944,7 +944,7 @@ impl PulseApp {
         match param {
             Param::Volume => "Volumen".into(),
             Param::Pan => "Pan".into(),
-            Param::Send(i) => format!("Envío {}", ["A", "B"].get(i).unwrap_or(&"?")),
+            Param::Send(i) => format!("Envío {}", crate::project::return_letter(i)),
             Param::Device { device, .. } => {
                 let label = self.devices(target).get(device).map_or("?", |d| d.effect.label());
                 format!("{} {label}: {info}", device + 1)
@@ -964,7 +964,7 @@ impl PulseApp {
             params.insert(0, Param::Tempo);
         }
         if let Target::Track(t) = target {
-            params.extend((0..NUM_RETURNS).map(Param::Send));
+            params.extend((0..self.project.returns.len()).map(Param::Send));
             if !self.project.tracks[t].is_audio() {
                 let instrument = &self.project.tracks[t].instrument;
                 // Only settings that exist now (a modular synth's lane effects come and go).

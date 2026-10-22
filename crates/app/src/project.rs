@@ -134,6 +134,11 @@ pub struct Track {
     /// before its fader, quiet when that one is muted: a rumble follows its kick.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub audio_from: Option<u32>,
+    /// Which of that track's drum machine sounds it plays instead (a bit each,
+    /// in `DRUM_VOICES` order; 0: all its sound): those, straight from the drum
+    /// machine, and that track no longer plays them (see `drum_split`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub sounds_from: u16,
 }
 
 impl Track {
@@ -159,6 +164,7 @@ impl Track {
             id: 0,
             midi_effects: Vec::new(),
             audio_from: None,
+            sounds_from: 0,
         }
     }
 
@@ -267,7 +273,9 @@ pub struct MasterTrack {
 /// 3: a track that plays another's sound (`audio_from`, a rumble): only
 /// projects that have one are written as 3, so the rest still open in a Pulse
 /// that reads 2.
-pub const FORMAT: u32 = 3;
+/// 4: a drum sound on a track of its own (`sounds_from`): a Pulse that reads 3
+/// would play the whole kit twice. Only projects that have one.
+pub const FORMAT: u32 = 4;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -509,7 +517,13 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.tracks.iter().any(|t| t.audio_from.is_some()) { FORMAT } else { 2 };
+            let format = if self.tracks.iter().any(|t| t.sounds_from != 0) {
+                FORMAT
+            } else if self.tracks.iter().any(|t| t.audio_from.is_some()) {
+                3
+            } else {
+                2
+            };
             object.insert(FORMAT_KEY.into(), format.into());
             object.insert(SAVED_BY_KEY.into(), crate::updates::VERSION.into());
         }

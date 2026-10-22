@@ -556,7 +556,11 @@ pub struct DrumMachine {
     hits: [Hit; 8],
     metal_phases: [f32; 6],
     hat_filter: Svf,
+    /// The open hat's, when it plays apart from the closed one (see `apart`).
+    open_hat_filter: Svf,
     bell_filter: Svf,
+    /// The sounds other tracks take, out of its own output.
+    apart: crate::drumkit::Apart,
 }
 
 impl DrumMachine {
@@ -569,8 +573,21 @@ impl DrumMachine {
             hits: [Hit::default(); 8],
             metal_phases: [0.0; 6],
             hat_filter: Svf::default(),
+            open_hat_filter: Svf::default(),
             bell_filter: Svf::default(),
+            apart: crate::drumkit::Apart::new(),
         }
+    }
+
+    /// A new block, the sounds in `mask` (a bit each, in `DRUM_VOICES` order)
+    /// apart from its output: for other tracks to play (see `sound`).
+    pub fn begin(&mut self, mask: u16) {
+        self.apart.begin(mask);
+    }
+
+    /// Sound `voice` this block, if it is apart.
+    pub fn sound(&self, voice: usize) -> &[f32] {
+        self.apart.sound(voice)
     }
 
     pub fn params(&self) -> DrumParams {
@@ -627,7 +644,7 @@ impl DrumMachine {
     pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
         // The models ring out even if the model changes meanwhile.
         let params = self.params;
-        self.kit.render(&params, left, right);
+        self.kit.render(&params, &mut self.apart, left, right);
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
         let p = self.params;
@@ -647,7 +664,10 @@ impl DrumMachine {
         let bell_g = svf_g(1200.0 * tune(7), sr);
         let any_metal = self.hits[4].active || self.hits[5].active || self.hits[7].active;
 
-        for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
+        // The open hat on its own when it is apart (filtering both together, as
+        // the machine does, is the same: the filter is linear).
+        let open_apart = self.apart.takes(5);
+        for (i, (out_l, out_r)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
             let mut per = [0f32; crate::model::DRUM_SOUNDS];
             let noise = self.noise();
 
@@ -705,17 +725,22 @@ impl DrumMachine {
                 c.active = c.env > 1e-4;
             }
 
-            let mut hats = 0.0;
+            let mut hats = [0.0; 2];
             for voice in [4, 5] {
                 let h = &mut self.hits[voice];
                 if h.active {
-                    hats += (metal * 0.7 + noise * 0.3) * h.env * h.velocity * p.level[voice];
+                    hats[voice - 4] += (metal * 0.7 + noise * 0.3) * h.env * h.velocity * p.level[voice];
                     h.env *= decays[voice];
                     h.active = h.env > 1e-4;
                 }
             }
-            if hats != 0.0 || any_metal {
-                let (_, _, high) = self.hat_filter.tick(hats, hat_g, 1.2);
+            if open_apart {
+                let (_, _, open) = self.open_hat_filter.tick(hats[1], hat_g, 1.2);
+                per[5] += open * 0.5;
+                hats[1] = 0.0;
+            }
+            if hats != [0.0; 2] || any_metal {
+                let (_, _, high) = self.hat_filter.tick(hats[0] + hats[1], hat_g, 1.2);
                 // Both hats, through the closed one's drive.
                 per[4] += high * 0.5;
             }
@@ -741,12 +766,12 @@ impl DrumMachine {
                 bell.active = bell.env > 1e-4;
             }
 
-            let s = crate::drumkit::driven(&per, &p);
             // -6 dB of headroom: kick and clap often land together.
-            let out = s * 0.5;
+            let out = self.apart.mix(&per, &p, i, 0.5, f32::INFINITY);
             *out_l += out;
             *out_r += out;
         }
+        self.apart.advance(left.len());
     }
 }
 

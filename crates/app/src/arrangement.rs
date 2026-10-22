@@ -76,6 +76,7 @@ enum TrackAction {
     LeaveGroup,
     Fold,
     Rumble,
+    SoundApart(usize),
 }
 
 /// What a right-click landed on.
@@ -459,6 +460,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         Some((TrackAction::LeaveGroup, t, _)) => app.leave_group(t),
         Some((TrackAction::Fold, t, _)) => app.toggle_fold(t),
         Some((TrackAction::Rumble, t, _)) => app.make_rumble(t),
+        Some((TrackAction::SoundApart(voice), t, _)) => app.sound_apart(t, voice),
         None => {}
     }
     app.update_clip_gesture(ui, &clip_rects, &lane_rects, &[]);
@@ -586,8 +588,8 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     } else {
         "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
     };
-    let hint = match app.follows(t) {
-        Some(source) => format!("Toca lo que suena en «{source}», después de sus efectos (un rumble: no tiene clips propios, sigue a esa pista y se silencia con ella) · {hint}"),
+    let hint = match app.follows_hint(t) {
+        Some(follows) => format!("{follows} · {hint}"),
         None => hint.to_string(),
     };
     let response = response.on_hover_text(crate::theme::keys(&hint));
@@ -885,12 +887,14 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
         crate::session::group_items(ui, group, in_group, count, |action| chosen = Some(action), t);
         if !group {
             crate::session::freeze_items(ui, frozen, freezing, |action| chosen = Some(action), t);
+            crate::session::sound_items(app, ui, |action| chosen = Some(action), t);
         }
         match chosen {
             Some(crate::session::Action::Freeze(t)) => app.freeze(t),
             Some(crate::session::Action::Unfreeze(t)) => app.unfreeze(t),
             Some(crate::session::Action::Flatten(t)) => app.flatten(t),
             Some(crate::session::Action::Rumble(t)) => app.arrangement.track_action = Some((TrackAction::Rumble, t, false)),
+            Some(crate::session::Action::SoundApart(t, voice)) => app.arrangement.track_action = Some((TrackAction::SoundApart(voice), t, false)),
             // After the view is drawn, as they change the tracks.
             Some(crate::session::Action::GroupTracks) => app.arrangement.track_action = Some((TrackAction::Group, t, several)),
             Some(crate::session::Action::Ungroup(t)) => app.arrangement.track_action = Some((TrackAction::Ungroup, t, false)),

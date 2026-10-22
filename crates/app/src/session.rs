@@ -38,6 +38,8 @@ pub(crate) enum Action {
     Freeze(usize),
     /// A rumble track from this one (see `rumble`).
     Rumble(usize),
+    /// A drum machine sound of this track on a track of its own (see `drum_split`).
+    SoundApart(usize, usize),
     Unfreeze(usize),
     Flatten(usize),
     /// An empty slot clicked: its track selected, no clip, pasting goes there.
@@ -297,6 +299,26 @@ pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut 
     }
 }
 
+/// «Sacar a su pista ▸», for a Drum Machine track: one of its sounds on a track of its own.
+pub(crate) fn sound_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl FnMut(Action), t: usize) {
+    if !matches!(app.project.tracks[t].instrument, engine::model::InstrumentKind::DrumMachine(_)) {
+        return;
+    }
+    let taken = app.sounds_taken(t);
+    ui.menu_button("Sacar a su pista", |ui| {
+        for (voice, (_, name)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
+            let hint = match app.sound_track(t, voice) {
+                Some(track) => format!("Ya suena en «{track}»"),
+                None => format!("Una pista nueva que toca solo «{name}», con sus efectos y su fader: esta deja de tocarlo y los clips siguen aquí"),
+            };
+            if ui.add_enabled(taken >> voice & 1 == 0, egui::Button::new(name)).on_hover_text(hint).on_disabled_hover_text("Ya está en su pista").clicked() {
+                act(Action::SoundApart(t, voice));
+                ui.close();
+            }
+        }
+    });
+}
+
 /// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
 fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut Vec<Action>) -> egui::Rect {
     let track = &app.project.tracks[t];
@@ -307,8 +329,8 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     } else {
         "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
     };
-    let hint = match app.follows(t) {
-        Some(source) => format!("Toca lo que suena en «{source}», después de sus efectos (un rumble: no tiene clips propios, sigue a esa pista y se silencia con ella) · {hint}"),
+    let hint = match app.follows_hint(t) {
+        Some(follows) => format!("{follows} · {hint}"),
         None => hint.to_string(),
     };
     let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag()).on_hover_text(crate::theme::keys(&hint));
@@ -342,6 +364,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
         group_items(ui, group, in_group, count, |action| actions.push(action), t);
         if !group {
             freeze_items(ui, frozen, freezing, |action| actions.push(action), t);
+            sound_items(app, ui, |action| actions.push(action), t);
         }
     });
     if frozen {
@@ -733,6 +756,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::SelectTarget(target) => app.selected_target = target,
         Action::Freeze(t) => app.freeze(t),
         Action::Rumble(t) => app.make_rumble(t),
+        Action::SoundApart(t, voice) => app.sound_apart(t, voice),
         Action::Unfreeze(t) => app.unfreeze(t),
         Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),

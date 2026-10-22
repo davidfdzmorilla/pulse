@@ -166,6 +166,14 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 - Ajusta la reverb, el drive o el filtro a tu gusto. No se puede congelar, porque no tiene clips propios.
 - Un proyecto con un rumble se abre solo con esta versión de Pulse o una más nueva.
 
+**Sacar a su pista ▸** (clic derecho en la cabecera de una pista con Drum Machine) pone uno de sus sonidos en una pista propia, debajo: por ejemplo el bombo del kit, para darle su EQ, su saturación y su fader, o para que un Ducker escuche solo el bombo.
+- Esa pista no tiene clips: toca ese sonido tal como sale de la Drum Machine, antes de los efectos de la batería, y la batería deja de tocarlo. El patrón sigue siendo un solo clip en la pista de la batería.
+- Si silencias la batería, se silencian también sus sonidos sacados. Si borras la pista nueva, el sonido vuelve a la batería (o deshaz).
+- En la Drum Machine, un sonido sacado lleva una flecha (**Kick →**); al pasar por encima dice en qué pista suena.
+- Puedes sacar varios sonidos, cada uno a su pista. Al exportar por pistas, cada sonido sale en la stem de su pista.
+- Mientras tenga sonidos sacados, la batería no se puede congelar.
+- Un proyecto con sonidos sacados se abre solo con esta versión de Pulse o una más nueva.
+
 **Congelar pista** (clic derecho en la cabecera) renderiza a audio lo que suenan su instrumento y sus efectos, y la pista pasa a sonar ese audio: deja de gastar CPU. El volumen, el panorama y los envíos siguen en vivo.
 
 - Una pista congelada lleva un marco azul y ✱. Su instrumento y efectos no se pueden editar.
@@ -522,7 +530,7 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 - **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.
 - **Ducker**: bombeo de volumen. Sin sidechain, sincronizado al tempo (**Ritmo**). Con **Sidechain**, bombea con cada golpe de la pista elegida: baja de golpe y vuelve en **Release** (fracción del tiempo elegido), aunque la cola del bombo siga sonando, así que con bombos largos de 140–150 BPM también respira entre golpe y golpe.
   - **Threshold**: el golpe más flojo que lo hace bombear (del todo a partir de 12 dB por encima). Súbelo si bombea con cosas que no son el bombo.
-  - **Solo graves** (activado por defecto): solo escucha por debajo de 600 Hz, así que bombea con el bombo y no con los charles o las palmas de la misma pista. Quítalo con un bombo de hardstyle, cuya cola suena tan fuerte en graves como el golpe. Con la Drum Machine entera como sidechain, los toms graves y las congas también lo mueven un poco: si molesta, usa una pista solo con el bombo.
+  - **Solo graves** (activado por defecto): solo escucha por debajo de 600 Hz, así que bombea con el bombo y no con los charles o las palmas de la misma pista. Quítalo con un bombo de hardstyle, cuya cola suena tan fuerte en graves como el golpe. Con la Drum Machine entera como sidechain, los toms graves y las congas también lo mueven un poco: si molesta, saca el bombo a su pista (**Sacar a su pista ▸ Kick**) y escucha esa.
 - **Chorus** y **Phaser**.
 - **Delay**: tiempo sincronizado (1/16 a un compás), Ping Pong, feedback y filtro.
 - **Reverb**: tamaño, amortiguación y anchura.
@@ -561,7 +569,7 @@ Se eligen en el navegador (INSTRUMENTOS) con una pista MIDI seleccionada.
   - **Multisample**: carga o arrastra **varias** muestras a la vez y se reparten por el teclado según la nota de su nombre («Piano C3», «Rhodes_F#2», «Strings Db4»; C3 es el do central). Cada una cubre las teclas hasta la mitad de camino de sus vecinas y suena tal cual en su nota. Varias de la misma nota son **capas de velocidad**: la más suave abajo. Las que no llevan nota van una por tecla desde C3.
   - El mapa muestra las zonas sobre el teclado (arriba, las velocidades altas); clic en una tecla para oírla. **−12 / +12** mueven todo el mapa una octava (librerías que llaman C4 al do central). **Zonas…** permite ajustar a mano las notas, la raíz y las velocidades de cada muestra.
   - Hasta 32 muestras. Cargar una sola vuelve al modo normal.
-- **Drum Machine**: 16 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tres toms, cencerro, crash, ride, shaker, pandereta, conga y clave), cada uno con Tune, Decay, Level y **Drive** (lo recorta, como un clipper: más sucio y con más pegada; el Level sigue siendo su volumen). Clic en un sonido para escucharlo. **Máquina**: **808** (bombo largo y redondo, palma, cencerro: hip hop, trap, reggaetón), **909** (bombo con pegada y charles brillantes: house, techno) o **Clásica**, sus sonidos primeros. En los proyectos de cuando tenía 8 sonidos, los 8 nuevos entran con Level a 0, para que suenen como sonaban: súbelos si quieres oírlos.
+- **Drum Machine**: 16 sonidos sintetizados (bombo, rimshot, caja, palmas, hats cerrado y abierto, tres toms, cencerro, crash, ride, shaker, pandereta, conga y clave), cada uno con Tune, Decay, Level y **Drive** (lo recorta, como un clipper: más sucio y con más pegada; el Level sigue siendo su volumen). Clic en un sonido para escucharlo; un sonido puede ir a su propia pista (clic derecho en la cabecera de la pista: **Sacar a su pista ▸**). **Máquina**: **808** (bombo largo y redondo, palma, cencerro: hip hop, trap, reggaetón), **909** (bombo con pegada y charles brillantes: house, techno) o **Clásica**, sus sonidos primeros. En los proyectos de cuando tenía 8 sonidos, los 8 nuevos entran con Level a 0, para que suenen como sonaban: súbelos si quieres oírlos.
 - **Drum Pads**: 16 pads de muestras (el 1 abajo a la izquierda, desde C1).
   - Clic en un pad lo escucha y lo selecciona. Arrastra uno o varios audios sobre los pads.
   - Por pad: Tune, Length, Level, Pan y grupo de **choke** (los pads del mismo grupo se cortan entre sí, como el hi-hat abierto y cerrado).

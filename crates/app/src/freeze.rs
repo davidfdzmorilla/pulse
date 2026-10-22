@@ -219,6 +219,11 @@ impl PulseApp {
             self.status = Some(format!("«{}» toca lo que suena en otra pista (un rumble), no clips propios: no se puede congelar", track.name));
             return;
         }
+        let taken = self.sounds_taken(t);
+        if taken != 0 {
+            self.status = Some(format!("{} de «{}» suenan en otras pistas: no se puede congelar", crate::drum_split::sound_names(taken), self.project.tracks[t].name));
+            return;
+        }
         if track.is_audio() && track.devices.is_empty() {
             self.status = Some("Una pista de audio sin efectos no gasta nada: no hace falta congelarla".into());
             return;

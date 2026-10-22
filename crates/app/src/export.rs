@@ -344,6 +344,11 @@ pub fn only(project: &Project, t: usize) -> Project {
     for (track, _) in only.tracks.iter_mut().zip(&keep).filter(|(_, k)| !**k) {
         let mut empty = Track::new(track.name.clone(), track.color, InstrumentKind::Synth(Default::default()));
         (empty.kind, empty.depth, empty.id) = (track.kind, track.depth, track.id);
+        // One that takes drum sounds still takes them (and isn't heard): the
+        // drum track's stem is without them, as it sounds in the song.
+        if track.sounds_from != 0 {
+            (empty.audio_from, empty.sounds_from) = (track.audio_from, track.sounds_from);
+        }
         *track = empty;
     }
     only

@@ -172,7 +172,7 @@ impl ModelKit {
         self.voices[voice] = Voice { active: true, t: 0.0, velocity, base, phases: [0.0; 2], filters };
     }
 
-    pub fn render(&mut self, p: &DrumParams, left: &mut [f32], right: &mut [f32]) {
+    pub fn render(&mut self, p: &DrumParams, apart: &mut Apart, left: &mut [f32], right: &mut [f32]) {
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
         let tune = |v: usize| 2f32.powf(p.tune[v] / 12.0);
@@ -180,7 +180,7 @@ impl ModelKit {
         let is_909 = self.model == DrumModel::Tr909;
         let metal_on = self.voices[4].active || self.voices[5].active || self.voices[7].active;
         let cymbal_on = self.voices[10].active || self.voices[11].active || self.voices[13].active;
-        for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
+        for (i, (out_l, out_r)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
             // Each sound on its own, for its drive.
             let mut per = [0f32; DRUM_SOUNDS];
             let noise = self.noise();
@@ -402,24 +402,78 @@ impl ModelKit {
                 v.active = v.t < tau * 7.0;
             }
 
-            let s = driven(&per, p);
             // Headroom: kick and clap often land together.
-            let out = (s * 0.55).clamp(-1.5, 1.5);
+            let out = apart.mix(&per, p, i, 0.55, 1.5);
             *out_l += out;
             *out_r += out;
         }
     }
 }
 
-/// The sounds mixed, each through its drive: a hard clip (a hard techno kick)
-/// of the sound before its level, so the level stays its volume, normalised so
-/// a full-scale hit keeps its peak.
-pub(crate) fn driven(sounds: &[f32; DRUM_SOUNDS], p: &DrumParams) -> f32 {
-    let mut sum = 0.0;
-    for ((&x, &drive), &level) in sounds.iter().zip(&p.drive).zip(&p.level) {
-        sum += if drive > 0.0 && level > 0.0 { crate::kick::distort(x / level, crate::model::KickDrive::Hard, drive) * level } else { x };
+/// A sound through its drive: a hard clip (a hard techno kick) of the sound
+/// before its level, so the level stays its volume, normalised so a full-scale
+/// hit keeps its peak.
+fn driven(x: f32, drive: f32, level: f32) -> f32 {
+    if drive > 0.0 && level > 0.0 { crate::kick::distort(x / level, crate::model::KickDrive::Hard, drive) * level } else { x }
+}
+
+const BLOCK: usize = crate::engine::MAX_BLOCK;
+
+/// The sounds a drum machine plays apart from its own output, for the tracks
+/// that take them (see `Command::SetSoundsFrom`): each on its own, after its
+/// drive, as loud as it is in the mix.
+pub(crate) struct Apart {
+    /// Which sounds (a bit each, in `DRUM_VOICES` order).
+    mask: u16,
+    /// Where in the block the frames rendered next go.
+    at: usize,
+    sounds: Box<[f32]>,
+}
+
+impl Apart {
+    pub fn new() -> Self {
+        Self { mask: 0, at: 0, sounds: vec![0.0; DRUM_SOUNDS * BLOCK].into_boxed_slice() }
     }
-    sum
+
+    pub fn takes(&self, voice: usize) -> bool {
+        self.mask >> voice & 1 == 1
+    }
+
+    /// A new block, with the sounds in `mask` apart: those start silent.
+    pub fn begin(&mut self, mask: u16) {
+        (self.mask, self.at) = (mask, 0);
+        for voice in (0..DRUM_SOUNDS).filter(|&v| mask >> v & 1 == 1) {
+            self.sounds[voice * BLOCK..(voice + 1) * BLOCK].fill(0.0);
+        }
+    }
+
+    /// Sound `voice` in this block (silent unless it is apart).
+    pub fn sound(&self, voice: usize) -> &[f32] {
+        &self.sounds[voice * BLOCK..(voice + 1) * BLOCK]
+    }
+
+    /// One frame's sounds (`i` frames into what is being rendered), each
+    /// through its drive and then `scale` (and `limit`, the mix's clip): those
+    /// apart are kept here, the rest summed into what it returns.
+    pub fn mix(&mut self, sounds: &[f32; DRUM_SOUNDS], p: &DrumParams, i: usize, scale: f32, limit: f32) -> f32 {
+        let (mut sum, at) = (0.0, self.at + i);
+        for (voice, &x) in sounds.iter().enumerate() {
+            let x = driven(x, p.drive[voice], p.level[voice]);
+            if self.takes(voice) {
+                if at < BLOCK {
+                    self.sounds[voice * BLOCK + at] += (x * scale).clamp(-limit, limit);
+                }
+            } else {
+                sum += x;
+            }
+        }
+        (sum * scale).clamp(-limit, limit)
+    }
+
+    /// Past `n` frames rendered.
+    pub fn advance(&mut self, n: usize) {
+        self.at += n;
+    }
 }
 
 #[cfg(test)]
@@ -454,7 +508,7 @@ mod tests {
         let frames = (SR * seconds) as usize;
         let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
         for (a, b) in l.chunks_mut(512).zip(r.chunks_mut(512)) {
-            kit.render(&p, a, b);
+            kit.render(&p, &mut Apart::new(), a, b);
         }
         l
     }

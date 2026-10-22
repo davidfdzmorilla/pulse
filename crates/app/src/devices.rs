@@ -542,8 +542,15 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 egui::Grid::new("drum_machine").spacing([8.0, 2.0]).show(ui, |ui| {
                     for (voice, (pitch, name)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
                         ui.vertical(|ui| {
-                            let pad = egui::Button::new(egui::RichText::new(name).size(10.5)).min_size(vec2(136.0, 16.0));
-                            if ui.add(pad).on_hover_text(format!("{} · clic para escuchar", crate::project::note_name(pitch))).clicked() {
+                            // A sound on a track of its own (see `drum_split`): marked, and where.
+                            let elsewhere = app.sound_track(t, voice);
+                            let label = if elsewhere.is_some() { format!("{name} →") } else { name.to_string() };
+                            let pad = egui::Button::new(egui::RichText::new(label).size(10.5)).min_size(vec2(136.0, 16.0));
+                            let hint = match elsewhere {
+                                Some(track) => format!("{} · clic para escuchar · suena en «{track}», con sus efectos", crate::project::note_name(pitch)),
+                                None => format!("{} · clic para escuchar", crate::project::note_name(pitch)),
+                            };
+                            if ui.add(pad).on_hover_text(hint).clicked() {
                                 actions.push(Action::Preview(pitch));
                             }
                             ui.horizontal(|ui| {

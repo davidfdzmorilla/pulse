@@ -20,6 +20,7 @@ mod curves;
 mod detail;
 mod devices;
 mod drum_gen;
+mod drum_split;
 mod editor;
 mod export;
 mod files;

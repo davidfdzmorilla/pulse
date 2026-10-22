@@ -29,7 +29,7 @@ pub const NUM_SCENES: usize = 16;
 pub const NUM_RETURNS: usize = 2;
 /// Devices per chain; insertions beyond this are rejected so the chain never reallocates.
 pub const MAX_CHAIN: usize = 16;
-const MAX_BLOCK: usize = 1024;
+pub(crate) const MAX_BLOCK: usize = 1024;
 /// Blocks are cut at every multiple of this many frames counted from the
 /// engine's start: automation, instruments' control rates and every other
 /// once-a-block thing happen at the same frames whatever size the audio device
@@ -279,6 +279,12 @@ pub enum Command {
     /// after that one's effects and before its fader, quiet when that one is
     /// muted: a rumble that follows its kick.
     SetAudioFrom([u32; MAX_TRACKS]),
+    /// Which of its drum machine's sounds (a bit each, in `DRUM_VOICES` order)
+    /// each track takes from the track it plays the sound of (0: its whole
+    /// sound, see [`Command::SetAudioFrom`]). Those it takes go straight from
+    /// the drum machine, before that track's effects, and that track no
+    /// longer plays them: a sound on a track of its own.
+    SetSoundsFrom([u16; MAX_TRACKS]),
     /// A MIDI track's MIDI effects, in order (keys already filled in).
     SetMidiEffects { track: usize, devices: [Option<crate::model::MidiDevice>; crate::model::MAX_MIDI_EFFECTS] },
     LaunchScene(usize),
@@ -1352,6 +1358,8 @@ struct Track {
     /// The track (by id; 0 for none) whose sound it plays too, after that
     /// one's effects and before its fader (see [`Command::SetAudioFrom`]).
     audio_from: u32,
+    /// Which of that track's drum sounds it takes instead (see [`Command::SetSoundsFrom`]).
+    sounds_from: u16,
 }
 
 fn is_permutation(order: &[usize]) -> bool {
@@ -1404,6 +1412,7 @@ impl Track {
             record_start: 0.0,
             held: [None; 128],
             audio_from: 0,
+            sounds_from: 0,
         }
     }
 
@@ -1540,6 +1549,8 @@ pub struct Engine {
     /// the last block it was processed: what sidechains listen to.
     ids: [u32; MAX_TRACKS],
     key_left: Vec<Vec<f32>>,
+    /// The drum sounds the track being mixed takes (see [`Command::SetSoundsFrom`]).
+    taken: Vec<f32>,
     key_right: Vec<Vec<f32>>,
     /// Each track muted this block, itself or by a group (what `audio_from` follows).
     mutes: [bool; MAX_TRACKS],
@@ -1689,6 +1700,7 @@ impl Engine {
             bus_right: vec![0.0; MAX_BLOCK],
             ids: [0; MAX_TRACKS],
             key_left: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
+            taken: vec![0.0; MAX_BLOCK],
             key_right: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
             mutes: [false; MAX_TRACKS],
         };
@@ -1697,6 +1709,12 @@ impl Engine {
 
     /// Monitored tracks play this block of the audio input instead of their clips,
     /// resampled to the output's rate if the input runs at another.
+    /// The track (index) whose sound `track` plays (see [`Command::SetAudioFrom`]).
+    fn source_of(&self, track: &Track) -> Option<usize> {
+        let from = track.audio_from;
+        self.ids.iter().position(|&x| x == from && from != 0)
+    }
+
     fn monitor(&mut self, n: usize) {
         let (left, right) = (&mut self.monitor_left[..n], &mut self.monitor_right[..n]);
         left.fill(0.0);
@@ -1930,6 +1948,11 @@ impl Engine {
             Command::SetAudioFrom(sources) => {
                 for (track, source) in self.tracks.iter_mut().zip(sources) {
                     track.audio_from = source;
+                }
+            }
+            Command::SetSoundsFrom(sounds) => {
+                for (track, sounds) in self.tracks.iter_mut().zip(sounds) {
+                    track.sounds_from = sounds;
                 }
             }
             Command::SetMidiEffects { track, devices } => {
@@ -2338,10 +2361,33 @@ impl Engine {
         for (i, mute) in self.mutes.iter_mut().enumerate() {
             *mute |= silenced[i];
         }
+        // The drum sounds other tracks take, out of each drum machine's output.
+        let mut apart = [0u16; MAX_TRACKS];
+        for (i, track) in self.tracks.iter().enumerate() {
+            if let Some(source) = self.source_of(track).filter(|&s| s != i && track.sounds_from != 0) {
+                apart[source] |= track.sounds_from;
+            }
+        }
         let sr = self.sample_rate;
         for k in 0..MAX_TRACKS {
             let index = self.order[k];
+            // The drum sounds it takes (its source came earlier in the order).
+            let takes = self.tracks[index].sounds_from;
+            if takes != 0 {
+                self.taken[..n].fill(0.0);
+                let source = self.source_of(&self.tracks[index]).filter(|&s| s != index && !self.mutes[s]);
+                if let Some(Instrument::Drums(drums)) = source.map(|s| &self.tracks[s].instrument) {
+                    for voice in (0..crate::model::DRUM_SOUNDS).filter(|&v| takes >> v & 1 == 1) {
+                        for (out, x) in self.taken[..n].iter_mut().zip(drums.sound(voice)) {
+                            *out += x;
+                        }
+                    }
+                }
+            }
             let track = &mut self.tracks[index];
+            if let Instrument::Drums(drums) = &mut track.instrument {
+                drums.begin(apart[index]);
+            }
             let (left, right) = (&mut track.buffer[..n], &mut track.buffer_right[..n]);
             left.fill(0.0);
             right.fill(0.0);
@@ -2379,9 +2425,15 @@ impl Engine {
                 channel.left[i] = left[i] + track.audio_left[i];
                 channel.right[i] = right[i] + track.audio_right[i];
             }
-            // The sound of the track it follows, unless that one is muted.
+            // The sound of the track it follows, unless that one is muted: the
+            // drum sounds it takes, or all of it after its effects.
             let from = track.audio_from;
-            if let Some(source) = self.ids.iter().position(|&x| x == from && from != 0).filter(|&s| s != index) {
+            if takes != 0 {
+                for i in 0..n {
+                    channel.left[i] += self.taken[i];
+                    channel.right[i] += self.taken[i];
+                }
+            } else if let Some(source) = self.ids.iter().position(|&x| x == from && from != 0).filter(|&s| s != index) {
                 if !self.mutes[source] {
                     for i in 0..n {
                         channel.left[i] += self.key_left[source][i];
@@ -4373,5 +4425,67 @@ mod tests {
         h.send(Command::RemoveDevice { target: Target::Master, index: 0 });
         h.run_beats(0.1);
         assert!(h.engine.master.chain.is_empty());
+    }
+
+    /// A drum sound on a track of its own (a track that takes it, see
+    /// `SetSoundsFrom`): the kit sounds the same as before, but that sound now
+    /// comes out of that track, before the drum track's effects. In every
+    /// model, the classic one's open hat too (it shares the closed one's filter).
+    #[test]
+    fn a_drum_sound_can_play_on_a_track_of_its_own() {
+        use crate::model::{drum_note, DrumModel, DrumParams};
+        let pattern = |pitches: &[u8]| {
+            let mut clip = MidiClip::new("drums", 4.0, [0, 0, 0]);
+            for k in 0..16 {
+                for &pitch in pitches.iter().filter(|&&p| k % 4 == 0 || p != drum_note::KICK) {
+                    // Under the kit's clip, which a sound on its own doesn't share.
+                    clip.notes.push(Note::new(k as f64 * 0.25, 0.1, pitch, 0.5));
+                }
+            }
+            clip
+        };
+        for (model, sound, pitch) in [(DrumModel::Tr909, 0usize, drum_note::KICK), (DrumModel::Tr808, 3, drum_note::CLAP), (DrumModel::Classic, 0, drum_note::KICK), (DrumModel::Classic, 5, drum_note::OPEN_HAT)] {
+            let all = [drum_note::KICK, drum_note::CLAP, drum_note::CLOSED_HAT, drum_note::OPEN_HAT];
+            // `takes`: track 1 takes the sound; `mute`: which track is muted.
+            let render = |pitches: &[u8], takes: bool, mute: Option<usize>| {
+                let mut h = Harness::new();
+                let params = DrumParams { model, ..Default::default() };
+                h.send(Command::set_instrument(0, InstrumentKind::DrumMachine(params), SR));
+                h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 8.0, PlayClip::Midi(pattern(pitches)))]) });
+                h.send(Command::SetTrackIds(std::array::from_fn(|t| t as u32 + 1)));
+                if takes {
+                    let mut from = [0; MAX_TRACKS];
+                    from[1] = 1;
+                    h.send(Command::SetAudioFrom(from));
+                    let mut sounds = [0; MAX_TRACKS];
+                    sounds[1] = 1 << sound;
+                    h.send(Command::SetSoundsFrom(sounds));
+                }
+                if let Some(track) = mute {
+                    h.send(Command::SetMute { target: Target::Track(track), mute: true });
+                }
+                h.send(Command::SetOutputLimit(false));
+                h.send(Command::Play);
+                h.run_beats(8.0)
+            };
+            let differ = |a: &[f32], b: &[f32]| a.iter().zip(b).map(|(x, y)| (x - y).abs()).fold(0.0, f32::max);
+            let whole = render(&all, false, None);
+            assert!(energy(&whole) > 1.0, "{model:?} plays");
+            let label = format!("{model:?}, sound {sound}");
+            assert!(differ(&render(&all, true, None), &whole) < 1e-4, "{label}: the same kit");
+            let rest: Vec<u8> = all.iter().copied().filter(|&p| p != pitch).collect();
+            assert!(differ(&render(&all, true, Some(1)), &render(&rest, false, None)) < 1e-4, "{label}: the drum track no longer plays it");
+            let alone = render(&[pitch], false, None);
+            assert!(energy(&alone) > 0.1, "{label} sounds");
+            // Hats choke each other: the open hat alone rings longer than with closed ones.
+            if sound != 5 {
+                let taken = render(&all, true, None);
+                let with_rest = render(&all, true, Some(1));
+                let track_only: Vec<f32> = taken.iter().zip(&with_rest).map(|(a, b)| a - b).collect();
+                assert!(differ(&track_only, &alone) < 1e-4, "{label}: the track plays it as the kit did");
+            }
+            // The drum track muted: its sounds on other tracks are quiet too.
+            assert!(energy(&render(&all, true, Some(0))) < 1e-9, "{label}: muted with the drums");
+        }
     }
 }

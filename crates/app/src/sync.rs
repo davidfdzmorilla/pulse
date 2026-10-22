@@ -362,6 +362,7 @@ fn commands_from(
     commands.push(Command::SetTrackIds(std::array::from_fn(|t| project.tracks.get(t).map_or(0, |track| track.id))));
     // The sound each track plays from another (a frozen track has it in its audio already).
     commands.push(Command::SetAudioFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none()).and_then(|track| track.audio_from).unwrap_or(0))));
+    commands.push(Command::SetSoundsFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none() && track.audio_from.is_some()).map_or(0, |track| track.sounds_from))));
     for (r, ret) in project.returns.iter().enumerate().take(NUM_RETURNS) {
         let target = Target::Return(r);
         let old = before.and_then(|b| b.returns.get(r)).map(|o| o.devices.as_slice());

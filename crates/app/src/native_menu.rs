@@ -7,12 +7,13 @@
 use crate::commands::Command;
 
 /// One entry of a menu: a command with its title and shortcut, a separator, a submenu
-/// of recent projects, or a system action (hide, minimize…).
+/// of recent projects or of templates, or a system action (hide, minimize…).
 #[derive(Clone, Copy)]
 pub enum Item {
     Run(Command, &'static str, &'static str),
     Separator,
     Recent,
+    Templates,
     // Only macOS's menu bar has them (the in-window menu leaves them out).
     #[cfg_attr(not(target_os = "macos"), allow(dead_code))]
     System(&'static str, &'static str, &'static str),
@@ -43,11 +44,13 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         "Archivo",
         &[
             Run(C::New, "Nuevo", "n"),
+            Templates,
             Run(C::Open, "Abrir…", "o"),
             Recent,
             Separator,
             Run(C::Save, "Guardar", "s"),
             Run(C::SaveAs, "Guardar como…", "⇧s"),
+            Run(C::SaveAsTemplate, "Guardar como plantilla…", ""),
             Run(C::Revert, "Volver a la versión guardada", ""),
             Run(C::Versions, "Versiones…", "⌥s"),
             Separator,
@@ -194,6 +197,8 @@ mod mac {
     /// Recent projects use tags from here on.
     const RECENT_TAG: isize = 10_000;
     const CLEAR_RECENT_TAG: isize = 20_000;
+    /// Templates, from here on.
+    const TEMPLATE_TAG: isize = 30_000;
 
     pub struct TargetState {
         /// Tags of the items chosen since the last frame.
@@ -234,6 +239,8 @@ mod mac {
         commands: Vec<Command>,
         recent_menu: Retained<NSMenu>,
         recent_shown: Vec<PathBuf>,
+        templates_menu: Retained<NSMenu>,
+        templates_shown: Vec<String>,
         mtm: MainThreadMarker,
     }
 
@@ -262,6 +269,7 @@ mod mac {
             let target: Retained<MenuTarget> = unsafe { msg_send![super(target), init] };
             let bar = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str(""));
             let recent_menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str("Abrir recientes"));
+            let templates_menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str("Nuevo desde plantilla"));
             let commands = super::commands();
             let mut tag = 0;
             let app = NSApplication::sharedApplication(mtm);
@@ -282,6 +290,11 @@ mod mac {
                             item.setSubmenu(Some(&recent_menu));
                             menu.addItem(&item);
                         }
+                        Templates => {
+                            let item = item(mtm, "Nuevo desde plantilla", None, "");
+                            item.setSubmenu(Some(&templates_menu));
+                            menu.addItem(&item);
+                        }
                         System(title, action, shortcut) => {
                             let item = item(mtm, title, Some(Sel::register(&std::ffi::CString::new(action).unwrap())), shortcut);
                             menu.addItem(&item);
@@ -296,8 +309,9 @@ mod mac {
                 }
             }
             app.setMainMenu(Some(&bar));
-            let mut menu_bar = MenuBar { target, chosen, disabled, commands, recent_menu, recent_shown: vec![PathBuf::from("-")], mtm };
+            let mut menu_bar = MenuBar { target, chosen, disabled, commands, recent_menu, recent_shown: vec![PathBuf::from("-")], templates_menu, templates_shown: vec!["-".into()], mtm };
             menu_bar.set_recent(&[]);
+            menu_bar.set_templates(&[]);
             Some(menu_bar)
         }
 
@@ -307,20 +321,42 @@ mod mac {
             tags.into_iter()
                 .filter_map(|tag| match tag {
                     CLEAR_RECENT_TAG => Some(Command::ClearRecent),
+                    t if t >= TEMPLATE_TAG => Some(Command::NewFromTemplate((t - TEMPLATE_TAG) as usize)),
                     t if t >= RECENT_TAG => Some(Command::OpenRecent((t - RECENT_TAG) as usize)),
                     t => self.commands.get(t as usize).copied(),
                 })
                 .collect()
         }
 
-        /// Greys out what cannot act, and keeps the recent projects up to date.
-        pub fn update(&mut self, enabled: impl Fn(Command) -> bool, recent: &[PathBuf]) {
+        /// Greys out what cannot act, and keeps the recent projects and the
+        /// templates up to date.
+        pub fn update(&mut self, enabled: impl Fn(Command) -> bool, recent: &[PathBuf], templates: &[String]) {
             let mut disabled: Vec<isize> = self.commands.iter().enumerate().filter(|(_, c)| !enabled(**c)).map(|(i, _)| i as isize).collect();
             if recent.is_empty() {
                 disabled.push(CLEAR_RECENT_TAG);
             }
             *self.disabled.borrow_mut() = disabled;
             self.set_recent(recent);
+            self.set_templates(templates);
+        }
+
+        /// Pulse's templates, then the user's after a line.
+        fn set_templates(&mut self, templates: &[String]) {
+            if self.templates_shown == templates {
+                return;
+            }
+            self.templates_shown = templates.to_vec();
+            let menu = &self.templates_menu;
+            menu.removeAllItems();
+            for (i, name) in templates.iter().enumerate() {
+                if i == crate::templates::BUILT_IN.len() {
+                    menu.addItem(&NSMenuItem::separatorItem(self.mtm));
+                }
+                let item = item(self.mtm, name, Some(sel!(menuAction:)), "");
+                item.setTag(TEMPLATE_TAG + i as isize);
+                unsafe { item.setTarget(Some(&self.target)) };
+                menu.addItem(&item);
+            }
         }
 
         fn set_recent(&mut self, recent: &[PathBuf]) {
@@ -358,7 +394,8 @@ mod mac {
         // An application object that never shows up in the Dock.
         let _: bool = unsafe { msg_send![&*app, setActivationPolicy: 2isize] };
         let Some(mut bar) = MenuBar::install() else { return vec!["no se pudo instalar".into()] };
-        bar.update(&enabled, &[PathBuf::from("/tmp/Demo.pulse")]);
+        let templates: Vec<String> = crate::templates::all().into_iter().map(|t| t.name).collect();
+        bar.update(&enabled, &[PathBuf::from("/tmp/Demo.pulse")], &templates);
         let mut lines = Vec::new();
         let Some(main) = app.mainMenu() else { return vec!["sin menú principal".into()] };
         for i in 0..main.numberOfItems() {
@@ -405,7 +442,7 @@ impl MenuBar {
         Vec::new()
     }
 
-    pub fn update(&mut self, _enabled: impl Fn(Command) -> bool, _recent: &[std::path::PathBuf]) {}
+    pub fn update(&mut self, _enabled: impl Fn(Command) -> bool, _recent: &[std::path::PathBuf], _templates: &[String]) {}
 }
 
 #[cfg(test)]

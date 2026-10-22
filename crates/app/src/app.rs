@@ -332,6 +332,8 @@ pub struct PulseApp {
     pub(crate) settings_changed: Option<std::time::Instant>,
     /// Recent projects, newest first.
     pub recent: Vec<PathBuf>,
+    /// What new projects can start from (see `templates`).
+    pub templates: Vec<crate::templates::Template>,
     /// A copied or cut clip.
     pub clip_clipboard: Option<crate::clip_select::Clipboard>,
     /// Whether notes were copied last (⌘V pastes notes in the clip editor).
@@ -411,6 +413,7 @@ impl PulseApp {
             app.recovery = Some(crate::recovery::Recovery::standard());
         }
         crate::library::prepare();
+        app.templates = crate::templates::all();
         app.menu_bar = crate::native_menu::MenuBar::install();
         // A project opened from Finder or given on the command line, else the
         // last one (if wanted).
@@ -523,6 +526,7 @@ impl PulseApp {
             input_track: None,
             file: None,
             recent: Vec::new(),
+            templates: Vec::new(),
             clip_clipboard: None,
             paste_notes: false,
             answers: Default::default(),
@@ -2887,7 +2891,8 @@ impl eframe::App for PulseApp {
         crate::updates::window(self, &ctx);
         self.text_focus = ctx.egui_wants_keyboard_input();
         if let Some(mut bar) = self.menu_bar.take() {
-            bar.update(|c| self.command_enabled(c), &self.recent);
+            let templates: Vec<String> = self.templates.iter().map(|t| t.name.clone()).collect();
+            bar.update(|c| self.command_enabled(c), &self.recent, &templates);
             self.menu_bar = Some(bar);
         }
 

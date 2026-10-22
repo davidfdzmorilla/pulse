@@ -730,12 +730,13 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
 Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse` en macOS, la carpeta Música de tu usuario en Windows; se cambia en Ajustes):
 
 - `Proyectos/<nombre>/`: cada proyecto en su carpeta, con sus audios en `Samples/` (Importados, Grabaciones, Stems, Trozos, Consolidados, Congelados) y sus versiones en `Versiones/`. La carpeta entera se puede copiar a otro ordenador, también de macOS a Windows y al revés. Si al abrir un proyecto falta algún audio (estaba fuera de su carpeta o en otro ordenador), Pulse lo dice en la barra de estado y conserva su ruta: pon el archivo en su sitio o vuelve a importarlo.
+- `Plantillas/<nombre>/`: tus plantillas (ver «Plantillas»), cada una en su carpeta con sus audios, como los proyectos.
 - `Exportaciones`, `Presets`, `Wavetables` y `Samples` (las tuyas).
 - `Sin guardar`: lo que graba o crea un proyecto que aún no has guardado. Al guardarlo se mueve a su carpeta.
 
 ### Archivo
 
-- **⌘N** nuevo, **⌘O** abrir, **Abrir recientes** (los 10 últimos), **⌘S** guardar, **⇧⌘S** guardar como, **Volver a la versión guardada**, **⌥⌘S** versiones (ver «Versiones del proyecto»).
+- **⌘N** nuevo (o desde la plantilla elegida en Ajustes), **Nuevo desde plantilla ▸**, **Guardar como plantilla…** (ver «Plantillas»), **⌘O** abrir, **Abrir recientes** (los 10 últimos), **⌘S** guardar, **⇧⌘S** guardar como, **Volver a la versión guardada**, **⌥⌘S** versiones (ver «Versiones del proyecto»).
 - Al guardar, todos los audios que usa el proyecto se copian a su carpeta (los grabados en un proyecto sin guardar se mueven). **⌘Z** después de guardar deshace tu último cambio y los clips siguen apuntando a sus audios en la carpeta del proyecto.
 - Antes de perder cambios sin guardar, Pulse pregunta (Guardar / No guardar / Cancelar).
 - **⌘Z / ⇧⌘Z**: deshacer y rehacer. Se puede hacer mientras suena: solo cambia lo que deshaces; las demás pistas siguen como estaban, con sus colas de reverb y delay y sus plugins (lo mismo al añadir una pista).
@@ -743,6 +744,16 @@ Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`
 - Los ajustes y lo que Pulse genera no son tu trabajo y no están en la carpeta de Pulse: en macOS en `~/Library/Application Support/Pulse`; en Windows, los ajustes en `%APPDATA%\Pulse` y kits y modelos en `%LOCALAPPDATA%\Pulse`. Si Pulse se cierra por un fallo, deja lo que pasó en `pulse.log` (`~/Library/Logs/Pulse` en macOS, `%LOCALAPPDATA%\Pulse\Logs` en Windows), con la versión, el sistema y el commit. Si se cierra de golpe sin dejarlo (un plugin que falla, por ejemplo), en macOS hay un informe en Consola → Informes de fallos (`~/Library/Logs/DiagnosticReports/pulse-*.ips`).
 - El título de la ventana lleva * si hay cambios sin guardar. También cuentan los que haces dentro de un plugin (en su editor, con un controlador o en **Parámetros…**).
 - Guardar es todo o nada: Pulse escribe primero una copia completa y solo entonces sustituye el archivo, así que un cierre, un disco lleno o un corte de luz a mitad de guardar dejan el archivo anterior entero. Si el proyecto tuviera algún número no válido (NaN o infinito, por ejemplo de un set de Live dañado), se guarda como 0 y la barra de estado dice cuántos. Si un archivo de ajustes o de listas tiene algo que Pulse no entiende (un valor de una versión más nueva, una entrada dañada), solo se pierde eso: el resto se conserva y queda una copia del original como «… (dañado)». Si no se puede leer nada, Pulse lo aparta con ese nombre en vez de sobrescribirlo.
+
+### Plantillas
+
+Una plantilla es un proyecto del que partir: tus pistas, instrumentos, efectos, muestras de los Drum Pads y el Sampler, mezcla, envíos, retornos, master, tempo, tonalidad, escenas, macros y asignaciones MIDI, sin el contenido (clips, arreglo, automatización ni marcadores).
+
+- **Archivo → Nuevo desde plantilla ▸** empieza un proyecto nuevo desde una. Pulse trae dos: **Beat** (Batería 909 con compresor, Bajo ácido, Acordes y Melodía con envíos a la reverb y al delay, a 124 BPM) y **Grabar voz** (una pista Base para el instrumental y dos de audio, Voz y Coros, con ecualizador, compresor y envío a la reverb, a 90 BPM). Debajo de una línea, las tuyas.
+- **Archivo → Guardar como plantilla…** guarda el proyecto de ahora como plantilla con el nombre que le des. Las muestras que use se copian a la carpeta de la plantilla, así que sigue funcionando aunque borres o muevas el proyecto. Tu proyecto no cambia. Con el nombre de una que ya existe, la sustituye; con el de una de Pulse, la tuya va primero.
+- En **Ajustes → Proyectos**, **Proyecto nuevo (⌘N)** elige de qué plantilla parte **⌘N** (**Vacío**: dos pistas MIDI, como siempre).
+- Un proyecto que empieza desde una plantilla está sin guardar: **⌘S** pregunta dónde y se lleva sus muestras a su carpeta.
+- Para borrar o renombrar una plantilla, borra o renombra su carpeta en `Plantillas` (con **Mostrar la carpeta de Pulse**). Renombra también el `.pulse` de dentro, que se llama igual que la carpeta.
 
 ### Autoguardado y recuperación
 
@@ -829,7 +840,7 @@ Tras **Aplicar** se vuelve a analizar sola, para que veas el resultado. Todo lo 
 - **MIDI**: dispositivos conectados y volver a buscar.
 - **Plugins**: carpetas donde buscarlos y **Buscar plugins**.
 - **Carpeta de Pulse**: dónde está, **Cambiar…** (lo que ya hay no se mueve) y **Mostrar en Finder**.
-- **Proyectos**: abrir el último proyecto al arrancar y buscar actualizaciones al arrancar.
+- **Proyectos**: abrir el último proyecto al arrancar, de qué plantilla parte **⌘N** (ver «Plantillas») y buscar actualizaciones al arrancar.
 
 ## Actualizaciones
 

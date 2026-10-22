@@ -49,6 +49,9 @@ pub struct Settings {
     /// The browser plays loops at the project's tempo, looping (see `browser`).
     #[serde(default = "yes")]
     pub preview_in_tempo: bool,
+    /// The template ⌘N starts from (see `templates`); none: an empty project.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub new_from: Option<String>,
     /// The export dialog's last choices.
     #[serde(default)]
     pub export: crate::export::Settings,
@@ -64,7 +67,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, export: Default::default(), unknown: Default::default() }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), unknown: Default::default() }
     }
 }
 
@@ -291,6 +294,16 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.separator();
         ui.heading("Proyectos");
         ui.checkbox(&mut next.reopen_last, "Abrir el último proyecto al arrancar");
+        ui.horizontal(|ui| {
+            ui.label("Proyecto nuevo (⌘N)");
+            let shown = next.new_from.clone().unwrap_or(crate::templates::EMPTY.into());
+            egui::ComboBox::from_id_salt("new_from").selected_text(shown).show_ui(ui, |ui| {
+                ui.selectable_value(&mut next.new_from, None, crate::templates::EMPTY);
+                for template in &app.templates {
+                    ui.selectable_value(&mut next.new_from, Some(template.name.clone()), &template.name);
+                }
+            });
+        });
         ui.checkbox(&mut next.check_updates, "Buscar actualizaciones al arrancar");
     });
     if next != app.settings {
@@ -334,7 +347,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, export: Default::default(), unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

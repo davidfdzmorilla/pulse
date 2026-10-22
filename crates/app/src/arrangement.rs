@@ -1010,12 +1010,14 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                     app.project.markers.remove(i);
                     ui.close();
                 }
+                crate::transitions::menu(app, ui, beat);
             }
             Menu::Markers(beat) => {
                 if ui.button("Añadir marcador aquí").clicked() {
                     app.add_marker(beat);
                     ui.close();
                 }
+                crate::transitions::menu(app, ui, (beat / 4.0).round() * 4.0);
             }
             Menu::Clip(clip, beat) => clip_menu(app, ui, clip, beat),
             Menu::Lane { track, beat } => {
@@ -1031,7 +1033,8 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                         app.choose_samples(Placement::Arrangement { track, start: bar });
                         ui.close();
                     }
-                } else if ui.button("Nuevo clip MIDI aquí").clicked() {
+                }
+                if !audio && ui.button("Nuevo clip MIDI aquí").clicked() {
                     let color = app.project.tracks[track].color;
                     app.project.tracks[track].arrangement.push(ArrangementClip { start: bar, length: 4.0, clip: Clip::Midi(MidiClip::new("MIDI", 4.0, color)) });
                     let index = app.project.tracks[track].arrangement.len() - 1;
@@ -1039,6 +1042,7 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                     app.select_clip(ClipRef::Arrangement { track, index });
                     ui.close();
                 }
+                crate::transitions::menu(app, ui, (beat / 4.0).round() * 4.0);
             }
             Menu::Automation { track, param } => {
                 let target = row_target(app, track);
@@ -1135,6 +1139,10 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     let all_audio = app.clip_selection().iter().all(|&c| matches!(app.clip(c), Some(Clip::Audio(_))));
     if audio && all_audio && ui.button(label("Consolidar")).on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
         app.consolidate(app.clip_selection());
+        ui.close();
+    }
+    if audio && all_audio && ui.button(label("Invertir")).on_hover_text("Lo que suena el clip, del final al principio, en un archivo nuevo (otra vez lo devuelve)").clicked() {
+        app.reverse_clips(app.clip_selection());
         ui.close();
     }
     if count == 1 && ui.button(crate::theme::keys("Dividir aquí   ⌘E")).on_hover_text(crate::theme::keys("Corta el clip en dos donde hiciste clic derecho (⌘E corta en el cursor)")).clicked() {

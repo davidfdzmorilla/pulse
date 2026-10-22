@@ -4,7 +4,7 @@ use engine::model::{
     drum_note::*, AcidParams, ArrangementClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, FmParams, SuperSawParams, CompressorParams, DelayParams, Device, Effect,
     InstrumentKind, MidiClip, Note, Param, PluginId, ReverbParams, SynthParams, RACK_FIRST_NOTE, RACK_PADS,
 };
-use engine::{NUM_RETURNS, NUM_SCENES};
+use engine::{MAX_RETURNS, NUM_SCENES};
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -102,7 +102,9 @@ pub struct Track {
     /// When an audio track plays its audio input.
     #[serde(default, skip_serializing_if = "is_default")]
     pub monitor: Monitor,
-    pub sends: [f32; NUM_RETURNS],
+    /// How much it sends to each return (as many as the project has; the rest 0).
+    #[serde(serialize_with = "save_sends", deserialize_with = "load_sends")]
+    pub sends: [f32; MAX_RETURNS],
     pub devices: Vec<Device>,
     #[serde(deserialize_with = "scenes")]
     pub clips: [Option<Clip>; NUM_SCENES],
@@ -152,7 +154,7 @@ impl Track {
             solo: false,
             armed: false,
             monitor: Monitor::Auto,
-            sends: [0.0; NUM_RETURNS],
+            sends: [0.0; MAX_RETURNS],
             devices: Vec::new(),
             clips: Default::default(),
             arrangement: Vec::new(),
@@ -275,10 +277,35 @@ pub struct MasterTrack {
 /// that reads 2.
 /// 4: a drum sound on a track of its own (`sounds_from`): a Pulse that reads 3
 /// would play the whole kit twice. Only projects that have one.
-pub const FORMAT: u32 = 4;
+/// 5: other than two returns: a Pulse that reads 4 has two, always. Only
+/// projects that have more or fewer.
+pub const FORMAT: u32 = 5;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
+
+/// A track's sends as saved: two at least (what a Pulse with two returns
+/// reads), and up to the last one that sends.
+fn save_sends<S: serde::Serializer>(sends: &[f32; MAX_RETURNS], serializer: S) -> Result<S::Ok, S::Error> {
+    let used = sends.iter().rposition(|&s| s != 0.0).map_or(0, |i| i + 1).max(2);
+    sends[..used].serialize(serializer)
+}
+
+/// A track's sends as saved: the ones missing are 0, and more than there can
+/// be are left out.
+fn load_sends<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[f32; MAX_RETURNS], D::Error> {
+    let saved: Vec<f32> = Vec::deserialize(deserializer)?;
+    let mut sends = [0.0; MAX_RETURNS];
+    for (send, value) in sends.iter_mut().zip(saved) {
+        *send = value;
+    }
+    Ok(sends)
+}
+
+/// A return's letter (A, B, C…), as the mixer shows it.
+pub fn return_letter(index: usize) -> char {
+    (b'A' + index.min(25) as u8) as char
+}
 
 /// Converts a project file from `format` to the current one.
 /// A track's clip slots as saved: as many as there were scenes then (8 before
@@ -517,8 +544,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.tracks.iter().any(|t| t.sounds_from != 0) {
+            let format = if self.returns.len() != 2 {
                 FORMAT
+            } else if self.tracks.iter().any(|t| t.sounds_from != 0) {
+                4
             } else if self.tracks.iter().any(|t| t.audio_from.is_some()) {
                 3
             } else {
@@ -625,7 +654,7 @@ impl Project {
             .collect();
         keys.clips[0] = clip("Am F C G", 16.0, keys_color, chord_notes);
         keys.clips[1] = keys.clips[0].clone();
-        keys.sends = [0.35, 0.0];
+        keys.sends[0] = 0.35;
         keys.devices.push(Device::new(Effect::AutoFilter(AutoFilterParams {
             cutoff: 1200.0,
             resonance: 0.4,
@@ -667,7 +696,7 @@ impl Project {
         .map(|(s, l, p)| note(s, l, p, 0.8))
         .collect();
         lead.clips[1] = clip("Melody", 8.0, lead_color, melody);
-        lead.sends = [0.3, 0.25];
+        lead.sends[..2].copy_from_slice(&[0.3, 0.25]);
 
         // A short arrangement built from the session clips.
         let place = |track: &Track, slot: usize, start: f64, length: f64| ArrangementClip {

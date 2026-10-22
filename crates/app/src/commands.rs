@@ -41,6 +41,7 @@ pub enum Command {
     SelectAll,
     NewMidiTrack,
     NewAudioTrack,
+    NewReturn,
     DuplicateTrack,
     DeleteTrack,
     GroupTracks,
@@ -88,7 +89,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 34] = [
+pub const SHORTCUTS: [(&str, &str); 35] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -105,6 +106,7 @@ pub const SHORTCUTS: [(&str, &str); 34] = [
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),
     ("⌘T / ⇧⌘T", "Nueva pista MIDI / de audio"),
+    ("⌥⌘T", "Nuevo retorno"),
     ("⌘G", "Agrupar las pistas seleccionadas"),
     ("⇧⌘G", "Desagrupar el grupo seleccionado"),
     ("⌘ clic / ⇧ clic", "Seleccionar varias pistas (en sus cabeceras) o varios clips"),
@@ -144,6 +146,7 @@ impl PulseApp {
             Command::NewFromTemplate(i) => i < self.templates.len(),
             Command::ClearRecent => !self.recent.is_empty(),
             Command::Cut | Command::Copy | Command::Duplicate | Command::Delete => clip_selected || editing_notes,
+            Command::NewReturn => self.project.returns.len() < engine::MAX_RETURNS,
             Command::Split | Command::Join => matches!(self.selected_clip, Some(crate::app::ClipRef::Arrangement { .. })),
             Command::Paste => self.clip_clipboard.is_some() || editing_notes,
             Command::SelectAll => editing_notes,
@@ -262,6 +265,7 @@ impl PulseApp {
             Command::Delete => self.delete_selected_clip(),
             Command::SelectAll => {}
             Command::NewMidiTrack => self.add_track(),
+            Command::NewReturn => self.add_return(),
             Command::NewAudioTrack => {
                 self.add_audio_track();
             }

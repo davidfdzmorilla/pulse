@@ -13,7 +13,7 @@ use crate::project::{Mixer, Project, Track, PALETTE};
 use engine::model::{
     rack_pad, ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, RackParams, SamplerParams, SynthParams, WarpMarker, WarpMode, RACK_FIRST_NOTE,
 };
-use engine::{MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
+use engine::{MAX_TRACKS, MAX_RETURNS, NUM_SCENES};
 use roxmltree::{Document, Node};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -179,7 +179,12 @@ pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport
     let returns: Vec<Node> = child(set, "Tracks")
         .map(|t| t.children().filter(|n| n.has_tag_name("ReturnTrack")).collect())
         .unwrap_or_default();
-    for (ret, node) in project.returns.iter_mut().zip(returns.iter().take(NUM_RETURNS)) {
+    // Beyond them, as many empty ones as the set has (up to the most there can be).
+    for (i, node) in returns.iter().take(MAX_RETURNS).enumerate() {
+        if project.returns.len() <= i {
+            project.returns.push(crate::returns::new_return(i));
+        }
+        let ret = &mut project.returns[i];
         if let Some(name) = track_name(*node) {
             ret.name = name;
         }
@@ -714,7 +719,7 @@ mod tests {
         assert!(drums.instrument.is_drums());
         assert!((drums.mixer.gain - 0.501).abs() < 0.001);
         assert_eq!(drums.mixer.pan, -0.25);
-        assert_eq!(drums.sends, [0.5, 0.0]);
+        assert_eq!(drums.sends[..2], [0.5, 0.0]);
         assert_eq!(report.audio_tracks, 1);
         assert_eq!(report.midi_tracks, 1);
         assert!(project.tracks[1].is_audio());

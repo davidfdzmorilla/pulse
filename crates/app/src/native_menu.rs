@@ -84,6 +84,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         &[
             Run(C::NewMidiTrack, "Pista MIDI", "t"),
             Run(C::NewAudioTrack, "Pista de audio", "⇧t"),
+            Run(C::NewReturn, "Retorno", "⌥t"),
             Separator,
             Run(C::DuplicateTrack, "Duplicar pista", ""),
             Run(C::DeleteTrack, "Eliminar pista", ""),

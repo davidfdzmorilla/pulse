@@ -227,7 +227,7 @@ impl PulseApp {
         match (devices, param) {
             (None, _) => false,
             (Some(devices), Param::Device { device, .. }) => device < devices.len(),
-            (Some(_), Param::Send(i)) => i < engine::NUM_RETURNS,
+            (Some(_), Param::Send(i)) => i < self.project.returns.len(),
             _ => true,
         }
     }

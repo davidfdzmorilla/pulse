@@ -26,7 +26,9 @@ pub const MAX_TRACKS: usize = 64;
 /// Scenes (rows of clip slots) in the Session. Projects saved with fewer
 /// (8, before) open with the rest empty.
 pub const NUM_SCENES: usize = 16;
-pub const NUM_RETURNS: usize = 2;
+/// The most return tracks a project can have (as in Live); the ones it
+/// doesn't have stay silent.
+pub const MAX_RETURNS: usize = 12;
 /// Devices per chain; insertions beyond this are rejected so the chain never reallocates.
 pub const MAX_CHAIN: usize = 16;
 pub(crate) const MAX_BLOCK: usize = 1024;
@@ -331,6 +333,11 @@ pub enum Command {
         send: usize,
         amount: f32,
     },
+    /// All of a track's sends at once (a project's sync: one command, not one per return).
+    SetSends {
+        track: usize,
+        sends: [f32; MAX_RETURNS],
+    },
     InsertDevice {
         target: Target,
         index: usize,
@@ -477,7 +484,7 @@ pub struct SharedState {
     /// The tempo playing (automation included), BPM.
     tempo: AtomicF64,
     pub tracks: [TrackStatus; MAX_TRACKS],
-    pub returns: [Peak; NUM_RETURNS],
+    pub returns: [Peak; MAX_RETURNS],
     pub master: Peak,
     /// Beats of count-in left before the transport starts (0: not counting in).
     count_in: AtomicF64,
@@ -1323,9 +1330,9 @@ struct Track {
     /// What the wavetable synth's oscillators read.
     tables: Box<Vec<Arc<Wavetable>>>,
     solo: bool,
-    sends: [f32; NUM_RETURNS],
+    sends: [f32; MAX_RETURNS],
     /// The sends as set (see `Channel::base_gain`).
-    base_sends: [f32; NUM_RETURNS],
+    base_sends: [f32; MAX_RETURNS],
     /// Device and instrument parameters a clip's envelopes hold, with the value
     /// they had before: it comes back when the clip ends.
     envelope_held: [Option<(Param, f32)>; MAX_HELD],
@@ -1390,8 +1397,8 @@ impl Track {
             samples: Box::default(),
             tables: Box::default(),
             solo: false,
-            sends: [0.0; NUM_RETURNS],
-            base_sends: [0.0; NUM_RETURNS],
+            sends: [0.0; MAX_RETURNS],
+            base_sends: [0.0; MAX_RETURNS],
             envelope_held: [None; MAX_HELD],
             arrangement: Box::default(),
             replaced: None,
@@ -1662,7 +1669,7 @@ impl Engine {
             shared: shared.clone(),
             sample_rate,
             tracks: (0..MAX_TRACKS).map(|_| Track::new(sample_rate)).collect(),
-            returns: (0..NUM_RETURNS).map(|_| Channel::new()).collect(),
+            returns: (0..MAX_RETURNS).map(|_| Channel::new()).collect(),
             master: Channel::new(),
             playing: false,
             position: 0.0,
@@ -2070,6 +2077,14 @@ impl Engine {
                         *base = amount.clamp(0.0, 1.0);
                         t.sends[send] = *base;
                     }
+                }
+            }
+            Command::SetSends { track, sends } => {
+                if let Some(t) = self.tracks.get_mut(track) {
+                    for (base, amount) in t.base_sends.iter_mut().zip(sends) {
+                        *base = amount.clamp(0.0, 1.0);
+                    }
+                    t.sends = t.base_sends;
                 }
             }
             Command::InsertDevice { target, index, slot } => {
@@ -4219,6 +4234,20 @@ mod tests {
         assert_eq!(h.shared.tracks[0].peak.take(), 0.0);
         assert!(h.shared.tracks[1].peak.take() > 0.0);
         assert!(h.shared.returns[0].take() > 0.0);
+    }
+
+    /// Every return can be sent to, up to the last; one sent nothing stays silent.
+    #[test]
+    fn the_last_return_is_heard_too() {
+        let mut h = Harness::new();
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        let mut sends = [0.0; MAX_RETURNS];
+        sends[MAX_RETURNS - 1] = 1.0;
+        h.send(Command::SetSends { track: 0, sends });
+        h.send(Command::LaunchScene(0));
+        h.run_beats(1.0);
+        assert!(h.shared.returns[MAX_RETURNS - 1].take() > 0.0);
+        assert_eq!(h.shared.returns[0].take(), 0.0);
     }
 
     /// Tracks 1 and 2 in group 0, track 3 outside.

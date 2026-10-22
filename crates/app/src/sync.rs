@@ -4,7 +4,7 @@ use crate::project::{Project, Track};
 use engine::model::{AutomationLane, Clip, Device, Effect, InstrumentKind, Param, PluginId, SynthParams};
 use engine::plugin::{PluginHandle, PluginProcessor};
 use engine::wavetable::Wavetable;
-use engine::{build_chain, ChainSlot, Command, PlacedClip, PlayClip, Sample, Target, MAX_TRACKS, NUM_RETURNS, NUM_SCENES};
+use engine::{build_chain, ChainSlot, Command, PlacedClip, PlayClip, Sample, Target, MAX_TRACKS, MAX_RETURNS, NUM_SCENES};
 use std::collections::{HashMap, HashSet};
 use std::path::Path;
 use std::sync::Arc;
@@ -331,9 +331,7 @@ fn commands_from(
             commands.push(Command::SetArrangement { track: t, clips: placed_clips(track, samples) });
         }
         commands.push(Command::SetAutomation { target, lanes: active_lanes(&track.automation, target, overridden) });
-        for (send, &amount) in track.sends.iter().enumerate() {
-            commands.push(Command::SetSend { track: t, send, amount });
-        }
+        commands.push(Command::SetSends { track: t, sends: track.sends });
         for slot in 0..NUM_SCENES {
             if old.is_some_and(|o| o.clips[slot] == track.clips[slot]) {
                 continue;
@@ -363,9 +361,15 @@ fn commands_from(
     // The sound each track plays from another (a frozen track has it in its audio already).
     commands.push(Command::SetAudioFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none()).and_then(|track| track.audio_from).unwrap_or(0))));
     commands.push(Command::SetSoundsFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none() && track.audio_from.is_some()).map_or(0, |track| track.sounds_from))));
-    for (r, ret) in project.returns.iter().enumerate().take(NUM_RETURNS) {
+    // The returns the project doesn't have (any more) are emptied: silent.
+    let none = crate::project::ReturnTrack { name: String::new(), color: [0; 3], mixer: Default::default(), devices: Vec::new(), automation: Vec::new() };
+    for r in 0..MAX_RETURNS {
+        if before.is_some_and(|b| b.returns.len() <= r) && project.returns.len() <= r {
+            continue;
+        }
+        let ret = project.returns.get(r).unwrap_or(&none);
         let target = Target::Return(r);
-        let old = before.and_then(|b| b.returns.get(r)).map(|o| o.devices.as_slice());
+        let old = before.map(|b| b.returns.get(r).map_or(&[][..], |o| o.devices.as_slice()));
         commands.extend(chain_commands(project, target, old, &ret.devices, samples, sample_rate));
         commands.push(Command::SetAutomation { target, lanes: active_lanes(&ret.automation, target, overridden) });
         commands.extend(mixer_commands(target, &ret.mixer));

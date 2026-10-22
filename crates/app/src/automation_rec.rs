@@ -12,7 +12,7 @@
 
 use crate::app::PulseApp;
 use engine::model::{AutomationLane, AutomationPoint, Param};
-use engine::{Target, NUM_RETURNS};
+use engine::Target;
 use std::collections::HashMap;
 
 /// Points closer than this (in beats) replace each other: a sweep stays light.
@@ -45,7 +45,7 @@ pub struct ClipAutomationTake {
 
 impl PulseApp {
     fn all_targets(&self) -> impl Iterator<Item = Target> {
-        (0..self.project.tracks.len()).map(Target::Track).chain((0..NUM_RETURNS).map(Target::Return)).chain([Target::Master])
+        (0..self.project.tracks.len()).map(Target::Track).chain((0..self.project.returns.len()).map(Target::Return)).chain([Target::Master])
     }
 
     /// Every parameter's value now (of one channel, or all).

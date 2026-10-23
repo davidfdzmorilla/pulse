@@ -281,7 +281,9 @@ pub struct MasterTrack {
 /// projects that have more or fewer.
 /// 6: audio clips with fades: a Pulse that reads 5 would play them without.
 /// Only projects that have one.
-pub const FORMAT: u32 = 6;
+/// 7: an EQ Eight: a Pulse that reads 6 doesn't know it. Only projects that
+/// have one.
+pub const FORMAT: u32 = 7;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -442,6 +444,12 @@ impl Project {
         self.tracks.iter().any(|t| t.clips.iter().flatten().any(fades) || t.arrangement.iter().any(|p| fades(&p.clip)))
     }
 
+    /// Whether a track, a return or the master has an EQ Eight.
+    pub fn has_eq_eight(&self) -> bool {
+        let chains = self.tracks.iter().map(|t| &t.devices).chain(self.returns.iter().map(|r| &r.devices)).chain([&self.master.devices]);
+        chains.flatten().any(|d| matches!(d.effect, engine::model::Effect::EqEight(_)))
+    }
+
     /// An id no plugin of the project uses yet.
     pub fn new_plugin_id(&self) -> PluginId {
         PluginId(self.plugins.iter().map(|p| p.id.0 + 1).max().unwrap_or(1))
@@ -552,8 +560,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_fades() {
+            let format = if self.has_eq_eight() {
                 FORMAT
+            } else if self.has_fades() {
+                6
             } else if self.returns.len() != 2 {
                 5
             } else if self.tracks.iter().any(|t| t.sounds_from != 0) {

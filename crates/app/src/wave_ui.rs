@@ -725,7 +725,7 @@ pub(crate) fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &m
                 }
                 None => {
                     egui::ComboBox::from_id_salt(("wave_fx_add", t, slot)).selected_text("+ Añadir efecto").width(130.0).show_ui(ui, |ui| {
-                        for effect in Effect::catalog() {
+                        for effect in Effect::catalog().into_iter().filter(Effect::fits_in_synths) {
                             if ui.selectable_label(false, effect.label()).clicked() {
                                 let mut p = base;
                                 p.fx[slot] = Some(Device::new(effect));

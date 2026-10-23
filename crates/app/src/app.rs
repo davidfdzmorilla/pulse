@@ -262,6 +262,8 @@ pub struct PulseApp {
     /// Track headers being dragged to a new place.
     pub track_drag: Option<crate::tracks::TrackDrag>,
     pub meters: Meters,
+    /// What the EQ Eight on view hears (see `eq_ui`).
+    pub spectrum: crate::eq_ui::Spectrum,
     pub piano_roll: piano_roll::State,
     pub arrangement: arrangement::State,
     pub show_browser: bool,
@@ -492,6 +494,7 @@ impl PulseApp {
             selected_tracks: Vec::new(),
             track_drag: None,
             meters: Meters::default(),
+            spectrum: Default::default(),
             piano_roll: Default::default(),
             arrangement: Default::default(),
             show_browser: true,

@@ -547,6 +547,15 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 ### Efectos
 
 - **EQ Three**: graves, medios y agudos, con sus frecuencias de corte.
+- **EQ Eight**: ecualizador de ocho bandas, como el EQ Eight de Live. La gráfica muestra la curva (naranja) sobre el **espectro** de lo que sale del EQ (gris), en vivo: ves dónde están los graves que sobran o la frecuencia que pita.
+  - Cada banda es un **punto numerado** del color de su botón. **Arrástralo**: izquierda y derecha cambian la frecuencia; arriba y abajo, la ganancia. Con **⌥** pulsado, arriba y abajo cambian la **Q** (lo estrecha que es). **Doble clic** en un punto enciende o apaga la banda; las apagadas se ven huecas.
+  - Los botones **1–8** bajo la gráfica eligen la banda que muestran los controles de la derecha: si está encendida, su **forma** y sus ruedas **Freq**, **Gain** y **Q**. **Output** sube o baja todo al final.
+  - Formas: **Corte graves** y **Corte agudos**, que quitan lo que hay por debajo o por encima de la frecuencia (48 dB por octava, casi de golpe, o 12, suave; una Q por encima de 0,71 resalta el corte); **Estante graves** y **Estante agudos**, que suben o bajan todo lo que hay por debajo o por encima; **Campana**, que sube o baja alrededor de la frecuencia; y **Notch**, que quita una frecuencia muy concreta (un zumbido de 50 Hz, un pitido).
+  - Uno nuevo no cambia el sonido: trae las bandas 2–7 encendidas y planas, y los cortes (1 y 8) apagados. Enciende la 1 para quitar los graves que no se oyen pero ocupan (40 Hz de inicio).
+  - Las 25 ruedas se pueden automatizar y asignar a MIDI como las de cualquier efecto, y los puntos siguen a la automatización.
+  - El espectro se dibuja para el primer EQ Eight de la cadena que estás viendo.
+  - No está entre los efectos internos del Wavetable, el Polychrome ni las líneas del Modular, que llevan seis controles por efecto como mucho.
+  - Un proyecto con un EQ Eight no se abre en un Pulse anterior: pide actualizar.
 - **Compressor**: umbral, ratio, ataque, release y ganancia, y **Sidechain** (ver abajo).
 - **Limiter**: ganancia, techo y release.
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras).

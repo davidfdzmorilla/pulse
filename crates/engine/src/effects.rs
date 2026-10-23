@@ -3,7 +3,7 @@
 
 use crate::model::{
     db_to_gain, AutoFilterParams, BitcrusherParams, ChorusParams, CompressorParams, DelayParams, DuckerParams, Effect,
-    Eq3Params, FilterMode, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
+    EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
 use crate::plugin::PluginProcessor;
 use std::f32::consts::{PI, TAU};
@@ -83,6 +83,177 @@ impl Eq3 {
                 *s = low * gl + mid * gm + high * gh;
             }
         }
+    }
+}
+
+/// Second-order filter coefficients, normalized so a0 is 1.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Biquad {
+    b0: f64,
+    b1: f64,
+    b2: f64,
+    a1: f64,
+    a2: f64,
+}
+
+impl Biquad {
+    const IDENTITY: Biquad = Biquad { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 };
+
+    fn normalized(b: [f64; 3], a: [f64; 3]) -> Self {
+        Self { b0: b[0] / a[0], b1: b[1] / a[0], b2: b[2] / a[0], a1: a[1] / a[0], a2: a[2] / a[0] }
+    }
+
+    /// Gain at `w` radians a sample.
+    fn magnitude(&self, w: f64) -> f64 {
+        let (c1, s1, c2, s2) = (w.cos(), w.sin(), (2.0 * w).cos(), (2.0 * w).sin());
+        let (nr, ni) = (self.b0 + self.b1 * c1 + self.b2 * c2, -(self.b1 * s1 + self.b2 * s2));
+        let (dr, di) = (1.0 + self.a1 * c1 + self.a2 * c2, -(self.a1 * s1 + self.a2 * s2));
+        ((nr * nr + ni * ni) / (dr * dr + di * di).max(1e-30)).sqrt()
+    }
+}
+
+/// Transposed direct form II state.
+#[derive(Clone, Copy, Default)]
+struct BiquadState {
+    s1: f64,
+    s2: f64,
+}
+
+impl BiquadState {
+    #[inline]
+    fn tick(&mut self, x: f64, c: &Biquad) -> f64 {
+        let y = c.b0 * x + self.s1;
+        self.s1 = c.b1 * x - c.a1 * y + self.s2;
+        self.s2 = c.b2 * x - c.a2 * y;
+        y
+    }
+}
+
+/// Second-order sections a band needs at most (a 48 dB cut).
+const EQ_STAGES: usize = 4;
+
+/// The sections that make band `band` at `sample_rate`, and how many it uses.
+fn band_sections(band: &EqBand, sample_rate: f32) -> ([Biquad; EQ_STAGES], usize) {
+    let sr = sample_rate as f64;
+    let freq = (band.freq as f64).clamp(10.0, sr * 0.49);
+    let q = (band.q as f64).clamp(0.05, 40.0);
+    let w0 = std::f64::consts::TAU * freq / sr;
+    let (cos, sin) = (w0.cos(), w0.sin());
+    let low_pass = |q: f64| {
+        let alpha = sin / (2.0 * q);
+        Biquad::normalized([(1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0], [1.0 + alpha, -2.0 * cos, 1.0 - alpha])
+    };
+    let high_pass = |q: f64| {
+        let alpha = sin / (2.0 * q);
+        Biquad::normalized([(1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0], [1.0 + alpha, -2.0 * cos, 1.0 - alpha])
+    };
+    // An eighth-order Butterworth in four sections; the band's Q above 0.71
+    // raises the resonance of the last one.
+    let steep = |section: &dyn Fn(f64) -> Biquad| {
+        let resonance = q / std::f64::consts::FRAC_1_SQRT_2;
+        let qs = [0.5098, 0.6013, 0.9000, 2.5629 * resonance.max(0.2)];
+        (qs.map(|q| section(q)), EQ_STAGES)
+    };
+    let one = |section: Biquad| {
+        let mut sections = [Biquad::IDENTITY; EQ_STAGES];
+        sections[0] = section;
+        (sections, 1)
+    };
+    let a = 10f64.powf(band.gain_db as f64 / 40.0);
+    let alpha = sin / (2.0 * q);
+    match band.shape {
+        EqShape::LowCut48 => steep(&high_pass),
+        EqShape::HighCut48 => steep(&low_pass),
+        EqShape::LowCut12 => one(high_pass(q)),
+        EqShape::HighCut12 => one(low_pass(q)),
+        EqShape::Bell => one(Biquad::normalized([1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a], [1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a])),
+        EqShape::Notch => one(Biquad::normalized([1.0, -2.0 * cos, 1.0], [1.0 + alpha, -2.0 * cos, 1.0 - alpha])),
+        EqShape::LowShelf => {
+            let k = 2.0 * a.sqrt() * alpha;
+            one(Biquad::normalized(
+                [a * ((a + 1.0) - (a - 1.0) * cos + k), 2.0 * a * ((a - 1.0) - (a + 1.0) * cos), a * ((a + 1.0) - (a - 1.0) * cos - k)],
+                [(a + 1.0) + (a - 1.0) * cos + k, -2.0 * ((a - 1.0) + (a + 1.0) * cos), (a + 1.0) + (a - 1.0) * cos - k],
+            ))
+        }
+        EqShape::HighShelf => {
+            let k = 2.0 * a.sqrt() * alpha;
+            one(Biquad::normalized(
+                [a * ((a + 1.0) + (a - 1.0) * cos + k), -2.0 * a * ((a - 1.0) + (a + 1.0) * cos), a * ((a + 1.0) + (a - 1.0) * cos - k)],
+                [(a + 1.0) - (a - 1.0) * cos + k, 2.0 * ((a - 1.0) - (a + 1.0) * cos), (a + 1.0) - (a - 1.0) * cos - k],
+            ))
+        }
+    }
+}
+
+/// What band `band` does at `freq` Hz, in dB (whether it is on or not).
+pub fn eq_band_response_db(band: &EqBand, sample_rate: f32, freq: f32) -> f32 {
+    let (sections, used) = band_sections(band, sample_rate);
+    let w = std::f64::consts::TAU * freq as f64 / sample_rate as f64;
+    let gain: f64 = sections[..used].iter().map(|s| s.magnitude(w)).product();
+    (20.0 * gain.max(1e-12).log10()) as f32
+}
+
+/// What the bands that are on do together at `freq` Hz, in dB (the output gain apart).
+pub fn eq_eight_response_db(params: &EqEightParams, sample_rate: f32, freq: f32) -> f32 {
+    params.bands.iter().filter(|b| b.on).map(|b| eq_band_response_db(b, sample_rate, freq)).sum()
+}
+
+pub struct EqEight {
+    params: EqEightParams,
+    /// The settings the sections were made from (None: make them).
+    made: Option<(EqEightParams, f32)>,
+    sections: [([Biquad; EQ_STAGES], usize); EQ_BANDS],
+    states: [[[BiquadState; EQ_STAGES]; EQ_BANDS]; 2],
+    /// The output gain at the end of the last block.
+    gain: f32,
+}
+
+impl EqEight {
+    fn new(params: EqEightParams) -> Self {
+        Self {
+            params,
+            made: None,
+            sections: [([Biquad::IDENTITY; EQ_STAGES], 0); EQ_BANDS],
+            states: Default::default(),
+            gain: db_to_gain(params.output_db),
+        }
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        if self.made != Some((p, sr)) {
+            for (b, band) in p.bands.iter().enumerate() {
+                let before = self.made.map(|(m, _)| m.bands[b]);
+                // A band that comes on, or changes shape, starts from silence.
+                if before.is_none_or(|m| m.on != band.on || m.shape != band.shape) {
+                    self.states[0][b] = Default::default();
+                    self.states[1][b] = Default::default();
+                }
+                self.sections[b] = if band.on { band_sections(band, sr) } else { ([Biquad::IDENTITY; EQ_STAGES], 0) };
+            }
+            self.made = Some((p, sr));
+        }
+        for (ch, buf) in [&mut *l, &mut *r].into_iter().enumerate() {
+            for (b, (sections, used)) in self.sections.iter().enumerate() {
+                let state = &mut self.states[ch][b];
+                for (section, s) in sections[..*used].iter().zip(state.iter_mut()) {
+                    for x in buf.iter_mut() {
+                        *x = s.tick(*x as f64, section) as f32;
+                    }
+                }
+            }
+        }
+        // The output gain glides across the block, so turning it doesn't click.
+        let target = db_to_gain(p.output_db);
+        let (from, n) = (self.gain, l.len().max(1) as f32);
+        if from != 1.0 || target != 1.0 {
+            for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+                let g = from + (target - from) * (i + 1) as f32 / n;
+                *a *= g;
+                *b *= g;
+            }
+        }
+        self.gain = target;
     }
 }
 
@@ -958,6 +1129,7 @@ impl Utility {
 
 pub enum EffectProcessor {
     Eq3(Eq3),
+    EqEight(Box<EqEight>),
     Compressor(Compressor),
     Delay(Delay),
     Reverb(Reverb),
@@ -982,6 +1154,7 @@ impl EffectProcessor {
                 low: Default::default(),
                 high: Default::default(),
             }),
+            Effect::EqEight(params) => Self::EqEight(Box::new(EqEight::new(params))),
             Effect::Compressor(params) => Self::Compressor(Compressor {
                 params,
                 envelope_db: 0.0,
@@ -1036,6 +1209,7 @@ impl EffectProcessor {
     pub fn set_params(&mut self, effect: &Effect) -> bool {
         match (self, *effect) {
             (Self::Eq3(fx), Effect::Eq3(p)) => fx.params = p,
+            (Self::EqEight(fx), Effect::EqEight(p)) => fx.params = p,
             (Self::Compressor(fx), Effect::Compressor(p)) => fx.params = p,
             (Self::Delay(fx), Effect::Delay(p)) => fx.params = p,
             (Self::Reverb(fx), Effect::Reverb(p)) => fx.params = p,
@@ -1057,6 +1231,7 @@ impl EffectProcessor {
     pub(crate) fn effect(&self) -> Effect {
         match self {
             Self::Eq3(fx) => Effect::Eq3(fx.params),
+            Self::EqEight(fx) => Effect::EqEight(fx.params),
             Self::Compressor(fx) => Effect::Compressor(fx.params),
             Self::Delay(fx) => Effect::Delay(fx.params),
             Self::Reverb(fx) => Effect::Reverb(fx.params),
@@ -1092,6 +1267,10 @@ impl EffectProcessor {
             Self::Eq3(fx) => {
                 fx.low = Default::default();
                 fx.high = Default::default();
+            }
+            Self::EqEight(fx) => {
+                fx.states = Default::default();
+                fx.gain = db_to_gain(fx.params.output_db);
             }
             Self::Compressor(fx) => fx.envelope_db = 0.0,
             Self::Delay(fx) => {
@@ -1149,6 +1328,7 @@ impl EffectProcessor {
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32], ctx: &ProcessContext) {
         match self {
             Self::Eq3(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::EqEight(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Compressor(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Delay(fx) => fx.process(l, r, ctx),
             Self::Reverb(fx) => fx.process(l, r),
@@ -1180,6 +1360,85 @@ mod tests {
             beat: 0.0,
             beats_per_sample: 120.0 / 60.0 / 48_000.0,
         }
+    }
+
+    /// Gain (dB) of `fx` on a sine of `freq` Hz, once it has settled.
+    fn sine_gain_db(fx: &mut EffectProcessor, freq: f32) -> f32 {
+        let n = 48_000;
+        let input: Vec<f32> = (0..n).map(|i| (TAU * freq * i as f32 / 48_000.0).sin() * 0.25).collect();
+        let (mut l, mut r) = (input.clone(), input.clone());
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            fx.process(a, b, &ctx());
+        }
+        let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
+        let tail = n / 2;
+        20.0 * (rms(&l[tail..]) / rms(&input[tail..])).log10()
+    }
+
+    /// What an EQ Eight does to the sound is what it draws, for every shape.
+    #[test]
+    fn eq_eight_sounds_like_its_curve() {
+        for shape in EqShape::ALL {
+            for (freq, gain_db, q) in [(1000.0, 9.0, 0.71), (120.0, -12.0, 3.0), (6000.0, 4.0, 0.3)] {
+                let mut p = EqEightParams::default();
+                p.bands = p.bands.map(|b| EqBand { on: false, ..b });
+                p.bands[3] = EqBand { on: true, shape, freq, gain_db, q };
+                let mut fx = EffectProcessor::new(&Effect::EqEight(p), 48_000.0);
+                for probe in [50.0, 200.0, 1000.0, 3000.0, 12000.0] {
+                    let drawn = eq_eight_response_db(&p, 48_000.0, probe);
+                    fx.reset();
+                    let heard = sine_gain_db(&mut fx, probe);
+                    // Far down a cut, the residue doesn't need to match.
+                    if drawn > -40.0 {
+                        assert!((heard - drawn).abs() < 0.3, "{shape:?} {freq} Hz at {probe} Hz: drawn {drawn:.2} dB, heard {heard:.2} dB");
+                    } else {
+                        assert!(heard < -35.0, "{shape:?} {freq} Hz at {probe} Hz: {heard:.2} dB");
+                    }
+                }
+            }
+        }
+    }
+
+    /// The curves have the shapes their names say.
+    #[test]
+    fn eq_eight_shapes() {
+        let at = |shape, freq: f32, gain_db: f32, probe: f32| eq_band_response_db(&EqBand { on: true, shape, freq, gain_db, q: 0.71 }, 48_000.0, probe);
+        assert!((at(EqShape::Bell, 1000.0, 6.0, 1000.0) - 6.0).abs() < 0.01);
+        assert!(at(EqShape::Bell, 1000.0, 6.0, 50.0).abs() < 0.2 && at(EqShape::Bell, 1000.0, 6.0, 15000.0).abs() < 0.3);
+        // Butterworth: −3 dB at the frequency; then 48 or 12 dB an octave.
+        for shape in [EqShape::LowCut48, EqShape::LowCut12, EqShape::HighCut12, EqShape::HighCut48] {
+            assert!((at(shape, 1000.0, 0.0, 1000.0) + 3.01).abs() < 0.1, "{shape:?} at its frequency");
+        }
+        assert!((at(EqShape::LowCut48, 1000.0, 0.0, 250.0) + 96.0).abs() < 1.0, "two octaves down a 48 dB cut");
+        assert!((at(EqShape::LowCut12, 1000.0, 0.0, 250.0) + 24.0).abs() < 0.5);
+        assert!((at(EqShape::HighCut48, 1000.0, 0.0, 4000.0) + 96.0).abs() < 2.0);
+        assert!(at(EqShape::LowCut48, 1000.0, 0.0, 8000.0).abs() < 0.01 && at(EqShape::HighCut48, 1000.0, 0.0, 125.0).abs() < 0.01);
+        assert!((at(EqShape::LowShelf, 200.0, 6.0, 20.0) - 6.0).abs() < 0.1 && at(EqShape::LowShelf, 200.0, 6.0, 10000.0).abs() < 0.1);
+        assert!((at(EqShape::HighShelf, 2000.0, -6.0, 20000.0) + 6.0).abs() < 0.3 && at(EqShape::HighShelf, 2000.0, -6.0, 50.0).abs() < 0.1);
+        assert!(at(EqShape::Notch, 1000.0, 0.0, 1000.0) < -60.0 && at(EqShape::Notch, 1000.0, 0.0, 100.0).abs() < 0.1);
+        // The gain of a cut does nothing.
+        assert_eq!(at(EqShape::LowCut12, 1000.0, 12.0, 400.0), at(EqShape::LowCut12, 1000.0, -12.0, 400.0));
+    }
+
+    /// A new EQ Eight leaves the sound as it is, and its output gain is a gain.
+    #[test]
+    fn a_new_eq_eight_changes_nothing() {
+        let mut fx = EffectProcessor::new(&Effect::EqEight(Default::default()), 48_000.0);
+        let input: Vec<f32> = (0..4096).map(|i| ((i * 7919) % 2001) as f32 / 1000.0 - 1.0).collect();
+        let (mut l, mut r) = (input.clone(), input.clone());
+        fx.process(&mut l, &mut r, &ctx());
+        assert!(l.iter().zip(&input).all(|(a, b)| (a - b).abs() < 1e-5), "flat bells and shelves are exact");
+        let mut p = EqEightParams::default();
+        p.output_db = -6.0;
+        fx.set_param(EQ_BANDS * crate::model::EQ_BAND_PARAMS, -6.0);
+        assert_eq!(fx.effect(), Effect::EqEight(p), "the last parameter is the output");
+        assert!((sine_gain_db(&mut fx, 1000.0) + 6.0).abs() < 0.01);
+        fx.set_param(4, -9.0);
+        let Effect::EqEight(p) = fx.effect() else { unreachable!() };
+        assert_eq!(p.bands[1].gain_db, -9.0, "band 2's gain");
+        fx.set_param(4, -90.0);
+        let Effect::EqEight(p) = fx.effect() else { unreachable!() };
+        assert_eq!(p.bands[1].gain_db, -15.0, "within its range");
     }
 
     /// Feeds an impulse followed by silence and checks the output stays finite and bounded.

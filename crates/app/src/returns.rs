@@ -185,6 +185,10 @@ mod tests {
         // One return only: also 5 (a Pulse that reads 4 needs two).
         project.returns.truncate(1);
         assert_eq!(serde_json::from_str::<serde_json::Value>(&project.to_json().unwrap()).unwrap()["format"], 5);
+        // An EQ Eight, on the master too: 7 (a Pulse that reads 6 doesn't know it).
+        let mut eq = Project::demo();
+        eq.master.devices.push(engine::model::Device::new(engine::model::Effect::EqEight(Default::default())));
+        assert_eq!(serde_json::from_str::<serde_json::Value>(&eq.to_json().unwrap()).unwrap()["format"], 7);
     }
 
     #[test]

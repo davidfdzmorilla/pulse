@@ -109,8 +109,13 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         ("Sampler", InstrumentKind::Sampler(Default::default())),
         ("Rack", InstrumentKind::DrumRack(Default::default())),
     ];
+    let mut eq = engine::model::EqEightParams::default();
+    eq.bands[0].on = true;
+    eq.bands[3] = engine::model::EqBand { on: true, shape: engine::model::EqShape::Notch, freq: 3150.0, gain_db: 0.0, q: 6.0 };
+    eq.output_db = -1.5;
     let effects = [
         Effect::Eq3(Default::default()),
+        Effect::EqEight(eq),
         Effect::Compressor(Default::default()),
         Effect::Delay(Default::default()),
         Effect::Reverb(Default::default()),

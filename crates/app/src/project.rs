@@ -562,6 +562,13 @@ impl Project {
         }
         project.saved_by = SavedBy(saved_by);
         project.name_scenes();
+        // A damaged or hand-edited file: no more returns than there can be, and
+        // no sends to returns it doesn't have (unseen, but heard).
+        project.returns.truncate(MAX_RETURNS);
+        let returns = project.returns.len();
+        for track in &mut project.tracks {
+            track.sends[returns..].fill(0.0);
+        }
         Ok(project)
     }
 

@@ -1736,14 +1736,35 @@ impl PulseApp {
             self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
             return;
         }
+        // A drum sound plays on one track only: a track taking one is
+        // duplicated with the drums it takes it from.
+        let originals: Vec<u32> = block.clone().map(|t| self.project.tracks[t].id).collect();
+        if let Some(taker) = block.clone().map(|t| &self.project.tracks[t]).find(|t| t.sounds_from != 0 && t.audio_from.is_some_and(|id| !originals.contains(&id))) {
+            let source = self.project.tracks.iter().find(|t| Some(t.id) == taker.audio_from).map_or(String::new(), |t| t.name.clone());
+            self.status = Some(format!("«{}» toca un sonido de «{source}», que suena en una sola pista: duplica «{source}» (o su grupo) con ella", taker.name));
+            return;
+        }
         self.capture_plugins();
         let end = block.end;
         let mut copies: Vec<Track> = block.map(|t| self.copy_track(t)).collect();
         copies[0].name = format!("{} copia", copies[0].name);
         let at = end;
         let ids = self.track_ids();
+        let count = copies.len();
         self.project.tracks.splice(at..at, copies);
         self.follow_tracks(&ids);
+        // Inside the copy, what pointed at a track of the block (a drum sound,
+        // a rumble, a sidechain) points at that track's copy.
+        let copied: Vec<u32> = self.project.tracks[at..at + count].iter().map(|t| t.id).collect();
+        let to_copy = |id: u32| originals.iter().position(|&o| o == id).map_or(id, |k| copied[k]);
+        for track in &mut self.project.tracks[at..at + count] {
+            track.audio_from = track.audio_from.map(to_copy);
+            for device in &mut track.devices {
+                if let Some(sidechain) = device.effect.sidechain_mut() {
+                    *sidechain = sidechain.map(to_copy);
+                }
+            }
+        }
         self.selected_target = Target::Track(at);
         self.sync_all();
     }

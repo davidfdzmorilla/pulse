@@ -362,7 +362,9 @@ fn commands_from(
     commands.push(Command::SetAudioFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none()).and_then(|track| track.audio_from).unwrap_or(0))));
     commands.push(Command::SetSoundsFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none() && track.audio_from.is_some()).map_or(0, |track| track.sounds_from))));
     // The returns the project doesn't have (any more) are emptied: silent.
-    let none = crate::project::ReturnTrack { name: String::new(), color: [0; 3], mixer: Default::default(), devices: Vec::new(), automation: Vec::new() };
+    // Switched off: a send left over to one (a damaged file) is not heard dry.
+    let off = crate::project::Mixer { active: false, ..Default::default() };
+    let none = crate::project::ReturnTrack { name: String::new(), color: [0; 3], mixer: off, devices: Vec::new(), automation: Vec::new() };
     for r in 0..MAX_RETURNS {
         if before.is_some_and(|b| b.returns.len() <= r) && project.returns.len() <= r {
             continue;

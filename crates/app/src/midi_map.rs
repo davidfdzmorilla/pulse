@@ -247,6 +247,27 @@ impl PulseApp {
         self.learn.armed = self.learn.armed.and_then(moved);
         self.learn.glides = self.learn.glides.iter().filter_map(|g| Some(Glide { control: moved(g.control)?, ..*g })).collect();
         self.sync_midi_map();
+        // The automation overridden by hand, and the lanes shown, go along too.
+        let overridden: std::collections::HashSet<(Target, Param)> = self.overridden.iter().filter_map(|&(t, p)| to(t, p)).collect();
+        if overridden != self.overridden {
+            let touched: Vec<Target> = self.overridden.iter().chain(&overridden).map(|&(t, _)| t).collect();
+            self.overridden = overridden;
+            let mut synced = Vec::new();
+            for target in touched {
+                if !synced.contains(&target) {
+                    synced.push(target);
+                    self.sync_automation(target);
+                }
+            }
+        }
+        self.arrangement.automation = std::mem::take(&mut self.arrangement.automation)
+            .into_iter()
+            .filter_map(|(t, p)| match to(Target::Track(t), p) {
+                Some((Target::Track(t), p)) => Some((t, p)),
+                _ => None,
+            })
+            .collect();
+        self.arrangement.master_automation = self.arrangement.master_automation.and_then(|p| to(Target::Master, p).map(|(_, p)| p));
     }
 
     /// Controls stop gliding where they are.
@@ -271,6 +292,30 @@ impl PulseApp {
             Target::Track(t) => new(t).map(|t| (Target::Track(t), param)),
             other => Some((other, param)),
         });
+        // What is open, selected or measured for a track stays with it.
+        for window in [&mut self.kick_window, &mut self.wave_window, &mut self.poly_window, &mut self.modular_window] {
+            *window = window.and_then(new);
+        }
+        if let Some(t) = self.table_editor.as_ref().map(|e| new(e.track)) {
+            match t {
+                Some(t) => self.table_editor.as_mut().unwrap().track = t,
+                None => self.table_editor = None,
+            }
+        }
+        self.selected_tracks = self.selected_tracks.iter().filter_map(|&t| new(t)).collect();
+        let clip = |clip: crate::app::ClipRef| match clip {
+            crate::app::ClipRef::Session { track, slot } => new(track).map(|track| crate::app::ClipRef::Session { track, slot }),
+            crate::app::ClipRef::Arrangement { track, index } => new(track).map(|track| crate::app::ClipRef::Arrangement { track, index }),
+        };
+        self.selected_clip = self.selected_clip.and_then(clip);
+        self.selected_clips = self.selected_clips.iter().filter_map(|&c| clip(c)).collect();
+        let meters = self.meters.tracks;
+        self.meters.tracks = [0.0; engine::MAX_TRACKS];
+        for (old, &level) in meters.iter().enumerate() {
+            if let Some(t) = new(old).filter(|&t| t < engine::MAX_TRACKS) {
+                self.meters.tracks[t] = level;
+            }
+        }
     }
 
     /// Every assignment: the project's and the transport ones.

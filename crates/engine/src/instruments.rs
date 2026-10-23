@@ -594,6 +594,15 @@ impl DrumMachine {
         self.params
     }
 
+    /// Its noise from the start again (see `ModelKit::reseed`).
+    pub fn reseed(&mut self) {
+        self.seed = 0x9E37_79B9;
+        if !(self.hits[4].active || self.hits[5].active || self.hits[7].active) {
+            self.metal_phases = [0.0; 6];
+        }
+        self.kit.reseed();
+    }
+
     pub fn set_params(&mut self, params: DrumParams) {
         self.params = params;
         self.kit.set_model(params.model);
@@ -672,14 +681,16 @@ impl DrumMachine {
             let noise = self.noise();
 
             // Shared metallic oscillators for the hats and the cowbell.
+            // They run all the time (not only while a hat sounds), so where
+            // they are when one starts doesn't depend on how the audio was
+            // cut into blocks: the export sounds like the playback.
             let mut metal = 0.0;
-            if any_metal {
-                for (phase, &f) in self.metal_phases.iter_mut().zip(&METAL) {
-                    *phase = (*phase + f * dt * 1.5) % 1.0;
-                    metal += if *phase < 0.5 { 1.0 } else { -1.0 };
-                }
-                metal /= 6.0;
+            for (phase, &f) in self.metal_phases.iter_mut().zip(&METAL) {
+                *phase = (*phase + f * dt * 1.5) % 1.0;
+                metal += if *phase < 0.5 { 1.0 } else { -1.0 };
             }
+            metal /= 6.0;
+            let metal = if any_metal { metal } else { 0.0 };
 
             let k = &mut self.hits[0];
             if k.active {

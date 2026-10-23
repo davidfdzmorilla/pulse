@@ -114,6 +114,19 @@ impl ModelKit {
         self.model = model;
     }
 
+    /// Its noise from the start again, and the metal oscillators if they are
+    /// silent (the transport starts: it plays the same every time, and as
+    /// exported).
+    pub fn reseed(&mut self) {
+        self.seed = 0x1234_5679;
+        if !(self.voices[4].active || self.voices[5].active || self.voices[7].active) {
+            self.metal = [0.0; 6];
+        }
+        if !(self.voices[10].active || self.voices[11].active || self.voices[13].active) {
+            self.cymbal = [0.0; 6];
+        }
+    }
+
     fn noise(&mut self) -> f32 {
         self.seed ^= self.seed << 13;
         self.seed ^= self.seed >> 17;
@@ -185,17 +198,20 @@ impl ModelKit {
             let mut per = [0f32; DRUM_SOUNDS];
             let noise = self.noise();
             // The six squares, shared by hats and cowbell.
+            // They run all the time (not only while a hat or a cymbal
+            // sounds), so where they are when one starts doesn't depend on how
+            // the audio was cut into blocks: the export sounds like the playback.
             let mut metal = [0f32; 6];
-            if metal_on {
-                for (i, phase) in self.metal.iter_mut().enumerate() {
-                    *phase = (*phase + METAL[i] * dt) % 1.0;
+            for (i, phase) in self.metal.iter_mut().enumerate() {
+                *phase = (*phase + METAL[i] * dt) % 1.0;
+                if metal_on {
                     metal[i] = square(*phase);
                 }
             }
             let mut cymbal = 0.0;
-            if cymbal_on {
-                for (i, phase) in self.cymbal.iter_mut().enumerate() {
-                    *phase = (*phase + CYMBAL[i] * dt) % 1.0;
+            for (i, phase) in self.cymbal.iter_mut().enumerate() {
+                *phase = (*phase + CYMBAL[i] * dt) % 1.0;
+                if cymbal_on {
                     cymbal += square(*phase);
                 }
                 cymbal /= 6.0;

@@ -478,9 +478,23 @@ struct Arp {
     wait: f64,
 }
 
+/// Voice `i`'s first noise seed.
+fn voice_seed(i: usize) -> u32 {
+    0x9E37_79B9 ^ (i as u32).wrapping_mul(0x85EB_CA6B)
+}
+
 impl WaveSynth {
+    /// Its random numbers from the start again (the transport starts: it
+    /// plays the same every time, and as exported).
+    pub fn reseed(&mut self) {
+        self.seed = 0x1357_9BDF;
+        for (i, voice) in self.voices.iter_mut().enumerate() {
+            voice.noise_seed = voice_seed(i);
+        }
+    }
+
     pub fn new(params: WaveParams, sample_rate: f32) -> Self {
-        let voices = (0..VOICES).map(|i| Voice::new(0x9E37_79B9 ^ (i as u32).wrapping_mul(0x85EB_CA6B))).collect();
+        let voices = (0..VOICES).map(|i| Voice::new(voice_seed(i))).collect();
         let fx = params.fx.iter().map(|slot| slot.map(|d| (EffectProcessor::new(&d.effect, sample_rate), d.enabled))).collect();
         Self {
             params,

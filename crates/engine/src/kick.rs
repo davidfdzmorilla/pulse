@@ -291,6 +291,11 @@ impl KickSynth {
         self.hits[0] = Hit { active: true, level, note, phase: start, sub_phase: start, click, ..Hit::IDLE };
     }
 
+    /// Its click noise from the start again: each hit's comes from the last.
+    pub fn reseed(&mut self) {
+        self.hits[0].click.seed = Click::NEW.seed;
+    }
+
     pub fn all_notes_off(&mut self) {
         for hit in &mut self.hits {
             if hit.active {

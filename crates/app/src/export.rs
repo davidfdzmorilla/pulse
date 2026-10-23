@@ -562,7 +562,9 @@ pub fn render_mapped(
         if cancel.load(Ordering::Relaxed) {
             return None;
         }
-        let frames = ((start - renderer.state.position()) * 60.0 / playing(&renderer) * sample_rate as f64).ceil() as usize;
+        // Less a hair: the position adds up in floats, and 4800.0000001 frames
+        // to go is 4800, not 4801 (the section would start a sample late).
+        let frames = ((start - renderer.state.position()) * 60.0 / playing(&renderer) * sample_rate as f64 - 1e-6).ceil() as usize;
         renderer.render(frames.clamp(1, chunk), &mut left, &mut right);
     }
 
@@ -582,7 +584,7 @@ pub fn render_mapped(
         if at >= end - 1e-9 || left.len() >= most {
             break;
         }
-        let left_frames = ((end - at) * 60.0 / playing(&renderer) * sample_rate as f64).ceil() as usize;
+        let left_frames = ((end - at) * 60.0 / playing(&renderer) * sample_rate as f64 - 1e-6).ceil() as usize;
         renderer.render(chunk.min(left_frames.max(1)), &mut left, &mut right);
         progress(((renderer.state.position() - start) / (end - start)).clamp(0.0, 1.0) as f32);
     }

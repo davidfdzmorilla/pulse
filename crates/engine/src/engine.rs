@@ -476,23 +476,25 @@ impl TrackStatus {
     }
 }
 
-/// Samples the analyzer keeps: the last ones it heard.
-pub const ANALYZER_SAMPLES: usize = 4096;
+/// Samples the analyzer keeps a channel: the last ones it heard (enough for
+/// the same detail in the lows at 192 kHz as 4096 give at 48).
+pub const ANALYZER_SAMPLES: usize = 16384;
 
 /// The sound right after one device of one channel, for the UI to draw its
 /// spectrum (an EQ Eight's). It listens to one device at a time.
 pub struct Analyzer {
     /// What it listens to (see [`Analyzer::code`]), or -1.
     watch: AtomicI64,
-    /// The mono sum, f32 bits, as a ring.
-    samples: Box<[AtomicU32]>,
+    /// Left and right, f32 bits, as rings.
+    samples: [Box<[AtomicU32]>; 2],
     /// Samples written in all.
     written: AtomicU64,
 }
 
 impl Analyzer {
     fn new() -> Self {
-        Self { watch: AtomicI64::new(-1), samples: (0..ANALYZER_SAMPLES).map(|_| AtomicU32::new(0)).collect(), written: AtomicU64::new(0) }
+        let ring = || (0..ANALYZER_SAMPLES).map(|_| AtomicU32::new(0)).collect();
+        Self { watch: AtomicI64::new(-1), samples: [ring(), ring()], written: AtomicU64::new(0) }
     }
 
     fn code(target: Target, device: usize) -> i64 {
@@ -509,7 +511,7 @@ impl Analyzer {
         let code = what.map_or(-1, |(target, device)| Self::code(target, device));
         if self.watch.swap(code, Ordering::Relaxed) != code {
             self.written.store(0, Ordering::Relaxed);
-            for s in self.samples.iter() {
+            for s in self.samples.iter().flat_map(|ring| ring.iter()) {
                 s.store(0, Ordering::Relaxed);
             }
         }
@@ -535,23 +537,28 @@ impl Analyzer {
         self.watching().filter(|(t, _)| *t == target).map(|(_, d)| d)
     }
 
-    fn push(&self, left: &[f32], right: &[f32]) {
+    /// Takes what the channel sounds like after the device it listens to.
+    pub fn push(&self, left: &[f32], right: &[f32]) {
         let start = self.written.load(Ordering::Relaxed);
         for (i, (l, r)) in left.iter().zip(right).enumerate() {
             let at = (start as usize + i) % ANALYZER_SAMPLES;
-            self.samples[at].store((0.5 * (l + r)).to_bits(), Ordering::Relaxed);
+            self.samples[0][at].store(l.to_bits(), Ordering::Relaxed);
+            self.samples[1][at].store(r.to_bits(), Ordering::Relaxed);
         }
         self.written.store(start + left.len().min(right.len()) as u64, Ordering::Release);
     }
 
-    /// The last [`ANALYZER_SAMPLES`] it heard into `out`, oldest first, and
-    /// how many it has heard in all (the same as last time: nothing new).
-    pub fn read(&self, out: &mut [f32]) -> u64 {
+    /// The last samples it heard into `left` and `right` (as many as fit, up
+    /// to [`ANALYZER_SAMPLES`]), oldest first, and how many it has heard in all
+    /// (the same as last time: nothing new).
+    pub fn read(&self, left: &mut [f32], right: &mut [f32]) -> u64 {
         let written = self.written.load(Ordering::Acquire);
-        let n = out.len().min(ANALYZER_SAMPLES);
-        for (i, o) in out[..n].iter_mut().enumerate() {
-            let at = (written as usize + ANALYZER_SAMPLES - n + i) % ANALYZER_SAMPLES;
-            *o = f32::from_bits(self.samples[at].load(Ordering::Relaxed));
+        for (ring, out) in self.samples.iter().zip([left, right]) {
+            let n = out.len().min(ANALYZER_SAMPLES);
+            for (i, o) in out[..n].iter_mut().enumerate() {
+                let at = (written as usize + ANALYZER_SAMPLES - n + i) % ANALYZER_SAMPLES;
+                *o = f32::from_bits(ring[at].load(Ordering::Relaxed));
+            }
         }
         written
     }
@@ -1378,6 +1385,10 @@ impl Channel {
     }
 
     fn set(param: Param, value: f32, gain: &mut f32, pan: &mut f32, chain: &mut [ChainSlot], other: &mut impl FnMut(Param, f32)) {
+        // Not a number (a broken lane, a plugin's controller): left as it was.
+        if value.is_nan() {
+            return;
+        }
         match param {
             Param::Volume => *gain = value.max(0.0),
             Param::Pan => *pan = value.clamp(-1.0, 1.0),
@@ -3746,6 +3757,20 @@ mod tests {
         assert_eq!(p.cutoff, 100.0, "device parameters follow their lane");
     }
 
+    /// It keeps both sides: a sound only in what differs between left and
+    /// right (in antiphase) is there, not cancelled out.
+    #[test]
+    fn the_analyzer_keeps_left_and_right() {
+        let analyzer = Analyzer::new();
+        analyzer.watch(Some((Target::Track(0), 0)));
+        let left: Vec<f32> = (0..1000).map(|i| (i as f32 * 0.1).sin() * 0.5).collect();
+        let right: Vec<f32> = left.iter().map(|x| -x).collect();
+        analyzer.push(&left, &right);
+        let (mut l, mut r) = (vec![0.0; 1000], vec![0.0; 1000]);
+        assert_eq!(analyzer.read(&mut l, &mut r), 1000);
+        assert_eq!((l, r), (left, right));
+    }
+
     /// The analyzer hears the sound right after the device it listens to, and
     /// nothing from other channels.
     #[test]
@@ -3760,12 +3785,12 @@ mod tests {
         clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
         h.send(Command::LaunchClip { track: 0, slot: 0 });
-        let mut heard = vec![0.0; ANALYZER_SAMPLES];
+        let (mut heard, mut right) = (vec![0.0; 4096], vec![0.0; 4096]);
         let mut level = |h: &mut Harness, what| {
             h.shared.analyzer.watch(what);
             assert_eq!(h.shared.analyzer.watching(), what);
             h.run_beats(0.25);
-            h.shared.analyzer.read(&mut heard);
+            h.shared.analyzer.read(&mut heard, &mut right);
             energy(&heard)
         };
         h.run_beats(0.25);

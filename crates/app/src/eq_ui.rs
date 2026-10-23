@@ -55,18 +55,27 @@ fn column_hz(c: usize) -> f32 {
 
 /// The spectrum the analyzer hears, column by column, falling slowly.
 pub struct Spectrum {
-    samples: Vec<f32>,
+    left: Vec<f32>,
+    right: Vec<f32>,
     written: u64,
     /// dB at each column.
     levels: Vec<f32>,
     /// When it was last updated (seconds).
     at: f64,
+    /// The device it shows the sound of.
+    watching: Option<(Target, usize)>,
 }
 
 impl Default for Spectrum {
     fn default() -> Self {
-        Self { samples: vec![0.0; ANALYZER_SAMPLES], written: 0, levels: vec![FLOOR_DB; COLUMNS], at: 0.0 }
+        Self { left: Vec::new(), right: Vec::new(), written: 0, levels: vec![FLOOR_DB; COLUMNS], at: 0.0, watching: None }
     }
+}
+
+/// How many samples the spectrum is made of at `sample_rate`: 4096 at 48 kHz,
+/// as many more at higher rates as keep the same detail in the lows.
+fn window_len(sample_rate: f32) -> usize {
+    ((4096.0 * sample_rate / 48_000.0).round() as usize).next_power_of_two().clamp(1024, ANALYZER_SAMPLES)
 }
 
 impl Spectrum {
@@ -74,9 +83,19 @@ impl Spectrum {
     pub fn update(&mut self, analyzer: &Analyzer, sample_rate: f32, now: f64) {
         let dt = (now - self.at).clamp(0.0, 0.25) as f32;
         self.at = now;
-        let written = analyzer.read(&mut self.samples);
+        // Another device (another track): not what the last one played.
+        let watching = analyzer.watching();
+        if watching != self.watching {
+            self.watching = watching;
+            self.levels.fill(FLOOR_DB);
+            self.written = 0;
+        }
+        let n = window_len(sample_rate);
+        self.left.resize(n, 0.0);
+        self.right.resize(n, 0.0);
+        let written = analyzer.read(&mut self.left, &mut self.right);
         // Nothing new: the sound stopped reaching it.
-        let fresh = if written != self.written { spectrum_db(&self.samples, sample_rate) } else { vec![FLOOR_DB; COLUMNS] };
+        let fresh = if written != self.written { spectrum_db(&self.left, &self.right, sample_rate) } else { vec![FLOOR_DB; COLUMNS] };
         self.written = written;
         for (level, new) in self.levels.iter_mut().zip(fresh) {
             *level = new.max(*level - FALL_DB * dt).max(FLOOR_DB);
@@ -89,17 +108,31 @@ impl Spectrum {
     }
 }
 
-/// The level of `samples` at each column's frequency, in dB (a full-scale sine
-/// reads 0).
-fn spectrum_db(samples: &[f32], sample_rate: f32) -> Vec<f32> {
-    let n = samples.len();
+/// The level of `left` and `right` (as many samples each, a power of two) at
+/// each column's frequency, in dB: the power of both, so a full-scale sine
+/// reads 0 in one channel or both, and a sound only in the sides still shows.
+fn spectrum_db(left: &[f32], right: &[f32], sample_rate: f32) -> Vec<f32> {
+    let n = left.len();
+    // Padded with as many zeros: a sine between two bins reads its level, not
+    // up to 1.4 dB less.
+    let size = 2 * n;
+    let half = size / 2;
     let window = |i: usize| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / n as f32).cos();
-    let mut re: Vec<f32> = samples.iter().enumerate().map(|(i, &s)| if s.is_finite() { s * window(i) } else { 0.0 }).collect();
-    let mut im = vec![0.0; n];
-    engine::fft(&mut re, &mut im);
+    let mut power = vec![0f32; half];
+    for samples in [left, right] {
+        let mut re = vec![0.0; size];
+        for (i, (r, &s)) in re.iter_mut().zip(samples).enumerate() {
+            *r = if s.is_finite() { s * window(i) } else { 0.0 };
+        }
+        let mut im = vec![0.0; size];
+        engine::fft(&mut re, &mut im);
+        for (p, (r, i)) in power.iter_mut().zip(re.iter().zip(&im)) {
+            *p += 0.5 * (r * r + i * i);
+        }
+    }
     // The window halves a sine's amplitude, and half of it is in the mirror bins.
-    let magnitude: Vec<f32> = (0..n / 2).map(|k| 4.0 * (re[k] * re[k] + im[k] * im[k]).sqrt() / n as f32).collect();
-    let bin_hz = sample_rate / n as f32;
+    let magnitude: Vec<f32> = power.iter().map(|p| 4.0 * p.sqrt() / n as f32).collect();
+    let bin_hz = sample_rate / size as f32;
     let step = (HIGH_HZ / LOW_HZ).powf(0.5 / (COLUMNS - 1) as f32);
     (0..COLUMNS)
         .map(|c| {
@@ -107,10 +140,10 @@ fn spectrum_db(samples: &[f32], sample_rate: f32) -> Vec<f32> {
             let (low, high) = ((hz / step / bin_hz).ceil() as usize, (hz * step / bin_hz).floor() as usize);
             let level = if high >= low + 1 {
                 // Several bins in the column: the loudest.
-                magnitude[low.min(n / 2 - 1)..=high.min(n / 2 - 1)].iter().fold(0f32, |a, &b| a.max(b))
+                magnitude[low.min(half - 1)..=high.min(half - 1)].iter().fold(0f32, |a, &b| a.max(b))
             } else {
                 // Fewer than one (the lows): between the two nearest.
-                let at = (hz / bin_hz).min((n / 2 - 2) as f32);
+                let at = (hz / bin_hz).min((half - 2) as f32);
                 let (k, t) = (at.floor() as usize, at.fract());
                 magnitude[k] * (1.0 - t) + magnitude[k + 1] * t
             };
@@ -174,8 +207,8 @@ pub(crate) fn body(
         let hint = match band.shape {
             EqShape::LowCut48 | EqShape::LowCut12 => "Quita lo que hay por debajo de la frecuencia (48 o 12 dB por octava). Q por encima de 0,71 resalta el corte",
             EqShape::HighCut48 | EqShape::HighCut12 => "Quita lo que hay por encima de la frecuencia (48 o 12 dB por octava). Q por encima de 0,71 resalta el corte",
-            EqShape::LowShelf => "Sube o baja todo lo que hay por debajo de la frecuencia",
-            EqShape::HighShelf => "Sube o baja todo lo que hay por encima de la frecuencia",
+            EqShape::LowShelf => "Sube o baja todo lo que hay por debajo de la frecuencia. Q por encima de 0,71 resalta el borde",
+            EqShape::HighShelf => "Sube o baja todo lo que hay por encima de la frecuencia. Q por encima de 0,71 resalta el borde",
             EqShape::Bell => "Sube o baja alrededor de la frecuencia; Q, cuánto de estrecho",
             EqShape::Notch => "Quita una frecuencia muy concreta (un zumbido, un pitido); Q, cuánto de estrecho",
         };
@@ -279,8 +312,16 @@ fn graph(
         let line: Vec<Pos2> = (0..COLUMNS).map(|c| pos2(x_at(column_hz(c)), y_of(rect, engine::eq_band_response_db(&band, sample_rate, column_hz(c))))).collect();
         painter.add(egui::Shape::line(line, Stroke::new(1.0, theme::shade(COLORS[chosen], 0.7))));
     }
-    let line: Vec<Pos2> = (0..COLUMNS).map(|c| pos2(x_at(column_hz(c)), y_of(rect, engine::eq_eight_response_db(shown, sample_rate, column_hz(c))))).collect();
+    let total: Vec<f32> = (0..COLUMNS).map(|c| engine::eq_eight_response_db(shown, sample_rate, column_hz(c))).collect();
+    let line: Vec<Pos2> = total.iter().enumerate().map(|(c, &db)| pos2(x_at(column_hz(c)), y_of(rect, db))).collect();
     painter.add(egui::Shape::line(line, Stroke::new(1.6, ACCENT)));
+    // Louder than the graph goes (a resonant cut, bells piled up): how much,
+    // written at the top. (Cuts go far down: that's what they do.)
+    let loudest = (0..COLUMNS).max_by(|&a, &b| total[a].total_cmp(&total[b])).unwrap_or(0);
+    if total[loudest] > RANGE_DB + 0.5 {
+        let x = x_at(column_hz(loudest)).clamp(rect.left() + 16.0, rect.right() - 16.0);
+        painter.text(pos2(x, outer.top() + 1.0), Align2::CENTER_TOP, format!("{:+.0} dB", total[loudest]), egui::FontId::proportional(9.0), ACCENT);
+    }
 
     let hover = response.hover_pos();
     let nearest = |pos: Pos2| {
@@ -362,12 +403,12 @@ mod tests {
     #[test]
     fn the_spectrum_shows_a_sine_where_it_is() {
         let sr = 48_000.0;
-        let samples: Vec<f32> = (0..ANALYZER_SAMPLES).map(|i| 0.5 * (std::f32::consts::TAU * 1000.0 * i as f32 / sr).sin()).collect();
-        let levels = spectrum_db(&samples, sr);
+        let samples: Vec<f32> = (0..4096).map(|i| 0.5 * (std::f32::consts::TAU * 1000.0 * i as f32 / sr).sin()).collect();
+        let levels = spectrum_db(&samples, &samples, sr);
         let at = |hz: f32| levels[(0..COLUMNS).min_by(|&a, &b| (column_hz(a) - hz).abs().total_cmp(&(column_hz(b) - hz).abs())).unwrap()];
         assert!((at(1000.0) + 6.0).abs() < 1.5, "half scale is −6 dB: {}", at(1000.0));
         assert!(at(100.0) < -60.0 && at(10000.0) < -60.0, "{} {}", at(100.0), at(10000.0));
-        let silence = spectrum_db(&[0.0; ANALYZER_SAMPLES], sr);
+        let silence = spectrum_db(&[0.0; 4096], &[0.0; 4096], sr);
         assert!(silence.iter().all(|&l| l <= FLOOR_DB));
     }
 
@@ -437,6 +478,108 @@ mod tests {
         frame(&mut app, vec![]);
         assert!(eq(&app).bands[0].on, "a double click turns the low cut on");
         assert_eq!(eq(&app).bands[2], band, "the others stay");
+    }
+
+    fn sine(hz: f32, sr: f32, amp: f32) -> Vec<f32> {
+        (0..window_len(sr)).map(|i| amp * (std::f32::consts::TAU * hz * i as f32 / sr).sin()).collect()
+    }
+
+    fn level_at(levels: &[f32], hz: f32) -> f32 {
+        levels[(0..COLUMNS).min_by(|&a, &b| (column_hz(a) - hz).abs().total_cmp(&(column_hz(b) - hz).abs())).unwrap()]
+    }
+
+    /// A full-scale sine reads 0 dB wherever it falls between the FFT's bins,
+    /// in one channel or both; in antiphase it still shows.
+    #[test]
+    fn a_full_scale_sine_reads_0_db() {
+        let sr = 48_000.0;
+        let bin = sr / 4096.0;
+        let silent = vec![0.0; 4096];
+        for k in [40.0f32, 85.5, 170.25, 341.5, 853.75, 1500.5] {
+            let hz = k * bin;
+            let s = sine(hz, sr, 1.0);
+            let peak = |levels: Vec<f32>| (0..COLUMNS).filter(|&c| (column_hz(c) / hz).log2().abs() < 0.05).map(|c| levels[c]).fold(f32::MIN, f32::max);
+            let both = peak(spectrum_db(&s, &s, sr));
+            assert!(both.abs() < 0.5, "a full-scale sine at {hz:.1} Hz reads {both:.2} dB");
+            let antiphase: Vec<f32> = s.iter().map(|x| -x).collect();
+            assert!((peak(spectrum_db(&s, &antiphase, sr)) - both).abs() < 0.01, "in antiphase too");
+            // In one channel: half the power.
+            assert!((peak(spectrum_db(&s, &silent, sr)) - both + 3.0).abs() < 0.1, "in one channel, 3 dB less");
+        }
+    }
+
+    /// A 100 Hz sine stays at 100 Hz at every sample rate (it doesn't smear
+    /// down to 20 Hz at 192 kHz).
+    #[test]
+    fn the_lows_are_as_sharp_at_high_rates() {
+        let mut shapes = Vec::new();
+        for sr in [48_000.0f32, 96_000.0, 192_000.0] {
+            let s = sine(100.0, sr, 1.0);
+            let levels = spectrum_db(&s, &s, sr);
+            assert!(level_at(&levels, 100.0).abs() < 1.0, "{sr}: {}", level_at(&levels, 100.0));
+            assert!(level_at(&levels, 30.0) < -30.0 && level_at(&levels, 300.0) < -30.0, "at {sr} a 100 Hz tone shows at 30 Hz ({:.1} dB) and 300 Hz ({:.1} dB)", level_at(&levels, 30.0), level_at(&levels, 300.0));
+            shapes.push([60.0, 80.0, 125.0, 160.0].map(|hz| level_at(&levels, hz)));
+        }
+        for shape in &shapes[1..] {
+            for (a, b) in shape.iter().zip(&shapes[0]) {
+                assert!((a - b).abs() < 3.0, "the same around the tone: {shape:?} at a higher rate, {:?} at 48 kHz", shapes[0]);
+            }
+        }
+    }
+
+    /// Switching to another track's EQ starts the spectrum again: what the
+    /// last one played doesn't linger, falling.
+    #[test]
+    fn another_device_starts_the_spectrum_again() {
+        use crate::app::Audio;
+        let (audio, _engine) = Audio::detached();
+        let analyzer = &audio.state().unwrap().analyzer;
+        let mut spectrum = Spectrum::default();
+        analyzer.watch(Some((Target::Track(0), 0)));
+        let loud = sine(1000.0, 48_000.0, 0.5);
+        analyzer.push(&loud, &loud);
+        spectrum.update(analyzer, 48_000.0, 1.0);
+        assert!(spectrum.sounding());
+        analyzer.watch(Some((Target::Track(1), 0)));
+        spectrum.update(analyzer, 48_000.0, 1.05);
+        assert!(!spectrum.sounding(), "the other track is silent: {:?}", spectrum.levels.iter().fold(f32::MIN, |a, &b| a.max(b)));
+    }
+
+    /// A curve over the graph's +15 dB (a resonant cut) writes how far.
+    #[test]
+    fn a_curve_past_the_graph_says_how_far() {
+        use engine::model::EqBand;
+        let texts = |p: EqEightParams| {
+            let ctx = egui::Context::default();
+            let mut texts = Vec::new();
+            let output = ctx.run_ui(egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(800.0, 300.0))), ..Default::default() }, |ui| {
+                let mut copy = p;
+                body(ui, Target::Track(0), 0, &mut copy, &p, &|_| None, None, 48_000.0, &mut Vec::new());
+            });
+            fn collect(shape: &egui::Shape, texts: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(t) => texts.push(t.galley.text().to_string()),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
+                    _ => {}
+                }
+            }
+            output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+            texts
+        };
+        let mut p = EqEightParams::default();
+        for b in p.bands.iter_mut() {
+            b.on = false;
+        }
+        // What it writes: whole dB (the knobs show tenths).
+        let over = |p: EqEightParams| texts(p).iter().filter_map(|t| t.strip_suffix(" dB")?.parse::<i32>().ok()).collect::<Vec<i32>>();
+        assert!(over(p).is_empty(), "flat: nothing written");
+        p.bands[0] = EqBand { on: true, shape: EqShape::LowCut12, freq: 200.0, gain_db: 0.0, q: 18.0 };
+        assert!(matches!(over(p)[..], [db] if db > 18), "a 12 dB cut at Q 18 rings at about +25 dB: {:?}", over(p));
+        p.bands[0].q = 0.71;
+        assert!(over(p).is_empty(), "a plain cut goes far down: nothing written");
+        p.bands[1] = EqBand { on: true, shape: EqShape::Bell, freq: 2000.0, gain_db: 12.0, q: 1.0 };
+        p.bands[2] = EqBand { on: true, shape: EqShape::Bell, freq: 2000.0, gain_db: 12.0, q: 1.0 };
+        assert_eq!(over(p), [24], "two bells piled up");
     }
 
     #[test]

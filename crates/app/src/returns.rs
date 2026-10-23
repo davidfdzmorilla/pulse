@@ -111,6 +111,21 @@ mod tests {
     use super::*;
     use crate::midi_map::{Control, Mapping};
 
+    /// Undoing a new return, which is selected: the selection goes to one that
+    /// is there (the panel below used to read the gone one and Pulse closed).
+    #[test]
+    fn undoing_a_new_return_leaves_a_selection_that_exists() {
+        let mut app = PulseApp::headless(Project::demo());
+        app.add_return();
+        app.commit_history();
+        assert_eq!(app.selected_target, Target::Return(2));
+        app.undo();
+        assert_eq!(app.project.returns.len(), 2);
+        assert_eq!(app.selected_target, Target::Return(1));
+        let ctx = eframe::egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| crate::detail::show(&mut app, ui));
+    }
+
     #[test]
     fn deleting_a_return_takes_its_sends_and_moves_the_others_up() {
         let mut app = PulseApp::headless(Project::demo());

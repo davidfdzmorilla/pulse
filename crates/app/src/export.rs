@@ -352,7 +352,59 @@ pub fn only(project: &Project, t: usize) -> Project {
         }
         *track = empty;
     }
+    key_copies(&mut only, t);
     only
+}
+
+/// In `only` (track `t`'s stem, `t` soloed), the groups `t` is in are heard
+/// with `t` alone: what listens to one of them (a gate on `t` keyed by its own
+/// group) would hear only `t`. It listens to a copy of the group instead,
+/// whole and unheard (a group left out by the solo still sums its tracks for
+/// sidechains). Not when the copy would hold plugins (an instance each) or
+/// not fit.
+fn key_copies(only: &mut Project, t: usize) {
+    let mut heard = Vec::new();
+    let mut at = crate::groups::parent(&only.tracks, t);
+    while let Some(group) = at {
+        heard.push(group);
+        at = crate::groups::parent(&only.tracks, group);
+    }
+    for group in heard {
+        let id = only.tracks[group].id;
+        let listened = only.tracks.iter().flat_map(|t| &t.devices).chain(only.returns.iter().flat_map(|r| &r.devices)).chain(&only.master.devices).any(|d| d.effect.sidechain() == Some(id));
+        let block = crate::groups::block(&only.tracks, group);
+        let mut copy: Vec<Track> = only.tracks[block.clone()].to_vec();
+        if !listened || only.tracks.len() + copy.len() > engine::MAX_TRACKS || uses_plugins(&Project { tracks: copy.clone(), ..Project::empty() }) {
+            continue;
+        }
+        let base = copy[0].depth;
+        let first = only.tracks.iter().map(|t| t.id).max().unwrap_or(0).max(only.next_id) + 1;
+        let originals: Vec<u32> = copy.iter().map(|t| t.id).collect();
+        let to_copy = |id: u32| originals.iter().position(|&o| o == id).map_or(id, |k| first + k as u32);
+        for (k, track) in copy.iter_mut().enumerate() {
+            track.id = first + k as u32;
+            track.depth -= base;
+            track.solo = false;
+            track.sends = Default::default();
+            track.audio_from = track.audio_from.map(to_copy);
+            for device in &mut track.devices {
+                if let Some(sidechain) = device.effect.sidechain_mut() {
+                    *sidechain = sidechain.map(to_copy);
+                }
+            }
+        }
+        let key = first;
+        only.tracks.extend(copy);
+        let devices = only.tracks.iter_mut().flat_map(|t| &mut t.devices).chain(only.returns.iter_mut().flat_map(|r| &mut r.devices)).chain(&mut only.master.devices);
+        for device in devices {
+            if let Some(sidechain) = device.effect.sidechain_mut() {
+                if *sidechain == Some(id) {
+                    *sidechain = Some(key);
+                }
+            }
+        }
+        only.next_id = key + 1 + (block.len() as u32);
+    }
 }
 
 /// The tracks (indices) a chain's sidechains listen to (and, given the track

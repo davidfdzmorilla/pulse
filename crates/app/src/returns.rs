@@ -189,6 +189,16 @@ mod tests {
         let mut eq = Project::demo();
         eq.master.devices.push(engine::model::Device::new(engine::model::Effect::EqEight(Default::default())));
         assert_eq!(serde_json::from_str::<serde_json::Value>(&eq.to_json().unwrap()).unwrap()["format"], 7);
+        // A Gate or a Transient, also inside a synth: 8.
+        let format = |p: &Project| serde_json::from_str::<serde_json::Value>(&p.to_json().unwrap()).unwrap()["format"].clone();
+        let mut gated = Project::demo();
+        gated.tracks[1].devices.push(engine::model::Device::new(engine::model::Effect::Gate(Default::default())));
+        assert_eq!(format(&gated), 8);
+        let mut synth = Project::demo();
+        let mut wave = engine::model::WaveParams::default();
+        wave.fx[0] = Some(engine::model::Device::new(engine::model::Effect::Transient(Default::default())));
+        synth.tracks[0].instrument = engine::model::InstrumentKind::Wavetable(wave);
+        assert_eq!(format(&synth), 8);
     }
 
     #[test]

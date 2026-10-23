@@ -381,6 +381,8 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Eq3(_) => (5, 0),
         Effect::EqEight(_) => return crate::eq_ui::WIDTH,
         Effect::Compressor(_) => (5, 1),
+        Effect::Gate(_) => (6, 1),
+        Effect::Transient(_) => (3, 0),
         Effect::Delay(_) => (3, 1),
         Effect::Reverb(_) => (4, 0),
         Effect::Saturator(_) => (3, 0),
@@ -407,8 +409,11 @@ fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) {
         });
 }
 
-/// A compressor's or ducker's sidechain: none, or the track it listens to.
-fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources: &[(u32, String)]) {
+/// What a compressor's or ducker's sidechain does.
+const DUCKS: &str = "Con el bombo, el bajo o el pad se apartan cuando suena";
+
+/// A compressor's, gate's or ducker's sidechain: none, or the track it listens to.
+fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources: &[(u32, String)], hint: &str) {
     ui.label(egui::RichText::new("Sidechain").color(TEXT_DIM).size(10.5));
     let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Ninguno", |(_, name)| name.as_str());
     egui::ComboBox::from_id_salt(id)
@@ -421,7 +426,7 @@ fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources
             }
         })
         .response
-        .on_hover_text("La pista que lo dispara: escucha su sonido (tras sus efectos, aunque esté silenciada) en vez del propio. Con el bombo, el bajo o el pad se apartan cuando suena");
+        .on_hover_text(format!("La pista que lo dispara: escucha su sonido (tras sus efectos, aunque esté silenciada) en vez del propio. {hint}"));
 }
 
 /// Settings that are choices rather than knobs: time divisions, modes, switches.
@@ -429,7 +434,10 @@ fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources
 pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize, sources: &[(u32, String)]) {
     match effect {
         Effect::Compressor(p) if !sources.is_empty() => {
-            ui.vertical(|ui| sidechain_combo(ui, &format!("comp_sc{index}"), &mut p.sidechain, sources));
+            ui.vertical(|ui| sidechain_combo(ui, &format!("comp_sc{index}"), &mut p.sidechain, sources, DUCKS));
+        }
+        Effect::Gate(p) if !sources.is_empty() => {
+            ui.vertical(|ui| sidechain_combo(ui, &format!("gate_sc{index}"), &mut p.sidechain, sources, "Se abre solo cuando suena esa pista: un pad que corta al ritmo de los charles, o un bajo que suena solo con el bombo"));
         }
         Effect::Delay(p) => {
             ui.vertical(|ui| {
@@ -467,7 +475,7 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 ui.label(egui::RichText::new(if p.sidechain.is_some() { "Release" } else { "Ritmo" }).color(TEXT_DIM).size(10.5));
                 beats_combo(ui, &format!("ducker{index}"), &mut p.rate_beats, &[0.25, 0.5, 1.0, 2.0, 4.0]);
                 if !sources.is_empty() {
-                    sidechain_combo(ui, &format!("duck_sc{index}"), &mut p.sidechain, sources);
+                    sidechain_combo(ui, &format!("duck_sc{index}"), &mut p.sidechain, sources, DUCKS);
                 }
                 if p.sidechain.is_some() {
                     ui.checkbox(&mut p.lows, "Solo graves").on_hover_text("Escucha solo por debajo de 600 Hz: bombea con el bombo y no con los charles o las palmas de la misma pista. Quítalo con un bombo de hardstyle");
@@ -477,6 +485,8 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         Effect::Eq3(_)
         | Effect::EqEight(_)
         | Effect::Compressor(_)
+        | Effect::Gate(_)
+        | Effect::Transient(_)
         | Effect::Reverb(_)
         | Effect::Chorus(_)
         | Effect::Phaser(_)

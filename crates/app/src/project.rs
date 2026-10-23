@@ -283,7 +283,9 @@ pub struct MasterTrack {
 /// Only projects that have one.
 /// 7: an EQ Eight: a Pulse that reads 6 doesn't know it. Only projects that
 /// have one.
-pub const FORMAT: u32 = 7;
+/// 8: a Gate or a Transient: a Pulse that reads 7 doesn't know them. Only
+/// projects that have one.
+pub const FORMAT: u32 = 8;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -444,10 +446,12 @@ impl Project {
         self.tracks.iter().any(|t| t.clips.iter().flatten().any(fades) || t.arrangement.iter().any(|p| fades(&p.clip)))
     }
 
-    /// Whether a track, a return or the master has an EQ Eight.
-    pub fn has_eq_eight(&self) -> bool {
+    /// Whether a track, a return or the master has an effect that is `which`,
+    /// or a synth of a track has it among its own effects.
+    pub fn has_effect(&self, which: impl Fn(&Effect) -> bool) -> bool {
         let chains = self.tracks.iter().map(|t| &t.devices).chain(self.returns.iter().map(|r| &r.devices)).chain([&self.master.devices]);
-        chains.flatten().any(|d| matches!(d.effect, engine::model::Effect::EqEight(_)))
+        let synths = self.tracks.iter().flat_map(|t| t.instrument.own_effects());
+        chains.flatten().map(|d| d.effect).chain(synths).any(|e| which(&e))
     }
 
     /// An id no plugin of the project uses yet.
@@ -560,8 +564,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_eq_eight() {
+            let format = if self.has_effect(|e| matches!(e, Effect::Gate(_) | Effect::Transient(_))) {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::EqEight(_))) {
+                7
             } else if self.has_fades() {
                 6
             } else if self.returns.len() != 2 {

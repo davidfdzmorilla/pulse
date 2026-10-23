@@ -165,8 +165,12 @@ pub fn join(parts: &[ArrangementClip], base: &dyn Fn(Param) -> f32) -> Option<Ar
     let Clip::Midi(first_midi) = &first.clip else { return None };
     let grooves: Vec<Option<Groove>> = parts.iter().map(|p| if let Clip::Midi(m) = &p.clip { m.groove } else { None }).collect();
     let shared = grooves.iter().all(|g| *g == grooves[0]);
+    // What was heard: the deactivated parts left out, unless all of them are
+    // (then the whole, still deactivated).
+    let all_off = parts.iter().all(|p| p.clip.muted());
+    let heard: Vec<ArrangementClip> = parts.iter().filter(|p| all_off || !p.clip.muted()).cloned().collect();
     let mut notes = Vec::new();
-    for part in parts {
+    for part in &heard {
         let Clip::Midi(midi) = &part.clip else { return None };
         let laid = match &midi.groove {
             Some(groove) if !shared => laid_out_grooved(part, midi, groove),
@@ -176,9 +180,9 @@ pub fn join(parts: &[ArrangementClip], base: &dyn Fn(Param) -> f32) -> Option<Ar
     }
     notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
     let length = end - start;
-    let envelopes = join_envelopes(parts, start, base);
+    let envelopes = join_envelopes(&heard, start, base);
     let groove = if shared { first_midi.groove } else { None };
-    Some(ArrangementClip { start, length, clip: Clip::Midi(MidiClip { notes, length, envelopes, groove, ..first_midi.clone() }) })
+    Some(ArrangementClip { start, length, clip: Clip::Midi(MidiClip { notes, length, envelopes, groove, muted: all_off, ..first_midi.clone() }) })
 }
 
 /// The envelopes of `parts` laid out along one clip starting at `start`: each
@@ -376,6 +380,25 @@ impl PulseApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// ⌘J keeps what was heard: a deactivated part's notes are left out and
+    /// the result plays; all parts deactivated, it keeps them all, deactivated.
+    #[test]
+    fn joining_deactivated_clips_keeps_what_was_heard() {
+        let mut off = MidiClip { notes: vec![note(0.0, 60)], ..MidiClip::new("off", 4.0, [0; 3]) };
+        off.muted = true;
+        let on = MidiClip { notes: vec![note(0.0, 64)], ..MidiClip::new("on", 4.0, [0; 3]) };
+        for first_off in [true, false] {
+            let (a, b) = if first_off { (off.clone(), on.clone()) } else { (on.clone(), off.clone()) };
+            let parts = [ArrangementClip { start: 0.0, length: 4.0, clip: Clip::Midi(a) }, ArrangementClip { start: 4.0, length: 4.0, clip: Clip::Midi(b) }];
+            let Clip::Midi(m) = join(&parts, &|_| 0.0).unwrap().clip else { panic!() };
+            assert!(!m.muted);
+            assert_eq!(m.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![64]);
+        }
+        let parts = [ArrangementClip { start: 0.0, length: 4.0, clip: Clip::Midi(off.clone()) }, ArrangementClip { start: 4.0, length: 4.0, clip: Clip::Midi(off) }];
+        let Clip::Midi(m) = join(&parts, &|_| 0.0).unwrap().clip else { panic!() };
+        assert!(m.muted && m.notes.len() == 2, "all off: all kept, off");
+    }
     use engine::model::{Param, WarpMarker, WarpMode};
 
     fn note(start: f64, pitch: u8) -> Note {

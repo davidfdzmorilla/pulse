@@ -198,6 +198,23 @@ impl crate::project::Project {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A new track never takes the id of one deleted: what pointed at that one
+    /// (a sidechain) doesn't jump to it, also after saving and opening.
+    #[test]
+    fn a_new_track_never_takes_a_deleted_tracks_id() {
+        let mut app = PulseApp::headless(Project::demo());
+        app.add_track();
+        let kick = app.project.tracks.len() - 1;
+        let kick_id = app.project.tracks[kick].id;
+        app.project.tracks[0].devices.push(engine::model::Device::new(engine::model::Effect::Compressor(engine::model::CompressorParams { sidechain: Some(kick_id), ..Default::default() })));
+        app.sync_all();
+        app.delete_track(kick);
+        let reopened = Project::from_json(&app.project.to_json().unwrap()).unwrap();
+        app.replace_project(reopened, None);
+        app.add_track();
+        assert_ne!(app.project.tracks.last().unwrap().id, kick_id, "the new track took the deleted one's id");
+    }
     use crate::project::Project;
 
     fn names(app: &PulseApp) -> Vec<String> {

@@ -341,25 +341,107 @@ pub fn melody(mono: &[f32], rate: f32, context: [f64; 12], snap: bool) -> (Vec<N
 /// look back and ahead of [`track`]): its frequency and how unsure it is (the
 /// aperiodicity, 0 a perfect tone), or None if it has none between `fmin` and
 /// `fmax` Hz. `frame` needs at least two periods of `fmin` and `fmax`'s lag.
+/// (One call; [`LiveTracker`] for one after another.)
 pub fn live(frame: &[f32], rate: f32, fmin: f64, fmax: f64) -> Option<(f64, f64)> {
-    const THRESHOLD: f64 = 0.15;
-    let (lag_min, lag_max) = ((rate as f64 / fmax).floor() as usize, (rate as f64 / fmin).ceil() as usize);
-    if lag_min < 2 || frame.len() < 2 * lag_max {
-        return None;
-    }
-    let width = frame.len() - lag_max;
-    // The difference function and its cumulative mean normalized form.
-    let mut d = vec![0f64; lag_max + 2];
-    for (tau, slot) in d.iter_mut().enumerate().take(lag_max + 2).skip(1) {
-        if tau + width > frame.len() {
-            break;
+    LiveTracker::new(frame.len(), rate, fmin, fmax).pitch(frame)
+}
+
+/// [`live`] for one stretch after another of the same length, as the voice
+/// comes in. It listens to the newest part of each (each sample of it compared
+/// with the one a period before), so a new note shows as soon as it is there;
+/// with FFTs and its buffers kept, it can run every few milliseconds.
+pub struct LiveTracker {
+    rate: f32,
+    len: usize,
+    lag_min: usize,
+    lag_max: usize,
+    forward: std::sync::Arc<dyn rustfft::Fft<f64>>,
+    inverse: std::sync::Arc<dyn rustfft::Fft<f64>>,
+    a: Vec<Complex64>,
+    b: Vec<Complex64>,
+    scratch: Vec<Complex64>,
+    /// Running sums of the squares: `squares[i]` is that of the first `i` samples.
+    squares: Vec<f64>,
+    d: Vec<f64>,
+    cmnd: Vec<f64>,
+}
+
+impl LiveTracker {
+    /// For stretches of `len` samples at `rate`, pitches between `fmin` and `fmax` Hz.
+    pub fn new(len: usize, rate: f32, fmin: f64, fmax: f64) -> Self {
+        let (lag_min, lag_max) = ((rate as f64 / fmax).floor() as usize, (rate as f64 / fmin).ceil() as usize);
+        // The correlation needs no wrap: what is compared fits in `len`.
+        let size = len.max(2).next_power_of_two();
+        let mut planner = rustfft::FftPlanner::<f64>::new();
+        let (forward, inverse) = (planner.plan_fft_forward(size), planner.plan_fft_inverse(size));
+        let scratch = vec![Complex64::default(); forward.get_inplace_scratch_len().max(inverse.get_inplace_scratch_len())];
+        Self {
+            rate,
+            len,
+            lag_min,
+            lag_max,
+            forward,
+            inverse,
+            a: vec![Complex64::default(); size],
+            b: vec![Complex64::default(); size],
+            scratch,
+            squares: vec![0.0; len + 1],
+            d: vec![0.0; lag_max + 2],
+            cmnd: vec![1.0; lag_max + 2],
         }
-        *slot = (0..width).map(|j| {
-            let diff = (frame[j] - frame[j + tau]) as f64;
-            diff * diff
-        }).sum();
     }
-    let mut cmnd = vec![1f64; d.len()];
+
+    /// The samples it takes each time.
+    pub fn len(&self) -> usize {
+        self.len
+    }
+
+    /// The pitch of `frame` (`len` samples, oldest first), as [`live`].
+    pub fn pitch(&mut self, frame: &[f32]) -> Option<(f64, f64)> {
+        let (lag_min, lag_max) = (self.lag_min, self.lag_max);
+        if lag_min < 2 || frame.len() != self.len || frame.len() < 2 * lag_max {
+            return None;
+        }
+        // The newest `width` samples, each compared with the one `tau` before:
+        // d(tau) = Σ x[j]² + Σ x[j - tau]² - 2 Σ x[j]·x[j - tau].
+        let width = self.len - lag_max;
+        for (i, slot) in self.a.iter_mut().enumerate() {
+            *slot = Complex64::new(frame.get(i).map_or(0.0, |&x| x as f64), 0.0);
+        }
+        for (i, slot) in self.b.iter_mut().enumerate() {
+            *slot = Complex64::new(if i < width { frame[lag_max + i] as f64 } else { 0.0 }, 0.0);
+        }
+        self.forward.process_with_scratch(&mut self.a, &mut self.scratch);
+        self.forward.process_with_scratch(&mut self.b, &mut self.scratch);
+        for (a, b) in self.a.iter_mut().zip(&self.b) {
+            *a *= b.conj();
+        }
+        self.inverse.process_with_scratch(&mut self.a, &mut self.scratch);
+        // a[m] / size: Σ frame[k + m]·frame[lag_max + k], over the window.
+        let scale = 1.0 / self.a.len() as f64;
+        for (i, &x) in frame.iter().enumerate() {
+            self.squares[i + 1] = self.squares[i] + (x as f64) * (x as f64);
+        }
+        let energy = |from: usize| self.squares[from + width] - self.squares[from];
+        let newest = energy(lag_max);
+        self.d[0] = 0.0;
+        for tau in 1..=lag_max {
+            let cross = self.a[lag_max - tau].re * scale;
+            self.d[tau] = (newest + energy(lag_max - tau) - 2.0 * cross).max(0.0);
+        }
+        self.d[lag_max + 1] = 0.0;
+        yin_pick(&self.d, &mut self.cmnd, lag_min, lag_max, self.rate)
+    }
+}
+
+type Complex64 = rustfft::num_complex::Complex<f64>;
+
+/// YIN's last steps on a difference function `d` (from lag 0 to `lag_max + 1`):
+/// the first dip of its cumulative mean normalized form under the threshold,
+/// between lags. `cmnd` is room for that form, as long as `d`.
+fn yin_pick(d: &[f64], cmnd: &mut [f64], lag_min: usize, lag_max: usize, rate: f32) -> Option<(f64, f64)> {
+    const THRESHOLD: f64 = 0.15;
+    cmnd[0] = 1.0;
     let mut running = 0.0;
     for tau in 1..d.len() {
         running += d[tau];
@@ -457,6 +539,49 @@ mod tests {
         let mut seed = 7u32;
         let noise: Vec<f32> = (0..2048).map(|_| { seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345); (seed >> 9) as f32 / (1u32 << 23) as f32 - 1.0 }).collect();
         assert!(live(&noise, rate, 65.0, 1100.0).is_none());
+    }
+
+    /// The FFT's sums are the direct ones: the same pitch and certainty as
+    /// working them out sample by sample, on voices, noise and odd lengths.
+    #[test]
+    fn the_live_tracker_matches_the_direct_sums() {
+        let direct = |frame: &[f32], rate: f32, fmin: f64, fmax: f64| {
+            let (lag_min, lag_max) = ((rate as f64 / fmax).floor() as usize, (rate as f64 / fmin).ceil() as usize);
+            let width = frame.len() - lag_max;
+            let mut d = vec![0f64; lag_max + 2];
+            for tau in 1..=lag_max {
+                d[tau] = (lag_max..lag_max + width).map(|j| ((frame[j] - frame[j - tau]) as f64).powi(2)).sum();
+            }
+            yin_pick(&d, &mut vec![0.0; d.len()], lag_min, lag_max, rate)
+        };
+        let mut seed = 3u32;
+        let mut noise = || { seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345); (seed >> 9) as f32 / (1u32 << 23) as f32 - 1.0 };
+        for (rate, len) in [(48_000.0f32, 2064usize), (44_100.0, 1896), (96_000.0, 4128)] {
+            let mut tracker = LiveTracker::new(len, rate, 65.0, 1600.0);
+            for pitch in [40.0, 52.5, 64.0, 81.0] {
+                let voice: Vec<f32> = tone(rate, &[(0.0, 0.2, pitch)]).iter().map(|x| x + 0.02 * noise()).collect();
+                let frame = &voice[500..500 + len];
+                let (fast, slow) = (tracker.pitch(frame), direct(frame, rate, 65.0, 1600.0));
+                let (a, b) = (fast.expect("a pitch"), slow.expect("a pitch"));
+                assert!((a.0 / b.0 - 1.0).abs() < 1e-9 && (a.1 - b.1).abs() < 1e-9, "{pitch} at {rate}: {a:?} vs {b:?}");
+            }
+            let frame: Vec<f32> = (0..len).map(|_| noise()).collect();
+            assert_eq!(tracker.pitch(&frame).is_some(), direct(&frame, rate, 65.0, 1600.0).is_some());
+        }
+    }
+
+    /// It listens to the newest part of what it gets: a note that started 30
+    /// ms ago is the pitch, not the one before it (the oldest 28 ms of the 43
+    /// are still the last note).
+    #[test]
+    fn live_pitch_hears_the_newest_note() {
+        let rate = 48_000.0;
+        let len = (0.043 * rate) as usize;
+        // A3 until 0.3 s, then E4.
+        let audio = tone(rate, &[(0.0, 0.3, 57.0), (0.3, 0.3, 64.0)]);
+        let end = (0.33 * rate) as usize;
+        let (hz, _) = live(&audio[end - len..end], rate, 65.0, 1600.0).expect("a pitch");
+        assert!((hz / 329.63 - 1.0).abs() < 0.01, "30 ms into E4 it hears {hz:.1} Hz");
     }
 
     #[test]

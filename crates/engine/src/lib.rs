@@ -26,7 +26,7 @@ pub use dsp::fft;
 pub use effects::{eq_band_response_db, eq_eight_response_db};
 pub use instruments::render_drum_hit;
 pub use kick::{amplitude as kick_amplitude, drive_at as kick_drive_at, effective as kick_effective, length_ms as kick_length_ms, pitch_offset as kick_pitch_offset, render_kick};
-pub use input::{detached_input, start_input, start_input_with, AudioInput, InputHandle, Marker, MonitorInput};
+pub use input::{detached_input, detached_input_with_voice, start_input, start_input_with, AudioInput, InputHandle, Marker, MonitorInput, VoiceInput};
 pub use offline::OfflineRenderer;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};
 pub use engine::{

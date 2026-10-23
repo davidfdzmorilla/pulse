@@ -1161,14 +1161,37 @@ impl PulseApp {
     }
 
     /// Duplicates every selected clip: below it in the session (in the next free
-    /// slot), after it on the arrangement. The copies end up selected.
+    /// slot), after it on the arrangement. Several arrangement clips go as a
+    /// block, after the end of the whole selection. The copies end up selected.
     pub fn duplicate_selected_clip(&mut self) {
         let clips = self.clip_selection();
         if clips.len() <= 1 {
             return self.duplicate_clip();
         }
         let mut copies = Vec::new();
-        for clip in clips {
+        // The arrangement's, all moved by the selection's length.
+        let arranged: Vec<(usize, usize)> = clips.iter().filter_map(|c| match *c {
+            ClipRef::Arrangement { track, index } => self.project.tracks.get(track)?.arrangement.get(index).map(|_| (track, index)),
+            ClipRef::Session { .. } => None,
+        }).collect();
+        let placed: Vec<&engine::model::ArrangementClip> = arranged.iter().map(|&(t, i)| &self.project.tracks[t].arrangement[i]).collect();
+        let start = placed.iter().map(|c| c.start).fold(f64::INFINITY, f64::min);
+        let shift = placed.iter().map(|c| c.end()).fold(f64::NEG_INFINITY, f64::max) - start;
+        let mut touched = Vec::new();
+        for &(track, index) in &arranged {
+            let lane = &mut self.project.tracks[track].arrangement;
+            let mut copy = lane[index].clone();
+            copy.start += shift;
+            lane.push(copy);
+            copies.push(ClipRef::Arrangement { track, index: lane.len() - 1 });
+            if !touched.contains(&track) {
+                touched.push(track);
+            }
+        }
+        for track in touched {
+            self.sync_arrangement(track);
+        }
+        for clip in clips.into_iter().filter(|c| matches!(c, ClipRef::Session { .. })) {
             self.selected_clip = Some(clip);
             self.duplicate_clip();
             if let Some(copy) = self.selected_clip.filter(|&c| c != clip) {

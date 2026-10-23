@@ -1814,6 +1814,49 @@ mod tests {
         }
     }
 
+    /// ⌘D on two clips one after the other: the copies go as a block after
+    /// the second, never the first's copy on top of the second.
+    #[test]
+    fn duplicating_adjacent_clips_does_not_stack_them() {
+        let mut app = app();
+        let color = app.project.tracks[0].color;
+        app.project.tracks[0].arrangement.push(ArrangementClip { start: 8.0, length: 4.0, clip: Clip::Midi(MidiClip::new("B", 4.0, color)) });
+        app.sync_arrangement(0);
+        app.set_clip_selection(vec![ClipRef::Arrangement { track: 0, index: 0 }, ClipRef::Arrangement { track: 0, index: 1 }]);
+        app.duplicate_selected_clip();
+        let mut spans: Vec<(f64, f64)> = app.project.tracks[0].arrangement.iter().map(|c| (c.start, c.end())).collect();
+        spans.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(spans, vec![(4.0, 8.0), (8.0, 12.0), (12.0, 16.0), (16.0, 20.0)]);
+        // The copies are what is selected.
+        let selected: Vec<f64> = app.clip_selection().iter().map(|c| match *c {
+            ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement[index].start,
+            ClipRef::Session { .. } => panic!("a session clip"),
+        }).collect();
+        assert_eq!(selected, vec![12.0, 16.0]);
+    }
+
+    /// Clips with a gap, on two tracks: the block keeps its shape, after the
+    /// end of the whole selection.
+    #[test]
+    fn duplicating_clips_on_several_tracks_keeps_their_offsets() {
+        let mut app = app();
+        let color = app.project.tracks[0].color;
+        app.project.tracks[0].arrangement.push(ArrangementClip { start: 12.0, length: 2.0, clip: Clip::Midi(MidiClip::new("B", 2.0, color)) });
+        app.project.tracks[1].arrangement.push(ArrangementClip { start: 6.0, length: 4.0, clip: Clip::Midi(MidiClip::new("C", 4.0, color)) });
+        app.sync_all();
+        app.set_clip_selection(vec![ClipRef::Arrangement { track: 0, index: 0 }, ClipRef::Arrangement { track: 0, index: 1 }, ClipRef::Arrangement { track: 1, index: 0 }]);
+        app.duplicate_selected_clip();
+        // The selection runs 4–14: everything moves 10 beats.
+        let starts = |app: &PulseApp, t: usize| app.project.tracks[t].arrangement.iter().map(|c| c.start).collect::<Vec<f64>>();
+        assert_eq!(starts(&app, 0), vec![4.0, 12.0, 14.0, 22.0]);
+        assert_eq!(starts(&app, 1), vec![6.0, 16.0]);
+        assert_eq!(app.clip_selection().len(), 3);
+        // One clip alone still goes right after itself.
+        app.set_clip_selection(vec![ClipRef::Arrangement { track: 1, index: 0 }]);
+        app.duplicate_selected_clip();
+        assert_eq!(starts(&app, 1), vec![6.0, 16.0, 10.0]);
+    }
+
     /// Lane `t` at `beat`, with no automation lanes shown above it.
     fn at(app: &PulseApp, t: usize, beat: f64) -> Pos2 {
         pos2(150.0 + beat as f32 * app.arrangement.pixels_per_beat, 96.0 + t as f32 * 53.0)

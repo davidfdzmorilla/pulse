@@ -50,6 +50,11 @@ impl History {
         }
     }
 
+    /// Every earlier and later state kept.
+    pub fn states(&self) -> impl Iterator<Item = &Project> {
+        self.undo.iter().chain(&self.redo).chain(std::iter::once(&self.baseline))
+    }
+
     pub fn can_undo(&self) -> bool {
         !self.undo.is_empty()
     }

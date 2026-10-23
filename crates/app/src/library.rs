@@ -15,7 +15,7 @@
 //! user's work.
 
 use crate::project::Project;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::sync::RwLock;
 
@@ -236,6 +236,29 @@ fn gather(project: &mut Project, dir: &Path, may_move: bool) -> (Collected, Hash
         }
     }
     (report, done)
+}
+
+/// Deletes the files in `dir`'s samples folder that none of `projects` uses,
+/// and the folders left empty.
+pub fn prune_samples<'a>(projects: impl IntoIterator<Item = &'a Project>, dir: &Path) {
+    let real = |path: &Path| path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let mut used: HashSet<PathBuf> = HashSet::new();
+    for project in projects {
+        let mut project = project.clone();
+        used.extend(files_mut(&mut project).into_iter().map(|f| real(Path::new(f.as_str()))));
+    }
+    fn walk(dir: &Path, used: &HashSet<PathBuf>, real: &dyn Fn(&Path) -> PathBuf) {
+        for entry in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, used, real);
+                let _ = std::fs::remove_dir(&path);
+            } else if !used.contains(&real(&path)) {
+                let _ = std::fs::remove_file(&path);
+            }
+        }
+    }
+    walk(&dir.join(SAMPLES), &used, &real);
 }
 
 /// Points the project's audio files at their new places (`renamed`: old path → new).

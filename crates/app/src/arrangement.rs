@@ -1244,8 +1244,11 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     if count > 1 {
         return;
     }
+    // What was chosen above may have taken the clip away (cutting, deleting,
+    // joining): its name and colour only while it is there.
+    let Some(placed) = app.project.tracks.get_mut(track).and_then(|t| t.arrangement.get_mut(index)) else { return };
     ui.separator();
-    let clip = &mut app.project.tracks[track].arrangement[index].clip;
+    let clip = &mut placed.clip;
     let before = clip.clone();
     ui.label("Nombre");
     ui.text_edit_singleline(clip.name_mut());
@@ -1746,6 +1749,23 @@ mod tests {
         screen.menu(&mut app, clip, "Eliminar   ⌫");
         let starts: Vec<f64> = app.project.tracks[0].arrangement.iter().map(|c| c.start).collect();
         assert_eq!(starts, vec![8.0], "the copy stays");
+    }
+
+    /// Cutting or deleting the only clip of a track from its menu: the menu
+    /// went on to show the name of a clip no longer there, and Pulse closed.
+    #[test]
+    fn cutting_or_deleting_a_tracks_only_clip_from_its_menu() {
+        for item in ["Cortar", "Eliminar   ⌫"] {
+            let mut app = app();
+            let mut screen = Screen::new();
+            let (clip, empty) = (at(&app, 0, 5.0), at(&app, 1, 9.5));
+            screen.menu(&mut app, clip, item);
+            assert!(app.project.tracks[0].arrangement.is_empty(), "{item}");
+            if item == "Cortar" {
+                screen.menu(&mut app, empty, "Pegar aquí");
+                assert_eq!(app.project.tracks[1].arrangement.len(), 1, "what was cut pastes");
+            }
+        }
     }
 
     #[test]

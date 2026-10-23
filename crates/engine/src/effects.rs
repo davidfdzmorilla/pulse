@@ -86,6 +86,44 @@ impl Eq3 {
     }
 }
 
+/// A gain that glides to a new value over [`Glide::SAMPLES`] samples, so
+/// turning it doesn't click, the same whatever the blocks are cut into (the
+/// export must sound like the playback).
+#[derive(Clone, Copy)]
+struct Glide {
+    value: f32,
+    target: f32,
+    step: f32,
+    left: u32,
+}
+
+impl Glide {
+    const SAMPLES: u32 = 64;
+
+    fn new(value: f32) -> Self {
+        Self { value, target: value, step: 0.0, left: 0 }
+    }
+
+    #[inline]
+    fn next(&mut self, target: f32) -> f32 {
+        if target != self.target {
+            self.target = target;
+            self.step = (target - self.value) / Self::SAMPLES as f32;
+            self.left = Self::SAMPLES;
+        }
+        if self.left > 0 {
+            self.left -= 1;
+            self.value = if self.left == 0 { self.target } else { self.value + self.step };
+        }
+        self.value
+    }
+
+    /// Settled at `value` (nothing to glide).
+    fn at(&self, value: f32) -> bool {
+        self.left == 0 && self.value == value
+    }
+}
+
 /// Second-order filter coefficients, normalized so a0 is 1.
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct Biquad {
@@ -204,8 +242,8 @@ pub struct EqEight {
     made: Option<(EqEightParams, f32)>,
     sections: [([Biquad; EQ_STAGES], usize); EQ_BANDS],
     states: [[[BiquadState; EQ_STAGES]; EQ_BANDS]; 2],
-    /// The output gain at the end of the last block.
-    gain: f32,
+    /// The output gain.
+    gain: Glide,
 }
 
 impl EqEight {
@@ -215,7 +253,7 @@ impl EqEight {
             made: None,
             sections: [([Biquad::IDENTITY; EQ_STAGES], 0); EQ_BANDS],
             states: Default::default(),
-            gain: db_to_gain(params.output_db),
+            gain: Glide::new(db_to_gain(params.output_db)),
         }
     }
 
@@ -243,17 +281,14 @@ impl EqEight {
                 }
             }
         }
-        // The output gain glides across the block, so turning it doesn't click.
         let target = db_to_gain(p.output_db);
-        let (from, n) = (self.gain, l.len().max(1) as f32);
-        if from != 1.0 || target != 1.0 {
-            for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
-                let g = from + (target - from) * (i + 1) as f32 / n;
+        if !(self.gain.at(1.0) && target == 1.0) {
+            for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+                let g = self.gain.next(target);
                 *a *= g;
                 *b *= g;
             }
         }
-        self.gain = target;
     }
 }
 
@@ -1176,7 +1211,7 @@ pub struct Transient {
     falling: f32,
     /// The gain of the last sample, dB (smoothed so it doesn't crackle).
     gain_db: f32,
-    output: f32,
+    output: Glide,
 }
 
 impl Transient {
@@ -1186,16 +1221,14 @@ impl Transient {
     const DEPTH: f32 = 0.8;
 
     fn new(params: TransientParams) -> Self {
-        Self { params, power: 0.0, rising: 0.0, falling: 0.0, gain_db: 0.0, output: db_to_gain(params.output_db) }
+        Self { params, power: 0.0, rising: 0.0, falling: 0.0, gain_db: 0.0, output: Glide::new(db_to_gain(params.output_db)) }
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
         let p = self.params;
         let (mean, rise, fall, glide) = (smoothing(5.0, sr), smoothing(25.0, sr), smoothing(350.0, sr), smoothing(1.0, sr));
         let target_output = db_to_gain(p.output_db);
-        let n = l.len().max(1) as f32;
-        let from = self.output;
-        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
             let x = 0.5 * (*a * *a + *b * *b);
             self.power = x + mean * (self.power - x);
             let level = self.power;
@@ -1208,11 +1241,10 @@ impl Transient {
             let tail = if self.falling > 1e-7 { db(self.falling) - db(level) } else { 0.0 };
             let target = ((p.attack * hit + p.sustain * tail) * Self::DEPTH).clamp(-Self::RANGE_DB, Self::RANGE_DB);
             self.gain_db = target + glide * (self.gain_db - target);
-            let g = db_to_gain(self.gain_db) * (from + (target_output - from) * (i + 1) as f32 / n);
+            let g = db_to_gain(self.gain_db) * self.output.next(target_output);
             *a *= g;
             *b *= g;
         }
-        self.output = target_output;
     }
 }
 
@@ -1386,7 +1418,7 @@ impl EffectProcessor {
             }
             Self::EqEight(fx) => {
                 fx.states = Default::default();
-                fx.gain = db_to_gain(fx.params.output_db);
+                fx.gain = Glide::new(db_to_gain(fx.params.output_db));
             }
             Self::Compressor(fx) => fx.envelope_db = 0.0,
             Self::Gate(fx) => {
@@ -1669,6 +1701,34 @@ mod tests {
         let out = run(&mut fx, &held);
         let g = 20.0 * (rms(&out[24_000..]) / rms(&held[24_000..])).log10();
         assert!((g + 6.0).abs() < 0.3, "a held note: only the output, {g} dB");
+    }
+
+    /// The output gain of the EQ Eight and the Transient, automated every 64
+    /// samples, gives the same samples whatever blocks the audio comes in
+    /// (it used to glide across each block: the export differed).
+    #[test]
+    fn automated_output_gain_is_the_same_in_any_blocks() {
+        let input: Vec<f32> = (0..24_000).map(|i| ((i * 7919) % 2001) as f32 / 1000.0 - 1.0).collect();
+        let run = |effect: Effect, index: usize, block: usize| {
+            let mut fx = EffectProcessor::new(&effect, 48_000.0);
+            let (mut l, mut r) = (input.clone(), input.clone());
+            let mut at = 0;
+            while at < input.len() {
+                if at % 64 == 0 {
+                    fx.set_param(index, -12.0 + 24.0 * at as f32 / input.len() as f32);
+                }
+                let n = block.min(64 - at % 64).min(input.len() - at);
+                fx.process(&mut l[at..at + n], &mut r[at..at + n], &ctx());
+                at += n;
+            }
+            l
+        };
+        for (effect, index) in [(Effect::EqEight(Default::default()), 24), (Effect::Transient(TransientParams { attack: 0.5, sustain: 0.3, output_db: 0.0 }), 2)] {
+            let whole = run(effect, index, 64);
+            for block in [1, 37, 100] {
+                assert_eq!(run(effect, index, block), whole, "{} in blocks of {block}", effect.label());
+            }
+        }
     }
 
     /// Feeds an impulse followed by silence and checks the output stays finite and bounded.

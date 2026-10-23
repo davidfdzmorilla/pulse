@@ -1616,7 +1616,7 @@ pub struct Engine {
     input_track: Option<usize>,
     arrangement_record: bool,
     limit_output: bool,
-    /// Frames rendered since the engine started (see [`SUB_BLOCK`]).
+    /// Frames rendered since the engine started, or the transport did (see [`SUB_BLOCK`]).
     rendered: u64,
     /// The transport started or jumped: automation applies at the next block.
     automate_now: bool,
@@ -1901,9 +1901,19 @@ impl Engine {
         if !self.playing && self.counting.is_none() {
             self.playing = true;
             self.position = self.start_marker;
+            // The once-a-block things (automation, control rates) on a grid
+            // from here, as in an export, wherever the audio device was.
+            self.rendered = 0;
+            // Whatever plays at random plays the same every time from here,
+            // and as exported.
             for track in &mut self.tracks {
-                if let Instrument::SuperSaw(s) = &mut track.instrument {
-                    s.reseed();
+                match &mut track.instrument {
+                    Instrument::SuperSaw(s) => s.reseed(),
+                    Instrument::Drums(d) => d.reseed(),
+                    Instrument::Kick(k) => k.reseed(),
+                    Instrument::Wavetable(w, _) => w.reseed(),
+                    Instrument::Modular(m) => m.reseed(),
+                    _ => {}
                 }
             }
         }
@@ -2407,6 +2417,15 @@ impl Engine {
     }
 
     fn render_block(&mut self, n: usize) {
+        // On the sub-block's frame (the same frames whatever the callbacks
+        // are), or at once when the transport has just started or moved. Before
+        // the tempo is read: the whole sub-block plays at the tempo automated
+        // there, however the callbacks cut it.
+        let playing = self.playing;
+        if playing && (self.rendered % SUB_BLOCK == 0 || self.automate_now) {
+            self.automate_now = false;
+            self.apply_automation();
+        }
         let beats_per_sample = self.tempo / 60.0 / self.sample_rate as f64;
         let ctx = ProcessContext {
             sample_rate: self.sample_rate,
@@ -2419,15 +2438,8 @@ impl Engine {
             track.audio_right[..n].fill(0.0);
         }
         // A transport the count-in starts at the end of this block plays from the next.
-        let playing = self.playing;
         self.count_in(n, beats_per_sample);
         if playing {
-            // On the sub-block's frame (the same frames whatever the callbacks
-            // are), or at once when the transport has just started or moved.
-            if self.rendered % SUB_BLOCK == 0 || self.automate_now {
-                self.automate_now = false;
-                self.apply_automation();
-            }
             self.sequence(n, beats_per_sample);
         }
         self.monitor(n);

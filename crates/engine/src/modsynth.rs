@@ -885,7 +885,29 @@ fn modulate(p: &ModularParams, voice: &mut Voice, inputs: &ModInputs, m: &mut [f
     }
 }
 
+/// Voice `i`'s first seed, for its modulators.
+fn voice_seed(i: usize) -> u32 {
+    0x6C07_8965 ^ (i as u32 + 1).wrapping_mul(0x2545_F491)
+}
+
+/// Module `m` of voice `i`'s first noise seed.
+fn module_seed(i: usize, m: usize) -> u32 {
+    0x9E37_79B9 ^ ((i * MOD_MODULES + m) as u32).wrapping_mul(0x85EB_CA6B)
+}
+
 impl ModSynth {
+    /// Its random numbers from the start again (the transport starts: it
+    /// plays the same every time, and as exported).
+    pub fn reseed(&mut self) {
+        self.seed = 0x2468_ACE1;
+        for (i, voice) in self.voices.iter_mut().enumerate() {
+            voice.seed = voice_seed(i);
+            for (m, module) in voice.modules.iter_mut().enumerate() {
+                module.seed = module_seed(i, m);
+            }
+        }
+    }
+
     pub fn new(params: ModularParams, sample_rate: f32) -> Self {
         let voice = |i: usize| {
             let module = |m: usize| ModuleState {
@@ -893,7 +915,7 @@ impl ModSynth {
                 masters: [0.0; UNISON],
                 positions: [-1.0; UNISON],
                 back: [false; UNISON],
-                seed: 0x9E37_79B9 ^ ((i * MOD_MODULES + m) as u32).wrapping_mul(0x85EB_CA6B),
+                seed: module_seed(i, m),
                 pink: [[0.0; 7]; 2],
                 brown: [0.0; 2],
                 previous: [[0.0; 2]; 2],
@@ -921,7 +943,7 @@ impl ModSynth {
                 unison: 0,
                 unisons: 1,
                 mods: [ModState::IDLE; MOD_MODULATORS],
-                seed: 0x6C07_8965 ^ (i as u32 + 1).wrapping_mul(0x2545_F491),
+                seed: voice_seed(i),
                 pressure: 0.0,
                 modules: std::array::from_fn(module),
                 grains: [Grain::FREE; GRAINS],

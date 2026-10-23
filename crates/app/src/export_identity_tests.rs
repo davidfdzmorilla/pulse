@@ -182,8 +182,8 @@ fn the_new_effects_play_as_exported() {
         let mut a = Track::new_audio("Audio", [0; 3]);
         a.id = 2;
         a.arrangement = vec![
-            ArrangementClip { start: 0.5, length: 6.0, clip: Clip::Audio(audio(&tone(), 6.0, WarpMode::Stretch, Fades { fade_in: 1.0, fade_out: 2.0 })) },
-            ArrangementClip { start: 6.5, length: 5.5, clip: Clip::Audio(audio(&ramp(), 5.5, WarpMode::Repitch, Fades { fade_in: 0.5, fade_out: 1.5 })) },
+            ArrangementClip { start: 0.5, length: 6.0, clip: Clip::Audio(audio(&tone(), 6.0, WarpMode::Stretch, Fades::new(1.0, 2.0))) },
+            ArrangementClip { start: 6.5, length: 5.5, clip: Clip::Audio(audio(&ramp(), 5.5, WarpMode::Repitch, Fades::new(0.5, 1.5))) },
         ];
         a.devices.push(Device::new(Effect::Gate(GateParams { sidechain: Some(1), threshold_db: -30.0, hold_ms: 5.0, release_ms: 40.0, ..Default::default() })));
         a.devices.push(Device::new(Effect::Transient(TransientParams { attack: 0.8, sustain: -0.5, output_db: 0.0 })));

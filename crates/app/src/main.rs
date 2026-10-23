@@ -55,6 +55,8 @@ mod open_files;
 mod piano_roll;
 #[cfg(test)]
 mod persist_tests;
+#[cfg(test)]
+mod structure_tests;
 mod plugins;
 mod poly_ui;
 mod presets;

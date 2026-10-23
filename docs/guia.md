@@ -174,6 +174,7 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 - En la Drum Machine, un sonido sacado lleva una flecha (**Kick →**); al pasar por encima dice en qué pista suena.
 - Puedes sacar varios sonidos, cada uno a su pista. Al exportar por pistas, cada sonido sale en la stem de su pista.
 - Mientras tenga sonidos sacados, la batería no se puede congelar.
+- Un sonido suena en una sola pista: la pista de un sonido no se duplica sola (sonaría dos veces). Duplica la batería con ella, por ejemplo agrupándolas y duplicando el grupo: la copia toca sus sonidos de la batería copiada, y los sidechains de dentro escuchan también a las copias.
 - Un proyecto con sonidos sacados se abre solo con esta versión de Pulse o una más nueva.
 
 **Congelar pista** (clic derecho en la cabecera) renderiza a audio lo que suenan su instrumento y sus efectos, y la pista pasa a sonar ese audio: deja de gastar CPU. El volumen, el panorama y los envíos siguen en vivo.

@@ -1819,6 +1819,16 @@ impl Effect {
         }
     }
 
+    /// Its sidechain, to point it at another track (None: it has none).
+    pub fn sidechain_mut(&mut self) -> Option<&mut Option<u32>> {
+        match self {
+            Effect::Compressor(p) => Some(&mut p.sidechain),
+            Effect::Gate(p) => Some(&mut p.sidechain),
+            Effect::Ducker(p) => Some(&mut p.sidechain),
+            _ => None,
+        }
+    }
+
     /// Whether it can go among a synth's own effects (the Wavetable's, a
     /// Modular's lanes): those show and modulate [`MOD_FX_SLOTS`] settings an
     /// effect at most.

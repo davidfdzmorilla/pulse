@@ -2023,8 +2023,14 @@ impl ParamInfo {
         Self { name, min, max, default, log: true, unit }
     }
 
-    /// Position of `value` along the control's travel, 0..1.
+    /// `value` within the range (not a number: the default).
+    pub fn clamp(&self, value: f32) -> f32 {
+        if value.is_nan() { self.default } else { value.clamp(self.min, self.max) }
+    }
+
+    /// Position of `value` along the control's travel, 0..1 (not a number: the default's).
     pub fn normalize(&self, value: f32) -> f32 {
+        let value = if value.is_nan() { self.default } else { value };
         let n = if self.log {
             (value / self.min).ln() / (self.max / self.min).ln()
         } else {
@@ -2514,7 +2520,7 @@ impl InstrumentKind {
     pub fn set(&mut self, index: usize, value: f32) {
         let info = self.param_info(index);
         if let (Some(info), Some(slot)) = (info, self.param_mut(index)) {
-            *slot = value.clamp(info.min, info.max);
+            *slot = info.clamp(value);
         }
     }
 
@@ -2629,7 +2635,7 @@ impl Effect {
     pub fn set(&mut self, index: usize, value: f32) {
         let info = self.params().get(index).copied();
         if let (Some(slot), Some(info)) = (self.param_mut(index), info) {
-            *slot = value.clamp(info.min, info.max);
+            *slot = info.clamp(value);
         }
     }
 }
@@ -2659,7 +2665,7 @@ impl SynthParams {
 
     pub fn set(&mut self, index: usize, value: f32) {
         if let (Some(info), Some(slot)) = (SYNTH_PARAMS.get(index).copied(), self.param_mut(index)) {
-            *slot = value.clamp(info.min, info.max);
+            *slot = info.clamp(value);
         }
     }
 }

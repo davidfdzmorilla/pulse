@@ -157,21 +157,30 @@ struct BiquadState {
     s2: f64,
 }
 
-impl BiquadState {
-    #[inline]
-    fn tick(&mut self, x: f64, c: &Biquad) -> f64 {
-        let y = c.b0 * x + self.s1;
-        self.s1 = c.b1 * x - c.a1 * y + self.s2;
-        self.s2 = c.b2 * x - c.a2 * y;
-        y
-    }
-}
-
 /// Second-order sections a band needs at most (a 48 dB cut).
 const EQ_STAGES: usize = 4;
 
-/// The sections that make band `band` at `sample_rate`, and how many it uses.
+/// The Q a shelf gets at the Q knob's top: a bump of about 3 dB at its edge
+/// (the knob's 18 would make one of over 20 dB).
+const SHELF_MAX_Q: f64 = 1.4;
+
+/// The Q a shelf uses for knob value `q`: the same up to 0.71 (no bump), then
+/// the rest of the knob's travel spread up to [`SHELF_MAX_Q`].
+fn shelf_q(q: f64) -> f64 {
+    let flat = std::f64::consts::FRAC_1_SQRT_2;
+    if q <= flat {
+        return q;
+    }
+    let top = 18.0 / flat;
+    flat * (q / flat).min(top).powf((SHELF_MAX_Q / flat).ln() / top.ln())
+}
+
+/// The sections that make band `band` at `sample_rate`, and how many it uses
+/// (none: it changes nothing, a bell or shelf at 0 dB).
 fn band_sections(band: &EqBand, sample_rate: f32) -> ([Biquad; EQ_STAGES], usize) {
+    if band.shape.has_gain() && band.gain_db == 0.0 {
+        return ([Biquad::IDENTITY; EQ_STAGES], 0);
+    }
     let sr = sample_rate as f64;
     let freq = (band.freq as f64).clamp(10.0, sr * 0.49);
     let q = (band.q as f64).clamp(0.05, 40.0);
@@ -199,6 +208,7 @@ fn band_sections(band: &EqBand, sample_rate: f32) -> ([Biquad; EQ_STAGES], usize
     };
     let a = 10f64.powf(band.gain_db as f64 / 40.0);
     let alpha = sin / (2.0 * q);
+    let shelf_alpha = sin / (2.0 * shelf_q(q));
     match band.shape {
         EqShape::LowCut48 => steep(&high_pass),
         EqShape::HighCut48 => steep(&low_pass),
@@ -207,14 +217,14 @@ fn band_sections(band: &EqBand, sample_rate: f32) -> ([Biquad; EQ_STAGES], usize
         EqShape::Bell => one(Biquad::normalized([1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a], [1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a])),
         EqShape::Notch => one(Biquad::normalized([1.0, -2.0 * cos, 1.0], [1.0 + alpha, -2.0 * cos, 1.0 - alpha])),
         EqShape::LowShelf => {
-            let k = 2.0 * a.sqrt() * alpha;
+            let k = 2.0 * a.sqrt() * shelf_alpha;
             one(Biquad::normalized(
                 [a * ((a + 1.0) - (a - 1.0) * cos + k), 2.0 * a * ((a - 1.0) - (a + 1.0) * cos), a * ((a + 1.0) - (a - 1.0) * cos - k)],
                 [(a + 1.0) + (a - 1.0) * cos + k, -2.0 * ((a - 1.0) + (a + 1.0) * cos), (a + 1.0) + (a - 1.0) * cos - k],
             ))
         }
         EqShape::HighShelf => {
-            let k = 2.0 * a.sqrt() * alpha;
+            let k = 2.0 * a.sqrt() * shelf_alpha;
             one(Biquad::normalized(
                 [a * ((a + 1.0) + (a - 1.0) * cos + k), -2.0 * a * ((a - 1.0) + (a + 1.0) * cos), a * ((a + 1.0) + (a - 1.0) * cos - k)],
                 [(a + 1.0) - (a - 1.0) * cos + k, 2.0 * ((a - 1.0) - (a + 1.0) * cos), (a + 1.0) - (a - 1.0) * cos - k],
@@ -262,22 +272,30 @@ impl EqEight {
         if self.made != Some((p, sr)) {
             for (b, band) in p.bands.iter().enumerate() {
                 let before = self.made.map(|(m, _)| m.bands[b]);
-                // A band that comes on, or changes shape, starts from silence.
-                if before.is_none_or(|m| m.on != band.on || m.shape != band.shape) {
+                self.sections[b] = if band.on { band_sections(band, sr) } else { ([Biquad::IDENTITY; EQ_STAGES], 0) };
+                // A band that comes on, or changes shape, starts from silence; so
+                // does one left out (flat: a flat filter's state is 0 anyway).
+                if before.is_none_or(|m| m.on != band.on || m.shape != band.shape) || self.sections[b].1 == 0 {
                     self.states[0][b] = Default::default();
                     self.states[1][b] = Default::default();
                 }
-                self.sections[b] = if band.on { band_sections(band, sr) } else { ([Biquad::IDENTITY; EQ_STAGES], 0) };
             }
             self.made = Some((p, sr));
         }
         for (ch, buf) in [&mut *l, &mut *r].into_iter().enumerate() {
             for (b, (sections, used)) in self.sections.iter().enumerate() {
                 let state = &mut self.states[ch][b];
-                for (section, s) in sections[..*used].iter().zip(state.iter_mut()) {
+                for (c, s) in sections[..*used].iter().zip(state.iter_mut()) {
+                    // In locals: kept in registers, not written back every sample.
+                    let (mut s1, mut s2) = (s.s1, s.s2);
                     for x in buf.iter_mut() {
-                        *x = s.tick(*x as f64, section) as f32;
+                        let input = *x as f64;
+                        let y = c.b0 * input + s1;
+                        s1 = c.b1 * input - c.a1 * y + s2;
+                        s2 = c.b2 * input - c.a2 * y;
+                        *x = y as f32;
                     }
+                    *s = BiquadState { s1, s2 };
                 }
             }
         }
@@ -1575,6 +1593,74 @@ mod tests {
         assert!(at(EqShape::Notch, 1000.0, 0.0, 1000.0) < -60.0 && at(EqShape::Notch, 1000.0, 0.0, 100.0).abs() < 0.1);
         // The gain of a cut does nothing.
         assert_eq!(at(EqShape::LowCut12, 1000.0, 12.0, 400.0), at(EqShape::LowCut12, 1000.0, -12.0, 400.0));
+    }
+
+    /// A shelf's Q makes a bump at its edge, but a small one: up to about 3 dB
+    /// at the knob's top, the same up to 0.71 (none), growing with the knob.
+    #[test]
+    fn a_shelf_at_high_q_stays_near_its_gain() {
+        let sr = 48_000.0;
+        let extremes = |shape, gain_db, q| {
+            let r: Vec<f32> = (0..2000).map(|k| eq_band_response_db(&EqBand { on: true, shape, freq: 1000.0, gain_db, q }, sr, 20.0 * 1000f32.powf(k as f32 / 1999.0))).collect();
+            (r.iter().fold(f32::MIN, |a, &b| a.max(b)), r.iter().fold(f32::MAX, |a, &b| a.min(b)))
+        };
+        for shape in [EqShape::LowShelf, EqShape::HighShelf] {
+            let (top, low) = extremes(shape, 15.0, 18.0);
+            assert!(top < 18.5 && top > 16.0 && low > -3.5, "{shape:?} +15 dB Q 18: {top:.1} to {low:.1} dB");
+            let (top, low) = extremes(shape, -15.0, 18.0);
+            assert!(low > -18.5 && top < 3.5, "{shape:?} −15 dB Q 18: {top:.1} to {low:.1} dB");
+            let (top, _) = extremes(shape, 15.0, 0.71);
+            assert!(top < 15.05, "no bump at 0.71: {top}");
+            let bumps: Vec<f32> = [1.0, 2.0, 4.0, 8.0, 18.0].map(|q| extremes(shape, 15.0, q).0).to_vec();
+            assert!(bumps.windows(2).all(|w| w[1] > w[0]), "the knob does something all the way: {bumps:?}");
+        }
+    }
+
+    /// Bands at 0 dB are left out, and that changes nothing: not the sound,
+    /// not when one leaves 0 dB later (automated), whatever the blocks.
+    #[test]
+    fn flat_bands_change_nothing() {
+        let sr = 48_000.0;
+        let input: Vec<f32> = (0..9600).map(|i| ((i as f32 * 0.37).sin() + (i as f32 * 0.051).sin()) * 0.3).collect();
+        let mut fx = EffectProcessor::new(&Effect::EqEight(EqEightParams::default()), sr);
+        let (mut l, mut r) = (input.clone(), input.clone());
+        fx.process(&mut l, &mut r, &ctx());
+        assert_eq!(l, input, "the default EQ Eight (all at 0 dB) is the sound as it was");
+        // The third band (a bell) automated from 0 dB up, in blocks of 64 or of 7.
+        let run = |block: usize| {
+            let mut fx = EffectProcessor::new(&Effect::EqEight(EqEightParams::default()), sr);
+            let (mut l, mut r) = (input.clone(), input.clone());
+            let mut at = 0;
+            while at < input.len() {
+                if at % 64 == 0 {
+                    fx.set_param(7, if at < 3200 { 0.0 } else { (at - 3200) as f32 / 600.0 });
+                }
+                let n = block.min(64 - at % 64).min(input.len() - at);
+                fx.process(&mut l[at..at + n], &mut r[at..at + n], &ctx());
+                at += n;
+            }
+            l
+        };
+        let (a, b) = (run(64), run(7));
+        assert_eq!(a[..3200], input[..3200]);
+        assert!(a.iter().zip(&b).all(|(x, y)| (x - y).abs() < 1e-6), "the same in any blocks");
+        assert!(a[9000..].iter().zip(&input[9000..]).any(|(x, y)| (x - y).abs() > 0.01), "it does boost once up");
+    }
+
+    /// Not a number (a broken lane, a plugin's controller) never reaches a
+    /// setting: it gets the default.
+    #[test]
+    fn a_parameter_set_to_nan_gets_its_default() {
+        let mut e = Effect::EqEight(Default::default());
+        for i in 0..e.params().len() {
+            e.set(i, f32::NAN);
+            assert_eq!(e.get(i), e.params()[i].default, "{i}");
+        }
+        let mut k = crate::model::InstrumentKind::SuperSaw(Default::default());
+        k.set(0, f32::NAN);
+        assert!(k.get(0).is_finite());
+        let info = crate::model::ParamInfo::log("Freq", 20.0, 20_000.0, 1000.0, crate::model::Unit::Hertz);
+        assert_eq!(info.denormalize(info.normalize(f32::NAN)), info.denormalize(info.normalize(1000.0)));
     }
 
     /// A new EQ Eight leaves the sound as it is, and its output gain is a gain.

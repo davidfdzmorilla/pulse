@@ -225,7 +225,7 @@ impl PulseApp {
         let dir = self.media_dir(crate::library::TRANSITIONS);
         let name = format!("{} {bars} compás{}", kind.label(), if bars == 1 { "" } else { "es" });
         let written = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| {
-            let path = crate::library::unique(&dir.join(format!("{name}.wav")));
+            let path = crate::library::claim(&dir.join(format!("{name}.wav")));
             crate::export::write(&path, &left, &right, rate as u32, crate::export::BitDepth::Float32, 1.0).map(|_| path)
         });
         let path = match written {

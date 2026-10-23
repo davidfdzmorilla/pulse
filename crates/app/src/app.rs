@@ -2289,16 +2289,31 @@ impl PulseApp {
         }
     }
 
-    /// After undo or redo: the engine gets what changed from `before`.
-    fn after_project_replaced(&mut self, before: Option<&Project>) {
+    /// After undo, redo or going back to a version: what is selected or open
+    /// stays within the project, and the engine gets what changed from `before`
+    /// (all of it, without).
+    pub(crate) fn after_project_replaced(&mut self, before: Option<&Project>) {
         // A knob still gliding would move back what was just undone.
         self.stop_glides();
         if self.selected_clip.is_some_and(|c| self.clip(c).is_none()) {
             self.selected_clip = None;
         }
-        let tracks = self.project.tracks.len();
-        if matches!(self.selected_target, Target::Track(t) if t >= tracks) {
-            self.selected_target = Target::Track(0);
+        let clips: Vec<ClipRef> = self.selected_clips.iter().copied().filter(|&c| self.clip(c).is_some()).collect();
+        self.selected_clips = clips;
+        let (tracks, returns) = (self.project.tracks.len(), self.project.returns.len());
+        match self.selected_target {
+            Target::Track(t) if t >= tracks => self.selected_target = Target::Track(0),
+            Target::Return(r) if r >= returns => self.selected_target = if returns > 0 { Target::Return(returns - 1) } else { Target::Master },
+            _ => {}
+        }
+        self.selected_tracks.retain(|&t| t < tracks);
+        for window in [&mut self.kick_window, &mut self.wave_window, &mut self.poly_window, &mut self.modular_window] {
+            if window.is_some_and(|t| t >= tracks) {
+                *window = None;
+            }
+        }
+        if self.table_editor.as_ref().is_some_and(|e| e.track >= tracks) {
+            self.table_editor = None;
         }
         match before {
             Some(before) => self.sync_from(before),
@@ -2316,8 +2331,17 @@ impl PulseApp {
         self.saved = self.project.clone();
         self.history.reset(&self.project);
         self.file = file;
+        // Nothing of the project before stays selected, open or overridden.
         self.selected_clip = None;
+        self.selected_clips.clear();
+        self.selected_tracks.clear();
         self.selected_target = Target::Track(0);
+        self.overridden.clear();
+        self.arrangement.forget_project();
+        for window in [&mut self.kick_window, &mut self.wave_window, &mut self.poly_window, &mut self.modular_window] {
+            *window = None;
+        }
+        self.table_editor = None;
         self.sync_all();
         // Loading their states may have touched the new plugins.
         self.forget_plugin_edits();
@@ -2942,6 +2966,20 @@ mod window_tests {
         app.open_panel(Panel::Shortcuts);
         assert!(app.show_shortcuts && !app.show_settings && !app.updates.show && !app.export.open);
         assert_eq!(app.wave_window, Some(1), "an editor and a window can be open together");
+    }
+
+    /// Opening another project leaves nothing of the one before: what was
+    /// selected or open, and the automation overridden by hand (which then
+    /// didn't play in the new one).
+    #[test]
+    fn opening_a_project_forgets_the_one_before() {
+        let mut app = PulseApp::headless(Project::demo());
+        app.overridden.insert((Target::Track(0), engine::model::Param::Volume));
+        app.selected_tracks = vec![3];
+        app.kick_window = Some(3);
+        app.arrangement.automation.insert(0, engine::model::Param::Pan);
+        app.replace_project(Project::demo(), None);
+        assert!(app.overridden.is_empty() && app.selected_tracks.is_empty() && app.kick_window.is_none() && app.arrangement.automation.is_empty());
     }
 
     /// A dropped folder brings its audio (in its folders too, by name); in the

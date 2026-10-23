@@ -289,7 +289,7 @@ impl PulseApp {
         self.project = project;
         self.history.commit(&self.project, false);
         self.selected_clip = None;
-        self.sync_all();
+        self.after_project_replaced(None);
         self.status = Some(crate::theme::keys(&format!("Has vuelto a «{}» (⌘Z lo deshace; guarda para quedarte con ella)", version.name)));
     }
 }
@@ -538,6 +538,33 @@ mod tests {
         assert_eq!(load(&dir, &last).unwrap().tempo, 95.0, "what there was is kept");
         app.undo();
         assert_eq!(app.project.tempo, 95.0);
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// Going back to a version with fewer tracks and returns than the selected
+    /// one: the selection and the editors stay within it (Pulse used to close).
+    #[test]
+    fn going_back_to_a_smaller_version_keeps_the_selection_in_it() {
+        let root = temp("smaller");
+        let file = root.join("Canción").join("Canción.pulse");
+        let mut app = PulseApp::headless(Project::demo());
+        app.save_to_path(&file);
+        app.save_version("Original", "");
+        let dir = folder(&file).unwrap();
+        let original = list(&dir).into_iter().find(|v| v.name == "Original").unwrap().file;
+        let tracks = app.project.tracks.len();
+        app.add_track();
+        app.add_track();
+        app.selected_target = engine::Target::Track(tracks + 1);
+        app.selected_tracks = vec![tracks, tracks + 1];
+        app.open_instrument_editor(crate::app::InstrumentEditor::Wave, tracks + 1);
+        app.commit_history();
+        app.restore_version(&original);
+        assert_eq!(app.project.tracks.len(), tracks);
+        assert!(matches!(app.selected_target, engine::Target::Track(t) if t < tracks));
+        assert!(app.selected_tracks.is_empty() && app.wave_window.is_none());
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| crate::detail::show(&mut app, ui));
         let _ = std::fs::remove_dir_all(root);
     }
 

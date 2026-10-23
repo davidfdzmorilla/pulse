@@ -101,6 +101,8 @@ pub struct State {
     menu: Option<Menu>,
     /// Where a clic on a clip left the cut point (⌘E cuts there), in beats.
     pub(crate) cut: Option<f64>,
+    /// The project as the drag in progress left it last frame.
+    left: Option<Box<crate::project::Project>>,
     /// A track to duplicate or delete once the view is drawn (true: the selected ones).
     track_action: Option<(TrackAction, usize, bool)>,
 }
@@ -131,6 +133,20 @@ enum Menu {
     Markers(f64),
 }
 
+impl State {
+    /// Lets go of everything about the project shown (another one opens).
+    pub(crate) fn forget_project(&mut self) {
+        self.drag = None;
+        self.left = None;
+        self.cut = None;
+        self.menu = None;
+        self.track_action = None;
+        self.automation.clear();
+        self.master_automation = None;
+        self.takes.clear();
+    }
+}
+
 impl Default for State {
     fn default() -> Self {
         Self {
@@ -143,6 +159,7 @@ impl Default for State {
             automation_filter: String::new(),
             menu: None,
             cut: None,
+            left: None,
             track_action: None,
         }
     }
@@ -245,6 +262,12 @@ fn row_height(automation: bool, takes: usize) -> f32 {
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
+    // Something else changed the project in the middle of a drag (a key like ⌫
+    // or ⌘Z, a menu, a recording): the clips, points and snapshot the drag holds
+    // no longer fit it, so the drag ends here, leaving things as they are.
+    if app.arrangement.drag.is_some() && app.arrangement.left.as_deref().is_some_and(|left| *left != app.project) {
+        app.arrangement.drag = None;
+    }
     let position = app.audio.position();
     let playing = app.audio.is_playing();
     let state = app.audio.state();
@@ -502,6 +525,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             context_menu(app, &response);
         });
     });
+    // How the drag leaves the project, to notice next frame if something else changed it.
+    app.arrangement.left = app.arrangement.drag.as_ref().filter(|d| !matches!(d, Drag::Scrub)).map(|_| Box::new(app.project.clone()));
     app.finish_track_drag(ui, &headers, true);
     match app.arrangement.track_action.take() {
         Some((TrackAction::Duplicate, _, true)) => app.duplicate_selected_tracks(),
@@ -1795,6 +1820,115 @@ mod tests {
                 assert_eq!(app.project.tracks[1].arrangement.len(), 1, "what was cut pastes");
             }
         }
+    }
+
+    fn button(pos: Pos2, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE }
+    }
+
+    /// Presses at `from` and drags to `from + delta` in `steps` frames, the button still held.
+    fn hold_and_drag(screen: &mut Screen, app: &mut PulseApp, from: Pos2, delta: egui::Vec2, steps: usize) {
+        screen.frame(app, vec![egui::Event::PointerMoved(from)]);
+        screen.frame(app, vec![button(from, true)]);
+        for k in 1..=steps {
+            screen.frame(app, vec![egui::Event::PointerMoved(from + delta * (k as f32 / steps as f32))]);
+        }
+    }
+
+    /// Moves on and lets go.
+    fn drag_on_and_release(screen: &mut Screen, app: &mut PulseApp, to: Pos2) {
+        screen.frame(app, vec![egui::Event::PointerMoved(to)]);
+        screen.frame(app, vec![button(to, false)]);
+        screen.frame(app, vec![]);
+    }
+
+    /// ⌫ while a clip's right edge is being dragged: the drag ends, no crash.
+    #[test]
+    fn deleting_a_clip_while_resizing_it() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let edge = at(&app, 0, 7.8);
+        hold_and_drag(&mut screen, &mut app, edge, vec2(30.0, 0.0), 3);
+        assert!(app.project.tracks[0].arrangement[0].length > 4.0, "the resize is under way");
+        app.delete_selected_clip();
+        drag_on_and_release(&mut screen, &mut app, edge + vec2(60.0, 0.0));
+        assert!(app.project.tracks[0].arrangement.is_empty());
+    }
+
+    /// ⌘Z while resizing the clip that the undone step added.
+    #[test]
+    fn undoing_while_resizing_a_clip() {
+        let mut app = app();
+        app.commit_history();
+        let color = app.project.tracks[0].color;
+        app.project.tracks[0].arrangement.push(ArrangementClip { start: 12.0, length: 4.0, clip: Clip::Midi(MidiClip::new("B", 4.0, color)) });
+        app.sync_arrangement(0);
+        app.commit_history();
+        let mut screen = Screen::new();
+        let edge = at(&app, 0, 15.8);
+        hold_and_drag(&mut screen, &mut app, edge, vec2(30.0, 0.0), 3);
+        assert!(app.project.tracks[0].arrangement[1].length > 4.0, "the resize is under way");
+        app.undo();
+        drag_on_and_release(&mut screen, &mut app, edge + vec2(60.0, 0.0));
+        assert_eq!(app.project.tracks[0].arrangement.len(), 1, "undone, and it stays undone");
+    }
+
+    /// ⌘Z of a new track while moving a clip.
+    #[test]
+    fn undoing_a_new_track_while_moving_a_clip() {
+        let mut app = app();
+        app.commit_history();
+        app.add_track();
+        app.commit_history();
+        let tracks = app.project.tracks.len();
+        let mut screen = Screen::new();
+        let grab = at(&app, 0, 5.0);
+        hold_and_drag(&mut screen, &mut app, grab, vec2(28.0, 0.0), 3);
+        assert!(app.project.tracks[0].arrangement[0].start > 4.0, "the move is under way");
+        app.undo();
+        drag_on_and_release(&mut screen, &mut app, grab + vec2(70.0, 0.0));
+        assert_eq!(app.project.tracks.len(), tracks - 1);
+    }
+
+    /// ⌘Z while dragging the point a press just added to an automation lane.
+    #[test]
+    fn undoing_while_dragging_a_new_automation_point() {
+        let mut app = app();
+        app.arrangement.automation.insert(1, Param::Volume);
+        app.commit_history();
+        app.project.tempo = 121.0;
+        app.commit_history();
+        let mut screen = Screen::new();
+        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 70.0 + 53.0 + 53.0 + 40.0);
+        hold_and_drag(&mut screen, &mut app, from, vec2(20.0, -10.0), 3);
+        assert_eq!(app.automation(Target::Track(1)).iter().find(|l| l.param == Param::Volume).map(|l| l.points.len()), Some(1), "a point is being dragged");
+        app.undo();
+        drag_on_and_release(&mut screen, &mut app, from + vec2(40.0, -20.0));
+        assert!(app.automation(Target::Track(1)).iter().all(|l| l.points.is_empty()), "undone, the point stays gone");
+    }
+
+    /// ⌫ while moving a clip: it stays deleted (the drag used to lay the lanes
+    /// out again from what it held and bring it back).
+    #[test]
+    fn deleting_a_clip_while_moving_it() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let grab = at(&app, 0, 5.0);
+        hold_and_drag(&mut screen, &mut app, grab, vec2(28.0, 0.0), 3);
+        app.delete_selected_clip();
+        drag_on_and_release(&mut screen, &mut app, grab + vec2(70.0, 0.0));
+        assert!(app.project.tracks.iter().all(|t| t.arrangement.is_empty()), "it came back: {:?}", app.project.tracks.iter().map(|t| t.arrangement.len()).collect::<Vec<_>>());
+    }
+
+    /// A drag that nothing interrupts still works as before.
+    #[test]
+    fn a_plain_move_still_moves() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let (grab, bar) = (at(&app, 0, 5.0), vec2(4.0 * app.arrangement.pixels_per_beat, 0.0));
+        hold_and_drag(&mut screen, &mut app, grab, bar, 4);
+        drag_on_and_release(&mut screen, &mut app, grab + bar);
+        assert_eq!(app.project.tracks[0].arrangement[0].start, 8.0);
     }
 
     /// A clic on a clip leaves the cut point there (on the grid), and ⌘E cuts

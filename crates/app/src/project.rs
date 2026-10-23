@@ -285,7 +285,10 @@ pub struct MasterTrack {
 /// have one.
 /// 8: a Gate or a Transient: a Pulse that reads 7 doesn't know them. Only
 /// projects that have one.
-pub const FORMAT: u32 = 8;
+/// 9: a fade that is a piece of its curve (a clip split in the middle of
+/// one): a Pulse that reads 8 would play the whole curve. Only projects that
+/// have one.
+pub const FORMAT: u32 = 9;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -450,6 +453,12 @@ impl Project {
         self.plugins.iter().find(|p| p.id == id)
     }
 
+    /// Whether any audio clip has a fade that is a piece of its curve.
+    pub fn has_partial_fades(&self) -> bool {
+        let partial = |clip: &Clip| matches!(clip, Clip::Audio(a) if a.fades.partial());
+        self.tracks.iter().any(|t| t.clips.iter().flatten().any(partial) || t.arrangement.iter().any(|p| partial(&p.clip)))
+    }
+
     /// Whether any audio clip fades in or out.
     pub fn has_fades(&self) -> bool {
         let fades = |clip: &Clip| matches!(clip, Clip::Audio(a) if a.fades != engine::model::Fades::NONE);
@@ -582,8 +591,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Gate(_) | Effect::Transient(_))) {
+            let format = if self.has_partial_fades() {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::Gate(_) | Effect::Transient(_))) {
+                8
             } else if self.has_effect(|e| matches!(e, Effect::EqEight(_))) {
                 7
             } else if self.has_fades() {

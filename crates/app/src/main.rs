@@ -26,6 +26,8 @@ mod eq_ui;
 mod export;
 mod files;
 #[cfg(test)]
+mod cut_tests;
+#[cfg(test)]
 mod fidelity_tests;
 #[cfg(test)]
 mod freeze_tests;

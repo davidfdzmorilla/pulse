@@ -76,12 +76,10 @@ pub fn split(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(Arrange
     let d = beat - placed.start;
     let mut left = ArrangementClip { length: d, ..placed.clone() };
     let mut right = ArrangementClip { start: beat, length: placed.end() - beat, clip: from(&placed.clip, d, tempo) };
-    // The fade-in stays at the start, the fade-out at the end.
-    if let Clip::Audio(audio) = &mut left.clip {
-        audio.fades.fade_out = 0.0;
-    }
-    if let Clip::Audio(audio) = &mut right.clip {
-        audio.fades.fade_in = 0.0;
+    // The fade-in stays at the start, the fade-out at the end; one the cut
+    // falls in goes on in the other part, so the two sound as the whole.
+    if let (Clip::Audio(a), Clip::Audio(b)) = (&mut left.clip, &mut right.clip) {
+        (a.fades, b.fades) = a.fades.split(placed.length, d);
     }
     // Not looping: each part is only its piece (the clip editor shows just that).
     // A loop keeps its loop.
@@ -411,7 +409,7 @@ mod tests {
 
     #[test]
     fn a_split_clip_keeps_its_fade_in_at_the_start_and_its_fade_out_at_the_end() {
-        let mut audio = engine::model::AudioClip { hard_start: false, fades: engine::model::Fades { fade_in: 1.0, fade_out: 2.0 }, name: "a".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        let mut audio = engine::model::AudioClip { hard_start: false, fades: engine::model::Fades::new(1.0, 2.0), name: "a".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
         audio.length = 8.0;
         let placed = ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(audio) };
         let (left, right) = split(&placed, 4.0, 120.0).unwrap();

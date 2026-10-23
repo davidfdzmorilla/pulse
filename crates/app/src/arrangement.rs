@@ -645,7 +645,9 @@ fn paint_fades(clipped: &egui::Painter, rect: Rect, body: Rect, fades: engine::m
         let curve: Vec<egui::Pos2> = (0..=steps)
             .map(|i| {
                 let x = i as f32 / steps as f32;
-                let gain = (x * std::f32::consts::FRAC_PI_2).sin();
+                // Its piece of the curve (all of it, unless the clip was split in the middle of it).
+                let along = if out { fades.out_at(x as f64 * length) } else { fades.in_at(x as f64 * length) };
+                let gain = engine::model::Fades::curve(along) as f32;
                 let at = if out { rect.right() - width * x } else { rect.left() + width * x };
                 pos2(at, body.bottom() - gain * body.height())
             })
@@ -1395,7 +1397,7 @@ fn handle_pointer(
         if response.double_clicked() {
             if let Some(Clip::Audio(audio)) = app.project.tracks[t].arrangement.get_mut(index).map(|p| &mut p.clip) {
                 let out = fade.is_some_and(|f| f.2);
-                if out { audio.fades.fade_out = 0.0 } else { audio.fades.fade_in = 0.0 }
+                audio.fades = if out { audio.fades.without_out() } else { audio.fades.without_in() };
                 app.sync_arrangement(t);
             }
             return;
@@ -1542,6 +1544,13 @@ fn handle_pointer(
                 let (start, end, length) = (placed.start, placed.end(), placed.length);
                 let Clip::Audio(audio) = &mut placed.clip else { return };
                 let mut fades = audio.fades.fitted(length);
+                // A fade drawn from nothing is a whole one (not what was left
+                // of a piece of one).
+                if out && fades.fade_out == 0.0 {
+                    fades = fades.without_out();
+                } else if !out && fades.fade_in == 0.0 {
+                    fades = fades.without_in();
+                }
                 // Free, not on the grid; ⇧ snaps it to the grid.
                 let at = if ui.input(|i| i.modifiers.shift) { snap(beat, unit) } else { beat };
                 if out {

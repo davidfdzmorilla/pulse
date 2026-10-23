@@ -30,6 +30,6 @@ pub use input::{detached_input, start_input, start_input_with, AudioInput, Input
 pub use offline::OfflineRenderer;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};
 pub use engine::{
-    build_chain, copy_salt, Analyzer, ANALYZER_SAMPLES, link_neighbours, render_audio, render_placed, swing_offset, ChainSlot, Command, Engine, PreparedInstrument, LiveNote, Controller, PlacedClip, PlayClip, RecordedNote, SharedState, Fault, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
+    build_chain, copy_salt, render_audio_handles, HANDLE_SECONDS, Analyzer, ANALYZER_SAMPLES, link_neighbours, render_audio, render_placed, swing_offset, ChainSlot, Command, Engine, PreparedInstrument, LiveNote, Controller, PlacedClip, PlayClip, RecordedNote, SharedState, Fault, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
     MAX_RETURNS, NUM_SCENES, QUEUED_STOP,
 };

@@ -201,22 +201,68 @@ pub struct AudioClip {
 /// go back to it at its end, in beats (they follow the tempo). Equal-power
 /// curves: no dip in the middle. In the Arrangement, at the clip's edges as
 /// placed; in the Session, on every lap of its loop.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+///
+/// A fade may be a piece of its curve (a clip split in the middle of one keeps
+/// its sound): the fade-in goes from `in_from` to `in_to` along it (0 is
+/// silence, 1 full), the fade-out from `out_from` where it begins to `out_to`
+/// at the clip's end. A whole fade goes 0 → 1, and 1 → 0.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Fades {
     #[serde(default, rename = "in", skip_serializing_if = "is_default")]
     pub fade_in: f64,
     #[serde(default, rename = "out", skip_serializing_if = "is_default")]
     pub fade_out: f64,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub in_from: f64,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub in_to: f64,
+    #[serde(default = "one", skip_serializing_if = "is_one")]
+    pub out_from: f64,
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub out_to: f64,
+}
+
+fn one() -> f64 {
+    1.0
+}
+
+fn is_one(x: &f64) -> bool {
+    *x == 1.0
+}
+
+impl Default for Fades {
+    fn default() -> Self {
+        Self::NONE
+    }
 }
 
 impl Fades {
-    pub const NONE: Fades = Fades { fade_in: 0.0, fade_out: 0.0 };
+    pub const NONE: Fades = Fades { fade_in: 0.0, fade_out: 0.0, in_from: 0.0, in_to: 1.0, out_from: 1.0, out_to: 0.0 };
+
+    /// Whole fades of these lengths.
+    pub const fn new(fade_in: f64, fade_out: f64) -> Fades {
+        Fades { fade_in, fade_out, ..Fades::NONE }
+    }
+
+    /// The curve's gain at `x` (0..1) along it.
+    pub fn curve(x: f64) -> f64 {
+        (x.clamp(0.0, 1.0) * std::f64::consts::FRAC_PI_2).sin()
+    }
+
+    /// Where along its curve the fade-in is `since` beats after the start.
+    pub fn in_at(&self, since: f64) -> f64 {
+        self.in_from + (self.in_to - self.in_from) * (since / self.fade_in).clamp(0.0, 1.0)
+    }
+
+    /// Where along its curve the fade-out is `until` beats before the end.
+    pub fn out_at(&self, until: f64) -> f64 {
+        self.out_to + (self.out_from - self.out_to) * (until / self.fade_out).clamp(0.0, 1.0)
+    }
 
     /// The gain `since` beats after the start and `until` beats before the end.
     pub fn gain(&self, since: f64, until: f64) -> f32 {
-        let curve = |x: f64| (x.clamp(0.0, 1.0) * std::f64::consts::FRAC_PI_2).sin();
-        let fade_in = if self.fade_in > 0.0 { curve(since / self.fade_in) } else { 1.0 };
-        let fade_out = if self.fade_out > 0.0 { curve(until / self.fade_out) } else { 1.0 };
+        let fade_in = if self.fade_in > 0.0 { Self::curve(self.in_at(since)) } else { 1.0 };
+        let fade_out = if self.fade_out > 0.0 { Self::curve(self.out_at(until)) } else { 1.0 };
         (fade_in * fade_out) as f32
     }
 
@@ -224,7 +270,44 @@ impl Fades {
     /// together too.
     pub fn fitted(self, length: f64) -> Fades {
         let fade_in = self.fade_in.clamp(0.0, length.max(0.0));
-        Fades { fade_in, fade_out: self.fade_out.clamp(0.0, (length - fade_in).max(0.0)) }
+        Fades { fade_in, fade_out: self.fade_out.clamp(0.0, (length - fade_in).max(0.0)), ..self }
+    }
+
+    /// Whether one is only a piece of its curve (see the type's notes).
+    pub fn partial(&self) -> bool {
+        (self.fade_in > 0.0 && (self.in_from != 0.0 || self.in_to != 1.0)) || (self.fade_out > 0.0 && (self.out_from != 1.0 || self.out_to != 0.0))
+    }
+
+    /// Without a fade-in (and the next one whole).
+    pub fn without_in(self) -> Fades {
+        Fades { fade_in: 0.0, in_from: 0.0, in_to: 1.0, ..self }
+    }
+
+    /// Without a fade-out (and the next one whole).
+    pub fn without_out(self) -> Fades {
+        Fades { fade_out: 0.0, out_from: 1.0, out_to: 0.0, ..self }
+    }
+
+    /// The two parts of these fades (fitted to a clip `length` long) when the
+    /// clip is cut `at` beats from its start: each part with the piece of each
+    /// curve it has, so together they sound as the whole.
+    pub fn split(self, length: f64, at: f64) -> (Fades, Fades) {
+        let f = self.fitted(length);
+        let (mut left, mut right) = (f.without_out(), f.without_in());
+        if f.fade_in > at {
+            let cut = f.in_at(at);
+            left = Fades { fade_in: at, in_to: cut, ..left };
+            right = Fades { fade_in: f.fade_in - at, in_from: cut, in_to: f.in_to, ..right };
+        } else {
+            right = right.without_in();
+        }
+        let begins = length - f.fade_out;
+        if f.fade_out > 0.0 && at > begins {
+            let cut = f.out_at(length - at);
+            left = Fades { fade_out: at - begins, out_from: f.out_from, out_to: cut, ..left };
+            right = Fades { fade_out: length - at, out_from: cut, ..right };
+        }
+        (left, right)
     }
 }
 

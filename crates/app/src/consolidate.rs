@@ -49,7 +49,9 @@ impl PulseApp {
             return Err(format!("No se encuentra el audio de «{}»", audio.name));
         }
         let tempo = self.project.tempo;
-        let (left, right) = engine::render_audio(audio, &sample, beats, tempo, self.audio.sample_rate());
+        // What it sounds when on: a deactivated clip stays deactivated, with its sound.
+        let heard = AudioClip { muted: false, ..audio.clone() };
+        let (left, right) = engine::render_audio(&heard, &sample, beats, tempo, self.audio.sample_rate());
         let path = self.write_consolidated(&audio.name, &left, &right)?;
         Ok(AudioClip {
             sample: path.to_string_lossy().into_owned(),
@@ -120,7 +122,9 @@ impl PulseApp {
                 return;
             }
             let tempo = self.project.tempo;
-            let (mut left, mut right) = engine::render_audio(&audio, &sample, beats, tempo, self.audio.sample_rate());
+            // What it sounds when on: a deactivated clip stays deactivated, with its sound.
+            let heard = AudioClip { muted: false, ..audio.clone() };
+            let (mut left, mut right) = engine::render_audio(&heard, &sample, beats, tempo, self.audio.sample_rate());
             left.reverse();
             right.reverse();
             let name = match audio.name.strip_suffix(" (invertido)") {
@@ -182,12 +186,17 @@ impl PulseApp {
         let (tempo, rate) = (self.project.tempo, self.audio.sample_rate());
         let frames = ((end - start) * 60.0 / tempo * rate as f64).round() as usize;
         let (mut left, mut right) = (vec![0f32; frames], vec![0f32; frames]);
+        // What was heard: the deactivated parts left out, unless all of them
+        // are (then the whole, still deactivated).
+        let all_off = parts.iter().all(|p| p.clip.muted());
         let mut placed = Vec::new();
         for part in parts {
             let Clip::Audio(audio) = &part.clip else { return Err("Solo se unen clips del mismo tipo".into()) };
             let sample = self.sample(&audio.sample);
-            placed.push(engine::PlacedClip::new(part.start, part.length, engine::PlayClip::Audio(audio.clone(), sample)));
+            let audio = AudioClip { muted: audio.muted && !all_off, ..audio.clone() };
+            placed.push(engine::PlacedClip::new(part.start, part.length, engine::PlayClip::Audio(audio, sample)));
         }
+        let heard: Vec<ArrangementClip> = parts.iter().filter(|p| all_off || !p.clip.muted()).cloned().collect();
         // Pieces that follow on (of a split clip, or of takes) cross-fade as they play.
         engine::link_neighbours(&mut placed);
         for part in &placed {
@@ -211,9 +220,10 @@ impl PulseApp {
             gain_db: 0.0,
             transpose: 0.0,
             // The pieces' envelopes still move the mixer and effects, along it.
-            envelopes: crate::clip_split::join_envelopes(parts, start, &|p| self.envelope_base(track, p)),
+            envelopes: crate::clip_split::join_envelopes(&heard, start, &|p| self.envelope_base(track, p)),
             // Its fades are in the file now.
             fades: engine::model::Fades::NONE,
+            muted: all_off,
             ..base.clone()
         };
         Ok(ArrangementClip { start, length: end - start, clip: Clip::Audio(clip) })
@@ -223,6 +233,26 @@ impl PulseApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Consolidating or reversing a deactivated clip keeps its sound in the
+    /// new file (it used to render silence): switched back on, it sounds.
+    #[test]
+    fn a_deactivated_clip_consolidated_or_reversed_keeps_its_sound() {
+        for reverse in [false, true] {
+            let mut clip = demo_clip(WarpMode::Repitch, 8.0, 3.0);
+            clip.muted = true;
+            let (mut app, track) = app_with(vec![ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(clip) }]);
+            let refs = vec![ClipRef::Arrangement { track, index: 0 }];
+            if reverse { app.reverse_clips(refs) } else { app.consolidate(refs) }
+            let Clip::Audio(new) = &mut app.project.tracks[track].arrangement[0].clip else { panic!() };
+            assert!(new.muted, "still deactivated");
+            let path = new.sample.clone();
+            new.muted = false;
+            let loudest = render(&app, 8.0).iter().map(|s| s.abs()).fold(0f32, f32::max);
+            std::fs::remove_file(&path).ok();
+            assert!(loudest > 0.05, "reverse {reverse}: switched back on it is silent ({loudest})");
+        }
+    }
     use crate::project::Project;
 
     fn demo_clip(warp: WarpMode, length: f64, offset: f64) -> AudioClip {

@@ -389,6 +389,15 @@ pub struct Project {
     /// Knobs that move several controls at once (see `macros`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub macros: Vec<crate::macros::Macro>,
+    /// The id the next new track gets: never one a deleted track had, so what
+    /// pointed at that one (a sidechain, a rumble, a drum sound) doesn't
+    /// follow a new track. See [`Project::assign_ids`].
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub next_id: u32,
+}
+
+fn is_zero(n: &u32) -> bool {
+    *n == 0
 }
 
 /// A marker on the Arrangement: where (beat) and its name.
@@ -425,7 +434,7 @@ impl PartialEq for PluginRef {
 impl Project {
     /// Gives each track without one (or with another's: a copy) an id of its own.
     pub fn assign_ids(&mut self) {
-        let mut next = self.tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1;
+        let mut next = (self.tracks.iter().map(|t| t.id).max().unwrap_or(0) + 1).max(self.next_id);
         let mut seen = std::collections::HashSet::new();
         for track in &mut self.tracks {
             if track.id == 0 || !seen.insert(track.id) {
@@ -434,6 +443,7 @@ impl Project {
                 next += 1;
             }
         }
+        self.next_id = next;
     }
 
     pub fn plugin(&self, id: PluginId) -> Option<&PluginRef> {
@@ -488,6 +498,7 @@ impl Project {
             key: None,
             markers: Vec::new(),
             macros: Vec::new(),
+            next_id: 0,
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

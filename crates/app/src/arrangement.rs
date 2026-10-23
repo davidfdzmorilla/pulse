@@ -1480,6 +1480,8 @@ fn handle_pointer(
                         to >= 0
                             && (to as usize) < app.project.tracks.len()
                             && matches!(snapshot[t][i].clip, Clip::Audio(_)) == app.project.tracks[to as usize].is_audio()
+                            // A group track plays no clips of its own.
+                            && !app.project.tracks[to as usize].is_group()
                     })
                 };
                 let tracks = if fits(wanted) { wanted } else { applied.1 };
@@ -1693,6 +1695,37 @@ fn handle_automation(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Two clips on different tracks moved down together: neither lands on a
+    /// group track (which plays no clips: it was lost from sight and sound).
+    #[test]
+    fn moving_several_clips_never_drops_one_on_a_group_track() {
+        let mut app = app();
+        app.project.tracks[0].arrangement.clear();
+        app.selected_tracks = vec![2];
+        app.selected_target = Target::Track(2);
+        app.group_selected();
+        let group = app.project.tracks.iter().position(|t| t.is_group()).expect("a group");
+        assert_eq!(group, 2);
+        let color = app.project.tracks[1].color;
+        for t in [1, 3] {
+            app.project.tracks[t].arrangement.push(ArrangementClip { start: 4.0, length: 4.0, clip: Clip::Midi(MidiClip::new("M", 4.0, color)) });
+            app.sync_arrangement(t);
+        }
+        app.set_clip_selection(vec![ClipRef::Arrangement { track: 3, index: 0 }, ClipRef::Arrangement { track: 1, index: 0 }]);
+        let mut screen = Screen::new();
+        let grab = at(&app, 3, 5.0);
+        screen.frame(&mut app, vec![egui::Event::PointerMoved(grab)]);
+        let press = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        screen.frame(&mut app, vec![press(grab, true)]);
+        for k in 1..=4 {
+            screen.frame(&mut app, vec![egui::Event::PointerMoved(grab + vec2(0.0, 53.0 * k as f32 / 4.0))]);
+        }
+        screen.frame(&mut app, vec![press(grab + vec2(0.0, 53.0), false)]);
+        screen.frame(&mut app, vec![]);
+        assert!(app.project.tracks[group].arrangement.is_empty(), "a clip landed on the group track");
+        assert_eq!(app.project.tracks.iter().map(|t| t.arrangement.len()).sum::<usize>(), 2, "both still there");
+    }
     use crate::project::Project;
     use egui::{Modifiers, PointerButton, Pos2};
 

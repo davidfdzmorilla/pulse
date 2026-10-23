@@ -54,6 +54,8 @@ mod note_edit;
 mod open_files;
 mod piano_roll;
 #[cfg(test)]
+mod stem_key_tests;
+#[cfg(test)]
 mod persist_tests;
 #[cfg(test)]
 mod structure_tests;

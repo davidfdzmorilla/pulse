@@ -257,6 +257,24 @@ pub fn unique(path: &Path) -> PathBuf {
     (2..).map(|n| path.with_file_name(format!("{stem} {n}{extension}"))).find(|p| !p.exists()).expect("a free name")
 }
 
+/// Like [`unique`], but the name is taken at once (an empty file is made
+/// there): two writers at the same time (a freeze in the background, tests
+/// side by side) never get the same name and write over each other.
+pub fn claim(path: &Path) -> PathBuf {
+    let stem = path.file_stem().map_or(String::new(), |s| s.to_string_lossy().into_owned());
+    let extension = path.extension().map(|e| format!(".{}", e.to_string_lossy())).unwrap_or_default();
+    let names = std::iter::once(path.to_path_buf()).chain((2..).map(|n| path.with_file_name(format!("{stem} {n}{extension}"))));
+    for candidate in names.take(10_000) {
+        match std::fs::OpenOptions::new().write(true).create_new(true).open(&candidate) {
+            Ok(_) => return candidate,
+            Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            // Not writable at all: whoever writes it says why.
+            Err(_) => return candidate,
+        }
+    }
+    unique(path)
+}
+
 /// The project as saved in `dir`: files inside it as paths relative to it, so the
 /// folder can be moved.
 pub fn relative(project: &Project, dir: &Path) -> Project {
@@ -302,6 +320,25 @@ pub fn missing_files(project: &Project) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Many writers wanting the same name at once each get one of their own.
+    #[test]
+    fn claimed_names_are_never_shared() {
+        let dir = std::env::temp_dir().join(format!("pulse-claim-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let wanted = dir.join("demo (consolidado).wav");
+        let threads: Vec<_> = (0..16).map(|_| {
+            let wanted = wanted.clone();
+            std::thread::spawn(move || claim(&wanted))
+        }).collect();
+        let mut names: Vec<PathBuf> = threads.into_iter().map(|t| t.join().unwrap()).collect();
+        names.sort();
+        names.dedup();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert_eq!(names.len(), 16);
+        assert!(names.contains(&wanted));
+    }
     use engine::model::{AudioClip, Clip, WarpMode};
 
     fn audio(path: &Path) -> Clip {

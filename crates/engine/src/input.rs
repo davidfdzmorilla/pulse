@@ -31,6 +31,8 @@ pub struct InputHandle {
     pub samples: Consumer<f32>,
     /// The same input for the engine to play back as it comes (monitoring); taken once.
     pub monitor: Option<MonitorInput>,
+    /// The same input mixed to one channel, for playing with the voice; taken once.
+    pub voice: Option<VoiceInput>,
     pub markers: Consumer<Marker>,
     pub channels: usize,
     pub sample_rate: f32,
@@ -70,9 +72,11 @@ pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioS
     let latency = Arc::new(AtomicU64::new(0));
     // A second of input is plenty: the engine keeps only a block or two of it.
     let (monitor_tx, monitor_rx) = RingBuffer::new(sample_rate as usize * channels);
+    let (voice_tx, voice_rx) = RingBuffer::new(sample_rate as usize);
     let capture = Capture {
         samples: sample_tx,
         monitor: monitor_tx,
+        voice: voice_tx,
         markers: marker_tx,
         state,
         peak: peak.clone(),
@@ -93,6 +97,7 @@ pub fn start_input_with(state: Arc<SharedState>, settings: &crate::audio::AudioS
         InputHandle {
             samples,
             monitor: Some(MonitorInput::new(monitor_rx, channels, sample_rate)),
+            voice: Some(VoiceInput { samples: voice_rx, sample_rate }),
             markers,
             channels,
             sample_rate,
@@ -121,15 +126,56 @@ impl MonitorInput {
     }
 }
 
+/// The input as one channel, as it comes, for following a voice: a second
+/// of it waits for whoever reads it (more is dropped).
+pub struct VoiceInput {
+    samples: Consumer<f32>,
+    pub sample_rate: f32,
+}
+
+impl VoiceInput {
+    /// Appends what came in since the last call to `out`.
+    pub fn take_into(&mut self, out: &mut Vec<f32>) {
+        let available = self.samples.slots();
+        if let Ok(chunk) = self.samples.read_chunk(available) {
+            let (a, b) = chunk.as_slices();
+            out.extend_from_slice(a);
+            out.extend_from_slice(b);
+            chunk.commit_all();
+        }
+    }
+
+    /// Drops what is waiting (from before it was listened to).
+    pub fn skip(&mut self) {
+        let available = self.samples.slots();
+        if let Ok(chunk) = self.samples.read_chunk(available) {
+            chunk.commit_all();
+        }
+    }
+
+    /// Whether the input it came from is closed (nothing more will come).
+    pub fn closed(&self) -> bool {
+        self.samples.is_abandoned()
+    }
+}
+
 /// An input with no device: whoever holds the producers feeds it samples and
 /// markers by hand (tests).
 pub fn detached_input(sample_rate: f32, channels: usize) -> (Producer<f32>, Producer<Marker>, InputHandle) {
+    let (samples, markers, _, handle) = detached_input_with_voice(sample_rate, channels);
+    (samples, markers, handle)
+}
+
+/// [`detached_input`], also with the producer of its voice input (one channel).
+pub fn detached_input_with_voice(sample_rate: f32, channels: usize) -> (Producer<f32>, Producer<Marker>, Producer<f32>, InputHandle) {
     let (samples_tx, samples) = RingBuffer::new(RING_SECONDS * sample_rate as usize * channels);
     let (markers_tx, markers) = RingBuffer::new(RING_SECONDS * 1000);
     let (_, monitor) = RingBuffer::new(1);
+    let (voice_tx, voice) = RingBuffer::new(RING_SECONDS * sample_rate as usize);
     let handle = InputHandle {
         samples,
         monitor: Some(MonitorInput::new(monitor, channels, sample_rate)),
+        voice: Some(VoiceInput { samples: voice, sample_rate }),
         markers,
         channels,
         sample_rate,
@@ -137,12 +183,13 @@ pub fn detached_input(sample_rate: f32, channels: usize) -> (Producer<f32>, Prod
         peak: Arc::default(),
         latency: Arc::default(),
     };
-    (samples_tx, markers_tx, handle)
+    (samples_tx, markers_tx, voice_tx, handle)
 }
 
 struct Capture {
     samples: Producer<f32>,
     monitor: Producer<f32>,
+    voice: Producer<f32>,
     markers: Producer<Marker>,
     state: Arc<SharedState>,
     peak: Arc<AtomicU32>,
@@ -164,6 +211,8 @@ impl Capture {
         };
         let _ = self.markers.push(marker);
         let mut peak = 0f32;
+        let channels = self.channels.max(1);
+        let (mut mixed, mut in_frame) = (0f32, 0);
         for &sample in data {
             let value = <f32 as FromSample<T>>::from_sample_(sample);
             peak = peak.max(value.abs());
@@ -171,6 +220,13 @@ impl Capture {
             let _ = self.samples.push(value);
             // Full when nothing monitors (the engine drains it otherwise).
             let _ = self.monitor.push(value);
+            mixed += value;
+            in_frame += 1;
+            if in_frame == channels {
+                // Full when the voice isn't followed.
+                let _ = self.voice.push(mixed / channels as f32);
+                (mixed, in_frame) = (0.0, 0);
+            }
         }
         self.peak.fetch_max(peak.to_bits(), Ordering::Relaxed);
         self.latency.store(latency.to_bits(), Ordering::Relaxed);

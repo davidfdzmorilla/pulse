@@ -67,6 +67,18 @@ impl InputCapture {
         self.handle.latency()
     }
 
+    /// The input mixed to one channel, for following the voice (once; given
+    /// back with [`InputCapture::give_back_voice`]).
+    pub fn take_voice(&mut self) -> Option<engine::VoiceInput> {
+        self.handle.voice.take()
+    }
+
+    pub fn give_back_voice(&mut self, voice: engine::VoiceInput) {
+        if !voice.closed() {
+            self.handle.voice = Some(voice);
+        }
+    }
+
     /// The input for the engine to monitor (once).
     pub fn take_monitor(&mut self) -> Option<engine::MonitorInput> {
         self.handle.monitor.take()
@@ -157,22 +169,6 @@ impl InputCapture {
     /// `after` on (a loop plays the same beats again on each pass).
     pub fn frame_at_beat_after(&self, beat: f64, after: u64) -> Option<u64> {
         frame_at_beat(&self.markers, beat, after)
-    }
-
-    /// The input frame after the newest one buffered.
-    pub fn end_frame(&self) -> u64 {
-        self.first_frame + (self.buffer.len() / self.handle.channels.max(1)) as u64
-    }
-
-    /// The newest `frames` of input, both channels mixed; None until there are as many.
-    pub fn latest(&self, frames: usize) -> Option<Vec<f32>> {
-        let channels = self.handle.channels.max(1);
-        let have = self.buffer.len() / channels;
-        if have < frames {
-            return None;
-        }
-        let from = (have - frames) * channels;
-        Some(self.buffer[from..].chunks(channels).map(|c| c.iter().sum::<f32>() / channels as f32).collect())
     }
 
     /// Stereo copy of `frames` input frames from `start`; missing input is silence.

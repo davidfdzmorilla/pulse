@@ -746,7 +746,8 @@ Pulsa **M** (o el botón **Teclado**) para tocar con el teclado del ordenador:
 
 Tu voz como teclado MIDI: pulsa **Voz** en la barra de transporte y canta, tararea o silba al micrófono. Suena la pista seleccionada (o las armadas), nota a nota, mientras cantas.
 
-- Una nota se mantiene aunque la voz oscile un poco a su alrededor, y cambia cuando te asientas en otra (unos 50 ms). Si paras un instante y vuelves a cantar, es una nota nueva («la-la»). Lo fuerte que cantes es la velocidad.
+- Una nota empieza a sonar unos 25–35 ms después de que empieces a cantarla (las más graves tardan un poco más: la voz tiene que dar un par de vueltas). La voz se sigue en su propio hilo, también con Pulse detrás de otra ventana.
+- Una nota se mantiene aunque la voz oscile un poco a su alrededor, y cambia cuando te asientas en otra (unos 30 ms; un salto de octava, unos 60). Si paras un instante y vuelves a cantar, es una nota nueva («la-la»). Lo fuerte que cantes es la velocidad.
 - Con una **Escala** en el proyecto, las notas que cantes desafinadas van a la nota de la escala más cercana; las que cantes afinadas se quedan, aunque no sean de la escala.
 - **Clic derecho** en **Voz**: la **octava**. −1 o −2 para tocar un bajo con una voz aguda; +1 o +2 para un lead con una voz grave.
 - **Graba** como un teclado MIDI: arma una pista MIDI y graba (F9 o en un slot) mientras cantas.

@@ -212,6 +212,11 @@ impl PulseApp {
         };
         let saved = info.original.as_deref().and_then(|p| Project::load(p).ok());
         self.replace_project(project, info.original.clone());
+        // The copy was written by this Pulse, the file by whichever saved it:
+        // saving over a newer Pulse's file still asks first.
+        if let Some(saved) = &saved {
+            self.project.saved_by = saved.saved_by.clone();
+        }
         // Unsaved until saved: against the file as it is on the disk.
         self.saved = saved.unwrap_or_else(Project::empty);
         // replace_project let the old copy go: this one stays until saved.
@@ -274,6 +279,34 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pulse-recovery-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         Recovery::new(dir)
+    }
+
+    /// A project a newer Pulse saved, recovered after a crash: ⌘S still asks
+    /// before writing over it (the recovered copy, written by this Pulse,
+    /// used to let it through and lose what the newer one knew).
+    #[test]
+    fn recovered_changes_still_ask_before_overwriting_a_newer_pulses_file() {
+        let dir = std::env::temp_dir().join(format!("pulse-recovery-newer-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let file = dir.join("Tema").join("Tema.pulse");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        let text = Project::demo().to_json().unwrap().replace(&format!("\"saved_by\": \"{}\"", crate::updates::VERSION), "\"saved_by\": \"99.0.0\"");
+        assert!(text.contains("99.0.0"));
+        std::fs::write(&file, &text).unwrap();
+        let recovery = Recovery::new(dir.join("Recuperación"));
+        let mut changed = Project::load(&file).unwrap();
+        changed.tempo = 133.0;
+        recovery.write(&changed, &Info { original: Some(file.clone()), saved_at: 1, version: crate::updates::VERSION.into() }).unwrap();
+
+        let mut app = PulseApp::headless(Project::empty());
+        app.recovery = Some(recovery);
+        app.answers.push_back(crate::commands::Answer::Save);
+        assert!(app.offer_recovery());
+        assert_eq!(app.project.tempo, 133.0);
+        app.save_to_path(&file);
+        let after = std::fs::read_to_string(&file).unwrap();
+        let _ = std::fs::remove_dir_all(&dir);
+        assert!(after.contains("99.0.0"), "written over without asking");
     }
 
     #[test]

@@ -41,7 +41,17 @@ pub fn folder(file: &Path) -> Option<PathBuf> {
 
 /// The versions in `dir`, oldest first.
 pub fn list(dir: &Path) -> Vec<Version> {
-    crate::store::read_json(&dir.join(INDEX))
+    let versions: Vec<Version> = crate::store::read_json(&dir.join(INDEX));
+    // The list comes with the project's folder, which may have been shared or
+    // damaged: a version is a file in this folder, never a path elsewhere
+    // (pruning would delete it).
+    versions.into_iter().filter(|v| in_folder(&v.file)).collect()
+}
+
+/// Whether `file` names a file right in the versions folder.
+fn in_folder(file: &str) -> bool {
+    let path = Path::new(file);
+    !file.contains(['/', '\\']) && path.file_name().is_some_and(|name| name == file) && !path.is_absolute()
 }
 
 fn write_list(dir: &Path, versions: &[Version]) -> Result<(), String> {
@@ -116,6 +126,9 @@ pub fn rename(dir: &Path, file: &str, name: &str, note: &str) -> Result<(), Stri
 }
 
 pub fn remove(dir: &Path, file: &str) -> Result<(), String> {
+    if !in_folder(file) {
+        return Ok(());
+    }
     let mut versions = list(dir);
     versions.retain(|v| v.file != file);
     let _ = std::fs::remove_file(dir.join(file));
@@ -539,6 +552,36 @@ mod tests {
         app.undo();
         assert_eq!(app.project.tempo, 95.0);
         let _ = std::fs::remove_dir_all(root);
+    }
+
+    /// A version list that names files outside its folder (a shared or
+    /// damaged project folder): those are left out, so pruning never deletes
+    /// the project or anything else.
+    #[test]
+    fn versions_never_reach_outside_their_folder() {
+        let root = temp("outside");
+        let project_dir = root.join("Tema");
+        let dir = project_dir.join(FOLDER);
+        std::fs::create_dir_all(&dir).unwrap();
+        let project_file = project_dir.join("Tema.pulse");
+        std::fs::write(&project_file, "the project").unwrap();
+        let mut versions = vec![Version { file: "../Tema.pulse".into(), name: "x".into(), note: String::new(), created: 1, auto: true }];
+        for i in 0..MAX_AUTO {
+            versions.push(Version { file: format!("{i}.pulse"), name: format!("v{i}"), note: String::new(), created: 2 + i as u64, auto: true });
+        }
+        write_list(&dir, &versions).unwrap();
+        assert_eq!(list(&dir).len(), MAX_AUTO, "the one outside is left out");
+        let mut project = Project::demo();
+        project.tempo = 101.0;
+        add(&dir, &project, "nueva", "", true).unwrap();
+        remove(&dir, "../Tema.pulse").unwrap();
+        for bad in ["..", ".", "/tmp/x.pulse", "a/b.pulse", "a\\b.pulse", ""] {
+            assert!(!in_folder(bad), "{bad}");
+        }
+        assert!(in_folder("1729000000-2.pulse"));
+        let survived = project_file.is_file();
+        let _ = std::fs::remove_dir_all(&root);
+        assert!(survived, "the project file was deleted");
     }
 
     /// The window lists the versions, newest first, with what each changed.

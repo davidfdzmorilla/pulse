@@ -1116,6 +1116,23 @@ pub fn render_audio(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, r
     (left, right)
 }
 
+/// What `clip` plays once over `beats` (as [`render_audio`]), with half a
+/// cross-fade more of its file before and after it, untouched (no fades at its
+/// edges): a piece of a split clip rendered into a file of its own (consolidated,
+/// turned round) cross-fades with its neighbours as before. The clip that plays
+/// it starts [`HANDLE_SECONDS`] into it.
+pub fn render_audio_handles(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, rate: f32) -> (Vec<f32>, Vec<f32>) {
+    let half = CROSSFADE * tempo / 60.0 / 2.0;
+    let frames = ((beats + 2.0 * half) * 60.0 / tempo * rate as f64).round() as usize;
+    let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
+    let beats_per_sample = tempo / 60.0 / rate as f64;
+    render_audio_clip_edges(clip, sample, 0.0, beats, (true, true), true, (0, frames), -half, beats_per_sample, tempo, None, &mut left, &mut right);
+    (left, right)
+}
+
+/// How far into a file from [`render_audio_handles`] its clip starts, seconds.
+pub const HANDLE_SECONDS: f64 = CROSSFADE / 2.0;
+
 /// What an arrangement audio clip plays over `frames` frames from `beat`, at
 /// `tempo`, as audio at `rate`: silent outside it, cross-fading where it is
 /// joined (joining clips into one file).
@@ -1139,6 +1156,27 @@ fn render_audio_clip(
     origin: f64,
     limit: f64,
     joined: (bool, bool),
+    frames: (usize, usize),
+    beat: f64,
+    beats_per_sample: f64,
+    tempo: f64,
+    tempo_lane: Option<&AutomationLane>,
+    left: &mut [f32],
+    right: &mut [f32],
+) {
+    render_audio_clip_edges(clip, sample, origin, limit, joined, false, frames, beat, beats_per_sample, tempo, tempo_lane, left, right);
+}
+
+/// [`render_audio_clip`]; `raw`: past a joined edge, without the cross-fade
+/// (see [`render_audio_handles`]).
+#[allow(clippy::too_many_arguments)]
+fn render_audio_clip_edges(
+    clip: &AudioClip,
+    sample: &Sample,
+    origin: f64,
+    limit: f64,
+    joined: (bool, bool),
+    raw: bool,
     (from, to): (usize, usize),
     beat: f64,
     beats_per_sample: f64,
@@ -1184,7 +1222,7 @@ fn render_audio_clip(
             local = b - origin;
             let fade_in = if joined.0 { (local + half) / (2.0 * half) } else if clean_start { 1.0 } else { local / fade };
             let fade_out = if joined.1 { (limit + half - b) / (2.0 * half) } else { (limit - b) / fade };
-            envelope = (fade_in.clamp(0.0, 1.0) * fade_out.clamp(0.0, 1.0)) as f32;
+            envelope = if raw { 1.0 } else { (fade_in.clamp(0.0, 1.0) * fade_out.clamp(0.0, 1.0)) as f32 };
         } else {
             local = (b - origin).rem_euclid(clip.length);
             let remaining = (clip.length - local).min(limit - b);
@@ -4388,7 +4426,7 @@ mod tests {
         use crate::model::Fades;
         let rate = 48_000.0;
         let sample = Sample::from_channels(vec![0.5; 48_000 * 8], vec![0.5; 48_000 * 8], rate);
-        let mut clip = AudioClip { hard_start: false, fades: Fades { fade_in: 1.0, fade_out: 2.0 }, name: "c".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        let mut clip = AudioClip { hard_start: false, fades: Fades::new(1.0, 2.0), name: "c".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
         // 120 BPM: a beat is 24 000 frames.
         let (left, _) = render_audio(&clip, &sample, 8.0, 120.0, rate);
         let at = |beat: f64| left[(beat * 24_000.0) as usize];
@@ -4398,14 +4436,14 @@ mod tests {
         assert!((at(7.0) - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "{}", at(7.0));
         assert!(at(7.999).abs() < 0.01);
         // Longer than the clip: fitted to it (the fade-in first, all of it).
-        clip.fades = Fades { fade_in: 20.0, fade_out: 20.0 };
+        clip.fades = Fades::new(20.0, 20.0);
         let (left, _) = render_audio(&clip, &sample, 8.0, 120.0, rate);
         let at = |beat: f64| left[(beat * 24_000.0) as usize];
         assert!((at(4.0) - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "{}", at(4.0));
         assert!(at(7.99) > 0.49 && left.iter().all(|s| s.is_finite()));
         // Looping: each lap fades in again.
         clip.length = 2.0;
-        clip.fades = Fades { fade_in: 0.5, fade_out: 0.0 };
+        clip.fades = Fades::new(0.5, 0.0);
         let (mut l, mut r) = (vec![0.0; 24_000 * 4], vec![0.0; 24_000 * 4]);
         render_audio_clip(&clip, &sample, 0.0, f64::INFINITY, (false, false), (0, 96_000), 0.0, 120.0 / 60.0 / 48_000.0, 120.0, None, &mut l, &mut r);
         assert!(l[48_000 + 10].abs() < 0.01, "the second lap starts silent again");

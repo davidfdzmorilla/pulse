@@ -174,7 +174,7 @@ pub(crate) fn rich_project(media: &Path) -> Project {
     // Audio track: three warp modes, markers, envelopes, takes, the same file twice.
     let mut audio = Track::new_audio("Audio ñ", PALETTE[7]);
     let mut stretch = audio_clip(&wav_a, 4.0, WarpMode::Stretch);
-    stretch.fades = engine::model::Fades { fade_in: 0.5, fade_out: 1.25 };
+    stretch.fades = engine::model::Fades::new(0.5, 1.25);
     stretch.envelopes.push(lane(Param::Volume, &[(0.0, 1.0, 0.0), (4.0, 0.2, 0.0)]));
     stretch.key = Some(ClipKey { tonic: 0, minor: false, follow: true });
     let mut marked = audio_clip(&wav_a, 4.0, WarpMode::Stretch);

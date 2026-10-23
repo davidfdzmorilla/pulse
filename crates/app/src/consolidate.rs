@@ -30,6 +30,18 @@ fn laid_out(lanes: &[AutomationLane], length: f64, beats: f64) -> Vec<Automation
         .collect()
 }
 
+/// How long `clip` (`audio`) plays, in beats, and whether it plays once in the
+/// Arrangement (then it may cross-fade with a neighbour: rendered with handles).
+fn placed_length(app: &PulseApp, clip: ClipRef, audio: &AudioClip) -> (f64, bool) {
+    match clip {
+        ClipRef::Session { .. } => (audio.length, false),
+        ClipRef::Arrangement { track, index } => {
+            let length = app.project.tracks[track].arrangement[index].length;
+            (length, length <= audio.length + 1e-9)
+        }
+    }
+}
+
 impl PulseApp {
     /// Writes `left`/`right` as a new file for a clip named `name`, with the
     /// project's media.
@@ -42,8 +54,10 @@ impl PulseApp {
     }
 
     /// `audio` as heard over `beats`, rendered into a new file, and the clip that
-    /// plays it.
-    fn consolidated(&mut self, audio: &AudioClip, beats: f64) -> Result<AudioClip, String> {
+    /// plays it. `handles`: with a little more of it before and after, for an
+    /// arrangement clip that cross-fades with its neighbours (see
+    /// `engine::render_audio_handles`).
+    fn consolidated(&mut self, audio: &AudioClip, beats: f64, handles: bool) -> Result<AudioClip, String> {
         let sample = self.sample(&audio.sample);
         if sample.frames() == 0 {
             return Err(format!("No se encuentra el audio de «{}»", audio.name));
@@ -51,11 +65,12 @@ impl PulseApp {
         let tempo = self.project.tempo;
         // What it sounds when on: a deactivated clip stays deactivated, with its sound.
         let heard = AudioClip { muted: false, ..audio.clone() };
-        let (left, right) = engine::render_audio(&heard, &sample, beats, tempo, self.audio.sample_rate());
+        let render = if handles { engine::render_audio_handles } else { engine::render_audio };
+        let (left, right) = render(&heard, &sample, beats, tempo, self.audio.sample_rate());
         let path = self.write_consolidated(&audio.name, &left, &right)?;
         Ok(AudioClip {
             sample: path.to_string_lossy().into_owned(),
-            offset: 0.0,
+            offset: if handles { engine::HANDLE_SECONDS } else { 0.0 },
             length: beats,
             // Rendered at the project's tempo: that is its own now.
             warp: audio.warp,
@@ -77,11 +92,8 @@ impl PulseApp {
         let mut done = 0;
         for clip in clips {
             let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { continue };
-            let beats = match clip {
-                ClipRef::Session { .. } => audio.length,
-                ClipRef::Arrangement { track, index } => self.project.tracks[track].arrangement[index].length,
-            };
-            match self.consolidated(&audio, beats) {
+            let (beats, handles) = placed_length(self, clip, &audio);
+            match self.consolidated(&audio, beats, handles) {
                 Ok(new) => {
                     match clip {
                         ClipRef::Session { track, slot } => self.set_clip(track, slot, Some(Clip::Audio(new))),
@@ -112,10 +124,7 @@ impl PulseApp {
         let mut done = 0;
         for clip in clips {
             let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { continue };
-            let beats = match clip {
-                ClipRef::Session { .. } => audio.length,
-                ClipRef::Arrangement { track, index } => self.project.tracks[track].arrangement[index].length,
-            };
+            let (beats, handles) = placed_length(self, clip, &audio);
             let sample = self.sample(&audio.sample);
             if sample.frames() == 0 {
                 self.status = Some(format!("No se encuentra el audio de «{}»", audio.name));
@@ -124,7 +133,9 @@ impl PulseApp {
             let tempo = self.project.tempo;
             // What it sounds when on: a deactivated clip stays deactivated, with its sound.
             let heard = AudioClip { muted: false, ..audio.clone() };
-            let (mut left, mut right) = engine::render_audio(&heard, &sample, beats, tempo, self.audio.sample_rate());
+            let render = if handles { engine::render_audio_handles } else { engine::render_audio };
+            let (mut left, mut right) = render(&heard, &sample, beats, tempo, self.audio.sample_rate());
+            // Turned round, the handles swap ends: still as long each.
             left.reverse();
             right.reverse();
             let name = match audio.name.strip_suffix(" (invertido)") {
@@ -148,7 +159,7 @@ impl PulseApp {
             let new = AudioClip {
                 name,
                 sample: path.to_string_lossy().into_owned(),
-                offset: 0.0,
+                offset: if handles { engine::HANDLE_SECONDS } else { 0.0 },
                 length: beats,
                 original_bpm: tempo,
                 warp_markers: Vec::new(),
@@ -309,10 +320,11 @@ mod tests {
         app.consolidate(vec![ClipRef::Arrangement { track, index: 0 }]);
         let Clip::Audio(new) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
         assert!(new.sample.contains("Consolidados"), "{}", new.sample);
-        assert_eq!((new.offset, new.length, new.gain_db, new.original_bpm), (0.0, 16.0, 0.0, 100.0));
-        // The file is just the part: 16 beats at 100 BPM.
+        assert_eq!((new.offset, new.length, new.gain_db, new.original_bpm), (engine::HANDLE_SECONDS, 16.0, 0.0, 100.0));
+        // The file is just the part, 16 beats at 100 BPM, and a handle at each
+        // end (for cross-fading with a neighbour: it plays from after the first).
         let file = engine::Sample::load(std::path::Path::new(&new.sample)).unwrap();
-        assert!((file.duration() - 9.6).abs() < 0.01, "{}", file.duration());
+        assert!((file.duration() - 9.6 - 2.0 * engine::HANDLE_SECONDS).abs() < 0.001, "{}", file.duration());
         let after = render(&app, 16.0);
         // The same but for the few ms of the edges' fades (twice now: rendered in, played back).
         let edge = 48_000 / 50;
@@ -327,7 +339,7 @@ mod tests {
     #[test]
     fn a_consolidated_clip_keeps_its_fades_once() {
         let mut clip = demo_clip(WarpMode::Repitch, 8.0, 3.0);
-        clip.fades = engine::model::Fades { fade_in: 2.0, fade_out: 1.0 };
+        clip.fades = engine::model::Fades::new(2.0, 1.0);
         let (mut app, track) = app_with(vec![ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(clip) }]);
         let before = render(&app, 8.0);
         app.consolidate(vec![ClipRef::Arrangement { track, index: 0 }]);

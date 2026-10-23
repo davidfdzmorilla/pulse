@@ -101,7 +101,7 @@ pub const SHORTCUTS: [(&str, &str); 35] = [
     ("⌘Z / ⇧⌘Z", "Deshacer / Rehacer"),
     ("⌘X / ⌘C / ⌘V", "Cortar / Copiar / Pegar los clips seleccionados (o las notas seleccionadas en el editor)"),
     ("⌘D", "Duplicar"),
-    ("⌘E / ⌘J", "Dividir el clip en el cursor / unir clips (Arrangement)"),
+    ("⌘E / ⌘J", "Dividir el clip donde hiciste clic / unir clips (Arrangement)"),
     ("0", "Desactivar o activar los clips seleccionados"),
     ("⌫", "Eliminar"),
     ("⌘A", "Seleccionar todas las notas"),

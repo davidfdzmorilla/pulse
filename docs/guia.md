@@ -120,7 +120,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 - **Tomas** (en grabaciones en bucle): elegir la toma que suena y **Mostrar las tomas en filas…** (ver «Tomas y comping»).
 - Solo audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar**, **Invertir**.
 - **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
-- **Dividir aquí** (⌘E corta en el cursor), **Unir N clips** (⌘J).
+- **Dividir aquí** (⌘E corta donde hiciste clic en el clip), **Trocear ▸** (en trozos iguales), **Unir N clips** (⌘J).
 - **Desactivar clip** (tecla **0**): el clip se queda donde está, en gris, pero no suena (ni sus notas, ni su audio, ni su automatización); tampoco al exportar. Otra vez lo activa. Si lo desactivas (o mueves, recortas o borras un clip de audio) mientras suena, se apaga con un fundido corto, sin clic. Con varios seleccionados, los desactiva todos (o los activa, si ya lo estaban todos). También en el menú de los clips de Session.
 - **Copiar**, **Cortar**, **Duplicar** (⌘D), **Eliminar** (⌫).
 - Con un solo clip: **Nombre** y **Color**.
@@ -197,7 +197,8 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 
 ## Dividir, unir y consolidar
 
-- **⌘E — Dividir clip**: corta los clips seleccionados del Arrangement por el cursor. **Dividir aquí** (clic derecho) corta donde hiciste clic. Cada parte sigue sonando lo mismo que antes; no se tocan los archivos. Una nota MIDI que cruza el corte termina en él y lo que le quedaba se toca al principio de la parte derecha (vuelve a oírse su ataque).
+- **⌘E — Dividir clip**: **haz clic en el clip donde quieras cortar** (queda una marca naranja, en la rejilla; con **⌥**, justo donde hiciste clic) y pulsa ⌘E. Para cortarlo en varios trozos, repite: clic, ⌘E, clic, ⌘E… Si no has hecho clic en el clip, corta por el cursor de reproducción (el que mueves en la regla). **Dividir aquí** (clic derecho) corta donde hiciste clic.
+- **Trocear ▸** (clic derecho en un clip): lo corta en trozos iguales, **cada tiempo**, **cada 2 tiempos**, **cada compás**, **cada 2** o **cada 4 compases**, por las líneas de la rejilla. Con varios clips seleccionados, los trocea todos. Los trozos quedan seleccionados, para moverlos o borrar los que sobran. Cada parte sigue sonando lo mismo que antes; no se tocan los archivos. Una nota MIDI que cruza el corte termina en él y lo que le quedaba se toca al principio de la parte derecha (vuelve a oírse su ataque).
 - **⌘J — Unir clips**: dos o más clips de la misma pista en uno, del principio del primero al final del último. Los MIDI juntan sus notas; los de audio se renderizan a un archivo nuevo, con silencio en los huecos.
 - **Consolidar** (clic derecho en un clip de audio): lo que suena el clip (con su warp, transposición, ganancia y fundidos) pasa a un archivo de audio nuevo solo con su trozo. Pierde sus tomas, y sus fundidos quedan en el archivo (el clip nuevo no tiene, para no aplicarlos dos veces). Lo mismo al unir e invertir.
 - Al **dividir** un clip con fundidos, la parte izquierda conserva el de entrada y la derecha el de salida.
@@ -912,7 +913,7 @@ Pulse → **Acerca de Pulse** muestra la versión y la licencia. Pulse es softwa
 | ⌘Z / ⇧⌘Z | Deshacer / Rehacer |
 | ⌘X / ⌘C / ⌘V | Cortar / Copiar / Pegar los clips seleccionados (o las notas seleccionadas en el editor) |
 | ⌘D | Duplicar |
-| ⌘E / ⌘J | Dividir el clip en el cursor / unir clips (Arrangement) |
+| ⌘E / ⌘J | Dividir el clip donde hiciste clic / unir clips (Arrangement) |
 | 0 | Desactivar o activar los clips seleccionados |
 | ⌫ | Eliminar |
 | ⌘A | Seleccionar todas las notas |

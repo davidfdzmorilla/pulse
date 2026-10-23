@@ -11,6 +11,9 @@ use engine::model::{ArrangementClip, AudioClip, AutomationLane, AutomationPoint,
 /// The shortest part a split leaves.
 pub const MIN_PART: f64 = 1.0 / 16.0;
 
+/// The most pieces «Trocear» leaves at once.
+const MAX_PIECES: usize = 512;
+
 /// Envelope lanes turned round to start `d` beats into a loop of `length`, with a
 /// point at the new start so the value there stays.
 fn rotate_lanes(lanes: &[AutomationLane], d: f64, length: f64) -> Vec<AutomationLane> {
@@ -257,9 +260,43 @@ impl PulseApp {
         true
     }
 
-    /// ⌘E: the selected arrangement clips split at the playhead.
+    /// Cuts the selected arrangement clips at every multiple of `every` beats
+    /// inside them; the pieces end up selected.
+    pub fn slice_selected(&mut self, every: f64) {
+        let selected: Vec<(usize, usize)> = self
+            .clip_selection()
+            .into_iter()
+            .filter_map(|c| match c {
+                ClipRef::Arrangement { track, index } => Some((track, index)),
+                ClipRef::Session { .. } => None,
+            })
+            .collect();
+        let mut pieces = Vec::new();
+        for (track, index) in selected {
+            let Some(placed) = self.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) else { continue };
+            let (start, end) = (placed.start, placed.end());
+            pieces.push(ClipRef::Arrangement { track, index });
+            // Each cut leaves the rest at the end of the lane: cut that next.
+            let mut rest = index;
+            let mut at = ((start + MIN_PART) / every).ceil() * every;
+            while at < end - MIN_PART && pieces.len() < MAX_PIECES {
+                if self.split_clip_at(track, rest, at) {
+                    rest = self.project.tracks[track].arrangement.len() - 1;
+                    pieces.push(ClipRef::Arrangement { track, index: rest });
+                }
+                at += every;
+            }
+        }
+        if pieces.is_empty() {
+            self.status = Some("Selecciona clips del Arrangement para trocearlos".into());
+        } else {
+            self.set_clip_selection(pieces);
+        }
+    }
+
+    /// ⌘E: the selected arrangement clips split where a clic on a clip left the
+    /// cut point, or else at the playhead.
     pub fn split_selected(&mut self) {
-        let beat = self.audio.position();
         let selected: Vec<(usize, usize)> = self
             .clip_selection()
             .into_iter()
@@ -272,6 +309,8 @@ impl PulseApp {
             self.status = Some("Selecciona clips del Arrangement para dividirlos".into());
             return;
         }
+        let inside = |beat: f64| selected.iter().any(|&(t, i)| self.project.tracks.get(t).and_then(|t| t.arrangement.get(i)).is_some_and(|p| p.start < beat && beat < p.end()));
+        let beat = self.arrangement.cut.filter(|&c| inside(c)).unwrap_or_else(|| self.audio.position());
         let mut parts = Vec::new();
         for (track, index) in selected {
             if self.split_clip_at(track, index, beat) {
@@ -279,7 +318,7 @@ impl PulseApp {
             }
         }
         if parts.is_empty() {
-            self.status = Some("El cursor no está dentro de los clips seleccionados: colócalo donde quieras cortar".into());
+            self.status = Some(crate::theme::keys("Haz clic en el clip donde quieras cortar y pulsa ⌘E otra vez"));
         } else {
             self.set_clip_selection(parts);
         }

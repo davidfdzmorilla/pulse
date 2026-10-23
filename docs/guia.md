@@ -559,6 +559,19 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
   - Un proyecto con un EQ Eight no se abre en un Pulse anterior: pide actualizar.
 - **Compressor**: umbral, ratio, ataque, release y ganancia, y **Sidechain** (ver abajo).
 - **Limiter**: ganancia, techo y release.
+- **Gate** (puerta de ruido): deja pasar el sonido solo cuando supera el umbral, y lo cierra cuando baja. Quita el ruido de fondo entre frase y frase de una voz, el zumbido de un amplificador o la cola de una caja.
+  - **Threshold**: el nivel a partir del cual se abre.
+  - **Return**: cuánto por debajo del umbral tiene que bajar para cerrarse. Así no se abre y se cierra sin parar con un sonido que ronda el umbral.
+  - **Attack**: lo que tarda en abrirse del todo (muy corto: no se pierde el golpe).
+  - **Hold**: cuánto se queda abierta después de que el sonido baje.
+  - **Release**: lo que tarda en cerrarse del todo.
+  - **Floor**: lo que deja pasar cerrada (−80 dB: nada; −20 dB: baja el fondo sin quitarlo).
+  - Con **Sidechain**, se abre cuando suena otra pista, no la suya: un pad que corta al ritmo de los charles (el «trance gate»), o un bajo que solo suena cuando suena el bombo.
+- **Transient**: cambia el golpe y la cola de cada sonido, sin umbral, sea cual sea su volumen.
+  - **Attack**: por encima de 0 %, el principio de cada golpe suena más fuerte (una batería con más pegada); por debajo, más suave (redondea una caja o una guitarra muy picada).
+  - **Sustain**: por encima de 0 %, lo que sigue al golpe dura más (más sala, más cuerpo); por debajo, se acorta (una batería más seca y apretada).
+  - **Output**: el volumen al final.
+  - Un sonido sostenido, sin golpes, pasa igual.
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras).
 - **Bitcrusher**: bits y reducción de muestreo.
 - **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.
@@ -582,7 +595,7 @@ Se combinan: **Acorde + Arpegiador** arpegia acordes tocando una sola nota. Al g
 
 ### Sidechain
 
-El **Compressor** y el **Ducker** pueden escuchar a otra pista en vez de a la suya: elige cuál en **Sidechain**. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
+El **Compressor**, el **Gate** y el **Ducker** pueden escuchar a otra pista en vez de a la suya: elige cuál en **Sidechain**. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
 
 - Escucha el sonido de la pista elegida **tras sus efectos y antes de su fader**: funciona aunque esa pista esté silenciada o con el fader abajo (puedes tener un bombo solo para disparar el sidechain).
 - Puede escuchar a un **grupo**: oye la suma de sus pistas tras los efectos del grupo. Sigue funcionando con otra pista en solo, en los stems y al congelar.

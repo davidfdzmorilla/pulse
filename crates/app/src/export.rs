@@ -312,7 +312,8 @@ pub fn stems_add_up(project: &Project) -> bool {
         d.enabled
             && match &d.effect {
                 Effect::Compressor(p) => p.sidechain.is_none(),
-                Effect::Saturator(_) | Effect::Bitcrusher(_) | Effect::Limiter(_) | Effect::Plugin(_) => true,
+                Effect::Gate(p) => p.sidechain.is_none(),
+                Effect::Saturator(_) | Effect::Bitcrusher(_) | Effect::Limiter(_) | Effect::Transient(_) | Effect::Plugin(_) => true,
                 Effect::AutoFilter(p) => p.drive_db > 0.0 || p.resonance > 0.95,
                 _ => false,
             }
@@ -357,14 +358,9 @@ pub fn only(project: &Project, t: usize) -> Project {
 /// The tracks (indices) a chain's sidechains listen to (and, given the track
 /// it belongs to, the one it plays the sound of).
 fn listens(tracks: &[Track], devices: &[engine::model::Device], from: Option<u32>) -> Vec<usize> {
-    use engine::model::Effect;
     devices
         .iter()
-        .filter_map(|d| match &d.effect {
-            Effect::Compressor(p) => p.sidechain,
-            Effect::Ducker(p) => p.sidechain,
-            _ => None,
-        })
+        .filter_map(|d| d.effect.sidechain())
         .chain(from)
         .filter_map(|id| tracks.iter().position(|o| o.id == id && id != 0))
         .collect()

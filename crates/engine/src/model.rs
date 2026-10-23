@@ -1364,6 +1364,46 @@ impl Default for CompressorParams {
     }
 }
 
+/// A noise gate: closes (down to `floor_db`) while the sound is under the threshold.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GateParams {
+    pub threshold_db: f32,
+    /// How far under the threshold the sound must fall for it to close again, dB
+    /// (hysteresis: it doesn't flutter on a level near the threshold).
+    pub return_db: f32,
+    pub attack_ms: f32,
+    /// How long it stays open after the sound falls under, ms.
+    pub hold_ms: f32,
+    pub release_ms: f32,
+    /// How much it lets through when closed, dB (-80: nothing).
+    pub floor_db: f32,
+    /// Sidechain: the track (by its id) whose sound opens it, instead of its own.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<u32>,
+}
+
+impl Default for GateParams {
+    fn default() -> Self {
+        Self { threshold_db: -40.0, return_db: 3.0, attack_ms: 0.5, hold_ms: 20.0, release_ms: 120.0, floor_db: -80.0, sidechain: None }
+    }
+}
+
+/// Makes the start of each hit stronger or softer, and its tail longer or shorter.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TransientParams {
+    /// -1..1: the hits' attack, softer to harder.
+    pub attack: f32,
+    /// -1..1: what follows the hit, shorter to longer.
+    pub sustain: f32,
+    pub output_db: f32,
+}
+
+impl Default for TransientParams {
+    fn default() -> Self {
+        Self { attack: 0.0, sustain: 0.0, output_db: 0.0 }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DelayParams {
     /// Delay time in beats, synced to the tempo.
@@ -1731,6 +1771,8 @@ pub enum Effect {
     Eq3(Eq3Params),
     EqEight(EqEightParams),
     Compressor(CompressorParams),
+    Gate(GateParams),
+    Transient(TransientParams),
     Delay(DelayParams),
     Reverb(ReverbParams),
     Saturator(SaturatorParams),
@@ -1747,12 +1789,14 @@ pub enum Effect {
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 13] {
+    pub fn catalog() -> [Effect; 15] {
         [
             Effect::Eq3(Default::default()),
             Effect::EqEight(Default::default()),
             Effect::Compressor(Default::default()),
             Effect::Limiter(Default::default()),
+            Effect::Gate(Default::default()),
+            Effect::Transient(Default::default()),
             Effect::Saturator(Default::default()),
             Effect::Bitcrusher(Default::default()),
             Effect::AutoFilter(Default::default()),
@@ -1763,6 +1807,16 @@ impl Effect {
             Effect::Reverb(Default::default()),
             Effect::Utility(Default::default()),
         ]
+    }
+
+    /// The track (by its id) whose sound drives it, if it has a sidechain.
+    pub fn sidechain(&self) -> Option<u32> {
+        match self {
+            Effect::Compressor(p) => p.sidechain,
+            Effect::Gate(p) => p.sidechain,
+            Effect::Ducker(p) => p.sidechain,
+            _ => None,
+        }
     }
 
     /// Whether it can go among a synth's own effects (the Wavetable's, a
@@ -1777,6 +1831,8 @@ impl Effect {
             Effect::Eq3(_) => "EQ Three",
             Effect::EqEight(_) => "EQ Eight",
             Effect::Compressor(_) => "Compressor",
+            Effect::Gate(_) => "Gate",
+            Effect::Transient(_) => "Transient",
             Effect::Delay(_) => "Delay",
             Effect::Reverb(_) => "Reverb",
             Effect::Saturator(_) => "Saturator",
@@ -1984,6 +2040,19 @@ const DUCKER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Release", 0.05, 1.0, 0.6, Percent),
     ParamInfo::linear("Threshold", -60.0, 0.0, -36.0, Decibels),
 ];
+const GATE_PARAMS: [ParamInfo; 6] = [
+    ParamInfo::linear("Threshold", -80.0, 0.0, -40.0, Decibels),
+    ParamInfo::linear("Return", 0.0, 24.0, 3.0, Decibels),
+    ParamInfo::log("Attack", 0.02, 100.0, 0.5, Milliseconds),
+    ParamInfo::linear("Hold", 0.0, 500.0, 20.0, Milliseconds),
+    ParamInfo::log("Release", 1.0, 2000.0, 120.0, Milliseconds),
+    ParamInfo::linear("Floor", -80.0, 0.0, -80.0, Decibels),
+];
+const TRANSIENT_PARAMS: [ParamInfo; 3] = [
+    ParamInfo::linear("Attack", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Sustain", -1.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Output", -12.0, 12.0, 0.0, Decibels),
+];
 const LIMITER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Gain", 0.0, 24.0, 0.0, Decibels),
     ParamInfo::linear("Ceiling", -12.0, 0.0, -0.3, Decibels),
@@ -2134,6 +2203,17 @@ const DRUM_PARAMS: [ParamInfo; DRUM_SOUNDS * 4] = {
 };
 
 impl InstrumentKind {
+    /// The effects inside the synth (the Wavetable's and Polychrome's, a
+    /// Modular's lanes').
+    pub fn own_effects(&self) -> Vec<Effect> {
+        let devices: Vec<Option<Device>> = match self {
+            InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) => p.fx.to_vec(),
+            InstrumentKind::Modular(p) => p.lanes.iter().flat_map(|l| l.fx).collect(),
+            _ => Vec::new(),
+        };
+        devices.into_iter().flatten().map(|d| d.effect).collect()
+    }
+
     /// Every instrument, in browser order.
     pub fn catalog() -> [InstrumentKind; 11] {
         [
@@ -2372,6 +2452,8 @@ impl Effect {
             Effect::Eq3(_) => &EQ3_PARAMS,
             Effect::EqEight(_) => &EQ_EIGHT_PARAMS,
             Effect::Compressor(_) => &COMPRESSOR_PARAMS,
+            Effect::Gate(_) => &GATE_PARAMS,
+            Effect::Transient(_) => &TRANSIENT_PARAMS,
             Effect::Delay(_) => &DELAY_PARAMS,
             Effect::Reverb(_) => &REVERB_PARAMS,
             Effect::Saturator(_) => &SATURATOR_PARAMS,
@@ -2399,6 +2481,15 @@ impl Effect {
             (Effect::Compressor(p), 2) => &mut p.attack_ms,
             (Effect::Compressor(p), 3) => &mut p.release_ms,
             (Effect::Compressor(p), 4) => &mut p.makeup_db,
+            (Effect::Gate(p), 0) => &mut p.threshold_db,
+            (Effect::Gate(p), 1) => &mut p.return_db,
+            (Effect::Gate(p), 2) => &mut p.attack_ms,
+            (Effect::Gate(p), 3) => &mut p.hold_ms,
+            (Effect::Gate(p), 4) => &mut p.release_ms,
+            (Effect::Gate(p), 5) => &mut p.floor_db,
+            (Effect::Transient(p), 0) => &mut p.attack,
+            (Effect::Transient(p), 1) => &mut p.sustain,
+            (Effect::Transient(p), 2) => &mut p.output_db,
             (Effect::Delay(p), 0) => &mut p.feedback,
             (Effect::Delay(p), 1) => &mut p.filter_hz,
             (Effect::Delay(p), 2) => &mut p.mix,

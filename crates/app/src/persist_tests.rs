@@ -116,6 +116,8 @@ pub(crate) fn rich_project(media: &Path) -> Project {
     let effects = [
         Effect::Eq3(Default::default()),
         Effect::EqEight(eq),
+        Effect::Gate(engine::model::GateParams { threshold_db: -33.0, hold_ms: 45.0, ..Default::default() }),
+        Effect::Transient(engine::model::TransientParams { attack: 0.4, sustain: -0.3, output_db: -1.0 }),
         Effect::Compressor(Default::default()),
         Effect::Delay(Default::default()),
         Effect::Reverb(Default::default()),

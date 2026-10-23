@@ -3,7 +3,7 @@
 
 use crate::model::{
     db_to_gain, AutoFilterParams, BitcrusherParams, ChorusParams, CompressorParams, DelayParams, DuckerParams, Effect,
-    EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
+    EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, GateParams, TransientParams, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
 use crate::plugin::PluginProcessor;
 use std::f32::consts::{PI, TAU};
@@ -1110,6 +1110,112 @@ impl Limiter {
     }
 }
 
+/// One-pole smoothing coefficient for `ms` milliseconds at `sr`.
+fn smoothing(ms: f32, sr: f32) -> f32 {
+    (-1.0 / (ms.max(0.001) * 0.001 * sr)).exp()
+}
+
+pub struct Gate {
+    params: GateParams,
+    key: Key,
+    /// The level it listens to, a peak that falls in a few ms (it doesn't
+    /// close between the waves of a low note).
+    level: f32,
+    open: bool,
+    /// Samples left to stay open after the sound fell under.
+    hold: usize,
+    gain: f32,
+}
+
+impl Gate {
+    fn new(params: GateParams) -> Self {
+        Self { params, key: Key::new(), level: 0.0, open: false, hold: 0, gain: 0.0 }
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        let open_at = db_to_gain(p.threshold_db);
+        let close_at = db_to_gain(p.threshold_db - p.return_db.max(0.0));
+        let floor = if p.floor_db <= -80.0 { 0.0 } else { db_to_gain(p.floor_db) };
+        // Attack and release are how long it takes to open and close all the
+        // way (60 dB), not a time constant.
+        let (attack, release, fall) = (smoothing(p.attack_ms / 6.9, sr), smoothing(p.release_ms / 6.9, sr), smoothing(5.0, sr));
+        let hold = (p.hold_ms.max(0.0) * 0.001 * sr) as usize;
+        let keyed = self.key.take(l.len());
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            let peak = if keyed { self.key.level[i] } else { a.abs().max(b.abs()) };
+            self.level = peak.max(self.level * fall);
+            if self.level >= open_at {
+                self.open = true;
+                self.hold = hold;
+            } else if self.open && self.level < close_at {
+                if self.hold > 0 {
+                    self.hold -= 1;
+                } else {
+                    self.open = false;
+                }
+            } else if self.open {
+                self.hold = hold;
+            }
+            let (target, coef) = if self.open { (1.0, attack) } else { (floor, release) };
+            self.gain = target + coef * (self.gain - target);
+            *a *= self.gain;
+            *b *= self.gain;
+        }
+    }
+}
+
+pub struct Transient {
+    params: TransientParams,
+    /// The sound's level, smooth (mean square over a few ms).
+    power: f32,
+    /// The level rising slowly and falling at once: under the level at the
+    /// start of a hit.
+    rising: f32,
+    /// The level rising at once and falling slowly: over it in a hit's tail.
+    falling: f32,
+    /// The gain of the last sample, dB (smoothed so it doesn't crackle).
+    gain_db: f32,
+    output: f32,
+}
+
+impl Transient {
+    /// The most it raises or lowers, dB.
+    const RANGE_DB: f32 = 18.0;
+    /// dB of change for each dB of attack or tail, at ±100 %.
+    const DEPTH: f32 = 0.8;
+
+    fn new(params: TransientParams) -> Self {
+        Self { params, power: 0.0, rising: 0.0, falling: 0.0, gain_db: 0.0, output: db_to_gain(params.output_db) }
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        let (mean, rise, fall, glide) = (smoothing(5.0, sr), smoothing(25.0, sr), smoothing(350.0, sr), smoothing(1.0, sr));
+        let target_output = db_to_gain(p.output_db);
+        let n = l.len().max(1) as f32;
+        let from = self.output;
+        for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+            let x = 0.5 * (*a * *a + *b * *b);
+            self.power = x + mean * (self.power - x);
+            let level = self.power;
+            self.rising = if level < self.rising { level } else { level + rise * (self.rising - level) };
+            self.falling = if level > self.falling { level } else { level + fall * (self.falling - level) };
+            // Power ratios in dB (10 log10).
+            let db = |x: f32| 10.0 * x.max(1e-10).log10();
+            let hit = db(level) - db(self.rising);
+            // Near silence there is no tail to lengthen (only noise).
+            let tail = if self.falling > 1e-7 { db(self.falling) - db(level) } else { 0.0 };
+            let target = ((p.attack * hit + p.sustain * tail) * Self::DEPTH).clamp(-Self::RANGE_DB, Self::RANGE_DB);
+            self.gain_db = target + glide * (self.gain_db - target);
+            let g = db_to_gain(self.gain_db) * (from + (target_output - from) * (i + 1) as f32 / n);
+            *a *= g;
+            *b *= g;
+        }
+        self.output = target_output;
+    }
+}
+
 pub struct Utility {
     params: UtilityParams,
 }
@@ -1131,6 +1237,8 @@ pub enum EffectProcessor {
     Eq3(Eq3),
     EqEight(Box<EqEight>),
     Compressor(Compressor),
+    Gate(Gate),
+    Transient(Transient),
     Delay(Delay),
     Reverb(Reverb),
     Saturator(Saturator),
@@ -1160,6 +1268,8 @@ impl EffectProcessor {
                 envelope_db: 0.0,
                 key: Key::new(),
             }),
+            Effect::Gate(params) => Self::Gate(Gate::new(params)),
+            Effect::Transient(params) => Self::Transient(Transient::new(params)),
             Effect::Delay(params) => Self::Delay(Delay::new(params, sample_rate)),
             Effect::Reverb(params) => Self::Reverb(Reverb::new(params, sample_rate)),
             Effect::Saturator(params) => Self::Saturator(Saturator::new(params)),
@@ -1191,6 +1301,7 @@ impl EffectProcessor {
     pub fn sidechain(&self) -> Option<u32> {
         match self {
             Self::Compressor(fx) => fx.params.sidechain,
+            Self::Gate(fx) => fx.params.sidechain,
             Self::Ducker(fx) => fx.params.sidechain,
             _ => None,
         }
@@ -1200,6 +1311,7 @@ impl EffectProcessor {
     pub fn feed_key(&mut self, left: &[f32], right: &[f32]) {
         match self {
             Self::Compressor(fx) => fx.key.feed(left, right),
+            Self::Gate(fx) => fx.key.feed(left, right),
             Self::Ducker(fx) => fx.key.feed(left, right),
             _ => {}
         }
@@ -1211,6 +1323,8 @@ impl EffectProcessor {
             (Self::Eq3(fx), Effect::Eq3(p)) => fx.params = p,
             (Self::EqEight(fx), Effect::EqEight(p)) => fx.params = p,
             (Self::Compressor(fx), Effect::Compressor(p)) => fx.params = p,
+            (Self::Gate(fx), Effect::Gate(p)) => fx.params = p,
+            (Self::Transient(fx), Effect::Transient(p)) => fx.params = p,
             (Self::Delay(fx), Effect::Delay(p)) => fx.params = p,
             (Self::Reverb(fx), Effect::Reverb(p)) => fx.params = p,
             (Self::Saturator(fx), Effect::Saturator(p)) => fx.params = p,
@@ -1233,6 +1347,8 @@ impl EffectProcessor {
             Self::Eq3(fx) => Effect::Eq3(fx.params),
             Self::EqEight(fx) => Effect::EqEight(fx.params),
             Self::Compressor(fx) => Effect::Compressor(fx.params),
+            Self::Gate(fx) => Effect::Gate(fx.params),
+            Self::Transient(fx) => Effect::Transient(fx.params),
             Self::Delay(fx) => Effect::Delay(fx.params),
             Self::Reverb(fx) => Effect::Reverb(fx.params),
             Self::Saturator(fx) => Effect::Saturator(fx.params),
@@ -1273,6 +1389,13 @@ impl EffectProcessor {
                 fx.gain = db_to_gain(fx.params.output_db);
             }
             Self::Compressor(fx) => fx.envelope_db = 0.0,
+            Self::Gate(fx) => {
+                fx.level = 0.0;
+                fx.open = false;
+                fx.hold = 0;
+                fx.gain = 0.0;
+            }
+            Self::Transient(fx) => *fx = Transient::new(fx.params),
             Self::Delay(fx) => {
                 fx.lines.iter_mut().for_each(|line| line.fill(0.0));
                 fx.write = 0;
@@ -1330,6 +1453,8 @@ impl EffectProcessor {
             Self::Eq3(fx) => fx.process(l, r, ctx.sample_rate),
             Self::EqEight(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Compressor(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::Gate(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::Transient(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Delay(fx) => fx.process(l, r, ctx),
             Self::Reverb(fx) => fx.process(l, r),
             Self::Saturator(fx) => fx.process(l, r),
@@ -1439,6 +1564,111 @@ mod tests {
         fx.set_param(4, -90.0);
         let Effect::EqEight(p) = fx.effect() else { unreachable!() };
         assert_eq!(p.bands[1].gain_db, -15.0, "within its range");
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    fn run(fx: &mut EffectProcessor, input: &[f32]) -> Vec<f32> {
+        let (mut l, mut r) = (input.to_vec(), input.to_vec());
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            fx.process(a, b, &ctx());
+        }
+        l
+    }
+
+    /// Loud notes with quiet noise between them: the gate lets the notes
+    /// through and silences the noise, down to its floor.
+    #[test]
+    fn the_gate_silences_whats_under_the_threshold() {
+        let sr = 48_000.0;
+        let mut noise = 12345u32;
+        let input: Vec<f32> = (0..48_000)
+            .map(|i| {
+                noise = noise.wrapping_mul(1664525).wrapping_add(1013904223);
+                let hiss = 0.003 * (noise as f32 / u32::MAX as f32 * 2.0 - 1.0);
+                let note = if (i / 6000) % 2 == 0 { 0.3 * (TAU * 220.0 * i as f32 / sr).sin() } else { 0.0 };
+                note + hiss
+            })
+            .collect();
+        let gated = |floor_db: f32| run(&mut EffectProcessor::new(&Effect::Gate(GateParams { floor_db, release_ms: 20.0, ..Default::default() }), sr), &input);
+        let out = gated(-80.0);
+        // A note (from 12 000) and the gap after it (from 18 000), past the
+        // edges: closing takes the fall under the threshold, hold and release.
+        let (note, gap) = (12_500..17_500, 18_000 + 4000..23_500);
+        assert!((rms(&out[note.clone()]) / rms(&input[note.clone()]) - 1.0).abs() < 0.01, "the notes pass as they are");
+        assert!(rms(&out[gap.clone()]) < rms(&input[gap.clone()]) * 1e-3, "the hiss between them goes");
+        let out = gated(-20.0);
+        let ratio = rms(&out[gap.clone()]) / rms(&input[gap.clone()]);
+        assert!((20.0 * ratio.log10() + 20.0).abs() < 0.5, "closed, it leaves the floor: {ratio}");
+    }
+
+    /// Return keeps it open while the sound is a little under the threshold
+    /// (it doesn't flutter); hold keeps it open a while after.
+    #[test]
+    fn the_gate_return_and_hold() {
+        let sr = 48_000.0;
+        // −30 dB, then −42 (under −40, but within 3 dB of return), then −50.
+        let level = |i: usize| match i / 12_000 { 0 => 0.0316, 1 => 0.0079, _ => 0.00316 };
+        let input: Vec<f32> = (0..36_000).map(|i| level(i) * (TAU * 300.0 * i as f32 / sr).sin()).collect();
+        let mut gate = EffectProcessor::new(&Effect::Gate(GateParams { hold_ms: 50.0, release_ms: 5.0, ..Default::default() }), sr);
+        let out = run(&mut gate, &input);
+        assert!((rms(&out[13_000..23_000]) / rms(&input[13_000..23_000]) - 1.0).abs() < 0.01, "still open within return");
+        assert!((rms(&out[24_000..26_000]) / rms(&input[24_000..26_000]) - 1.0).abs() < 0.05, "held for 50 ms");
+        assert!(rms(&out[28_000..36_000]) < rms(&input[28_000..36_000]) * 0.01, "then closed");
+    }
+
+    /// With a sidechain, the gate opens with its source's sound, not its own.
+    #[test]
+    fn a_keyed_gate_opens_with_its_source() {
+        let sr = 48_000.0;
+        let mut fx = EffectProcessor::new(&Effect::Gate(GateParams { sidechain: Some(1), hold_ms: 10.0, release_ms: 20.0, ..Default::default() }), sr);
+        let pad: Vec<f32> = (0..256).map(|i| 0.5 * (TAU * 200.0 * i as f32 / sr).sin()).collect();
+        let mut opened = Vec::new();
+        for block in 0..40 {
+            let key = if block % 20 < 10 { vec![0.5; 256] } else { vec![0.0; 256] };
+            fx.feed_key(&key, &key);
+            let (mut l, mut r) = (pad.clone(), pad.clone());
+            fx.process(&mut l, &mut r, &ctx());
+            opened.push(rms(&l[128..]) / rms(&pad[128..]));
+        }
+        assert!(opened[5] > 0.99 && opened[25] > 0.99, "open while the key sounds");
+        // The key's level falls under the threshold in about 20 ms, then hold
+        // and release: 50 ms, 10 blocks.
+        assert!(opened[19] < 0.001 && opened[39] < 0.001, "closed when it doesn't, though the pad is loud: {opened:?}");
+    }
+
+    /// Hits that fall away: Attack makes their start louder or softer, Sustain
+    /// their tail longer or shorter; a held note stays as it is.
+    #[test]
+    fn transient_shapes_attack_and_sustain() {
+        let sr = 48_000.0;
+        let hits: Vec<f32> = (0..48_000).map(|i| {
+            let t = (i % 12_000) as f32 / sr;
+            0.5 * (-t * 25.0).exp() * (TAU * 180.0 * t).sin()
+        }).collect();
+        let shaped = |attack, sustain| run(&mut EffectProcessor::new(&Effect::Transient(TransientParams { attack, sustain, output_db: 0.0 }), sr), &hits);
+        // The third hit: its first 4 ms, and its tail at 80–160 ms.
+        let (start, tail) = (24_000..24_192, 24_000 + 3840..24_000 + 7680);
+        let gain = |out: &[f32], range: std::ops::Range<usize>| 20.0 * (rms(&out[range.clone()]) / rms(&hits[range])).log10();
+        let flat = shaped(0.0, 0.0);
+        assert!(gain(&flat, start.clone()).abs() < 0.01 && gain(&flat, tail.clone()).abs() < 0.01, "at 0 % it does nothing");
+        let harder = shaped(1.0, 0.0);
+        let softer = shaped(-1.0, 0.0);
+        assert!(gain(&harder, start.clone()) > 4.0, "attack up: {}", gain(&harder, start.clone()));
+        assert!(gain(&softer, start.clone()) < -4.0, "attack down: {}", gain(&softer, start.clone()));
+        assert!(gain(&harder, tail.clone()).abs() < 1.0, "the tail stays: {}", gain(&harder, tail.clone()));
+        let longer = shaped(0.0, 1.0);
+        let shorter = shaped(0.0, -1.0);
+        assert!(gain(&longer, tail.clone()) > 4.0, "sustain up: {}", gain(&longer, tail.clone()));
+        assert!(gain(&shorter, tail.clone()) < -4.0, "sustain down: {}", gain(&shorter, tail.clone()));
+
+        let held: Vec<f32> = (0..48_000).map(|i| 0.3 * (TAU * 440.0 * i as f32 / sr).sin()).collect();
+        let mut fx = EffectProcessor::new(&Effect::Transient(TransientParams { attack: 1.0, sustain: 1.0, output_db: -6.0 }), sr);
+        let out = run(&mut fx, &held);
+        let g = 20.0 * (rms(&out[24_000..]) / rms(&held[24_000..])).log10();
+        assert!((g + 6.0).abs() < 0.3, "a held note: only the output, {g} dB");
     }
 
     /// Feeds an impulse followed by silence and checks the output stays finite and bounded.

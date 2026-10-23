@@ -194,11 +194,7 @@ fn is_drums(track: &crate::project::Track) -> bool {
 
 /// The tracks (ids) a track's sidechains listen to.
 fn listens(track: &crate::project::Track) -> Vec<u32> {
-    track.devices.iter().filter_map(|d| match d.effect {
-        Effect::Compressor(p) => p.sidechain,
-        Effect::Ducker(p) => p.sidechain,
-        _ => None,
-    }).collect()
+    track.devices.iter().filter_map(|d| d.effect.sidechain()).collect()
 }
 
 /// What to do about the mix for `target`.

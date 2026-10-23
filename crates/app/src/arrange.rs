@@ -514,6 +514,7 @@ mod tests {
         let mut audio = Track::new_audio("6 Audio", [0; 3]);
         let tops = AudioClip {
             hard_start: false,
+            fades: Default::default(),
             name: "Tops_150".into(),
             color: [0; 3],
             sample: "/loops/Tops_150.wav".into(),

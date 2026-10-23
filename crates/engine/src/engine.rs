@@ -7,7 +7,7 @@
 //! handed back to the UI thread as [`Garbage`] to be freed there.
 
 use crate::effects::{EffectProcessor, ProcessContext};
-use crate::model::{db_to_gain, AudioClip, AutomationLane, Device, Effect, Groove, InstrumentKind, MidiClip, Param, PluginId, WarpMode};
+use crate::model::{db_to_gain, AudioClip, AutomationLane, Fades, Device, Effect, Groove, InstrumentKind, MidiClip, Param, PluginId, WarpMode};
 use crate::plugin::PluginProcessor;
 use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
@@ -1094,7 +1094,7 @@ fn render_audio_clip(
         if b < lo || b >= hi {
             continue;
         }
-        let envelope;
+        let mut envelope;
         let local;
         if crossing {
             // Plays once: past an edge it reads on into the file.
@@ -1107,6 +1107,11 @@ fn render_audio_clip(
             let remaining = (clip.length - local).min(limit - b);
             let fade_in = if clean_start && b - origin < clip.length { 1.0 } else { (local / fade).min(1.0) };
             envelope = (fade_in * (remaining / fade).min(1.0)) as f32;
+        }
+        // Its own fades: at its edges as placed, or on every lap when it loops
+        // on and on (the Session).
+        if clip.fades != Fades::NONE {
+            envelope *= if limit.is_finite() { clip.fades.fitted(limit - origin).gain(b - origin, limit - b) } else { clip.fades.fitted(clip.length).gain(local, clip.length - local) };
         }
         let (l, r) = match clip.warp {
             WarpMode::Off => {
@@ -3141,7 +3146,7 @@ mod tests {
     }
 
     fn audio_clip(warp: WarpMode) -> AudioClip {
-        AudioClip { hard_start: false,
+        AudioClip { hard_start: false, fades: Default::default(),
             envelopes: Vec::new(),
             name: "sine".into(),
             color: [0, 0, 0],
@@ -4234,6 +4239,38 @@ mod tests {
         assert_eq!(h.shared.tracks[0].peak.take(), 0.0);
         assert!(h.shared.tracks[1].peak.take() > 0.0);
         assert!(h.shared.returns[0].take() > 0.0);
+    }
+
+    /// A clip's fades: silent at its edges, full in between, at half power
+    /// halfway through each (equal-power curves); placed, at its edges as
+    /// placed; looping on (the Session), on every lap.
+    #[test]
+    fn clip_fades_shape_its_edges() {
+        use crate::model::Fades;
+        let rate = 48_000.0;
+        let sample = Sample::from_channels(vec![0.5; 48_000 * 8], vec![0.5; 48_000 * 8], rate);
+        let mut clip = AudioClip { hard_start: false, fades: Fades { fade_in: 1.0, fade_out: 2.0 }, name: "c".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        // 120 BPM: a beat is 24 000 frames.
+        let (left, _) = render_audio(&clip, &sample, 8.0, 120.0, rate);
+        let at = |beat: f64| left[(beat * 24_000.0) as usize];
+        assert!(at(0.0).abs() < 1e-3);
+        assert!((at(0.5) - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "{}", at(0.5));
+        assert!((at(3.0) - 0.5).abs() < 1e-3);
+        assert!((at(7.0) - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "{}", at(7.0));
+        assert!(at(7.999).abs() < 0.01);
+        // Longer than the clip: fitted to it (the fade-in first, all of it).
+        clip.fades = Fades { fade_in: 20.0, fade_out: 20.0 };
+        let (left, _) = render_audio(&clip, &sample, 8.0, 120.0, rate);
+        let at = |beat: f64| left[(beat * 24_000.0) as usize];
+        assert!((at(4.0) - 0.5 * std::f32::consts::FRAC_1_SQRT_2).abs() < 0.01, "{}", at(4.0));
+        assert!(at(7.99) > 0.49 && left.iter().all(|s| s.is_finite()));
+        // Looping: each lap fades in again.
+        clip.length = 2.0;
+        clip.fades = Fades { fade_in: 0.5, fade_out: 0.0 };
+        let (mut l, mut r) = (vec![0.0; 24_000 * 4], vec![0.0; 24_000 * 4]);
+        render_audio_clip(&clip, &sample, 0.0, f64::INFINITY, (false, false), (0, 96_000), 0.0, 120.0 / 60.0 / 48_000.0, 120.0, None, &mut l, &mut r);
+        assert!(l[48_000 + 10].abs() < 0.01, "the second lap starts silent again");
+        assert!((l[48_000 + 30_000] - 0.5).abs() < 1e-3);
     }
 
     /// Every return can be sent to, up to the last; one sent nothing stays silent.

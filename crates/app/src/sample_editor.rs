@@ -117,6 +117,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 ui.add(egui::DragValue::new(&mut clip.offset).range(-8.0..=sample.duration().max(0.0)).speed(0.005).suffix(" s").fixed_decimals(3));
             });
             ui.horizontal(|ui| {
+                label(ui, "Fundidos");
+                // In the Arrangement also with the handles at the clip's top corners.
+                ui.add(egui::DragValue::new(&mut clip.fades.fade_in).range(0.0..=64.0).speed(0.05).fixed_decimals(2).prefix("entrada ").suffix(" beats"))
+                    .on_hover_text("Cuánto tarda en entrar desde el silencio");
+                ui.add(egui::DragValue::new(&mut clip.fades.fade_out).range(0.0..=64.0).speed(0.05).fixed_decimals(2).prefix("salida ").suffix(" beats"))
+                    .on_hover_text("Cuánto tarda en irse al silencio al final");
+            });
+            ui.horizontal(|ui| {
                 label(ui, "Marcadores");
                 let count = clip.warp_markers.len();
                 ui.label(egui::RichText::new(if count == 0 { "ninguno".to_string() } else { count.to_string() }).size(10.5));
@@ -476,7 +484,7 @@ mod tests {
     use super::*;
 
     fn clip() -> AudioClip {
-        AudioClip { hard_start: false,
+        AudioClip { hard_start: false, fades: Default::default(),
             name: "x".into(),
             color: [0; 3],
             sample: "/x.wav".into(),

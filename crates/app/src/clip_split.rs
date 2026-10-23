@@ -73,6 +73,13 @@ pub fn split(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(Arrange
     let d = beat - placed.start;
     let mut left = ArrangementClip { length: d, ..placed.clone() };
     let mut right = ArrangementClip { start: beat, length: placed.end() - beat, clip: from(&placed.clip, d, tempo) };
+    // The fade-in stays at the start, the fade-out at the end.
+    if let Clip::Audio(audio) = &mut left.clip {
+        audio.fades.fade_out = 0.0;
+    }
+    if let Clip::Audio(audio) = &mut right.clip {
+        audio.fades.fade_in = 0.0;
+    }
     // Not looping: each part is only its piece (the clip editor shows just that).
     // A loop keeps its loop.
     let loop_length = match &placed.clip {
@@ -341,6 +348,20 @@ mod tests {
     }
 
     #[test]
+    fn a_split_clip_keeps_its_fade_in_at_the_start_and_its_fade_out_at_the_end() {
+        let mut audio = engine::model::AudioClip { hard_start: false, fades: engine::model::Fades { fade_in: 1.0, fade_out: 2.0 }, name: "a".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        audio.length = 8.0;
+        let placed = ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(audio) };
+        let (left, right) = split(&placed, 4.0, 120.0).unwrap();
+        let fades = |p: &ArrangementClip| match &p.clip {
+            Clip::Audio(a) => (a.fades.fade_in, a.fades.fade_out),
+            _ => panic!(),
+        };
+        assert_eq!(fades(&left), (1.0, 0.0));
+        assert_eq!(fades(&right), (0.0, 2.0));
+    }
+
+    #[test]
     fn a_looping_midi_clip_splits_where_it_was() {
         // A 4-beat loop placed for 12 beats, split at beat 6 of the timeline (start 2):
         // 4 beats in, so the right part starts at the loop's start again.
@@ -361,7 +382,7 @@ mod tests {
 
     #[test]
     fn an_audio_clip_split_starts_later_in_its_file() {
-        let audio = AudioClip { hard_start: false,
+        let audio = AudioClip { hard_start: false, fades: Default::default(),
             name: "a".into(),
             color: [0; 3],
             sample: "/a.wav".into(),
@@ -436,7 +457,7 @@ mod tests {
                 track.mixer.active = false;
             }
             let track = app.add_audio_track().unwrap();
-            let audio = AudioClip { hard_start: false,
+            let audio = AudioClip { hard_start: false, fades: Default::default(),
                 name: "demo".into(),
                 color: [0; 3],
                 sample: song.to_string_lossy().into_owned(),
@@ -478,7 +499,7 @@ mod tests {
     /// the clip editor shows); a looping one keeps its loop.
     #[test]
     fn the_parts_of_a_clip_are_only_their_pieces() {
-        let audio = AudioClip { hard_start: false,
+        let audio = AudioClip { hard_start: false, fades: Default::default(),
             name: "a".into(),
             color: [0; 3],
             sample: "/a.wav".into(),

@@ -192,6 +192,40 @@ pub struct AudioClip {
     /// the sound starts (a frozen track, rendered from the song's start).
     #[serde(default, skip_serializing_if = "is_default")]
     pub hard_start: bool,
+    /// Its fade-in and fade-out (see [`Fades`]).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub fades: Fades,
+}
+
+/// How long an audio clip takes to come in from silence at its start and to
+/// go back to it at its end, in beats (they follow the tempo). Equal-power
+/// curves: no dip in the middle. In the Arrangement, at the clip's edges as
+/// placed; in the Session, on every lap of its loop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Fades {
+    #[serde(default, rename = "in", skip_serializing_if = "is_default")]
+    pub fade_in: f64,
+    #[serde(default, rename = "out", skip_serializing_if = "is_default")]
+    pub fade_out: f64,
+}
+
+impl Fades {
+    pub const NONE: Fades = Fades { fade_in: 0.0, fade_out: 0.0 };
+
+    /// The gain `since` beats after the start and `until` beats before the end.
+    pub fn gain(&self, since: f64, until: f64) -> f32 {
+        let curve = |x: f64| (x.clamp(0.0, 1.0) * std::f64::consts::FRAC_PI_2).sin();
+        let fade_in = if self.fade_in > 0.0 { curve(since / self.fade_in) } else { 1.0 };
+        let fade_out = if self.fade_out > 0.0 { curve(until / self.fade_out) } else { 1.0 };
+        (fade_in * fade_out) as f32
+    }
+
+    /// Kept inside a clip `length` beats long: each at most all of it, both
+    /// together too.
+    pub fn fitted(self, length: f64) -> Fades {
+        let fade_in = self.fade_in.clamp(0.0, length.max(0.0));
+        Fades { fade_in, fade_out: self.fade_out.clamp(0.0, (length - fade_in).max(0.0)) }
+    }
 }
 
 /// The key an audio file is in.
@@ -6776,7 +6810,7 @@ mod tests {
 
     #[test]
     fn warp_markers_map_beats_to_the_file_and_back() {
-        let mut clip = AudioClip { hard_start: false,
+        let mut clip = AudioClip { hard_start: false, fades: Default::default(),
             name: "x".into(),
             color: [0; 3],
             sample: "x.wav".into(),

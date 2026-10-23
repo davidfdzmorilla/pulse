@@ -191,7 +191,7 @@ Un grupo junta varias pistas en una: suenan por **su fader y sus efectos** (como
 - **⌘C / ⌘X / ⌘V**: copiar, cortar y pegar los clips seleccionados, también de varias pistas a la vez y de una vista a otra.
 - **Pegar en el Arrangement**: justo después de los clips seleccionados, o en el compás del cursor si no hay ninguno. Cada pista copiada va a la pista que le corresponde, manteniendo las distancias. **Pegar aquí** (clic derecho en un hueco) pega en ese punto exacto.
 - **Pegar en Session**: desde el slot seleccionado hacia abajo; si no caben, más abajo.
-- **⌘D**: duplicar (en el Arrangement, justo detrás; en Session, al siguiente slot libre).
+- **⌘D**: duplicar (en el Arrangement, justo detrás; con varios clips, en bloque detrás del último, sin moverlos entre sí; en Session, al siguiente slot libre).
 - **⌫ / Supr**: eliminar.
 - En el editor de clips, si hay notas seleccionadas, estos atajos actúan sobre las notas.
 - Mientras escribes en un campo de texto, los atajos son del campo.
@@ -799,8 +799,8 @@ Todo vive en la **carpeta de Pulse**, por defecto Música/Pulse (`~/Music/Pulse`
 Una plantilla es un proyecto del que partir: tus pistas, instrumentos, efectos, muestras de los Drum Pads y el Sampler, mezcla, envíos, retornos, master, tempo, tonalidad, escenas, macros y asignaciones MIDI, sin el contenido (clips, arreglo, automatización ni marcadores).
 
 - **Archivo → Nuevo desde plantilla ▸** empieza un proyecto nuevo desde una. Pulse trae dos: **Beat** (Batería 909 con compresor, Bajo ácido, Acordes y Melodía con envíos a la reverb y al delay, a 124 BPM) y **Grabar voz** (una pista Base para el instrumental y dos de audio, Voz y Coros, con ecualizador, compresor y envío a la reverb, a 90 BPM). Debajo de una línea, las tuyas.
-- **Archivo → Guardar como plantilla…** guarda el proyecto de ahora como plantilla con el nombre que le des. Las muestras que use se copian a la carpeta de la plantilla, así que sigue funcionando aunque borres o muevas el proyecto. Tu proyecto no cambia. Con el nombre de una que ya existe, la sustituye; con el de una de Pulse, la tuya va primero.
-- En **Ajustes → Proyectos**, **Proyecto nuevo (⌘N)** elige de qué plantilla parte **⌘N** (**Vacío**: dos pistas MIDI, como siempre).
+- **Archivo → Guardar como plantilla…** guarda el proyecto de ahora como plantilla con el nombre que le des. Las muestras que use se copian a la carpeta de la plantilla, así que sigue funcionando aunque borres o muevas el proyecto. Tu proyecto no cambia. Con el nombre de una que ya existe, la sustituye, muestras incluidas (no se acumulan copias); con el de una de Pulse, la tuya va primero.
+- En **Ajustes → Proyectos**, **Proyecto nuevo (⌘N)** elige de qué plantilla parte **⌘N** (**Vacío**: dos pistas MIDI, como siempre). Si esa plantilla no se puede abrir (dañada, borrada o de un Pulse más nuevo), **⌘N** abre un proyecto vacío y te lo dice abajo.
 - Un proyecto que empieza desde una plantilla está sin guardar: **⌘S** pregunta dónde y se lleva sus muestras a su carpeta.
 - Para borrar o renombrar una plantilla, borra o renombra su carpeta en `Plantillas` (con **Mostrar la carpeta de Pulse**). Renombra también el `.pulse` de dentro, que se llama igual que la carpeta.
 

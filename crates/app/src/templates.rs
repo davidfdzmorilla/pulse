@@ -123,20 +123,30 @@ impl PulseApp {
     /// ⌘N: the template chosen in Settings, or an empty project.
     pub fn new_default(&mut self) {
         match self.settings.new_from.as_deref().and_then(|name| find(&self.templates, name)) {
-            Some(template) => self.start_from(&template),
+            Some(template) => {
+                // One that can't be opened still gives a new, empty project.
+                if !self.start_from(&template) {
+                    let why = self.status.take().unwrap_or_default();
+                    self.new_project();
+                    self.status = Some(format!("{why} · proyecto vacío"));
+                }
+            }
             None => self.new_project(),
         }
     }
 
-    fn start_from(&mut self, template: &Template) {
+    /// Whether the template opened.
+    fn start_from(&mut self, template: &Template) -> bool {
         match project(template) {
             Ok(project) => {
                 self.replace_project(project, None);
                 self.status = Some(format!("Proyecto nuevo desde la plantilla «{}»", template.name));
+                true
             }
             Err(error) => {
                 self.status = Some(format!("No se pudo abrir la plantilla «{}»: {error}", template.name));
                 self.templates = all();
+                false
             }
         }
     }
@@ -165,6 +175,9 @@ impl PulseApp {
         self.capture_plugins();
         let mut template = without_content(&self.project);
         let dir = crate::library::folder(crate::library::TEMPLATES).join(&name);
+        // Over one of that name: its old samples go, except those the project
+        // (or its undo) uses.
+        crate::library::prune_samples(std::iter::once(&self.project).chain(self.history.states()), &dir);
         let collected = crate::library::collect_copies(&mut template, &dir);
         let result = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| template.save(&dir.join(format!("{name}.pulse"))));
         self.status = Some(match result {
@@ -251,6 +264,109 @@ mod tests {
         assert!(std::path::Path::new(copied).is_file());
         let _ = std::fs::remove_dir_all(crate::library::folder(crate::library::TEMPLATES).join(&name));
         let _ = std::fs::remove_dir_all(&unsaved);
+    }
+
+    /// ⌘N with the chosen template damaged, or gone since the list was made:
+    /// an empty project, and the status says why.
+    #[test]
+    fn cmd_n_with_a_broken_template_makes_an_empty_project() {
+        let name = format!("Rota {}", std::process::id());
+        let dir = crate::library::folder(crate::library::TEMPLATES).join(&name);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{name}.pulse")), "{ dañado").unwrap();
+        let mut app = PulseApp::headless(Project::demo());
+        app.templates = all();
+        app.settings.new_from = Some(name.clone());
+        let mut empty = Project::empty();
+        empty.assign_ids();
+        for _ in 0..2 {
+            app.project.tempo = 77.0;
+            app.saved = app.project.clone();
+            app.run(Command::New, &egui::Context::default());
+            assert_eq!(app.project, empty);
+            let status = app.status.clone().unwrap_or_default();
+            assert!(status.contains("No se pudo abrir la plantilla") && status.contains(&name), "{status}");
+        }
+        // Deleted while still in the list.
+        app.templates = all();
+        let _ = std::fs::remove_dir_all(&dir);
+        app.project.tempo = 77.0;
+        app.saved = app.project.clone();
+        app.run(Command::New, &egui::Context::default());
+        assert_eq!(app.project, empty);
+        assert_eq!(app.settings.new_from, Some(name), "the choice stays");
+    }
+
+    /// The `.wav` files in a template's folder, by name.
+    fn wavs(dir: &std::path::Path) -> Vec<String> {
+        let mut files = Vec::new();
+        let mut stack = vec![dir.to_path_buf()];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).into_iter().flatten().flatten() {
+                if e.path().is_dir() {
+                    stack.push(e.path());
+                } else if e.path().extension().is_some_and(|x| x == "wav") {
+                    files.push(e.file_name().to_string_lossy().into_owned());
+                }
+            }
+        }
+        files.sort();
+        files
+    }
+
+    /// A project with a sampler playing `golpe.wav`, in a folder of its own.
+    fn with_a_sample(test: &str) -> (PulseApp, std::path::PathBuf) {
+        let source = std::env::temp_dir().join(format!("pulse-plantilla-{test}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&source);
+        std::fs::create_dir_all(&source).unwrap();
+        let sample = source.join("golpe.wav");
+        std::fs::write(&sample, b"RIFF").unwrap();
+        let mut project = Project::empty();
+        project.tracks[0].instrument = InstrumentKind::Sampler(Default::default());
+        project.tracks[0].set_sample(0, Some(sample.to_string_lossy().into_owned()));
+        (PulseApp::headless(project), source)
+    }
+
+    #[test]
+    fn saving_a_template_again_keeps_one_copy_of_each_sample() {
+        let (mut app, source) = with_a_sample("repetida");
+        let name = format!("Repetida {}", std::process::id());
+        let dir = crate::library::folder(crate::library::TEMPLATES).join(&name);
+        for _ in 0..3 {
+            app.save_template(&name);
+        }
+        assert_eq!(wavs(&dir), vec!["golpe.wav".to_string()]);
+        let opened = super::project(&find(&app.templates, &name).unwrap()).unwrap();
+        assert!(std::path::Path::new(opened.tracks[0].sample(0).unwrap()).is_file());
+        // A sample the project no longer uses leaves the template too.
+        app.project.tracks[0].set_sample(0, None);
+        app.save_template(&name);
+        assert!(wavs(&dir).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&source);
+    }
+
+    /// Opened from the template and saved over it: its samples are the ones
+    /// the project plays, and they stay.
+    #[test]
+    fn saving_over_the_template_a_project_came_from_keeps_its_samples() {
+        let (mut app, source) = with_a_sample("reabierta");
+        let name = format!("Reabierta {}", std::process::id());
+        let dir = crate::library::folder(crate::library::TEMPLATES).join(&name);
+        app.save_template(&name);
+        let index = app.templates.iter().position(|t| t.name == name).unwrap();
+        app.new_from_template(index);
+        let played = app.project.tracks[0].sample(0).unwrap().to_string();
+        assert!(played.starts_with(&*dir.to_string_lossy()), "{played}");
+        // The original is gone: only the template's copy is left.
+        let _ = std::fs::remove_dir_all(&source);
+        app.save_template(&name);
+        app.save_template(&name);
+        assert_eq!(wavs(&dir), vec!["golpe.wav".to_string()]);
+        assert!(std::path::Path::new(&played).is_file());
+        let opened = super::project(&find(&app.templates, &name).unwrap()).unwrap();
+        assert_eq!(opened.tracks[0].sample(0), Some(played.as_str()));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

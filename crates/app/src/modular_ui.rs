@@ -521,7 +521,7 @@ fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularP
             }
             if let Some(free) = lane.fx.iter().position(Option::is_none) {
                 egui::ComboBox::from_id_salt(("mod_lane_add", t, l)).selected_text("+ Efecto").width(100.0).show_ui(ui, |ui| {
-                    for effect in Effect::catalog() {
+                    for effect in Effect::catalog().into_iter().filter(Effect::fits_in_synths) {
                         if ui.selectable_label(false, effect.label()).clicked() {
                             next.lanes[l].fx[free] = Some(Device::new(effect));
                         }
@@ -1160,7 +1160,7 @@ mod tests {
     #[test]
     fn every_lane_setting_draws_and_the_window_fits() {
         let mut p = ModularParams::default();
-        for (k, effect) in Effect::catalog().into_iter().enumerate() {
+        for (k, effect) in Effect::catalog().into_iter().filter(Effect::fits_in_synths).enumerate() {
             let (lane, slot) = (k / MOD_LANE_FX, k % MOD_LANE_FX);
             p.lanes[lane].fx[slot] = Some(Device::new(effect));
         }

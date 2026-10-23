@@ -22,6 +22,7 @@ mod devices;
 mod drum_gen;
 mod drum_split;
 mod editor;
+mod eq_ui;
 mod export;
 mod files;
 #[cfg(test)]

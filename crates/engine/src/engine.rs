@@ -19,7 +19,7 @@ use crate::wavetable::Wavetable;
 use crate::input::MonitorInput;
 use crate::synth::{Click, PolySynth, HELD};
 use rtrb::{Consumer, Producer};
-use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicI64, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 
 pub const MAX_TRACKS: usize = 64;
@@ -476,6 +476,87 @@ impl TrackStatus {
     }
 }
 
+/// Samples the analyzer keeps: the last ones it heard.
+pub const ANALYZER_SAMPLES: usize = 4096;
+
+/// The sound right after one device of one channel, for the UI to draw its
+/// spectrum (an EQ Eight's). It listens to one device at a time.
+pub struct Analyzer {
+    /// What it listens to (see [`Analyzer::code`]), or -1.
+    watch: AtomicI64,
+    /// The mono sum, f32 bits, as a ring.
+    samples: Box<[AtomicU32]>,
+    /// Samples written in all.
+    written: AtomicU64,
+}
+
+impl Analyzer {
+    fn new() -> Self {
+        Self { watch: AtomicI64::new(-1), samples: (0..ANALYZER_SAMPLES).map(|_| AtomicU32::new(0)).collect(), written: AtomicU64::new(0) }
+    }
+
+    fn code(target: Target, device: usize) -> i64 {
+        let channel = match target {
+            Target::Track(t) => t,
+            Target::Return(r) => MAX_TRACKS + r,
+            Target::Master => MAX_TRACKS + MAX_RETURNS,
+        };
+        (channel * MAX_CHAIN + device.min(MAX_CHAIN - 1)) as i64
+    }
+
+    /// Listens after device `device` of `target`, or to nothing.
+    pub fn watch(&self, what: Option<(Target, usize)>) {
+        let code = what.map_or(-1, |(target, device)| Self::code(target, device));
+        if self.watch.swap(code, Ordering::Relaxed) != code {
+            self.written.store(0, Ordering::Relaxed);
+            for s in self.samples.iter() {
+                s.store(0, Ordering::Relaxed);
+            }
+        }
+    }
+
+    /// What it listens to.
+    pub fn watching(&self) -> Option<(Target, usize)> {
+        let code = self.watch.load(Ordering::Relaxed);
+        if code < 0 {
+            return None;
+        }
+        let (channel, device) = (code as usize / MAX_CHAIN, code as usize % MAX_CHAIN);
+        let target = match channel {
+            c if c < MAX_TRACKS => Target::Track(c),
+            c if c < MAX_TRACKS + MAX_RETURNS => Target::Return(c - MAX_TRACKS),
+            _ => Target::Master,
+        };
+        Some((target, device))
+    }
+
+    /// The device of `target` it listens after, if it listens to that channel.
+    fn device(&self, target: Target) -> Option<usize> {
+        self.watching().filter(|(t, _)| *t == target).map(|(_, d)| d)
+    }
+
+    fn push(&self, left: &[f32], right: &[f32]) {
+        let start = self.written.load(Ordering::Relaxed);
+        for (i, (l, r)) in left.iter().zip(right).enumerate() {
+            let at = (start as usize + i) % ANALYZER_SAMPLES;
+            self.samples[at].store((0.5 * (l + r)).to_bits(), Ordering::Relaxed);
+        }
+        self.written.store(start + left.len().min(right.len()) as u64, Ordering::Release);
+    }
+
+    /// The last [`ANALYZER_SAMPLES`] it heard into `out`, oldest first, and
+    /// how many it has heard in all (the same as last time: nothing new).
+    pub fn read(&self, out: &mut [f32]) -> u64 {
+        let written = self.written.load(Ordering::Acquire);
+        let n = out.len().min(ANALYZER_SAMPLES);
+        for (i, o) in out[..n].iter_mut().enumerate() {
+            let at = (written as usize + ANALYZER_SAMPLES - n + i) % ANALYZER_SAMPLES;
+            *o = f32::from_bits(self.samples[at].load(Ordering::Relaxed));
+        }
+        written
+    }
+}
+
 /// State the audio thread publishes for the UI.
 pub struct SharedState {
     pub playing: AtomicBool,
@@ -494,6 +575,7 @@ pub struct SharedState {
     /// infinite) and was silenced, and the last one: see [`Fault`].
     pub faults: AtomicU32,
     last_fault: AtomicI32,
+    pub analyzer: Analyzer,
 }
 
 /// Where a channel's sound stopped being valid numbers (see [`SharedState::faults`]).
@@ -547,6 +629,7 @@ impl SharedState {
             output_latency: AtomicF64::default(),
             faults: AtomicU32::new(0),
             last_fault: AtomicI32::new(0),
+            analyzer: Analyzer::new(),
         }
     }
 
@@ -1293,10 +1376,16 @@ impl Channel {
     /// them for good, and so would a level no sound has (a filter running away
     /// to 1e12 stays finite): then the block is silenced and the effects' memory
     /// cleared. False if that happened.
-    fn run_chain(&mut self, n: usize, ctx: &ProcessContext) -> bool {
+    /// `tap`: the device after which the analyzer listens, if it listens here.
+    fn run_chain(&mut self, n: usize, ctx: &ProcessContext, tap: Option<(usize, &Analyzer)>) -> bool {
         let (left, right) = (&mut self.left[..n], &mut self.right[..n]);
-        for slot in self.chain.iter_mut().filter(|s| s.enabled) {
-            slot.processor.process(left, right, ctx);
+        for (i, slot) in self.chain.iter_mut().enumerate() {
+            if slot.enabled {
+                slot.processor.process(left, right, ctx);
+            }
+            if let Some((_, analyzer)) = tap.filter(|&(at, _)| at == i) {
+                analyzer.push(left, right);
+            }
         }
         // `<` is false for NaN too.
         if left.iter().chain(right.iter()).all(|s| s.abs() < RUNAWAY) {
@@ -2462,7 +2551,8 @@ impl Engine {
                 }
             }
             feed_keys(&mut channel.chain, &self.ids, &self.key_left, &self.key_right, n);
-            if !channel.run_chain(n, &ctx) {
+            let analyzer = &self.shared.analyzer;
+            if !channel.run_chain(n, &ctx, analyzer.device(Target::Track(index)).map(|d| (d, analyzer))) {
                 self.shared.fault(Fault::Track(index));
             }
             // What sidechains listening to it hear: after its effects, before its fader.
@@ -2507,7 +2597,8 @@ impl Engine {
 
         for (index, ret) in self.returns.iter_mut().enumerate() {
             feed_keys(&mut ret.chain, &self.ids, &self.key_left, &self.key_right, n);
-            if !ret.run_chain(n, &ctx) {
+            let analyzer = &self.shared.analyzer;
+            if !ret.run_chain(n, &ctx, analyzer.device(Target::Return(index)).map(|d| (d, analyzer))) {
                 self.shared.fault(Fault::Return(index));
             }
             let gain = if ret.mute { 0.0 } else { ret.gain };
@@ -2592,7 +2683,8 @@ impl Engine {
 
         let master = &mut self.master;
         feed_keys(&mut master.chain, &self.ids, &self.key_left, &self.key_right, n);
-        if !master.run_chain(n, &ctx) {
+        let analyzer = &self.shared.analyzer;
+        if !master.run_chain(n, &ctx, analyzer.device(Target::Master).map(|d| (d, analyzer))) {
             self.shared.fault(Fault::Master);
         }
         let (gl, gr) = master.pan_gains(master.gain);
@@ -3602,6 +3694,41 @@ mod tests {
         assert_eq!(h.engine.tracks[0].channel.automation.len(), 3);
         let Effect::AutoFilter(p) = h.engine.tracks[0].channel.chain[0].processor.effect() else { panic!() };
         assert_eq!(p.cutoff, 100.0, "device parameters follow their lane");
+    }
+
+    /// The analyzer hears the sound right after the device it listens to, and
+    /// nothing from other channels.
+    #[test]
+    fn the_analyzer_listens_after_one_device() {
+        use crate::model::UtilityParams;
+        let mut h = Harness::new();
+        for (index, gain_db) in [(0, 0.0), (1, -20.0)] {
+            let device = Device::new(Effect::Utility(UtilityParams { gain_db, ..Default::default() }));
+            h.send(Command::InsertDevice { target: Target::Track(0), index, slot: ChainSlot::new(&device, SR) });
+        }
+        let mut clip = MidiClip::new("drone", 4.0, [0, 0, 0]);
+        clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        let mut heard = vec![0.0; ANALYZER_SAMPLES];
+        let mut level = |h: &mut Harness, what| {
+            h.shared.analyzer.watch(what);
+            assert_eq!(h.shared.analyzer.watching(), what);
+            h.run_beats(0.25);
+            h.shared.analyzer.read(&mut heard);
+            energy(&heard)
+        };
+        h.run_beats(0.25);
+        let before = level(&mut h, Some((Target::Track(0), 0)));
+        let after = level(&mut h, Some((Target::Track(0), 1)));
+        assert!(before > 0.0);
+        assert!((after / before - 0.01).abs() < 0.002, "−20 dB later in the chain: {before} → {after}");
+        assert_eq!(level(&mut h, Some((Target::Track(1), 0))), 0.0, "another track is silent");
+        assert_eq!(level(&mut h, None), 0.0, "listening to nothing");
+        for what in [Some((Target::Return(3), 2)), Some((Target::Master, 15))] {
+            h.shared.analyzer.watch(what);
+            assert_eq!(h.shared.analyzer.watching(), what);
+        }
     }
 
     #[test]

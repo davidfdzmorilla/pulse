@@ -1249,6 +1249,96 @@ impl Default for Eq3Params {
     }
 }
 
+/// What one band of an EQ Eight does to the sound.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EqShape {
+    /// Takes away what is below the frequency, 48 dB an octave.
+    LowCut48,
+    LowCut12,
+    LowShelf,
+    Bell,
+    Notch,
+    HighShelf,
+    HighCut12,
+    /// Takes away what is above the frequency, 48 dB an octave.
+    HighCut48,
+}
+
+impl EqShape {
+    pub const ALL: [EqShape; 8] = [Self::LowCut48, Self::LowCut12, Self::LowShelf, Self::Bell, Self::Notch, Self::HighShelf, Self::HighCut12, Self::HighCut48];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LowCut48 => "Corte graves 48",
+            Self::LowCut12 => "Corte graves 12",
+            Self::LowShelf => "Estante graves",
+            Self::Bell => "Campana",
+            Self::Notch => "Notch",
+            Self::HighShelf => "Estante agudos",
+            Self::HighCut12 => "Corte agudos 12",
+            Self::HighCut48 => "Corte agudos 48",
+        }
+    }
+
+    /// Whether its gain does something (the cuts and the notch ignore it).
+    pub fn has_gain(self) -> bool {
+        matches!(self, Self::LowShelf | Self::Bell | Self::HighShelf)
+    }
+}
+
+/// One band of an EQ Eight.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EqBand {
+    pub on: bool,
+    pub shape: EqShape,
+    pub freq: f32,
+    pub gain_db: f32,
+    pub q: f32,
+}
+
+pub const EQ_BANDS: usize = 8;
+
+/// The parameters of each band (frequency, gain, Q) in [`Effect::params`].
+pub const EQ_BAND_PARAMS: usize = 3;
+
+/// An eight-band parametric EQ (like Live's EQ Eight).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct EqEightParams {
+    pub bands: [EqBand; EQ_BANDS],
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub output_db: f32,
+}
+
+impl EqEightParams {
+    /// Each band's frequency when it is new (see [`EQ_EIGHT_PARAMS`]).
+    const FREQS: [f32; EQ_BANDS] = [40.0, 100.0, 250.0, 800.0, 2000.0, 5000.0, 10000.0, 18000.0];
+}
+
+impl EqEightParams {
+    fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
+        if index == EQ_BANDS * EQ_BAND_PARAMS {
+            return Some(&mut self.output_db);
+        }
+        let band = self.bands.get_mut(index / EQ_BAND_PARAMS)?;
+        Some(match index % EQ_BAND_PARAMS {
+            0 => &mut band.freq,
+            1 => &mut band.gain_db,
+            _ => &mut band.q,
+        })
+    }
+}
+
+impl Default for EqEightParams {
+    fn default() -> Self {
+        let shapes = [EqShape::LowCut48, EqShape::LowShelf, EqShape::Bell, EqShape::Bell, EqShape::Bell, EqShape::Bell, EqShape::HighShelf, EqShape::HighCut12];
+        Self {
+            // The cuts start off: a new EQ doesn't change the sound.
+            bands: std::array::from_fn(|b| EqBand { on: b != 0 && b != EQ_BANDS - 1, shape: shapes[b], freq: Self::FREQS[b], gain_db: 0.0, q: 0.71 }),
+            output_db: 0.0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompressorParams {
     pub threshold_db: f32,
@@ -1639,6 +1729,7 @@ pub const MAX_MIDI_EFFECTS: usize = 4;
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum Effect {
     Eq3(Eq3Params),
+    EqEight(EqEightParams),
     Compressor(CompressorParams),
     Delay(DelayParams),
     Reverb(ReverbParams),
@@ -1656,9 +1747,10 @@ pub enum Effect {
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 12] {
+    pub fn catalog() -> [Effect; 13] {
         [
             Effect::Eq3(Default::default()),
+            Effect::EqEight(Default::default()),
             Effect::Compressor(Default::default()),
             Effect::Limiter(Default::default()),
             Effect::Saturator(Default::default()),
@@ -1673,9 +1765,17 @@ impl Effect {
         ]
     }
 
+    /// Whether it can go among a synth's own effects (the Wavetable's, a
+    /// Modular's lanes): those show and modulate [`MOD_FX_SLOTS`] settings an
+    /// effect at most.
+    pub fn fits_in_synths(&self) -> bool {
+        self.params().len() <= MOD_FX_SLOTS
+    }
+
     pub fn label(&self) -> &'static str {
         match self {
             Effect::Eq3(_) => "EQ Three",
+            Effect::EqEight(_) => "EQ Eight",
             Effect::Compressor(_) => "Compressor",
             Effect::Delay(_) => "Delay",
             Effect::Reverb(_) => "Reverb",
@@ -1802,6 +1902,34 @@ const EQ3_PARAMS: [ParamInfo; 5] = [
     ParamInfo::linear("High", -40.0, 6.0, 0.0, Decibels),
     ParamInfo::log("FreqLo", 50.0, 1000.0, 250.0, Hertz),
     ParamInfo::log("FreqHi", 800.0, 12000.0, 2500.0, Hertz),
+];
+/// Frequency, gain and Q of each band, then the output.
+pub const EQ_EIGHT_PARAMS: [ParamInfo; EQ_BANDS * EQ_BAND_PARAMS + 1] = [
+    ParamInfo::log("Freq 1", 20.0, 20000.0, 40.0, Hertz),
+    ParamInfo::linear("Gain 1", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 1", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::log("Freq 2", 20.0, 20000.0, 100.0, Hertz),
+    ParamInfo::linear("Gain 2", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 2", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::log("Freq 3", 20.0, 20000.0, 250.0, Hertz),
+    ParamInfo::linear("Gain 3", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 3", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::log("Freq 4", 20.0, 20000.0, 800.0, Hertz),
+    ParamInfo::linear("Gain 4", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 4", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::log("Freq 5", 20.0, 20000.0, 2000.0, Hertz),
+    ParamInfo::linear("Gain 5", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 5", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::log("Freq 6", 20.0, 20000.0, 5000.0, Hertz),
+    ParamInfo::linear("Gain 6", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 6", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::log("Freq 7", 20.0, 20000.0, 10000.0, Hertz),
+    ParamInfo::linear("Gain 7", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 7", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::log("Freq 8", 20.0, 20000.0, 18000.0, Hertz),
+    ParamInfo::linear("Gain 8", -15.0, 15.0, 0.0, Decibels),
+    ParamInfo::log("Q 8", 0.1, 18.0, 0.71, Plain),
+    ParamInfo::linear("Output", -12.0, 12.0, 0.0, Decibels),
 ];
 const COMPRESSOR_PARAMS: [ParamInfo; 5] = [
     ParamInfo::linear("Threshold", -60.0, 0.0, -18.0, Decibels),
@@ -2242,6 +2370,7 @@ impl Effect {
     pub fn params(&self) -> &'static [ParamInfo] {
         match self {
             Effect::Eq3(_) => &EQ3_PARAMS,
+            Effect::EqEight(_) => &EQ_EIGHT_PARAMS,
             Effect::Compressor(_) => &COMPRESSOR_PARAMS,
             Effect::Delay(_) => &DELAY_PARAMS,
             Effect::Reverb(_) => &REVERB_PARAMS,
@@ -2264,6 +2393,7 @@ impl Effect {
             (Effect::Eq3(p), 2) => &mut p.high_db,
             (Effect::Eq3(p), 3) => &mut p.low_freq,
             (Effect::Eq3(p), 4) => &mut p.high_freq,
+            (Effect::EqEight(p), i) => return p.param_mut(i),
             (Effect::Compressor(p), 0) => &mut p.threshold_db,
             (Effect::Compressor(p), 1) => &mut p.ratio,
             (Effect::Compressor(p), 2) => &mut p.attack_ms,

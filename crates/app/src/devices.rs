@@ -152,6 +152,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 .map(|(_, track)| (track.id, track.name.clone()))
                 .collect();
             let count = app.devices(target).len();
+            // The first EQ Eight shows the spectrum of what comes out of it.
+            let analyzed = app.devices(target).iter().position(|d| matches!(d.effect, Effect::EqEight(_)));
+            if let Some(state) = app.audio.state() {
+                state.analyzer.watch(analyzed.map(|d| (target, d)));
+                if analyzed.is_some() {
+                    app.spectrum.update(&state.analyzer, app.audio.sample_rate(), ui.input(|i| i.time));
+                    if app.spectrum.sounding() {
+                        ui.ctx().request_repaint();
+                    }
+                }
+            }
             for index in 0..count {
                 let before = app.devices(target)[index];
                 let mut device = before;
@@ -183,6 +194,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         if let Effect::Plugin(id) = *effect {
                             let as_param = |param: u32| Param::Device { device: index, param: param as usize };
                             crate::plugins::device_body(app, ui, target, &as_param, id, PLUGIN_KNOBS, &mut actions);
+                            return;
+                        }
+                        if let Effect::EqEight(p) = effect {
+                            let mut shown = Effect::EqEight(*p);
+                            for param in 0..shown.params().len() {
+                                shown.set(param, app.display_value(target, Param::Device { device: index, param }));
+                            }
+                            let Effect::EqEight(shown) = shown else { unreachable!() };
+                            let automation = |param| app.automation_state(target, Param::Device { device: index, param });
+                            let spectrum = (analyzed == Some(index)).then_some(&app.spectrum);
+                            crate::eq_ui::body(ui, target, index, p, &shown, &automation, spectrum, app.audio.sample_rate(), &mut actions);
                             return;
                         }
                         discrete_controls(ui, effect, index, &sources);
@@ -357,6 +379,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
     // Knobs are 46 px wide plus spacing; option columns (combos, radios) take about 96 px.
     let (knobs, columns) = match effect {
         Effect::Eq3(_) => (5, 0),
+        Effect::EqEight(_) => return crate::eq_ui::WIDTH,
         Effect::Compressor(_) => (5, 1),
         Effect::Delay(_) => (3, 1),
         Effect::Reverb(_) => (4, 0),
@@ -452,6 +475,7 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
             });
         }
         Effect::Eq3(_)
+        | Effect::EqEight(_)
         | Effect::Compressor(_)
         | Effect::Reverb(_)
         | Effect::Chorus(_)

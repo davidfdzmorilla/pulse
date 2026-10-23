@@ -99,6 +99,8 @@ pub struct State {
     pub automation_filter: String,
     /// What was right-clicked, for its menu.
     menu: Option<Menu>,
+    /// Where a clic on a clip left the cut point (⌘E cuts there), in beats.
+    pub(crate) cut: Option<f64>,
     /// A track to duplicate or delete once the view is drawn (true: the selected ones).
     track_action: Option<(TrackAction, usize, bool)>,
 }
@@ -140,6 +142,7 @@ impl Default for State {
             takes: HashSet::new(),
             automation_filter: String::new(),
             menu: None,
+            cut: None,
             track_action: None,
         }
     }
@@ -251,7 +254,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("Zoom").color(TEXT_DIM).size(10.5));
         ui.add(egui::Slider::new(&mut app.arrangement.pixels_per_beat, 3.0..=60.0).logarithmic(true).show_value(false));
         ui.checkbox(&mut app.arrangement.follow, "Seguir cursor");
-        let hint = crate::theme::keys("Doble clic: nuevo clip · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop");
+        let hint = crate::theme::keys("Doble clic: nuevo clip · clic en un clip: punto de corte (⌘E corta ahí) · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop");
         // Cut with "…" in a narrow window; the tooltip has all of it.
         ui.add(egui::Label::new(egui::RichText::new(&hint).color(TEXT_DIM).size(10.5)).truncate()).on_hover_text(hint);
     });
@@ -465,6 +468,20 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let x = x_at(position);
             painter.line_segment([pos2(x, rect.top() + LOOP_H), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::WHITE));
             widgets::play_triangle(&painter, pos2(x, rect.top() + LOOP_H + MARKER_H + RULER_H - 6.0), 8.0, Color32::WHITE);
+            // The cut point, over the selected clips' lanes.
+            if let Some(cut) = app.arrangement.cut {
+                let x = x_at(cut);
+                for t in app.clip_selection().iter().filter_map(|c| match *c {
+                    ClipRef::Arrangement { track, index } => app.project.tracks.get(track)?.arrangement.get(index).filter(|p| p.start < cut && cut < p.end()).map(|_| track),
+                    ClipRef::Session { .. } => None,
+                }) {
+                    if layout.shown(t) {
+                        let lane = lane_rect(t);
+                        painter.line_segment([pos2(x, lane.top()), pos2(x, lane.bottom())], Stroke::new(1.5, theme::ACCENT));
+                        painter.add(egui::Shape::convex_polygon(vec![pos2(x - 4.0, lane.top()), pos2(x + 4.0, lane.top()), pos2(x, lane.top() + 5.0)], theme::ACCENT, Stroke::NONE));
+                    }
+                }
+            }
             paint_markers(app, &painter, rect, &x_at);
             // Region being recorded on armed tracks.
             if let Some(take) = &app.recorder.arrangement {
@@ -1216,10 +1233,18 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         app.reverse_clips(app.clip_selection());
         ui.close();
     }
-    if count == 1 && ui.button(crate::theme::keys("Dividir aquí   ⌘E")).on_hover_text(crate::theme::keys("Corta el clip en dos donde hiciste clic derecho (⌘E corta en el cursor)")).clicked() {
+    if count == 1 && ui.button(crate::theme::keys("Dividir aquí   ⌘E")).on_hover_text(crate::theme::keys("Corta el clip en dos donde hiciste clic derecho (⌘E corta donde hiciste clic en el clip)")).clicked() {
         app.split_clip_at(track, index, beat);
         ui.close();
     }
+    ui.menu_button(label("Trocear"), |ui| {
+        for (name, every) in [("Cada tiempo", 1.0), ("Cada 2 tiempos", 2.0), ("Cada compás", 4.0), ("Cada 2 compases", 8.0), ("Cada 4 compases", 16.0)] {
+            if ui.button(name).on_hover_text("Corta los clips en trozos iguales, en las líneas de la rejilla").clicked() {
+                app.slice_selected(every);
+                ui.close();
+            }
+        }
+    });
     if count > 1 && ui.button(crate::theme::keys(&format!("Unir {count} clips   ⌘J"))).on_hover_text("Clips de una pista en uno solo, de principio a fin (los de audio, en un archivo nuevo)").clicked() {
         app.join_selected();
         ui.close();
@@ -1358,6 +1383,8 @@ fn handle_pointer(
             Some(Drag::Loop { anchor: snap(beat, unit) })
         } else if pos.y < lanes_top {
             app.audio.send(Command::SetPosition(snap(beat, unit)));
+            // ⌘E cuts at the playhead again.
+            app.arrangement.cut = None;
             Some(Drag::Scrub)
         } else if let Some((track, index, out)) = fade {
             Some(Drag::Fade { track, index, out })
@@ -1405,13 +1432,15 @@ fn handle_pointer(
         };
     }
 
-    // A plain clic on one of several selected clips leaves only that one.
+    // A plain clic on one of several selected clips leaves only that one, and
+    // leaves the cut point there (on the grid; with ⌥, exactly there).
     if response.clicked() && !ui.input(|i| i.modifiers.command || i.modifiers.shift) {
         if let Some((index, _)) = lane.and_then(|t| clip_at(app, t, beat, pos.x, ppb, origin_x)) {
             let clip = ClipRef::Arrangement { track: lane.unwrap_or(0), index };
             if app.clip_selection().len() > 1 {
                 app.select_clip(clip);
             }
+            app.arrangement.cut = Some(if ui.input(|i| i.modifiers.alt) { beat.max(0.0) } else { snap(beat, unit) });
         }
     }
 
@@ -1766,6 +1795,44 @@ mod tests {
                 assert_eq!(app.project.tracks[1].arrangement.len(), 1, "what was cut pastes");
             }
         }
+    }
+
+    /// A clic on a clip leaves the cut point there (on the grid), and ⌘E cuts
+    /// there: one clip into three with two clics.
+    #[test]
+    fn clicking_a_clip_then_split_cuts_where_clicked() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let lane = |app: &PulseApp| app.project.tracks[0].arrangement.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>();
+        let here = at(&app, 0, 5.3);
+        screen.click(&mut app, here, PointerButton::Primary);
+        assert_eq!(app.arrangement.cut, Some(5.0), "on the grid");
+        assert_eq!(app.audio.position(), 0.0, "the playhead stays");
+        app.split_selected();
+        assert_eq!(lane(&app), vec![(4.0, 1.0), (5.0, 3.0)]);
+        let here = at(&app, 0, 6.6);
+        screen.click(&mut app, here, PointerButton::Primary);
+        app.split_selected();
+        let mut parts = lane(&app);
+        parts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(parts, vec![(4.0, 1.0), (5.0, 2.0), (7.0, 1.0)]);
+    }
+
+    /// «Trocear ▸ Cada tiempo» cuts a clip at every beat.
+    #[test]
+    fn slicing_a_clip_from_its_menu() {
+        let mut app = app();
+        let mut screen = Screen::new();
+        let here = at(&app, 0, 5.0);
+        let texts = screen.click(&mut app, here, PointerButton::Secondary);
+        let (_, rect) = texts.iter().find(|(t, _)| t == "Trocear").expect("in the clip's menu");
+        let texts = screen.click(&mut app, rect.center(), PointerButton::Primary);
+        let (_, rect) = texts.iter().find(|(t, _)| t == "Cada tiempo").expect("its submenu");
+        screen.click(&mut app, rect.center(), PointerButton::Primary);
+        let mut parts: Vec<(f64, f64)> = app.project.tracks[0].arrangement.iter().map(|c| (c.start, c.length)).collect();
+        parts.sort_by(|a, b| a.0.total_cmp(&b.0));
+        assert_eq!(parts, vec![(4.0, 1.0), (5.0, 1.0), (6.0, 1.0), (7.0, 1.0)]);
+        assert_eq!(app.clip_selection().len(), 4, "the pieces stay selected");
     }
 
     #[test]

@@ -194,7 +194,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     app.piano_roll.lane.refresh(t, &params, names);
     let envelope = app.piano_roll.lane.shown.and_then(|p| app.param_info(target, p).map(|info| (p, info, app.param_value(target, p))));
     if matches!(app.clip(clip_ref), Some(Clip::Audio(_))) {
-        crate::sample_editor::show(app, ui, clip_ref, playhead, envelope);
+        if app.tuner.open == Some(clip_ref) {
+            crate::tuning_ui::show(app, ui, clip_ref, playhead);
+        } else {
+            crate::sample_editor::show(app, ui, clip_ref, playhead, envelope);
+        }
         return;
     }
     let is_drums = app.project.tracks[t].is_drums();

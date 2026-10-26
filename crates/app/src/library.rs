@@ -149,6 +149,10 @@ fn files_mut(project: &mut Project) -> Vec<&mut String> {
             files.extend(frozen.clips.iter_mut().flatten().map(|a| &mut a.sample));
         }
     }
+    for tuning in &mut project.tunings {
+        files.push(&mut tuning.source);
+        files.push(&mut tuning.output);
+    }
     files.retain(|f| !f.is_empty());
     files
 }

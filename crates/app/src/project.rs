@@ -399,6 +399,9 @@ pub struct Project {
     /// follow a new track. See [`Project::assign_ids`].
     #[serde(default, skip_serializing_if = "is_zero")]
     pub next_id: u32,
+    /// Voices tuned note by note (see `tuning`): the clips play their files.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub tunings: Vec<crate::tuning::Tuning>,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -510,6 +513,7 @@ impl Project {
             markers: Vec::new(),
             macros: Vec::new(),
             next_id: 0,
+            tunings: Vec::new(),
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

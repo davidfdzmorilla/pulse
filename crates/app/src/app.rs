@@ -355,6 +355,8 @@ pub struct PulseApp {
     pub arrange: crate::arrange::Window,
     /// Playing with the voice (see `voice_play`).
     pub voice: crate::voice_play::Voice,
+    /// Tuning recorded voices note by note (see `tuning`).
+    pub tuner: crate::tuning::Tuner,
     /// The accompaniment written last (see `accompany`).
     pub accompaniment: Option<crate::accompany::Generated>,
     /// The session clips playing while recording onto the arrangement.
@@ -543,6 +545,7 @@ impl PulseApp {
             mix: Default::default(),
             arrange: Default::default(),
             voice: Default::default(),
+            tuner: Default::default(),
             accompaniment: None,
             session_capture: None,
             settings: Default::default(),
@@ -853,6 +856,13 @@ impl PulseApp {
             ClipRef::Arrangement { track, index } => {
                 self.project.tracks.get(track)?.arrangement.get(index).map(|a| &a.clip)
             }
+        }
+    }
+
+    pub fn clip_mut(&mut self, clip: ClipRef) -> Option<&mut Clip> {
+        match clip {
+            ClipRef::Session { track, slot } => self.project.tracks.get_mut(track)?.clips[slot].as_mut(),
+            ClipRef::Arrangement { track, index } => self.project.tracks.get_mut(track)?.arrangement.get_mut(index).map(|a| &mut a.clip),
         }
     }
 
@@ -2601,6 +2611,8 @@ impl PulseApp {
             return;
         }
         self.capture_plugins();
+        // The tuned files written, and those nothing uses gone.
+        self.clean_tunings();
         // Every audio file it uses goes into its folder (a lone .pulse from before
         // stays as it was: "Guardar como…" gives it a folder).
         let collected = match path.parent().filter(|_| crate::library::in_own_folder(&path)) {
@@ -2973,6 +2985,7 @@ impl eframe::App for PulseApp {
             self.check_frozen();
         }
         self.follow_freeze(&ctx);
+        self.follow_tuning(&ctx);
         self.update_title(&ctx);
         crate::export::window(self, &ctx);
         self.follow_browser_drag(&ctx);

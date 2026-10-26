@@ -63,6 +63,8 @@ mod persist_tests;
 #[cfg(test)]
 mod tuner_tests;
 #[cfg(test)]
+mod tuning_tests;
+#[cfg(test)]
 mod structure_tests;
 #[cfg(test)]
 mod export_identity_tests;
@@ -93,6 +95,8 @@ mod theme;
 mod test_audio;
 mod to_midi;
 mod tracks;
+mod tuning;
+mod tuning_ui;
 mod updates;
 mod voice_play;
 mod versions;

@@ -471,7 +471,22 @@ Se abre al seleccionar un clip de audio.
 - **Gain** (−36 a +12 dB) y **Transp.** (±24 semitonos, solo en Stretch).
 - **Tonalidad** del audio, **Seguir la escala** y **Detectar** (ver «Loops en tu tonalidad»).
 - **Marcadores** de warp y **Quitar**. **Trocear → A Drum Pads**. **Tempo: Detectar / Usar en el proyecto**. **Separar en stems**.
+- **Afinación → Editar notas…**: afinar la voz nota a nota (ver «Afinar una voz nota a nota»).
 - **Carril**: envolventes del clip (ver «Automatización»).
+
+### Afinar una voz nota a nota
+
+Como Melodyne: en un clip de audio con una voz (o un instrumento que toque una nota a la vez), **Afinación → Editar notas…** cambia la forma de onda por sus **notas**, cada una un bloque sobre el teclado, a la altura a la que suena. Debajo de cada bloque va el tono que cantaste (línea gris) y, si la has cambiado, cómo sonará (del color del clip). La primera vez analiza la voz unos segundos.
+
+- **Arrastra una nota** arriba o abajo para cambiarla de nota: va a semitonos enteros, así que con moverla un poco una nota desafinada queda afinada. Con **⌥** se mueve libre, en cents.
+- **Doble clic** en una nota: la afina (a la nota de la **Escala** del proyecto más cercana; sin escala, al semitono más cercano).
+- **Clic** elige una nota; **⇧ o ⌘ clic** añade o quita notas de la elección. Al arrastrar una de las elegidas se mueven todas.
+- **Afinar**, **Sin vibrato** y **Como se cantó** actúan sobre las notas elegidas o, si no hay ninguna, sobre todas. **Sin vibrato** deja cada nota quieta en su tono. **Como se cantó** la devuelve a como estaba.
+- Con una nota elegida, arriba se ve dónde se cantó y dónde va («A2 +30 cents → A2»), y su **vibrato**: 100 % como se cantó, 0 % nada, por encima de 100 % más marcado.
+- La voz conserva su timbre al moverla (sus vocales no cambian, no suena «a ardilla») y dura lo mismo. Lo que no tocas queda exactamente igual.
+- Al soltar, el clip pasa a sonar un archivo nuevo con la voz afinada (en la carpeta **Afinados** del proyecto). Las copias de ese clip cambian con él; otros clips que usen la grabación original, no. **⌘Z** deshace al momento. Al guardar se borran los archivos afinados que ya no usa nada.
+- **← Forma de onda** vuelve al editor de audio. Un clip afinado muestra **Editar notas… ✓**.
+- Para afinar en vivo mientras cantas, o toda una pista sin tocar nota a nota, usa el efecto **Tuner**.
 
 ### Marcadores de warp
 
@@ -581,7 +596,7 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
   - **Humanize**: cuanto más alto, más libre deja una nota que mantienes (su vibrato se queda), mientras las notas cortas siguen afinadas.
   - **Amount**: cuánto del camino recorre: al 100 % llega a la nota; al 50 %, se queda a medias.
   - Sigue de un Do2 (65 Hz) a un Do#6 (1100 Hz). Lo que no tiene tono (respiraciones, eses, silencio) pasa sin cambios.
-  - Suena un poco tarde, algo más de un periodo de la nota: unos 5 ms con una voz media (La3), 10 con una grave (La2) y hasta 17 con las notas más bajas de un bajo.
+  - Suena un poco tarde, algo más de un periodo de la nota: unos 5 ms con una voz media (220 Hz), 10 con una grave (110 Hz) y hasta 17 con las notas más bajas de un bajo.
   - No está entre los efectos internos de los sintes, que ya tocan afinado.
   - Un proyecto con un Tuner no se abre en un Pulse anterior: pide actualizar.
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras).

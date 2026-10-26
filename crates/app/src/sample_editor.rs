@@ -188,6 +188,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 }
             });
             ui.horizontal(|ui| {
+                label(ui, "Afinación");
+                let tuned = app.tuning_of(clip_ref).is_some();
+                if ui.button(if tuned { "Editar notas… ✓" } else { "Editar notas…" }).on_hover_text("Las notas de la voz sobre el teclado: arrastra cada una a otra nota, afínala o quítale el vibrato (como Melodyne)").clicked() {
+                    app.open_tuning(clip_ref);
+                }
+            });
+            ui.horizontal(|ui| {
                 label(ui, "Stems");
                 separate = ui
                     .add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems"))

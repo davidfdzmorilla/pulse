@@ -357,6 +357,8 @@ pub struct PulseApp {
     pub voice: crate::voice_play::Voice,
     /// Tuning recorded voices note by note (see `tuning`).
     pub tuner: crate::tuning::Tuner,
+    /// A hummed tune being heard, to make a song of (see `hum_song`).
+    pub hum_song: Option<crate::hum_song::HumJob>,
     /// The accompaniment written last (see `accompany`).
     pub accompaniment: Option<crate::accompany::Generated>,
     /// The session clips playing while recording onto the arrangement.
@@ -546,6 +548,7 @@ impl PulseApp {
             arrange: Default::default(),
             voice: Default::default(),
             tuner: Default::default(),
+            hum_song: None,
             accompaniment: None,
             session_capture: None,
             settings: Default::default(),
@@ -2986,6 +2989,7 @@ impl eframe::App for PulseApp {
         }
         self.follow_freeze(&ctx);
         self.follow_tuning(&ctx);
+        self.follow_hum_song(&ctx);
         self.update_title(&ctx);
         crate::export::window(self, &ctx);
         self.follow_browser_drag(&ctx);

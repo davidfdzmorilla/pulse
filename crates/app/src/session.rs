@@ -43,6 +43,7 @@ pub(crate) enum Action {
     ToggleClipMuted(usize, usize),
     ToMidi(usize, usize, crate::to_midi::ToMidi),
     Accompany(usize, usize, crate::accompany::Part),
+    HumSong(usize, usize, crate::drum_gen::Style),
     Freeze(usize),
     /// A rumble track from this one (see `rumble`).
     Rumble(usize),
@@ -539,6 +540,7 @@ fn clip_slot(
     let response = response.on_hover_text(crate::theme::keys(hint));
     // Drums have no chords to accompany.
     let app_drums = app.project.tracks[t].is_drums();
+    let hearing = app.hum_song.is_some();
     if let Some(clip) = clip {
         let mut color = clip.color();
         response.context_menu(|ui| {
@@ -569,6 +571,15 @@ fn clip_slot(
                     for part in crate::accompany::Part::ALL {
                         if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
                             actions.push(Action::Accompany(t, slot, part));
+                            ui.close();
+                        }
+                    }
+                });
+                ui.menu_button("De tarareo a canción", |ui| {
+                    ui.label(egui::RichText::new("La melodía, sus acordes, un bajo y una batería, en pistas nuevas").color(crate::theme::TEXT_DIM).size(10.5));
+                    for style in crate::drum_gen::Style::ALL {
+                        if ui.add_enabled(!hearing, egui::Button::new(style.label())).on_hover_text("Saca la melodía que tarareas, cantas o silbas (con el metrónomo, al tempo del proyecto), la ajusta a la rejilla, le pone acordes de su escala y añade bajo y batería de este estilo").clicked() {
+                            actions.push(Action::HumSong(t, slot, style));
                             ui.close();
                         }
                     }
@@ -810,6 +821,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         }
         Action::ToMidi(t, slot, mode) => app.convert_to_midi(ClipRef::Session { track: t, slot }, mode),
         Action::Accompany(t, slot, part) => app.accompany(ClipRef::Session { track: t, slot }, part),
+        Action::HumSong(t, slot, style) => app.hum_to_song(ClipRef::Session { track: t, slot }, style),
         Action::SelectSlot(t, slot) => {
             app.set_clip_selection(Vec::new());
             app.selected_target = Target::Track(t);

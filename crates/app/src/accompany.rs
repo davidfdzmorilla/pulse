@@ -57,7 +57,7 @@ impl Part {
     }
 
     /// The instrument its new track gets.
-    fn instrument(self) -> InstrumentKind {
+    pub(crate) fn instrument(self) -> InstrumentKind {
         match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => InstrumentKind::Acid(AcidParams::default()),
             Part::ArpUp | Part::ArpUpDown => InstrumentKind::Fm(FmParams::default()),

@@ -750,6 +750,7 @@ Tu voz como teclado MIDI: pulsa **Voz** en la barra de transporte y canta, tarar
 - Una nota se mantiene aunque la voz oscile un poco a su alrededor, y cambia cuando te asientas en otra (unos 30 ms; un salto de octava, unos 60). Si paras un instante y vuelves a cantar, es una nota nueva («la-la»). Lo fuerte que cantes es la velocidad.
 - Con una **Escala** en el proyecto, las notas que cantes desafinadas van a la nota de la escala más cercana; las que cantes afinadas se quedan, aunque no sean de la escala.
 - **Clic derecho** en **Voz**: la **octava**. −1 o −2 para tocar un bajo con una voz aguda; +1 o +2 para un lead con una voz grave.
+- **Clic derecho → Seguir el tono**: el vibrato de la voz y los deslizamientos hacia otra nota doblan la nota que suena (pitch bend, hasta ±2 semitonos). Si cantas un poco desafinado, se oye desafinado como tu voz; si la **Escala** ha corregido la nota, suena afinada y se mueve desde ahí. Un deslizamiento lento pasa por las notas de en medio. Se oye en vivo; al grabar se guardan las notas, sin el bend.
 - **Graba** como un teclado MIDI: arma una pista MIDI y graba (F9 o en un slot) mientras cantas.
 - El botón muestra la nota que suena («Voz · A2»).
 - Usa **auriculares**: si el micrófono oye los altavoces, toca también lo que suena (sobre todo el bajo).

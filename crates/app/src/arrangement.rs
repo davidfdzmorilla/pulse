@@ -1222,6 +1222,9 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             }
         });
     }
+    if count == 1 && !app.project.tracks[track].is_drums() {
+        song_menu(ui, app, |app, style| app.hum_to_song(clip, style));
+    }
     if audio && count == 1 {
         ui.menu_button("Convertir a MIDI", |ui| {
             for mode in crate::to_midi::ToMidi::ALL {
@@ -2233,3 +2236,16 @@ mod tests {
     }
 }
 
+
+/// «De tarareo a canción ▸», a style each.
+pub(crate) fn song_menu(ui: &mut egui::Ui, app: &mut PulseApp, mut make: impl FnMut(&mut PulseApp, crate::drum_gen::Style)) {
+    ui.menu_button("De tarareo a canción", |ui| {
+        ui.label(egui::RichText::new("La melodía, sus acordes, un bajo y una batería, en pistas nuevas").color(theme::TEXT_DIM).size(10.5));
+        for style in crate::drum_gen::Style::ALL {
+            if ui.add_enabled(app.hum_song.is_none(), egui::Button::new(style.label())).on_hover_text("Saca la melodía que tarareas, cantas o silbas (con el metrónomo, al tempo del proyecto), la ajusta a la rejilla, le pone acordes de su escala y añade bajo y batería de este estilo").clicked() {
+                make(app, style);
+                ui.close();
+            }
+        }
+    });
+}

@@ -458,6 +458,19 @@ Pulse toca contigo: clic derecho en un clip con acordes (MIDI, o audio: un piano
 
 Cada parte llega con un instrumento que le va (Acid para los bajos, FM para los arpegios, SuperSaw para el pad); cámbialo como cualquier otro. En el **Editor MIDI** del clip nuevo, **Otra variación** lo escribe de otra manera sobre los mismos acordes, tantas veces como quieras, hasta que lo edites. Los acordes salen como en la franja de acordes (ver «Acordes»); con una **Escala** en el proyecto, mejor.
 
+## De tarareo a canción
+
+Tararea, canta o silba una melodía y Pulse hace una canción con ella. Graba la melodía en una pista de audio **con el metrónomo**, al tempo del proyecto. Después, clic derecho en el clip → **De tarareo a canción** → un estilo (House, Techno, Pop / Rock, Reggaetón, Trap…). También funciona con un clip MIDI que tenga una melodía.
+
+Debajo de su pista aparecen cuatro pistas nuevas, en el mismo slot o en el mismo tramo del Arrangement:
+
+- **Melodía**: lo que tarareaste en notas, cada una en su semicorchea (aunque entres un poco tarde o desafines un poco), en un sintetizador. Si suena alguna nota de más o de menos, corrígela en el Editor MIDI.
+- **Acordes**: un acorde de su escala por compás, el que mejor va con las notas de la melodía en ese compás (las de los tiempos fuertes cuentan más). Donde la melodía no lo deja claro, los que suelen seguirse; empieza y acaba en la tónica. En menor, el V puede ser mayor (Mi en La menor). Pad sostenido o acordes rítmicos, según el estilo.
+- **Bajo**: sobre los acordes, a la manera del estilo (en los contratiempos en house y techno, en la raíz en pop o trap, en octavas en breakbeat).
+- **Batería**: un ritmo del estilo en una Drum Machine con su sonido, con un redoble al final de cada frase de ocho compases (o del clip, si es más corto).
+
+La escala sale de la melodía si el proyecto no tiene una (y pasa a ser la del proyecto); si la tiene, se usa esa. La barra de estado dice qué acordes ha puesto («Do Fa Sol Do»). Con un clip de audio, primero escucha la melodía unos segundos. Todo es un paso: **⌘Z** lo quita. Cada parte es una pista normal: cámbiale el instrumento, edita las notas o pide **Otra variación** de los acordes y el bajo con **Acompañar**.
+
 ## Editor de audio
 
 Se abre al seleccionar un clip de audio.

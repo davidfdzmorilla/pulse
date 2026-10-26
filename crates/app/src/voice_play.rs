@@ -526,6 +526,7 @@ impl PulseApp {
         }
         self.voice.teaching = Some(drum);
         self.voice.taught = 0;
+        self.tell_voice();
         self.status = Some(format!("{}: haz {} {TEACH} veces, como lo harías tocando", drum.name(), drum.sound()));
     }
 
@@ -534,7 +535,16 @@ impl PulseApp {
         let mut settings = self.settings.clone();
         settings.beatbox = Examples::default();
         self.set_settings(settings);
+        self.tell_voice();
         self.status = Some("Sonidos olvidados: el bombo, la caja y el charles vuelven a ser «pum», «pf» y «ts»".into());
+    }
+
+    /// Gives the voice's thread the settings now, not at the next frame: the
+    /// hits that follow a click on «Enseñar» are taught, however soon.
+    fn tell_voice(&self) {
+        if let Some(worker) = &self.voice.worker {
+            *worker.shared.settings.lock().unwrap_or_else(|e| e.into_inner()) = self.voice_settings();
+        }
     }
 
     /// Keeps the hits heard while teaching.
@@ -559,6 +569,7 @@ impl PulseApp {
         self.set_settings(settings);
         if self.voice.taught >= TEACH {
             self.voice.teaching = None;
+            self.tell_voice();
             self.status = Some(format!("{} aprendido: ya suena con tu {}", drum.name(), drum.sound()));
         } else {
             self.status = Some(format!("{}: {} de {TEACH}", drum.name(), self.voice.taught));
@@ -583,9 +594,7 @@ impl PulseApp {
             }
         }
         self.keep_taught();
-        if let Some(worker) = &self.voice.worker {
-            *worker.shared.settings.lock().unwrap_or_else(|e| e.into_inner()) = self.voice_settings();
-        }
+        self.tell_voice();
         // The button shows the note.
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
     }
@@ -937,7 +946,6 @@ mod tests {
         assert_eq!(app.settings.beatbox.count(Drum::Kick), TEACH);
         feed(&mut app, hats(1), &|app| app.voice.last_hit() == Some(Drum::Kick));
         app.forget_drums();
-        app.follow_voice(&ctx);
         feed(&mut app, hats(1), &|app| app.voice.last_hit() == Some(Drum::Hat));
     }
 

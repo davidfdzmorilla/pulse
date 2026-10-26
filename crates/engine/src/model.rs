@@ -1471,6 +1471,36 @@ impl Default for GateParams {
     }
 }
 
+/// The notes a Tuner tunes to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TunerScale {
+    /// The project's scale (chromatic if it has none).
+    #[default]
+    Project,
+    Chromatic,
+    /// Its own: a major or (natural) minor scale on `tonic` (0 = C).
+    Key { tonic: u8, minor: bool },
+}
+
+/// Pitch correction for a voice (see `tuner`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct TunerParams {
+    /// How long it takes to get to the note (0: at once, robotic).
+    pub speed_ms: f32,
+    /// 0..1: notes held long are left freer (their vibrato stays).
+    pub humanize: f32,
+    /// 0..1: how much of the way to the note.
+    pub amount: f32,
+    #[serde(default)]
+    pub scale: TunerScale,
+}
+
+impl Default for TunerParams {
+    fn default() -> Self {
+        Self { speed_ms: 20.0, humanize: 0.0, amount: 1.0, scale: TunerScale::Project }
+    }
+}
+
 /// Makes the start of each hit stronger or softer, and its tail longer or shorter.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransientParams {
@@ -1856,6 +1886,7 @@ pub enum Effect {
     Compressor(CompressorParams),
     Gate(GateParams),
     Transient(TransientParams),
+    Tuner(TunerParams),
     Delay(DelayParams),
     Reverb(ReverbParams),
     Saturator(SaturatorParams),
@@ -1872,7 +1903,7 @@ pub enum Effect {
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 15] {
+    pub fn catalog() -> [Effect; 16] {
         [
             Effect::Eq3(Default::default()),
             Effect::EqEight(Default::default()),
@@ -1880,6 +1911,7 @@ impl Effect {
             Effect::Limiter(Default::default()),
             Effect::Gate(Default::default()),
             Effect::Transient(Default::default()),
+            Effect::Tuner(Default::default()),
             Effect::Saturator(Default::default()),
             Effect::Bitcrusher(Default::default()),
             Effect::AutoFilter(Default::default()),
@@ -1916,7 +1948,8 @@ impl Effect {
     /// Modular's lanes): those show and modulate [`MOD_FX_SLOTS`] settings an
     /// effect at most.
     pub fn fits_in_synths(&self) -> bool {
-        self.params().len() <= MOD_FX_SLOTS
+        // A Tuner tunes a voice coming in, not a synth (which plays in tune).
+        self.params().len() <= MOD_FX_SLOTS && !matches!(self, Effect::Tuner(_))
     }
 
     pub fn label(&self) -> &'static str {
@@ -1926,6 +1959,7 @@ impl Effect {
             Effect::Compressor(_) => "Compressor",
             Effect::Gate(_) => "Gate",
             Effect::Transient(_) => "Transient",
+            Effect::Tuner(_) => "Tuner",
             Effect::Delay(_) => "Delay",
             Effect::Reverb(_) => "Reverb",
             Effect::Saturator(_) => "Saturator",
@@ -2146,6 +2180,11 @@ const GATE_PARAMS: [ParamInfo; 6] = [
     ParamInfo::linear("Hold", 0.0, 500.0, 20.0, Milliseconds),
     ParamInfo::log("Release", 1.0, 2000.0, 120.0, Milliseconds),
     ParamInfo::linear("Floor", -80.0, 0.0, -80.0, Decibels),
+];
+const TUNER_PARAMS: [ParamInfo; 3] = [
+    ParamInfo::linear("Speed", 0.0, 400.0, 20.0, Milliseconds),
+    ParamInfo::linear("Humanize", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Amount", 0.0, 1.0, 1.0, Percent),
 ];
 const TRANSIENT_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Attack", -1.0, 1.0, 0.0, Percent),
@@ -2553,6 +2592,7 @@ impl Effect {
             Effect::Compressor(_) => &COMPRESSOR_PARAMS,
             Effect::Gate(_) => &GATE_PARAMS,
             Effect::Transient(_) => &TRANSIENT_PARAMS,
+            Effect::Tuner(_) => &TUNER_PARAMS,
             Effect::Delay(_) => &DELAY_PARAMS,
             Effect::Reverb(_) => &REVERB_PARAMS,
             Effect::Saturator(_) => &SATURATOR_PARAMS,
@@ -2589,6 +2629,9 @@ impl Effect {
             (Effect::Transient(p), 0) => &mut p.attack,
             (Effect::Transient(p), 1) => &mut p.sustain,
             (Effect::Transient(p), 2) => &mut p.output_db,
+            (Effect::Tuner(p), 0) => &mut p.speed_ms,
+            (Effect::Tuner(p), 1) => &mut p.humanize,
+            (Effect::Tuner(p), 2) => &mut p.amount,
             (Effect::Delay(p), 0) => &mut p.feedback,
             (Effect::Delay(p), 1) => &mut p.filter_hz,
             (Effect::Delay(p), 2) => &mut p.mix,

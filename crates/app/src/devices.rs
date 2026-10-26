@@ -383,6 +383,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Compressor(_) => (5, 1),
         Effect::Gate(_) => (6, 1),
         Effect::Transient(_) => (3, 0),
+        Effect::Tuner(_) => (3, 1),
         Effect::Delay(_) => (3, 1),
         Effect::Reverb(_) => (4, 0),
         Effect::Saturator(_) => (3, 0),
@@ -438,6 +439,26 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         }
         Effect::Gate(p) if !sources.is_empty() => {
             ui.vertical(|ui| sidechain_combo(ui, &format!("gate_sc{index}"), &mut p.sidechain, sources, "Se abre solo cuando suena esa pista: un pad que corta al ritmo de los charles, o un bajo que suena solo con el bombo"));
+        }
+        Effect::Tuner(p) => {
+            use engine::model::TunerScale;
+            let name = |scale: TunerScale| match scale {
+                TunerScale::Project => "Del proyecto".to_string(),
+                TunerScale::Chromatic => "Cromática".to_string(),
+                TunerScale::Key { tonic, minor } => stems::key::Key { tonic, minor }.name(),
+            };
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Escala").color(TEXT_DIM).size(10.5));
+                egui::ComboBox::from_id_salt(format!("tuner_scale{index}")).selected_text(name(p.scale)).width(84.0).show_ui(ui, |ui| {
+                    ui.selectable_value(&mut p.scale, TunerScale::Project, name(TunerScale::Project)).on_hover_text("La escala del proyecto (Tonalidad y escala); sin escala, todas las notas");
+                    ui.selectable_value(&mut p.scale, TunerScale::Chromatic, name(TunerScale::Chromatic)).on_hover_text("Todas las notas: la más cercana");
+                    ui.separator();
+                    for key in stems::key::Key::all() {
+                        let scale = TunerScale::Key { tonic: key.tonic, minor: key.minor };
+                        ui.selectable_value(&mut p.scale, scale, name(scale));
+                    }
+                });
+            });
         }
         Effect::Delay(p) => {
             ui.vertical(|ui| {

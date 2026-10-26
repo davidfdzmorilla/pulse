@@ -288,7 +288,9 @@ pub struct MasterTrack {
 /// 9: a fade that is a piece of its curve (a clip split in the middle of
 /// one): a Pulse that reads 8 would play the whole curve. Only projects that
 /// have one.
-pub const FORMAT: u32 = 9;
+/// 10: a Tuner: a Pulse that reads 9 doesn't know it. Only projects that
+/// have one.
+pub const FORMAT: u32 = 10;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -591,8 +593,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_partial_fades() {
+            let format = if self.has_effect(|e| matches!(e, Effect::Tuner(_))) {
                 FORMAT
+            } else if self.has_partial_fades() {
+                9
             } else if self.has_effect(|e| matches!(e, Effect::Gate(_) | Effect::Transient(_))) {
                 8
             } else if self.has_effect(|e| matches!(e, Effect::EqEight(_))) {

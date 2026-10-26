@@ -61,6 +61,8 @@ mod stem_key_tests;
 #[cfg(test)]
 mod persist_tests;
 #[cfg(test)]
+mod tuner_tests;
+#[cfg(test)]
 mod structure_tests;
 #[cfg(test)]
 mod export_identity_tests;

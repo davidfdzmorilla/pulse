@@ -285,6 +285,11 @@ fn chain_commands(project: &Project, target: Target, before: Option<&[Device]>, 
     }
 }
 
+/// The project's scale, for the Tuners that follow it.
+pub fn scale_command(project: &Project) -> Command {
+    Command::SetScale(project.key.map_or(0, |k| engine::scale_bits(k.tonic, k.minor)))
+}
+
 fn commands_from(
     before: Option<&Project>,
     project: &Project,
@@ -298,6 +303,7 @@ fn commands_from(
         Command::SetQuantize(project.quantize),
         Command::SetLoop { enabled: project.loop_enabled, start: project.loop_start, end: project.loop_end },
         Command::SetSwing { amount: project.swing, grid: project.swing_grid },
+        scale_command(project),
     ];
     let empty = Track::new("", [0, 0, 0], InstrumentKind::Synth(SynthParams::default()));
     for t in 0..MAX_TRACKS {

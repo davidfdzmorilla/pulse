@@ -207,7 +207,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             (false, _) => "Voz".to_string(),
         };
         let voice = widgets::flat_button(ui, &voice_label, app.voice.enabled, vec2(if app.voice.enabled { 74.0 } else { 40.0 }, 22.0))
-            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. Usa auriculares.\nClic derecho: octava");
+            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. Usa auriculares.\nClic derecho: octava y seguir el tono (bend)");
         if voice.clicked() {
             app.toggle_voice();
         }
@@ -219,6 +219,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     ui.close();
                 }
             }
+            ui.separator();
+            ui.checkbox(&mut app.voice.bend, "Seguir el tono").on_hover_text("El vibrato y los deslizamientos de la voz mueven el pitch bend de la nota (hasta ±2 semitonos). Se oye en vivo; lo que se graba son las notas");
         });
         let devices = app.midi.names.len();
         let midi_hint = if devices == 0 {

@@ -4,10 +4,12 @@
 //! (`stems::pitch::LiveTracker`), every few milliseconds, on a thread of its
 //! own (not at the screen's pace); a note holds while the voice wavers around
 //! it and changes once the voice settles on another; with a project key, a
-//! note sung off the scale goes to the scale's nearest.
+//! note sung off the scale goes to the scale's nearest. Following the pitch
+//! («Seguir el tono»), what the voice strays from the note (vibrato, a slide
+//! to the next) bends it too.
 
 use crate::app::PulseApp;
-use engine::{LiveInput, LiveNote, VoiceInput};
+use engine::{Controller, LiveInput, LiveNote, VoiceInput};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
 use std::sync::{Arc, Mutex};
@@ -43,6 +45,14 @@ const ATTACK_SPAN: f64 = 0.016;
 /// Within this of a semitone (semitones), a note is sung in tune and stays,
 /// even off the scale.
 const IN_TUNE: f64 = 0.3;
+/// The pitch bend's range (semitones) in the built-in instruments (and most
+/// synths): the bend sent is the voice's distance from the note over this.
+const BEND_RANGE: f64 = 2.0;
+/// How fast the bend follows the voice (seconds; a vibrato of 5–7 Hz goes
+/// through, the tracker's jitter does not).
+const BEND_SMOOTH: f64 = 0.008;
+/// A change in the bend smaller than this (semitones) is not sent.
+const BEND_STEP: f64 = 0.01;
 
 /// Turns what is heard, analysis after analysis, into notes on and off.
 #[derive(Default)]
@@ -55,6 +65,11 @@ pub struct Follower {
     /// The time (seconds since it started) and the levels heard lately.
     clock: f64,
     levels: VecDeque<(f64, f64)>,
+    /// Where the voice is in tune with the note playing (fractional MIDI):
+    /// the note, or the pitch it was sung at if the scale moved it.
+    reference: f64,
+    /// How far the voice is from `reference` (semitones, smoothed).
+    pub bend: f64,
 }
 
 impl Follower {
@@ -95,16 +110,23 @@ impl Follower {
             *candidate = Some((target, held));
             held
         };
+        // A note starting: the bend is how far the voice is from it, unless the
+        // scale moved it (it plays in tune, and moves with the voice from there).
+        let reference = if target as f64 == m.round() { target as f64 } else { m };
+        let follow = 1.0 - (-dt / BEND_SMOOTH).exp();
         match self.playing {
             None => {
                 if heard(&mut self.candidate) >= AGREE - 1e-9 {
                     out.push((target, velocity));
                     self.playing = Some(target);
                     self.candidate = None;
+                    self.reference = reference;
+                    self.bend = m - reference;
                 }
             }
             Some(p) if (m - p as f64).abs() < STRAY || target == p => {
                 self.candidate = None;
+                self.bend += (m - self.reference - self.bend) * follow;
                 // Sung again, louder all at once: a new note on the same pitch.
                 if rose {
                     out.push((p, 0.0));
@@ -120,6 +142,11 @@ impl Follower {
                     out.push((target, velocity));
                     self.playing = Some(target);
                     self.candidate = None;
+                    self.reference = reference;
+                    self.bend = m - reference;
+                } else {
+                    // On the way to another note: the note slides after it.
+                    self.bend += (m - self.reference - self.bend) * follow;
                 }
             }
         }
@@ -156,17 +183,21 @@ pub struct Listener {
     /// Input since the last analysis.
     since: usize,
     pub follower: Follower,
+    /// Whether the voice's pitch bends the note, and the bend last sent
+    /// (semitones).
+    pub bend: bool,
+    sent_bend: f64,
 }
 
 impl Listener {
     pub fn new(rate: f32) -> Self {
         let window = (WINDOW_SECONDS * rate) as usize;
-        Self { tracker: LiveTracker::new(window, rate, FMIN, FMAX), rate, hop: ((HOP_SECONDS * rate) as usize).max(1), recent: Vec::with_capacity(4 * window), since: 0, follower: Follower::default() }
+        Self { tracker: LiveTracker::new(window, rate, FMIN, FMAX), rate, hop: ((HOP_SECONDS * rate) as usize).max(1), recent: Vec::with_capacity(4 * window), since: 0, follower: Follower::default(), bend: false, sent_bend: 0.0 }
     }
 
-    /// Takes new input: the notes it starts and stops, in order, moved by
-    /// `octave` octaves.
-    pub fn hear(&mut self, input: &[f32], octave: i32, key: Option<Key>) -> Vec<(u8, f32)> {
+    /// Takes new input: the notes it starts and stops (and, following the
+    /// pitch, the bends), in order, moved by `octave` octaves.
+    pub fn hear(&mut self, input: &[f32], octave: i32, key: Option<Key>) -> Vec<LiveNote> {
         let window = self.tracker.len();
         let mut out = Vec::new();
         let mut rest = input;
@@ -190,24 +221,67 @@ impl Listener {
                     .filter(|&(_, unsure)| unsure < UNSURE)
                     .map(|(hz, _)| 69.0 + 12.0 * (hz / 440.0).log2() + 12.0 * octave as f64)
                     .filter(|m| (0.0..=127.0).contains(m));
-                out.extend(self.follower.step(pitch, level, key, self.hop as f64 / self.rate as f64));
+                let notes = self.follower.step(pitch, level, key, self.hop as f64 / self.rate as f64);
+                self.send(notes, &mut out);
             }
+        }
+        // Turned off with the note bent: back to the note.
+        if !self.bend && self.sent_bend != 0.0 {
+            self.send(Vec::new(), &mut out);
         }
         out
     }
+
+    /// Adds `notes` to `out`, with the bend where it changed: after the notes
+    /// that stop, before those that start (so they start bent).
+    fn send(&mut self, notes: Vec<(u8, f32)>, out: &mut Vec<LiveNote>) {
+        let starts = notes.iter().position(|n| n.1 > 0.0).unwrap_or(notes.len());
+        out.extend(notes[..starts].iter().map(|&(p, v)| LiveNote::note(p, v)));
+        let bend = match self.follower.playing {
+            Some(_) if self.bend => self.follower.bend.clamp(-BEND_RANGE, BEND_RANGE),
+            _ => 0.0,
+        };
+        let moved = (bend - self.sent_bend).abs() >= BEND_STEP || (bend == 0.0 && self.sent_bend != 0.0);
+        // A note starting takes the bend as it is, however small the change.
+        let starting = starts < notes.len() && bend != self.sent_bend;
+        if moved || starting {
+            out.push(bend_to(bend));
+            self.sent_bend = bend;
+        }
+        out.extend(notes[starts..].iter().map(|&(p, v)| LiveNote::note(p, v)));
+    }
+
+    /// Stops the note playing (and brings the bend back), if any.
+    pub fn release(&mut self) -> Vec<LiveNote> {
+        let mut out: Vec<LiveNote> = self.follower.release().map(|p| LiveNote::note(p, 0.0)).into_iter().collect();
+        if self.sent_bend != 0.0 {
+            out.push(bend_to(0.0));
+            self.sent_bend = 0.0;
+        }
+        out
+    }
+}
+
+/// The pitch bend for `semitones` (over [`BEND_RANGE`]).
+fn bend_to(semitones: f64) -> LiveNote {
+    LiveNote::control(Controller::PitchBend, 0, (semitones / BEND_RANGE).clamp(-1.0, 1.0) as f32)
 }
 
 /// What the voice's thread and the window share.
 #[derive(Default)]
 struct Shared {
     stop: AtomicBool,
-    /// The octave and the project's key, as the window last set them.
-    settings: Mutex<(i32, Option<Key>)>,
+    /// The octave, the project's key and whether to follow the pitch, as the
+    /// window last set them.
+    settings: Mutex<Settings>,
     /// The note playing (255: none).
     playing: AtomicU8,
 }
 
 const NO_NOTE: u8 = 255;
+
+/// What the window sets: the octave, the project's key, whether to bend.
+type Settings = (i32, Option<Key>, bool);
 
 /// The thread that listens; it gives the input back when it ends.
 struct Worker {
@@ -216,8 +290,8 @@ struct Worker {
 }
 
 impl Worker {
-    fn start(mut input: VoiceInput, live: LiveInput, octave: i32, key: Option<Key>) -> Option<Self> {
-        let shared = Arc::new(Shared { settings: Mutex::new((octave, key)), playing: AtomicU8::new(NO_NOTE), ..Default::default() });
+    fn start(mut input: VoiceInput, live: LiveInput, settings: Settings) -> Option<Self> {
+        let shared = Arc::new(Shared { settings: Mutex::new(settings), playing: AtomicU8::new(NO_NOTE), ..Default::default() });
         let mine = shared.clone();
         // What waited from before is not what is sung now.
         input.skip();
@@ -236,14 +310,15 @@ impl Worker {
                         std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
-                    let (octave, key) = *mine.settings.lock().unwrap_or_else(|e| e.into_inner());
-                    for (pitch, velocity) in listener.hear(&new, octave, key) {
-                        live.send(LiveNote::note(pitch, velocity));
+                    let (octave, key, bend) = *mine.settings.lock().unwrap_or_else(|e| e.into_inner());
+                    listener.bend = bend;
+                    for note in listener.hear(&new, octave, key) {
+                        live.send(note);
                     }
                     mine.playing.store(listener.follower.playing.unwrap_or(NO_NOTE), Ordering::Relaxed);
                 }
-                if let Some(p) = listener.follower.release() {
-                    live.send(LiveNote::note(p, 0.0));
+                for note in listener.release() {
+                    live.send(note);
                 }
                 mine.playing.store(NO_NOTE, Ordering::Relaxed);
                 input
@@ -259,11 +334,13 @@ impl Worker {
     }
 }
 
-/// The voice as an instrument: on or off, and the octave it is moved by.
+/// The voice as an instrument: on or off, the octave it is moved by and
+/// whether its pitch bends the notes.
 #[derive(Default)]
 pub struct Voice {
     pub enabled: bool,
     pub octave: i32,
+    pub bend: bool,
     worker: Option<Worker>,
 }
 
@@ -312,11 +389,11 @@ impl PulseApp {
         if self.voice.worker.is_none() {
             let input = self.capture.as_mut().and_then(|c| c.take_voice());
             if let (Some(input), Some(live)) = (input, self.audio.live()) {
-                self.voice.worker = Worker::start(input, live, self.voice.octave, self.project.key);
+                self.voice.worker = Worker::start(input, live, (self.voice.octave, self.project.key, self.voice.bend));
             }
         }
         if let Some(worker) = &self.voice.worker {
-            *worker.shared.settings.lock().unwrap_or_else(|e| e.into_inner()) = (self.voice.octave, self.project.key);
+            *worker.shared.settings.lock().unwrap_or_else(|e| e.into_inner()) = (self.voice.octave, self.project.key, self.voice.bend);
         }
         // The button shows the note.
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -330,6 +407,16 @@ mod tests {
     /// Analyses this far apart in the tests of the follower (a screen frame,
     /// as it used to be).
     const DT: f64 = 0.016;
+
+    /// The notes among what the listener sends: (pitch, velocity).
+    fn notes(sent: &[LiveNote]) -> Vec<(u8, f32)> {
+        sent.iter().filter(|n| n.controller.is_none()).map(|n| (n.pitch, n.velocity)).collect()
+    }
+
+    /// The bends among what the listener sends, in semitones.
+    fn bends(sent: &[LiveNote]) -> Vec<f64> {
+        sent.iter().filter(|n| n.controller == Some(Controller::PitchBend)).map(|n| n.velocity as f64 * BEND_RANGE).collect()
+    }
 
     /// Steps of (pitch, level) and what was sent.
     fn run(follower: &mut Follower, steps: &[(Option<f64>, f64)], key: Option<Key>) -> Vec<(u8, f32)> {
@@ -348,7 +435,7 @@ mod tests {
         let mut listener = Listener::new(rate);
         let mut line = Vec::new();
         for (k, chunk) in mono.chunks(512).enumerate() {
-            for (p, v) in listener.hear(chunk, 0, None) {
+            for (p, v) in notes(&listener.hear(chunk, 0, None)) {
                 if v > 0.0 {
                     line.push(format!("{:.3}s:{p}", ((k + 1) * 512) as f32 / rate));
                 }
@@ -441,7 +528,7 @@ mod tests {
             .map(|i| if i < silence { 0.0 } else { let t = (i - silence) as f32 / rate; 0.2 * ((std::f32::consts::TAU * hz * t).sin() + 0.5 * (2.0 * std::f32::consts::TAU * hz * t).sin()) })
             .collect();
         for (k, block) in audio.chunks(chunk).enumerate() {
-            if listener.hear(block, 0, None).iter().any(|n| n.1 > 0.0) {
+            if notes(&listener.hear(block, 0, None)).iter().any(|n| n.1 > 0.0) {
                 return (((k + 1) * chunk).saturating_sub(silence)) as f32 / rate * 1000.0;
             }
         }
@@ -474,7 +561,7 @@ mod tests {
             .collect();
         let notes = |chunk: usize| {
             let mut listener = Listener::new(rate);
-            audio.chunks(chunk).flat_map(|c| listener.hear(c, 0, None)).collect::<Vec<_>>()
+            audio.chunks(chunk).flat_map(|c| notes(&listener.hear(c, 0, None))).collect::<Vec<_>>()
         };
         let reference = notes(128);
         // A3, E4, and E4 again after the gap.
@@ -482,6 +569,82 @@ mod tests {
         for chunk in [1, 37, 512, 4800] {
             assert_eq!(notes(chunk), reference, "in blocks of {chunk}");
         }
+    }
+
+    /// A tone at `hz` times `ratio(t)` (seconds since it started), with an
+    /// octave above it, after `silence` seconds of nothing.
+    fn sung(rate: f32, silence: f32, seconds: f32, hz: f32, ratio: impl Fn(f32) -> f32) -> Vec<f32> {
+        let mut phase = 0f32;
+        (0..((silence + seconds) * rate) as usize)
+            .map(|i| {
+                let t = i as f32 / rate - silence;
+                if t < 0.0 {
+                    return 0.0;
+                }
+                phase = (phase + hz * ratio(t) / rate).fract();
+                0.2 * ((std::f32::consts::TAU * phase).sin() + 0.5 * (2.0 * std::f32::consts::TAU * phase).sin())
+            })
+            .collect()
+    }
+
+    /// What the listener sends for `audio`, in blocks of 256, following the
+    /// pitch or not, then on release.
+    fn listen(audio: &[f32], bend: bool, key: Option<Key>) -> Vec<LiveNote> {
+        let mut listener = Listener::new(48_000.0);
+        listener.bend = bend;
+        let mut sent: Vec<LiveNote> = audio.chunks(256).flat_map(|c| listener.hear(c, 0, key)).collect();
+        sent.extend(listener.release());
+        sent
+    }
+
+    /// A vibrato (±50 cents, 5.5 Hz) on one A3: one note, bent up and down
+    /// with it, and back to straight at the end. Not following the pitch: the
+    /// note alone.
+    #[test]
+    fn a_vibrato_bends_the_note() {
+        let vibrato = |t: f32| 2f32.powf(0.5 * (std::f32::consts::TAU * 5.5 * t).sin() / 12.0);
+        let audio = sung(48_000.0, 0.1, 1.0, 220.0, vibrato);
+        let sent = listen(&audio, true, None);
+        assert_eq!(notes(&sent).iter().map(|n| (n.0, n.1 > 0.0)).collect::<Vec<_>>(), vec![(57, true), (57, false)]);
+        let b = bends(&sent);
+        let (low, high) = b.iter().fold((0f64, 0f64), |(l, h), &x| (l.min(x), h.max(x)));
+        println!("{} bends, {low:.2}..{high:.2} semitones", b.len());
+        assert!(high > 0.35 && high < 0.6 && low < -0.35 && low > -0.6, "the bend follows ±0.5: {low:.2}..{high:.2}");
+        // About one every analysis at most (a vibrato moves all the time).
+        assert!(b.len() < 400, "{} bends in a second", b.len());
+        assert_eq!(*b.last().unwrap(), 0.0, "straight again at the end");
+        assert!(matches!(sent.last(), Some(n) if n.controller == Some(Controller::PitchBend)), "the bend comes back after the note stops");
+        let plain = listen(&audio, false, None);
+        assert!(bends(&plain).is_empty() && notes(&plain) == notes(&sent));
+    }
+
+    /// A quick slide (60 ms) from A3 up to B3: the note bends up on the way,
+    /// then B3 plays straight (the bend sent before it starts). (A slower one
+    /// goes through A#3.)
+    #[test]
+    fn a_slide_bends_then_changes_the_note() {
+        let slide = |t: f32| 2f32.powf(((t - 0.3) / 0.06).clamp(0.0, 1.0) * 2.0 / 12.0);
+        let sent = listen(&sung(48_000.0, 0.1, 0.8, 220.0, slide), true, None);
+        let ons: Vec<u8> = notes(&sent).iter().filter(|n| n.1 > 0.0).map(|n| n.0).collect();
+        assert_eq!(ons, vec![57, 59], "{:?}", notes(&sent));
+        let b_on = sent.iter().position(|n| n.controller.is_none() && n.pitch == 59 && n.velocity > 0.0).unwrap();
+        let before: Vec<f64> = bends(&sent[..b_on]);
+        let up = before[..before.len() - 1].iter().cloned().fold(0f64, f64::max);
+        println!("up to {up:.2} on A3, then {:.2} as B3 starts", before.last().unwrap());
+        assert!(up > 0.6, "A3 bends up on the way to B3: {up:.2}");
+        assert!(before.last().unwrap().abs() < 0.3, "B3 starts about straight: {:.2}", before.last().unwrap());
+    }
+
+    /// A note the scale moved (a flat F#, in C major: G) plays in tune, not
+    /// bent back to where it was sung.
+    #[test]
+    fn a_note_moved_to_the_scale_is_not_bent_back() {
+        let c = Key { tonic: 0, minor: false };
+        let hz = 440.0 * 2f32.powf((66.35 - 69.0) / 12.0);
+        let sent = listen(&sung(48_000.0, 0.1, 0.5, hz, |_| 1.0), true, Some(c));
+        assert_eq!(notes(&sent)[0].0, 67);
+        let worst = bends(&sent).iter().fold(0f64, |w, x| w.max(x.abs()));
+        assert!(worst < 0.1, "bent {worst:.2} semitones");
     }
 
     /// From a microphone fed by hand: the voice's thread plays a sung A3 then

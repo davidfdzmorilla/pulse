@@ -207,7 +207,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             (false, _) => "Voz".to_string(),
         };
         let voice = widgets::flat_button(ui, &voice_label, app.voice.enabled, vec2(if app.voice.enabled { 74.0 } else { 40.0 }, 22.0))
-            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. Usa auriculares.\nClic derecho: octava y seguir el tono (bend)");
+            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. Usa auriculares.\nClic derecho: octava, acordes y seguir el tono (bend)");
         if voice.clicked() {
             app.toggle_voice();
         }
@@ -216,6 +216,15 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             for (octave, label) in [(-2, "−2 (voz aguda → bajo)"), (-1, "−1"), (0, "Como suena"), (1, "+1"), (2, "+2 (voz grave → agudo)")] {
                 if ui.radio(app.voice.octave == octave, label).clicked() {
                     app.voice.octave = octave;
+                    ui.close();
+                }
+            }
+            ui.separator();
+            ui.label("Acordes");
+            use crate::voice_play::Chords;
+            for (chords, label) in [(Chords::Off, "No (una nota)"), (Chords::Triads, "Tríadas"), (Chords::Sevenths, "Con séptima")] {
+                if ui.radio(app.voice.chords == chords, label).on_hover_text("La nota que cantas es la raíz de su acorde en la escala del proyecto (sin escala, o fuera de ella, un acorde mayor)").clicked() {
+                    app.voice.chords = chords;
                     ui.close();
                 }
             }

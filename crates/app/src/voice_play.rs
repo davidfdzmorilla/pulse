@@ -7,9 +7,12 @@
 //! note sung off the scale goes to the scale's nearest. Following the pitch
 //! («Seguir el tono»), what the voice strays from the note (vibrato, a slide
 //! to the next) bends it too. With chords, the note sung is the root of its
-//! chord in the project's scale (a triad or a seventh chord).
+//! chord in the project's scale (a triad or a seventh chord). As drums, the
+//! voice beatboxes instead: «pum», «pf» and «ts» play the kick, the snare and
+//! the hat (see `beatbox`).
 
 use crate::app::PulseApp;
+use crate::beatbox::{Beatbox, Drum, Examples, Features, TEACH};
 use engine::{Controller, LiveInput, LiveNote, VoiceInput};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -193,17 +196,30 @@ pub struct Listener {
     sounding: Vec<u8>,
     /// The key the last notes were heard in (their chords are in it).
     key: Option<Key>,
+    /// Beatboxing instead of singing: the hits heard, the sound being taught
+    /// (its hits play it, and are kept in `taught`), the drum notes waiting to
+    /// stop (when, in input samples) and the last sound played.
+    pub drums: bool,
+    pub beatbox: Beatbox,
+    pub teach: Option<Drum>,
+    pub taught: Vec<(Drum, Features)>,
+    hits_off: Vec<(u8, u64)>,
+    heard: u64,
+    pub last_hit: Option<Drum>,
 }
 
 impl Listener {
     pub fn new(rate: f32) -> Self {
         let window = (WINDOW_SECONDS * rate) as usize;
-        Self { tracker: LiveTracker::new(window, rate, FMIN, FMAX), rate, hop: ((HOP_SECONDS * rate) as usize).max(1), recent: Vec::with_capacity(4 * window), since: 0, follower: Follower::default(), bend: false, sent_bend: 0.0, chords: Chords::Off, sounding: Vec::new(), key: None }
+        Self { tracker: LiveTracker::new(window, rate, FMIN, FMAX), rate, hop: ((HOP_SECONDS * rate) as usize).max(1), recent: Vec::with_capacity(4 * window), since: 0, follower: Follower::default(), bend: false, sent_bend: 0.0, chords: Chords::Off, sounding: Vec::new(), key: None, drums: false, beatbox: Beatbox::new(rate), teach: None, taught: Vec::new(), hits_off: Vec::new(), heard: 0, last_hit: None }
     }
 
     /// Takes new input: the notes it starts and stops (and, following the
     /// pitch, the bends), in order, moved by `octave` octaves.
     pub fn hear(&mut self, input: &[f32], octave: i32, key: Option<Key>) -> Vec<LiveNote> {
+        if self.drums {
+            return self.hear_drums(input);
+        }
         let window = self.tracker.len();
         self.key = key;
         let mut out = Vec::new();
@@ -264,10 +280,41 @@ impl Listener {
         }
     }
 
+    /// Beatboxing: a drum note for each hit (stopped [`HIT_LENGTH`] later, so
+    /// it records as a note).
+    fn hear_drums(&mut self, input: &[f32]) -> Vec<LiveNote> {
+        let mut out = Vec::new();
+        self.heard += input.len() as u64;
+        let now = self.heard;
+        self.hits_off.retain(|&(p, due)| {
+            let done = due <= now;
+            if done {
+                out.push(LiveNote::note(p, 0.0));
+            }
+            !done
+        });
+        for hit in self.beatbox.hear(input) {
+            let drum = self.teach.unwrap_or(hit.drum);
+            if let Some(taught) = self.teach {
+                self.taught.push((taught, hit.features));
+            }
+            let note = drum.note();
+            // Hit again before it stopped.
+            if let Some(i) = self.hits_off.iter().position(|&(p, _)| p == note) {
+                self.hits_off.remove(i);
+                out.push(LiveNote::note(note, 0.0));
+            }
+            out.push(LiveNote::note(note, hit.velocity));
+            self.hits_off.push((note, now + (HIT_LENGTH * self.rate as f64) as u64));
+            self.last_hit = Some(drum);
+        }
+        out
+    }
+
     /// Stops the note playing (and brings the bend back), if any.
     pub fn release(&mut self) -> Vec<LiveNote> {
         self.follower.release();
-        let mut out: Vec<LiveNote> = self.sounding.drain(..).map(|p| LiveNote::note(p, 0.0)).collect();
+        let mut out: Vec<LiveNote> = self.sounding.drain(..).chain(self.hits_off.drain(..).map(|(p, _)| p)).map(|p| LiveNote::note(p, 0.0)).collect();
         if self.sent_bend != 0.0 {
             out.push(bend_to(0.0));
             self.sent_bend = 0.0;
@@ -275,6 +322,9 @@ impl Listener {
         out
     }
 }
+
+/// How long a drum note beatboxed lasts (seconds).
+const HIT_LENGTH: f64 = 0.05;
 
 /// What a note sung plays: itself, or the chord on it.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -316,17 +366,24 @@ struct Shared {
     settings: Mutex<Settings>,
     /// The note playing (255: none).
     playing: AtomicU8,
+    /// Beatboxing: the last sound played (255: none) and the hits heard
+    /// while teaching, for the window to keep.
+    last_hit: AtomicU8,
+    taught: Mutex<Vec<(Drum, Features)>>,
 }
 
 const NO_NOTE: u8 = 255;
 
 /// What the window sets.
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 struct Settings {
     octave: i32,
     key: Option<Key>,
     bend: bool,
     chords: Chords,
+    drums: bool,
+    teach: Option<Drum>,
+    examples: Arc<Examples>,
 }
 
 /// The thread that listens; it gives the input back when it ends.
@@ -337,7 +394,7 @@ struct Worker {
 
 impl Worker {
     fn start(mut input: VoiceInput, live: LiveInput, settings: Settings) -> Option<Self> {
-        let shared = Arc::new(Shared { settings: Mutex::new(settings), playing: AtomicU8::new(NO_NOTE), ..Default::default() });
+        let shared = Arc::new(Shared { settings: Mutex::new(settings), playing: AtomicU8::new(NO_NOTE), last_hit: AtomicU8::new(NO_NOTE), ..Default::default() });
         let mine = shared.clone();
         // What waited from before is not what is sung now.
         input.skip();
@@ -356,13 +413,25 @@ impl Worker {
                         std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
-                    let Settings { octave, key, bend, chords } = *mine.settings.lock().unwrap_or_else(|e| e.into_inner());
+                    let Settings { octave, key, bend, chords, drums, teach, examples } = mine.settings.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                    if drums != listener.drums {
+                        for note in listener.release() {
+                            live.send(note);
+                        }
+                        listener.drums = drums;
+                    }
                     listener.bend = bend;
                     listener.chords = chords;
+                    listener.teach = teach;
+                    listener.beatbox.learn(&examples);
                     for note in listener.hear(&new, octave, key) {
                         live.send(note);
                     }
                     mine.playing.store(listener.follower.playing.unwrap_or(NO_NOTE), Ordering::Relaxed);
+                    mine.last_hit.store(listener.last_hit.map_or(NO_NOTE, |d| d as u8), Ordering::Relaxed);
+                    if !listener.taught.is_empty() {
+                        mine.taught.lock().unwrap_or_else(|e| e.into_inner()).append(&mut listener.taught);
+                    }
                 }
                 for note in listener.release() {
                     live.send(note);
@@ -382,13 +451,19 @@ impl Worker {
 }
 
 /// The voice as an instrument: on or off, the octave it is moved by, whether
-/// its pitch bends the notes and whether it plays chords.
+/// its pitch bends the notes, whether it plays chords, and whether it plays
+/// drums instead.
 #[derive(Default)]
 pub struct Voice {
     pub enabled: bool,
     pub octave: i32,
     pub bend: bool,
     pub chords: Chords,
+    /// Beatboxing instead, the sound being taught and how many of its hits
+    /// were heard.
+    pub drums: bool,
+    pub teaching: Option<Drum>,
+    taught: usize,
     worker: Option<Worker>,
 }
 
@@ -396,6 +471,12 @@ impl Voice {
     /// The note sung playing (the chord's root).
     pub fn playing(&self) -> Option<u8> {
         self.worker.as_ref().map(|w| w.shared.playing.load(Ordering::Relaxed)).filter(|&p| p != NO_NOTE)
+    }
+
+    /// Beatboxing: the last sound played.
+    pub fn last_hit(&self) -> Option<Drum> {
+        let hit = self.worker.as_ref()?.shared.last_hit.load(Ordering::Relaxed);
+        Drum::ALL.into_iter().find(|d| *d as u8 == hit)
     }
 }
 
@@ -406,7 +487,11 @@ impl PulseApp {
         if self.voice.enabled {
             self.capture_failed = false;
             if self.ensure_capture() {
-                self.status = Some("Canta, tararea o silba: suena la pista seleccionada (o las armadas). Con auriculares, para que el micrófono no oiga los altavoces".into());
+                self.status = Some(if self.voice.drums {
+                    "Haz beatbox: «pum» es el bombo, «pf» la caja y «ts» el charles de la pista seleccionada (una Drum Machine). Con auriculares".into()
+                } else {
+                    "Canta, tararea o silba: suena la pista seleccionada (o las armadas). Con auriculares, para que el micrófono no oiga los altavoces".into()
+                });
             } else {
                 self.voice.enabled = false;
             }
@@ -426,7 +511,58 @@ impl PulseApp {
     }
 
     fn voice_settings(&self) -> Settings {
-        Settings { octave: self.voice.octave, key: self.project.key, bend: self.voice.bend, chords: self.voice.chords }
+        let v = &self.voice;
+        Settings { octave: v.octave, key: self.project.key, bend: v.bend, chords: v.chords, drums: v.drums, teach: v.teaching.filter(|_| v.drums), examples: Arc::new(self.settings.beatbox.clone()) }
+    }
+
+    /// Beatboxing: the next [`TEACH`] hits are `drum` (the voice on, as drums).
+    pub fn teach_drum(&mut self, drum: Drum) {
+        self.voice.drums = true;
+        if !self.voice.enabled {
+            self.toggle_voice();
+            if !self.voice.enabled {
+                return;
+            }
+        }
+        self.voice.teaching = Some(drum);
+        self.voice.taught = 0;
+        self.status = Some(format!("{}: haz {} {TEACH} veces, como lo harías tocando", drum.name(), drum.sound()));
+    }
+
+    /// Forgets the sounds taught: back to the built-in ones.
+    pub fn forget_drums(&mut self) {
+        let mut settings = self.settings.clone();
+        settings.beatbox = Examples::default();
+        self.set_settings(settings);
+        self.status = Some("Sonidos olvidados: el bombo, la caja y el charles vuelven a ser «pum», «pf» y «ts»".into());
+    }
+
+    /// Keeps the hits heard while teaching.
+    fn keep_taught(&mut self) {
+        let Some(worker) = &self.voice.worker else { return };
+        let taught = std::mem::take(&mut *worker.shared.taught.lock().unwrap_or_else(|e| e.into_inner()));
+        let Some(drum) = self.voice.teaching else { return };
+        let mut examples = self.settings.beatbox.clone();
+        for (d, features) in taught.into_iter().filter(|(d, _)| *d == drum) {
+            if self.voice.taught == 0 {
+                // Taught again: the old hits of it go.
+                examples.forget(d);
+            }
+            examples.add(d, features);
+            self.voice.taught += 1;
+        }
+        if examples == self.settings.beatbox {
+            return;
+        }
+        let mut settings = self.settings.clone();
+        settings.beatbox = examples;
+        self.set_settings(settings);
+        if self.voice.taught >= TEACH {
+            self.voice.teaching = None;
+            self.status = Some(format!("{} aprendido: ya suena con tu {}", drum.name(), drum.sound()));
+        } else {
+            self.status = Some(format!("{}: {} de {TEACH}", drum.name(), self.voice.taught));
+        }
     }
 
     /// Every frame: the voice's thread runs while the voice is on (started
@@ -437,6 +573,7 @@ impl PulseApp {
             self.stop_voice();
         }
         if !self.voice.enabled {
+            self.voice.teaching = None;
             return;
         }
         if self.voice.worker.is_none() {
@@ -445,6 +582,7 @@ impl PulseApp {
                 self.voice.worker = Worker::start(input, live, self.voice_settings());
             }
         }
+        self.keep_taught();
         if let Some(worker) = &self.voice.worker {
             *worker.shared.settings.lock().unwrap_or_else(|e| e.into_inner()) = self.voice_settings();
         }
@@ -739,6 +877,64 @@ mod tests {
         // Every chord's notes at one velocity.
         let first = notes(&sent)[0].1;
         assert!(notes(&sent)[..3].iter().all(|n| n.1 == first));
+    }
+
+    /// Beatboxing «pum ts pf»: the kick, the hat and the snare, each stopped
+    /// 50 ms later; on release, nothing is left on.
+    #[test]
+    fn a_beatbox_plays_the_drum_notes() {
+        use crate::beatbox::tests::pattern;
+        let audio = pattern(&[(Drum::Kick, 0.1), (Drum::Hat, 0.35), (Drum::Snare, 0.6)], 0.62);
+        let mut listener = Listener::new(48_000.0);
+        listener.drums = true;
+        let mut sent: Vec<LiveNote> = audio.chunks(256).flat_map(|c| listener.hear(c, 0, None)).collect();
+        sent.extend(listener.release());
+        let on_off: Vec<(u8, bool)> = notes(&sent).iter().map(|n| (n.0, n.1 > 0.0)).collect();
+        assert_eq!(on_off, vec![(36, true), (36, false), (42, true), (42, false), (38, true), (38, false)]);
+        assert_eq!(listener.last_hit, Some(Drum::Snare));
+    }
+
+    /// Teaching from the microphone: four hits (here a «ts») taught as the
+    /// kick are kept in the settings, and from then on that sound plays the
+    /// kick.
+    #[test]
+    fn hits_taught_at_the_microphone_play_what_they_were_taught_as() {
+        use crate::beatbox::tests::pattern;
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let (audio, _engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        app.sync_all();
+        let (_samples, _markers, mut voice, handle) = engine::detached_input_with_voice(48_000.0, 1);
+        app.capture = Some(crate::capture::InputCapture::with_handle(None, handle));
+        app.voice.enabled = true;
+        app.voice.drums = true;
+        let ctx = eframe::egui::Context::default();
+        app.follow_voice(&ctx);
+        let mut feed = |app: &mut PulseApp, audio: Vec<f32>| {
+            for s in audio {
+                let _ = voice.push(s);
+            }
+            let started = std::time::Instant::now();
+            while voice.slots() < voice.buffer().capacity() || started.elapsed().as_millis() < 100 {
+                app.follow_voice(&ctx);
+                assert!(started.elapsed().as_secs() < 5);
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            app.follow_voice(&ctx);
+        };
+        let hats = |n: usize| pattern(&(0..n).map(|i| (Drum::Hat, 0.05 + 0.2 * i as f32)).collect::<Vec<_>>(), 0.05 + 0.2 * n as f32);
+        feed(&mut app, hats(1));
+        assert_eq!(app.voice.last_hit(), Some(Drum::Hat));
+        app.teach_drum(Drum::Kick);
+        feed(&mut app, hats(TEACH));
+        assert_eq!(app.voice.teaching, None, "{:?}", app.status);
+        assert_eq!(app.settings.beatbox.count(Drum::Kick), TEACH);
+        feed(&mut app, hats(1));
+        assert_eq!(app.voice.last_hit(), Some(Drum::Kick));
+        app.forget_drums();
+        app.follow_voice(&ctx);
+        feed(&mut app, hats(1));
+        assert_eq!(app.voice.last_hit(), Some(Drum::Hat));
     }
 
     /// From a microphone fed by hand: the voice's thread plays a sung A3 then

@@ -7,6 +7,7 @@ mod als;
 mod arrange;
 mod app;
 mod arrangement;
+mod beatbox;
 mod automation_rec;
 mod browser;
 mod capture;

@@ -201,17 +201,47 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         {
             app.toggle_keyboard();
         }
-        let voice_label = match (app.voice.enabled, app.voice.playing()) {
-            (true, Some(pitch)) => format!("Voz · {}", crate::project::note_name(pitch)),
-            (true, None) => "Voz · …".to_string(),
-            (false, _) => "Voz".to_string(),
+        let voice_label = match (app.voice.enabled, app.voice.drums, app.voice.playing()) {
+            (false, _, _) => "Voz".to_string(),
+            (true, true, _) => match app.voice.last_hit() {
+                Some(drum) => format!("Voz · {}", drum.name()),
+                None => "Voz · …".to_string(),
+            },
+            (true, false, Some(pitch)) => format!("Voz · {}", crate::project::note_name(pitch)),
+            (true, false, None) => "Voz · …".to_string(),
         };
-        let voice = widgets::flat_button(ui, &voice_label, app.voice.enabled, vec2(if app.voice.enabled { 74.0 } else { 40.0 }, 22.0))
-            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. Usa auriculares.\nClic derecho: octava, acordes y seguir el tono (bend)");
+        let voice = widgets::flat_button(ui, &voice_label, app.voice.enabled, vec2(if app.voice.enabled { 84.0 } else { 40.0 }, 22.0))
+            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. O haz beatbox y toca una batería. Usa auriculares.\nClic derecho: notas o batería, octava, acordes, seguir el tono y enseñar tus sonidos");
         if voice.clicked() {
             app.toggle_voice();
         }
         voice.context_menu(|ui| {
+            if ui.radio(!app.voice.drums, "Notas (cantar)").clicked() {
+                app.voice.drums = false;
+                ui.close();
+            }
+            if ui.radio(app.voice.drums, "Batería (beatbox)").on_hover_text("«pum»: bombo · «pf» o «ka»: caja · «ts»: charles, en la pista seleccionada (una Drum Machine)").clicked() {
+                app.voice.drums = true;
+                ui.close();
+            }
+            ui.separator();
+            if app.voice.drums {
+                use crate::beatbox::{Drum, TEACH};
+                ui.label("Enseñar tus sonidos");
+                for drum in Drum::ALL {
+                    let taught = app.settings.beatbox.count(drum);
+                    let label = format!("{} {}{}", drum.name(), drum.sound(), if taught > 0 { " ✓" } else { "" });
+                    if ui.button(label).on_hover_text(format!("Haz el sonido {TEACH} veces: desde entonces, ese sonido tuyo toca el {}", drum.name().to_lowercase())).clicked() {
+                        app.teach_drum(drum);
+                        ui.close();
+                    }
+                }
+                if !app.settings.beatbox.is_empty() && ui.button("Olvidar lo enseñado").clicked() {
+                    app.forget_drums();
+                    ui.close();
+                }
+                return;
+            }
             ui.label("Octava");
             for (octave, label) in [(-2, "−2 (voz aguda → bajo)"), (-1, "−1"), (0, "Como suena"), (1, "+1"), (2, "+2 (voz grave → agudo)")] {
                 if ui.radio(app.voice.octave == octave, label).clicked() {

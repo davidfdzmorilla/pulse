@@ -42,7 +42,7 @@ La barra de arriba, de izquierda a derecha. Si la ventana es estrecha, pasa a do
 - **Escala**: la tonalidad de la canción (ver «Tonalidad y escala»), y si los loops nuevos se ajustan a ella.
 - **► Arrangement**: se ilumina cuando hace falta. Devuelve al Arrangement las pistas que están tocando clips de Session y reactiva la automatización que hayas movido a mano.
 - **Teclado**: el teclado del ordenador como teclado MIDI (M).
-- **Voz**: tocar cantando, tarareando o silbando al micrófono (ver «Tocar con la voz»).
+- **Voz**: tocar cantando, tarareando o silbando al micrófono, o una batería haciendo beatbox (ver «Tocar con la voz»).
 - **MIDI**: encendido si hay teclados MIDI conectados. Clic para volver a buscarlos.
 - **Asignar**: asignar knobs y botones de un controlador MIDI (ver «Controladores MIDI»).
 - A la derecha: **☰** (navegador), **Session** / **Arrangement** y el medidor del master.
@@ -756,6 +756,17 @@ Tu voz como teclado MIDI: pulsa **Voz** en la barra de transporte y canta, tarar
 - El botón muestra la nota que suena («Voz · A2»).
 - Usa **auriculares**: si el micrófono oye los altavoces, toca también lo que suena (sobre todo el bajo).
 - La primera vez, macOS pide permiso para usar el micrófono.
+
+### Beatbox a batería
+
+**Clic derecho** en **Voz** → **Batería (beatbox)**: en vez de cantar notas, haz beatbox y toca la Drum Machine de la pista seleccionada (o de las armadas).
+
+- **«pum»** es el bombo, **«pf»** o **«ka»** la caja y **«ts»** el charles cerrado (las notas C1, D1 y F#1).
+- Cada golpe suena unos 15–20 ms después de hacerlo. Lo fuerte que lo hagas es la velocidad.
+- **Graba** como un teclado: arma la pista y graba (F9 o en un slot) mientras haces beatbox; cada golpe queda como una nota corta.
+- El botón muestra el último sonido («Voz · Caja»).
+- **Enseñar tus sonidos**: si alguno no lo reconoce bien, en el mismo menú pulsa **Bombo**, **Caja** o **Charles** y hazlo 4 veces como lo harías tocando. Desde entonces ese sonido tuyo toca ese instrumento (los enseñados llevan ✓ y se guardan en los ajustes de Pulse). Enseñarlo otra vez sustituye lo anterior; **Olvidar lo enseñado** vuelve a los sonidos de serie.
+- La octava, los acordes y seguir el tono son de las notas: en batería no cuentan.
 
 Para pasar a MIDI algo ya grabado, usa **Audio a MIDI → Melodía**, que lo analiza con más calma y saca notas más limpias.
 

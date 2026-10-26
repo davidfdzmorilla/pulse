@@ -246,6 +246,7 @@ dependencies = [
  "paths",
  "rfd",
  "roxmltree",
+ "rustfft",
  "rusty_mp3",
  "serde",
  "serde_json",

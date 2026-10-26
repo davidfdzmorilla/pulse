@@ -6,7 +6,8 @@
 //! it and changes once the voice settles on another; with a project key, a
 //! note sung off the scale goes to the scale's nearest. Following the pitch
 //! («Seguir el tono»), what the voice strays from the note (vibrato, a slide
-//! to the next) bends it too.
+//! to the next) bends it too. With chords, the note sung is the root of its
+//! chord in the project's scale (a triad or a seventh chord).
 
 use crate::app::PulseApp;
 use engine::{Controller, LiveInput, LiveNote, VoiceInput};
@@ -187,18 +188,24 @@ pub struct Listener {
     /// (semitones).
     pub bend: bool,
     sent_bend: f64,
+    /// Chords or single notes, and the notes the note playing sounds.
+    pub chords: Chords,
+    sounding: Vec<u8>,
+    /// The key the last notes were heard in (their chords are in it).
+    key: Option<Key>,
 }
 
 impl Listener {
     pub fn new(rate: f32) -> Self {
         let window = (WINDOW_SECONDS * rate) as usize;
-        Self { tracker: LiveTracker::new(window, rate, FMIN, FMAX), rate, hop: ((HOP_SECONDS * rate) as usize).max(1), recent: Vec::with_capacity(4 * window), since: 0, follower: Follower::default(), bend: false, sent_bend: 0.0 }
+        Self { tracker: LiveTracker::new(window, rate, FMIN, FMAX), rate, hop: ((HOP_SECONDS * rate) as usize).max(1), recent: Vec::with_capacity(4 * window), since: 0, follower: Follower::default(), bend: false, sent_bend: 0.0, chords: Chords::Off, sounding: Vec::new(), key: None }
     }
 
     /// Takes new input: the notes it starts and stops (and, following the
     /// pitch, the bends), in order, moved by `octave` octaves.
     pub fn hear(&mut self, input: &[f32], octave: i32, key: Option<Key>) -> Vec<LiveNote> {
         let window = self.tracker.len();
+        self.key = key;
         let mut out = Vec::new();
         let mut rest = input;
         while !rest.is_empty() {
@@ -236,7 +243,9 @@ impl Listener {
     /// that stop, before those that start (so they start bent).
     fn send(&mut self, notes: Vec<(u8, f32)>, out: &mut Vec<LiveNote>) {
         let starts = notes.iter().position(|n| n.1 > 0.0).unwrap_or(notes.len());
-        out.extend(notes[..starts].iter().map(|&(p, v)| LiveNote::note(p, v)));
+        for _ in &notes[..starts] {
+            out.extend(self.sounding.drain(..).map(|p| LiveNote::note(p, 0.0)));
+        }
         let bend = match self.follower.playing {
             Some(_) if self.bend => self.follower.bend.clamp(-BEND_RANGE, BEND_RANGE),
             _ => 0.0,
@@ -248,18 +257,49 @@ impl Listener {
             out.push(bend_to(bend));
             self.sent_bend = bend;
         }
-        out.extend(notes[starts..].iter().map(|&(p, v)| LiveNote::note(p, v)));
+        for &(root, velocity) in &notes[starts..] {
+            out.extend(self.sounding.drain(..).map(|p| LiveNote::note(p, 0.0)));
+            self.sounding = chord(root, self.key, self.chords);
+            out.extend(self.sounding.iter().map(|&p| LiveNote::note(p, velocity)));
+        }
     }
 
     /// Stops the note playing (and brings the bend back), if any.
     pub fn release(&mut self) -> Vec<LiveNote> {
-        let mut out: Vec<LiveNote> = self.follower.release().map(|p| LiveNote::note(p, 0.0)).into_iter().collect();
+        self.follower.release();
+        let mut out: Vec<LiveNote> = self.sounding.drain(..).map(|p| LiveNote::note(p, 0.0)).collect();
         if self.sent_bend != 0.0 {
             out.push(bend_to(0.0));
             self.sent_bend = 0.0;
         }
         out
     }
+}
+
+/// What a note sung plays: itself, or the chord on it.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Chords {
+    #[default]
+    Off,
+    Triads,
+    Sevenths,
+}
+
+/// The notes `root` plays: with chords, its chord stacked in thirds of the
+/// scale above it (a major one without a scale, or for a note off it).
+pub fn chord(root: u8, key: Option<Key>, chords: Chords) -> Vec<u8> {
+    let tones = match chords {
+        Chords::Off => return vec![root],
+        Chords::Triads => 3,
+        Chords::Sevenths => 4,
+    };
+    let in_scale = key.filter(|k| k.scale()[root as usize % 12]);
+    (0..tones)
+        .filter_map(|i| match in_scale {
+            Some(k) => k.step(root, 2 * i as i32),
+            None => Some(root as i32 + [0, 4, 7, 11][i]).filter(|p| *p <= 127).map(|p| p as u8),
+        })
+        .collect()
 }
 
 /// The pitch bend for `semitones` (over [`BEND_RANGE`]).
@@ -280,8 +320,14 @@ struct Shared {
 
 const NO_NOTE: u8 = 255;
 
-/// What the window sets: the octave, the project's key, whether to bend.
-type Settings = (i32, Option<Key>, bool);
+/// What the window sets.
+#[derive(Clone, Copy, Default)]
+struct Settings {
+    octave: i32,
+    key: Option<Key>,
+    bend: bool,
+    chords: Chords,
+}
 
 /// The thread that listens; it gives the input back when it ends.
 struct Worker {
@@ -310,8 +356,9 @@ impl Worker {
                         std::thread::sleep(std::time::Duration::from_millis(1));
                         continue;
                     }
-                    let (octave, key, bend) = *mine.settings.lock().unwrap_or_else(|e| e.into_inner());
+                    let Settings { octave, key, bend, chords } = *mine.settings.lock().unwrap_or_else(|e| e.into_inner());
                     listener.bend = bend;
+                    listener.chords = chords;
                     for note in listener.hear(&new, octave, key) {
                         live.send(note);
                     }
@@ -334,17 +381,19 @@ impl Worker {
     }
 }
 
-/// The voice as an instrument: on or off, the octave it is moved by and
-/// whether its pitch bends the notes.
+/// The voice as an instrument: on or off, the octave it is moved by, whether
+/// its pitch bends the notes and whether it plays chords.
 #[derive(Default)]
 pub struct Voice {
     pub enabled: bool,
     pub octave: i32,
     pub bend: bool,
+    pub chords: Chords,
     worker: Option<Worker>,
 }
 
 impl Voice {
+    /// The note sung playing (the chord's root).
     pub fn playing(&self) -> Option<u8> {
         self.worker.as_ref().map(|w| w.shared.playing.load(Ordering::Relaxed)).filter(|&p| p != NO_NOTE)
     }
@@ -376,6 +425,10 @@ impl PulseApp {
         }
     }
 
+    fn voice_settings(&self) -> Settings {
+        Settings { octave: self.voice.octave, key: self.project.key, bend: self.voice.bend, chords: self.voice.chords }
+    }
+
     /// Every frame: the voice's thread runs while the voice is on (started
     /// again on a new input), with the octave and key as they are now.
     pub fn follow_voice(&mut self, ctx: &eframe::egui::Context) {
@@ -389,11 +442,11 @@ impl PulseApp {
         if self.voice.worker.is_none() {
             let input = self.capture.as_mut().and_then(|c| c.take_voice());
             if let (Some(input), Some(live)) = (input, self.audio.live()) {
-                self.voice.worker = Worker::start(input, live, (self.voice.octave, self.project.key, self.voice.bend));
+                self.voice.worker = Worker::start(input, live, self.voice_settings());
             }
         }
         if let Some(worker) = &self.voice.worker {
-            *worker.shared.settings.lock().unwrap_or_else(|e| e.into_inner()) = (self.voice.octave, self.project.key, self.voice.bend);
+            *worker.shared.settings.lock().unwrap_or_else(|e| e.into_inner()) = self.voice_settings();
         }
         // The button shows the note.
         ctx.request_repaint_after(std::time::Duration::from_millis(30));
@@ -645,6 +698,47 @@ mod tests {
         assert_eq!(notes(&sent)[0].0, 67);
         let worst = bends(&sent).iter().fold(0f64, |w, x| w.max(x.abs()));
         assert!(worst < 0.1, "bent {worst:.2} semitones");
+    }
+
+    #[test]
+    fn a_note_plays_its_chord_in_the_scale() {
+        let c = Some(Key { tonic: 0, minor: false });
+        let a = Some(Key { tonic: 9, minor: true });
+        assert_eq!(chord(60, c, Chords::Off), vec![60]);
+        assert_eq!(chord(60, c, Chords::Triads), vec![60, 64, 67]);
+        // ii in C: D minor; vii°7: B half-diminished.
+        assert_eq!(chord(62, c, Chords::Triads), vec![62, 65, 69]);
+        assert_eq!(chord(71, c, Chords::Sevenths), vec![71, 74, 77, 81]);
+        // I and V7 in C, i in A minor.
+        assert_eq!(chord(60, c, Chords::Sevenths), vec![60, 64, 67, 71]);
+        assert_eq!(chord(67, c, Chords::Sevenths), vec![67, 71, 74, 77]);
+        assert_eq!(chord(57, a, Chords::Triads), vec![57, 60, 64]);
+        // Without a scale, or off it: major.
+        assert_eq!(chord(61, None, Chords::Triads), vec![61, 65, 68]);
+        assert_eq!(chord(61, c, Chords::Sevenths), vec![61, 65, 68, 72]);
+        // What would go over the top is left out.
+        assert_eq!(chord(122, None, Chords::Sevenths), vec![122, 126]);
+    }
+
+    /// Singing A3 then C4 in C major, with triads: A minor, then C major,
+    /// each stopped before the next, and nothing left sounding.
+    #[test]
+    fn a_sung_note_plays_its_chord() {
+        let rate = 48_000.0;
+        let mut audio = sung(rate, 0.1, 0.3, 220.0, |_| 1.0);
+        audio.extend(sung(rate, 0.0, 0.3, 261.63, |_| 1.0));
+        audio.extend(vec![0.0; 4800]);
+        let mut listener = Listener::new(rate);
+        listener.chords = Chords::Triads;
+        listener.bend = true;
+        let c = Some(Key { tonic: 0, minor: false });
+        let mut sent: Vec<LiveNote> = audio.chunks(256).flat_map(|b| listener.hear(b, 0, c)).collect();
+        sent.extend(listener.release());
+        let on_off: Vec<(u8, bool)> = notes(&sent).iter().map(|n| (n.0, n.1 > 0.0)).collect();
+        assert_eq!(on_off, vec![(57, true), (60, true), (64, true), (57, false), (60, false), (64, false), (60, true), (64, true), (67, true), (60, false), (64, false), (67, false)]);
+        // Every chord's notes at one velocity.
+        let first = notes(&sent)[0].1;
+        assert!(notes(&sent)[..3].iter().all(|n| n.1 == first));
     }
 
     /// From a microphone fed by hand: the voice's thread plays a sung A3 then

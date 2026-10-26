@@ -1339,6 +1339,7 @@ dependencies = [
  "cpal",
  "libloading 0.9.0",
  "rtrb",
+ "rustfft",
  "serde",
  "serde_json",
  "symphonia",

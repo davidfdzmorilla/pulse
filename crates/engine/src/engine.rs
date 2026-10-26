@@ -367,6 +367,9 @@ pub enum Command {
         amount: f32,
         grid: f64,
     },
+    /// The project's scale: its pitch classes as bits (C first), 0 for none.
+    /// The Tuners set to the project's scale tune to it.
+    SetScale(u16),
     /// Whether the master output is clipped to ±1 (on for speakers; off when
     /// rendering to a file so peaks can be measured and normalized).
     SetOutputLimit(bool),
@@ -1670,6 +1673,8 @@ pub struct Engine {
     /// The transport started or jumped: automation applies at the next block.
     automate_now: bool,
     swing: (f64, f32),
+    /// The project's scale, for the Tuners (see [`Command::SetScale`]).
+    scale: u16,
     /// The file the browser is previewing, and where in it (frames of the file).
     preview: Option<(Arc<Sample>, f64)>,
     preview_buffer: Vec<f32>,
@@ -1844,6 +1849,7 @@ impl Engine {
             rendered: 0,
             automate_now: true,
             swing: (0.25, 0.0),
+            scale: 0,
             parents: [None; MAX_TRACKS],
             order: std::array::from_fn(|i| i),
             bus_left: vec![0.0; MAX_BLOCK],
@@ -2287,6 +2293,7 @@ impl Engine {
             }
             Command::SetOutputLimit(on) => self.limit_output = on,
             Command::SetSwing { amount, grid } => self.swing = (grid.max(1.0 / 64.0), amount.clamp(0.0, 1.0)),
+            Command::SetScale(bits) => self.scale = bits & 0xFFF,
             Command::SetArm { track, armed } => {
                 let end = self.position;
                 if let Some(t) = self.tracks.get_mut(track) {
@@ -2481,6 +2488,7 @@ impl Engine {
             tempo: self.tempo,
             beat: self.position,
             beats_per_sample: if self.playing { beats_per_sample } else { 0.0 },
+            scale: self.scale,
         };
         for track in &mut self.tracks {
             track.audio_left[..n].fill(0.0);

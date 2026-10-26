@@ -197,8 +197,10 @@ impl PulseApp {
         self.sync_all_midi_effects();
     }
 
-    /// Transposes every clip that follows the project's key to it.
+    /// Transposes every clip that follows the project's key to it (and the
+    /// Tuners that follow it tune to it).
     pub fn follow_key(&mut self) {
+        self.audio.send(crate::sync::scale_command(&self.project));
         let key = self.project.key;
         let mut changed = Vec::new();
         for (t, track) in self.project.tracks.iter_mut().enumerate() {

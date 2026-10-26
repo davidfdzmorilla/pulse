@@ -6,6 +6,7 @@ use crate::model::{
     EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, GateParams, TransientParams, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
 use crate::plugin::PluginProcessor;
+use crate::tuner::Tuner;
 use std::f32::consts::{PI, TAU};
 
 /// Timing information effects may need (tempo-synced delay, LFOs).
@@ -17,6 +18,9 @@ pub struct ProcessContext {
     pub beat: f64,
     /// Beats advanced per sample; 0 while the transport is stopped.
     pub beats_per_sample: f64,
+    /// The project's scale (its pitch classes as bits, C first; 0: none),
+    /// for a Tuner.
+    pub scale: u16,
 }
 
 /// Topology-preserving-transform state variable filter returning (low, band, high).
@@ -1289,6 +1293,7 @@ pub enum EffectProcessor {
     Compressor(Compressor),
     Gate(Gate),
     Transient(Transient),
+    Tuner(Box<Tuner>),
     Delay(Delay),
     Reverb(Reverb),
     Saturator(Saturator),
@@ -1320,6 +1325,7 @@ impl EffectProcessor {
             }),
             Effect::Gate(params) => Self::Gate(Gate::new(params)),
             Effect::Transient(params) => Self::Transient(Transient::new(params)),
+            Effect::Tuner(params) => Self::Tuner(Box::new(Tuner::new(params, sample_rate))),
             Effect::Delay(params) => Self::Delay(Delay::new(params, sample_rate)),
             Effect::Reverb(params) => Self::Reverb(Reverb::new(params, sample_rate)),
             Effect::Saturator(params) => Self::Saturator(Saturator::new(params)),
@@ -1375,6 +1381,7 @@ impl EffectProcessor {
             (Self::Compressor(fx), Effect::Compressor(p)) => fx.params = p,
             (Self::Gate(fx), Effect::Gate(p)) => fx.params = p,
             (Self::Transient(fx), Effect::Transient(p)) => fx.params = p,
+            (Self::Tuner(fx), Effect::Tuner(p)) => fx.params = p,
             (Self::Delay(fx), Effect::Delay(p)) => fx.params = p,
             (Self::Reverb(fx), Effect::Reverb(p)) => fx.params = p,
             (Self::Saturator(fx), Effect::Saturator(p)) => fx.params = p,
@@ -1399,6 +1406,7 @@ impl EffectProcessor {
             Self::Compressor(fx) => Effect::Compressor(fx.params),
             Self::Gate(fx) => Effect::Gate(fx.params),
             Self::Transient(fx) => Effect::Transient(fx.params),
+            Self::Tuner(fx) => Effect::Tuner(fx.params),
             Self::Delay(fx) => Effect::Delay(fx.params),
             Self::Reverb(fx) => Effect::Reverb(fx.params),
             Self::Saturator(fx) => Effect::Saturator(fx.params),
@@ -1446,6 +1454,7 @@ impl EffectProcessor {
                 fx.gain = 0.0;
             }
             Self::Transient(fx) => *fx = Transient::new(fx.params),
+            Self::Tuner(fx) => fx.reset(),
             Self::Delay(fx) => {
                 fx.lines.iter_mut().for_each(|line| line.fill(0.0));
                 fx.write = 0;
@@ -1505,6 +1514,7 @@ impl EffectProcessor {
             Self::Compressor(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Gate(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Transient(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::Tuner(fx) => fx.process(l, r, ctx.scale),
             Self::Delay(fx) => fx.process(l, r, ctx),
             Self::Reverb(fx) => fx.process(l, r),
             Self::Saturator(fx) => fx.process(l, r),
@@ -1534,6 +1544,7 @@ mod tests {
             tempo: 120.0,
             beat: 0.0,
             beats_per_sample: 120.0 / 60.0 / 48_000.0,
+            scale: 0,
         }
     }
 
@@ -2039,7 +2050,7 @@ mod tests {
         };
         let mut worst = (0f32, String::new());
         for rate in [44_100.0f32, 48_000.0] {
-            let ctx = ProcessContext { sample_rate: rate, tempo: 120.0, beat: 0.0, beats_per_sample: 2.0 / rate as f64 };
+            let ctx = ProcessContext { sample_rate: rate, tempo: 120.0, beat: 0.0, beats_per_sample: 2.0 / rate as f64, scale: 0 };
             for mode in [FilterMode::LowPass, FilterMode::HighPass, FilterMode::BandPass] {
                 for (steep, drive_db) in [(false, 0.0), (true, 0.0), (false, 24.0)] {
                     for resonance in [0.95f32, 1.0, 1.1, 1.2] {

@@ -16,6 +16,8 @@ mod clap_host;
 mod sample;
 mod sampler;
 mod synth;
+mod tuner;
+pub use tuner::scale_bits;
 pub mod wavetable;
 mod wavesynth;
 mod modsynth;

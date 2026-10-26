@@ -910,31 +910,35 @@ mod tests {
         app.voice.drums = true;
         let ctx = eframe::egui::Context::default();
         app.follow_voice(&ctx);
-        let mut feed = |app: &mut PulseApp, audio: Vec<f32>| {
-            for s in audio {
-                let _ = voice.push(s);
-            }
+        // Feeds `audio` and waits (5 s at most) for the window to see `done`:
+        // the voice's thread may still be on it after the input is empty.
+        let mut feed = |app: &mut PulseApp, audio: Vec<f32>, done: &dyn Fn(&PulseApp) -> bool| {
             let started = std::time::Instant::now();
-            while voice.slots() < voice.buffer().capacity() || started.elapsed().as_millis() < 100 {
+            // As a microphone does: a little at a time, none of it lost.
+            for s in audio {
+                while voice.push(s).is_err() {
+                    assert!(started.elapsed().as_secs() < 5, "the voice's thread does not take the input");
+                    std::thread::sleep(std::time::Duration::from_millis(1));
+                }
+            }
+            loop {
                 app.follow_voice(&ctx);
-                assert!(started.elapsed().as_secs() < 5);
+                if done(app) {
+                    break;
+                }
+                assert!(started.elapsed().as_secs() < 5, "{:?} {:?}", app.voice.last_hit(), app.status);
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
-            app.follow_voice(&ctx);
         };
         let hats = |n: usize| pattern(&(0..n).map(|i| (Drum::Hat, 0.05 + 0.2 * i as f32)).collect::<Vec<_>>(), 0.05 + 0.2 * n as f32);
-        feed(&mut app, hats(1));
-        assert_eq!(app.voice.last_hit(), Some(Drum::Hat));
+        feed(&mut app, hats(1), &|app| app.voice.last_hit() == Some(Drum::Hat));
         app.teach_drum(Drum::Kick);
-        feed(&mut app, hats(TEACH));
-        assert_eq!(app.voice.teaching, None, "{:?}", app.status);
+        feed(&mut app, hats(TEACH), &|app| app.voice.teaching.is_none());
         assert_eq!(app.settings.beatbox.count(Drum::Kick), TEACH);
-        feed(&mut app, hats(1));
-        assert_eq!(app.voice.last_hit(), Some(Drum::Kick));
+        feed(&mut app, hats(1), &|app| app.voice.last_hit() == Some(Drum::Kick));
         app.forget_drums();
         app.follow_voice(&ctx);
-        feed(&mut app, hats(1));
-        assert_eq!(app.voice.last_hit(), Some(Drum::Hat));
+        feed(&mut app, hats(1), &|app| app.voice.last_hit() == Some(Drum::Hat));
     }
 
     /// From a microphone fed by hand: the voice's thread plays a sung A3 then

@@ -575,6 +575,15 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
   - **Sustain**: por encima de 0 %, lo que sigue al golpe dura más (más sala, más cuerpo); por debajo, se acorta (una batería más seca y apretada).
   - **Output**: el volumen al final.
   - Un sonido sostenido, sin golpes, pasa igual.
+- **Tuner** (afinador de voz, como Auto-Tune): lleva cada nota de una voz, o de cualquier instrumento que toque una nota a la vez (un bajo, un violín, un silbido), a la nota más cercana de la escala, en vivo o en lo que ya está grabado. Ponlo en una pista de audio.
+  - **Escala**: **Del proyecto** (la de Tonalidad y escala; si el proyecto no tiene, todas las notas y cambia en cuanto le pongas una), **Cromática** (la nota más cercana, sea cual sea) o una escala concreta (Do mayor, La menor…). Una nota que no es de la escala va a la de la escala más cercana: un Fa# desafinado en Do mayor suena como Sol.
+  - **Speed**: lo que tarda en llegar a la nota. A 0 ms va al instante, y cada cambio de nota es un salto: el efecto robótico del pop y el trap. Con 20–50 ms afina sin que se note; con 100–400 ms, solo corrige lo que se aleja mucho.
+  - **Humanize**: cuanto más alto, más libre deja una nota que mantienes (su vibrato se queda), mientras las notas cortas siguen afinadas.
+  - **Amount**: cuánto del camino recorre: al 100 % llega a la nota; al 50 %, se queda a medias.
+  - Sigue de un Do2 (65 Hz) a un Do#6 (1100 Hz). Lo que no tiene tono (respiraciones, eses, silencio) pasa sin cambios.
+  - Suena un poco tarde, algo más de un periodo de la nota: unos 5 ms con una voz media (La3), 10 con una grave (La2) y hasta 17 con las notas más bajas de un bajo.
+  - No está entre los efectos internos de los sintes, que ya tocan afinado.
+  - Un proyecto con un Tuner no se abre en un Pulse anterior: pide actualizar.
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras).
 - **Bitcrusher**: bits y reducción de muestreo.
 - **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.

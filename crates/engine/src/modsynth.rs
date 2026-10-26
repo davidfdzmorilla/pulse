@@ -1261,7 +1261,7 @@ impl ModSynth {
             let mut sideband = [[0f32; CONTROL]; 2];
             self.update_globals(&base, n as f32 / self.sample_rate);
             let tempo = self.tempo;
-            let ctx = ProcessContext { sample_rate: self.sample_rate, tempo, beat: self.clock * tempo / 60.0, beats_per_sample: tempo / 60.0 / self.sample_rate as f64 };
+            let ctx = ProcessContext { sample_rate: self.sample_rate, tempo, beat: self.clock * tempo / 60.0, beats_per_sample: tempo / 60.0 / self.sample_rate as f64, scale: 0 };
             let mut newest: Option<(usize, u64)> = None;
             for v in 0..VOICES {
                 if !self.voices[v].active {

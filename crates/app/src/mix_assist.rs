@@ -3,12 +3,18 @@
 //! end) and says what to fix for where the song is going (Spotify, Apple Music,
 //! a club…), each with a button that does it. A reference song can be loaded to
 //! compare the loudness and the tonal balance with.
+//!
+//! «Mezcla de partida» sets the tracks against each other the way a mix
+//! usually starts: each takes a role (kick, bass, voice, pads…), from its
+//! name, its instrument or its sound, and gets that role's usual level next
+//! to the kick or the drums, its place in the stereo and, if it doesn't need
+//! its lows, a low cut.
 
 use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{Device, DuckerParams, Effect, Eq3Params, KickDrive, LimiterParams, Param, SaturatorParams};
+use engine::model::{Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, SaturatorParams};
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -111,6 +117,248 @@ pub struct TrackMeasures {
     pub correlation: f64,
     /// Its level below 120 Hz every 0.1 s (dB).
     low_end: Vec<f64>,
+    /// What it is in the mix, where it is in the stereo, whether it has a low
+    /// cut already, and its octave bands (see [`balance_tracks`]).
+    pub role: Role,
+    pub pan: f32,
+    pub cut: bool,
+    pub bands: [f64; 10],
+    /// Its fader (linear gain).
+    pub gain: f32,
+}
+
+// ----- A starting balance -------------------------------------------------------------
+
+/// What a track is in the mix.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Role {
+    Kick,
+    Drums,
+    Percussion,
+    Bass,
+    Vocal,
+    Backing,
+    Lead,
+    Chords,
+    Pad,
+    Fx,
+    Other,
+}
+
+impl Role {
+    pub fn label(self) -> &'static str {
+        match self {
+            Role::Kick => "bombo",
+            Role::Drums => "batería",
+            Role::Percussion => "percusión",
+            Role::Bass => "bajo",
+            Role::Vocal => "voz",
+            Role::Backing => "coros",
+            Role::Lead => "solista",
+            Role::Chords => "acordes",
+            Role::Pad => "pad",
+            Role::Fx => "efectos",
+            Role::Other => "otra",
+        }
+    }
+
+    /// Its loudness (LU) next to the kick, where a mix usually starts: the
+    /// voice as loud, the bass a little under, pads and percussion well under.
+    fn level(self) -> Option<f64> {
+        match self {
+            Role::Kick | Role::Vocal => Some(0.0),
+            Role::Drums | Role::Bass => Some(-2.0),
+            Role::Lead => Some(-3.0),
+            Role::Chords => Some(-5.0),
+            Role::Backing => Some(-7.0),
+            Role::Percussion | Role::Pad => Some(-8.0),
+            Role::Fx => Some(-10.0),
+            Role::Other => None,
+        }
+    }
+
+    /// Where its low cut goes (Hz), if it doesn't need its lows.
+    fn low_cut(self) -> Option<f32> {
+        match self {
+            Role::Vocal => Some(90.0),
+            Role::Lead => Some(120.0),
+            Role::Backing | Role::Chords | Role::Pad | Role::Fx => Some(150.0),
+            Role::Percussion => Some(250.0),
+            _ => None,
+        }
+    }
+
+    /// In the middle: the low end (a club is mono down there) and the voice.
+    fn centred(self) -> bool {
+        matches!(self, Role::Kick | Role::Bass | Role::Vocal)
+    }
+
+    /// How far apart several of it go (pan, each way).
+    fn spread(self) -> Option<f32> {
+        match self {
+            Role::Lead => Some(0.25),
+            Role::Percussion => Some(0.3),
+            Role::Chords => Some(0.35),
+            Role::Pad | Role::Fx => Some(0.4),
+            Role::Backing => Some(0.5),
+            _ => None,
+        }
+    }
+}
+
+/// The role a track's name says (Spanish or English), or its instrument.
+pub fn role_hint(name: &str, instrument: &InstrumentKind, drums: bool) -> Option<Role> {
+    let name = name.to_lowercase();
+    let words: Vec<&str> = name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let has = |keys: &[&str]| words.iter().any(|w| keys.iter().any(|k| w.starts_with(k)));
+    // The most telling first: «Kick Rumble» is low end, «Voz FX» an effect.
+    let by_name = [
+        (Role::Fx, &["fx", "riser", "sweep", "impact", "efecto", "noise", "ruido"][..]),
+        (Role::Backing, &["coro", "backing", "bvs", "dobl"]),
+        (Role::Vocal, &["voz", "voces", "vocal", "vox", "voice", "cant"]),
+        (Role::Bass, &["bass", "bajo", "sub", "808", "rumble"]),
+        (Role::Kick, &["kick", "bombo", "bd"]),
+        (Role::Percussion, &["hat", "hihat", "charles", "perc", "shaker", "tops", "ride", "crash", "conga", "bongo", "clap", "palma", "tambor"]),
+        (Role::Drums, &["drum", "bater", "beat", "ritmo", "break", "snare", "caja"]),
+        (Role::Lead, &["lead", "melod", "solo", "arp", "pluck", "hook"]),
+        (Role::Chords, &["acorde", "chord", "keys", "piano", "rhodes", "guitar", "stab", "organ", "órgano"]),
+        (Role::Pad, &["pad", "string", "cuerda", "atmos", "ambient", "drone"]),
+    ];
+    if let Some((role, _)) = by_name.iter().find(|(_, keys)| has(keys)) {
+        return Some(*role);
+    }
+    match instrument {
+        InstrumentKind::Kick(_) => Some(Role::Kick),
+        InstrumentKind::Acid(_) => Some(Role::Bass),
+        _ if drums => Some(Role::Drums),
+        _ => None,
+    }
+}
+
+/// The role a track's sound says, when its name and instrument don't: low
+/// end mostly, a bass; highs mostly, percussion.
+pub fn role_by_sound(bands: &[f64; 10]) -> Role {
+    let power: Vec<f64> = bands.iter().map(|b| 10f64.powf(b / 10.0)).collect();
+    let total = power.iter().sum::<f64>().max(1e-30);
+    let share = |range: std::ops::RangeInclusive<usize>| power[range].iter().sum::<f64>() / total;
+    if share(0..=2) > 0.6 {
+        Role::Bass
+    } else if share(7..=9) > 0.6 {
+        Role::Percussion
+    } else {
+        Role::Other
+    }
+}
+
+/// What the starting balance changes on a track.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Change {
+    pub track: usize,
+    pub name: String,
+    pub role: Role,
+    /// Its volume moved (dB), its pan set, a low cut at (Hz).
+    pub gain_db: f32,
+    pub pan: Option<f32>,
+    pub low_cut: Option<f32>,
+}
+
+impl Change {
+    fn describe(&self) -> String {
+        let mut parts = Vec::new();
+        if self.gain_db != 0.0 {
+            parts.push(format!("volumen {} dB", db(self.gain_db as f64)));
+        }
+        if let Some(pan) = self.pan {
+            parts.push(match pan {
+                p if p.abs() < 0.01 => "al centro".to_string(),
+                p => format!("panorama {:.0} % {}", p.abs() * 100.0, if p < 0.0 { "izquierda" } else { "derecha" }),
+            });
+        }
+        if let Some(hz) = self.low_cut {
+            parts.push(format!("sin graves bajo {hz:.0} Hz"));
+        }
+        format!("«{}» ({}): {}", self.name, self.role.label(), parts.join(", "))
+    }
+}
+
+/// A fader's top (linear gain: +6 dB).
+const FADER_TOP: f32 = 2.0;
+/// The least a volume is moved (dB): less isn't worth the change.
+const BALANCE_STEP: f64 = 1.5;
+/// How loud a track's lowest octaves may be (dB under its loudest) before
+/// it is worth a low cut.
+const LOWS_WORTH_CUTTING: f64 = -30.0;
+
+/// The track the balance is set from: the loudest kick, else drums, voice or
+/// lead.
+fn anchor(tracks: &[TrackMeasures]) -> Option<&TrackMeasures> {
+    [Role::Kick, Role::Drums, Role::Vocal, Role::Lead]
+        .into_iter()
+        .find_map(|role| tracks.iter().filter(|t| t.role == role && t.lufs.is_some()).max_by(|a, b| a.lufs.partial_cmp(&b.lufs).unwrap()))
+}
+
+/// A starting balance: what each track needs to sit where its role
+/// usually does, next to the anchor (see [`anchor`]).
+pub fn balance_tracks(tracks: &[TrackMeasures]) -> (Option<&TrackMeasures>, Vec<Change>) {
+    let Some(anchor) = anchor(tracks) else { return (None, Vec::new()) };
+    let reference = anchor.lufs.unwrap_or(0.0) - anchor.role.level().unwrap_or(0.0);
+    let sounding: Vec<&TrackMeasures> = tracks.iter().filter(|t| t.lufs.is_some()).collect();
+    let count = |role: Role| sounding.iter().filter(|t| t.role == role).count();
+    let mut changes = Vec::new();
+    for t in &sounding {
+        let mut change = Change { track: t.index, name: t.name.clone(), role: t.role, gain_db: 0.0, pan: None, low_cut: None };
+        // Its level: the role's, shared among the tracks of it.
+        if let (Some(level), Some(lufs)) = (t.role.level(), t.lufs) {
+            if t.index != anchor.index {
+                let goal = reference + level - 10.0 * (count(t.role) as f64).log10();
+                // Up no further than a dB under full scale, nor past the
+                // fader's top.
+                let room = 20.0 * (FADER_TOP / t.gain.max(1e-6)).log10() as f64;
+                let gain = (goal - lufs).clamp(-24.0, 24.0).min(-1.0 - t.peak).min(room);
+                if gain.abs() >= BALANCE_STEP {
+                    change.gain_db = (gain * 2.0).round() as f32 / 2.0;
+                }
+            }
+        }
+        // In the stereo: the low end and the voice in the middle; several of
+        // a kind, spread across (only those not placed by hand).
+        if t.role.centred() && t.pan.abs() > 0.15 && count(t.role) == 1 {
+            change.pan = Some(0.0);
+        }
+        if let Some(spread) = t.role.spread() {
+            let alike: Vec<&&TrackMeasures> = sounding.iter().filter(|o| o.role == t.role && o.pan.abs() < 0.05).collect();
+            if alike.len() >= 2 {
+                let k = alike.iter().position(|o| o.index == t.index);
+                if let Some(k) = k {
+                    let pan = -spread + 2.0 * spread * k as f32 / (alike.len() - 1) as f32;
+                    if pan.abs() > 0.01 {
+                        change.pan = Some(pan);
+                    }
+                }
+            }
+        }
+        // Lows it doesn't need.
+        if let Some(hz) = t.role.low_cut().filter(|_| !t.cut) {
+            let loudest = t.bands.iter().cloned().fold(f64::NEG_INFINITY, f64::max);
+            if t.bands[0].max(t.bands[1]) - loudest > LOWS_WORTH_CUTTING {
+                change.low_cut = Some(hz);
+            }
+        }
+        if change.gain_db != 0.0 || change.pan.is_some() || change.low_cut.is_some() {
+            changes.push(change);
+        }
+    }
+    (Some(anchor), changes)
+}
+
+/// Whether a track's effects already cut its lows (an EQ Eight's low cut, or
+/// an EQ Three with its lows well down).
+fn cuts_lows(track: &crate::project::Track) -> bool {
+    track.devices.iter().any(|d| match &d.effect {
+        Effect::EqEight(eq) => eq.bands.iter().any(|b| b.on && matches!(b.shape, EqShape::LowCut12 | EqShape::LowCut48) && b.freq >= 50.0),
+        Effect::Eq3(eq) => eq.low_db <= -6.0,
+        _ => false,
+    })
 }
 
 #[derive(Clone, Debug)]
@@ -133,6 +381,8 @@ pub enum Fix {
     CutLows { track: usize, name: String },
     /// The master's EQ Three moved by these (dB).
     MasterEq { low: f32, mid: f32, high: f32 },
+    /// A starting balance (see [`balance_tracks`]).
+    Balance(Vec<Change>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -147,10 +397,12 @@ pub struct Advice {
     pub level: Level,
     pub text: String,
     pub fix: Option<Fix>,
+    /// What it would do, a line each.
+    pub details: Vec<String>,
 }
 
 fn advice(level: Level, text: String, fix: Option<Fix>) -> Advice {
-    Advice { level, text, fix }
+    Advice { level, text, fix, details: Vec::new() }
 }
 
 fn db(x: f64) -> String {
@@ -238,6 +490,21 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             ));
         } else if mix.true_peak <= ceiling {
             out.push(advice(Level::Good, format!("Pico real {} dBTP: sin riesgo de distorsión", db(mix.true_peak)), None));
+        }
+    }
+    // The tracks against each other.
+    let (anchor, changes) = balance_tracks(&report.tracks);
+    if let Some(anchor) = anchor {
+        if changes.is_empty() {
+            out.push(advice(Level::Good, format!("Las pistas están equilibradas para empezar a mezclar, junto a «{}»", anchor.name), None));
+        } else {
+            let mut a = advice(
+                Level::Note,
+                format!("Mezcla de partida: {} {} fuera del sitio habitual de su papel junto a «{}»", changes.len(), if changes.len() == 1 { "pista" } else { "pistas" }, anchor.name),
+                Some(Fix::Balance(changes.clone())),
+            );
+            a.details = changes.iter().map(Change::describe).collect();
+            out.push(a);
         }
     }
     // Tracks over 0 dB (the master adds them up past full scale).
@@ -416,6 +683,8 @@ impl PulseApp {
             .iter()
             .map(|t| (t.name.clone(), is_drums(t), matches!(t.instrument, engine::model::InstrumentKind::Kick(_)), t.id, listens(t)))
             .collect();
+        // For the balance: the role its name or instrument says, its pan, its low cut.
+        let mixing: Vec<(Option<Role>, f32, bool, f32)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain)).collect();
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -426,6 +695,8 @@ impl PulseApp {
                     None => Measured::Mix(Measures::of(&left, &right, RATE)),
                     Some(index) => {
                         let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
+                        let (hint, pan, cut, gain) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0));
+                        let bands = loudness::bands(&left, &right, RATE);
                         Measured::Track(TrackMeasures {
                             index,
                             id,
@@ -437,6 +708,11 @@ impl PulseApp {
                             lufs: loudness::integrated(&left, &right, RATE),
                             correlation: loudness::correlation(&left, &right),
                             low_end: loudness::low_end(&left, &right, RATE),
+                            role: hint.unwrap_or_else(|| role_by_sound(&bands)),
+                            pan,
+                            cut,
+                            bands,
+                            gain,
                         })
                     }
                 })
@@ -665,6 +941,23 @@ impl PulseApp {
                 }
                 self.status = Some("EQ Three del master ajustado a la referencia".into());
             }
+            Fix::Balance(changes) if changes.iter().all(|c| track_ok(self, c.track, &c.name)) => {
+                for c in changes {
+                    let track = &mut self.project.tracks[c.track];
+                    track.mixer.gain *= 10f32.powf(c.gain_db / 20.0);
+                    if let Some(pan) = c.pan {
+                        track.mixer.pan = pan;
+                    }
+                    if let Some(hz) = c.low_cut {
+                        let mut eq = EqEightParams::default();
+                        eq.bands[0].on = true;
+                        eq.bands[0].shape = EqShape::LowCut12;
+                        eq.bands[0].freq = hz;
+                        track.devices.push(Device::new(Effect::EqEight(eq)));
+                    }
+                }
+                self.status = Some(format!("Mezcla de partida: {} pistas en su sitio (⌘Z lo deshace)", changes.len()));
+            }
             _ => {
                 self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
                 return;
@@ -791,6 +1084,12 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
         });
+        for line in &a.details {
+            ui.horizontal(|ui| {
+                ui.add_space(18.0);
+                ui.label(RichText::new(line).color(TEXT_DIM).size(10.5));
+            });
+        }
     }
     if let Some(note) = &app.mix.note {
         ui.label(RichText::new(note).color(ACCENT));
@@ -830,6 +1129,7 @@ fn fix_hint(fix: &Fix) -> String {
         Fix::Duck { name, source_name, .. } => format!("Añade un Ducker a «{name}» que escucha a «{source_name}» (sidechain): baja cuando suena, para dejarle sitio"),
         Fix::CutLows { name, .. } => format!("Añade un EQ Three a «{name}» con los graves (bajo 150 Hz) a −9 dB"),
         Fix::MasterEq { low, mid, high } => format!("EQ Three en el master: graves {low:+.1}, medios {mid:+.1}, agudos {high:+.1} dB"),
+        Fix::Balance(_) => "Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
     }
 }
 
@@ -867,7 +1167,7 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5 }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
@@ -1125,5 +1425,147 @@ mod tests {
         wait(&mut app);
         let advice = advise(&app.mix.report.clone().unwrap(), Target::Club, None);
         assert!(!advice.iter().any(|a| matches!(a.fix, Some(Fix::Duck { .. }))), "{advice:?}");
+    }
+
+    #[test]
+    fn a_tracks_role_comes_from_its_name_or_instrument() {
+        use engine::model::{AcidParams, KickParams};
+        let synth = InstrumentKind::Synth(Default::default());
+        for (name, role) in [
+            ("Kick", Role::Kick),
+            ("Bombo 909", Role::Kick),
+            ("Kick Rumble", Role::Bass),
+            ("Bajo", Role::Bass),
+            ("Sub 808", Role::Bass),
+            ("Batería", Role::Drums),
+            ("Hi-Hats", Role::Percussion),
+            ("Charles abierto", Role::Percussion),
+            ("Voz principal", Role::Vocal),
+            ("Coros", Role::Backing),
+            ("Voz FX", Role::Fx),
+            ("Melodía", Role::Lead),
+            ("Acordes", Role::Chords),
+            ("Piano", Role::Chords),
+            ("Pad oscuro", Role::Pad),
+        ] {
+            assert_eq!(role_hint(name, &synth, false), Some(role), "{name}");
+        }
+        assert_eq!(role_hint("Pista 3", &synth, false), None);
+        assert_eq!(role_hint("Pista 3", &InstrumentKind::Kick(KickParams::default()), false), Some(Role::Kick));
+        assert_eq!(role_hint("Pista 3", &InstrumentKind::Acid(AcidParams::default()), false), Some(Role::Bass));
+        assert_eq!(role_hint("Pista 3", &synth, true), Some(Role::Drums));
+        // By its sound: lows, a bass; highs, percussion.
+        assert_eq!(role_by_sound(&[-10.0, -5.0, -8.0, -25.0, -35.0, -40.0, -45.0, -50.0, -55.0, -60.0]), Role::Bass);
+        assert_eq!(role_by_sound(&[-60.0, -55.0, -50.0, -45.0, -40.0, -30.0, -20.0, -8.0, -5.0, -9.0]), Role::Percussion);
+        assert_eq!(role_by_sound(&[-30.0; 10]), Role::Other);
+    }
+
+    /// Each track where its role usually starts, next to the kick: the bass
+    /// up and to the middle, the pad down without its lows, two chord tracks
+    /// sharing their level and spread, the voice where it was.
+    #[test]
+    fn the_tracks_start_where_their_role_does() {
+        let t = |index: usize, name: &str, role: Role, lufs: f64, peak: f64, pan: f32, lows: bool| TrackMeasures {
+            role,
+            pan,
+            lufs: Some(lufs),
+            bands: if lows { [-20.0; 10] } else { [-70.0, -70.0, -40.0, -30.0, -20.0, -15.0, -12.0, -10.0, -10.0, -12.0] },
+            ..track(index, name, false, peak, Vec::new())
+        };
+        let tracks = vec![
+            t(0, "Kick", Role::Kick, -12.0, -3.0, 0.0, true),
+            t(1, "Bajo", Role::Bass, -20.0, -10.0, 0.4, true),
+            t(2, "Pad", Role::Pad, -10.0, -4.0, 0.0, true),
+            t(3, "Acordes A", Role::Chords, -17.0, -8.0, 0.0, false),
+            t(4, "Acordes B", Role::Chords, -17.0, -8.0, 0.0, false),
+            t(5, "Voz", Role::Vocal, -12.5, -6.0, 0.0, true),
+            t(6, "Hats", Role::Percussion, -20.0, -12.0, 0.0, false),
+            t(7, "Ruido raro", Role::Other, -30.0, -20.0, 0.7, true),
+            // Too quiet to raise it all the way: up to a dB under full scale.
+            t(8, "Lead", Role::Lead, -30.0, -4.0, 0.0, false),
+        ];
+        let (anchor, changes) = balance_tracks(&tracks);
+        assert_eq!(anchor.unwrap().name, "Kick");
+        for c in &changes {
+            println!("{}", c.describe());
+        }
+        let of = |name: &str| changes.iter().find(|c| c.name == name).cloned();
+        assert_eq!(of("Bajo"), Some(Change { track: 1, name: "Bajo".into(), role: Role::Bass, gain_db: 6.0, pan: Some(0.0), low_cut: None }));
+        assert_eq!(of("Pad"), Some(Change { track: 2, name: "Pad".into(), role: Role::Pad, gain_db: -10.0, pan: None, low_cut: Some(150.0) }));
+        // Two of them: 3 dB under the chords' level each, one each side.
+        assert_eq!(of("Acordes A").map(|c| (c.gain_db, c.pan)), Some((-3.0, Some(-0.35))));
+        assert_eq!(of("Acordes B").map(|c| (c.gain_db, c.pan)), Some((-3.0, Some(0.35))));
+        // Within a dB and a half: as it is, but its rumble goes.
+        assert_eq!(of("Voz").map(|c| (c.gain_db, c.pan, c.low_cut)), Some((0.0, None, Some(90.0))));
+        assert_eq!(of("Lead").map(|c| c.gain_db), Some(3.0));
+        assert!(of("Kick").is_none() && of("Hats").is_none() && of("Ruido raro").is_none());
+        let list = advise(&report(-14.0, -1.5, tracks.clone()), Target::Streaming, None);
+        let balance = list.iter().find(|a| matches!(a.fix, Some(Fix::Balance(_)))).expect("the balance advice");
+        assert!(balance.text.contains("6 pistas") && balance.text.contains("«Kick»"), "{}", balance.text);
+        assert_eq!(balance.details.len(), 6);
+        // Nothing to set it from: no advice about it.
+        let none: Vec<TrackMeasures> = tracks.into_iter().filter(|t| matches!(t.role, Role::Pad | Role::Other)).collect();
+        assert!(balance_tracks(&none).0.is_none());
+    }
+
+    /// A song from «De tarareo a canción» (melody, chords, bass, drums),
+    /// analysed for real, balanced, and analysed again: then it is balanced.
+    #[test]
+    fn a_song_is_balanced_in_one_step() {
+        use crate::project::{Project, Track};
+        use engine::model::{ArrangementClip, Clip, MidiClip, Note};
+        let mut project = Project::empty();
+        let mut voice = Track::new("Tarareo", [10, 20, 30], InstrumentKind::Synth(Default::default()));
+        voice.id = 1;
+        let tune = [[60, 64, 67, 64], [65, 69, 72, 69], [67, 71, 74, 71], [72, 67, 64, 60]];
+        let notes: Vec<Note> = tune.iter().enumerate().flat_map(|(b, ns)| ns.iter().enumerate().map(move |(k, &p)| Note { start: b as f64 * 4.0 + k as f64, length: 1.0, pitch: p, velocity: 0.8, chance: 1.0 })).collect();
+        voice.arrangement = vec![ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(MidiClip { notes, ..MidiClip::new("Tarareo", 16.0, [10, 20, 30]) }) }];
+        project.tracks = vec![voice];
+        let mut app = PulseApp::headless(project);
+        app.hum_to_song(crate::app::ClipRef::Arrangement { track: 0, index: 0 }, crate::drum_gen::Style::PopRock);
+        // The hummed tune itself out of the way: the song is the four tracks.
+        app.project.tracks[0].mixer.active = false;
+        // Out of balance: the pad-like chords far too loud, the bass far too quiet.
+        app.project.tracks[2].mixer.gain *= 4.0;
+        app.project.tracks[3].mixer.gain *= 0.1;
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 120);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let report = app.mix.report.clone().unwrap();
+        let roles: Vec<(String, Role)> = report.tracks.iter().map(|t| (t.name.clone(), t.role)).collect();
+        println!("{roles:?}");
+        for (name, role) in [("Melodía", Role::Lead), ("Acordes", Role::Chords), ("Bajo", Role::Bass), ("Batería", Role::Drums)] {
+            assert!(roles.contains(&(name.to_string(), role)), "{name}: {roles:?}");
+        }
+        let advice = advise(&report, Target::Streaming, None);
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Balance(_)))).expect("a balance to apply");
+        let Fix::Balance(changes) = &fix else { unreachable!() };
+        for c in changes {
+            println!("{}", c.describe());
+        }
+        assert!(changes.iter().any(|c| c.name == "Acordes" && c.gain_db < -6.0));
+        assert!(changes.iter().any(|c| c.name == "Bajo" && c.gain_db > 6.0));
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        let after = app.mix.report.clone().unwrap();
+        let (_, left) = balance_tracks(&after.tracks);
+        assert!(left.is_empty(), "balanced once applied: {left:?}");
+        assert!(advise(&after, Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text.starts_with("Las pistas están equilibradas")));
+        // Lows cut where the plan said (only where there were lows to cut),
+        // never on the bass.
+        for t in 1..app.project.tracks.len() {
+            let planned = changes.iter().any(|c| c.track == t && c.low_cut.is_some());
+            assert_eq!(cuts_lows(&app.project.tracks[t]), planned, "{}", app.project.tracks[t].name);
+        }
+        assert!(!cuts_lows(&app.project.tracks[3]), "not the bass");
     }
 }

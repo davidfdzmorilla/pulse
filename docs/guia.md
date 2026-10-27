@@ -366,6 +366,16 @@ Se abre al seleccionar un clip MIDI. En pistas de batería las filas llevan el n
 - Nombre del clip, **Loop** (1, 2, 4, 8 o 16 compases, o cualquier número de semicorcheas en el campo **/16**: un clip de 3/16, 5/16 o 7/16 sobre el 4/4 se desplaza en cada compás, para polirritmos), **Rejilla** (1/4 a 1/32, con tresillos), **Nota** (longitud de las notas nuevas).
 - **Dibujar** (B): modo lápiz.
 - **Groove**: el del proyecto (el swing del transporte) o **uno propio para este clip**, con **Swing** y su rejilla, **Acentos** (contratiempos más suaves) y **Humanizar** (pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta). Tiene grooves listos: Recto, Swing 1/16, MPC 1/16, Shuffle 1/8 y Humano. Se aplica al tocar: las notas no se mueven.
+  - **De tus grabaciones**: los grooves que has sacado de un audio (ver «Groove desde un audio»). Con uno de ellos, cada nota que cae en la rejilla se mueve como su golpe en la grabación y toma su fuerza; **Tiempo** y **Dinámica** dicen cuánto (100 %, igual que la grabación; 50 %, a medio camino). **Humanizar** se suma encima.
+
+### Groove desde un audio
+
+Clic derecho en un clip de audio (un loop de batería, un break, tu beatbox) → **Sacar groove**. Pulse escucha dónde cae cada golpe respecto a la rejilla y con qué fuerza, paso a paso a lo largo de un compás, y lo guarda en el proyecto con el nombre del clip. Después, en el **Groove** de cualquier clip MIDI, aparece en **De tus grabaciones**: el clip suena con el pulso de esa grabación.
+
+- Sabe si el loop va en **semicorcheas** o en **corcheas** (un shuffle): la barra de estado lo dice, y cuánto se retrasan sus contratiempos («en semicorcheas, los contratiempos un 30 % de paso tarde»).
+- Si la grabación entera va un poco tarde o pronto (el clip empieza unos milisegundos antes del golpe), no cuenta: lo que guarda es cómo se separan sus golpes de los tiempos.
+- Sigue el warp del clip: si el loop está ajustado al tempo, el groove sale de cómo suena en él.
+- Los proyectos con grooves sacados de audio se guardan en un formato nuevo (11): una versión anterior de Pulse no los abre, para no tocarlos sin ellos.
 - **Cuantizar** (⌘U) con su **intensidad** (%) y **finales** (cuantizar también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
 - **Prob.** (%): cuántas de las veces que pasa el loop suena cada nota seleccionada (o todas, si no hay selección). Un hat al 60 % o una nota fantasma de caja al 30 % hacen que el loop varíe solo. Es al azar, pero siempre el mismo azar: suena igual cada vez que reproduces la canción, al exportarla y al congelar la pista. Cada copia de un clip en el Arrangement tiene su propio azar: duplicar un loop de charles al 60 % no repite las mismas notas en cada copia. Las notas con probabilidad se ven más pálidas, con su %.
 - **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom**.

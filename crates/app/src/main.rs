@@ -40,6 +40,7 @@ mod guide;
 mod harmony;
 mod freeze;
 mod history;
+mod groove_audio;
 mod hum_song;
 mod input;
 mod kick_ui;

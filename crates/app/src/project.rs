@@ -290,7 +290,9 @@ pub struct MasterTrack {
 /// have one.
 /// 10: a Tuner: a Pulse that reads 9 doesn't know it. Only projects that
 /// have one.
-pub const FORMAT: u32 = 10;
+/// 11: a groove taken from a recording: a Pulse that reads 10 would play
+/// its clips straight and lose it. Only projects that have one.
+pub const FORMAT: u32 = 11;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -402,6 +404,16 @@ pub struct Project {
     /// Voices tuned note by note (see `tuning`): the clips play their files.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tunings: Vec<crate::tuning::Tuning>,
+    /// Grooves taken from audio clips (see `groove_audio`), to give MIDI clips.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub grooves: Vec<SavedGroove>,
+}
+
+/// A groove taken from a recording, with the name of where it came from.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SavedGroove {
+    pub name: String,
+    pub groove: engine::model::Groove,
 }
 
 fn is_zero(n: &u32) -> bool {
@@ -464,6 +476,12 @@ impl Project {
         self.tracks.iter().any(|t| t.clips.iter().flatten().any(partial) || t.arrangement.iter().any(|p| partial(&p.clip)))
     }
 
+    /// Whether a groove taken from a recording is saved or plays in a clip.
+    pub fn has_groove_templates(&self) -> bool {
+        let templated = |clip: &Clip| matches!(clip, Clip::Midi(m) if m.groove.is_some_and(|g| g.template.is_some()));
+        !self.grooves.is_empty() || self.tracks.iter().any(|t| t.clips.iter().flatten().any(templated) || t.arrangement.iter().any(|p| templated(&p.clip)))
+    }
+
     /// Whether any audio clip fades in or out.
     pub fn has_fades(&self) -> bool {
         let fades = |clip: &Clip| matches!(clip, Clip::Audio(a) if a.fades != engine::model::Fades::NONE);
@@ -514,6 +532,7 @@ impl Project {
             macros: Vec::new(),
             next_id: 0,
             tunings: Vec::new(),
+            grooves: Vec::new(),
             tracks: (0..2)
                 .map(|i| {
                     Track::new(
@@ -597,8 +616,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Tuner(_))) {
+            let format = if self.has_groove_templates() {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::Tuner(_))) {
+                10
             } else if self.has_partial_fades() {
                 9
             } else if self.has_effect(|e| matches!(e, Effect::Gate(_) | Effect::Transient(_))) {

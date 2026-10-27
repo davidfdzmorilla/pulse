@@ -222,6 +222,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     });
     // The accompaniment just written can be written again, another way.
     let mut vary = app.can_vary(clip_ref).then_some(false);
+    let grooves = app.project.grooves.clone();
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     let state = &mut app.piano_roll;
     if state.selection_clip != Some(clip_ref) {
@@ -238,7 +239,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let before = clip.clone();
     let mut previews: Vec<u8> = Vec::new();
 
-    previews.extend(toolbar(ui, state, clip, key, is_drums, &mut vary));
+    previews.extend(toolbar(ui, state, clip, key, is_drums, &mut vary, &grooves));
     let (tempo, machine) = drums.as_ref().map_or((None, None), |(kit, bass)| drum_menu(ui, state, clip, clip_ref, kit, bass, drum_machine.is_some()));
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
@@ -669,7 +670,7 @@ fn length_label(length: f64) -> String {
     }
 }
 
-fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool, vary: &mut Option<bool>) -> Vec<u8> {
+fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool, vary: &mut Option<bool>, grooves: &[crate::project::SavedGroove]) -> Vec<u8> {
     let mut previews = Vec::new();
     ui.horizontal_wrapped(|ui| {
         if let Some(asked) = vary.as_mut() {
@@ -705,7 +706,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         if widgets::flat_button(ui, "Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
             state.draw_mode = !state.draw_mode;
         }
-        groove_menu(ui, clip);
+        groove_menu(ui, clip, grooves);
         if !is_drums {
             let (added, pitches) = crate::harmony::menu(ui, &mut state.chords, clip, &mut state.insert_at, key);
             if !added.is_empty() {
@@ -919,8 +920,9 @@ fn take_beat(state: &mut State, clip: &mut MidiClip, settings: &crate::drum_gen:
 }
 
 /// «Groove»: the clip follows the project's swing, or has its own groove
-/// (swing, softer off-beats, humanize), with some ready-made ones.
-fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip) {
+/// (swing, softer off-beats, humanize), with some ready-made ones and those
+/// taken from the project's recordings (see `groove_audio`).
+fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::project::SavedGroove]) {
     use engine::model::Groove;
     let label = if clip.groove.is_some() { "Groove: propio" } else { "Groove: proyecto" };
     widgets::field_menu_button(ui, label, |ui| {
@@ -939,7 +941,7 @@ fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip) {
                 ("Swing 1/16", Groove { grid: 0.25, swing: 0.5, ..Groove::default() }),
                 ("MPC 1/16", Groove { grid: 0.25, swing: 0.36, accent: 0.3, ..Groove::default() }),
                 ("Shuffle 1/8", Groove { grid: 0.5, swing: 1.0, accent: 0.2, ..Groove::default() }),
-                ("Humano", Groove { grid: 0.25, swing: 0.15, accent: 0.25, humanize: 0.5 }),
+                ("Humano", Groove { grid: 0.25, swing: 0.15, accent: 0.25, humanize: 0.5, template: None }),
             ];
             for (name, preset) in presets {
                 if ui.selectable_label(*groove == preset, name).clicked() {
@@ -947,11 +949,27 @@ fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip) {
                 }
             }
         });
-        ui.horizontal(|ui| {
-            ui.label("Rejilla");
-            ui.selectable_value(&mut groove.grid, 0.5, "1/8");
-            ui.selectable_value(&mut groove.grid, 0.25, "1/16");
-        });
+        if !grooves.is_empty() {
+            ui.label(egui::RichText::new("De tus grabaciones").color(theme::TEXT_DIM).size(10.5));
+            ui.horizontal_wrapped(|ui| {
+                for saved in grooves {
+                    let chosen = groove.template.is_some() && groove.template == saved.groove.template && groove.grid == saved.groove.grid;
+                    if ui.selectable_label(chosen, &saved.name).on_hover_text(crate::groove_audio::describe(&saved.groove)).clicked() {
+                        *groove = saved.groove;
+                    }
+                }
+            });
+        }
+        let template = groove.template.is_some();
+        if template {
+            ui.label(egui::RichText::new(format!("Groove de una grabación: {}", crate::groove_audio::describe(groove))).size(10.5));
+        } else {
+            ui.horizontal(|ui| {
+                ui.label("Rejilla");
+                ui.selectable_value(&mut groove.grid, 0.5, "1/8");
+                ui.selectable_value(&mut groove.grid, 0.25, "1/16");
+            });
+        }
         let percent = |ui: &mut egui::Ui, name: &str, value: &mut f32, hint: &str| {
             let mut p = *value * 100.0;
             ui.horizontal(|ui| {
@@ -961,8 +979,13 @@ fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip) {
                 }
             });
         };
-        percent(ui, "Swing", &mut groove.swing, "Retrasa los contratiempos de la rejilla (100 % = shuffle de tresillo)");
-        percent(ui, "Acentos", &mut groove.accent, "Los contratiempos suenan más suaves");
+        if template {
+            percent(ui, "Tiempo", &mut groove.swing, "Cuánto se mueve cada nota hacia donde caía el golpe en la grabación (100 % = igual que en ella)");
+            percent(ui, "Dinámica", &mut groove.accent, "Cuánto sigue cada nota la fuerza de su golpe en la grabación (100 % = igual que en ella)");
+        } else {
+            percent(ui, "Swing", &mut groove.swing, "Retrasa los contratiempos de la rejilla (100 % = shuffle de tresillo)");
+            percent(ui, "Acentos", &mut groove.accent, "Los contratiempos suenan más suaves");
+        }
         percent(ui, "Humanizar", &mut groove.humanize, "Pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta");
         ui.label(egui::RichText::new("Se aplica al tocar: las notas no se mueven.").color(theme::TEXT_DIM).size(10.5));
     });

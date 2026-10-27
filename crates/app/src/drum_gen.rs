@@ -596,9 +596,9 @@ fn fill(style: Style) -> Option<(Bar, bool)> {
 fn swing(style: Style, level: Level) -> Option<engine::model::Groove> {
     use engine::model::Groove;
     match (style, level) {
-        (Style::BoomBap, _) => Some(Groove { grid: 0.25, swing: 0.5, accent: 0.0, humanize: 0.3 }),
-        (Style::House, Level::Medium | Level::Intense) => Some(Groove { grid: 0.25, swing: 0.15, accent: 0.0, humanize: 0.15 }),
-        (Style::Hardgroove, Level::Medium | Level::Intense) => Some(Groove { grid: 0.25, swing: 0.2, accent: 0.0, humanize: 0.1 }),
+        (Style::BoomBap, _) => Some(Groove { grid: 0.25, swing: 0.5, accent: 0.0, humanize: 0.3, template: None }),
+        (Style::House, Level::Medium | Level::Intense) => Some(Groove { grid: 0.25, swing: 0.15, accent: 0.0, humanize: 0.15, template: None }),
+        (Style::Hardgroove, Level::Medium | Level::Intense) => Some(Groove { grid: 0.25, swing: 0.2, accent: 0.0, humanize: 0.1, template: None }),
         _ => None,
     }
 }

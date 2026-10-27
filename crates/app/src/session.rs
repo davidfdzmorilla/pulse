@@ -42,6 +42,7 @@ pub(crate) enum Action {
     Reverse(usize, usize),
     ToggleClipMuted(usize, usize),
     ToMidi(usize, usize, crate::to_midi::ToMidi),
+    TakeGroove(usize, usize),
     Accompany(usize, usize, crate::accompany::Part),
     HumSong(usize, usize, crate::drum_gen::Style),
     Freeze(usize),
@@ -556,6 +557,10 @@ fn clip_slot(
                 actions.push(Action::SeparateStems(t, slot));
                 ui.close();
             }
+            if matches!(clip, Clip::Audio(_)) && ui.button("Sacar groove").on_hover_text(crate::arrangement::GROOVE_HINT).clicked() {
+                actions.push(Action::TakeGroove(t, slot));
+                ui.close();
+            }
             if matches!(clip, Clip::Audio(_)) {
                 ui.menu_button("Convertir a MIDI", |ui| {
                     for mode in crate::to_midi::ToMidi::ALL {
@@ -820,6 +825,7 @@ fn apply(app: &mut PulseApp, action: Action) {
             app.toggle_clips_muted();
         }
         Action::ToMidi(t, slot, mode) => app.convert_to_midi(ClipRef::Session { track: t, slot }, mode),
+        Action::TakeGroove(t, slot) => app.take_groove(ClipRef::Session { track: t, slot }),
         Action::Accompany(t, slot, part) => app.accompany(ClipRef::Session { track: t, slot }, part),
         Action::HumSong(t, slot, style) => app.hum_to_song(ClipRef::Session { track: t, slot }, style),
         Action::SelectSlot(t, slot) => {

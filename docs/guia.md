@@ -977,6 +977,9 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     7. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
     8. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
   - Al terminar dice lo que ha hecho. Cada paso se deshace con ⌘Z. Lo que queda en la lista son sugerencias para aplicar a mano, si quieres.
+  - **Escuchar: Antes · Después** aparece en cuanto el asistente cambia algo, y deja oír la mezcla como estaba antes de su primer cambio y como está ahora. Dale a reproducir y pasa de una a otra mientras suena.
+    - Suenan al mismo volumen: la más fuerte se baja hasta la otra. Así comparas cómo suena y no cuánto, porque lo más fuerte siempre parece mejor. Si la mezcla ha cambiado sin volver a analizarla, avisa de que no están igualadas.
+    - No toca el proyecto ni el historial de ⌘Z. **Dejar de comparar**, cerrar la ventana o cambiar cualquier cosa de la mezcla la devuelve a como está.
   - **Se tapan en los medios**: dos pistas que suenan a la vez en la misma zona, de 250 Hz a 4 kHz, y con un nivel parecido (a menos de 6 dB) la mayor parte del tiempo que coinciden, como una voz y unos acordes, o un sinte y una guitarra. Dice en qué frecuencia, y **Aplicar** abre ahí un hueco de 4 dB, una campana estrecha en el **EQ Eight** de la pista que cede (en uno nuevo si no tiene). Así la otra se oye clara sin bajar el volumen de ninguna.
     - Cede la que no es protagonista: la voz manda sobre todo, luego la solista, los coros, la batería, el bajo, los acordes, los pads, la percusión y los efectos. Entre dos del mismo papel, cede la más floja.
     - El hueco va donde la protagonista suena más fuerte de entre las zonas en que se tapan: su cuerpo, que es lo que necesita para oírse.

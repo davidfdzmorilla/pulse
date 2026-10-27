@@ -117,7 +117,7 @@ fn a_track_gated_by_its_own_group_has_its_stem() {
     let mut p = Project::empty();
     let mut group = Track::new_group("Grupo", [0; 3]);
     group.id = 10;
-    group.devices.push(Device::new(Effect::Utility(UtilityParams { gain_db: -12.0, width: 1.0 })));
+    group.devices.push(Device::new(Effect::Utility(UtilityParams { gain_db: -12.0, width: 1.0, ..Default::default() })));
     let mut d = drums(1, 16.0);
     d.depth = 1;
     let mut pad = Track::new("Pad", [0, 100, 200], InstrumentKind::SuperSaw(Default::default()));
@@ -157,7 +157,7 @@ fn a_track_gated_by_its_own_group_freezes_as_it_sounds() {
     let mut p = Project::empty();
     let mut group = Track::new_group("Grupo", [0; 3]);
     group.id = 10;
-    group.devices.push(Device::new(Effect::Utility(UtilityParams { gain_db: -12.0, width: 1.0 })));
+    group.devices.push(Device::new(Effect::Utility(UtilityParams { gain_db: -12.0, width: 1.0, ..Default::default() })));
     let mut d = drums(1, 16.0);
     d.depth = 1;
     let mut pad = Track::new("Pad", [0, 100, 200], InstrumentKind::SuperSaw(Default::default()));

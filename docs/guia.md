@@ -936,6 +936,11 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
   - **Sonoridad** por debajo o por encima del destino: **Aplicar** pone un **Limiter** en el master y lo ajusta midiendo cada vez, hasta llegar (y con el pico real por debajo de −1 dBTP). Si la mezcla no da más sin aplastarla, se para y te lo dice: para más volumen, comprime o satura las pistas.
     - Para destinos de −8,5 LUFS o más fuertes (hard techno), pone además un **Saturator Hard 4×** justo antes del Limiter, que recorta 3 dB de los picos (los del bombo), y le acorta el release a 40 ms. Es como se masteriza el género: el limitador solo, con un bombo cada 400 ms, bombea en vez de subir el volumen y deja pasar picos reales.
     - Por encima del destino, en uno de streaming te avisa de que la plataforma la bajará; en uno de club, de que más apretada solo pierde pegada.
+  - **Mezcla de partida**: pone cada pista donde suele empezar una mezcla, para que sigas a oído desde ahí. Cada pista tiene un **papel**, que sale de su nombre («Kick», «Bajo», «Voz», «Coros», «Pad», «Hats»…, en español o en inglés), de su instrumento (el Kick Designer es el bombo, el Acid el bajo, una Drum Machine la batería) o, si no, de cómo suena (casi todo graves: un bajo; casi todo agudos: percusión). El consejo dice qué cambiaría en cada pista y **Aplicar** lo hace todo de una vez (**⌘Z** lo deshace):
+    - **Volumen**: cada papel, a su nivel habitual junto al bombo (o la batería, o la voz si no hay): la voz igual de fuerte, el bajo y la batería 2 dB por debajo, la solista 3, los acordes 5, los coros 7, pads y percusión 8, efectos 10. Si hay varias pistas del mismo papel, se reparten ese nivel. No sube ninguna por encima de −1 dBFS ni más allá del tope de su fader. Solo cambia lo que se aleje más de 1,5 dB.
+    - **Panorama**: el bombo, el bajo y la voz, al centro. Si hay dos o más pistas de acordes, pads, coros, percusión o solistas en el centro, las abre a izquierda y derecha. Lo que ya has panoramizado tú no lo toca.
+    - **Graves**: a lo que no los necesita (voz, coros, acordes, pads, solistas, percusión, efectos) y aun así tiene algo por debajo de unos 60 Hz, le pone un **EQ Eight** con corte de graves (90 Hz en la voz, 250 Hz en la percusión, 150 Hz en el resto).
+    - Las pistas sin papel claro («otra») no se tocan. Cuando todo está en su sitio, sale en verde.
   - **Pistas por encima de 0 dB**: **Aplicar** les baja el volumen.
   - **Graves que chocan**: dos pistas llenando los graves (por debajo de 120 Hz) a la vez. Si una es la batería, **Aplicar** pone a la otra un **Ducker** con **sidechain** de la batería (se aparta cada vez que suena); si no, recorta los graves de la que menos tiene con un **EQ Three**.
     - Cuenta como batería una Drum Machine, una Drum Rack, el **Kick Designer** (el bombo en su propia pista) y una pista de audio con nombre de batería («Kick», «Tops», «Perc»…).
@@ -946,7 +951,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Referencia**: **Elegir canción…** carga una canción que suene como quieres. Se compara su sonoridad y su **balance de graves, medios y agudos** con el tuyo (en la gráfica por octavas: barras, tu mezcla; línea, la referencia), y **Aplicar** pone un **EQ Three** en el master que lo acerca.
 - **Pistas**: el pico, la sonoridad y el estéreo de cada una.
 
-Tras **Aplicar** se vuelve a analizar sola, para que veas el resultado. Todo lo que hace son dispositivos normales (Limiter, Ducker, EQ Three) y volúmenes: puedes retocarlos o quitarlos, y se deshace con ⌘Z.
+Tras **Aplicar** se vuelve a analizar sola, para que veas el resultado. Todo lo que hace son dispositivos normales (Limiter, Ducker, EQ Three, EQ Eight), volúmenes y panoramas: puedes retocarlos o quitarlos, y se deshace con ⌘Z.
 
 ## Ajustes
 

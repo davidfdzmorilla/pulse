@@ -264,6 +264,11 @@ impl KickSynth {
         }
     }
 
+    /// How late it sounds (samples): its limiter's lookahead, when on.
+    pub fn latency(&self) -> usize {
+        if self.params.limiter { self.lookahead_len } else { 0 }
+    }
+
     pub fn params(&self) -> KickParams {
         self.params
     }

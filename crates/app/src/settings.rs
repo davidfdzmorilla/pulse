@@ -58,6 +58,9 @@ pub struct Settings {
     /// The beatbox sounds the user taught (see `beatbox`).
     #[serde(default, skip_serializing_if = "crate::beatbox::Examples::is_empty")]
     pub beatbox: crate::beatbox::Examples,
+    /// Tracks wait for those whose effects sound late (see `Engine::compensate`).
+    #[serde(default = "yes")]
+    pub compensate: bool,
     /// Settings this Pulse doesn't know (a newer one wrote them): kept, so going
     /// back to an older version and forward again loses none.
     #[serde(flatten)]
@@ -70,7 +73,7 @@ fn yes() -> bool {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), unknown: Default::default() }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, unknown: Default::default() }
     }
 }
 
@@ -125,6 +128,7 @@ impl PulseApp {
             crate::library::prepare();
         }
         let count_in = settings.count_in_bars != self.settings.count_in_bars;
+        let compensate = settings.compensate != self.settings.compensate;
         let plugin_folders = settings.plugin_folders != self.settings.plugin_folders;
         self.settings = settings;
         if plugin_folders {
@@ -136,6 +140,9 @@ impl PulseApp {
         }
         if count_in {
             self.audio.send(engine::Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+        }
+        if compensate {
+            self.audio.send(engine::Command::SetCompensation(self.settings.compensate));
         }
         if self.interactive {
             // A second after the last change (a drag changes them every frame,
@@ -224,12 +231,16 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         });
         ui.label(egui::RichText::new("Un búfer menor responde antes al tocar; si oyes cortes, súbelo.").color(TEXT_DIM).size(10.5));
         ui.add_space(4.0);
-        let (input, output) = app.latencies();
+        let (input, output, effects) = app.latencies();
         ui.label(format!(
-            "Latencia: entrada {} · salida {:.1} ms. Pulse la descuenta al grabar para que las tomas caigan a tempo.",
+            "Latencia: entrada {} · salida {:.1} ms{}. Pulse la descuenta al grabar para que las tomas caigan a tempo.",
             input.map_or("— (sin abrir)".to_string(), |s| format!("{:.1} ms", s * 1000.0)),
-            output * 1000.0
+            output * 1000.0,
+            if effects > 0.0 { format!(" · efectos {:.1} ms", effects * 1000.0) } else { String::new() }
         ));
+        ui.checkbox(&mut next.compensate, "Compensar la latencia de los efectos").on_hover_text(
+            "Algunos efectos sacan el sonido un poco tarde: el Limiter (1,5 ms), el Saturator con sobremuestreo, el Tuner y muchos plugins. Con esto, las demás pistas los esperan y todo suena a la vez, y el metrónomo con ellas. Quítalo para tocar o cantar en directo a través de un efecto así sin que el resto se retrase",
+        );
         ui.horizontal(|ui| {
             ui.label("Ajuste fino de la grabación");
             ui.add(egui::DragValue::new(&mut next.record_offset_ms).range(-200.0..=200.0).speed(0.2).fixed_decimals(1).suffix(" ms"))
@@ -350,7 +361,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

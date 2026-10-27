@@ -17,7 +17,11 @@ fn voice() -> String {
     if !path.exists() {
         let hz = 440.0 * 2f32.powf((66.4 - 69.0) / 12.0);
         let l: Vec<f32> = (0..(6.0 * SR) as usize).map(|i| 0.3 * (std::f32::consts::TAU * hz * i as f32 / SR).sin()).collect();
-        crate::export::write(&path, &l, &l, SR as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        // Written aside and moved in whole: tests running at once never
+        // read it half written.
+        let part = dir.join(format!("tuner-voice-{}-{:?}.part", std::process::id(), std::thread::current().id()));
+        crate::export::write(&part, &l, &l, SR as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        std::fs::rename(&part, &path).unwrap();
     }
     path.to_string_lossy().into_owned()
 }

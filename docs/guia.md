@@ -293,6 +293,20 @@ Con la pista armada, su medidor muestra el nivel de entrada. Usa auriculares par
 
 Pulse descuenta la latencia de la entrada y de la salida para que las tomas caigan a tempo. En Ajustes se ven las dos y está el **Ajuste fino de la grabación** (−200 a +200 ms): si las tomas de audio quedan tarde, súbelo; si quedan pronto, bájalo.
 
+### Compensación de latencia
+
+Algunos efectos sacan el sonido un poco tarde: el **Limiter** (1,5 ms), el **Saturator** con 4× (36 muestras), el **Tuner** y muchos plugins (Pulse les pregunta cuánto). Sin compensar, su pista sonaría detrás de las demás. Pulse hace que todo suene a la vez:
+
+- Cada pista espera a la más lenta: dentro de su grupo a las del grupo, y fuera, a todas las del proyecto.
+- Los envíos llegan juntos a las pistas de retorno, y lo que sale de ellas llega a tiempo con el resto.
+- El metrónomo se retrasa con la canción.
+- Las tomas que grabas y las notas que tocas se colocan donde las oíste.
+- Al exportar y al congelar, el archivo empieza justo en su sitio, sin el retraso.
+
+La canción sale tanto más tarde como el camino más lento; Ajustes → Audio lo muestra como **efectos** junto a las latencias. Para tocar o cantar en directo a través de uno de esos efectos sin que el resto se retrase, quita **Compensar la latencia de los efectos** en Ajustes → Audio. La exportación compensa siempre.
+
+El Tuner se compensa con su latencia para una voz media (unos 5 ms). Como mueve el tono leyendo un periodo antes o después, una voz grave o un bajo quedan unos pocos milisegundos más tarde.
+
 ## Tomas y comping
 
 Si grabas audio en el Arrangement con el **loop activado** y das varias vueltas, cada vuelta es una **toma**.
@@ -610,7 +624,7 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
   - **Humanize**: cuanto más alto, más libre deja una nota que mantienes (su vibrato se queda), mientras las notas cortas siguen afinadas.
   - **Amount**: cuánto del camino recorre: al 100 % llega a la nota; al 50 %, se queda a medias.
   - Sigue de un Do2 (65 Hz) a un Do#6 (1100 Hz). Lo que no tiene tono (respiraciones, eses, silencio) pasa sin cambios.
-  - Suena un poco tarde, algo más de un periodo de la nota: unos 5 ms con una voz media (220 Hz), 10 con una grave (110 Hz) y hasta 17 con las notas más bajas de un bajo.
+  - Suena un poco tarde, algo más de un periodo de la nota: unos 5 ms con una voz media (220 Hz), 10 con una grave (110 Hz) y hasta 17 con las notas más bajas de un bajo. Las demás pistas lo esperan esos 5 ms (ver «Compensación de latencia»).
   - No está entre los efectos internos de los sintes, que ya tocan afinado.
   - Un proyecto con un Tuner no se abre en un Pulse anterior: pide actualizar.
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras).
@@ -938,7 +952,7 @@ Tras **Aplicar** se vuelve a analizar sola, para que veas el resultado. Todo lo 
 
 **⌘,** (Pulse → Ajustes…). Los cambios se aplican al momento.
 
-- **Audio**: salida, entrada (para grabar), frecuencia y tamaño del búfer (más pequeño responde antes; si oyes cortes, súbelo). Latencias medidas y **Ajuste fino de la grabación**.
+- **Audio**: salida, entrada (para grabar), frecuencia y tamaño del búfer (más pequeño responde antes; si oyes cortes, súbelo). Latencias medidas (también la de los **efectos**), **Ajuste fino de la grabación** y **Compensar la latencia de los efectos** (ver «Compensación de latencia»).
 - **MIDI**: dispositivos conectados y volver a buscar.
 - **Plugins**: carpetas donde buscarlos y **Buscar plugins**.
 - **Carpeta de Pulse**: dónde está, **Cambiar…** (lo que ya hay no se mueve) y **Mostrar en Finder**.

@@ -14,6 +14,7 @@ use clap_sys::entry::clap_plugin_entry;
 use clap_sys::events::*;
 use clap_sys::ext::audio_ports::*;
 use clap_sys::ext::gui::*;
+use clap_sys::ext::latency::*;
 use clap_sys::ext::log::*;
 use clap_sys::ext::note_ports::*;
 use clap_sys::ext::params::*;
@@ -360,6 +361,8 @@ pub(crate) struct ClapProcessor {
     /// Notes as CLAP events (otherwise MIDI); whether MIDI controllers reach it.
     clap_notes: bool,
     midi: bool,
+    /// How late its sound comes out (samples), as it said once active.
+    latency: usize,
 }
 
 unsafe impl Send for ClapProcessor {}
@@ -371,6 +374,10 @@ impl Drop for ClapProcessor {
 }
 
 impl ClapProcessor {
+    pub fn latency(&self) -> usize {
+        self.latency
+    }
+
     pub fn set_tempo(&mut self, tempo: f64) {
         self.transport.tempo = tempo;
     }
@@ -873,6 +880,9 @@ pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Opti
         unsafe { p.destroy.map(|destroy| destroy(plugin)) };
         return Err(format!("{}: no acepta {sample_rate} Hz", info.name));
     }
+    // (Asked on this thread, the main one, once active.)
+    let latency_ext = extension(CLAP_EXT_LATENCY) as *const clap_plugin_latency;
+    let latency = unsafe { latency_ext.as_ref().and_then(|ext| ext.get).map_or(0, |get| get(plugin)) } as usize;
 
     let mut buffers = Vec::new();
     let mut layout = |counts: &[usize]| -> Vec<(usize, usize)> {
@@ -943,6 +953,7 @@ pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Opti
         held: [false; 128],
         clap_notes,
         midi,
+        latency,
     };
     Ok((processor, ClapHandle { instance, queue: Mutex::new(producer) }, info.instrument))
 }

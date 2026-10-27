@@ -619,6 +619,10 @@ pub fn render_mapped(
         let frames = ((start - renderer.state.position()) * 60.0 / playing(&renderer) * sample_rate as f64 - 1e-6).ceil() as usize;
         renderer.render(frames.clamp(1, chunk), &mut left, &mut right);
     }
+    // What comes out from here is the song from `start`, however late its
+    // effects make it come out (see `Engine::compensate`): it starts the file.
+    map.push((renderer.state.position(), 0));
+    let late = renderer.skip_latency();
 
     // Until the transport reaches the end: with tempo automation the song is as
     // long as its tempos make it. Near the end, in steps the size of what is
@@ -632,7 +636,7 @@ pub fn render_mapped(
             return None;
         }
         let at = renderer.state.position();
-        map.push((at, left.len()));
+        map.push((at, left.len() + late));
         if at >= end - 1e-9 || left.len() >= most {
             break;
         }
@@ -640,7 +644,8 @@ pub fn render_mapped(
         renderer.render(chunk.min(left_frames.max(1)), &mut left, &mut right);
         progress(((renderer.state.position() - start) / (end - start)).clamp(0.0, 1.0) as f32);
     }
-    let frames = left.len();
+    // The song's last frames are still to come out.
+    let frames = left.len() + late;
 
     // Let notes release and reverbs/delays ring out until the output falls silent.
     renderer.send(Command::Stop);
@@ -1495,6 +1500,49 @@ mod tests {
         assert!(first > 0.05, "the held note from the first 10 ms: {first}");
         // Two seconds of region, its tail aside.
         assert!(left.len() >= 2 * 48_000 && left.len() < 2 * 48_000 + 10 * 48_000);
+    }
+
+    /// Effects that sound late (a limiter on the track and on the master,
+    /// 1.5 ms each): the export still has the click where it is in the song,
+    /// to the sample, and a track without them in time with it (playing it
+    /// upside down, it cancels it).
+    #[test]
+    fn late_effects_dont_move_the_export() {
+        use engine::model::{ArrangementClip, AudioClip, Clip, Device, Effect, LimiterParams, WarpMode};
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let click = |sign: f32| {
+            let path = dir.join(format!("click-{}-{}.wav", sign, std::process::id()));
+            let mut l = vec![0f32; 48_000];
+            l[4_800] = 0.2 * sign;
+            write(&path, &l, &l, 48_000, BitDepth::Float32, 1.0).unwrap();
+            path.to_string_lossy().into_owned()
+        };
+        let track = |name: &str, sample: String, late: bool| {
+            let mut t = crate::project::Track::new_audio(name, [0; 3]);
+            let clip = AudioClip { hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample, length: 2.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+            t.arrangement.push(ArrangementClip { start: 0.0, length: 2.0, clip: Clip::Audio(clip) });
+            if late {
+                t.devices.push(Device::new(Effect::Limiter(LimiterParams { ceiling_db: 0.0, ..Default::default() })));
+            }
+            t
+        };
+        let limiter = Device::new(Effect::Limiter(LimiterParams { ceiling_db: 0.0, ..Default::default() }));
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        project.tracks = vec![track("Tarde", click(1.0), true)];
+        project.master.devices.push(limiter);
+        let render_it = |project: &Project| {
+            let commands = sync::project_commands(project, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+            render(commands, (0.0, 4.0), Song::of(project), 48_000.0, &AtomicBool::new(false), &|_| {}).unwrap().0
+        };
+        let left = render_it(&project);
+        let at = left.iter().position(|s| s.abs() > 1e-6);
+        assert_eq!(at, Some(4_800), "the click on its sample");
+        assert!(left.len() >= 2 * 48_000, "the whole two seconds: {}", left.len());
+        project.tracks.push(track("Al revés", click(-1.0), false));
+        let loudest = render_it(&project).iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(loudest < 1e-4, "{loudest}");
     }
 
     /// A delay with echoes two seconds apart: the export waits for them instead of

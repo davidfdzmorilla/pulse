@@ -373,6 +373,10 @@ pub enum Command {
     /// Whether the master output is clipped to ±1 (on for speakers; off when
     /// rendering to a file so peaks can be measured and normalized).
     SetOutputLimit(bool),
+    /// Whether tracks wait for the slowest (see [`Engine::compensate`]): on
+    /// unless turned off, to play live through an effect that comes out late
+    /// without the rest waiting for it.
+    SetCompensation(bool),
     /// Arming routes live notes to a track and makes it record.
     SetArm {
         track: usize,
@@ -581,6 +585,9 @@ pub struct SharedState {
     count_in: AtomicF64,
     /// Seconds from rendering a sample to hearing it (the output device's latency).
     output_latency: AtomicF64,
+    /// Seconds the song comes out later for the effects that sound late
+    /// (see [`Engine::compensate`]).
+    compensation: AtomicF64,
     /// How many times a channel's sound stopped being valid numbers (NaN or
     /// infinite) and was silenced, and the last one: see [`Fault`].
     pub faults: AtomicU32,
@@ -637,6 +644,7 @@ impl SharedState {
             master: Peak::default(),
             count_in: AtomicF64::default(),
             output_latency: AtomicF64::default(),
+            compensation: AtomicF64::default(),
             faults: AtomicU32::new(0),
             last_fault: AtomicI32::new(0),
             analyzer: Analyzer::new(),
@@ -658,9 +666,16 @@ impl SharedState {
         self.count_in.load()
     }
 
-    /// Seconds between rendering audio and hearing it.
+    /// Seconds between the transport passing a moment of the song and
+    /// hearing it: the output device's latency and the effects' that sound
+    /// late (what recording makes up for).
     pub fn output_latency(&self) -> f64 {
-        self.output_latency.load()
+        self.output_latency.load() + self.compensation.load()
+    }
+
+    /// Of that, the effects' (see [`Engine::compensate`]).
+    pub fn compensation(&self) -> f64 {
+        self.compensation.load()
     }
 
     pub fn set_output_latency(&self, seconds: f64) {
@@ -777,6 +792,15 @@ impl Instrument {
     }
 
     /// Instruments with tempo-synced settings follow the transport.
+    /// How late it sounds (samples).
+    fn latency(&self) -> usize {
+        match self {
+            Self::Kick(k) => k.latency(),
+            Self::Plugin(_, Some(p)) => p.latency(),
+            _ => 0,
+        }
+    }
+
     fn set_tempo(&mut self, tempo: f64) {
         match self {
             Self::Kick(k) => k.set_tempo(tempo),
@@ -1709,6 +1733,74 @@ pub struct Engine {
     key_right: Vec<Vec<f32>>,
     /// Each track muted this block, itself or by a group (what `audio_from` follows).
     mutes: [bool; MAX_TRACKS],
+    /// Delay compensation (see [`Engine::compensate`]): whether it is on, how
+    /// much later each track's sound goes on (to its group or the master) and
+    /// its sends, each return's, and the metronome's (the whole song's).
+    compensating: bool,
+    track_delays: Vec<Compensator>,
+    send_delays: Vec<Compensator>,
+    return_delays: Vec<Compensator>,
+    click_delay: Compensator,
+    /// A track's sends, late as the returns need them.
+    send_left: Vec<f32>,
+    send_right: Vec<f32>,
+    /// The song's delay now (samples).
+    latency: usize,
+}
+
+/// The most a track waits for another (samples): a third of a second at 48 kHz.
+pub const MAX_COMPENSATION: usize = 1 << 14;
+
+/// A delay line for compensation: its sound, `delay` samples later.
+struct Compensator {
+    lines: [Vec<f32>; 2],
+    at: usize,
+    delay: usize,
+    /// Whether the lines hold sound (cleared when the delay changes).
+    used: bool,
+}
+
+impl Compensator {
+    fn new() -> Self {
+        // Zeroed pages the system hands over as they are first written.
+        Self { lines: [vec![0.0; MAX_COMPENSATION], vec![0.0; MAX_COMPENSATION]], at: 0, delay: 0, used: false }
+    }
+
+    /// Sets the delay; what it held goes (a jump either way would be heard
+    /// as a click or a repeat).
+    fn set(&mut self, delay: usize) {
+        let delay = delay.min(MAX_COMPENSATION - 1);
+        if delay != self.delay {
+            self.delay = delay;
+            if self.used {
+                self.lines.iter_mut().for_each(|l| l.fill(0.0));
+                self.used = false;
+            }
+        }
+    }
+
+    /// `left` and `right` (or only `left`), `delay` samples later.
+    fn process(&mut self, left: &mut [f32], right: Option<&mut [f32]>) {
+        if self.delay == 0 {
+            return;
+        }
+        self.used = true;
+        let mask = MAX_COMPENSATION - 1;
+        let start = self.at;
+        let run = |line: &mut Vec<f32>, buffer: &mut [f32]| {
+            let mut at = start;
+            for x in buffer.iter_mut() {
+                line[at] = *x;
+                *x = line[(at + MAX_COMPENSATION - self.delay) & mask];
+                at = (at + 1) & mask;
+            }
+        };
+        run(&mut self.lines[0], left);
+        if let Some(right) = right {
+            run(&mut self.lines[1], right);
+        }
+        self.at = (start + left.len()) & mask;
+    }
 }
 
 /// Gives the sidechained effects of a chain their sources' sound.
@@ -1859,6 +1951,14 @@ impl Engine {
             taken: vec![0.0; MAX_BLOCK],
             key_right: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
             mutes: [false; MAX_TRACKS],
+            compensating: true,
+            track_delays: (0..MAX_TRACKS).map(|_| Compensator::new()).collect(),
+            send_delays: (0..MAX_TRACKS).map(|_| Compensator::new()).collect(),
+            return_delays: (0..MAX_RETURNS).map(|_| Compensator::new()).collect(),
+            click_delay: Compensator::new(),
+            send_left: vec![0.0; MAX_BLOCK],
+            send_right: vec![0.0; MAX_BLOCK],
+            latency: 0,
         };
         (engine, shared)
     }
@@ -2292,6 +2392,7 @@ impl Engine {
                 self.discard(Garbage::Automation(lanes));
             }
             Command::SetOutputLimit(on) => self.limit_output = on,
+            Command::SetCompensation(on) => self.compensating = on,
             Command::SetSwing { amount, grid } => self.swing = (grid.max(1.0 / 64.0), amount.clamp(0.0, 1.0)),
             Command::SetScale(bits) => self.scale = bits & 0xFFF,
             Command::SetArm { track, armed } => {
@@ -2431,6 +2532,7 @@ impl Engine {
         while let Ok(note) = self.live.pop() {
             self.handle_live(note);
         }
+        self.compensate();
 
         let frames = out.len() / channels;
         let mut done = 0;
@@ -2460,6 +2562,50 @@ impl Engine {
             done += n;
         }
         self.publish();
+    }
+
+    /// Delay compensation. An effect that sounds late (a limiter looking
+    /// ahead, a plugin, the Tuner) would put its track behind the rest: every
+    /// track's sound waits for the slowest of those it meets where they meet
+    /// (in its group, or at the master), and its sends wait for the slowest
+    /// track's, so each return gets them all together. The song comes out
+    /// that much later, and the metronome with it.
+    fn compensate(&mut self) {
+        let chain = |c: &Channel| c.chain.iter().filter(|s| s.enabled).map(|s| s.processor.latency()).sum::<usize>();
+        // What reaches each track (its instrument's, or its group's tracks'),
+        // and how late it comes out of its effects: a group's tracks first.
+        let order = processing_order(&self.parents, &[0; MAX_TRACKS]);
+        let (mut input, mut out) = ([0usize; MAX_TRACKS], [0usize; MAX_TRACKS]);
+        for &i in &order {
+            input[i] = input[i].max(self.tracks[i].instrument.latency());
+            out[i] = input[i] + chain(&self.tracks[i].channel);
+            if let Some(group) = self.parents[i] {
+                input[group as usize] = input[group as usize].max(out[i]);
+            }
+        }
+        let slowest = (0..MAX_TRACKS).filter(|&i| self.parents[i].is_none()).map(|i| out[i]).max().unwrap_or(0);
+        let slowest_return = self.returns.iter().map(chain).max().unwrap_or(0);
+        let on = self.compensating;
+        let wait = |until: usize, at: usize| if on { until.saturating_sub(at) } else { 0 };
+        for i in 0..MAX_TRACKS {
+            let until = match self.parents[i] {
+                Some(group) => input[group as usize],
+                None => slowest + slowest_return,
+            };
+            self.track_delays[i].set(wait(until, out[i]));
+            self.send_delays[i].set(wait(slowest, out[i]));
+        }
+        for (delay, ret) in self.return_delays.iter_mut().zip(&self.returns) {
+            delay.set(wait(slowest_return, chain(ret)));
+        }
+        self.latency = if on { slowest + slowest_return + chain(&self.master) } else { 0 };
+        self.click_delay.set(self.latency);
+        self.shared.compensation.store(self.latency as f64 / self.sample_rate as f64);
+    }
+
+    /// How late the song comes out of the effects (samples): see [`Engine::compensate`].
+    pub fn latency(&self) -> usize {
+        self.latency
     }
 
     /// Ends the browser's previews, the file and the loop.
@@ -2630,15 +2776,26 @@ impl Engine {
 
             let audible = !channel.mute && !silenced[index] && (!any_solo || soloed[index]);
             let gain = if audible { channel.gain } else { 0.0 };
-            // Post-fader sends, taken before panning.
+            // Post-fader sends, taken before panning, late as the returns need.
+            let sends = &mut self.send_delays[index];
+            let (send_left, send_right) = if sends.delay > 0 {
+                self.send_left[..n].copy_from_slice(&channel.left[..n]);
+                self.send_right[..n].copy_from_slice(&channel.right[..n]);
+                sends.process(&mut self.send_left[..n], Some(&mut self.send_right[..n]));
+                (&self.send_left[..n], &self.send_right[..n])
+            } else {
+                (&channel.left[..n], &channel.right[..n])
+            };
             for (ret, &amount) in self.returns.iter_mut().zip(&track.sends) {
                 if amount > 0.0 {
                     for i in 0..n {
-                        ret.left[i] += channel.left[i] * gain * amount;
-                        ret.right[i] += channel.right[i] * gain * amount;
+                        ret.left[i] += send_left[i] * gain * amount;
+                        ret.right[i] += send_right[i] * gain * amount;
                     }
                 }
             }
+            // Late as the slowest it meets.
+            self.track_delays[index].process(&mut channel.left[..n], Some(&mut channel.right[..n]));
             // Into its group (which comes later in the order), or the master.
             match self.parents[index] {
                 Some(group) => {
@@ -2670,6 +2827,7 @@ impl Engine {
             if !ret.run_chain(n, &ctx, analyzer.device(Target::Return(index)).map(|d| (d, analyzer))) {
                 self.shared.fault(Fault::Return(index));
             }
+            self.return_delays[index].process(&mut ret.left[..n], Some(&mut ret.right[..n]));
             let gain = if ret.mute { 0.0 } else { ret.gain };
             let peak = ret.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
             self.shared.returns[index].publish(peak);
@@ -2762,6 +2920,8 @@ impl Engine {
         let click = &mut self.click_buffer[..n];
         click.fill(0.0);
         self.click.render(click);
+        // With the song, as late as it comes out.
+        self.click_delay.process(click, None);
         let preview = &self.preview_buffer;
         let mut peak = 0f32;
         for i in 0..n {
@@ -4763,5 +4923,120 @@ mod tests {
             // The drum track muted: its sounds on other tracks are quiet too.
             assert!(energy(&render(&all, true, Some(0))) < 1e-9, "{label}: muted with the drums");
         }
+    }
+
+    // ----- Delay compensation ----------------------------------------------------
+
+    /// A click 0.1 s into a 1 s file, upside down if `sign` is negative.
+    fn click_sample(sign: f32) -> Arc<Sample> {
+        let mut left = vec![0f32; 48_000];
+        left[4_800] = 0.2 * sign;
+        Arc::new(Sample::from_channels(left.clone(), left, 48_000.0))
+    }
+
+    /// Track `track` plays the click (`gain_db` louder) from the song's start.
+    fn click_track(h: &mut Harness, track: usize, sign: f32, gain_db: f32) {
+        let clip = AudioClip { gain_db, ..audio_clip(WarpMode::Off) };
+        h.send(Command::SetArrangement { track, clips: Box::new(vec![PlacedClip::new(0.0, 2.0, PlayClip::Audio(clip, click_sample(sign)))]) });
+    }
+
+    /// A limiter that never limits these clicks: only its lookahead (1.5 ms).
+    fn lookahead() -> Device {
+        Device::new(Effect::Limiter(crate::model::LimiterParams { ceiling_db: 0.0, ..Default::default() }))
+    }
+
+    fn chain(h: &mut Harness, target: Target, devices: &[Device]) {
+        h.send(Command::ReplaceChain { target, chain: build_chain(devices, SR) });
+    }
+
+    /// The loudest the song gets in its first beat (where the clicks are),
+    /// with compensation on or off.
+    fn loudest(h: &mut Harness, compensating: bool) -> f32 {
+        h.send(Command::SetCompensation(compensating));
+        h.send(Command::SetOutputLimit(false));
+        h.send(Command::Play);
+        h.run_beats(1.0).iter().fold(0f32, |m, s| m.max(s.abs()))
+    }
+
+    /// A track through a limiter (1.5 ms late) and one without, playing the
+    /// same click upside down: in time, they cancel. Without compensation,
+    /// both clicks are heard, 1.5 ms apart.
+    #[test]
+    fn a_late_effect_keeps_its_track_in_time_with_the_rest() {
+        for compensating in [true, false] {
+            let mut h = Harness::new();
+            click_track(&mut h, 0, 1.0, 0.0);
+            chain(&mut h, Target::Track(0), &[lookahead()]);
+            click_track(&mut h, 1, -1.0, 0.0);
+            let loudest = loudest(&mut h, compensating);
+            println!("{compensating}: {loudest}");
+            if compensating {
+                assert!(loudest < 1e-4, "{loudest}");
+                assert_eq!(h.engine.latency(), 72, "the song comes out 1.5 ms later");
+                assert!((h.shared.compensation() - 0.0015).abs() < 1e-9);
+            } else {
+                assert!((loudest - 0.2).abs() < 1e-3, "{loudest}");
+                assert_eq!(h.engine.latency(), 0);
+            }
+        }
+    }
+
+    /// In a group: its tracks wait for each other inside it, and the group
+    /// (late itself) for the rest of the song outside it.
+    #[test]
+    fn a_groups_tracks_and_the_group_are_in_time() {
+        let mut h = Harness::new();
+        let mut parents = [None; MAX_TRACKS];
+        parents[1] = Some(0);
+        parents[2] = Some(0);
+        h.send(Command::SetGroups(parents));
+        click_track(&mut h, 1, 1.0, 0.0);
+        chain(&mut h, Target::Track(1), &[lookahead()]);
+        click_track(&mut h, 2, 1.0, 0.0);
+        chain(&mut h, Target::Track(0), &[lookahead(), lookahead()]);
+        // Twice the click, upside down, out of the group.
+        click_track(&mut h, 3, -1.0, 20.0 * 2f32.log10());
+        let loudest = loudest(&mut h, true);
+        assert!(loudest < 1e-3, "{loudest}");
+        assert_eq!(h.engine.latency(), 3 * 72);
+    }
+
+    /// Sends: a late track's and an on-time track's reach a return together,
+    /// and what comes out of the return (late itself) reaches the master with
+    /// the tracks. Tracks 0 (late) and 1 play the click and the click upside
+    /// down, and both send it: they cancel straight out and in the return.
+    /// Track 2 sends its click too, and track 3 plays it twice, upside down:
+    /// they cancel only if the return's click comes out with track 2's.
+    #[test]
+    fn sends_reach_the_returns_in_time() {
+        let mut h = Harness::new();
+        click_track(&mut h, 0, 1.0, 0.0);
+        chain(&mut h, Target::Track(0), &[lookahead()]);
+        click_track(&mut h, 1, -1.0, 0.0);
+        click_track(&mut h, 2, 1.0, 0.0);
+        click_track(&mut h, 3, -1.0, 20.0 * 2f32.log10());
+        for track in [0, 1, 2] {
+            h.send(Command::SetSend { track, send: 0, amount: 1.0 });
+        }
+        chain(&mut h, Target::Return(0), &[lookahead()]);
+        let loudest = loudest(&mut h, true);
+        println!("{loudest}");
+        assert!(loudest < 1e-3, "{loudest}");
+        assert_eq!(h.engine.latency(), 2 * 72);
+    }
+
+    /// The metronome comes out with the song, as late as it (the master's
+    /// effects included).
+    #[test]
+    fn the_metronome_waits_for_the_song() {
+        let mut h = Harness::new();
+        chain(&mut h, Target::Master, &[lookahead()]);
+        h.send(Command::SetMetronome(true));
+        h.send(Command::SetOutputLimit(false));
+        h.send(Command::Play);
+        let audio = h.run_beats(0.5);
+        let first = audio.chunks(2).position(|f| f[0].abs() > 1e-6).unwrap();
+        assert_eq!(first, 72, "the first click on the song's first beat, as it comes out");
+        assert_eq!(h.engine.latency(), 72);
     }
 }

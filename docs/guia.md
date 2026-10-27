@@ -956,6 +956,11 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - Cuenta como batería una Drum Machine, una Drum Rack, el **Kick Designer** (el bombo en su propia pista) y una pista de audio con nombre de batería («Kick», «Tops», «Perc»…).
     - Si las dos son batería y una es el Kick Designer, el bombo se queda los graves y se recortan los de la otra.
     - Si una ya se aparta de la otra con un sidechain (el bajo del bombo, o un rumble), no es un choque: lo dice en verde.
+  - **Compresión de partida**: la voz, los coros, la solista, el bajo y la batería que van de muy suave a muy fuerte (de sus partes suaves a las fuertes hay más de 8 dB en la voz y los coros, 6 en el bajo, 10 en la solista y la batería): en la mezcla unas partes se pierden y otras saltan. **Aplicar** les pone un **Compressor** ajustado a cómo suenan:
+    - Le quita a lo fuerte 5 dB en la voz, 4 en los coros y el bajo, 3 en la solista y la batería. El umbral se calcula con su nivel antes del fader y el panorama, que es lo que oye el compresor.
+    - Ratio 3:1 en la voz y los coros, 2,5:1 en la solista y 4:1 en el bajo y la batería. Ataque rápido en las voces (5 ms) y lento en la batería (25 ms), para que pase el golpe.
+    - Release de una semicorchea al tempo de la canción (una corchea en el bajo) y ganancia para recuperar la mitad de lo que quita, de modo que la pista sigue sonando más o menos igual de fuerte.
+    - Si la pista ya tiene un compresor (sin sidechain), sale en verde. Una pista que se aparta de otra con un sidechain (un rumble o un bajo que bombean con el bombo) no se comprime: su nivel se mueve a propósito.
   - **Se tapan en los medios**: dos pistas que suenan a la vez en la misma zona, de 250 Hz a 4 kHz, y con un nivel parecido (a menos de 6 dB) la mayor parte del tiempo que coinciden, como una voz y unos acordes, o un sinte y una guitarra. Dice en qué frecuencia, y **Aplicar** abre ahí un hueco de 4 dB, una campana estrecha en el **EQ Eight** de la pista que cede (en uno nuevo si no tiene). Así la otra se oye clara sin bajar el volumen de ninguna.
     - Cede la que no es protagonista: la voz manda sobre todo, luego la solista, los coros, la batería, el bajo, los acordes, los pads, la percusión y los efectos. Entre dos del mismo papel, cede la más floja.
     - El hueco va donde la protagonista suena más fuerte de entre las zonas en que se tapan: su cuerpo, que es lo que necesita para oírse.
@@ -966,7 +971,7 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - **Referencia**: **Elegir canción…** carga una canción que suene como quieres. Se compara su sonoridad y su **balance de graves, medios y agudos** con el tuyo (en la gráfica por octavas: barras, tu mezcla; línea, la referencia), y **Aplicar** pone un **EQ Three** en el master que lo acerca.
 - **Pistas**: el pico, la sonoridad y el estéreo de cada una.
 
-Tras **Aplicar** se vuelve a analizar sola, para que veas el resultado. Todo lo que hace son dispositivos normales (Limiter, Ducker, EQ Three, EQ Eight), volúmenes y panoramas: puedes retocarlos o quitarlos, y se deshace con ⌘Z.
+Tras **Aplicar** se vuelve a analizar sola, para que veas el resultado. Todo lo que hace son dispositivos normales (Limiter, Ducker, Compressor, EQ Three, EQ Eight), volúmenes y panoramas: puedes retocarlos o quitarlos, y se deshace con ⌘Z.
 
 ## Ajustes
 

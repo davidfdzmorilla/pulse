@@ -14,7 +14,7 @@ use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, SaturatorParams};
+use engine::model::{CompressorParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, SaturatorParams};
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -129,6 +129,66 @@ pub struct TrackMeasures {
     /// Eight already makes room (Hz of its cuts).
     pub mids: Vec<[f32; MID_BANDS]>,
     pub carves: Vec<f32>,
+    /// How loud its loud parts and its soft parts are (dBFS: its peak every
+    /// 50 ms, the 90th and 20th percentiles of what sounds), and whether it
+    /// has a compressor already (see [`compression`]).
+    pub dynamics: Option<(f32, f32)>,
+    pub compressed: bool,
+}
+
+// ----- Compression to start from ------------------------------------------------------
+
+/// How a role is compressed to start with: its ratio, attack (ms), how much it
+/// takes off the loud parts (dB), and from what range (loud to soft, dB) it
+/// needs it.
+fn squeeze(role: Role) -> Option<(f32, f32, f32, f32)> {
+    match role {
+        Role::Vocal => Some((3.0, 5.0, 5.0, 8.0)),
+        Role::Backing => Some((3.0, 5.0, 4.0, 8.0)),
+        Role::Lead => Some((2.5, 10.0, 3.0, 10.0)),
+        Role::Bass => Some((4.0, 15.0, 4.0, 6.0)),
+        // Slow to let the hit through: punch, not a flattened beat.
+        Role::Drums => Some((4.0, 25.0, 3.0, 10.0)),
+        _ => None,
+    }
+}
+
+/// The loud and soft parts of `left`/`right` (see [`TrackMeasures::dynamics`]).
+pub fn dynamics(left: &[f32], right: &[f32], rate: f32) -> Option<(f32, f32)> {
+    let window = (0.05 * rate) as usize;
+    let mut peaks: Vec<f32> = left.chunks(window).zip(right.chunks(window)).map(|(l, r)| 20.0 * l.iter().chain(r).fold(0f32, |m, x| m.max(x.abs())).max(1e-9).log10()).collect();
+    let loudest = peaks.iter().cloned().fold(f32::NEG_INFINITY, f32::max);
+    // What sounds: within 40 dB of its loudest.
+    peaks.retain(|&p| p > loudest - 40.0);
+    if peaks.len() < 20 {
+        return None;
+    }
+    peaks.sort_by(f32::total_cmp);
+    let at = |q: f32| peaks[((peaks.len() - 1) as f32 * q) as usize];
+    Some((at(0.9), at(0.2)))
+}
+
+/// The compressor a track starts with, for its role and how much its level
+/// moves, at `tempo`: the threshold where it takes the role's dB off the loud
+/// parts (as its effects hear them: before the fader and the pan), the
+/// release a sixteenth (a bass, an eighth), and makeup for about half of it.
+pub fn compression(t: &TrackMeasures, tempo: f64) -> Option<CompressorParams> {
+    let (ratio, attack_ms, reduce, needs) = squeeze(t.role)?;
+    let (loud, soft) = t.dynamics?;
+    // Ducking to another (a rumble to its kick, a bass to the drums) moves
+    // its level on purpose: that is no reason to compress it.
+    if t.compressed || loud - soft < needs || !t.listens.is_empty() {
+        return None;
+    }
+    // Back to before the fader and the pan (constant power, unity at centre).
+    let angle = (t.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+    let pan_db = 20.0 * (angle.cos().max(angle.sin()) * std::f32::consts::SQRT_2).log10();
+    let before = loud - 20.0 * t.gain.max(1e-6).log10() - pan_db;
+    let threshold = before - reduce * ratio / (ratio - 1.0);
+    let note = if t.role == Role::Bass { 0.5 } else { 0.25 };
+    let release = (note * 60.0 / tempo.max(1.0) * 1000.0).clamp(50.0, 250.0) as f32;
+    let round = |x: f32| (x * 2.0).round() / 2.0;
+    Some(CompressorParams { threshold_db: round(threshold), ratio, attack_ms, release_ms: release.round(), makeup_db: round(reduce * 0.5), sidechain: None })
 }
 
 // ----- Tracks covering each other in the mids ------------------------------------------
@@ -508,6 +568,8 @@ fn cuts_lows(track: &crate::project::Track) -> bool {
 pub struct Report {
     pub mix: Measures,
     pub tracks: Vec<TrackMeasures>,
+    /// The song's tempo (for release times).
+    pub tempo: f64,
 }
 
 /// A change the assistant can make.
@@ -528,6 +590,8 @@ pub enum Fix {
     Balance(Vec<Change>),
     /// Room made in a track at `hz` for another (an EQ Eight bell down).
     Carve { track: usize, name: String, hz: f32, for_name: String },
+    /// A compressor to start from on a track (see [`compression`]).
+    Compress { track: usize, name: String, params: CompressorParams },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -708,6 +772,31 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         }
         out.push(advice(Level::Warning, text, fix));
     }
+    // Tracks whose level moves too much to sit in the mix.
+    for t in &report.tracks {
+        let Some((_, _, reduce, needs)) = squeeze(t.role) else { continue };
+        let Some((loud, soft)) = t.dynamics else { continue };
+        if loud - soft < needs || !t.listens.is_empty() {
+            continue;
+        }
+        if t.compressed {
+            out.push(advice(Level::Good, format!("«{}» ya tiene compresor", t.name), None));
+        } else if let Some(params) = compression(t, report.tempo) {
+            out.push(advice(
+                Level::Note,
+                format!(
+                    "«{}» ({}) va de {} a {} dBFS: entre sus partes fuertes y suaves hay {} dB, y en la mezcla unas se pierden o saltan. Un compresor le quitaría unos {} dB a lo fuerte",
+                    t.name,
+                    t.role.label(),
+                    db(soft as f64),
+                    db(loud as f64),
+                    num((loud - soft) as f64),
+                    num(reduce as f64)
+                ),
+                Some(Fix::Compress { track: t.index, name: t.name.clone(), params }),
+            ));
+        }
+    }
     // Two tracks covering each other in the mids.
     for clash in mid_clashes(&report.tracks).into_iter().take(6) {
         let (yields, to) = (&report.tracks[clash.yields], &report.tracks[clash.to]);
@@ -843,7 +932,9 @@ impl PulseApp {
             .map(|t| (t.name.clone(), is_drums(t), matches!(t.instrument, engine::model::InstrumentKind::Kick(_)), t.id, listens(t)))
             .collect();
         // For the balance: the role its name or instrument says, its pan, its low cut.
-        let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t))).collect();
+        let compressed = |t: &crate::project::Track| t.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::Compressor(c) if c.sidechain.is_none()));
+        let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
+        let tempo = self.project.tempo;
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -854,7 +945,7 @@ impl PulseApp {
                     None => Measured::Mix(Measures::of(&left, &right, RATE)),
                     Some(index) => {
                         let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
-                        let (hint, pan, cut, gain, carves) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new()));
+                        let (hint, pan, cut, gain, carves, compressed) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new(), false));
                         let bands = loudness::bands(&left, &right, RATE);
                         Measured::Track(TrackMeasures {
                             index,
@@ -874,6 +965,8 @@ impl PulseApp {
                             gain,
                             mids: mids(&left, &right, RATE),
                             carves,
+                            dynamics: dynamics(&left, &right, RATE),
+                            compressed,
                         })
                     }
                 })
@@ -882,7 +975,7 @@ impl PulseApp {
                 let mut all = all.into_iter();
                 let Some(Measured::Mix(mix)) = all.next() else { return Err("Nada que analizar".to_string()) };
                 let tracks = all.filter_map(|t| if let Measured::Track(t) = t { Some(t) } else { None }).collect();
-                Ok(Report { mix, tracks })
+                Ok(Report { mix, tracks, tempo })
             });
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
@@ -1142,6 +1235,10 @@ impl PulseApp {
                 }
                 self.status = Some(format!("«{name}» deja hueco a «{for_name}» en {} (EQ Eight, {CARVE_DB} dB)", hz_label(*hz)));
             }
+            Fix::Compress { track, name, params } if track_ok(self, *track, name) => {
+                self.project.tracks[*track].devices.push(Device::new(Effect::Compressor(*params)));
+                self.status = Some(format!("Compresor en «{name}»: umbral {} dB, {}:1", num(params.threshold_db as f64), num(params.ratio as f64)));
+            }
             _ => {
                 self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
                 return;
@@ -1314,6 +1411,10 @@ fn fix_hint(fix: &Fix) -> String {
         Fix::CutLows { name, .. } => format!("Añade un EQ Three a «{name}» con los graves (bajo 150 Hz) a −9 dB"),
         Fix::MasterEq { low, mid, high } => format!("EQ Three en el master: graves {low:+.1}, medios {mid:+.1}, agudos {high:+.1} dB"),
         Fix::Carve { name, hz, for_name, .. } => format!("Baja {} dB «{name}» en {} (un EQ Eight, campana estrecha) para que «{for_name}» se oiga ahí", -CARVE_DB, hz_label(*hz)),
+        Fix::Compress { name, params, .. } => format!(
+            "Añade un Compressor a «{name}»: umbral {:.1} dB, ratio {}:1, ataque {:.0} ms, release {:.0} ms (una semicorchea al tempo; el bajo, una corchea) y {:+.1} dB de ganancia para que siga igual de fuerte",
+            params.threshold_db, params.ratio, params.attack_ms, params.release_ms, params.makeup_db
+        ),
         Fix::Balance(_) => "Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
     }
 }
@@ -1352,11 +1453,11 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new() }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0 }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -1409,7 +1510,7 @@ mod tests {
         assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
         // Over it: no platform turns a club track down, so it isn't said.
-        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new() };
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0 };
         let told = advise(&loud, Target::HardTechno, None);
         assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
@@ -1843,5 +1944,92 @@ mod tests {
         let after = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
         assert!(!after.iter().any(|a| matches!(&a.fix, Some(Fix::Carve { hz: h, .. }) if h == hz)), "{after:?}");
         assert!(after.iter().any(|a| a.level == Level::Good && a.text.starts_with("«Acordes» deja hueco a «Melodía»")));
+    }
+
+    /// A voice going from −22 to −6 dBFS gets a compressor that takes 5 dB
+    /// off its loud parts: the threshold from its level before the fader
+    /// (−6 dB here) and the pan, a sixteenth's release at 120.
+    #[test]
+    fn a_voice_that_moves_too_much_gets_a_compressor() {
+        let voice = TrackMeasures { role: Role::Vocal, dynamics: Some((-6.0, -22.0)), gain: 0.5, pan: 0.0, ..track(0, "Voz", false, -3.0, Vec::new()) };
+        let params = compression(&voice, 120.0).unwrap();
+        // Before the fader: −6 + 6 dB = 0; 5 dB off at 3:1 is 7.5 dB over the threshold.
+        let fader = 20.0 * 0.5f32.log10();
+        assert!((params.threshold_db - (-6.0 - fader - 7.5)).abs() <= 0.25, "{params:?}");
+        assert_eq!((params.ratio, params.attack_ms, params.release_ms, params.makeup_db), (3.0, 5.0, 125.0, 2.5));
+        // A bass releases in an eighth; panned hard, a channel has 3 dB more.
+        let bass = TrackMeasures { role: Role::Bass, pan: 1.0, gain: 1.0, ..voice.clone() };
+        let b = compression(&bass, 120.0).unwrap();
+        assert_eq!(b.release_ms, 250.0);
+        assert!((b.threshold_db - (-6.0 - 3.0 - 4.0 * 4.0 / 3.0)).abs() <= 0.25, "{b:?}");
+        let list = advise(&report(-14.0, -1.5, vec![voice.clone()]), Target::Streaming, None);
+        assert!(list.iter().any(|a| a.fix == Some(Fix::Compress { track: 0, name: "Voz".into(), params })), "{list:?}");
+        // Already compressed, steady enough, or a role not compressed: nothing to do.
+        let done = TrackMeasures { compressed: true, ..voice.clone() };
+        assert!(compression(&done, 120.0).is_none());
+        assert!(advise(&report(-14.0, -1.5, vec![done]), Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text == "«Voz» ya tiene compresor"));
+        assert!(compression(&TrackMeasures { dynamics: Some((-6.0, -11.0)), ..voice.clone() }, 120.0).is_none());
+        assert!(compression(&TrackMeasures { role: Role::Pad, ..voice.clone() }, 120.0).is_none());
+        // Ducking to the kick, it moves on purpose.
+        let ducking = TrackMeasures { listens: vec![99], ..bass };
+        assert!(compression(&ducking, 120.0).is_none());
+        assert!(advise(&report(-14.0, -1.5, vec![ducking]), Target::Streaming, None).iter().all(|a| !a.text.contains("compres")));
+    }
+
+    /// For real: a voice singing loud and soft phrases. Compressed, its loud
+    /// parts come down about what was asked, and then it says so in green.
+    #[test]
+    fn a_voices_loud_parts_come_down() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let audio: Vec<f32> = (0..(8.0 * rate) as usize)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let level = if (t as usize) % 2 == 0 { 0.5 } else { 0.06 };
+                let x = std::f32::consts::TAU * 220.0 * t;
+                level * (x.sin() + 0.5 * (2.0 * x).sin() + 0.25 * (3.0 * x).sin()) / 1.75
+            })
+            .collect();
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("voz-dinamica-{}.wav", std::process::id()));
+        crate::export::write(&path, &audio, &audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut voice = Track::new_audio("Voz", [0; 3]);
+        voice.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        project.tracks = vec![voice];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 60);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let before = app.mix.report.clone().unwrap().tracks[0].clone();
+        let (loud, soft) = before.dynamics.unwrap();
+        println!("antes: {loud:.1} / {soft:.1}");
+        let advice = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Compress { .. }))).expect("a compressor");
+        let Fix::Compress { params, .. } = &fix else { unreachable!() };
+        println!("{params:?}");
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        let after = app.mix.report.clone().unwrap().tracks[0].clone();
+        let (loud_after, soft_after) = after.dynamics.unwrap();
+        println!("después: {loud_after:.1} / {soft_after:.1}");
+        // 5 dB off the loud parts, give or take the knee and the release.
+        let taken = loud - (loud_after - params.makeup_db);
+        assert!((3.5..=6.5).contains(&taken), "{taken} dB");
+        // The soft parts untouched (only the makeup).
+        assert!((soft_after - params.makeup_db - soft).abs() < 1.0, "{soft} → {soft_after}");
+        assert!(advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text == "«Voz» ya tiene compresor"));
     }
 }

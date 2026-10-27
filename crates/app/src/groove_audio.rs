@@ -213,7 +213,7 @@ mod tests {
         assert_eq!(app.project.grooves[1].name, "Break 2");
         // Saved: a Pulse that reads format 10 would lose it, so it is 11.
         let text = app.project.to_json().unwrap();
-        assert!(text.contains(&format!("\"format\": {}", crate::project::FORMAT)) && crate::project::FORMAT == 11);
+        assert!(text.contains("\"format\": 11"));
         let again = crate::project::Project::from_json(&text).unwrap();
         assert_eq!(again.grooves, app.project.grooves);
         // Without one, the format it was.

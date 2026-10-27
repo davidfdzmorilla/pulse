@@ -15,6 +15,9 @@
 //! project has none), the voice both, pads and chords reverb, and the kick
 //! and the bass nothing, so the low end stays clean.
 //!
+//! «Eses» finds a voice whose esses jump out (as loud as its vowels, or
+//! nearly) and puts a De-esser on it, set where they are (see [`esses`]).
+//!
 //! «Nivelar la voz» rides the voice's fader phrase by phrase (volume
 //! automation), so it sits as far over the rest in every one (see [`ride`]).
 //!
@@ -31,7 +34,7 @@ use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{CompressorParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, ReverbParams, SaturatorParams};
+use engine::model::{CompressorParams, DeEsserParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, ReverbParams, SaturatorParams};
 use engine::MAX_RETURNS;
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -159,6 +162,125 @@ pub struct TrackMeasures {
     /// volume is automated already.
     pub levels: Vec<f32>,
     pub automated: bool,
+    /// A voice's esses (see [`esses`]), and whether it has a De-esser already.
+    pub esses: Option<Esses>,
+    pub deessed: bool,
+}
+
+// ----- Esses ------------------------------------------------------------------------------
+
+/// A voice's esses: how loud they are next to its vowels (dB: their 90th
+/// percentile against the vowels' median, in 10 ms frames), where they are
+/// (the De-esser's split, Hz), and the top part's peaks over that split, as
+/// the De-esser hears them (dBFS, 90th percentiles) in the esses and in the
+/// vowels.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Esses {
+    pub over_vowels: f32,
+    pub freq: f32,
+    pub esses_top: f32,
+    pub vowels_top: f32,
+}
+
+/// A second-order filter (RBJ), run on `x`.
+fn filtered(x: &[f64], rate: f32, hz: f64, q: f64, kind: u8) -> Vec<f64> {
+    let w = std::f64::consts::TAU * hz / rate as f64;
+    let (c, alpha) = (w.cos(), w.sin() / (2.0 * q));
+    let (b, a) = match kind {
+        // High-pass, low-pass, band-pass (0 dB at its peak).
+        0 => ([(1.0 + c) / 2.0, -(1.0 + c), (1.0 + c) / 2.0], [1.0 + alpha, -2.0 * c, 1.0 - alpha]),
+        1 => ([(1.0 - c) / 2.0, 1.0 - c, (1.0 - c) / 2.0], [1.0 + alpha, -2.0 * c, 1.0 - alpha]),
+        _ => ([alpha, 0.0, -alpha], [1.0 + alpha, -2.0 * c, 1.0 - alpha]),
+    };
+    let (mut s1, mut s2) = (0.0, 0.0);
+    x.iter()
+        .map(|&v| {
+            let y = (b[0] * v + s1) / a[0];
+            s1 = (b[1] * v - a[1] * y) + s2;
+            s2 = b[2] * v - a[2] * y;
+            y
+        })
+        .collect()
+}
+
+/// Finds a voice's esses: 10 ms frames where it sounds (within 40 dB of its
+/// loudest) and most of its power is over 4.5 kHz. None without a few of them
+/// and enough vowels to set them against.
+pub fn esses(left: &[f32], right: &[f32], rate: f32) -> Option<Esses> {
+    let x: Vec<f64> = left.iter().zip(right).map(|(a, b)| 0.5 * (*a as f64 + *b as f64)).collect();
+    let frame = (0.01 * rate) as usize;
+    let power = |y: &[f64]| -> Vec<f64> { y.chunks(frame).map(|c| c.iter().map(|v| v * v).sum::<f64>() / c.len() as f64).collect() };
+    let db = |p: f64| (10.0 * p.max(1e-14).log10()) as f32;
+    let total = power(&x);
+    let high = power(&filtered(&x, rate, 4500.0, std::f64::consts::FRAC_1_SQRT_2, 0));
+    let loudest = total.iter().copied().fold(0.0, f64::max);
+    let sounds = |k: usize| db(total[k]) > (db(loudest) - 40.0).max(-60.0);
+    let sibilant: Vec<usize> = (0..total.len()).filter(|&k| sounds(k) && high[k] > 0.5 * total[k]).collect();
+    let vowels: Vec<usize> = (0..total.len()).filter(|&k| sounds(k) && high[k] < 0.2 * total[k]).collect();
+    if sibilant.len() < 5 || vowels.len() < 20 {
+        return None;
+    }
+    let percentile = |mut v: Vec<f32>, q: f32| {
+        v.sort_by(f32::total_cmp);
+        v[((v.len() - 1) as f32 * q) as usize]
+    };
+    let over_vowels = percentile(sibilant.iter().map(|&k| db(total[k])).collect(), 0.9) - percentile(vowels.iter().map(|&k| db(total[k])).collect(), 0.5);
+    // Where they are: the loudest of three bands, and the split under it.
+    let bands = [(5000.0, 4500.0), (7000.0, 6000.0), (9500.0, 7500.0)];
+    let energy = |hz: f64| {
+        let p = power(&filtered(&x, rate, hz, 1.4, 2));
+        sibilant.iter().map(|&k| p[k]).sum::<f64>()
+    };
+    let freq = bands.iter().map(|&(hz, split)| (energy(hz), split)).max_by(|a, b| a.0.total_cmp(&b.0)).map_or(6000.0, |b| b.1);
+    // The top part as the De-esser takes it (the sound less a low-pass), its
+    // peak falling in 60 ms, at its highest in each frame.
+    let low = filtered(&x, rate, freq as f64, std::f64::consts::FRAC_1_SQRT_2, 1);
+    let fall = (-1.0 / (0.06 * rate as f64)).exp();
+    let mut level = 0.0f64;
+    let peaks: Vec<f32> = x
+        .iter()
+        .zip(&low)
+        .map(|(v, l)| {
+            level = (v - l).abs().max(level * fall);
+            level
+        })
+        .collect::<Vec<f64>>()
+        .chunks(frame)
+        .map(|c| (20.0 * c.iter().copied().fold(0.0, f64::max).max(1e-9).log10()) as f32)
+        .collect();
+    Some(Esses {
+        over_vowels,
+        freq,
+        esses_top: percentile(sibilant.iter().map(|&k| peaks[k]).collect(), 0.9),
+        vowels_top: percentile(vowels.iter().map(|&k| peaks[k]).collect(), 0.9),
+    })
+}
+
+/// Esses this close to the vowels (dB) or closer jump out of the voice.
+const ESSES_LOUD: f32 = -8.0;
+/// How much the De-esser takes off them (dB), and its range.
+const DEESS_DB: f32 = 6.0;
+const DEESS_RANGE: f32 = 8.0;
+
+/// The De-esser a voice starts with: split where its esses are, its
+/// threshold where it takes [`DEESS_DB`] off them (as its effects hear them:
+/// before the fader and the pan), and never as low as its vowels' top, so
+/// they stay bright; and how much it takes off them (dB). None if its esses
+/// don't jump out, or if it can't take them down without the vowels.
+pub fn deessing(t: &TrackMeasures) -> Option<(DeEsserParams, f32)> {
+    let e = t.esses?;
+    if t.deessed || e.over_vowels < ESSES_LOUD {
+        return None;
+    }
+    let angle = (t.pan.clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
+    let pan_db = 20.0 * (angle.cos().max(angle.sin()) * std::f32::consts::SQRT_2).log10();
+    let before = |x: f32| x - 20.0 * t.gain.max(1e-6).log10() - pan_db;
+    let threshold = ((before(e.esses_top) - DEESS_DB).max(before(e.vowels_top) + 1.0) * 2.0).round() / 2.0;
+    let takes = (before(e.esses_top) - threshold).min(DEESS_RANGE);
+    if takes < 3.0 {
+        return None;
+    }
+    Some((DeEsserParams { freq_hz: e.freq, threshold_db: threshold, range_db: DEESS_RANGE }, takes))
 }
 
 // ----- Riding the voice -----------------------------------------------------------------
@@ -885,6 +1007,8 @@ pub enum Fix {
     /// Sends to a reverb and a delay (see [`space_changes`]); the returns
     /// they go to, as they were when measured (`None`: made).
     Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
+    /// A De-esser on a voice (see [`deessing`]).
+    DeEss { track: usize, name: String, params: DeEsserParams },
     /// The voice ridden phrase by phrase (see [`ride`]): its phrases (s from
     /// `from`, a beat) and how much each moves (dB).
     Ride { track: usize, name: String, from: f64, phrases: Vec<Phrase>, gains: Vec<f32> },
@@ -900,10 +1024,11 @@ fn stage(fix: &Fix) -> u8 {
         Fix::Duck { .. } | Fix::CutLows { .. } => 2,
         Fix::Carve { .. } => 3,
         Fix::Compress { .. } => 4,
-        Fix::Ride { .. } => 5,
-        Fix::Space { .. } => 6,
-        Fix::MasterEq { .. } => 7,
-        Fix::MasterLimiter { .. } => 8,
+        Fix::DeEss { .. } => 5,
+        Fix::Ride { .. } => 6,
+        Fix::Space { .. } => 7,
+        Fix::MasterEq { .. } => 8,
+        Fix::MasterLimiter { .. } => 9,
     }
 }
 
@@ -948,6 +1073,7 @@ fn fix_label(fix: &Fix) -> String {
         Fix::Compress { name, .. } => format!("compresor en «{name}»"),
         Fix::Space { .. } => "reverb y delay".into(),
         Fix::Ride { name, .. } => format!("«{name}» nivelada"),
+        Fix::DeEss { name, .. } => format!("de-esser en «{name}»"),
     }
 }
 
@@ -1165,6 +1291,28 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
                     num(reduce as f64)
                 ),
                 Some(Fix::Compress { track: t.index, name: t.name.clone(), params }),
+            ));
+        }
+    }
+    // Esses that jump out of a voice.
+    for t in report.tracks.iter().filter(|t| matches!(t.role, Role::Vocal | Role::Backing) && !t.group) {
+        let Some(e) = t.esses else { continue };
+        if e.over_vowels < ESSES_LOUD {
+            continue;
+        }
+        if t.deessed {
+            out.push(advice(Level::Good, format!("«{}» ya tiene De-esser", t.name), None));
+        } else if let Some((params, takes)) = deessing(t) {
+            out.push(advice(
+                Level::Note,
+                format!(
+                    "Las eses de «{}» suenan a {} dB de sus vocales: saltan y pinchan, más aún tras comprimirla. Un De-esser en {} las bajaría unos {} dB sin apagar el resto",
+                    t.name,
+                    db(e.over_vowels as f64),
+                    hz_label(e.freq),
+                    format!("{takes:.0}")
+                ),
+                Some(Fix::DeEss { track: t.index, name: t.name.clone(), params }),
             ));
         }
     }
@@ -1393,7 +1541,12 @@ impl PulseApp {
         let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
         let tempo = self.project.tempo;
         let space = Space::of(&self.project.returns);
-        let routing: Vec<(bool, [f32; MAX_RETURNS], bool)> = self.project.tracks.iter().map(|t| (t.is_group(), t.sends, t.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()))).collect();
+        let routing: Vec<(bool, [f32; MAX_RETURNS], bool, bool)> = self
+            .project
+            .tracks
+            .iter()
+            .map(|t| (t.is_group(), t.sends, t.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()), t.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::DeEsser(_)))))
+            .collect();
         let start = export::beat_range(&self.project, self.mix.range).map_or(0.0, |r| r.0);
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
@@ -1407,7 +1560,8 @@ impl PulseApp {
                         let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
                         let (hint, pan, cut, gain, carves, compressed) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new(), false));
                         let bands = loudness::bands(&left, &right, RATE);
-                        let (group, sends, automated) = routing.get(index).copied().unwrap_or((false, [0.0; MAX_RETURNS], false));
+                        let (group, sends, automated, deessed) = routing.get(index).copied().unwrap_or((false, [0.0; MAX_RETURNS], false, false));
+                        let voice = matches!(hint, Some(Role::Vocal | Role::Backing));
                         Measured::Track(TrackMeasures {
                             index,
                             id,
@@ -1432,6 +1586,8 @@ impl PulseApp {
                             sends,
                             levels: levels(&left, &right, RATE),
                             automated,
+                            esses: if voice { esses(&left, &right, RATE) } else { None },
+                            deessed,
                         })
                     }
                 })
@@ -1839,6 +1995,10 @@ impl PulseApp {
                     false => format!("Espacio de partida: {} pistas, y nuevo{} {} (⌘Z lo deshace)", changes.len(), if made.len() > 1 { "s" } else { "" }, made.iter().map(|n| format!("«{n}»")).collect::<Vec<_>>().join(" y ")),
                 });
             }
+            Fix::DeEss { track, name, params } if track_ok(self, *track, name) => {
+                self.project.tracks[*track].devices.push(Device::new(Effect::DeEsser(*params)));
+                self.status = Some(format!("De-esser en «{name}»: {}, umbral {} dB", hz_label(params.freq_hz), num(params.threshold_db as f64)));
+            }
             Fix::Ride { track, name, from, phrases, gains } if track_ok(self, *track, name) => {
                 let fader = self.project.tracks[*track].mixer.gain;
                 let points: Vec<engine::model::AutomationPoint> = ride_points(phrases, gains, fader)
@@ -1980,7 +2140,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let any = next_fix(&list, &[]).is_some();
                 all = ui
                     .add_enabled(!busy && any, egui::Button::new("Aplicar todo").small())
-                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, voz nivelada, reverb y delay, y el master. Vuelve a medir después de cada uno")
+                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, y el master. Vuelve a medir después de cada uno")
                     .clicked();
             }
         }
@@ -2094,6 +2254,7 @@ fn louder(track: &mut crate::project::Track, db: f32) {
 
 fn fix_hint(fix: &Fix) -> String {
     match fix {
+        Fix::DeEss { name, params, .. } => format!("Añade un De-esser a «{name}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)", hz_label(params.freq_hz), num(params.threshold_db as f64), num(params.range_db as f64)),
         Fix::Ride { name, .. } => format!("Escribe automatización de volumen en «{name}»: cada frase sube o baja (como mucho {RIDE_MAX} dB) para quedar igual de por encima de la base. Los cambios caen en los silencios entre frases"),
         Fix::MasterLimiter { gain_db, ceiling_db } => format!("Limiter en el master: ganancia {gain_db:+.1} dB, techo {ceiling_db:.1} dB"),
         Fix::TrackGain { name, db, .. } => format!("Volumen de «{name}» {db:+.1} dB"),
@@ -2144,7 +2305,7 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
@@ -3142,5 +3303,82 @@ mod tests {
         app.apply_fix(&Fix::TrackGain { track: 0, name: "Voz".into(), db: 6.0 });
         let now = lane(&app);
         assert!(was.iter().zip(&now).all(|(a, b)| (b / a - 10f32.powf(0.3)).abs() < 1e-3 || *b == FADER_TOP));
+    }
+
+    /// For real: a voice whose «s» are as loud as its vowels. The assistant
+    /// finds them, where they are, and its De-esser brings them down about
+    /// what it said, the vowels as they were.
+    #[test]
+    fn a_voices_esses_come_down() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let n = (8.0 * rate) as usize;
+        // White noise, its top over 6.5 kHz: the «s».
+        let mut seed = 1u32;
+        let noise: Vec<f64> = (0..n)
+            .map(|_| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                (seed >> 8) as f64 / (1u32 << 24) as f64 * 2.0 - 1.0
+            })
+            .collect();
+        let hiss = filtered(&filtered(&noise, rate, 6500.0, 0.7, 0), rate, 6500.0, 0.7, 0);
+        let rms = |x: &[f64]| (x.iter().map(|v| v * v).sum::<f64>() / x.len() as f64).sqrt();
+        let hiss_rms = rms(&hiss);
+        // Each half second: a vowel (a 200 Hz voice) for 0.35 s, an «s» for 0.15 s, as loud.
+        let voice: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / rate;
+                if t % 0.5 < 0.35 {
+                    let x = std::f32::consts::TAU * 200.0 * t;
+                    0.25 * (x.sin() + 0.5 * (2.0 * x).sin() + 0.3 * (3.0 * x).sin())
+                } else {
+                    (hiss[i] / hiss_rms * 0.2) as f32
+                }
+            })
+            .collect();
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("eses-{}.wav", std::process::id()));
+        crate::export::write(&path, &voice, &voice, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut v = Track::new_audio("Voz", [0; 3]);
+        v.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        project.tracks = vec![v];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 60);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let before = app.mix.report.clone().unwrap().tracks[0].esses.expect("esses found");
+        println!("antes: {before:?}");
+        assert!(before.over_vowels > -3.0, "{before:?}");
+        assert!(before.freq >= 6000.0, "{before:?}");
+        let advice = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::DeEss { .. }))).expect("a de-esser");
+        println!("{fix:?}");
+        let vowels = |app: &PulseApp| {
+            let t = &app.mix.report.as_ref().unwrap().tracks[0];
+            t.levels.iter().enumerate().filter(|(k, _)| { let s = *k as f64 * HOP % 0.5; (0.05..0.1).contains(&s) }).map(|(_, l)| *l).sum::<f32>()
+        };
+        let vowels_before = vowels(&app);
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        let after = app.mix.report.clone().unwrap().tracks[0].esses.expect("esses still there");
+        println!("después: {after:?}");
+        let down = before.over_vowels - after.over_vowels;
+        assert!((4.0..=9.0).contains(&down), "{down} dB");
+        let count = app.mix.report.as_ref().unwrap().tracks[0].levels.iter().enumerate().filter(|(k, _)| { let s = *k as f64 * HOP % 0.5; (0.05..0.1).contains(&s) }).count() as f32;
+        assert!(((vowels(&app) - vowels_before) / count).abs() < 0.3, "the vowels as they were");
+        assert!(advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text == "«Voz» ya tiene De-esser"));
     }
 }

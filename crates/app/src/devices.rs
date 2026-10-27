@@ -384,6 +384,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Gate(_) => (6, 1),
         Effect::Transient(_) => (3, 0),
         Effect::Tuner(_) => (3, 1),
+        Effect::DeEsser(_) => (3, 0),
         Effect::Delay(_) => (3, 1),
         Effect::Reverb(_) => (4, 0),
         Effect::Saturator(_) => (3, 0),
@@ -508,6 +509,7 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         | Effect::Compressor(_)
         | Effect::Gate(_)
         | Effect::Transient(_)
+        | Effect::DeEsser(_)
         | Effect::Reverb(_)
         | Effect::Chorus(_)
         | Effect::Phaser(_)

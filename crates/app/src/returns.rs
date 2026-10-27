@@ -214,6 +214,10 @@ mod tests {
         wave.fx[0] = Some(engine::model::Device::new(engine::model::Effect::Transient(Default::default())));
         synth.tracks[0].instrument = engine::model::InstrumentKind::Wavetable(wave);
         assert_eq!(format(&synth), 8);
+        // A De-esser: 12.
+        let mut deessed = Project::demo();
+        deessed.tracks[1].devices.push(engine::model::Device::new(engine::model::Effect::DeEsser(Default::default())));
+        assert_eq!(format(&deessed), 12);
         // A clip split in the middle of a fade: each part a piece of its curve, 9.
         let mut cut = Project::demo();
         let clip = engine::model::AudioClip { hard_start: false, fades: engine::model::Fades::new(4.0, 0.0), name: "a".into(), color: [0; 3], sample: "a.wav".into(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };

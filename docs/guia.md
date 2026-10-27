@@ -541,6 +541,7 @@ Saca las notas de cualquier audio y las pone en una pista MIDI nueva, justo deba
 - **Armonía**: todas las notas a la vez. Para acordes, piano o guitarra.
 - **Acordes**: los acordes de una canción o de un instrumento, uno por cambio (como mucho cada medio compás), con el bajo y las voces enlazadas, listos para tocarlos con otro sonido. Ignora la batería y los golpes cortos. Usa la **Escala** del proyecto si la hay; si no, la del audio.
 - **Batería**: cada golpe pasa a bombo, caja o charles (según dónde tiene su energía), en una Drum Machine.
+- **Beatbox**: tu beatbox grabado pasa a batería. **«pum»** es el bombo, **«pf»** o **«ka»** la caja y **«ts»** el charles, igual que con la **Voz** en modo batería y con los sonidos que le hayas enseñado allí. Cada golpe va a su semicorchea, así que no hace falta clavar el tiempo; graba con el metrónomo. Da igual lo fuerte que grabaras: el golpe más fuerte suena con toda la velocidad y los demás en proporción. La barra de estado dice cuántos golpes de cada uno ha puesto.
 
 Se hace en este Mac, sin internet, en unos segundos; la barra de estado muestra el progreso. Las notas siguen el tempo del clip (su warp) y su fuerza pasa a la velocidad. Se combina bien con **Separar en stems**: separa una canción y convierte el bajo o la voz en MIDI.
 
@@ -805,7 +806,7 @@ Tu voz como teclado MIDI: pulsa **Voz** en la barra de transporte y canta, tarar
 - **Enseñar tus sonidos**: si alguno no lo reconoce bien, en el mismo menú pulsa **Bombo**, **Caja** o **Charles** y hazlo 4 veces como lo harías tocando. Desde entonces ese sonido tuyo toca ese instrumento (los enseñados llevan ✓ y se guardan en los ajustes de Pulse). Enseñarlo otra vez sustituye lo anterior; **Olvidar lo enseñado** vuelve a los sonidos de serie.
 - La octava, los acordes y seguir el tono son de las notas: en batería no cuentan.
 
-Para pasar a MIDI algo ya grabado, usa **Audio a MIDI → Melodía**, que lo analiza con más calma y saca notas más limpias.
+Para pasar a MIDI algo ya grabado, usa **Audio a MIDI → Melodía**, que lo analiza con más calma y saca notas más limpias; un beatbox grabado en audio, con **Audio a MIDI → Beatbox**.
 
 ## Navegador y biblioteca
 

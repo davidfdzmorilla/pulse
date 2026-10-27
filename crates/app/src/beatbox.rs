@@ -123,9 +123,11 @@ impl Examples {
     }
 }
 
-/// A hit heard: the sound, how hard and what it was like.
+/// A hit heard: where it starts (samples into all the input), the sound, how
+/// hard and what it was like.
 #[derive(Clone, Copy, Debug)]
 pub struct Hit {
+    pub at: u64,
     pub drum: Drum,
     pub velocity: f32,
     pub features: Features,
@@ -220,10 +222,14 @@ impl Beatbox {
             let (start, peak) = (*start, *peak);
             self.pending = None;
             let from = (start - self.before) as usize;
-            let features = self.features(&self.recent[from..from + self.window]);
+            let frame = &self.recent[from..from + self.window];
+            let features = self.features(frame);
             let drum = self.classify(&features);
             let velocity = ((peak - GATE_DB) / 40.0).clamp(0.3, 1.0);
-            return Some(Hit { drum, velocity, features });
+            // Where it starts: the first sample a third as loud as its loudest.
+            let loudest = frame.iter().fold(0f32, |m, x| m.max(x.abs()));
+            let onset = frame.iter().position(|x| x.abs() >= loudest / 3.0).unwrap_or(0);
+            return Some(Hit { at: start + onset as u64, drum, velocity, features });
         }
         if level > GATE_DB && level - floor >= RISE_DB && self.after >= APART {
             self.after = 0.0;
@@ -260,6 +266,29 @@ impl Beatbox {
         let distance = |c: &Features| c.iter().zip(features).map(|(a, b)| (a - b).powi(2)).sum::<f32>();
         Drum::ALL.into_iter().min_by(|a, b| distance(&self.centres[a.index()]).total_cmp(&distance(&self.centres[b.index()]))).unwrap()
     }
+}
+
+/// The hits in a whole recording, as `examples` taught. It is heard as if its
+/// loudest moment were at full scale, so how loud it was recorded doesn't
+/// matter: the loudest hit plays hardest.
+pub fn hits_in(mono: &[f32], rate: f32, examples: &Examples) -> Vec<Hit> {
+    let peak = mono.iter().fold(0f32, |m, x| m.max(x.abs()));
+    if peak < 1e-4 {
+        return Vec::new();
+    }
+    let mut beatbox = Beatbox::new(rate);
+    beatbox.learn(examples);
+    let gain = 1.0 / peak;
+    let mut hits = Vec::new();
+    let mut chunk = Vec::with_capacity(4096);
+    for part in mono.chunks(4096) {
+        chunk.clear();
+        chunk.extend(part.iter().map(|x| x * gain));
+        hits.extend(beatbox.hear(&chunk));
+    }
+    // Silence after, for a hit at the very end to be heard to the end of its window.
+    hits.extend(beatbox.hear(&vec![0.0; beatbox.window + 2 * beatbox.hop]));
+    hits
 }
 
 #[cfg(test)]
@@ -335,6 +364,26 @@ pub mod tests {
             }
             assert_eq!(heard.iter().map(|h| h.drum).collect::<Vec<_>>(), order, "in blocks of {chunk}");
             assert!(heard.iter().all(|h| h.velocity > 0.5));
+        }
+    }
+
+    /// In a recording, each hit where it starts (to the millisecond), however
+    /// softly it was recorded.
+    #[test]
+    fn a_recording_has_its_hits_where_they_start() {
+        use Drum::*;
+        let hits = [(Kick, 0.2), (Hat, 0.45), (Snare, 0.7), (Hat, 0.95)];
+        for gain in [1.0, 0.05] {
+            let audio: Vec<f32> = pattern(&hits, 1.2).iter().map(|s| s * gain).collect();
+            let heard = hits_in(&audio, RATE, &Examples::default());
+            let found: Vec<(Drum, f32)> = heard.iter().map(|h| (h.drum, h.at as f32 / RATE)).collect();
+            println!("{found:?}");
+            assert_eq!(found.len(), hits.len());
+            for ((drum, at), (want, when)) in found.iter().zip(hits) {
+                assert_eq!(*drum, want);
+                assert!((at - when).abs() < 0.002, "{at} for {when}");
+            }
+            assert!(heard[0].velocity > 0.9, "the loudest hit plays hard, however it was recorded");
         }
     }
 

@@ -5,6 +5,8 @@
 //! - Armonía: every note (chords, piano, guitar).
 //! - Acordes: the chords of a song or a part, one per change, voiced.
 //! - Batería: each hit as a kick, snare or hi-hat, by where its energy is.
+//! - Beatbox: a «pum», «pf» or «ts» made with the mouth as the kick, snare or
+//!   hat (as the Voz hears them, with the sounds taught to it), on the grid.
 //!
 //! A melody's notes come from following the pitch of the voice (`stems::pitch`,
 //! pYIN); chords' from Basic Pitch (`stems::transcribe`); drum hits from the
@@ -24,10 +26,11 @@ pub enum ToMidi {
     Harmony,
     Chords,
     Drums,
+    Beatbox,
 }
 
 impl ToMidi {
-    pub const ALL: [ToMidi; 5] = [ToMidi::Melody, ToMidi::MelodyFree, ToMidi::Harmony, ToMidi::Chords, ToMidi::Drums];
+    pub const ALL: [ToMidi; 6] = [ToMidi::Melody, ToMidi::MelodyFree, ToMidi::Harmony, ToMidi::Chords, ToMidi::Drums, ToMidi::Beatbox];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -36,6 +39,7 @@ impl ToMidi {
             ToMidi::Harmony => "Armonía",
             ToMidi::Chords => "Acordes",
             ToMidi::Drums => "Batería",
+            ToMidi::Beatbox => "Beatbox",
         }
     }
 
@@ -46,6 +50,7 @@ impl ToMidi {
             ToMidi::Harmony => "Todas las notas: acordes, piano, guitarra",
             ToMidi::Chords => "Los acordes de una canción o de un instrumento, uno por cada cambio (como mucho cada medio compás), con las voces enlazadas: para tocarlos con otro sonido",
             ToMidi::Drums => "Cada golpe como bombo, caja o charles, en una Drum Machine",
+            ToMidi::Beatbox => "Tu beatbox grabado como batería: «pum» es el bombo, «pf» o «ka» la caja y «ts» el charles (o los sonidos que le enseñaste a la Voz), cada golpe en su semicorchea, en una Drum Machine",
         }
     }
 }
@@ -75,6 +80,8 @@ struct Context {
     midi: [f64; 12],
     /// The project's key, if chosen: melodies go to it, nothing is detected.
     key: Option<stems::key::Key>,
+    /// The beatbox sounds the user taught the Voz.
+    examples: crate::beatbox::Examples,
 }
 
 impl Context {
@@ -143,6 +150,31 @@ pub fn drum_hits(mono: &[f32], rate: f32) -> Vec<NoteEvent> {
     hits
 }
 
+/// The beatbox hits in `mono`: when each starts (seconds), which drum, how loud.
+pub fn beatbox_hits(mono: &[f32], rate: f32, examples: &crate::beatbox::Examples) -> Vec<NoteEvent> {
+    crate::beatbox::hits_in(mono, rate, examples)
+        .into_iter()
+        .map(|h| {
+            let start = h.at as f64 / rate as f64;
+            NoteEvent { start, end: start + 0.1, pitch: h.drum.note(), amplitude: h.velocity }
+        })
+        .collect()
+}
+
+/// Drum `notes` on the grid (a sixteenth): of two of a drum on one step, the
+/// louder.
+pub fn on_grid(notes: Vec<Note>, length: f64) -> Vec<Note> {
+    const STEP: f64 = 0.25;
+    let mut out: Vec<Note> = notes
+        .into_iter()
+        .map(|n| Note { start: (n.start / STEP).round() * STEP, length: STEP, ..n })
+        .filter(|n| n.start < length - 1e-9)
+        .collect();
+    out.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)).then(b.velocity.total_cmp(&a.velocity)));
+    out.dedup_by(|later, earlier| later.pitch == earlier.pitch && (later.start - earlier.start).abs() < 1e-9);
+    out
+}
+
 /// `events` (seconds of the clip's file) as notes in the clip's beats, at `tempo`.
 pub fn clip_notes(events: &[NoteEvent], audio: &AudioClip, tempo: f64, drums: bool) -> Vec<Note> {
     let mut notes: Vec<Note> = events
@@ -175,6 +207,7 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
     let mono: Vec<f32> = sample.left[a..b].iter().zip(&sample.right[a..b]).map(|(l, r)| (l + r) * 0.5).collect();
     let (mut events, key) = match mode {
         ToMidi::Drums => (drum_hits(&mono, rate), None),
+        ToMidi::Beatbox => (beatbox_hits(&mono, rate, &context.examples), None),
         // One voice: its pitch followed frame by frame (pYIN), cut into notes,
         // heard in the song's key.
         ToMidi::Melody => match context.key {
@@ -281,7 +314,7 @@ impl PulseApp {
         }
         // A dozen files are plenty to hear the key.
         let audio = paths.into_iter().take(12).map(|p| self.sample(&p)).filter(|s| s.frames() > 0).collect();
-        Context { audio, midi, key: self.project.key }
+        Context { audio, midi, key: self.project.key, examples: Default::default() }
     }
 
     /// Sets the project's key to the one its clips sound in: the MIDI notes and
@@ -317,11 +350,12 @@ impl PulseApp {
         }
         let context = match mode {
             // With the project's key nothing needs hearing.
-            ToMidi::Melody if self.project.key.is_some() => Context { audio: Vec::new(), midi: [0.0; 12], key: self.project.key },
+            ToMidi::Melody if self.project.key.is_some() => Context { audio: Vec::new(), midi: [0.0; 12], key: self.project.key, examples: Default::default() },
             ToMidi::Melody => self.key_context(&audio.sample),
             ToMidi::MelodyFree => Context { key: None, ..self.key_context(&audio.sample) },
-            ToMidi::Chords => Context { audio: Vec::new(), midi: [0.0; 12], key: self.project.key },
-            _ => Context { audio: Vec::new(), midi: [0.0; 12], key: None },
+            ToMidi::Chords => Context { audio: Vec::new(), midi: [0.0; 12], key: self.project.key, examples: Default::default() },
+            ToMidi::Beatbox => Context { audio: Vec::new(), midi: [0.0; 12], key: None, examples: self.settings.beatbox.clone() },
+            _ => Context { audio: Vec::new(), midi: [0.0; 12], key: None, examples: Default::default() },
         };
         let chosen = self.project.key.is_some();
         let (progress, result) = (Arc::new(Mutex::new(0.0)), Arc::new(Mutex::new(None)));
@@ -367,7 +401,11 @@ impl PulseApp {
 
     /// A new MIDI track under the clip's, with the notes in the clip's place.
     pub fn place_midi(&mut self, clip: ClipRef, audio: &AudioClip, mode: ToMidi, events: &[NoteEvent]) {
-        let notes = clip_notes(events, audio, self.project.tempo, mode == ToMidi::Drums);
+        let drums = matches!(mode, ToMidi::Drums | ToMidi::Beatbox);
+        let mut notes = clip_notes(events, audio, self.project.tempo, drums);
+        if mode == ToMidi::Beatbox {
+            notes = on_grid(notes, audio.length);
+        }
         if notes.is_empty() {
             self.status = Some(format!("No se encontraron notas en «{}»", audio.name));
             return;
@@ -377,7 +415,7 @@ impl PulseApp {
             return;
         }
         let instrument = match mode {
-            ToMidi::Drums => InstrumentKind::DrumMachine(Default::default()),
+            ToMidi::Drums | ToMidi::Beatbox => InstrumentKind::DrumMachine(Default::default()),
             _ => InstrumentKind::Synth(SynthParams::default()),
         };
         let source = clip.track();
@@ -386,6 +424,8 @@ impl PulseApp {
             ClipRef::Session { .. } => None,
         };
         let count = notes.len();
+        let of = |drum: crate::beatbox::Drum| notes.iter().filter(|n| n.pitch == drum.note()).count();
+        let (kicks, snares, hats) = (of(crate::beatbox::Drum::Kick), of(crate::beatbox::Drum::Snare), of(crate::beatbox::Drum::Hat));
         let midi = Clip::Midi(MidiClip { notes, ..MidiClip::new(format!("{} · {}", audio.name, mode.label()), audio.length, audio.color) });
         let name = format!("{} · {}", audio.name, mode.label());
         let mut track = crate::project::Track::new(name, audio.color, instrument);
@@ -407,7 +447,10 @@ impl PulseApp {
             ClipRef::Session { slot, .. } => ClipRef::Session { track: at, slot },
             ClipRef::Arrangement { .. } => ClipRef::Arrangement { track: at, index: 0 },
         });
-        self.status = Some(format!("{count} notas de «{}» en una pista MIDI nueva", audio.name));
+        self.status = Some(match mode {
+            ToMidi::Beatbox => format!("{count} golpes de «{}» en una Drum Machine nueva: {kicks} de bombo, {snares} de caja y {hats} de charles", audio.name),
+            _ => format!("{count} notas de «{}» en una pista MIDI nueva", audio.name),
+        });
     }
 }
 
@@ -445,6 +488,55 @@ mod tests {
         let hits = drum_hits(&audio, rate);
         let found: Vec<(u8, f64)> = hits.iter().map(|h| (h.pitch, (h.start * 100.0).round() / 100.0)).collect();
         assert_eq!(found.iter().map(|f| f.0).collect::<Vec<_>>(), vec![KICK, SNARE, HAT], "{found:?}");
+    }
+
+    /// Two of a drum on one sixteenth: the louder; past the clip's end: gone.
+    #[test]
+    fn beatbox_hits_go_to_their_sixteenth() {
+        let hit = |start: f64, pitch: u8, velocity: f32| Note { start, length: 0.25, pitch, velocity, chance: 1.0 };
+        let notes = on_grid(vec![hit(0.03, 36, 0.9), hit(0.1, 36, 0.5), hit(0.08, 42, 0.6), hit(1.13, 38, 0.8), hit(3.9, 42, 0.7)], 4.0);
+        let placed: Vec<(f64, u8, f32)> = notes.iter().map(|n| (n.start, n.pitch, n.velocity)).collect();
+        assert_eq!(placed, vec![(0.0, 36, 0.9), (0.0, 42, 0.6), (1.25, 38, 0.8)]);
+    }
+
+    /// A beatbox recorded a little out of time (at 120 BPM, a hit an eighth
+    /// apart, each up to 30 ms early or late), from the clip's menu: a Drum
+    /// Machine under it with each hit on its eighth, what it is.
+    #[test]
+    fn a_recorded_beatbox_becomes_a_drum_track() {
+        use crate::beatbox::Drum::{self, *};
+        let order = [Kick, Hat, Snare, Hat, Kick, Kick, Snare, Hat];
+        let off = [0.0, 0.02, -0.03, 0.01, 0.025, -0.015, 0.03, -0.02];
+        let hits: Vec<(Drum, f32)> = order.iter().zip(off).enumerate().map(|(i, (&d, o))| (d, 0.25 * i as f32 + 0.05 + o)).collect();
+        let audio = crate::beatbox::tests::pattern(&hits, 2.2);
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("beatbox-{}.wav", std::process::id()));
+        crate::export::write(&path, &audio, &audio, 48_000, crate::export::BitDepth::Float32, 1.0).unwrap();
+        let mut project = crate::project::Project::empty();
+        project.tempo = 120.0;
+        let mut voice = crate::project::Track::new_audio("Voz", [0; 3]);
+        voice.id = 1;
+        // The clip starts 50 ms into the file, where the beat starts.
+        let clip = AudioClip { hard_start: false, fades: Default::default(), name: "Beatbox".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 4.0, offset: 0.05, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        voice.clips[0] = Some(Clip::Audio(clip));
+        project.tracks = vec![voice];
+        let mut app = PulseApp::headless(project);
+        app.convert_to_midi(ClipRef::Session { track: 0, slot: 0 }, ToMidi::Beatbox);
+        let ctx = eframe::egui::Context::default();
+        let started = std::time::Instant::now();
+        while app.to_midi.is_some() {
+            app.follow_to_midi(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+            assert!(started.elapsed().as_secs() < 30);
+        }
+        assert!(app.project.tracks[1].is_drums(), "{:?}", app.status);
+        let Some(Clip::Midi(midi)) = &app.project.tracks[1].clips[0] else { panic!("{:?}", app.status) };
+        let placed: Vec<(f64, u8)> = midi.notes.iter().map(|n| (n.start, n.pitch)).collect();
+        println!("{placed:?} {:?}", app.status);
+        let expected: Vec<(f64, u8)> = order.iter().enumerate().map(|(i, d)| (0.5 * i as f64, d.note())).collect();
+        assert_eq!(placed, expected);
+        assert!(app.status.as_deref().unwrap_or("").contains("8 golpes") && app.status.as_deref().unwrap_or("").contains("3 de bombo"), "{:?}", app.status);
     }
 
     #[test]
@@ -545,7 +637,7 @@ mod tests {
             transpose: 0.0,
             envelopes: Vec::new(), muted: false,
         };
-        let context = Context { audio: Vec::new(), midi: [0.0; 12], key: None };
+        let context = Context { audio: Vec::new(), midi: [0.0; 12], key: None, examples: Default::default() };
         let (events, key) = convert(&sample, &audio, 120.0, ToMidi::Chords, &context, &Mutex::new(0.0)).unwrap();
         assert_eq!(key.map(|k| k.name()).as_deref(), Some("Do mayor"));
         let notes = clip_notes(&events, &audio, 120.0, false);
@@ -608,7 +700,7 @@ mod tests {
         };
         // C E G C, in tune: C# major is not what they sound in, but it is chosen.
         let c_sharp = stems::key::Key { tonic: 1, minor: false };
-        let context = Context { audio: Vec::new(), midi: [0.0; 12], key: Some(c_sharp) };
+        let context = Context { audio: Vec::new(), midi: [0.0; 12], key: Some(c_sharp), examples: Default::default() };
         let (events, key) = convert(&sample, &audio, 120.0, ToMidi::Melody, &context, &Mutex::new(0.0)).unwrap();
         assert_eq!(key, Some(c_sharp));
         let pitches: Vec<u8> = events.iter().take(4).map(|e| e.pitch).collect();

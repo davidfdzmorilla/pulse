@@ -14,6 +14,10 @@
 //! what it usually does to a reverb and a delay (made as returns if the
 //! project has none), the voice both, pads and chords reverb, and the kick
 //! and the bass nothing, so the low end stays clean.
+//!
+//! «Aplicar todo» does it all, in the order a mix is made (see [`stage`]),
+//! measuring again after each change: the next one depends on what the last
+//! did.
 
 use crate::app::PulseApp;
 use crate::export::{self, Range};
@@ -750,6 +754,65 @@ pub enum Fix {
     Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
 }
 
+/// Where a fix goes in a mix made from the start («Aplicar todo»): nothing
+/// over 0 dB, the levels and pans, the low end, the mids, the dynamics, the
+/// space, and last the master (its tone, then its loudness).
+fn stage(fix: &Fix) -> u8 {
+    match fix {
+        Fix::TrackGain { .. } => 0,
+        Fix::Balance(_) => 1,
+        Fix::Duck { .. } | Fix::CutLows { .. } => 2,
+        Fix::Carve { .. } => 3,
+        Fix::Compress { .. } => 4,
+        Fix::Space { .. } => 5,
+        Fix::MasterEq { .. } => 6,
+        Fix::MasterLimiter { .. } => 7,
+    }
+}
+
+/// The next fix «Aplicar todo» makes, after `done`: the earliest stage's,
+/// none twice, and nothing after the master's loudness. Room in the mids, a
+/// track for another once (where they clash the most). The balance twice: at
+/// its stage, and again before the master, since cutting, ducking and
+/// compressing move the levels (the compressor's makeup more than any).
+pub fn next_fix(advice: &[Advice], done: &[Fix]) -> Option<Fix> {
+    if done.iter().any(|f| matches!(f, Fix::MasterLimiter { .. })) {
+        return None;
+    }
+    let balances = done.iter().filter(|f| matches!(f, Fix::Balance(_))).count();
+    let carved = |track: usize, to: &str| done.iter().any(|f| matches!(f, Fix::Carve { track: t, for_name, .. } if *t == track && for_name == to));
+    let order = |f: &Fix| match f {
+        Fix::Balance(_) if balances > 0 => 2 * stage(&Fix::Space { reverb: None, delay: None, changes: Vec::new() }) + 1,
+        _ => 2 * stage(f),
+    };
+    advice
+        .iter()
+        .filter_map(|a| a.fix.as_ref())
+        .filter(|f| !done.contains(f))
+        .filter(|f| match f {
+            Fix::Balance(_) => balances < 2,
+            Fix::Carve { track, for_name, .. } => !carved(*track, for_name),
+            _ => true,
+        })
+        .min_by_key(|f| order(f))
+        .cloned()
+}
+
+/// What a fix did, in a few words (for the summary of «Aplicar todo»).
+fn fix_label(fix: &Fix) -> String {
+    match fix {
+        Fix::MasterLimiter { .. } => "sonoridad con el limitador del master".into(),
+        Fix::TrackGain { name, .. } => format!("volumen de «{name}»"),
+        Fix::Duck { name, .. } => format!("ducker en «{name}»"),
+        Fix::CutLows { name, .. } => format!("graves de «{name}»"),
+        Fix::MasterEq { .. } => "EQ del master".into(),
+        Fix::Balance(_) => "volúmenes y panoramas".into(),
+        Fix::Carve { name, for_name, .. } => format!("hueco en «{name}» para «{for_name}»"),
+        Fix::Compress { name, .. } => format!("compresor en «{name}»"),
+        Fix::Space { .. } => "reverb y delay".into(),
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Level {
     Good,
@@ -1078,11 +1141,13 @@ pub struct Assistant {
     chase: Option<Chase>,
     /// What the last «Aplicar» could not do, shown until the next.
     note: Option<String>,
+    /// «Aplicar todo» under way: what it has applied so far.
+    auto: Option<Vec<Fix>>,
 }
 
 impl Default for Assistant {
     fn default() -> Self {
-        Self { open: false, range: Range::Song, target: Target::Streaming, job: None, report: None, stale: false, reference: None, reference_job: None, chase: None, note: None }
+        Self { open: false, range: Range::Song, target: Target::Streaming, job: None, report: None, stale: false, reference: None, reference_job: None, chase: None, note: None, auto: None }
     }
 }
 
@@ -1275,11 +1340,73 @@ impl PulseApp {
                 });
                 self.mix.report = Some(report);
                 self.mix.stale = false;
+                if self.mix.auto.is_some() {
+                    self.next_auto();
+                    return;
+                }
                 if let Some(note) = &self.mix.note {
                     self.status = Some(note.clone());
                 }
             }
-            Err(e) => self.status = Some(e),
+            Err(e) => {
+                self.mix.auto = None;
+                self.mix.chase = None;
+                self.status = Some(e);
+            }
+        }
+    }
+
+    /// «Aplicar todo»: makes the advice's fixes one by one, from the analysis
+    /// there is, each measured before the next.
+    pub fn apply_all(&mut self) {
+        self.mix.note = None;
+        self.mix.auto = Some(Vec::new());
+        self.next_auto();
+    }
+
+    /// The next step of «Aplicar todo», or its end.
+    fn next_auto(&mut self) {
+        let (Some(report), Some(done)) = (self.mix.report.clone(), self.mix.auto.clone()) else { return };
+        let reference = self.mix.reference.as_ref().map(|(_, m)| m.clone());
+        let advice = advise(&report, self.mix.target, reference.as_ref());
+        // A change undone by hand meanwhile, or a mix that keeps asking: a cap.
+        let next = if done.len() >= 40 { None } else { next_fix(&advice, &done) };
+        let Some(fix) = next else {
+            self.mix.auto = None;
+            let mut labels: Vec<String> = Vec::new();
+            let mut balanced = false;
+            for fix in &done {
+                let label = match fix {
+                    Fix::Balance(_) if balanced => "volúmenes reajustados".into(),
+                    _ => fix_label(fix),
+                };
+                balanced |= matches!(fix, Fix::Balance(_));
+                if !labels.contains(&label) {
+                    labels.push(label);
+                }
+            }
+            let summary = match labels.is_empty() {
+                true => "Mezcla completa: no había nada que cambiar".to_string(),
+                false => format!("Mezcla completa en {} pasos: {}. Cada paso se deshace con ⌘Z", done.len(), labels.join(", ")),
+            };
+            // What the limiter could not reach stays said.
+            self.mix.note = Some(match self.mix.note.take() {
+                Some(note) => format!("{summary}. {note}"),
+                None => summary,
+            });
+            self.status = self.mix.note.clone();
+            return;
+        };
+        let mut done = done;
+        done.push(fix.clone());
+        let step = done.len();
+        self.mix.auto = Some(done);
+        match (&fix, self.mix.target.levels(reference.as_ref())) {
+            (Fix::MasterLimiter { gain_db, ceiling_db }, Some((goal, peak))) => self.reach_loudness(goal, peak, *gain_db, *ceiling_db),
+            _ => self.apply_fix(&fix),
+        }
+        if self.mix.auto.is_some() {
+            self.status = Some(format!("Mezcla completa, paso {step}: {}…", fix_label(&fix)));
         }
     }
 
@@ -1457,6 +1584,7 @@ impl PulseApp {
             }
             _ => {
                 self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
+                self.mix.auto = None;
                 return;
             }
         }
@@ -1561,11 +1689,26 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.end_row();
     });
     ui.add_space(6.0);
-    ui.label(RichText::new("Consejos").strong());
     let reference = app.mix.reference.as_ref().map(|(_, m)| m.clone());
     let list = advise(&report, app.mix.target, reference.as_ref());
     let mut chosen = None;
     let busy = app.mix.job.is_some();
+    let mut all = false;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Consejos").strong());
+        match &app.mix.auto {
+            Some(done) => {
+                ui.label(RichText::new(format!("Mezclando: paso {}…", done.len())).color(ACCENT));
+            }
+            None => {
+                let any = next_fix(&list, &[]).is_some();
+                all = ui
+                    .add_enabled(!busy && any, egui::Button::new("Aplicar todo").small())
+                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, reverb y delay, y el master. Vuelve a medir después de cada uno")
+                    .clicked();
+            }
+        }
+    });
     for a in &list {
         ui.horizontal_wrapped(|ui| {
             let (mark, color) = match a.level {
@@ -1590,6 +1733,9 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
     if let Some(note) = &app.mix.note {
         ui.label(RichText::new(note).color(ACCENT));
+    }
+    if all {
+        app.apply_all();
     }
     if let Some(fix) = chosen {
         app.mix.note = None;
@@ -2381,5 +2527,85 @@ mod tests {
         println!("silencios: {before:.1} → {after:.1} dB");
         assert!(before < -100.0 && after > -50.0, "{before} → {after}");
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text.starts_with("Las pistas tienen su espacio")));
+    }
+
+    /// The order of «Aplicar todo»: the earliest stage first, nothing twice,
+    /// the balance once, and nothing after the master's loudness.
+    #[test]
+    fn everything_is_applied_in_the_order_of_a_mix() {
+        let fix = |f: Fix| advice(Level::Note, String::new(), Some(f));
+        let limiter = Fix::MasterLimiter { gain_db: 3.0, ceiling_db: -1.8 };
+        let space = Fix::Space { reverb: Some(0), delay: Some(1), changes: Vec::new() };
+        let gain = Fix::TrackGain { track: 0, name: "Voz".into(), db: -2.0 };
+        let list = vec![fix(limiter.clone()), fix(space.clone()), fix(Fix::Balance(Vec::new())), fix(gain.clone()), advice(Level::Good, String::new(), None)];
+        assert_eq!(next_fix(&list, &[]), Some(gain.clone()));
+        assert_eq!(next_fix(&list, &[gain.clone()]), Some(Fix::Balance(Vec::new())));
+        let other_balance = Fix::Balance(vec![Change { track: 0, name: "Voz".into(), role: Role::Vocal, gain_db: 1.0, pan: None, low_cut: None }]);
+        let again = vec![fix(other_balance), fix(space.clone())];
+        // Balanced again after the space, before the master; not a third time.
+        assert_eq!(next_fix(&again, &[Fix::Balance(Vec::new())]), Some(space.clone()));
+        assert_eq!(next_fix(&again, &[Fix::Balance(Vec::new()), space.clone()]), Some(again[0].fix.clone().unwrap()));
+        let third = vec![fix(Fix::Balance(vec![]))];
+        assert_eq!(next_fix(&third, &[Fix::Balance(vec![]), again[0].fix.clone().unwrap()]), None);
+        // One carve a pair.
+        let carve = |hz: f32, to: &str| Fix::Carve { track: 1, name: "Acordes".into(), hz, for_name: to.into() };
+        let carves = vec![fix(carve(1000.0, "Voz")), fix(carve(2000.0, "Voz")), fix(carve(500.0, "Batería"))];
+        assert_eq!(next_fix(&carves, &[carve(1000.0, "Voz")]), Some(carve(500.0, "Batería")));
+        assert_eq!(next_fix(&list, &[gain, limiter]), None);
+    }
+
+    /// For real: the song from «De tarareo a canción», out of balance and
+    /// quiet, mixed in one click. It ends balanced, with its space, at the
+    /// loudness for streaming, and says what it did.
+    #[test]
+    fn a_song_is_mixed_in_one_click() {
+        use crate::project::{Project, Track};
+        use engine::model::{ArrangementClip, Clip, MidiClip, Note};
+        let mut project = Project::empty();
+        let mut voice = Track::new("Tarareo", [10, 20, 30], InstrumentKind::Synth(Default::default()));
+        voice.id = 1;
+        let tune = [[60, 64, 67, 64], [65, 69, 72, 69], [67, 71, 74, 71], [72, 67, 64, 60]];
+        let notes: Vec<Note> = tune.iter().enumerate().flat_map(|(b, ns)| ns.iter().enumerate().map(move |(k, &p)| Note { start: b as f64 * 4.0 + k as f64, length: 1.0, pitch: p, velocity: 0.8, chance: 1.0 })).collect();
+        voice.arrangement = vec![ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(MidiClip { notes, ..MidiClip::new("Tarareo", 16.0, [10, 20, 30]) }) }];
+        project.tracks = vec![voice];
+        let mut app = PulseApp::headless(project);
+        app.hum_to_song(crate::app::ClipRef::Arrangement { track: 0, index: 0 }, crate::drum_gen::Style::PopRock);
+        app.project.tracks[0].mixer.active = false;
+        app.project.tracks[2].mixer.gain *= 4.0;
+        app.project.tracks[3].mixer.gain *= 0.1;
+        for t in &mut app.project.tracks {
+            t.sends = [0.0; MAX_RETURNS];
+        }
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 300);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        app.apply_all();
+        wait(&mut app);
+        let note = app.mix.note.clone().unwrap();
+        println!("{note}");
+        assert!(note.starts_with("Mezcla completa en "), "{note}");
+        for part in ["volúmenes y panoramas", "volúmenes reajustados", "reverb y delay", "sonoridad con el limitador del master"] {
+            assert!(note.contains(part), "{part}: {note}");
+        }
+        let report = app.mix.report.clone().unwrap();
+        let (_, left) = balance_tracks(&report.tracks);
+        assert!(left.is_empty(), "{left:?}");
+        let lufs = report.mix.lufs.unwrap();
+        println!("{lufs:.1} LUFS, {:.1} dBTP", report.mix.true_peak);
+        assert!((lufs + 14.0).abs() <= 1.0 && report.mix.true_peak <= -1.0, "{lufs} LUFS, {} dBTP", report.mix.true_peak);
+        let list = advise(&report, Target::Streaming, None);
+        assert!(list.iter().any(|a| a.level == Level::Good && a.text.starts_with("Las pistas tienen su espacio")), "{list:?}");
+        // Nothing left of what it fixes, except what it already tried.
+        for a in list.iter().filter(|a| a.fix.is_some()) {
+            println!("queda: {}", a.text);
+        }
     }
 }

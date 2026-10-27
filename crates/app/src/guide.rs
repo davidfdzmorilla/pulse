@@ -338,7 +338,7 @@ mod tests {
         assert!(!titles("comping").is_empty());
         assert_eq!(titles("COMPING"), titles("comping"));
         assert_eq!(titles("automatizacion"), titles("automatización"));
-        assert!(titles("palabra que no está en ninguna parte").is_empty());
+        assert!(titles("zarandajo inventado").is_empty());
         // The topic about it comes first.
         assert_eq!(titles("congelar")[0], "Pistas");
         assert_eq!(titles("comping")[0], "Tomas y comping");

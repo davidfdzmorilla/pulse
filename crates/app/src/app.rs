@@ -2385,6 +2385,9 @@ impl PulseApp {
         self.clear_recovery();
         self.audio.send(Command::Stop);
         self.project = project;
+        // What the assistant kept to compare with was of the other.
+        self.mix.before = None;
+        self.mix.listening = None;
         self.project.assign_ids();
         crate::freeze::refresh_frozen(&mut self.project);
         self.saved = self.project.clone();

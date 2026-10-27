@@ -18,6 +18,11 @@
 //! «Aplicar todo» does it all, in the order a mix is made (see [`stage`]),
 //! measuring again after each change: the next one depends on what the last
 //! did.
+//!
+//! «Antes / Después» plays the mix as it was before the assistant's first
+//! change and as it is, at the same loudness (the louder one's master fader
+//! down, only in what the engine plays): louder sounds better, and that is
+//! not what is being compared. The project and its undo are left alone.
 
 use crate::app::PulseApp;
 use crate::export::{self, Range};
@@ -1143,11 +1148,39 @@ pub struct Assistant {
     note: Option<String>,
     /// «Aplicar todo» under way: what it has applied so far.
     auto: Option<Vec<Fix>>,
+    /// The mix before the assistant's first change, and its loudness then.
+    pub(crate) before: Option<(crate::project::Project, Option<f64>)>,
+    /// Comparing: whether «Antes» plays, the project when it started, and
+    /// what the engine plays (see [`PulseApp::listen`]).
+    pub(crate) listening: Option<Listening>,
+}
+
+pub(crate) struct Listening {
+    pub before: bool,
+    at: crate::project::Project,
+    engine: crate::project::Project,
+}
+
+/// How much (dB) the master of the mix before and of the mix now come down
+/// so both sound as loud: the louder one, by the difference. Without both
+/// loudnesses, nothing.
+pub fn matched(before: Option<f64>, now: Option<f64>) -> (f32, f32) {
+    match (before, now) {
+        (Some(b), Some(n)) => ((n - b).min(0.0) as f32, (b - n).min(0.0) as f32),
+        _ => (0.0, 0.0),
+    }
+}
+
+/// `project` with its master `db` louder (for the engine only).
+fn levelled(project: &crate::project::Project, db: f32) -> crate::project::Project {
+    let mut p = project.clone();
+    p.master.mixer.gain *= 10f32.powf(db / 20.0);
+    p
 }
 
 impl Default for Assistant {
     fn default() -> Self {
-        Self { open: false, range: Range::Song, target: Target::Streaming, job: None, report: None, stale: false, reference: None, reference_job: None, chase: None, note: None, auto: None }
+        Self { open: false, range: Range::Song, target: Target::Streaming, job: None, report: None, stale: false, reference: None, reference_job: None, chase: None, note: None, auto: None, before: None, listening: None }
     }
 }
 
@@ -1265,6 +1298,11 @@ impl PulseApp {
 
     /// Every frame: picks up finished analyses.
     pub fn follow_mix(&mut self, ctx: &egui::Context) {
+        // Changed while comparing (an edit, an undo): what it is plays again.
+        if self.mix.listening.as_ref().is_some_and(|l| l.at != self.project) {
+            self.stop_listening();
+            self.status = Some("Has cambiado la mezcla: vuelve a sonar como está".into());
+        }
         if self.mix.job.is_none() && self.mix.reference_job.is_none() {
             return;
         }
@@ -1359,9 +1397,49 @@ impl PulseApp {
     /// «Aplicar todo»: makes the advice's fixes one by one, from the analysis
     /// there is, each measured before the next.
     pub fn apply_all(&mut self) {
+        self.keep_before();
         self.mix.note = None;
         self.mix.auto = Some(Vec::new());
         self.next_auto();
+    }
+
+    /// Keeps the mix as it is, before the assistant's first change (for
+    /// «Antes / Después»), and stops comparing.
+    fn keep_before(&mut self) {
+        self.stop_listening();
+        if self.mix.before.is_none() {
+            let lufs = self.mix.report.as_ref().and_then(|r| r.mix.lufs);
+            self.mix.before = Some((self.project.clone(), lufs));
+        }
+    }
+
+    /// What the engine plays for «Antes» (`before`) or «Después»: that mix,
+    /// at the loudness of the softer one.
+    pub fn heard(&self, before: bool) -> Option<crate::project::Project> {
+        let (old, old_lufs) = self.mix.before.as_ref()?;
+        let now = self.mix.report.as_ref().filter(|_| !self.mix.stale && self.mix.job.is_none()).and_then(|r| r.mix.lufs);
+        let (down_before, down_now) = matched(*old_lufs, now);
+        Some(if before { levelled(old, down_before) } else { levelled(&self.project, down_now) })
+    }
+
+    /// Plays the mix before the assistant's changes, or the one now, as loud
+    /// as each other. Only the engine changes, with only what differs.
+    pub fn listen(&mut self, before: bool) {
+        let Some(target) = self.heard(before) else { return };
+        let playing = self.mix.listening.take().map_or_else(|| self.project.clone(), |l| l.engine);
+        self.capture_plugins();
+        let rate = self.audio.sample_rate();
+        for command in crate::sync::changed_commands(&playing, &target, &mut self.samples, rate, &self.overridden) {
+            self.audio.send(command);
+        }
+        self.mix.listening = Some(Listening { before, at: self.project.clone(), engine: target });
+    }
+
+    /// Back to the mix as it is.
+    pub fn stop_listening(&mut self) {
+        if let Some(l) = self.mix.listening.take() {
+            self.sync_from(&l.engine);
+        }
     }
 
     /// The next step of «Aplicar todo», or its end.
@@ -1457,6 +1535,7 @@ impl PulseApp {
 
     /// Makes the change, and analyses again to show what it did.
     pub fn apply_fix(&mut self, fix: &Fix) {
+        self.keep_before();
         let track_ok = |app: &PulseApp, t: usize, name: &str| app.project.tracks.get(t).is_some_and(|tr| tr.name == name);
         match fix {
             Fix::MasterLimiter { gain_db, ceiling_db } => {
@@ -1598,6 +1677,9 @@ impl PulseApp {
 
 pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     if !app.mix.open {
+        if app.mix.listening.is_some() {
+            app.stop_listening();
+        }
         return;
     }
     let mut open = true;
@@ -1689,6 +1771,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.end_row();
     });
     ui.add_space(6.0);
+    compare_row(app, ui);
     let reference = app.mix.reference.as_ref().map(|(_, m)| m.clone());
     let list = advise(&report, app.mix.target, reference.as_ref());
     let mut chosen = None;
@@ -1763,6 +1846,45 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// «Escuchar: Antes · Después», once the assistant has changed the mix.
+fn compare_row(app: &mut PulseApp, ui: &mut egui::Ui) {
+    let Some((old, old_lufs)) = &app.mix.before else { return };
+    if *old == app.project && app.mix.listening.is_none() {
+        return;
+    }
+    let old_lufs = *old_lufs;
+    let listening = app.mix.listening.as_ref().map(|l| l.before);
+    let now = app.mix.report.as_ref().filter(|_| !app.mix.stale && app.mix.job.is_none()).and_then(|r| r.mix.lufs);
+    let mut choice = None;
+    ui.horizontal(|ui| {
+        ui.label(RichText::new("Escuchar").color(TEXT_DIM));
+        if ui.selectable_label(listening == Some(true), "Antes").on_hover_text("La mezcla como estaba antes de los cambios del asistente").clicked() {
+            choice = Some(Some(true));
+        }
+        if ui.selectable_label(listening == Some(false), "Después").on_hover_text("La mezcla como está ahora").clicked() {
+            choice = Some(Some(false));
+        }
+        if listening.is_some() && ui.small_button("Dejar de comparar").clicked() {
+            choice = Some(None);
+        }
+        let text = match (old_lufs, now) {
+            (Some(b), Some(n)) => format!("al mismo volumen (antes {} LUFS, ahora {}), para que lo más fuerte no te engañe", num(b), num(n)),
+            _ => "sin igualar el volumen: vuelve a analizar".into(),
+        };
+        ui.label(RichText::new(text).color(TEXT_DIM).size(10.5));
+    });
+    match choice {
+        Some(Some(before)) => {
+            app.listen(before);
+            if !app.audio.is_playing() {
+                app.status = Some("Dale a reproducir para oírlas".into());
+            }
+        }
+        Some(None) => app.stop_listening(),
+        None => {}
+    }
 }
 
 fn fix_hint(fix: &Fix) -> String {
@@ -2607,5 +2729,106 @@ mod tests {
         for a in list.iter().filter(|a| a.fix.is_some()) {
             println!("queda: {}", a.text);
         }
+    }
+
+    /// The louder one comes down to the softer one; without both, nothing.
+    #[test]
+    fn before_and_after_meet_at_the_softer_loudness() {
+        assert_eq!(matched(Some(-20.0), Some(-14.0)), (0.0, -6.0));
+        assert_eq!(matched(Some(-10.0), Some(-14.0)), (-4.0, 0.0));
+        assert_eq!(matched(None, Some(-14.0)), (0.0, 0.0));
+    }
+
+    /// For real: a dry, quiet voice and bass mixed with «Aplicar todo». What
+    /// the engine plays for «Antes» is the mix as it was (no returns), and
+    /// both sound as loud; changing the engine over to it with only what
+    /// differs sounds as it would from the start. The project is left alone,
+    /// and an edit ends the comparison.
+    #[test]
+    fn before_and_after_are_heard_as_loud() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        use engine::{Command, OfflineRenderer};
+        let rate = 48_000.0f32;
+        let tone = |hz: f32| -> Vec<f32> { (0..(8.0 * rate) as usize).map(|i| i as f32 / rate).map(|t| if t % 2.0 < 0.5 { 0.1 * (std::f32::consts::TAU * hz * t).sin() } else { 0.0 }).collect() };
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = |name: &str, audio: Vec<f32>| {
+            let path = dir.join(format!("antes-{name}-{}.wav", std::process::id()));
+            crate::export::write(&path, &audio, &audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+        };
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        project.returns.clear();
+        let mut voice = Track::new_audio("Voz", [0; 3]);
+        voice.arrangement.push(clip("voz", tone(440.0)));
+        let mut bass = Track::new_audio("Bajo", [0; 3]);
+        bass.arrangement.push(clip("bajo", tone(55.0)));
+        project.tracks = vec![voice, bass];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 120);
+            }
+        };
+        assert!(app.heard(true).is_none(), "nothing to compare yet");
+        app.analyze_mix();
+        wait(&mut app);
+        let original = app.project.clone();
+        app.apply_all();
+        wait(&mut app);
+        assert!(!app.project.returns.is_empty());
+        let (before, after) = (app.heard(true).unwrap(), app.heard(false).unwrap());
+        assert!(before.returns.is_empty() && before.tracks == original.tracks);
+        // Loudness of a project as rendered.
+        let lufs = |app: &mut PulseApp, p: &Project| {
+            let plan = export::plan(p, &mut app.samples, &export::Settings::default(), std::path::Path::new("ab.wav"));
+            let mix = export::render_each(plan, RATE, &AtomicU32::new(0), &AtomicBool::new(false), |_, l, r| Ok((l, r))).unwrap();
+            loudness::integrated(&mix[0].0, &mix[0].1, RATE).unwrap()
+        };
+        let now = app.project.clone();
+        let (raw_before, raw_after) = (lufs(&mut app, &original), lufs(&mut app, &now));
+        let (heard_before, heard_after) = (lufs(&mut app, &before), lufs(&mut app, &after));
+        println!("sin igualar {raw_before:.1} / {raw_after:.1}; igualadas {heard_before:.1} / {heard_after:.1}");
+        assert!(raw_after - raw_before > 3.0);
+        assert!((heard_before - heard_after).abs() < 1.0, "{heard_before} / {heard_after}");
+        // The engine moved over from «Después» to «Antes» sounds as «Antes» from the start.
+        let play = |app: &mut PulseApp, start: &Project, then: Option<&Project>| {
+            let mut renderer = OfflineRenderer::new(RATE);
+            let none = std::collections::HashSet::new();
+            for c in crate::sync::project_commands(start, &mut app.samples, RATE, &none) {
+                renderer.send(c);
+            }
+            if let Some(then) = then {
+                for c in crate::sync::changed_commands(start, then, &mut app.samples, RATE, &none) {
+                    renderer.send(c);
+                }
+            }
+            for c in [Command::SetOutputLimit(false), Command::BackToArrangement, Command::SetPosition(0.0), Command::Play] {
+                renderer.send(c);
+            }
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            renderer.render(2 * RATE as usize, &mut l, &mut r);
+            l
+        };
+        let moved = play(&mut app, &after, Some(&before));
+        let fresh = play(&mut app, &before, None);
+        let energy = |x: &[f32]| x.iter().map(|v| v * v).sum::<f32>();
+        let diff: f32 = moved.iter().zip(&fresh).map(|(a, b)| (a - b) * (a - b)).sum();
+        assert!(energy(&fresh) > 1.0 && diff < energy(&fresh) * 1e-4, "{} vs {}", diff, energy(&fresh));
+        // Listening touches nothing in the project; an edit ends it.
+        let kept = app.project.clone();
+        app.listen(true);
+        assert_eq!(app.mix.listening.as_ref().map(|l| l.before), Some(true));
+        app.listen(false);
+        assert_eq!(app.project, kept);
+        app.project.tracks[0].mixer.gain *= 0.5;
+        app.follow_mix(&ctx);
+        assert!(app.mix.listening.is_none());
     }
 }

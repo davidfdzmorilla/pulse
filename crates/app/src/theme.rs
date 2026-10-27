@@ -107,20 +107,68 @@ fn system_fonts() -> [std::path::PathBuf; 3] {
     }
 }
 
+/// The system's bold and semibold faces where they are files of their own
+/// (Windows: Segoe UI Bold and Semibold). On macOS San Francisco is a variable
+/// font: its weights come from the same file (see `install_fonts`).
+fn system_weights() -> Option<[std::path::PathBuf; 2]> {
+    let fonts = std::env::var_os("WINDIR").map_or_else(|| std::path::PathBuf::from(r"C:\Windows"), std::path::PathBuf::from).join("Fonts");
+    cfg!(windows).then(|| ["segoeuib.ttf", "seguisb.ttf"].map(|f| fonts.join(f)))
+}
+
+/// Text in bold: headings and what the guide marks **like this**.
+pub fn bold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("bold".into()))
+}
+
+/// Between regular and bold: titles of small things.
+pub fn semibold(size: f32) -> FontId {
+    FontId::new(size, FontFamily::Name("semibold".into()))
+}
+
 /// Uses the system's fonts when available; egui's bundled font otherwise.
 fn install_fonts(ctx: &egui::Context) {
     let mut fonts = FontDefinitions::default();
     let [system, mono, symbols] = system_fonts();
+    let mut weights: Vec<(&str, FontData)> = Vec::new();
     for (name, path) in [("system", system), ("system-mono", mono)] {
         let Ok(bytes) = std::fs::read(path) else { continue };
-        fonts.font_data.insert(name.into(), Arc::new(FontData::from_owned(bytes)));
+        if name == "system" && system_weights().is_none() {
+            // A variable font: the same outlines at another weight ("wght" axis).
+            let bytes: &'static [u8] = Box::leak(bytes.into_boxed_slice());
+            for (weight, wght) in [("bold", 680.0), ("semibold", 590.0)] {
+                let mut data = FontData::from_static(bytes);
+                data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", wght)]);
+                weights.push((weight, data));
+            }
+            fonts.font_data.insert(name.into(), Arc::new(FontData::from_static(bytes)));
+        } else {
+            fonts.font_data.insert(name.into(), Arc::new(FontData::from_owned(bytes)));
+        }
         let family = if name == "system" { FontFamily::Proportional } else { FontFamily::Monospace };
         fonts.families.entry(family).or_default().insert(0, name.into());
+    }
+    for (weight, path) in system_weights().into_iter().flat_map(|paths| ["bold", "semibold"].into_iter().zip(paths)) {
+        if let Ok(bytes) = std::fs::read(path) {
+            weights.push((weight, FontData::from_owned(bytes)));
+        }
+    }
+    // Each weight falls back on the regular face (and its fallbacks), so a
+    // missing bold still reads, just not bold.
+    let regular = fonts.families.get(&FontFamily::Proportional).cloned().unwrap_or_default();
+    for weight in ["bold", "semibold"] {
+        let mut list = Vec::new();
+        for (name, data) in weights.iter().filter(|(w, _)| *w == weight) {
+            let key = format!("system-{name}");
+            fonts.font_data.insert(key.clone(), Arc::new(data.clone()));
+            list.push(key);
+        }
+        list.extend(regular.iter().cloned());
+        fonts.families.insert(FontFamily::Name(weight.into()), list);
     }
     // Symbols neither has (✎ ⤢ ✔ ⬆ …), from the system's symbol font, last.
     if let Ok(bytes) = std::fs::read(symbols) {
         fonts.font_data.insert("symbols".into(), Arc::new(FontData::from_owned(bytes)));
-        for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        for family in [FontFamily::Proportional, FontFamily::Monospace, FontFamily::Name("bold".into()), FontFamily::Name("semibold".into())] {
             fonts.families.entry(family).or_default().push("symbols".into());
         }
     }

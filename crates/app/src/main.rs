@@ -37,6 +37,8 @@ mod genre_tests;
 mod finite;
 mod groups;
 mod guide;
+#[cfg(test)]
+mod offscreen;
 mod harmony;
 mod freeze;
 mod history;

@@ -125,6 +125,149 @@ pub struct TrackMeasures {
     pub bands: [f64; 10],
     /// Its fader (linear gain).
     pub gain: f32,
+    /// Its level in each of [`MID_HZ`] every 0.1 s (dB), and where its EQ
+    /// Eight already makes room (Hz of its cuts).
+    pub mids: Vec<[f32; MID_BANDS]>,
+    pub carves: Vec<f32>,
+}
+
+// ----- Tracks covering each other in the mids ------------------------------------------
+
+/// The bands (half an octave each) where tracks cover each other: from the
+/// voice's body to its presence.
+pub const MID_BANDS: usize = 9;
+pub const MID_HZ: [f32; MID_BANDS] = [250.0, 354.0, 500.0, 707.0, 1000.0, 1414.0, 2000.0, 2828.0, 4000.0];
+/// Under this a track isn't playing in a band (dB, a sine's level).
+const MID_ON: f32 = -50.0;
+/// Two tracks this close (dB) in a band at once cover each other.
+const MID_CLOSE: f32 = 6.0;
+/// How deep the room made is (dB) and how wide (Q).
+const CARVE_DB: f32 = -4.0;
+const CARVE_Q: f32 = 1.4;
+
+/// The level of `left`/`right` in each of [`MID_HZ`] every 0.1 s (dB).
+pub fn mids(left: &[f32], right: &[f32], rate: f32) -> Vec<[f32; MID_BANDS]> {
+    use rustfft::num_complex::Complex;
+    const SIZE: usize = 4096;
+    let fft = rustfft::FftPlanner::<f32>::new().plan_fft_forward(SIZE);
+    let hop = (0.1 * rate) as usize;
+    let window: Vec<f32> = (0..SIZE).map(|i| 0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / SIZE as f32).cos()).collect();
+    // The bins of each band: from a quarter octave under its centre to a quarter over.
+    let edges: Vec<(usize, usize)> = MID_HZ.iter().map(|&hz| ((hz / 2f32.powf(0.25) * SIZE as f32 / rate) as usize, (hz * 2f32.powf(0.25) * SIZE as f32 / rate) as usize)).collect();
+    let mut buffer = vec![Complex::new(0f32, 0f32); SIZE];
+    let mut out = Vec::new();
+    let mut at = 0;
+    while at + SIZE <= left.len() {
+        for (i, b) in buffer.iter_mut().enumerate() {
+            *b = Complex::new(0.5 * (left[at + i] + right[at + i]) * window[i], 0.0);
+        }
+        fft.process(&mut buffer);
+        // By the window's energy (Σw² = 3N/8 for Hann): a sine of amplitude
+        // A adds up to A² over its bins.
+        let scale = 32.0 / (3.0 * (SIZE * SIZE) as f32);
+        out.push(std::array::from_fn(|k| {
+            let (a, b) = edges[k];
+            let power: f32 = buffer[a..=b].iter().map(|c| c.norm_sqr()).sum::<f32>() * scale;
+            10.0 * power.max(1e-12).log10()
+        }));
+        at += hop;
+    }
+    out
+}
+
+/// Who has the right of way in the mids: the voice, then the lead, then the rest.
+fn presence(role: Role) -> u8 {
+    match role {
+        Role::Vocal => 9,
+        Role::Lead => 8,
+        Role::Backing => 7,
+        Role::Kick | Role::Drums => 6,
+        Role::Bass => 5,
+        Role::Chords => 4,
+        Role::Other => 3,
+        Role::Pad => 2,
+        Role::Percussion => 1,
+        Role::Fx => 0,
+    }
+}
+
+/// Two tracks covering each other in the mids: the one that makes room (its
+/// index in the tracks), the one it makes room for, where (a band of
+/// [`MID_HZ`]) and how much of the time they cover each other there.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MidClash {
+    pub yields: usize,
+    pub to: usize,
+    pub band: usize,
+    pub share: f64,
+}
+
+/// The pairs of tracks that cover each other in the mids, the worst first:
+/// in a band, at least half the time both play there they are as loud. Of
+/// the bands where they do, the one where the track with the right of way
+/// is loudest (its body: room there is what lets it through). Drums against
+/// drums aren't counted (they take turns), nor a kick or a bass (their place
+/// is the low end).
+pub fn mid_clashes(tracks: &[TrackMeasures]) -> Vec<MidClash> {
+    let rhythm = |r: Role| matches!(r, Role::Kick | Role::Drums | Role::Percussion);
+    let mut out = Vec::new();
+    for i in 0..tracks.len() {
+        for j in i + 1..tracks.len() {
+            let (a, b) = (&tracks[i], &tracks[j]);
+            if (rhythm(a.role) && rhythm(b.role)) || matches!(a.role, Role::Kick | Role::Bass) || matches!(b.role, Role::Kick | Role::Bass) {
+                continue;
+            }
+            let frames = a.mids.len().min(b.mids.len());
+            if frames == 0 {
+                continue;
+            }
+            // The one with less right of way makes room; of two alike, the quieter.
+            let a_first = (presence(a.role), a.lufs.unwrap_or(-99.0)) >= (presence(b.role), b.lufs.unwrap_or(-99.0));
+            let (yields, to) = if a_first { (j, i) } else { (i, j) };
+            let lead = &tracks[to];
+            let mut worst: Option<(usize, f64, f32)> = None;
+            for k in 0..MID_BANDS {
+                let on = |m: &[[f32; MID_BANDS]]| m[..frames].iter().filter(|f| f[k] > MID_ON).count();
+                let both = (0..frames).filter(|&f| a.mids[f][k] > MID_ON && b.mids[f][k] > MID_ON).count();
+                let close = (0..frames).filter(|&f| a.mids[f][k] > MID_ON && b.mids[f][k] > MID_ON && (a.mids[f][k] - b.mids[f][k]).abs() < MID_CLOSE).count();
+                // Both there a fair part of the song, and as loud most of that time.
+                if on(&a.mids).min(on(&b.mids)) * 5 < frames || both * 4 < frames || close * 2 < both {
+                    continue;
+                }
+                let share = close as f64 / frames as f64;
+                let playing: Vec<f32> = lead.mids[..frames].iter().map(|f| f[k]).filter(|&l| l > MID_ON).collect();
+                let level = playing.iter().sum::<f32>() / playing.len().max(1) as f32;
+                if worst.is_none_or(|(_, _, l)| level > l) {
+                    worst = Some((k, share, level));
+                }
+            }
+            if let Some((band, share, _)) = worst {
+                out.push(MidClash { yields, to, band, share });
+            }
+        }
+    }
+    out.sort_by(|a, b| b.share.total_cmp(&a.share));
+    out
+}
+
+/// Whether `carves` (a track's cuts, Hz) make room at `hz` already: one
+/// within a quarter octave.
+fn carved_at(carves: &[f32], hz: f32) -> bool {
+    carves.iter().any(|c| (c / hz).log2().abs() < 0.25)
+}
+
+/// Where a track's EQ Eights cut (Hz): bells at least 2 dB down.
+fn carves(track: &crate::project::Track) -> Vec<f32> {
+    track
+        .devices
+        .iter()
+        .filter_map(|d| if let Effect::EqEight(eq) = &d.effect { Some(eq) } else { None })
+        .flat_map(|eq| eq.bands.iter().filter(|b| b.on && b.shape == EqShape::Bell && b.gain_db <= -2.0).map(|b| b.freq))
+        .collect()
+}
+
+fn hz_label(hz: f32) -> String {
+    if hz >= 1000.0 { format!("{} kHz", num(hz as f64 / 1000.0)) } else { format!("{hz:.0} Hz") }
 }
 
 // ----- A starting balance -------------------------------------------------------------
@@ -383,6 +526,8 @@ pub enum Fix {
     MasterEq { low: f32, mid: f32, high: f32 },
     /// A starting balance (see [`balance_tracks`]).
     Balance(Vec<Change>),
+    /// Room made in a track at `hz` for another (an EQ Eight bell down).
+    Carve { track: usize, name: String, hz: f32, for_name: String },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -563,6 +708,20 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         }
         out.push(advice(Level::Warning, text, fix));
     }
+    // Two tracks covering each other in the mids.
+    for clash in mid_clashes(&report.tracks).into_iter().take(6) {
+        let (yields, to) = (&report.tracks[clash.yields], &report.tracks[clash.to]);
+        let hz = MID_HZ[clash.band];
+        if carved_at(&yields.carves, hz) {
+            out.push(advice(Level::Good, format!("«{}» deja hueco a «{}» en {}", yields.name, to.name, hz_label(hz)), None));
+            continue;
+        }
+        out.push(advice(
+            Level::Warning,
+            format!("«{}» y «{}» se tapan en {} el {:.0} % del tiempo: cuesta oír «{}» con claridad", to.name, yields.name, hz_label(hz), clash.share * 100.0, to.name),
+            Some(Fix::Carve { track: yields.index, name: yields.name.clone(), hz, for_name: to.name.clone() }),
+        ));
+    }
     // Stereo.
     if mix.correlation < 0.0 {
         out.push(advice(Level::Warning, format!("Correlación estéreo {:.2}: hay mucho en contrafase y en mono (un móvil, un club) se perderá", mix.correlation), None));
@@ -684,7 +843,7 @@ impl PulseApp {
             .map(|t| (t.name.clone(), is_drums(t), matches!(t.instrument, engine::model::InstrumentKind::Kick(_)), t.id, listens(t)))
             .collect();
         // For the balance: the role its name or instrument says, its pan, its low cut.
-        let mixing: Vec<(Option<Role>, f32, bool, f32)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain)).collect();
+        let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t))).collect();
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -695,7 +854,7 @@ impl PulseApp {
                     None => Measured::Mix(Measures::of(&left, &right, RATE)),
                     Some(index) => {
                         let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
-                        let (hint, pan, cut, gain) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0));
+                        let (hint, pan, cut, gain, carves) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new()));
                         let bands = loudness::bands(&left, &right, RATE);
                         Measured::Track(TrackMeasures {
                             index,
@@ -713,6 +872,8 @@ impl PulseApp {
                             cut,
                             bands,
                             gain,
+                            mids: mids(&left, &right, RATE),
+                            carves,
                         })
                     }
                 })
@@ -958,6 +1119,29 @@ impl PulseApp {
                 }
                 self.status = Some(format!("Mezcla de partida: {} pistas en su sitio (⌘Z lo deshace)", changes.len()));
             }
+            Fix::Carve { track, name, hz, for_name } if track_ok(self, *track, name) => {
+                let devices = &mut self.project.tracks[*track].devices;
+                // In its EQ Eight, in a bell left flat (the nearest); else a new one.
+                let free = devices.iter_mut().filter_map(|d| if let Effect::EqEight(eq) = &mut d.effect { Some(eq) } else { None }).find_map(|eq| {
+                    let k = (0..eq.bands.len()).filter(|&k| eq.bands[k].shape == EqShape::Bell && eq.bands[k].gain_db == 0.0).min_by(|&x, &y| (eq.bands[x].freq / hz).log2().abs().total_cmp(&(eq.bands[y].freq / hz).log2().abs()))?;
+                    Some(&mut eq.bands[k])
+                });
+                let carve = |band: &mut engine::model::EqBand| {
+                    band.on = true;
+                    band.freq = *hz;
+                    band.gain_db = CARVE_DB;
+                    band.q = CARVE_Q;
+                };
+                match free {
+                    Some(band) => carve(band),
+                    None => {
+                        let mut eq = EqEightParams::default();
+                        carve(&mut eq.bands[3]);
+                        devices.push(Device::new(Effect::EqEight(eq)));
+                    }
+                }
+                self.status = Some(format!("«{name}» deja hueco a «{for_name}» en {} (EQ Eight, {CARVE_DB} dB)", hz_label(*hz)));
+            }
             _ => {
                 self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
                 return;
@@ -1129,6 +1313,7 @@ fn fix_hint(fix: &Fix) -> String {
         Fix::Duck { name, source_name, .. } => format!("Añade un Ducker a «{name}» que escucha a «{source_name}» (sidechain): baja cuando suena, para dejarle sitio"),
         Fix::CutLows { name, .. } => format!("Añade un EQ Three a «{name}» con los graves (bajo 150 Hz) a −9 dB"),
         Fix::MasterEq { low, mid, high } => format!("EQ Three en el master: graves {low:+.1}, medios {mid:+.1}, agudos {high:+.1} dB"),
+        Fix::Carve { name, hz, for_name, .. } => format!("Baja {} dB «{name}» en {} (un EQ Eight, campana estrecha) para que «{for_name}» se oiga ahí", -CARVE_DB, hz_label(*hz)),
         Fix::Balance(_) => "Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
     }
 }
@@ -1167,7 +1352,7 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5 }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new() }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
@@ -1567,5 +1752,96 @@ mod tests {
             assert_eq!(cuts_lows(&app.project.tracks[t]), planned, "{}", app.project.tracks[t].name);
         }
         assert!(!cuts_lows(&app.project.tracks[3]), "not the bass");
+    }
+
+    /// A 1 kHz tone at half scale is −6 dB in its band and nothing in the
+    /// far ones.
+    #[test]
+    fn the_mids_are_measured_band_by_band() {
+        let tone: Vec<f32> = (0..48_000).map(|i| 0.5 * (std::f32::consts::TAU * 1000.0 * i as f32 / RATE).sin()).collect();
+        let frames = mids(&tone, &tone, RATE);
+        assert_eq!(frames.len(), 10);
+        let f = frames[3];
+        println!("{f:?}");
+        assert!((f[4] + 6.0).abs() < 0.5, "{}", f[4]);
+        assert!(f[0] < MID_ON && f[8] < MID_ON);
+    }
+
+    fn with_mids(index: usize, name: &str, role: Role, lufs: f64, mids: Vec<[f32; MID_BANDS]>) -> TrackMeasures {
+        TrackMeasures { role, lufs: Some(lufs), mids, ..track(index, name, false, -6.0, Vec::new()) }
+    }
+
+    /// The voice and the chords as loud at 1 kHz: the chords make room. A
+    /// pad well under, a hi-hat far up and a bass: no clash with them.
+    #[test]
+    fn tracks_covering_each_other_in_the_mids_are_found() {
+        let band = |k: usize, level: f32| -> [f32; MID_BANDS] { std::array::from_fn(|b| if b == k { level } else { -80.0 }) };
+        let voice = with_mids(0, "Voz", Role::Vocal, -14.0, vec![band(4, -20.0); 100]);
+        let chords = with_mids(1, "Acordes", Role::Chords, -16.0, vec![band(4, -23.0); 100]);
+        let pad = with_mids(2, "Pad", Role::Pad, -24.0, vec![band(4, -40.0); 100]);
+        let hats = with_mids(3, "Hats", Role::Percussion, -20.0, vec![band(8, -20.0); 100]);
+        let bass = with_mids(4, "Bajo", Role::Bass, -14.0, vec![band(0, -20.0); 100]);
+        let tracks = vec![voice, chords, pad, hats, bass];
+        let clashes = mid_clashes(&tracks);
+        assert_eq!(clashes, [MidClash { yields: 1, to: 0, band: 4, share: 1.0 }]);
+        let list = advise(&report(-14.0, -1.5, tracks.clone()), Target::Streaming, None);
+        let carve = list.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Carve { .. })));
+        assert_eq!(carve, Some(Fix::Carve { track: 1, name: "Acordes".into(), hz: 1000.0, for_name: "Voz".into() }));
+        // Two of a kind: the quieter makes room. Once it does, all is well.
+        let mut alike = tracks.clone();
+        alike[0].role = Role::Chords;
+        assert_eq!(mid_clashes(&alike)[0].yields, 1);
+        let mut carved = tracks;
+        carved[1].carves = vec![1050.0];
+        let list = advise(&report(-14.0, -1.5, carved), Target::Streaming, None);
+        assert!(list.iter().all(|a| !matches!(a.fix, Some(Fix::Carve { .. }))));
+        assert!(list.iter().any(|a| a.level == Level::Good && a.text == "«Acordes» deja hueco a «Voz» en 1,0 kHz"), "{list:?}");
+    }
+
+    /// For real: a melody and chords in the same octave, analysed. The chords
+    /// make room for the melody; applied, they do, in an EQ Eight.
+    #[test]
+    fn chords_make_room_for_the_melody() {
+        use crate::project::{Project, Track};
+        use engine::model::{ArrangementClip, Clip, MidiClip, Note};
+        let note = |start: f64, length: f64, pitch: u8| Note { start, length, pitch, velocity: 0.8, chance: 1.0 };
+        let mut project = Project::empty();
+        let mut lead = Track::new("Melodía", [0; 3], InstrumentKind::Synth(Default::default()));
+        let tune: Vec<Note> = (0..16).map(|k| note(k as f64, 1.0, [72, 76, 79, 76][k % 4])).collect();
+        lead.arrangement.push(ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(MidiClip { notes: tune, ..MidiClip::new("Melodía", 16.0, [0; 3]) }) });
+        let mut chords = Track::new("Acordes", [0; 3], InstrumentKind::Synth(Default::default()));
+        let voiced: Vec<Note> = (0..4).flat_map(|bar| [72, 76, 79].map(|p| note(bar as f64 * 4.0, 4.0, p))).collect();
+        chords.arrangement.push(ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(MidiClip { notes: voiced, ..MidiClip::new("Acordes", 16.0, [0; 3]) }) });
+        project.tracks = vec![lead, chords];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 120);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let report = app.mix.report.clone().unwrap();
+        let clashes = mid_clashes(&report.tracks);
+        println!("{clashes:?}");
+        let advice = advise(&report, Target::Streaming, None);
+        for a in &advice {
+            println!("{} → {:?}", a.text, a.fix);
+        }
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Carve { .. }))).expect("room to make");
+        let Fix::Carve { name, for_name, hz, .. } = &fix else { unreachable!() };
+        assert_eq!((name.as_str(), for_name.as_str()), ("Acordes", "Melodía"));
+        assert!((500.0..=2000.0).contains(hz), "{hz}");
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        assert_eq!(carves(&app.project.tracks[1]), vec![*hz]);
+        let after = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        assert!(!after.iter().any(|a| matches!(&a.fix, Some(Fix::Carve { hz: h, .. }) if h == hz)), "{after:?}");
+        assert!(after.iter().any(|a| a.level == Level::Good && a.text.starts_with("«Acordes» deja hueco a «Melodía»")));
     }
 }

@@ -637,6 +637,13 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
   - Suena un poco tarde, algo más de un periodo de la nota: unos 5 ms con una voz media (220 Hz), 10 con una grave (110 Hz) y hasta 17 con las notas más bajas de un bajo. Las demás pistas lo esperan esos 5 ms (ver «Compensación de latencia»).
   - No está entre los efectos internos de los sintes, que ya tocan afinado.
   - Un proyecto con un Tuner no se abre en un Pulse anterior: pide actualizar.
+- **De-esser**: baja las eses y los silbidos de una voz («s», «ch», «z») cuando saltan, sin apagar el resto. Separa la voz en lo que suena por debajo y por encima de su frecuencia, escucha solo la parte aguda y la baja mientras pase del umbral.
+  - **Frequency**: desde dónde escucha y baja (2–16 kHz). Las eses de una voz grave suelen estar en 4–6 kHz; las de una aguda, en 6–9 kHz.
+  - **Threshold**: a partir de qué nivel de esa parte aguda empieza a bajarla.
+  - **Range**: lo más que la baja (hasta 24 dB). Unos 6–8 dB bastan; más, y la voz suena como si ceceara.
+  - Mientras no actúa, no cambia nada del sonido, y la voz por debajo de Frequency nunca se toca.
+  - Ponlo después del compresor: comprimir sube las eses.
+  - Un proyecto con un De-esser no se abre en un Pulse anterior: pide actualizar.
 - **Saturator**: drive y salida, con cinco **tipos** (Soft, el de siempre; Hard, recorte duro; Fold, plegado brillante; Tube, asimétrico y cálido; Crush, reducción de bits) y **4×**, que trabaja a cuatro veces la frecuencia de muestreo para que mucho drive no ensucie los agudos (aliasing; gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras).
 - **Bitcrusher**: bits y reducción de muestreo.
 - **Auto Filter**: paso bajo, alto o banda, con LFO sincronizado al tempo. **24 dB** corta el doble por octava. **Drive** satura lo que entra al filtro. Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.
@@ -961,6 +968,10 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - Ratio 3:1 en la voz y los coros, 2,5:1 en la solista y 4:1 en el bajo y la batería. Ataque rápido en las voces (5 ms) y lento en la batería (25 ms), para que pase el golpe.
     - Release de una semicorchea al tempo de la canción (una corchea en el bajo) y ganancia para recuperar la mitad de lo que quita, de modo que la pista sigue sonando más o menos igual de fuerte.
     - Si la pista ya tiene un compresor (sin sidechain), sale en verde. Una pista que se aparta de otra con un sidechain (un rumble o un bajo que bombean con el bombo) no se comprime: su nivel se mueve a propósito.
+  - **Eses que saltan**: en una voz o unos coros, busca las eses («s», «ch», «z») y las compara con las vocales. Si suenan casi tan fuertes como ellas (a menos de 8 dB), pinchan, sobre todo tras comprimir. **Aplicar** pone un **De-esser** ajustado a la voz:
+    - Lo pone en la frecuencia de sus eses (4,5, 6 o 7,5 kHz, según dónde estén).
+    - Calcula el umbral para bajarlas unos 6 dB, pero nunca tanto como para tocar el brillo de las vocales: el consejo dice cuánto las bajará.
+    - Si la pista ya tiene un De-esser, sale en verde.
   - **Nivelar la voz**: si la voz cambia mucho frente a la base de una frase a otra (al menos 2 dB en alguna), unas frases se pierden y otras tapan la música. **Aplicar** escribe una automatización de volumen en su pista, como haría alguien moviendo el fader:
     - Mide cada frase: dónde suena la voz, y cuánto queda por encima del resto de la mezcla en ese momento.
     - Lleva cada frase a lo que está la mayoría, como mucho 6 dB arriba o abajo.
@@ -978,10 +989,11 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     3. Graves.
     4. Huecos en los medios: uno por cada pareja de pistas, donde más se tapan.
     5. Compresión.
-    6. Nivelar la voz.
-    7. Espacio.
-    8. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
-    9. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
+    6. Eses.
+    7. Nivelar la voz.
+    8. Espacio.
+    9. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
+    10. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
   - Al terminar dice lo que ha hecho. Cada paso se deshace con ⌘Z. Lo que queda en la lista son sugerencias para aplicar a mano, si quieres.
   - **Escuchar: Antes · Después** aparece en cuanto el asistente cambia algo, y deja oír la mezcla como estaba antes de su primer cambio y como está ahora. Dale a reproducir y pasa de una a otra mientras suena.
     - Suenan al mismo volumen: la más fuerte se baja hasta la otra. Así comparas cómo suena y no cuánto, porque lo más fuerte siempre parece mejor. Si la mezcla ha cambiado sin volver a analizarla, avisa de que no están igualadas.

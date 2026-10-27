@@ -3,7 +3,7 @@
 
 use crate::model::{
     db_to_gain, AutoFilterParams, BitcrusherParams, ChorusParams, CompressorParams, DelayParams, DuckerParams, Effect,
-    EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, GateParams, TransientParams, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
+    DeEsserParams, EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, GateParams, TransientParams, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
 use crate::plugin::PluginProcessor;
 use crate::tuner::Tuner;
@@ -1270,6 +1270,63 @@ impl Transient {
     }
 }
 
+/// Splits the sound at the esses' frequency (a low-pass, and what it leaves),
+/// listens to the top part and takes it down while it is over the threshold,
+/// up to the range. The two parts add up to the sound: while it takes nothing,
+/// it changes nothing.
+pub struct DeEsser {
+    params: DeEsserParams,
+    /// The low-pass the top part is taken from, and what it was made for.
+    split: Biquad,
+    made: Option<(f32, f32)>,
+    states: [BiquadState; 2],
+    /// The top part's level (a peak falling in 60 ms), and the gain taken off it (dB).
+    level: f32,
+    cut_db: f32,
+}
+
+impl DeEsser {
+    fn new(params: DeEsserParams) -> Self {
+        Self { params, split: Biquad::IDENTITY, made: None, states: Default::default(), level: 0.0, cut_db: 0.0 }
+    }
+
+    /// How much it takes off the top part (dB, ≤ 0) for its level.
+    fn cut_for(&self, level: f32) -> f32 {
+        let over = 20.0 * level.max(1e-9).log10() - self.params.threshold_db;
+        -over.clamp(0.0, self.params.range_db.max(0.0))
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let freq = self.params.freq_hz.clamp(1000.0, sr * 0.45);
+        if self.made != Some((freq, sr)) {
+            let band = EqBand { on: true, shape: EqShape::HighCut12, freq, gain_db: 0.0, q: std::f32::consts::FRAC_1_SQRT_2 };
+            self.split = band_sections(&band, sr).0[0];
+            self.made = Some((freq, sr));
+        }
+        let (fall, attack, release) = (smoothing(60.0, sr), smoothing(0.5, sr), smoothing(60.0, sr));
+        let s = self.split;
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let mut tops = [0f32; 2];
+            for (c, x) in [&mut *a, &mut *b].into_iter().enumerate() {
+                let st = &mut self.states[c];
+                let input = *x as f64;
+                let low = s.b0 * input + st.s1;
+                st.s1 = s.b1 * input - s.a1 * low + st.s2;
+                st.s2 = s.b2 * input - s.a2 * low;
+                tops[c] = (input - low) as f32;
+            }
+            self.level = tops[0].abs().max(tops[1].abs()).max(self.level * fall);
+            let target = self.cut_for(self.level);
+            let coef = if target < self.cut_db { attack } else { release };
+            self.cut_db = target + coef * (self.cut_db - target);
+            // The sound less what the top part loses.
+            let keep = db_to_gain(self.cut_db) - 1.0;
+            *a += keep * tops[0];
+            *b += keep * tops[1];
+        }
+    }
+}
+
 pub struct Utility {
     params: UtilityParams,
 }
@@ -1294,6 +1351,7 @@ pub enum EffectProcessor {
     Gate(Gate),
     Transient(Transient),
     Tuner(Box<Tuner>),
+    DeEsser(Box<DeEsser>),
     Delay(Delay),
     Reverb(Reverb),
     Saturator(Saturator),
@@ -1326,6 +1384,7 @@ impl EffectProcessor {
             Effect::Gate(params) => Self::Gate(Gate::new(params)),
             Effect::Transient(params) => Self::Transient(Transient::new(params)),
             Effect::Tuner(params) => Self::Tuner(Box::new(Tuner::new(params, sample_rate))),
+            Effect::DeEsser(params) => Self::DeEsser(Box::new(DeEsser::new(params))),
             Effect::Delay(params) => Self::Delay(Delay::new(params, sample_rate)),
             Effect::Reverb(params) => Self::Reverb(Reverb::new(params, sample_rate)),
             Effect::Saturator(params) => Self::Saturator(Saturator::new(params)),
@@ -1394,6 +1453,7 @@ impl EffectProcessor {
             (Self::Gate(fx), Effect::Gate(p)) => fx.params = p,
             (Self::Transient(fx), Effect::Transient(p)) => fx.params = p,
             (Self::Tuner(fx), Effect::Tuner(p)) => fx.params = p,
+            (Self::DeEsser(fx), Effect::DeEsser(p)) => fx.params = p,
             (Self::Delay(fx), Effect::Delay(p)) => fx.params = p,
             (Self::Reverb(fx), Effect::Reverb(p)) => fx.params = p,
             (Self::Saturator(fx), Effect::Saturator(p)) => fx.params = p,
@@ -1419,6 +1479,7 @@ impl EffectProcessor {
             Self::Gate(fx) => Effect::Gate(fx.params),
             Self::Transient(fx) => Effect::Transient(fx.params),
             Self::Tuner(fx) => Effect::Tuner(fx.params),
+            Self::DeEsser(fx) => Effect::DeEsser(fx.params),
             Self::Delay(fx) => Effect::Delay(fx.params),
             Self::Reverb(fx) => Effect::Reverb(fx.params),
             Self::Saturator(fx) => Effect::Saturator(fx.params),
@@ -1467,6 +1528,7 @@ impl EffectProcessor {
             }
             Self::Transient(fx) => *fx = Transient::new(fx.params),
             Self::Tuner(fx) => fx.reset(),
+            Self::DeEsser(fx) => **fx = DeEsser::new(fx.params),
             Self::Delay(fx) => {
                 fx.lines.iter_mut().for_each(|line| line.fill(0.0));
                 fx.write = 0;
@@ -1527,6 +1589,7 @@ impl EffectProcessor {
             Self::Gate(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Transient(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Tuner(fx) => fx.process(l, r, ctx.scale),
+            Self::DeEsser(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Delay(fx) => fx.process(l, r, ctx),
             Self::Reverb(fx) => fx.process(l, r),
             Self::Saturator(fx) => fx.process(l, r),
@@ -2234,5 +2297,41 @@ mod tests {
             let level = level_at(&l[4_800..], freq) / 0.05;
             assert!((0.9..1.1).contains(&level), "{freq} Hz: {level}");
         }
+    }
+
+    /// Under its threshold it changes nothing; a hiss over it comes down
+    /// about its range, and a low tone with it is left as it was.
+    #[test]
+    fn the_de_esser_takes_down_only_the_esses() {
+        let sr = 48_000.0;
+        let n = 48_000;
+        // A 220 Hz tone, quiet: nothing to take.
+        let tone: Vec<f32> = (0..n).map(|i| 0.3 * (std::f32::consts::TAU * 220.0 * i as f32 / sr).sin()).collect();
+        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }), sr);
+        let (mut l, mut r) = (tone.clone(), tone.clone());
+        fx.process(&mut l, &mut r, &ctx());
+        let worst = l.iter().zip(&tone).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+        assert!(worst < 1e-4, "untouched: {worst}");
+        // The tone and a loud 9 kHz whistle (an «s»): the whistle comes down, the tone stays.
+        let mixed: Vec<f32> = (0..n).map(|i| i as f32 / sr).map(|t| 0.3 * (std::f32::consts::TAU * 220.0 * t).sin() + 0.3 * (std::f32::consts::TAU * 9000.0 * t).sin()).collect();
+        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }), sr);
+        let (mut l, mut r) = (mixed.clone(), mixed.clone());
+        fx.process(&mut l, &mut r, &ctx());
+        let level = |x: &[f32], hz: f32| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &v) in x.iter().enumerate() {
+                let w = std::f64::consts::TAU * hz as f64 * i as f64 / sr as f64;
+                re += v as f64 * w.cos();
+                im += v as f64 * w.sin();
+            }
+            (2.0 * (re * re + im * im).sqrt() / x.len() as f64) as f32
+        };
+        let tail = &l[n / 2..];
+        let whistle = 20.0 * (level(tail, 9000.0) / 0.3).log10();
+        let low = 20.0 * (level(tail, 220.0) / 0.3).log10();
+        println!("9 kHz {whistle:.1} dB, 220 Hz {low:.1} dB");
+        // About the range: just over the split, the top part is a little louder than the sound.
+        assert!((-10.5..=-7.0).contains(&whistle), "{whistle}");
+        assert!(low.abs() < 0.5, "{low}");
     }
 }

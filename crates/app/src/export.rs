@@ -313,7 +313,7 @@ pub fn stems_add_up(project: &Project) -> bool {
             && match &d.effect {
                 Effect::Compressor(p) => p.sidechain.is_none(),
                 Effect::Gate(p) => p.sidechain.is_none(),
-                Effect::Saturator(_) | Effect::Bitcrusher(_) | Effect::Limiter(_) | Effect::Transient(_) | Effect::Tuner(_) | Effect::Plugin(_) => true,
+                Effect::Saturator(_) | Effect::Bitcrusher(_) | Effect::Limiter(_) | Effect::Transient(_) | Effect::Tuner(_) | Effect::DeEsser(_) | Effect::Plugin(_) => true,
                 Effect::AutoFilter(p) => p.drive_db > 0.0 || p.resonance > 0.95,
                 _ => false,
             }

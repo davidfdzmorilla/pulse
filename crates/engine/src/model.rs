@@ -1543,6 +1543,21 @@ impl Default for TunerParams {
     }
 }
 
+/// Takes down the voice's esses and hisses when they jump out: what is over
+/// `freq_hz`, while it is over the threshold, at most `range_db`.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DeEsserParams {
+    pub freq_hz: f32,
+    pub threshold_db: f32,
+    pub range_db: f32,
+}
+
+impl Default for DeEsserParams {
+    fn default() -> Self {
+        Self { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }
+    }
+}
+
 /// Makes the start of each hit stronger or softer, and its tail longer or shorter.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransientParams {
@@ -1929,6 +1944,7 @@ pub enum Effect {
     Gate(GateParams),
     Transient(TransientParams),
     Tuner(TunerParams),
+    DeEsser(DeEsserParams),
     Delay(DelayParams),
     Reverb(ReverbParams),
     Saturator(SaturatorParams),
@@ -1945,7 +1961,7 @@ pub enum Effect {
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 16] {
+    pub fn catalog() -> [Effect; 17] {
         [
             Effect::Eq3(Default::default()),
             Effect::EqEight(Default::default()),
@@ -1954,6 +1970,7 @@ impl Effect {
             Effect::Gate(Default::default()),
             Effect::Transient(Default::default()),
             Effect::Tuner(Default::default()),
+            Effect::DeEsser(Default::default()),
             Effect::Saturator(Default::default()),
             Effect::Bitcrusher(Default::default()),
             Effect::AutoFilter(Default::default()),
@@ -2002,6 +2019,7 @@ impl Effect {
             Effect::Gate(_) => "Gate",
             Effect::Transient(_) => "Transient",
             Effect::Tuner(_) => "Tuner",
+            Effect::DeEsser(_) => "De-esser",
             Effect::Delay(_) => "Delay",
             Effect::Reverb(_) => "Reverb",
             Effect::Saturator(_) => "Saturator",
@@ -2227,6 +2245,11 @@ const TUNER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Speed", 0.0, 400.0, 20.0, Milliseconds),
     ParamInfo::linear("Humanize", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("Amount", 0.0, 1.0, 1.0, Percent),
+];
+const DE_ESSER_PARAMS: [ParamInfo; 3] = [
+    ParamInfo::log("Frequency", 2000.0, 16000.0, 6000.0, Hertz),
+    ParamInfo::linear("Threshold", -60.0, 0.0, -30.0, Decibels),
+    ParamInfo::linear("Range", 0.0, 24.0, 8.0, Decibels),
 ];
 const TRANSIENT_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Attack", -1.0, 1.0, 0.0, Percent),
@@ -2635,6 +2658,7 @@ impl Effect {
             Effect::Gate(_) => &GATE_PARAMS,
             Effect::Transient(_) => &TRANSIENT_PARAMS,
             Effect::Tuner(_) => &TUNER_PARAMS,
+            Effect::DeEsser(_) => &DE_ESSER_PARAMS,
             Effect::Delay(_) => &DELAY_PARAMS,
             Effect::Reverb(_) => &REVERB_PARAMS,
             Effect::Saturator(_) => &SATURATOR_PARAMS,
@@ -2674,6 +2698,9 @@ impl Effect {
             (Effect::Tuner(p), 0) => &mut p.speed_ms,
             (Effect::Tuner(p), 1) => &mut p.humanize,
             (Effect::Tuner(p), 2) => &mut p.amount,
+            (Effect::DeEsser(p), 0) => &mut p.freq_hz,
+            (Effect::DeEsser(p), 1) => &mut p.threshold_db,
+            (Effect::DeEsser(p), 2) => &mut p.range_db,
             (Effect::Delay(p), 0) => &mut p.feedback,
             (Effect::Delay(p), 1) => &mut p.filter_hz,
             (Effect::Delay(p), 2) => &mut p.mix,

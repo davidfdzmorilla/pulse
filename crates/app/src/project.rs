@@ -292,7 +292,9 @@ pub struct MasterTrack {
 /// have one.
 /// 11: a groove taken from a recording: a Pulse that reads 10 would play
 /// its clips straight and lose it. Only projects that have one.
-pub const FORMAT: u32 = 11;
+/// 12: a De-esser: a Pulse that reads 11 doesn't know it. Only projects
+/// that have one.
+pub const FORMAT: u32 = 12;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -616,8 +618,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_groove_templates() {
+            let format = if self.has_effect(|e| matches!(e, Effect::DeEsser(_))) {
                 FORMAT
+            } else if self.has_groove_templates() {
+                11
             } else if self.has_effect(|e| matches!(e, Effect::Tuner(_))) {
                 10
             } else if self.has_partial_fades() {

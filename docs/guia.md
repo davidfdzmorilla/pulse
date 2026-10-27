@@ -987,6 +987,10 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - Se abre al 40 % en la última palabra de esas frases y vuelve a donde estaba en cuanto acaban. El eco de esa palabra rellena el silencio y, mientras canta, la voz no se ensucia.
     - Usa el retorno que tenga un Delay; si no hay, lo crea (corchea con puntillo a tempo).
     - Si la pista ya tiene algún envío automatizado, no lo toca (sale en verde).
+  - **Secciones que crecen**: si la canción tiene marcadores, mide la sonoridad de la mezcla en cada parte. El estribillo o el drop deben sonar más grandes que lo que lleva a ellos: al menos 1,5 LU por encima de las estrofas, subidas y preestribillos. Si no, la canción no llega a ningún sitio. **Aplicar** escribe una automatización de volumen en el master que baja esas partes lo justo (como mucho 6 dB):
+    - Se fija en el nombre del marcador: «Estribillo», «Coro», «Chorus», «Drop» o «Hook» son lo que debe crecer; «Estrofa», «Verse», «Subida», «Build», «Pre…» o «Groove» son lo que lleva a ello. «Pre-estribillo» y «Subida al drop» cuentan como lo que lleva. La intro, el break, el puente y el final no se tocan, porque pueden ser más suaves a propósito.
+    - Baja esas partes en vez de subir el estribillo: el master va detrás del limitador, y subirlo saturaría.
+    - Si el master ya tiene automatización de volumen, no la toca.
   - Las pistas se miden en seco, sin lo que mandan a los retornos: la cola de la reverb o del delay no cuenta como parte suave de la voz.
   - **Aplicar todo** (junto a «Consejos») hace los cambios de los consejos uno tras otro, en el orden de una mezcla, y vuelve a medir después de cada uno, porque cada cambio decide el siguiente:
     1. Pistas por encima de 0 dB.
@@ -999,7 +1003,8 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     8. Espacio.
     9. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
     10. Ecos al final de frase.
-    11. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
+    11. Secciones que crecen.
+    12. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
   - Al terminar dice lo que ha hecho. Cada paso se deshace con ⌘Z. Lo que queda en la lista son sugerencias para aplicar a mano, si quieres.
   - **Escuchar: Antes · Después** aparece en cuanto el asistente cambia algo, y deja oír la mezcla como estaba antes de su primer cambio y como está ahora. Dale a reproducir y pasa de una a otra mientras suena.
     - Suenan al mismo volumen: la más fuerte se baja hasta la otra. Así comparas cómo suena y no cuánto, porque lo más fuerte siempre parece mejor. Si la mezcla ha cambiado sin volver a analizarla, avisa de que no están igualadas.

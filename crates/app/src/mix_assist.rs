@@ -22,6 +22,10 @@
 //! word of the phrases a silence follows, so its echo fills it (a delay
 //! throw), and leaves it where it was while it sings (see [`throws`]).
 //!
+//! «Secciones que crecen» measures each part of the song (between its
+//! markers) and, where a chorus or a drop is no bigger than the verses and
+//! build-ups, brings those down with the master's volume (see [`growth`]).
+//!
 //! «Nivelar la voz» rides the voice's fader phrase by phrase (volume
 //! automation), so it sits as far over the rest in every one (see [`ride`]).
 //!
@@ -171,6 +175,72 @@ pub struct TrackMeasures {
     pub deessed: bool,
     /// Whether one of its sends is automated already.
     pub thrown: bool,
+}
+
+// ----- Sections that grow ------------------------------------------------------------
+
+/// A part of the song: its name, where it is (beats), and how loud the mix is
+/// in it (LUFS).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SectionLevel {
+    pub name: String,
+    pub start: f64,
+    pub end: f64,
+    pub lufs: Option<f64>,
+}
+
+/// What a part is for growing: `Some(true)` the peak (a chorus, a drop),
+/// `Some(false)` what leads to it (a verse, a build-up), `None` the rest
+/// (an intro, a break, a bridge, an outro: quieter on purpose, or anything).
+pub fn section_kind(name: &str) -> Option<bool> {
+    let name = name.to_lowercase();
+    let words: Vec<&str> = name.split(|c: char| !c.is_alphanumeric()).filter(|w| !w.is_empty()).collect();
+    let has = |keys: &[&str]| words.iter().any(|w| keys.iter().any(|k| w.starts_with(k)));
+    // What leads first: «Pre-estribillo», «Subida al drop».
+    if has(&["estrofa", "verse", "subida", "build", "pre", "groove"]) {
+        Some(false)
+    } else if has(&["estribillo", "coro", "chorus", "drop", "hook", "climax", "clímax"]) {
+        Some(true)
+    } else {
+        None
+    }
+}
+
+/// How much louder (LU) a peak should be than what leads to it, at least.
+const GROW_LU: f64 = 1.5;
+/// The most a part is brought down (dB).
+const GROW_MAX: f64 = 6.0;
+
+/// The parts to bring down so the quietest peak is [`GROW_LU`] over each of
+/// them: their indices in `sections` and by how much (dB, rounded to half).
+pub fn growth(sections: &[SectionLevel]) -> Vec<(usize, f32)> {
+    let peaks = sections.iter().filter(|s| section_kind(&s.name) == Some(true)).filter_map(|s| s.lufs);
+    let Some(peak) = peaks.reduce(f64::min) else { return Vec::new() };
+    sections
+        .iter()
+        .enumerate()
+        .filter(|(_, s)| section_kind(&s.name) == Some(false))
+        .filter_map(|(i, s)| {
+            let over = s.lufs? - (peak - GROW_LU);
+            (over > 0.25).then(|| (i, ((over.min(GROW_MAX) * 2.0).round() / 2.0).max(0.5) as f32))
+        })
+        .collect()
+}
+
+/// The seconds from beat `a` to beat `b`, at the project's tempo (and its
+/// tempo automation, if it has any).
+fn seconds_between(project: &crate::project::Project, a: f64, b: f64) -> f64 {
+    let lane = project.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty());
+    let Some(lane) = lane else { return (b - a) * 60.0 / project.tempo.max(1.0) };
+    const STEP: f64 = 1.0 / 32.0;
+    let mut beat = a;
+    let mut seconds = 0.0;
+    while beat < b {
+        let step = STEP.min(b - beat);
+        seconds += step * 60.0 / lane.value_at(beat).unwrap_or(project.tempo as f32).max(1.0) as f64;
+        beat += step;
+    }
+    seconds
 }
 
 // ----- Delay throws -----------------------------------------------------------------------
@@ -1028,6 +1098,10 @@ pub struct Report {
     pub start: f64,
     /// The delay return's time (beats; a delay to make, a dotted eighth).
     pub echo: f64,
+    /// The song's parts (empty without markers, or analysing the loop), and
+    /// whether the master's volume is automated already.
+    pub sections: Vec<SectionLevel>,
+    pub master_automated: bool,
 }
 
 /// A change the assistant can make.
@@ -1055,6 +1129,9 @@ pub enum Fix {
     Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
     /// A De-esser on a voice (see [`deessing`]).
     DeEss { track: usize, name: String, params: DeEsserParams },
+    /// The master's volume brought down (dB) in the parts at `cuts` (beats),
+    /// so the peaks grow over them (see [`growth`]).
+    Grow { cuts: Vec<(String, f64, f64, f32)> },
     /// The voice's send to the delay (return `delay`; `None`: made) opened on
     /// the last word of the phrases ending at `ends` (s from `from`, a beat).
     Throws { track: usize, name: String, delay: Option<usize>, from: f64, ends: Vec<f64>, base: f32 },
@@ -1077,8 +1154,9 @@ fn stage(fix: &Fix) -> u8 {
         Fix::Ride { .. } => 6,
         Fix::Space { .. } => 7,
         Fix::Throws { .. } => 8,
-        Fix::MasterEq { .. } => 9,
-        Fix::MasterLimiter { .. } => 10,
+        Fix::Grow { .. } => 9,
+        Fix::MasterEq { .. } => 10,
+        Fix::MasterLimiter { .. } => 11,
     }
 }
 
@@ -1125,6 +1203,7 @@ fn fix_label(fix: &Fix) -> String {
         Fix::Ride { name, .. } => format!("«{name}» nivelada"),
         Fix::DeEss { name, .. } => format!("de-esser en «{name}»"),
         Fix::Throws { name, .. } => format!("ecos de «{name}»"),
+        Fix::Grow { .. } => "secciones que crecen".into(),
     }
 }
 
@@ -1452,6 +1531,31 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         a.details = vec![ends.iter().take(8).map(|&e| clock(e)).collect::<Vec<_>>().join(" · ") + if ends.len() > 8 { " …" } else { "" }];
         out.push(a);
     }
+    // A chorus or a drop that doesn't grow.
+    let cuts = growth(&report.sections);
+    let peak = report.sections.iter().filter(|s| section_kind(&s.name) == Some(true)).filter_map(|s| s.lufs.map(|l| (l, &s.name))).min_by(|a, b| a.0.total_cmp(&b.0));
+    if let Some((peak, peak_name)) = peak {
+        if cuts.is_empty() {
+            if report.sections.iter().any(|s| section_kind(&s.name) == Some(false)) {
+                out.push(advice(Level::Good, format!("«{peak_name}» suena por encima de lo que lleva a él: la canción crece"), None));
+            }
+        } else if report.master_automated {
+            // (Its volume moves already: that is left to whoever wrote it.)
+        } else {
+            let (lead, lead_lufs) = cuts.iter().map(|&(i, _)| (&report.sections[i].name, report.sections[i].lufs.unwrap_or(peak))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
+            let mut a = advice(
+                Level::Note,
+                format!(
+                    "«{peak_name}» suena a {} LU de «{lead}»: no crece, y la canción no llega a ningún sitio. Bajar el master en lo que lleva a él lo deja {} LU por encima",
+                    db(peak - lead_lufs),
+                    num(GROW_LU)
+                ),
+                Some(Fix::Grow { cuts: cuts.iter().map(|&(i, d)| { let s = &report.sections[i]; (s.name.clone(), s.start, s.end, d) }).collect() }),
+            );
+            a.details = cuts.iter().map(|&(i, d)| format!("«{}»: {} dB", report.sections[i].name, db(-d as f64))).collect();
+            out.push(a);
+        }
+    }
     // Two tracks covering each other in the mids.
     for clash in mid_clashes(&report.tracks).into_iter().take(6) {
         let (yields, to) = (&report.tracks[clash.yields], &report.tracks[clash.to]);
@@ -1578,7 +1682,14 @@ pub fn matched(before: Option<f64>, now: Option<f64>) -> (f32, f32) {
 /// `project` with its master `db` louder (for the engine only).
 fn levelled(project: &crate::project::Project, db: f32) -> crate::project::Project {
     let mut p = project.clone();
-    p.master.mixer.gain *= 10f32.powf(db / 20.0);
+    let factor = 10f32.powf(db / 20.0);
+    p.master.mixer.gain *= factor;
+    // Its volume automated (sections that grow) holds it where it was: that too.
+    for lane in p.master.automation.iter_mut().filter(|l| l.param == Param::Volume) {
+        for point in &mut lane.points {
+            point.value *= factor;
+        }
+    }
     p
 }
 
@@ -1590,7 +1701,7 @@ impl Default for Assistant {
 
 /// One render of the analysis, measured.
 enum Measured {
-    Mix(Measures),
+    Mix(Measures, Vec<SectionLevel>),
     Track(TrackMeasures),
 }
 
@@ -1628,6 +1739,12 @@ impl PulseApp {
         let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
         let tempo = self.project.tempo;
         let space = Space::of(&self.project.returns);
+        // The parts, in seconds of the render (from the song's start).
+        let parts: Vec<(String, f64, f64, f64, f64)> = match self.mix.range {
+            Range::Loop => Vec::new(),
+            _ => export::sections(&self.project).into_iter().map(|(name, (a, b))| (name, a, b, seconds_between(&self.project, 0.0, a), seconds_between(&self.project, 0.0, b))).collect(),
+        };
+        let master_automated = self.project.master.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty());
         let routing: Vec<(bool, [f32; MAX_RETURNS], bool, bool)> = self
             .project
             .tracks
@@ -1644,7 +1761,11 @@ impl PulseApp {
             let renders: Vec<_> = mix.into_iter().chain(tracks).collect();
             let measured = export::render_each(renders, RATE, &p, &c, |render, left, right| {
                 Ok(match render.track {
-                    None => Measured::Mix(Measures::of(&left, &right, RATE)),
+                    None => {
+                        let slice = |x: &[f32], a: f64, b: f64| x[((a * RATE as f64) as usize).min(x.len())..((b * RATE as f64) as usize).min(x.len())].to_vec();
+                        let sections = parts.iter().map(|(name, start, end, a, b)| SectionLevel { name: name.clone(), start: *start, end: *end, lufs: loudness::integrated(&slice(&left, *a, *b), &slice(&right, *a, *b), RATE) }).collect();
+                        Measured::Mix(Measures::of(&left, &right, RATE), sections)
+                    }
                     Some(index) => {
                         let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
                         let (hint, pan, cut, gain, carves, compressed) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new(), false));
@@ -1684,9 +1805,9 @@ impl PulseApp {
             });
             let outcome = measured.map_err(|_| "Análisis cancelado".to_string()).and_then(|all| {
                 let mut all = all.into_iter();
-                let Some(Measured::Mix(mix)) = all.next() else { return Err("Nada que analizar".to_string()) };
+                let Some(Measured::Mix(mix, sections)) = all.next() else { return Err("Nada que analizar".to_string()) };
                 let tracks = all.filter_map(|t| if let Measured::Track(t) = t { Some(t) } else { None }).collect();
-                Ok(Report { mix, tracks, tempo, space, start, echo })
+                Ok(Report { mix, tracks, tempo, space, start, echo, sections, master_automated })
             });
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
@@ -2109,6 +2230,31 @@ impl PulseApp {
                 automation.push(lane);
                 self.status = Some(format!("Ecos de «{name}» en {} finales de frase (⌘Z lo deshace)", ends.len()));
             }
+            Fix::Grow { cuts } if !self.project.master.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()) => {
+                let base = self.project.master.mixer.gain;
+                let mut lane = engine::model::AutomationLane::new(Param::Volume);
+                // Each part held at its level, moving in the last 1/32 beat
+                // before the next; two parts brought down one after the other
+                // go from one to the other.
+                let edge = 1.0 / 32.0;
+                let mut points = Vec::new();
+                for (i, (_, start, end, d)) in cuts.iter().enumerate() {
+                    let value = base * 10f32.powf(-d / 20.0);
+                    let joined_before = i > 0 && (cuts[i - 1].2 - start).abs() < 1e-9;
+                    let joined_after = cuts.get(i + 1).is_some_and(|next| (next.1 - end).abs() < 1e-9);
+                    if !joined_before {
+                        points.push((start - edge, base));
+                    }
+                    points.extend([(*start, value), (end - edge, value)]);
+                    if !joined_after {
+                        points.push((*end, base));
+                    }
+                }
+                lane.points = points.into_iter().filter(|p| p.0 >= 0.0).map(|(beat, value)| engine::model::AutomationPoint { beat, value, curve: 0.0 }).collect();
+                lane.sort();
+                self.project.master.automation.push(lane);
+                self.status = Some(format!("Master más bajo en {} (⌘Z lo deshace)", cuts.iter().map(|c| format!("«{}» {} dB", c.0, db(-c.3 as f64))).collect::<Vec<_>>().join(", ")));
+            }
             Fix::DeEss { track, name, params } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::DeEsser(*params)));
                 self.status = Some(format!("De-esser en «{name}»: {}, umbral {} dB", hz_label(params.freq_hz), num(params.threshold_db as f64)));
@@ -2254,7 +2400,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let any = next_fix(&list, &[]).is_some();
                 all = ui
                     .add_enabled(!busy && any, egui::Button::new("Aplicar todo").small())
-                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, ecos, y el master. Vuelve a medir después de cada uno")
+                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, ecos, secciones, y el master. Vuelve a medir después de cada uno")
                     .clicked();
             }
         }
@@ -2368,6 +2514,7 @@ fn louder(track: &mut crate::project::Track, db: f32) {
 
 fn fix_hint(fix: &Fix) -> String {
     match fix {
+        Fix::Grow { .. } => "Escribe automatización de volumen en el master: baja lo que lleva al estribillo o al drop para que estos suenen más grandes, sin tocar el limitador".into(),
         Fix::Throws { name, .. } => format!("Escribe automatización en el envío de «{name}» al delay: se abre al {:.0} % en la última palabra de cada frase que acaba en silencio y vuelve a donde estaba al acabar", THROW * 100.0),
         Fix::DeEss { name, params, .. } => format!("Añade un De-esser a «{name}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)", hz_label(params.freq_hz), num(params.threshold_db as f64), num(params.range_db as f64)),
         Fix::Ride { name, .. } => format!("Escribe automatización de volumen en «{name}»: cada frase sube o baja (como mucho {RIDE_MAX} dB) para quedar igual de por encima de la base. Los cambios caen en los silencios entre frases"),
@@ -2424,7 +2571,7 @@ mod tests {
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75 }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -2477,7 +2624,7 @@ mod tests {
         assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
         // Over it: no platform turns a club track down, so it isn't said.
-        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0, echo: 0.75 };
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false };
         let told = advise(&loud, Target::HardTechno, None);
         assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
@@ -3591,5 +3738,80 @@ mod tests {
         assert!(list.iter().any(|a| a.level == Level::Good && a.text == "«Voz» ya tiene sus envíos automatizados"), "{list:?}");
         // Measured dry: its echoes are not its soft parts, so no compressor turns up.
         assert!(!list.iter().any(|a| matches!(a.fix, Some(Fix::Compress { .. }))), "{list:?}");
+    }
+
+    /// The parts by their names, and how much what leads to the peak comes
+    /// down: only what is too close to it.
+    #[test]
+    fn what_leads_to_the_chorus_comes_down() {
+        assert_eq!(section_kind("Estribillo 2"), Some(true));
+        assert_eq!(section_kind("DROP"), Some(true));
+        assert_eq!(section_kind("Coro final"), Some(true));
+        assert_eq!(section_kind("Pre-estribillo"), Some(false));
+        assert_eq!(section_kind("Subida al drop"), Some(false));
+        assert_eq!(section_kind("Estrofa 1"), Some(false));
+        assert_eq!(section_kind("Intro"), None);
+        assert_eq!(section_kind("Break"), None);
+        let part = |name: &str, lufs: f64| SectionLevel { name: name.into(), start: 0.0, end: 1.0, lufs: Some(lufs) };
+        let song = [part("Intro", -20.0), part("Estrofa", -14.0), part("Estribillo", -13.0), part("Estrofa 2", -16.0), part("Drop", -12.0)];
+        // The quietest peak, -13: what leads goes to -14.5 at most.
+        assert_eq!(growth(&song), [(1, 0.5)]);
+        let flat = [part("Estrofa", -12.0), part("Estribillo", -12.0)];
+        assert_eq!(growth(&flat), [(0, 1.5)]);
+        assert_eq!(growth(&[part("Estrofa", -12.0), part("Puente", -10.0)]), []);
+        let way = [part("Subida", -2.0), part("Drop", -12.0)];
+        assert_eq!(growth(&way), [(0, 6.0)], "6 dB at most");
+    }
+
+    /// For real: a song whose chorus is as loud as its verse. Applied, the
+    /// master comes down in the verse and the chorus is 1.5 LU over it.
+    #[test]
+    fn a_chorus_grows_over_its_verse() {
+        use crate::project::{Project, SongMarker, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let pad: Vec<f32> = (0..(16.0 * rate) as usize).map(|i| i as f32 / rate).map(|t| 0.1 * ((std::f32::consts::TAU * 220.0 * t).sin() + (std::f32::consts::TAU * 330.0 * t).sin())).collect();
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("secciones-{}.wav", std::process::id()));
+        crate::export::write(&path, &pad, &pad, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut t = Track::new_audio("Pad", [0; 3]);
+        t.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Pad".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        project.tracks = vec![t];
+        project.markers = vec![SongMarker { beat: 0.0, name: "Estrofa".into() }, SongMarker { beat: 16.0, name: "Estribillo".into() }];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 60);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let parts = app.mix.report.clone().unwrap().sections;
+        println!("{parts:?}");
+        assert_eq!(parts.len(), 2);
+        assert!((parts[0].lufs.unwrap() - parts[1].lufs.unwrap()).abs() < 0.3);
+        let advice = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Grow { .. }))).expect("growth");
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        let parts = app.mix.report.clone().unwrap().sections;
+        let grown = parts[1].lufs.unwrap() - parts[0].lufs.unwrap();
+        println!("el estribillo sobre la estrofa: {grown:.2} LU");
+        assert!((grown - 1.5).abs() < 0.3, "{grown}");
+        let list = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        assert!(!list.iter().any(|a| matches!(a.fix, Some(Fix::Grow { .. }))), "{list:?}");
+        assert!(list.iter().any(|a| a.level == Level::Good && a.text == "«Estribillo» suena por encima de lo que lleva a él: la canción crece"), "{list:?}");
+        // «Antes / Después» levels the master's automation too.
+        let lane = |p: &crate::project::Project| p.master.automation.iter().find(|l| l.param == Param::Volume).unwrap().points[0].value;
+        let quieter = levelled(&app.project, -6.0);
+        assert!((lane(&quieter) / lane(&app.project) - 0.5012).abs() < 1e-3);
     }
 }

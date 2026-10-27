@@ -35,6 +35,8 @@ const HUMAN_SLOWER: f32 = 0.3;
 const HUMAN_AFTER: f32 = 0.3;
 /// Without a voice, the correction goes back to none over this (seconds).
 const UNVOICED_RETURN: f32 = 0.03;
+/// The voice its latency is told for (see [`Tuner::latency`]): A3.
+const TYPICAL_HZ: f32 = 220.0;
 /// The delay line (samples, a power of two).
 const LINE: usize = 1 << 13;
 
@@ -201,6 +203,15 @@ impl Tuner {
         self.fade = None;
         let (low, high) = self.range();
         self.read = self.written as f64 - ((low + high) * 0.5) as f64;
+    }
+
+    /// How late it sounds (samples), as the mixer makes up for it: the middle
+    /// of its range for a voice around A3. It reads a period nearer or
+    /// further as it goes (that is how it moves the pitch), so a voice sounds
+    /// a few milliseconds earlier or later than this.
+    pub fn latency(&self) -> usize {
+        let period = self.rate / TYPICAL_HZ;
+        (1.1 * period + 4.0).round() as usize
     }
 
     /// How far behind the input it may read (samples): about a period.

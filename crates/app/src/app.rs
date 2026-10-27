@@ -583,6 +583,7 @@ impl PulseApp {
             self.audio.send(command);
         }
         self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+        self.audio.send(Command::SetCompensation(self.settings.compensate));
         self.sync_midi_map();
         self.show_sample_errors();
     }
@@ -607,6 +608,7 @@ impl PulseApp {
         let project = &self.project;
         self.samples.plugins.retain(|id, _| project.plugin(*id).is_some());
         self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+        self.audio.send(Command::SetCompensation(self.settings.compensate));
         self.sync_midi_map();
         self.show_sample_errors();
     }
@@ -2676,10 +2678,11 @@ impl PulseApp {
             .map_or("Sin título".into(), |s| s.to_string_lossy().into_owned())
     }
 
-    /// The input's latency (if it is open) and the output's, in seconds.
-    pub fn latencies(&self) -> (Option<f64>, f64) {
-        let output = self.audio.state().map_or(0.0, |s| s.output_latency());
-        (self.capture.as_ref().map(|c| c.latency()), output)
+    /// The input's latency (if it is open), the output's and the effects'
+    /// that sound late (see `Engine::compensate`), in seconds.
+    pub fn latencies(&self) -> (Option<f64>, f64, f64) {
+        let (heard, effects) = self.audio.state().map_or((0.0, 0.0), |s| (s.output_latency(), s.compensation()));
+        (self.capture.as_ref().map(|c| c.latency()), heard - effects, effects)
     }
 
     // ----- Frame ------------------------------------------------------------------

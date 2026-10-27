@@ -1353,6 +1353,18 @@ impl EffectProcessor {
         }
     }
 
+    /// How late (samples) its sound comes out: what the mixer makes up for
+    /// on the other tracks (see `Engine::compensate`).
+    pub fn latency(&self) -> usize {
+        match self {
+            Self::Saturator(fx) if fx.params.oversample => Oversampler::LATENCY,
+            Self::Limiter(fx) => fx.delay[0].len(),
+            Self::Tuner(fx) => fx.latency(),
+            Self::Plugin(_, Some(plugin)) => plugin.latency(),
+            _ => 0,
+        }
+    }
+
     /// The track (by id) whose sound drives it, if it has a sidechain.
     pub fn sidechain(&self) -> Option<u32> {
         match self {

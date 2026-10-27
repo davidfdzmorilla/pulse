@@ -191,9 +191,11 @@ fn render_loop(commands: Vec<Command>, slot: usize, beats: f64, tempo: f64, rate
         renderer.send(Command::LaunchClip { track, slot });
     }
     let lap = (beats * 60.0 / tempo * rate as f64).round() as usize;
+    // As late as its effects make it come out (see `Engine::compensate`).
+    let late = renderer.latency();
     let (mut left, mut right) = (Vec::new(), Vec::new());
-    renderer.render(2 * lap, &mut left, &mut right);
-    (left.split_off(lap.min(left.len())), right.split_off(lap.min(right.len())))
+    renderer.render(2 * lap + late, &mut left, &mut right);
+    (left.split_off((lap + late).min(left.len())), right.split_off((lap + late).min(right.len())))
 }
 
 /// Marks a frozen track's header: an ice-blue frame and a star.
@@ -422,6 +424,29 @@ mod tests {
         let (mut l, mut r) = (Vec::new(), Vec::new());
         renderer.render((beats * 60.0 / project.tempo * rate as f64) as usize, &mut l, &mut r);
         l
+    }
+
+    /// A loop through an effect that sounds late (a limiter, 1.5 ms) is
+    /// frozen with its click where it is, to the sample.
+    #[test]
+    fn a_frozen_loop_keeps_its_time_through_late_effects() {
+        use engine::model::{AudioClip, Device, Effect, LimiterParams, WarpMode};
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("click-loop-{}.wav", std::process::id()));
+        let mut l = vec![0f32; 48_000];
+        l[4_800] = 0.2;
+        crate::export::write(&path, &l, &l, 48_000, crate::export::BitDepth::Float32, 1.0).unwrap();
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut track = crate::project::Track::new_audio("Clic", [0; 3]);
+        track.clips[0] = Some(Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Clic".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 2.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }));
+        track.devices.push(Device::new(Effect::Limiter(LimiterParams { ceiling_db: 0.0, ..Default::default() })));
+        project.tracks = vec![track];
+        let commands = crate::sync::project_commands(&project, &mut crate::sync::SampleCache::default(), 48_000.0, &HashSet::new());
+        let (left, _) = super::render_loop(commands, 0, 2.0, 120.0, 48_000.0, false);
+        assert_eq!(left.len(), 48_000);
+        assert_eq!(left.iter().position(|s| s.abs() > 1e-6), Some(4_800));
     }
 
     /// Loudness in 50 ms windows, in dB.

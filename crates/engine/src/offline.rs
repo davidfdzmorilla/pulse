@@ -56,6 +56,23 @@ impl OfflineRenderer {
         while self.garbage.pop().is_ok() {}
     }
 
+    /// How late the song comes out of its effects (samples), with what was
+    /// sent so far (see `Engine::compensate`).
+    pub fn latency(&mut self) -> usize {
+        self.engine.process(&mut [], 2);
+        self.collect_garbage();
+        self.engine.latency()
+    }
+
+    /// Renders and drops that latency: what it renders from here on is in
+    /// time with where the transport was. Returns how many frames it dropped.
+    pub fn skip_latency(&mut self) -> usize {
+        let frames = self.latency();
+        let (mut left, mut right) = (Vec::with_capacity(frames), Vec::with_capacity(frames));
+        self.render(frames, &mut left, &mut right);
+        frames
+    }
+
     /// Renders `frames` stereo frames, appending them to `left` and `right`.
     pub fn render(&mut self, frames: usize, left: &mut Vec<f32>, right: &mut Vec<f32>) {
         let mut done = 0;

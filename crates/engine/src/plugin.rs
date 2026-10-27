@@ -22,7 +22,7 @@ use std::cell::UnsafeCell;
 use std::collections::HashMap;
 use std::ffi::{c_char, c_void, CStr};
 use std::path::{Path, PathBuf};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use vst3::{Class, ComPtr, ComWrapper, Interface, Steinberg::Vst::*, Steinberg::*};
 
@@ -443,6 +443,8 @@ struct ComponentHandler {
     queue: ParamQueue,
     /// Set by edits in the plugin's editor: the project has unsaved changes.
     edited: Arc<AtomicBool>,
+    /// Set when the plugin says its latency changed (read again on the UI thread).
+    latency_changed: Arc<AtomicBool>,
 }
 
 impl Class for ComponentHandler {
@@ -464,9 +466,12 @@ impl IComponentHandlerTrait for ComponentHandler {
         kResultOk
     }
 
-    unsafe fn restartComponent(&self, _flags: int32) -> tresult {
+    unsafe fn restartComponent(&self, flags: int32) -> tresult {
         // Often a preset loaded in the plugin's own browser.
         self.edited.store(true, Ordering::Relaxed);
+        if flags & RestartFlags_::kLatencyChanged as int32 != 0 {
+            self.latency_changed.store(true, Ordering::Relaxed);
+        }
         kResultOk
     }
 }
@@ -727,6 +732,10 @@ struct Instance {
     idle: Mutex<Option<Consumer<(u32, f64)>>>,
     /// The plugin changed by itself (see `ComponentHandler::edited`) or was set.
     edited: Arc<AtomicBool>,
+    /// How late its sound comes out (samples), as it says, and whether it said
+    /// that changed (see `ComponentHandler::latency_changed`).
+    latency: AtomicU32,
+    latency_changed: Arc<AtomicBool>,
 }
 
 // The COM objects are only used from one thread at a time: the processor from the
@@ -850,6 +859,10 @@ impl Vst3Handle {
 
     /// Whether the plugin changed since the last call.
     fn take_edited(&self) -> bool {
+        if self.instance.latency_changed.swap(false, Ordering::Relaxed) {
+            let samples = unsafe { self.instance.processor.getLatencySamples() };
+            self.instance.latency.store(samples, Ordering::Relaxed);
+        }
         self.instance.edited.swap(false, Ordering::Relaxed)
     }
 
@@ -1039,6 +1052,10 @@ impl Drop for Vst3Processor {
 }
 
 impl Vst3Processor {
+    fn latency(&self) -> usize {
+        self.instance.latency.load(Ordering::Relaxed) as usize
+    }
+
     pub fn set_tempo(&mut self, tempo: f64) {
         self.context.tempo = tempo;
     }
@@ -1279,8 +1296,9 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
         let (producer, consumer) = RingBuffer::new(1024);
         let queue: ParamQueue = Arc::new(Mutex::new(producer));
         let edited = Arc::new(AtomicBool::new(false));
+        let latency_changed = Arc::new(AtomicBool::new(false));
         let handler = controller.as_ref().map(|c| {
-            let handler = ComWrapper::new(ComponentHandler { queue: queue.clone(), edited: edited.clone() });
+            let handler = ComWrapper::new(ComponentHandler { queue: queue.clone(), edited: edited.clone(), latency_changed: latency_changed.clone() });
             if let Some(ptr) = handler.to_com_ptr::<IComponentHandler>() {
                 c.setComponentHandler(ptr.as_ptr());
             }
@@ -1401,7 +1419,8 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
         let events_ptr = events.to_com_ptr::<IEventList>().ok_or("events")?;
         let changes = ComWrapper::new(ParamChanges::new());
         let changes_ptr = changes.to_com_ptr::<IParameterChanges>().ok_or("changes")?;
-        let instance = Arc::new(Instance { component, processor, controller, separate, connected, _module: module, _host: host, _handler: handler, idle: Mutex::new(None), edited });
+        let latency = AtomicU32::new(processor.getLatencySamples());
+        let instance = Arc::new(Instance { component, processor, controller, separate, connected, _module: module, _host: host, _handler: handler, idle: Mutex::new(None), edited, latency, latency_changed });
         let processor = Vst3Processor {
             instance: instance.clone(),
             params: Some(consumer),
@@ -1495,6 +1514,11 @@ impl PluginProcessor {
     /// Runs an effect over `left`/`right` in place.
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
         each!(&mut self.inner, p => p.process(left, right))
+    }
+
+    /// How late its sound comes out (samples), as the plugin says.
+    pub fn latency(&self) -> usize {
+        each!(&self.inner, p => p.latency())
     }
 
     /// Whether controller `number` (CC 0..127, then aftertouch and pitch bend) reaches

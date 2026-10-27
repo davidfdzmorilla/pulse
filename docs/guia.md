@@ -961,6 +961,12 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - Ratio 3:1 en la voz y los coros, 2,5:1 en la solista y 4:1 en el bajo y la batería. Ataque rápido en las voces (5 ms) y lento en la batería (25 ms), para que pase el golpe.
     - Release de una semicorchea al tempo de la canción (una corchea en el bajo) y ganancia para recuperar la mitad de lo que quita, de modo que la pista sigue sonando más o menos igual de fuerte.
     - Si la pista ya tiene un compresor (sin sidechain), sale en verde. Una pista que se aparta de otra con un sidechain (un rumble o un bajo que bombean con el bombo) no se comprime: su nivel se mueve a propósito.
+  - **Espacio de partida**: las pistas que suenan secas, sin mandar nada a ningún retorno, se quedan todas delante y la mezcla suena plana. **Aplicar** pone sus envíos a la reverb y al delay según su papel:
+    - Voz: reverb 22 % y delay 14 %. Coros: reverb 32 % y delay 8 %, para que queden detrás. Solista: reverb 20 % y delay 16 %. Efectos: reverb 30 % y delay 12 %.
+    - Pads: reverb 28 %. Acordes: 18 %. Percusión: 12 %. Batería: 8 %.
+    - El bombo y el bajo, secos: si mandan más de un 15 % a la reverb, avisa de que embarra los graves y la quita.
+    - Las pistas que ya mandan a algún retorno se quedan como están, y los grupos también (mandan sus pistas).
+    - Usa el retorno que tenga una Reverb y el que tenga un Delay. Si falta alguno y queda sitio, lo crea: una **Reverb** con un EQ Eight que le quita los graves (bajo 250 Hz) y lo más agudo, y un **Delay** de corchea con puntillo a tempo, que se oscurece en cada repetición y tampoco lleva graves.
   - **Se tapan en los medios**: dos pistas que suenan a la vez en la misma zona, de 250 Hz a 4 kHz, y con un nivel parecido (a menos de 6 dB) la mayor parte del tiempo que coinciden, como una voz y unos acordes, o un sinte y una guitarra. Dice en qué frecuencia, y **Aplicar** abre ahí un hueco de 4 dB, una campana estrecha en el **EQ Eight** de la pista que cede (en uno nuevo si no tiene). Así la otra se oye clara sin bajar el volumen de ninguna.
     - Cede la que no es protagonista: la voz manda sobre todo, luego la solista, los coros, la batería, el bajo, los acordes, los pads, la percusión y los efectos. Entre dos del mismo papel, cede la más floja.
     - El hueco va donde la protagonista suena más fuerte de entre las zonas en que se tapan: su cuerpo, que es lo que necesita para oírse.

@@ -9,12 +9,18 @@
 //! name, its instrument or its sound, and gets that role's usual level next
 //! to the kick or the drums, its place in the stereo and, if it doesn't need
 //! its lows, a low cut.
+//!
+//! «Espacio de partida» gives the dry tracks their room: each role sends
+//! what it usually does to a reverb and a delay (made as returns if the
+//! project has none), the voice both, pads and chords reverb, and the kick
+//! and the bass nothing, so the low end stays clean.
 
 use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{CompressorParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, SaturatorParams};
+use engine::model::{CompressorParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, ReverbParams, SaturatorParams};
+use engine::MAX_RETURNS;
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
@@ -134,6 +140,151 @@ pub struct TrackMeasures {
     /// has a compressor already (see [`compression`]).
     pub dynamics: Option<(f32, f32)>,
     pub compressed: bool,
+    /// A group (its tracks send on their own), and what it sends to each return.
+    pub group: bool,
+    pub sends: [f32; MAX_RETURNS],
+}
+
+// ----- Space to start from ------------------------------------------------------------
+
+/// The project's returns as the assistant sees them: the one with a reverb,
+/// the one with a delay (another), and how many there are.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Space {
+    pub reverb: Option<usize>,
+    pub delay: Option<usize>,
+    pub returns: usize,
+}
+
+impl Space {
+    pub fn of(returns: &[crate::project::ReturnTrack]) -> Self {
+        let has = |r: &crate::project::ReturnTrack, delay: bool| r.devices.iter().any(|d| d.enabled && if delay { matches!(d.effect, Effect::Delay(_)) } else { matches!(d.effect, Effect::Reverb(_)) });
+        let reverb = returns.iter().position(|r| has(r, false));
+        let delay = returns.iter().enumerate().position(|(i, r)| Some(i) != reverb && has(r, true));
+        Self { reverb, delay, returns: returns.len() }
+    }
+}
+
+/// What a role sends to a reverb and to a delay to start with (0 to 1, as
+/// the sends): the voice both (a short slap of delay keeps it close), the
+/// backing vocals and pads more reverb, so they sit behind; the kick and the
+/// bass nothing, so the low end stays tight.
+fn room(role: Role) -> Option<(f32, f32)> {
+    match role {
+        Role::Vocal => Some((0.22, 0.14)),
+        Role::Backing => Some((0.32, 0.08)),
+        Role::Lead => Some((0.2, 0.16)),
+        Role::Chords => Some((0.18, 0.0)),
+        Role::Pad => Some((0.28, 0.0)),
+        Role::Percussion => Some((0.12, 0.0)),
+        Role::Drums => Some((0.08, 0.0)),
+        Role::Fx => Some((0.3, 0.12)),
+        Role::Kick | Role::Bass => Some((0.0, 0.0)),
+        Role::Other => None,
+    }
+}
+
+/// From this send on, reverb on the low end muddies it.
+const MUDDY_SEND: f32 = 0.15;
+
+/// What the space to start from changes on a track: its sends to the reverb
+/// and to the delay (`None`: left as they are).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SpaceChange {
+    pub track: usize,
+    pub name: String,
+    pub role: Role,
+    pub reverb: Option<f32>,
+    pub delay: Option<f32>,
+}
+
+impl SpaceChange {
+    fn describe(&self) -> String {
+        let pct = |x: f32| format!("{:.0} %", x * 100.0);
+        if self.reverb.unwrap_or(0.0) == 0.0 && self.delay.unwrap_or(0.0) == 0.0 {
+            return format!("«{}» ({}): sin reverb ni delay, para que sus graves no se embarren", self.name, self.role.label());
+        }
+        let mut parts = Vec::new();
+        if let Some(r) = self.reverb.filter(|&r| r > 0.0) {
+            parts.push(format!("reverb {}", pct(r)));
+        }
+        if let Some(d) = self.delay.filter(|&d| d > 0.0) {
+            parts.push(format!("delay {}", pct(d)));
+        }
+        format!("«{}» ({}): {}", self.name, self.role.label(), parts.join(", "))
+    }
+
+    /// Gives it some room (not takes it away).
+    fn wet(&self) -> bool {
+        self.reverb.unwrap_or(0.0) > 0.0 || self.delay.unwrap_or(0.0) > 0.0
+    }
+}
+
+/// The sends that give the mix its space: the tracks that send nothing to
+/// any return get their role's; the kick and the bass, if they send a lot of
+/// reverb, none. Tracks that send already are left as they are. A reverb or a
+/// delay the project lacks is made, if there is room for another return.
+pub fn space_changes(tracks: &[TrackMeasures], space: Space) -> Vec<SpaceChange> {
+    let free = MAX_RETURNS.saturating_sub(space.returns);
+    let mut out = Vec::new();
+    for t in tracks.iter().filter(|t| t.lufs.is_some() && !t.group) {
+        let Some((reverb, delay)) = room(t.role) else { continue };
+        let sent = |at: Option<usize>| at.map_or(0.0, |i| t.sends[i]);
+        if reverb == 0.0 && delay == 0.0 {
+            let muddy = |at: Option<usize>| (sent(at) > MUDDY_SEND).then_some(0.0);
+            let change = SpaceChange { track: t.index, name: t.name.clone(), role: t.role, reverb: muddy(space.reverb), delay: None };
+            if change.reverb.is_some() {
+                out.push(change);
+            }
+        } else if t.sends.iter().all(|&s| s == 0.0) {
+            out.push(SpaceChange { track: t.index, name: t.name.clone(), role: t.role, reverb: (reverb > 0.0).then_some(reverb), delay: (delay > 0.0).then_some(delay) });
+        }
+    }
+    // Returns to make: as many as are missing and wanted, while there is room.
+    let wants = |f: fn(&SpaceChange) -> Option<f32>| out.iter().any(|c| f(c).unwrap_or(0.0) > 0.0);
+    let new_reverb = space.reverb.is_none() && wants(|c| c.reverb) && free > 0;
+    let new_delay = space.delay.is_none() && wants(|c| c.delay) && free > usize::from(new_reverb);
+    for c in &mut out {
+        if space.reverb.is_none() && !new_reverb {
+            c.reverb = None;
+        }
+        if space.delay.is_none() && !new_delay {
+            c.delay = None;
+        }
+    }
+    out.retain(|c| c.reverb.is_some() || c.delay.is_some());
+    out
+}
+
+/// A reverb return to start from: all wet, its lows and its top cut so it
+/// doesn't muddy the low end or hiss.
+fn reverb_return(index: usize) -> crate::project::ReturnTrack {
+    let mut eq = EqEightParams::default();
+    eq.bands[0].on = true;
+    eq.bands[0].shape = EqShape::LowCut12;
+    eq.bands[0].freq = 250.0;
+    eq.bands[7].on = true;
+    eq.bands[7].shape = EqShape::HighCut12;
+    eq.bands[7].freq = 9000.0;
+    crate::project::ReturnTrack {
+        name: format!("{} Reverb", crate::project::return_letter(index)),
+        devices: vec![Device::new(Effect::Reverb(ReverbParams { size: 0.7, damping: 0.55, width: 1.0, mix: 1.0 })), Device::new(Effect::EqEight(eq))],
+        ..crate::returns::new_return(index)
+    }
+}
+
+/// A delay return to start from: a dotted eighth, at the tempo, darker each
+/// repeat, without lows.
+fn delay_return(index: usize) -> crate::project::ReturnTrack {
+    let mut eq = EqEightParams::default();
+    eq.bands[0].on = true;
+    eq.bands[0].shape = EqShape::LowCut12;
+    eq.bands[0].freq = 300.0;
+    crate::project::ReturnTrack {
+        name: format!("{} Delay", crate::project::return_letter(index)),
+        devices: vec![Device::new(Effect::Delay(DelayParams { time_beats: 0.75, feedback: 0.3, mix: 1.0, ping_pong: true, filter_hz: 4000.0 })), Device::new(Effect::EqEight(eq))],
+        ..crate::returns::new_return(index)
+    }
 }
 
 // ----- Compression to start from ------------------------------------------------------
@@ -570,6 +721,8 @@ pub struct Report {
     pub tracks: Vec<TrackMeasures>,
     /// The song's tempo (for release times).
     pub tempo: f64,
+    /// Its reverb and delay returns.
+    pub space: Space,
 }
 
 /// A change the assistant can make.
@@ -592,6 +745,9 @@ pub enum Fix {
     Carve { track: usize, name: String, hz: f32, for_name: String },
     /// A compressor to start from on a track (see [`compression`]).
     Compress { track: usize, name: String, params: CompressorParams },
+    /// Sends to a reverb and a delay (see [`space_changes`]); the returns
+    /// they go to, as they were when measured (`None`: made).
+    Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -797,6 +953,33 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             ));
         }
     }
+    // Room: reverb and delay.
+    let changes = space_changes(&report.tracks, report.space);
+    let fix = Fix::Space { reverb: report.space.reverb, delay: report.space.delay, changes: changes.clone() };
+    let dry: Vec<&SpaceChange> = changes.iter().filter(|c| c.wet()).collect();
+    if !dry.is_empty() {
+        let names: Vec<String> = dry.iter().take(3).map(|c| format!("«{}»", c.name)).collect();
+        let more = if dry.len() > 3 { format!(" y {} más", dry.len() - 3) } else { String::new() };
+        let made = match (report.space.reverb.is_none() && changes.iter().any(|c| c.reverb.unwrap_or(0.0) > 0.0), report.space.delay.is_none() && changes.iter().any(|c| c.delay.unwrap_or(0.0) > 0.0)) {
+            (true, true) => ". Crea un retorno de reverb y otro de delay",
+            (true, false) => ". Crea un retorno de reverb",
+            (false, true) => ". Crea un retorno de delay",
+            (false, false) => "",
+        };
+        let mut a = advice(
+            Level::Note,
+            format!("Espacio de partida: {}{more} {} secas, sin reverb ni delay, y la mezcla queda plana, todo delante{made}", names.join(", "), if dry.len() == 1 { "suena" } else { "suenan" }),
+            Some(fix),
+        );
+        a.details = changes.iter().map(SpaceChange::describe).collect();
+        out.push(a);
+    } else if let Some(c) = changes.first() {
+        let mut a = advice(Level::Warning, format!("«{}» ({}) manda mucho a la reverb: en los graves embarra la mezcla", c.name, c.role.label()), Some(fix));
+        a.details = changes.iter().map(SpaceChange::describe).collect();
+        out.push(a);
+    } else if report.tracks.iter().any(|t| t.lufs.is_some() && !t.group && room(t.role).is_some_and(|(r, d)| r + d > 0.0) && t.sends.iter().any(|&s| s > 0.0)) {
+        out.push(advice(Level::Good, "Las pistas tienen su espacio: mandan a reverb o delay".into(), None));
+    }
     // Two tracks covering each other in the mids.
     for clash in mid_clashes(&report.tracks).into_iter().take(6) {
         let (yields, to) = (&report.tracks[clash.yields], &report.tracks[clash.to]);
@@ -935,6 +1118,8 @@ impl PulseApp {
         let compressed = |t: &crate::project::Track| t.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::Compressor(c) if c.sidechain.is_none()));
         let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
         let tempo = self.project.tempo;
+        let space = Space::of(&self.project.returns);
+        let routing: Vec<(bool, [f32; MAX_RETURNS])> = self.project.tracks.iter().map(|t| (t.is_group(), t.sends)).collect();
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -947,6 +1132,7 @@ impl PulseApp {
                         let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
                         let (hint, pan, cut, gain, carves, compressed) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new(), false));
                         let bands = loudness::bands(&left, &right, RATE);
+                        let (group, sends) = routing.get(index).copied().unwrap_or((false, [0.0; MAX_RETURNS]));
                         Measured::Track(TrackMeasures {
                             index,
                             id,
@@ -967,6 +1153,8 @@ impl PulseApp {
                             carves,
                             dynamics: dynamics(&left, &right, RATE),
                             compressed,
+                            group,
+                            sends,
                         })
                     }
                 })
@@ -975,7 +1163,7 @@ impl PulseApp {
                 let mut all = all.into_iter();
                 let Some(Measured::Mix(mix)) = all.next() else { return Err("Nada que analizar".to_string()) };
                 let tracks = all.filter_map(|t| if let Measured::Track(t) = t { Some(t) } else { None }).collect();
-                Ok(Report { mix, tracks, tempo })
+                Ok(Report { mix, tracks, tempo, space })
             });
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
@@ -1239,6 +1427,34 @@ impl PulseApp {
                 self.project.tracks[*track].devices.push(Device::new(Effect::Compressor(*params)));
                 self.status = Some(format!("Compresor en «{name}»: umbral {} dB, {}:1", num(params.threshold_db as f64), num(params.ratio as f64)));
             }
+            Fix::Space { reverb, delay, changes } if changes.iter().all(|c| track_ok(self, c.track, &c.name)) && Space::of(&self.project.returns) == Space { reverb: *reverb, delay: *delay, returns: self.project.returns.len() } => {
+                let wants = |f: fn(&SpaceChange) -> Option<f32>| changes.iter().any(|c| f(c).unwrap_or(0.0) > 0.0);
+                let mut made = Vec::new();
+                let mut make = |app: &mut PulseApp, at: Option<usize>, wanted: bool, new: fn(usize) -> crate::project::ReturnTrack| match at {
+                    Some(i) => Some(i),
+                    None if wanted && app.project.returns.len() < MAX_RETURNS => {
+                        let i = app.project.returns.len();
+                        app.project.returns.push(new(i));
+                        made.push(app.project.returns[i].name.clone());
+                        Some(i)
+                    }
+                    None => None,
+                };
+                let reverb = make(self, *reverb, wants(|c| c.reverb), reverb_return);
+                let delay = make(self, *delay, wants(|c| c.delay), delay_return);
+                for c in changes {
+                    let sends = &mut self.project.tracks[c.track].sends;
+                    for (at, amount) in [(reverb, c.reverb), (delay, c.delay)] {
+                        if let (Some(i), Some(x)) = (at, amount) {
+                            sends[i] = x;
+                        }
+                    }
+                }
+                self.status = Some(match made.is_empty() {
+                    true => format!("Espacio de partida: {} pistas con su reverb y su delay (⌘Z lo deshace)", changes.len()),
+                    false => format!("Espacio de partida: {} pistas, y nuevo{} {} (⌘Z lo deshace)", changes.len(), if made.len() > 1 { "s" } else { "" }, made.iter().map(|n| format!("«{n}»")).collect::<Vec<_>>().join(" y ")),
+                });
+            }
             _ => {
                 self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
                 return;
@@ -1415,6 +1631,7 @@ fn fix_hint(fix: &Fix) -> String {
             "Añade un Compressor a «{name}»: umbral {:.1} dB, ratio {}:1, ataque {:.0} ms, release {:.0} ms (una semicorchea al tempo; el bajo, una corchea) y {:+.1} dB de ganancia para que siga igual de fuerte",
             params.threshold_db, params.ratio, params.attack_ms, params.release_ms, params.makeup_db
         ),
+        Fix::Space { .. } => "Pone los envíos de cada pista a la reverb y al delay según su papel (y crea esos retornos si faltan): un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
         Fix::Balance(_) => "Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
     }
 }
@@ -1453,11 +1670,11 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS] }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0 }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 } }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -1510,7 +1727,7 @@ mod tests {
         assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
         // Over it: no platform turns a club track down, so it isn't said.
-        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0 };
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default() };
         let told = advise(&loud, Target::HardTechno, None);
         assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
@@ -2031,5 +2248,138 @@ mod tests {
         // The soft parts untouched (only the makeup).
         assert!((soft_after - params.makeup_db - soft).abs() < 1.0, "{soft} → {soft_after}");
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text == "«Voz» ya tiene compresor"));
+    }
+
+    /// The dry tracks get their role's sends; the bass loses the reverb that
+    /// muddies it; what sends already, and the kick, are left alone.
+    #[test]
+    fn dry_tracks_get_their_room() {
+        let t = |index: usize, name: &str, role: Role| TrackMeasures { role, ..track(index, name, false, -6.0, Vec::new()) };
+        let mut bass = t(2, "Bajo", Role::Bass);
+        bass.sends[0] = 0.4;
+        let mut chords = t(3, "Acordes", Role::Chords);
+        chords.sends[1] = 0.2;
+        let tracks = vec![t(0, "Voz", Role::Vocal), t(1, "Pad", Role::Pad), bass, chords, t(4, "Kick", Role::Kick), TrackMeasures { lufs: None, ..t(5, "Coros", Role::Backing) }, TrackMeasures { group: true, ..t(6, "Voces", Role::Vocal) }];
+        let space = Space { reverb: Some(0), delay: Some(1), returns: 2 };
+        let changes = space_changes(&tracks, space);
+        let change = |track: usize, name: &str, role: Role, reverb: Option<f32>, delay: Option<f32>| SpaceChange { track, name: name.into(), role, reverb, delay };
+        assert_eq!(
+            changes,
+            [change(0, "Voz", Role::Vocal, Some(0.22), Some(0.14)), change(1, "Pad", Role::Pad, Some(0.28), None), change(2, "Bajo", Role::Bass, Some(0.0), None)]
+        );
+        let list = advise(&report(-14.0, -1.5, tracks.clone()), Target::Streaming, None);
+        let a = list.iter().find(|a| matches!(a.fix, Some(Fix::Space { .. }))).expect("space advice");
+        assert!(a.text.starts_with("Espacio de partida: «Voz», «Pad» suenan secas"), "{}", a.text);
+        assert_eq!(a.details[0], "«Voz» (voz): reverb 22 %, delay 14 %");
+        assert!(a.details[2].contains("sin reverb"), "{:?}", a.details);
+        // Only the bass to fix: a warning about it.
+        let only_bass = vec![tracks[2].clone(), tracks[3].clone()];
+        let list = advise(&report(-14.0, -1.5, only_bass), Target::Streaming, None);
+        assert!(list.iter().any(|a| a.level == Level::Warning && a.text.starts_with("«Bajo» (bajo) manda mucho a la reverb")), "{list:?}");
+        // Everything sending: fine.
+        let list = advise(&report(-14.0, -1.5, vec![tracks[3].clone(), tracks[4].clone()]), Target::Streaming, None);
+        assert!(list.iter().any(|a| a.level == Level::Good && a.text.starts_with("Las pistas tienen su espacio")), "{list:?}");
+    }
+
+    /// With no returns, it makes a reverb and a delay; with the returns full
+    /// and none a reverb, there is nothing it can do.
+    #[test]
+    fn missing_returns_are_made_if_there_is_room() {
+        let voice = TrackMeasures { role: Role::Vocal, ..track(0, "Voz", false, -6.0, Vec::new()) };
+        let pad = TrackMeasures { role: Role::Pad, ..track(1, "Pad", false, -6.0, Vec::new()) };
+        let none = Space { reverb: None, delay: None, returns: 0 };
+        assert_eq!(space_changes(&[voice.clone(), pad.clone()], none).len(), 2);
+        let list = advise(&Report { space: none, ..report(-14.0, -1.5, vec![voice.clone()]) }, Target::Streaming, None);
+        assert!(list.iter().any(|a| a.text.ends_with("Crea un retorno de reverb y otro de delay")), "{list:?}");
+        // One return left: the reverb, not the delay.
+        let one = Space { reverb: None, delay: None, returns: MAX_RETURNS - 1 };
+        let changes = space_changes(&[voice.clone()], one);
+        assert_eq!(changes[0].reverb, Some(0.22));
+        assert_eq!(changes[0].delay, None);
+        // Full, with a delay only: the delay.
+        let full = Space { reverb: None, delay: Some(0), returns: MAX_RETURNS };
+        let changes = space_changes(&[voice.clone(), pad.clone()], full);
+        assert_eq!(changes, [SpaceChange { track: 0, name: "Voz".into(), role: Role::Vocal, reverb: None, delay: Some(0.14) }]);
+        // The returns found by what they have.
+        let mut project = crate::project::Project::empty();
+        assert_eq!(Space::of(&project.returns), Space { reverb: Some(0), delay: Some(1), returns: 2 });
+        project.returns.swap(0, 1);
+        project.returns[1].devices[0].enabled = false;
+        assert_eq!(Space::of(&project.returns), Space { reverb: None, delay: Some(0), returns: 2 });
+    }
+
+    /// For real: a voice in short phrases and a bass, both dry, in a project
+    /// without returns. Applied, there is a reverb and a delay, the voice
+    /// sends to both and the bass to none, and the silences between the
+    /// phrases fill with their tail.
+    #[test]
+    fn a_dry_voice_gets_its_room() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let tone = |hz: f32, on: f32| -> Vec<f32> {
+            (0..(8.0 * rate) as usize)
+                .map(|i| {
+                    let t = i as f32 / rate;
+                    if t % 2.0 < on {
+                        0.3 * (std::f32::consts::TAU * hz * t).sin()
+                    } else {
+                        0.0
+                    }
+                })
+                .collect()
+        };
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = |name: &str, audio: Vec<f32>| {
+            let path = dir.join(format!("espacio-{name}-{}.wav", std::process::id()));
+            crate::export::write(&path, &audio, &audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+        };
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        project.returns.clear();
+        let mut voice = Track::new_audio("Voz", [0; 3]);
+        voice.arrangement.push(clip("voz", tone(440.0, 0.5)));
+        let mut bass = Track::new_audio("Bajo", [0; 3]);
+        bass.arrangement.push(clip("bajo", tone(55.0, 0.5)));
+        project.tracks = vec![voice, bass];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 60);
+            }
+        };
+        // The mix's level (dB) between 0.7 and 1.9 s of each 2 s, where only a tail can sound.
+        let gaps = |app: &mut PulseApp| {
+            let settings = export::Settings::default();
+            let plan = export::plan(&app.project, &mut app.samples, &settings, std::path::Path::new("espacio.wav"));
+            let mut mix = export::render_each(plan, RATE, &AtomicU32::new(0), &AtomicBool::new(false), |_, left, _| Ok(left)).unwrap();
+            let left = mix.remove(0);
+            let tail: Vec<f32> = left.iter().enumerate().filter(|(i, _)| (0.7..1.9).contains(&((*i as f32 / RATE) % 2.0))).map(|(_, &x)| x).collect();
+            10.0 * ((tail.iter().map(|x| x * x).sum::<f32>() / tail.len().max(1) as f32).max(1e-12)).log10()
+        };
+        let before = gaps(&mut app);
+        app.analyze_mix();
+        wait(&mut app);
+        let advice = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Space { .. }))).expect("room to give");
+        let Fix::Space { changes, .. } = &fix else { unreachable!() };
+        assert_eq!(changes.len(), 1, "{changes:?}");
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        let names: Vec<&str> = app.project.returns.iter().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["A Reverb", "B Delay"]);
+        assert_eq!(&app.project.tracks[0].sends[..2], &[0.22, 0.14]);
+        assert!(app.project.tracks[1].sends.iter().all(|&s| s == 0.0), "the bass stays dry");
+        let after = gaps(&mut app);
+        println!("silencios: {before:.1} → {after:.1} dB");
+        assert!(before < -100.0 && after > -50.0, "{before} → {after}");
+        assert!(advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text.starts_with("Las pistas tienen su espacio")));
     }
 }

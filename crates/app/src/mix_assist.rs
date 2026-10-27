@@ -18,6 +18,10 @@
 //! «Eses» finds a voice whose esses jump out (as loud as its vowels, or
 //! nearly) and puts a De-esser on it, set where they are (see [`esses`]).
 //!
+//! «Ecos al final de frase» opens the voice's send to the delay on the last
+//! word of the phrases a silence follows, so its echo fills it (a delay
+//! throw), and leaves it where it was while it sings (see [`throws`]).
+//!
 //! «Nivelar la voz» rides the voice's fader phrase by phrase (volume
 //! automation), so it sits as far over the rest in every one (see [`ride`]).
 //!
@@ -165,6 +169,44 @@ pub struct TrackMeasures {
     /// A voice's esses (see [`esses`]), and whether it has a De-esser already.
     pub esses: Option<Esses>,
     pub deessed: bool,
+    /// Whether one of its sends is automated already.
+    pub thrown: bool,
+}
+
+// ----- Delay throws -----------------------------------------------------------------------
+
+/// What the send to the delay opens to on a throw, and for how long before
+/// the phrase ends it opens (s): about its last word.
+const THROW: f32 = 0.4;
+const LAST_WORD: f64 = 0.35;
+const THROW_GAP: f64 = 0.75;
+
+/// The ends (s) of the voice's phrases (see [`phrases`]) a silence follows
+/// long enough to hear their echo: as long as the delay's time (`echo`, s)
+/// and [`THROW_GAP`] at least (not a breath). The last one too.
+pub fn throws(levels: &[f32], echo: f64) -> Vec<f64> {
+    let found = phrases(levels, &vec![0.0; levels.len()]);
+    let gap = echo.max(THROW_GAP);
+    found
+        .iter()
+        .enumerate()
+        .filter(|(i, p)| found.get(i + 1).is_none_or(|next| next.start - p.end >= gap))
+        .map(|(_, p)| p.end)
+        .collect()
+}
+
+/// The send's points for throws at `ends` (s): where it is (`base`) while
+/// it sings, [`THROW`] on each last word, and back right after it (the
+/// delay's feedback goes on repeating it).
+fn throw_points(ends: &[f64], base: f32) -> Vec<(f64, f32)> {
+    let open = THROW.max(base);
+    let mut out = Vec::new();
+    for &end in ends {
+        let start = (end - LAST_WORD).max(0.0);
+        out.extend([(start - 0.05, base), (start, open), (end + 0.05, open), (end + 0.15, base)]);
+    }
+    out.retain(|p| p.0 >= 0.0);
+    out
 }
 
 // ----- Esses ------------------------------------------------------------------------------
@@ -335,7 +377,9 @@ pub fn phrases(voice: &[f32], base: &[f32]) -> Vec<Phrase> {
         .filter(|(a, b)| (b - a) as f64 * HOP + WINDOW >= 0.5)
         .filter_map(|(a, b)| {
             let rest = power(base.get(a..=b.min(base.len().saturating_sub(1)))?);
-            (rest > QUIET).then(|| Phrase { start: a as f64 * HOP, end: b as f64 * HOP + WINDOW, over: power(&voice[a..=b]) - rest })
+            // A frame reaches [`WINDOW`] ahead: the first that hears the
+            // phrase starts that much (less a hop) before it.
+            (rest > QUIET).then(|| Phrase { start: a as f64 * HOP + WINDOW - HOP, end: (b + 1) as f64 * HOP, over: power(&voice[a..=b]) - rest })
         })
         .collect()
 }
@@ -982,6 +1026,8 @@ pub struct Report {
     pub space: Space,
     /// Where it was rendered from (beat).
     pub start: f64,
+    /// The delay return's time (beats; a delay to make, a dotted eighth).
+    pub echo: f64,
 }
 
 /// A change the assistant can make.
@@ -1009,6 +1055,9 @@ pub enum Fix {
     Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
     /// A De-esser on a voice (see [`deessing`]).
     DeEss { track: usize, name: String, params: DeEsserParams },
+    /// The voice's send to the delay (return `delay`; `None`: made) opened on
+    /// the last word of the phrases ending at `ends` (s from `from`, a beat).
+    Throws { track: usize, name: String, delay: Option<usize>, from: f64, ends: Vec<f64>, base: f32 },
     /// The voice ridden phrase by phrase (see [`ride`]): its phrases (s from
     /// `from`, a beat) and how much each moves (dB).
     Ride { track: usize, name: String, from: f64, phrases: Vec<Phrase>, gains: Vec<f32> },
@@ -1027,8 +1076,9 @@ fn stage(fix: &Fix) -> u8 {
         Fix::DeEss { .. } => 5,
         Fix::Ride { .. } => 6,
         Fix::Space { .. } => 7,
-        Fix::MasterEq { .. } => 8,
-        Fix::MasterLimiter { .. } => 9,
+        Fix::Throws { .. } => 8,
+        Fix::MasterEq { .. } => 9,
+        Fix::MasterLimiter { .. } => 10,
     }
 }
 
@@ -1074,6 +1124,7 @@ fn fix_label(fix: &Fix) -> String {
         Fix::Space { .. } => "reverb y delay".into(),
         Fix::Ride { name, .. } => format!("«{name}» nivelada"),
         Fix::DeEss { name, .. } => format!("de-esser en «{name}»"),
+        Fix::Throws { name, .. } => format!("ecos de «{name}»"),
     }
 }
 
@@ -1360,7 +1411,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         };
         let mut a = advice(
             Level::Note,
-            format!("Espacio de partida: {}{more} {} secas, sin reverb ni delay, y la mezcla queda plana, todo delante{made}", names.join(", "), if dry.len() == 1 { "suena" } else { "suenan" }),
+            format!("Espacio de partida: {}{more} {}, sin reverb ni delay, y la mezcla queda plana, todo delante{made}", names.join(", "), if dry.len() == 1 { "suena seca" } else { "suenan secas" }),
             Some(fix),
         );
         a.details = changes.iter().map(SpaceChange::describe).collect();
@@ -1371,6 +1422,35 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         out.push(a);
     } else if report.tracks.iter().any(|t| t.lufs.is_some() && !t.group && room(t.role).is_some_and(|(r, d)| r + d > 0.0) && t.sends.iter().any(|&s| s > 0.0)) {
         out.push(advice(Level::Good, "Las pistas tienen su espacio: mandan a reverb o delay".into(), None));
+    }
+    // Echoes on the voice's last words.
+    let echo_s = report.echo * 60.0 / report.tempo.max(1.0);
+    for t in report.tracks.iter().filter(|t| t.role == Role::Vocal && !t.group && t.lufs.is_some()) {
+        if t.thrown {
+            out.push(advice(Level::Good, format!("«{}» ya tiene sus envíos automatizados", t.name), None));
+            continue;
+        }
+        let ends = throws(&t.levels, echo_s);
+        if ends.len() < 2 {
+            continue;
+        }
+        // Without a delay, and no room for one: nothing to throw to.
+        if report.space.delay.is_none() && report.space.returns >= MAX_RETURNS {
+            continue;
+        }
+        let base = report.space.delay.map_or(0.0, |i| t.sends[i]);
+        let mut a = advice(
+            Level::Note,
+            format!(
+                "Ecos al final de frase: «{}» deja {} silencios tras sus frases. Abrir el envío al delay en su última palabra hace que el eco los rellene, sin ensuciarla mientras canta{}",
+                t.name,
+                ends.len(),
+                if report.space.delay.is_none() { ". Crea un retorno de delay" } else { "" }
+            ),
+            Some(Fix::Throws { track: t.index, name: t.name.clone(), delay: report.space.delay, from: report.start, ends: ends.clone(), base }),
+        );
+        a.details = vec![ends.iter().take(8).map(|&e| clock(e)).collect::<Vec<_>>().join(" · ") + if ends.len() > 8 { " …" } else { "" }];
+        out.push(a);
     }
     // Two tracks covering each other in the mids.
     for clash in mid_clashes(&report.tracks).into_iter().take(6) {
@@ -1528,7 +1608,14 @@ impl PulseApp {
         let settings = export::Settings { range: self.mix.range, stems: true, sample_rate: RATE as u32, ..Default::default() };
         let live = std::mem::take(&mut self.samples.plugins);
         let mix = export::plan(&self.project, &mut self.samples, &export::Settings { stems: false, ..settings }, std::path::Path::new("mezcla.wav"));
-        let tracks = export::plan(&self.project, &mut self.samples, &settings, std::path::Path::new("mezcla.wav"));
+        // Each track dry, without what it sends to the returns: their tails
+        // would fill its silences and pass for its soft parts.
+        let mut dry = self.project.clone();
+        for t in &mut dry.tracks {
+            t.sends = [0.0; MAX_RETURNS];
+            t.automation.retain(|l| !matches!(l.param, Param::Send(_)));
+        }
+        let tracks = export::plan(&dry, &mut self.samples, &settings, std::path::Path::new("mezcla.wav"));
         self.samples.plugins = live;
         let names: Vec<(String, bool, bool, u32, Vec<u32>)> = self
             .project
@@ -1547,6 +1634,8 @@ impl PulseApp {
             .iter()
             .map(|t| (t.is_group(), t.sends, t.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()), t.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::DeEsser(_)))))
             .collect();
+        let thrown: Vec<bool> = self.project.tracks.iter().map(|t| t.automation.iter().any(|l| matches!(l.param, Param::Send(_)) && !l.points.is_empty())).collect();
+        let echo = space.delay.and_then(|i| self.project.returns[i].devices.iter().find_map(|d| if let Effect::Delay(p) = &d.effect { Some(p.time_beats) } else { None })).unwrap_or(0.75);
         let start = export::beat_range(&self.project, self.mix.range).map_or(0.0, |r| r.0);
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
@@ -1588,6 +1677,7 @@ impl PulseApp {
                             automated,
                             esses: if voice { esses(&left, &right, RATE) } else { None },
                             deessed,
+                            thrown: thrown.get(index).copied().unwrap_or(false),
                         })
                     }
                 })
@@ -1596,7 +1686,7 @@ impl PulseApp {
                 let mut all = all.into_iter();
                 let Some(Measured::Mix(mix)) = all.next() else { return Err("Nada que analizar".to_string()) };
                 let tracks = all.filter_map(|t| if let Measured::Track(t) = t { Some(t) } else { None }).collect();
-                Ok(Report { mix, tracks, tempo, space, start })
+                Ok(Report { mix, tracks, tempo, space, start, echo })
             });
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
@@ -1995,6 +2085,30 @@ impl PulseApp {
                     false => format!("Espacio de partida: {} pistas, y nuevo{} {} (⌘Z lo deshace)", changes.len(), if made.len() > 1 { "s" } else { "" }, made.iter().map(|n| format!("«{n}»")).collect::<Vec<_>>().join(" y ")),
                 });
             }
+            Fix::Throws { track, name, delay, from, ends, base } if track_ok(self, *track, name) && Space::of(&self.project.returns).delay == *delay => {
+                let delay = match delay {
+                    Some(i) => *i,
+                    None if self.project.returns.len() < MAX_RETURNS => {
+                        let i = self.project.returns.len();
+                        self.project.returns.push(delay_return(i));
+                        i
+                    }
+                    None => {
+                        self.status = Some("No queda sitio para un retorno de delay".into());
+                        self.mix.auto = None;
+                        return;
+                    }
+                };
+                let points: Vec<engine::model::AutomationPoint> =
+                    throw_points(ends, *base).into_iter().map(|(at, value)| engine::model::AutomationPoint { beat: beat_after(&self.project, *from, at), value, curve: 0.0 }).collect();
+                let automation = &mut self.project.tracks[*track].automation;
+                automation.retain(|l| l.param != Param::Send(delay));
+                let mut lane = engine::model::AutomationLane::new(Param::Send(delay));
+                lane.points = points;
+                lane.sort();
+                automation.push(lane);
+                self.status = Some(format!("Ecos de «{name}» en {} finales de frase (⌘Z lo deshace)", ends.len()));
+            }
             Fix::DeEss { track, name, params } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::DeEsser(*params)));
                 self.status = Some(format!("De-esser en «{name}»: {}, umbral {} dB", hz_label(params.freq_hz), num(params.threshold_db as f64)));
@@ -2140,7 +2254,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let any = next_fix(&list, &[]).is_some();
                 all = ui
                     .add_enabled(!busy && any, egui::Button::new("Aplicar todo").small())
-                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, y el master. Vuelve a medir después de cada uno")
+                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, ecos, y el master. Vuelve a medir después de cada uno")
                     .clicked();
             }
         }
@@ -2254,6 +2368,7 @@ fn louder(track: &mut crate::project::Track, db: f32) {
 
 fn fix_hint(fix: &Fix) -> String {
     match fix {
+        Fix::Throws { name, .. } => format!("Escribe automatización en el envío de «{name}» al delay: se abre al {:.0} % en la última palabra de cada frase que acaba en silencio y vuelve a donde estaba al acabar", THROW * 100.0),
         Fix::DeEss { name, params, .. } => format!("Añade un De-esser a «{name}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)", hz_label(params.freq_hz), num(params.threshold_db as f64), num(params.range_db as f64)),
         Fix::Ride { name, .. } => format!("Escribe automatización de volumen en «{name}»: cada frase sube o baja (como mucho {RIDE_MAX} dB) para quedar igual de por encima de la base. Los cambios caen en los silencios entre frases"),
         Fix::MasterLimiter { gain_db, ceiling_db } => format!("Limiter en el master: ganancia {gain_db:+.1} dB, techo {ceiling_db:.1} dB"),
@@ -2305,11 +2420,11 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false, thrown: false }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0 }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75 }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -2362,7 +2477,7 @@ mod tests {
         assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
         // Over it: no platform turns a club track down, so it isn't said.
-        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0 };
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0, echo: 0.75 };
         let told = advise(&loud, Target::HardTechno, None);
         assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
@@ -3216,7 +3331,7 @@ mod tests {
         assert_eq!(found.len(), 4, "{found:?}");
         let overs: Vec<f32> = found.iter().map(|p| p.over.round()).collect();
         assert_eq!(overs, [10.0, 4.0, 10.0, 16.0]);
-        assert!((found[1].start - 1.5).abs() < 1e-9 && (found[1].end - 2.65).abs() < 1e-9, "{:?}", found[1]);
+        assert!((found[1].start - 1.65).abs() < 1e-9 && (found[1].end - 2.5).abs() < 1e-9, "{:?}", found[1]);
         assert_eq!(ride(&found), [0.0, 6.0, 0.0, -6.0]);
         // Changes in the gaps, each phrase held at its own.
         let points = ride_points(&found, &ride(&found), 0.5);
@@ -3380,5 +3495,101 @@ mod tests {
         let count = app.mix.report.as_ref().unwrap().tracks[0].levels.iter().enumerate().filter(|(k, _)| { let s = *k as f64 * HOP % 0.5; (0.05..0.1).contains(&s) }).count() as f32;
         assert!(((vowels(&app) - vowels_before) / count).abs() < 0.3, "the vowels as they were");
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None).iter().any(|a| a.level == Level::Good && a.text == "«Voz» ya tiene De-esser"));
+    }
+
+    /// The phrases a long enough silence follows get a throw (the last one
+    /// too); a breath between two doesn't. The send opens on the last word
+    /// and comes back to where it was.
+    #[test]
+    fn throws_go_where_a_silence_follows() {
+        // Frames of 50 ms: sings 0–1 s, 1.2–2.2 s, 3–4 s, 6–7 s.
+        let mut levels = vec![-90.0f32; 160];
+        for (a, b) in [(0, 16), (24, 40), (60, 76), (120, 136)] {
+            levels[a..b].fill(-20.0);
+        }
+        let ends = throws(&levels, 0.375);
+        let found = phrases(&levels, &vec![0.0; levels.len()]);
+        assert_eq!(found.len(), 4);
+        // A breath (0.55 s) gets none; 1.15 s and more, one.
+        assert_eq!(ends, [found[1].end, found[2].end, found[3].end], "{found:?}");
+        // An echo of 1.2 s: the 1.15 s gap is too short for it.
+        assert_eq!(throws(&levels, 1.2), [found[2].end, found[3].end]);
+        let points = throw_points(&[4.0], 0.1);
+        let expect = [(3.6, 0.1), (3.65, THROW), (4.05, THROW), (4.15, 0.1)];
+        assert_eq!(points.len(), 4);
+        for ((at, v), (eat, ev)) in points.iter().zip(expect) {
+            assert!((at - eat).abs() < 1e-9 && (v - ev).abs() < 1e-6, "{points:?}");
+        }
+    }
+
+    /// For real: a voice singing phrases with silences after them, sending
+    /// nothing to the delay. Applied, its echo fills the silences, and the
+    /// send is automated on its last words only.
+    #[test]
+    fn the_last_words_echo_into_the_silence() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let voice: Vec<f32> = (0..(16.0 * rate) as usize)
+            .map(|i| {
+                let t = i as f32 / rate;
+                if t % 2.0 < 1.2 && t < 14.0 {
+                    let x = std::f32::consts::TAU * 330.0 * t;
+                    0.3 * (x.sin() + 0.4 * (2.0 * x).sin()) / 1.4
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("ecos-{}.wav", std::process::id()));
+        crate::export::write(&path, &voice, &voice, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut v = Track::new_audio("Voz", [0; 3]);
+        v.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        project.tracks = vec![v];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 60);
+            }
+        };
+        // The mix's level (dB) in the silences: 0.3 to 0.7 s after each phrase.
+        let gaps = |app: &mut PulseApp| {
+            let plan = export::plan(&app.project, &mut app.samples, &export::Settings::default(), std::path::Path::new("ecos.wav"));
+            let mut mix = export::render_each(plan, RATE, &AtomicU32::new(0), &AtomicBool::new(false), |_, left, _| Ok(left)).unwrap();
+            let left = mix.remove(0);
+            let tail: Vec<f32> = left.iter().enumerate().filter(|(i, _)| { let t = *i as f32 / RATE; t < 14.0 && (1.5..1.9).contains(&(t % 2.0)) }).map(|(_, &x)| x).collect();
+            10.0 * ((tail.iter().map(|x| x * x).sum::<f32>() / tail.len() as f32).max(1e-12)).log10()
+        };
+        let before = gaps(&mut app);
+        app.analyze_mix();
+        wait(&mut app);
+        let advice = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Throws { .. }))).expect("throws");
+        let Fix::Throws { ends, delay, .. } = &fix else { unreachable!() };
+        assert_eq!(*delay, Some(1));
+        assert_eq!(ends.len(), 7, "{ends:?}");
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        let lane = app.project.tracks[0].automation.iter().find(|l| l.param == Param::Send(1)).expect("the send automated");
+        assert_eq!(lane.points.len(), 28);
+        // Open at the end of the first phrase (beat 2.4 at 120), shut in the middle of the next.
+        assert_eq!(lane.value_at(2.3), Some(THROW));
+        assert_eq!(lane.value_at(5.0), Some(0.0));
+        let after = gaps(&mut app);
+        println!("silencios: {before:.1} → {after:.1} dB");
+        assert!(before < -100.0 && after > -40.0, "{before} → {after}");
+        let list = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        assert!(list.iter().any(|a| a.level == Level::Good && a.text == "«Voz» ya tiene sus envíos automatizados"), "{list:?}");
+        // Measured dry: its echoes are not its soft parts, so no compressor turns up.
+        assert!(!list.iter().any(|a| matches!(a.fix, Some(Fix::Compress { .. }))), "{list:?}");
     }
 }

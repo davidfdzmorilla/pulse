@@ -983,6 +983,11 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - El bombo y el bajo, secos: si mandan más de un 15 % a la reverb, avisa de que embarra los graves y la quita.
     - Las pistas que ya mandan a algún retorno se quedan como están, y los grupos también (mandan sus pistas).
     - Usa el retorno que tenga una Reverb y el que tenga un Delay. Si falta alguno y queda sitio, lo crea: una **Reverb** con un EQ Eight que le quita los graves (bajo 250 Hz) y lo más agudo, y un **Delay** de corchea con puntillo a tempo, que se oscurece en cada repetición y tampoco lleva graves.
+  - **Ecos al final de frase**: el truco de los «delay throws». En la voz, busca las frases que terminan antes de un silencio en el que cabe el eco (al menos lo que tarda el delay y 0,75 s, más que una respiración). **Aplicar** escribe una automatización en su envío al delay:
+    - Se abre al 40 % en la última palabra de esas frases y vuelve a donde estaba en cuanto acaban. El eco de esa palabra rellena el silencio y, mientras canta, la voz no se ensucia.
+    - Usa el retorno que tenga un Delay; si no hay, lo crea (corchea con puntillo a tempo).
+    - Si la pista ya tiene algún envío automatizado, no lo toca (sale en verde).
+  - Las pistas se miden en seco, sin lo que mandan a los retornos: la cola de la reverb o del delay no cuenta como parte suave de la voz.
   - **Aplicar todo** (junto a «Consejos») hace los cambios de los consejos uno tras otro, en el orden de una mezcla, y vuelve a medir después de cada uno, porque cada cambio decide el siguiente:
     1. Pistas por encima de 0 dB.
     2. Mezcla de partida.
@@ -993,7 +998,8 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     7. Nivelar la voz.
     8. Espacio.
     9. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
-    10. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
+    10. Ecos al final de frase.
+    11. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
   - Al terminar dice lo que ha hecho. Cada paso se deshace con ⌘Z. Lo que queda en la lista son sugerencias para aplicar a mano, si quieres.
   - **Escuchar: Antes · Después** aparece en cuanto el asistente cambia algo, y deja oír la mezcla como estaba antes de su primer cambio y como está ahora. Dale a reproducir y pasa de una a otra mientras suena.
     - Suenan al mismo volumen: la más fuerte se baja hasta la otra. Así comparas cómo suena y no cuánto, porque lo más fuerte siempre parece mejor. Si la mezcla ha cambiado sin volver a analizarla, avisa de que no están igualadas.

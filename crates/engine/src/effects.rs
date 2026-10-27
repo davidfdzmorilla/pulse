@@ -1329,15 +1329,57 @@ impl DeEsser {
 
 pub struct Utility {
     params: UtilityParams,
+    /// The crossover's halves (each run twice), and what they were made for.
+    made: Option<(f32, f32)>,
+    low: Biquad,
+    high: Biquad,
+    /// The middle's low and high halves, the side's high one.
+    states: [[BiquadState; 2]; 3],
 }
 
 impl Utility {
-    fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
+    fn new(params: UtilityParams) -> Self {
+        Self { params, made: None, low: Biquad::IDENTITY, high: Biquad::IDENTITY, states: Default::default() }
+    }
+
+    /// Runs `x` through two of `s` (a 24 dB Linkwitz-Riley), with their states.
+    fn twice(s: &Biquad, states: &mut [BiquadState], mut x: f64) -> f64 {
+        for st in states {
+            let y = s.b0 * x + st.s1;
+            st.s1 = s.b1 * x - s.a1 * y + st.s2;
+            st.s2 = s.b2 * x - s.a2 * y;
+            x = y;
+        }
+        x
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
         let gain = db_to_gain(self.params.gain_db);
         let width = self.params.width.clamp(0.0, 2.0);
+        let flip = if self.params.flip_right { -1.0 } else { 1.0 };
+        // The lows in mono: a Linkwitz-Riley crossover. The side keeps only
+        // its highs; the middle goes through both halves, which add up to the
+        // same phase the side's highs have, so over the crossover left and
+        // right are what they were.
+        let mono = self.params.bass_mono_hz;
+        let bass = mono >= 10.0;
+        if bass && self.made != Some((mono, sr)) {
+            let band = |shape| band_sections(&EqBand { on: true, shape, freq: mono, gain_db: 0.0, q: std::f32::consts::FRAC_1_SQRT_2 }, sr).0[0];
+            self.low = band(EqShape::HighCut12);
+            self.high = band(EqShape::LowCut12);
+            self.made = Some((mono, sr));
+        }
         for (a, b) in l.iter_mut().zip(r.iter_mut()) {
-            let mid = (*a + *b) * 0.5;
-            let side = (*a - *b) * 0.5 * width;
+            let right = *b * flip;
+            let mut mid = (*a + right) * 0.5;
+            let mut side = (*a - right) * 0.5;
+            if bass {
+                let [mid_low, mid_high, side_high] = &mut self.states;
+                let (m, x) = (mid as f64, side as f64);
+                mid = (Self::twice(&self.low, mid_low, m) + Self::twice(&self.high, mid_high, m)) as f32;
+                side = Self::twice(&self.high, side_high, x) as f32;
+            }
+            side *= width;
             *a = (mid + side) * gain;
             *b = (mid - side) * gain;
         }
@@ -1407,7 +1449,7 @@ impl EffectProcessor {
             Effect::Bitcrusher(params) => Self::Bitcrusher(Bitcrusher { params, counter: 0.0, held: [0.0; 2] }),
             Effect::Ducker(params) => Self::Ducker(Ducker { params, key: Key::new(), hits: Hits::IDLE }),
             Effect::Limiter(params) => Self::Limiter(Limiter::new(params, sample_rate)),
-            Effect::Utility(params) => Self::Utility(Utility { params }),
+            Effect::Utility(params) => Self::Utility(Utility::new(params)),
             Effect::Plugin(id) => Self::Plugin(id, None),
         }
     }
@@ -1577,7 +1619,8 @@ impl EffectProcessor {
                 fx.over = [Oversampler::new(), Oversampler::new()];
                 fx.dry = [[0.0; Oversampler::LATENCY]; 2];
             }
-            Self::Utility(_) | Self::Plugin(..) => {}
+            Self::Utility(fx) => fx.states = Default::default(),
+            Self::Plugin(..) => {}
         }
     }
 
@@ -1599,7 +1642,7 @@ impl EffectProcessor {
             Self::Bitcrusher(fx) => fx.process(l, r),
             Self::Ducker(fx) => fx.process(l, r, ctx),
             Self::Limiter(fx) => fx.process(l, r, ctx.sample_rate),
-            Self::Utility(fx) => fx.process(l, r),
+            Self::Utility(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Plugin(_, Some(plugin)) => {
                 plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0);
                 plugin.process(l, r);
@@ -2056,7 +2099,7 @@ mod tests {
 
     #[test]
     fn utility_width_zero_is_mono() {
-        let mut fx = EffectProcessor::new(&Effect::Utility(crate::model::UtilityParams { gain_db: 0.0, width: 0.0 }), 48_000.0);
+        let mut fx = EffectProcessor::new(&Effect::Utility(crate::model::UtilityParams { gain_db: 0.0, width: 0.0, ..Default::default() }), 48_000.0);
         let (mut l, mut r) = (vec![1.0, 0.0], vec![0.0, 1.0]);
         fx.process(&mut l, &mut r, &ctx());
         assert_eq!((l, r), (vec![0.5, 0.5], vec![0.5, 0.5]));
@@ -2333,5 +2376,38 @@ mod tests {
         // About the range: just over the split, the top part is a little louder than the sound.
         assert!((-10.5..=-7.0).contains(&whistle), "{whistle}");
         assert!(low.abs() < 0.5, "{low}");
+    }
+
+    /// A channel flipped comes back the right way; with the lows in mono, a
+    /// bass only on the left is in both, and what is over it stays where it was.
+    #[test]
+    fn the_utility_flips_a_channel_and_puts_the_lows_in_mono() {
+        let sr = 48_000.0;
+        let n = 48_000;
+        let wave = |hz: f32| -> Vec<f32> { (0..n).map(|i| (std::f32::consts::TAU * hz * i as f32 / sr).sin()).collect() };
+        let tone = wave(440.0);
+        let mut fx = EffectProcessor::new(&Effect::Utility(UtilityParams { flip_right: true, ..Default::default() }), sr);
+        let (mut l, mut r): (Vec<f32>, Vec<f32>) = (tone.clone(), tone.iter().map(|x| -x).collect());
+        fx.process(&mut l, &mut r, &ctx());
+        assert!(l.iter().zip(&r).all(|(a, b)| (a - b).abs() < 1e-6), "both the same way");
+        // 50 Hz and 2 kHz, both only on the left.
+        let (low, high) = (wave(50.0), wave(2000.0));
+        let mut l: Vec<f32> = low.iter().zip(&high).map(|(a, b)| 0.5 * (a + b)).collect();
+        let mut r = vec![0.0f32; n];
+        let mut fx = EffectProcessor::new(&Effect::Utility(UtilityParams { bass_mono_hz: 150.0, ..Default::default() }), sr);
+        fx.process(&mut l, &mut r, &ctx());
+        let level = |x: &[f32], hz: f32| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &v) in x.iter().enumerate().skip(n / 2) {
+                let w = std::f64::consts::TAU * hz as f64 * i as f64 / sr as f64;
+                re += v as f64 * w.cos();
+                im += v as f64 * w.sin();
+            }
+            (2.0 * (re * re + im * im).sqrt() / (n / 2) as f64) as f32
+        };
+        let (l50, r50, l2k, r2k) = (level(&l, 50.0), level(&r, 50.0), level(&l, 2000.0), level(&r, 2000.0));
+        println!("50 Hz {l50:.3}/{r50:.3}, 2 kHz {l2k:.3}/{r2k:.3}");
+        assert!((l50 - r50).abs() < 0.03 && (l50 - 0.25).abs() < 0.03, "the lows in both");
+        assert!((l2k - 0.5).abs() < 0.02 && r2k < 0.02, "the rest where it was");
     }
 }

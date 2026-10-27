@@ -654,6 +654,9 @@ La pestaña **Dispositivos** (⇧Tab) del panel de abajo muestra la cadena de la
 - **Delay**: tiempo sincronizado (1/16 a un compás), Ping Pong, feedback y filtro.
 - **Reverb**: tamaño, amortiguación y anchura.
 - **Utility**: ganancia y anchura estéreo (0 % mono, 200 % muy abierto).
+  - **Bass Mono**: por debajo de esa frecuencia, el sonido en mono (0 Hz: apagado). Los graves en estéreo, en un club o un móvil, se pierden o retumban distinto; con 100–150 Hz se asientan sin cambiar lo de arriba.
+  - **Invertir R**: da la vuelta al canal derecho. Arregla una pista grabada con un canal al revés, que en mono casi desaparece.
+  - Un proyecto que use Bass Mono o Invertir R no se abre en un Pulse anterior: pide actualizar.
 
 ### Efectos MIDI
 
@@ -1014,7 +1017,10 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - El hueco va donde la protagonista suena más fuerte de entre las zonas en que se tapan: su cuerpo, que es lo que necesita para oírse.
     - No cuenta batería contra percusión (se turnan) ni el bombo o el bajo (su sitio son los graves: para eso está **Graves que chocan**).
     - Si la pista ya tiene un hueco ahí, sale en verde.
-  - **Fase**: mezcla o pistas en contrafase, que en mono (un móvil, un club) se pierden.
+  - **Fase**: mezcla o pistas en contrafase, que en mono (un móvil, un club) se pierden. En cada pista, **Aplicar** lo arregla con su **Utility** (el último que tenga, o uno nuevo):
+    - Un canal al revés (correlación por debajo de −0,5): invierte el derecho.
+    - Demasiado abierta (por debajo de −0,2): la estrecha lo justo para que en mono pierda poco (correlación 0,2).
+    - Graves en estéreo (una décima parte o más de la pista es grave, y su lado está a menos de 10 dB de su centro): los pone en mono por debajo de 120 Hz.
   - **Dinámica**: muy apretada o con partes muy lejos en volumen.
 - **Referencia**: **Elegir canción…** carga una canción que suene como quieres. Se compara su sonoridad y su **balance de graves, medios y agudos** con el tuyo (en la gráfica por octavas: barras, tu mezcla; línea, la referencia), y **Aplicar** pone un **EQ Three** en el master que lo acerca.
 - **Pistas**: el pico, la sonoridad y el estéreo de cada una.

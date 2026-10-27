@@ -1794,11 +1794,18 @@ pub struct UtilityParams {
     pub gain_db: f32,
     /// 0 = mono, 1 = unchanged, 2 = extra wide.
     pub width: f32,
+    /// Under this (Hz), the sound in mono: the low end of a club (0: off).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub bass_mono_hz: f32,
+    /// The right channel upside down: a track recorded with one channel
+    /// reversed (it vanishes in mono) put right.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub flip_right: bool,
 }
 
 impl Default for UtilityParams {
     fn default() -> Self {
-        Self { gain_db: 0.0, width: 1.0 }
+        Self { gain_db: 0.0, width: 1.0, bass_mono_hz: 0.0, flip_right: false }
     }
 }
 
@@ -2261,9 +2268,10 @@ const LIMITER_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Ceiling", -12.0, 0.0, -0.3, Decibels),
     ParamInfo::log("Release", 10.0, 1000.0, 120.0, Milliseconds),
 ];
-const UTILITY_PARAMS: [ParamInfo; 2] = [
+const UTILITY_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Gain", -36.0, 12.0, 0.0, Decibels),
     ParamInfo::linear("Width", 0.0, 2.0, 1.0, Percent),
+    ParamInfo::linear("Bass Mono", 0.0, 500.0, 0.0, Hertz),
 ];
 const SUPERSAW_PARAMS: [ParamInfo; 11] = [
     ParamInfo::linear("Voices", 1.0, 7.0, 7.0, Count),
@@ -2735,6 +2743,7 @@ impl Effect {
             (Effect::Limiter(p), 2) => &mut p.release_ms,
             (Effect::Utility(p), 0) => &mut p.gain_db,
             (Effect::Utility(p), 1) => &mut p.width,
+            (Effect::Utility(p), 2) => &mut p.bass_mono_hz,
             _ => return None,
         })
     }

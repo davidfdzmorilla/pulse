@@ -394,7 +394,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Bitcrusher(_) => (3, 0),
         Effect::Ducker(_) => (3, 1),
         Effect::Limiter(_) => (3, 0),
-        Effect::Utility(_) => (2, 0),
+        Effect::Utility(_) => (3, 1),
         Effect::Plugin(_) => (PLUGIN_KNOBS, 1),
     };
     knobs as f32 * 52.0 + columns as f32 * 100.0 + 24.0
@@ -440,6 +440,12 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         }
         Effect::Gate(p) if !sources.is_empty() => {
             ui.vertical(|ui| sidechain_combo(ui, &format!("gate_sc{index}"), &mut p.sidechain, sources, "Se abre solo cuando suena esa pista: un pad que corta al ritmo de los charles, o un bajo que suena solo con el bombo"));
+        }
+        Effect::Utility(p) => {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Fase").color(TEXT_DIM).size(10.5));
+                ui.checkbox(&mut p.flip_right, "Invertir R").on_hover_text("Da la vuelta al canal derecho: arregla una pista grabada con un canal al revés, que en mono casi desaparece");
+            });
         }
         Effect::Tuner(p) => {
             use engine::model::TunerScale;
@@ -515,7 +521,6 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         | Effect::Phaser(_)
         | Effect::Bitcrusher(_)
         | Effect::Limiter(_)
-        | Effect::Utility(_)
         | Effect::Plugin(_) => {}
     }
 }

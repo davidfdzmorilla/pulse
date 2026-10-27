@@ -26,6 +26,10 @@
 //! markers) and, where a chorus or a drop is no bigger than the verses and
 //! build-ups, brings those down with the master's volume (see [`growth`]).
 //!
+//! «Contrafase» puts right a track that vanishes in mono (a channel the
+//! wrong way, or too wide) and one whose lows are in stereo, with a Utility
+//! (see [`stereo_fix`]).
+//!
 //! «Nivelar la voz» rides the voice's fader phrase by phrase (volume
 //! automation), so it sits as far over the rest in every one (see [`ride`]).
 //!
@@ -42,7 +46,7 @@ use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{CompressorParams, DeEsserParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, ReverbParams, SaturatorParams};
+use engine::model::{UtilityParams, CompressorParams, DeEsserParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, ReverbParams, SaturatorParams};
 use engine::MAX_RETURNS;
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -175,6 +179,62 @@ pub struct TrackMeasures {
     pub deessed: bool,
     /// Whether one of its sends is automated already.
     pub thrown: bool,
+    /// Its middle and side (see [`stereo`]), and its last Utility, if it has one.
+    pub stereo: Stereo,
+    pub utility: Option<UtilityParams>,
+}
+
+// ----- Out of phase, and lows in stereo -------------------------------------------------
+
+/// A track's power in its middle (L+R) and side (L−R), all of it and under
+/// [`STEREO_LOW`] Hz.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct Stereo {
+    pub mid: f64,
+    pub side: f64,
+    pub low_mid: f64,
+    pub low_side: f64,
+}
+
+/// Where the lows end: under this, a club (and a phone) hears them in mono.
+const STEREO_LOW: f64 = 120.0;
+
+pub fn stereo(left: &[f32], right: &[f32], rate: f32) -> Stereo {
+    let mid: Vec<f64> = left.iter().zip(right).map(|(a, b)| 0.5 * (*a as f64 + *b as f64)).collect();
+    let side: Vec<f64> = left.iter().zip(right).map(|(a, b)| 0.5 * (*a as f64 - *b as f64)).collect();
+    let power = |x: &[f64]| x.iter().map(|v| v * v).sum::<f64>() / x.len().max(1) as f64;
+    let low = |x: &[f64]| {
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+        filtered(&filtered(x, rate, STEREO_LOW, q, 1), rate, STEREO_LOW, q, 1)
+    };
+    Stereo { mid: power(&mid), side: power(&side), low_mid: power(&low(&mid)), low_side: power(&low(&side)) }
+}
+
+/// The correlation a track narrowed is left at: a little more of it in the
+/// middle than in the side, so in mono it loses little.
+const NARROW_TO: f64 = 0.2;
+
+/// What a track's Utility needs so it doesn't vanish in mono: its right
+/// channel flipped (it is the wrong way: correlation under -0.5), or its
+/// width brought to where it is [`NARROW_TO`] (it is too wide: under -0.2);
+/// and its lows in mono under [`STEREO_LOW`] Hz, if a tenth of it is lows
+/// and their side is within 10 dB of their middle. None if it needs nothing.
+pub fn stereo_fix(t: &TrackMeasures) -> Option<UtilityParams> {
+    let mut fix = t.utility.unwrap_or_default();
+    let before = fix;
+    let st = t.stereo;
+    if t.correlation < -0.5 {
+        fix.flip_right = !fix.flip_right;
+    } else if t.correlation < -0.2 && st.side > 0.0 {
+        // With middle and side apart, correlation is (M − w²S) / (M + w²S).
+        let w = (st.mid * (1.0 - NARROW_TO) / (st.side * (1.0 + NARROW_TO))).sqrt();
+        fix.width = ((fix.width as f64 * w).clamp(0.0, 1.0) * 20.0).round() as f32 / 20.0;
+    }
+    let lows = st.low_mid + st.low_side;
+    if fix.bass_mono_hz == 0.0 && lows > 0.1 * (st.mid + st.side) && st.low_side > 0.1 * st.low_mid {
+        fix.bass_mono_hz = STEREO_LOW as f32;
+    }
+    (fix != before).then_some(fix)
 }
 
 // ----- Sections that grow ------------------------------------------------------------
@@ -1129,6 +1189,8 @@ pub enum Fix {
     Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
     /// A De-esser on a voice (see [`deessing`]).
     DeEss { track: usize, name: String, params: DeEsserParams },
+    /// A track's Utility (its last one, or a new one) set as [`stereo_fix`] says.
+    Stereo { track: usize, name: String, params: UtilityParams },
     /// The master's volume brought down (dB) in the parts at `cuts` (beats),
     /// so the peaks grow over them (see [`growth`]).
     Grow { cuts: Vec<(String, f64, f64, f32)> },
@@ -1145,7 +1207,7 @@ pub enum Fix {
 /// space, and last the master (its tone, then its loudness).
 fn stage(fix: &Fix) -> u8 {
     match fix {
-        Fix::TrackGain { .. } => 0,
+        Fix::TrackGain { .. } | Fix::Stereo { .. } => 0,
         Fix::Balance(_) => 1,
         Fix::Duck { .. } | Fix::CutLows { .. } => 2,
         Fix::Carve { .. } => 3,
@@ -1204,6 +1266,7 @@ fn fix_label(fix: &Fix) -> String {
         Fix::DeEss { name, .. } => format!("de-esser en «{name}»"),
         Fix::Throws { name, .. } => format!("ecos de «{name}»"),
         Fix::Grow { .. } => "secciones que crecen".into(),
+        Fix::Stereo { name, .. } => format!("estéreo de «{name}»"),
     }
 }
 
@@ -1574,8 +1637,20 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     if mix.correlation < 0.0 {
         out.push(advice(Level::Warning, format!("Correlación estéreo {:.2}: hay mucho en contrafase y en mono (un móvil, un club) se perderá", mix.correlation), None));
     }
-    for t in report.tracks.iter().filter(|t| t.correlation < -0.2) {
-        out.push(advice(Level::Warning, format!("«{}» tiene los canales en contrafase (correlación {:.2}): en mono casi desaparece", t.name, t.correlation), None));
+    for t in report.tracks.iter().filter(|t| t.lufs.is_some() && !t.group) {
+        let Some(fix) = stereo_fix(t) else { continue };
+        let was = t.utility.unwrap_or_default();
+        let mut parts = Vec::new();
+        if fix.flip_right != was.flip_right {
+            parts.push(format!("tiene un canal al revés (correlación {:.2}): en mono casi desaparece. Invertir el derecho lo pone en su sitio", t.correlation));
+        } else if fix.width != was.width {
+            parts.push(format!("es tan abierta (correlación {:.2}) que en mono pierde mucho. Estrecharla al {:.0} % la deja ancha y segura", t.correlation, fix.width * 100.0));
+        }
+        if fix.bass_mono_hz != was.bass_mono_hz {
+            parts.push(format!("{} los graves abiertos en estéreo: en un club o un móvil (en mono) se pierden o retumban distinto. Ponerlos en mono por debajo de {} Hz los asienta", if parts.is_empty() { "tiene" } else { "y tiene" }, STEREO_LOW));
+        }
+        let level = if fix.flip_right != was.flip_right || fix.width != was.width { Level::Warning } else { Level::Note };
+        out.push(advice(level, format!("«{}» {}", t.name, parts.join("; ")), Some(Fix::Stereo { track: t.index, name: t.name.clone(), params: fix })));
     }
     // Dynamics.
     match mix.range {
@@ -1751,6 +1826,7 @@ impl PulseApp {
             .iter()
             .map(|t| (t.is_group(), t.sends, t.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()), t.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::DeEsser(_)))))
             .collect();
+        let utilities: Vec<Option<UtilityParams>> = self.project.tracks.iter().map(|t| t.devices.iter().rev().find_map(|d| if let (true, Effect::Utility(u)) = (d.enabled, &d.effect) { Some(*u) } else { None })).collect();
         let thrown: Vec<bool> = self.project.tracks.iter().map(|t| t.automation.iter().any(|l| matches!(l.param, Param::Send(_)) && !l.points.is_empty())).collect();
         let echo = space.delay.and_then(|i| self.project.returns[i].devices.iter().find_map(|d| if let Effect::Delay(p) = &d.effect { Some(p.time_beats) } else { None })).unwrap_or(0.75);
         let start = export::beat_range(&self.project, self.mix.range).map_or(0.0, |r| r.0);
@@ -1799,6 +1875,8 @@ impl PulseApp {
                             esses: if voice { esses(&left, &right, RATE) } else { None },
                             deessed,
                             thrown: thrown.get(index).copied().unwrap_or(false),
+                            stereo: stereo(&left, &right, RATE),
+                            utility: utilities.get(index).copied().flatten(),
                         })
                     }
                 })
@@ -2230,6 +2308,14 @@ impl PulseApp {
                 automation.push(lane);
                 self.status = Some(format!("Ecos de «{name}» en {} finales de frase (⌘Z lo deshace)", ends.len()));
             }
+            Fix::Stereo { track, name, params } if track_ok(self, *track, name) => {
+                let devices = &mut self.project.tracks[*track].devices;
+                match devices.iter_mut().rev().find_map(|d| if let (true, Effect::Utility(u)) = (d.enabled, &mut d.effect) { Some(u) } else { None }) {
+                    Some(u) => *u = *params,
+                    None => devices.push(Device::new(Effect::Utility(*params))),
+                }
+                self.status = Some(format!("Utility de «{name}» ajustado"));
+            }
             Fix::Grow { cuts } if !self.project.master.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()) => {
                 let base = self.project.master.mixer.gain;
                 let mut lane = engine::model::AutomationLane::new(Param::Volume);
@@ -2514,6 +2600,19 @@ fn louder(track: &mut crate::project::Track, db: f32) {
 
 fn fix_hint(fix: &Fix) -> String {
     match fix {
+        Fix::Stereo { name, params, .. } => {
+            let mut what = Vec::new();
+            if params.flip_right {
+                what.push("invierte el canal derecho".to_string());
+            }
+            if params.width < 1.0 {
+                what.push(format!("ancho al {:.0} %", params.width * 100.0));
+            }
+            if params.bass_mono_hz > 0.0 {
+                what.push(format!("graves en mono por debajo de {:.0} Hz", params.bass_mono_hz));
+            }
+            format!("Utility en «{name}»: {}", what.join(", "))
+        }
         Fix::Grow { .. } => "Escribe automatización de volumen en el master: baja lo que lleva al estribillo o al drop para que estos suenen más grandes, sin tocar el limitador".into(),
         Fix::Throws { name, .. } => format!("Escribe automatización en el envío de «{name}» al delay: se abre al {:.0} % en la última palabra de cada frase que acaba en silencio y vuelve a donde estaba al acabar", THROW * 100.0),
         Fix::DeEss { name, params, .. } => format!("Añade un De-esser a «{name}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)", hz_label(params.freq_hz), num(params.threshold_db as f64), num(params.range_db as f64)),
@@ -2567,7 +2666,7 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false, thrown: false }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false, thrown: false, stereo: Stereo::default(), utility: None }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
@@ -2816,7 +2915,8 @@ mod tests {
         });
         assert!(duck.is_some(), "the bass ducks to the kick");
         assert!(!advice.iter().any(|a| matches!(&a.fix, Some(Fix::CutLows { name, .. }) if name.contains("Kick"))), "no kick (or its rumble) loses its lows");
-        assert!(!advice.iter().any(|a| a.fix.is_some() && a.text.contains("Rumble")), "the rumble ducks to its kick already");
+        // (Its lows in mono, a Utility, are another matter.)
+        assert!(!advice.iter().any(|a| a.fix.is_some() && !matches!(a.fix, Some(Fix::Stereo { .. })) && a.text.contains("Rumble")), "the rumble ducks to its kick already");
         // Applied, the bass listens to the kick: it says so instead of the clash.
         app.apply_fix(&duck.unwrap());
         assert!(listens(&app.project.tracks[2]).contains(&app.project.tracks[0].id));
@@ -3813,5 +3913,88 @@ mod tests {
         let lane = |p: &crate::project::Project| p.master.automation.iter().find(|l| l.param == Param::Volume).unwrap().points[0].value;
         let quieter = levelled(&app.project, -6.0);
         assert!((lane(&quieter) / lane(&app.project) - 0.5012).abs() < 1e-3);
+    }
+
+    /// A channel the wrong way is flipped; too wide, narrowed to where its
+    /// correlation is 0.2; its lows in stereo, in mono. A Utility it has is
+    /// built on.
+    #[test]
+    fn a_track_that_vanishes_in_mono_is_put_right() {
+        let t = |correlation: f64, stereo: Stereo| TrackMeasures { correlation, stereo, ..track(0, "Pad", false, -6.0, Vec::new()) };
+        let none = Stereo { mid: 1.0, side: 0.1, low_mid: 0.01, low_side: 0.0 };
+        assert_eq!(stereo_fix(&t(0.8, none)), None);
+        let flipped = stereo_fix(&t(-0.9, Stereo { mid: 0.05, side: 1.0, low_mid: 0.0, low_side: 0.0 })).unwrap();
+        assert!(flipped.flip_right && flipped.width == 1.0 && flipped.bass_mono_hz == 0.0);
+        // M = 1, S = 2: correlation -1/3. Narrowed: w² = 0.8 / (2 · 1.2), w = 0.577 → 0.6.
+        let wide = stereo_fix(&t(-0.33, Stereo { mid: 1.0, side: 2.0, low_mid: 0.0, low_side: 0.0 })).unwrap();
+        assert_eq!(wide.width, 0.6);
+        assert!(!wide.flip_right);
+        let lows = stereo_fix(&t(0.5, Stereo { mid: 1.0, side: 0.3, low_mid: 0.5, low_side: 0.2 })).unwrap();
+        assert_eq!(lows.bass_mono_hz, 120.0);
+        // Already at 50 % wide: narrowed from there.
+        let mut half = t(-0.33, Stereo { mid: 1.0, side: 2.0, low_mid: 0.0, low_side: 0.0 });
+        half.utility = Some(UtilityParams { width: 0.5, gain_db: -3.0, ..Default::default() });
+        let narrower = stereo_fix(&half).unwrap();
+        assert_eq!((narrower.width, narrower.gain_db), (0.3, -3.0));
+    }
+
+    /// For real: a pad with its right channel upside down, and a bass whose
+    /// lows are only on the left. Applied, the pad is whole in mono and the
+    /// bass's lows are in both channels.
+    #[test]
+    fn a_pad_the_wrong_way_and_a_bass_in_stereo_are_put_right() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let n = (8.0 * rate) as usize;
+        let wave = |hz: f32, a: f32| -> Vec<f32> { (0..n).map(|i| a * (std::f32::consts::TAU * hz * i as f32 / rate).sin()).collect() };
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = |name: &str, left: &[f32], right: &[f32]| {
+            let path = dir.join(format!("fase-{name}-{}.wav", std::process::id()));
+            crate::export::write(&path, left, right, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+        };
+        let pad = wave(440.0, 0.2);
+        let upside: Vec<f32> = pad.iter().map(|x| -x).collect();
+        let low = wave(55.0, 0.3);
+        let top = wave(880.0, 0.05);
+        let bass_left: Vec<f32> = low.iter().zip(&top).map(|(a, b)| a + b).collect();
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut p = Track::new_audio("Pad", [0; 3]);
+        p.arrangement.push(clip("pad", &pad, &upside));
+        let mut b = Track::new_audio("Bajo", [0; 3]);
+        b.arrangement.push(clip("bajo", &bass_left, &top));
+        project.tracks = vec![p, b];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 60);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let before = app.mix.report.clone().unwrap();
+        println!("antes: pad {:.2}, mezcla {:.2}", before.tracks[0].correlation, before.mix.correlation);
+        let advice = advise(&before, Target::Streaming, None);
+        let fixes: Vec<Fix> = advice.iter().filter_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Stereo { .. }))).collect();
+        assert_eq!(fixes.len(), 2, "{advice:?}");
+        for fix in &fixes {
+            app.mix.report = None;
+            app.apply_fix(fix);
+            wait(&mut app);
+        }
+        let after = app.mix.report.clone().unwrap();
+        let (pad, bass) = (&after.tracks[0], &after.tracks[1]);
+        println!("después: pad {:.2}, mezcla {:.2}, graves del bajo: lado/centro {:.3}", pad.correlation, after.mix.correlation, bass.stereo.low_side / bass.stereo.low_mid);
+        assert!(before.tracks[0].correlation < -0.9 && pad.correlation > 0.9);
+        assert!(bass.stereo.low_side < 0.01 * bass.stereo.low_mid, "the lows in mono");
+        assert!(after.mix.correlation > 0.5);
+        assert!(advise(&after, Target::Streaming, None).iter().all(|a| !matches!(a.fix, Some(Fix::Stereo { .. }))));
     }
 }

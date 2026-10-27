@@ -130,7 +130,7 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         Effect::Bitcrusher(Default::default()),
         Effect::Ducker(Default::default()),
         Effect::Limiter(Default::default()),
-        Effect::Utility(Default::default()),
+        Effect::Utility(engine::model::UtilityParams { gain_db: -2.0, width: 0.8, bass_mono_hz: 150.0, flip_right: true }),
     ];
     let mut tracks = Vec::new();
     for (i, (name, kind)) in kinds.into_iter().enumerate() {

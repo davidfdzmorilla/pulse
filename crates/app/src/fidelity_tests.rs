@@ -184,7 +184,7 @@ fn joined_clips_keep_their_envelopes_and_grooves() {
         }
         Clip::Midi(clip)
     };
-    let swung = Groove { grid: 0.25, swing: 1.0, accent: 0.3, humanize: 0.5 };
+    let swung = Groove { grid: 0.25, swing: 1.0, accent: 0.3, humanize: 0.5, template: None };
     track.arrangement = vec![ArrangementClip { start: 0.0, length: 4.0, clip: beat(None, None) }, ArrangementClip { start: 4.0, length: 4.0, clip: beat(Some(swung), Some(0.1)) }];
     p.tracks = vec![track];
     let frames = seconds(&p, 8.0);

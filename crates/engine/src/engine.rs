@@ -1069,9 +1069,9 @@ fn schedule_notes(
     let last_lap = (local_to / clip.length).floor() as i64;
     // The clip's own groove, or the project's swing.
     let (grid, amount) = timing.swing;
-    let groove = clip.groove.unwrap_or(Groove { grid, swing: amount, accent: 0.0, humanize: 0.0 });
-    // Humanized notes may come a hair early: the next lap's first ones too.
-    let last_lap = if groove.humanize > 0.0 { last_lap + 1 } else { last_lap };
+    let groove = clip.groove.unwrap_or(Groove { grid, swing: amount, ..Groove::default() });
+    // Humanized notes (or a template's) may come a hair early: the next lap's first ones too.
+    let last_lap = if groove.may_come_early() { last_lap + 1 } else { last_lap };
     for lap in first_lap..=last_lap {
         let lap_start = lap as f64 * clip.length;
         for (index, note) in clip.notes.iter().enumerate().filter(|(_, n)| n.start < clip.length) {
@@ -3253,7 +3253,7 @@ mod tests {
             for (i, pitch) in [48u8, 55, 60, 64, 67, 72, 52, 59].iter().enumerate() {
                 clip.notes.push(Note { start: i as f64 * 0.5, length: 0.4 + 0.1 * (i % 3) as f64, pitch: *pitch, velocity: 0.6 + 0.05 * i as f32, chance: 1.0 });
             }
-            clip.groove = Some(Groove { grid: 0.25, swing: 0.3, accent: 0.2, humanize: 0.5 });
+            clip.groove = Some(Groove { grid: 0.25, swing: 0.3, accent: 0.2, humanize: 0.5, template: None });
             clip
         };
         let render = |kind: Option<InstrumentKind>, chain: Vec<Device>, sizes: &[usize]| {

@@ -141,7 +141,7 @@ pub(crate) fn rich_project(media: &Path) -> Project {
             c.envelopes.push(lane(Param::Volume, &[(0.0, 0.3, 0.0), (2.0, 0.9, 0.5), (4.0, 0.3, 0.0)]));
         }
         if i % 3 == 0 {
-            c.groove = Some(Groove { grid: 0.25, swing: 0.5, accent: 0.3, humanize: 0.4 });
+            c.groove = Some(Groove { grid: 0.25, swing: 0.5, accent: 0.3, humanize: 0.4, template: None });
         }
         t.clips[0] = Some(Clip::Midi(c.clone()));
         t.clips[1] = Some(Clip::Midi(midi("B", 2.0, phrase(root + 2))));

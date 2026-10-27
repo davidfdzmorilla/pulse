@@ -1235,6 +1235,10 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             }
         });
     }
+    if audio && count == 1 && ui.button("Sacar groove").on_hover_text(GROOVE_HINT).clicked() {
+        app.take_groove(clip);
+        ui.close();
+    }
     if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems…")).on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
         app.separate_stems(clip);
         ui.close();
@@ -2236,6 +2240,9 @@ mod tests {
     }
 }
 
+
+/// What «Sacar groove» does.
+pub(crate) const GROOVE_HINT: &str = "Guarda cómo caen y con qué fuerza los golpes de este loop (su swing, golpe a golpe) para que cualquier clip MIDI suene con ese pulso: elígelo en el Groove del clip";
 
 /// «De tarareo a canción ▸», a style each.
 pub(crate) fn song_menu(ui: &mut egui::Ui, app: &mut PulseApp, mut make: impl FnMut(&mut PulseApp, crate::drum_gen::Style)) {

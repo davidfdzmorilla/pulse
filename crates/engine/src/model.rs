@@ -73,11 +73,27 @@ pub struct Groove {
     pub accent: f32,
     /// 0..1: random shifts, up to a 32nd of a beat in time and 15 % in velocity.
     pub humanize: f32,
+    /// A groove taken from a recording, step by step: then `swing` is how
+    /// much of its timing plays and `accent` how much of its dynamics.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<GrooveTemplate>,
+}
+
+/// Steps in a [`GrooveTemplate`]: a bar of sixteenths (two of eighths).
+pub const GROOVE_STEPS: usize = 16;
+
+/// How a recording plays the grid, step by step over [`GROOVE_STEPS`] steps:
+/// how far off each its hits come (a fraction of a step, later if positive)
+/// and how hard (1 the loudest).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct GrooveTemplate {
+    pub shift: [f32; GROOVE_STEPS],
+    pub velocity: [f32; GROOVE_STEPS],
 }
 
 impl Default for Groove {
     fn default() -> Self {
-        Self { grid: 0.25, swing: 0.0, accent: 0.0, humanize: 0.0 }
+        Self { grid: 0.25, swing: 0.0, accent: 0.0, humanize: 0.0, template: None }
     }
 }
 
@@ -91,6 +107,19 @@ fn jitter(seed: u64) -> f32 {
 }
 
 impl Groove {
+    /// The step of the grid `start` falls on, if it falls on one.
+    fn step(&self, start: f64) -> Option<i64> {
+        let step = start / self.grid.max(1.0 / 64.0);
+        let nearest = step.round();
+        ((step - nearest).abs() < 1e-6).then_some(nearest as i64)
+    }
+
+    /// Whether some notes may play before where they are written (humanized,
+    /// or a template's hits early).
+    pub fn may_come_early(&self) -> bool {
+        self.humanize > 0.0 || self.template.is_some_and(|t| t.shift.iter().any(|&s| s < 0.0))
+    }
+
     /// Whether `start` falls on an off-beat of the grid (its 2nd, 4th… step).
     fn off_beat(&self, start: f64) -> bool {
         let step = start / self.grid.max(1.0 / 64.0);
@@ -101,9 +130,22 @@ impl Groove {
     /// When note `index` (starting at `start` in the clip) plays on lap `lap`:
     /// beats later (or earlier, humanized), and its velocity.
     pub fn apply(&self, index: usize, lap: i64, start: f64, velocity: f32) -> (f64, f32) {
-        let off = self.off_beat(start);
-        let mut shift = if off { self.grid * self.swing.clamp(0.0, 1.0) as f64 / 3.0 } else { 0.0 };
-        let mut velocity = velocity * if off { 1.0 - 0.6 * self.accent.clamp(0.0, 1.0) } else { 1.0 };
+        let (mut shift, mut velocity) = match &self.template {
+            // On a step of the grid: as the recording played it.
+            Some(template) => match self.step(start) {
+                Some(k) => {
+                    let k = k.rem_euclid(GROOVE_STEPS as i64) as usize;
+                    let timing = (template.shift[k].clamp(-0.5, 0.5) * self.swing.clamp(0.0, 1.0)) as f64 * self.grid;
+                    (timing, velocity * (1.0 - self.accent.clamp(0.0, 1.0) * (1.0 - template.velocity[k].clamp(0.0, 1.0))))
+                }
+                None => (0.0, velocity),
+            },
+            None => {
+                let off = self.off_beat(start);
+                let shift = if off { self.grid * self.swing.clamp(0.0, 1.0) as f64 / 3.0 } else { 0.0 };
+                (shift, velocity * if off { 1.0 - 0.6 * self.accent.clamp(0.0, 1.0) } else { 1.0 })
+            }
+        };
         if self.humanize > 0.0 {
             let seed = (index as u64) << 32 ^ lap as u64;
             shift += jitter(seed) as f64 * self.humanize as f64 / 32.0;
@@ -7223,7 +7265,7 @@ mod tests {
 
     #[test]
     fn grooves_swing_soften_and_humanize_the_off_beats() {
-        let groove = Groove { grid: 0.5, swing: 0.6, accent: 0.5, humanize: 0.0 };
+        let groove = Groove { grid: 0.5, swing: 0.6, accent: 0.5, humanize: 0.0, template: None };
         assert_eq!(groove.apply(0, 0, 0.0, 1.0), (0.0, 1.0), "on the beat: as written");
         let (shift, velocity) = groove.apply(1, 0, 0.5, 1.0);
         assert!((shift - 0.5 * 0.6 / 3.0).abs() < 1e-6 && (velocity - 0.7).abs() < 1e-6, "{shift} {velocity}");

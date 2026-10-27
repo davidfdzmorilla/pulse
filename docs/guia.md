@@ -961,6 +961,11 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - Ratio 3:1 en la voz y los coros, 2,5:1 en la solista y 4:1 en el bajo y la batería. Ataque rápido en las voces (5 ms) y lento en la batería (25 ms), para que pase el golpe.
     - Release de una semicorchea al tempo de la canción (una corchea en el bajo) y ganancia para recuperar la mitad de lo que quita, de modo que la pista sigue sonando más o menos igual de fuerte.
     - Si la pista ya tiene un compresor (sin sidechain), sale en verde. Una pista que se aparta de otra con un sidechain (un rumble o un bajo que bombean con el bombo) no se comprime: su nivel se mueve a propósito.
+  - **Nivelar la voz**: si la voz cambia mucho frente a la base de una frase a otra (al menos 2 dB en alguna), unas frases se pierden y otras tapan la música. **Aplicar** escribe una automatización de volumen en su pista, como haría alguien moviendo el fader:
+    - Mide cada frase: dónde suena la voz, y cuánto queda por encima del resto de la mezcla en ese momento.
+    - Lleva cada frase a lo que está la mayoría, como mucho 6 dB arriba o abajo.
+    - Los cambios caen en los silencios entre frases, así que no se oyen. Respeta los cambios de tempo.
+    - Si la pista ya tiene automatización de volumen, no la toca (sale en verde). Si luego el asistente sube o baja esa pista, mueve también su automatización.
   - **Espacio de partida**: las pistas que suenan secas, sin mandar nada a ningún retorno, se quedan todas delante y la mezcla suena plana. **Aplicar** pone sus envíos a la reverb y al delay según su papel:
     - Voz: reverb 22 % y delay 14 %. Coros: reverb 32 % y delay 8 %, para que queden detrás. Solista: reverb 20 % y delay 16 %. Efectos: reverb 30 % y delay 12 %.
     - Pads: reverb 28 %. Acordes: 18 %. Percusión: 12 %. Batería: 8 %.
@@ -973,9 +978,10 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     3. Graves.
     4. Huecos en los medios: uno por cada pareja de pistas, donde más se tapan.
     5. Compresión.
-    6. Espacio.
-    7. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
-    8. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
+    6. Nivelar la voz.
+    7. Espacio.
+    8. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
+    9. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
   - Al terminar dice lo que ha hecho. Cada paso se deshace con ⌘Z. Lo que queda en la lista son sugerencias para aplicar a mano, si quieres.
   - **Escuchar: Antes · Después** aparece en cuanto el asistente cambia algo, y deja oír la mezcla como estaba antes de su primer cambio y como está ahora. Dale a reproducir y pasa de una a otra mientras suena.
     - Suenan al mismo volumen: la más fuerte se baja hasta la otra. Así comparas cómo suena y no cuánto, porque lo más fuerte siempre parece mejor. Si la mezcla ha cambiado sin volver a analizarla, avisa de que no están igualadas.

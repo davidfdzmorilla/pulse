@@ -15,6 +15,9 @@
 //! project has none), the voice both, pads and chords reverb, and the kick
 //! and the bass nothing, so the low end stays clean.
 //!
+//! «Nivelar la voz» rides the voice's fader phrase by phrase (volume
+//! automation), so it sits as far over the rest in every one (see [`ride`]).
+//!
 //! «Aplicar todo» does it all, in the order a mix is made (see [`stage`]),
 //! measuring again after each change: the next one depends on what the last
 //! did.
@@ -152,6 +155,129 @@ pub struct TrackMeasures {
     /// A group (its tracks send on their own), and what it sends to each return.
     pub group: bool,
     pub sends: [f32; MAX_RETURNS],
+    /// Its level every [`HOP`] s (dB of power, see [`levels`]), and whether its
+    /// volume is automated already.
+    pub levels: Vec<f32>,
+    pub automated: bool,
+}
+
+// ----- Riding the voice -----------------------------------------------------------------
+
+/// How often the tracks' level is measured (s), and over how long.
+pub const HOP: f64 = 0.05;
+const WINDOW: f64 = 0.2;
+/// Silence: under this (dB of power).
+const QUIET: f32 = -60.0;
+
+/// A track's level every [`HOP`] s, over [`WINDOW`] s (dB of power, both channels).
+pub fn levels(left: &[f32], right: &[f32], rate: f32) -> Vec<f32> {
+    let (hop, window) = ((HOP * rate as f64) as usize, (WINDOW * rate as f64) as usize);
+    let n = left.len().min(right.len());
+    (0..n / hop)
+        .map(|k| {
+            let (a, b) = (k * hop, (k * hop + window).min(n));
+            let power = (a..b).map(|i| (left[i] * left[i] + right[i] * right[i]) * 0.5).sum::<f32>() / (b - a).max(1) as f32;
+            10.0 * power.max(1e-12).log10()
+        })
+        .collect()
+}
+
+/// A phrase of the voice: from and to (s), and how far over the rest it is (dB).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Phrase {
+    pub start: f64,
+    pub end: f64,
+    pub over: f32,
+}
+
+/// The voice's phrases: where it sounds (within 35 dB of its loudest), gaps
+/// under 0.35 s bridged, at least half a second long; each with how far over
+/// `base` (the rest of the mix, as [`levels`]) it is. Over nothing (a cappella)
+/// it is not measured.
+pub fn phrases(voice: &[f32], base: &[f32]) -> Vec<Phrase> {
+    let top = voice.iter().copied().fold(QUIET, f32::max);
+    let on: Vec<bool> = voice.iter().map(|&v| v > (top - 35.0).max(QUIET)).collect();
+    let mut spans: Vec<(usize, usize)> = Vec::new();
+    for (k, &sounds) in on.iter().enumerate() {
+        if !sounds {
+            continue;
+        }
+        match spans.last_mut() {
+            Some((_, end)) if k - *end <= (0.35 / HOP) as usize => *end = k,
+            _ => spans.push((k, k)),
+        }
+    }
+    let power = |x: &[f32]| 10.0 * (x.iter().map(|d| 10f32.powf(d / 10.0)).sum::<f32>() / x.len().max(1) as f32).max(1e-12).log10();
+    spans
+        .into_iter()
+        .filter(|(a, b)| (b - a) as f64 * HOP + WINDOW >= 0.5)
+        .filter_map(|(a, b)| {
+            let rest = power(base.get(a..=b.min(base.len().saturating_sub(1)))?);
+            (rest > QUIET).then(|| Phrase { start: a as f64 * HOP, end: b as f64 * HOP + WINDOW, over: power(&voice[a..=b]) - rest })
+        })
+        .collect()
+}
+
+/// The most a phrase is moved (dB), and the least worth moving.
+const RIDE_MAX: f32 = 6.0;
+const RIDE_MIN: f32 = 0.5;
+
+/// How much each phrase moves (dB) to sit as far over the rest as most do
+/// (the median, by length).
+pub fn ride(phrases: &[Phrase]) -> Vec<f32> {
+    let mut sorted: Vec<(f32, f64)> = phrases.iter().map(|p| (p.over, p.end - p.start)).collect();
+    sorted.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let total: f64 = sorted.iter().map(|s| s.1).sum();
+    let mut run = 0.0;
+    let Some(median) = sorted.iter().find(|s| {
+        run += s.1;
+        run >= total / 2.0
+    }) else {
+        return Vec::new();
+    };
+    phrases
+        .iter()
+        .map(|p| {
+            let g = (median.0 - p.over).clamp(-RIDE_MAX, RIDE_MAX);
+            if g.abs() < RIDE_MIN { 0.0 } else { (g * 2.0).round() / 2.0 }
+        })
+        .collect()
+}
+
+/// The beat `seconds` after `from`, at the project's tempo (and its tempo
+/// automation, if it has any).
+fn beat_after(project: &crate::project::Project, from: f64, seconds: f64) -> f64 {
+    let lane = project.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty());
+    let Some(lane) = lane else { return from + seconds * project.tempo / 60.0 };
+    let (mut beat, mut left) = (from, seconds);
+    const STEP: f64 = 1.0 / 32.0;
+    loop {
+        let bpm = lane.value_at(beat).unwrap_or(project.tempo as f32).max(1.0) as f64;
+        let step = STEP * 60.0 / bpm;
+        if left <= step {
+            return beat + left * bpm / 60.0;
+        }
+        left -= step;
+        beat += STEP;
+    }
+}
+
+/// The volume points that ride the phrases: each phrase's gain (dB, on
+/// `fader`) from the middle of the gap before it to the middle of the gap
+/// after it, moving in 0.1 s there, where the voice is silent.
+fn ride_points(phrases: &[Phrase], gains: &[f32], fader: f32) -> Vec<(f64, f32)> {
+    let value = |g: f32| (fader * 10f32.powf(g / 20.0)).min(FADER_TOP);
+    let mut out = Vec::new();
+    for (i, (p, &g)) in phrases.iter().zip(gains).enumerate() {
+        let left = if i == 0 { (p.start - 0.05).max(0.0) } else { (phrases[i - 1].end + p.start) / 2.0 + 0.05 };
+        let right = match phrases.get(i + 1) {
+            Some(next) => (p.end + next.start) / 2.0 - 0.05,
+            None => p.end + 0.05,
+        };
+        out.push((left, value(g)));
+        out.push((right.max(left), value(g)));
+    }
+    out
 }
 
 // ----- Space to start from ------------------------------------------------------------
@@ -732,6 +858,8 @@ pub struct Report {
     pub tempo: f64,
     /// Its reverb and delay returns.
     pub space: Space,
+    /// Where it was rendered from (beat).
+    pub start: f64,
 }
 
 /// A change the assistant can make.
@@ -757,6 +885,9 @@ pub enum Fix {
     /// Sends to a reverb and a delay (see [`space_changes`]); the returns
     /// they go to, as they were when measured (`None`: made).
     Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
+    /// The voice ridden phrase by phrase (see [`ride`]): its phrases (s from
+    /// `from`, a beat) and how much each moves (dB).
+    Ride { track: usize, name: String, from: f64, phrases: Vec<Phrase>, gains: Vec<f32> },
 }
 
 /// Where a fix goes in a mix made from the start («Aplicar todo»): nothing
@@ -769,9 +900,10 @@ fn stage(fix: &Fix) -> u8 {
         Fix::Duck { .. } | Fix::CutLows { .. } => 2,
         Fix::Carve { .. } => 3,
         Fix::Compress { .. } => 4,
-        Fix::Space { .. } => 5,
-        Fix::MasterEq { .. } => 6,
-        Fix::MasterLimiter { .. } => 7,
+        Fix::Ride { .. } => 5,
+        Fix::Space { .. } => 6,
+        Fix::MasterEq { .. } => 7,
+        Fix::MasterLimiter { .. } => 8,
     }
 }
 
@@ -815,6 +947,7 @@ fn fix_label(fix: &Fix) -> String {
         Fix::Carve { name, for_name, .. } => format!("hueco en «{name}» para «{for_name}»"),
         Fix::Compress { name, .. } => format!("compresor en «{name}»"),
         Fix::Space { .. } => "reverb y delay".into(),
+        Fix::Ride { name, .. } => format!("«{name}» nivelada"),
     }
 }
 
@@ -836,6 +969,20 @@ pub struct Advice {
 
 fn advice(level: Level, text: String, fix: Option<Fix>) -> Advice {
     Advice { level, text, fix, details: Vec::new() }
+}
+
+/// The rest of the mix against track `index`: the other tracks' levels added
+/// up (their power), groups left out (their tracks are counted).
+fn base_levels(tracks: &[TrackMeasures], index: usize) -> Vec<f32> {
+    let others: Vec<&TrackMeasures> = tracks.iter().filter(|t| t.index != index && !t.group && t.lufs.is_some()).collect();
+    let n = others.iter().map(|t| t.levels.len()).max().unwrap_or(0);
+    (0..n).map(|k| 10.0 * others.iter().map(|t| t.levels.get(k).map_or(0.0, |d| 10f32.powf(d / 10.0))).sum::<f32>().max(1e-12).log10()).collect()
+}
+
+/// «1:05», from seconds.
+fn clock(seconds: f64) -> String {
+    let s = seconds.max(0.0).round() as u64;
+    format!("{}:{:02}", s / 60, s % 60)
 }
 
 fn db(x: f64) -> String {
@@ -1020,6 +1167,35 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
                 Some(Fix::Compress { track: t.index, name: t.name.clone(), params }),
             ));
         }
+    }
+    // A voice that comes and goes against the rest.
+    for t in report.tracks.iter().filter(|t| t.role == Role::Vocal && !t.group && t.lufs.is_some()) {
+        let base = base_levels(&report.tracks, t.index);
+        let found = phrases(&t.levels, &base);
+        let gains = ride(&found);
+        let moved = gains.iter().filter(|g| g.abs() >= 2.0).count();
+        if found.len() < 2 || moved == 0 {
+            continue;
+        }
+        if t.automated {
+            out.push(advice(Level::Good, format!("«{}» ya tiene automatización de volumen", t.name), None));
+            continue;
+        }
+        let (low, high) = found.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.over), b.max(p.over)));
+        let mut a = advice(
+            Level::Note,
+            format!(
+                "«{}» va de {} a {} dB sobre la base según la frase: unas se pierden y otras tapan la música. Nivelarla mueve {} de sus {} frases con automatización de volumen",
+                t.name,
+                db(low as f64),
+                db(high as f64),
+                gains.iter().filter(|g| **g != 0.0).count(),
+                found.len()
+            ),
+            Some(Fix::Ride { track: t.index, name: t.name.clone(), from: report.start, phrases: found.clone(), gains: gains.clone() }),
+        );
+        a.details = found.iter().zip(&gains).filter(|(_, g)| g.abs() >= 2.0).take(6).map(|(p, g)| format!("{}: {} dB", clock(p.start), db(*g as f64))).collect();
+        out.push(a);
     }
     // Room: reverb and delay.
     let changes = space_changes(&report.tracks, report.space);
@@ -1217,7 +1393,8 @@ impl PulseApp {
         let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
         let tempo = self.project.tempo;
         let space = Space::of(&self.project.returns);
-        let routing: Vec<(bool, [f32; MAX_RETURNS])> = self.project.tracks.iter().map(|t| (t.is_group(), t.sends)).collect();
+        let routing: Vec<(bool, [f32; MAX_RETURNS], bool)> = self.project.tracks.iter().map(|t| (t.is_group(), t.sends, t.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()))).collect();
+        let start = export::beat_range(&self.project, self.mix.range).map_or(0.0, |r| r.0);
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -1230,7 +1407,7 @@ impl PulseApp {
                         let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
                         let (hint, pan, cut, gain, carves, compressed) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new(), false));
                         let bands = loudness::bands(&left, &right, RATE);
-                        let (group, sends) = routing.get(index).copied().unwrap_or((false, [0.0; MAX_RETURNS]));
+                        let (group, sends, automated) = routing.get(index).copied().unwrap_or((false, [0.0; MAX_RETURNS], false));
                         Measured::Track(TrackMeasures {
                             index,
                             id,
@@ -1253,6 +1430,8 @@ impl PulseApp {
                             compressed,
                             group,
                             sends,
+                            levels: levels(&left, &right, RATE),
+                            automated,
                         })
                     }
                 })
@@ -1261,7 +1440,7 @@ impl PulseApp {
                 let mut all = all.into_iter();
                 let Some(Measured::Mix(mix)) = all.next() else { return Err("Nada que analizar".to_string()) };
                 let tracks = all.filter_map(|t| if let Measured::Track(t) = t { Some(t) } else { None }).collect();
-                Ok(Report { mix, tracks, tempo, space })
+                Ok(Report { mix, tracks, tempo, space, start })
             });
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
@@ -1550,8 +1729,7 @@ impl PulseApp {
                 self.status = Some("Limitador del master ajustado".into());
             }
             Fix::TrackGain { track, name, db } if track_ok(self, *track, name) => {
-                let mixer = &mut self.project.tracks[*track].mixer;
-                mixer.gain *= 10f32.powf(db / 20.0);
+                louder(&mut self.project.tracks[*track], *db);
                 self.status = Some(format!("«{name}» {:+.1} dB", db));
             }
             Fix::Duck { track, name, source, source_name } if track_ok(self, *track, name) => {
@@ -1592,7 +1770,7 @@ impl PulseApp {
             Fix::Balance(changes) if changes.iter().all(|c| track_ok(self, c.track, &c.name)) => {
                 for c in changes {
                     let track = &mut self.project.tracks[c.track];
-                    track.mixer.gain *= 10f32.powf(c.gain_db / 20.0);
+                    louder(track, c.gain_db);
                     if let Some(pan) = c.pan {
                         track.mixer.pan = pan;
                     }
@@ -1660,6 +1838,21 @@ impl PulseApp {
                     true => format!("Espacio de partida: {} pistas con su reverb y su delay (⌘Z lo deshace)", changes.len()),
                     false => format!("Espacio de partida: {} pistas, y nuevo{} {} (⌘Z lo deshace)", changes.len(), if made.len() > 1 { "s" } else { "" }, made.iter().map(|n| format!("«{n}»")).collect::<Vec<_>>().join(" y ")),
                 });
+            }
+            Fix::Ride { track, name, from, phrases, gains } if track_ok(self, *track, name) => {
+                let fader = self.project.tracks[*track].mixer.gain;
+                let points: Vec<engine::model::AutomationPoint> = ride_points(phrases, gains, fader)
+                    .into_iter()
+                    .map(|(at, value)| engine::model::AutomationPoint { beat: beat_after(&self.project, *from, at), value, curve: 0.0 })
+                    .collect();
+                let automation = &mut self.project.tracks[*track].automation;
+                automation.retain(|l| l.param != Param::Volume);
+                let mut lane = engine::model::AutomationLane::new(Param::Volume);
+                lane.points = points;
+                lane.sort();
+                automation.push(lane);
+                self.sync_automation(engine::Target::Track(*track));
+                self.status = Some(format!("«{name}» nivelada: {} frases con automatización de volumen (⌘Z lo deshace)", gains.iter().filter(|g| **g != 0.0).count()));
             }
             _ => {
                 self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
@@ -1787,7 +1980,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let any = next_fix(&list, &[]).is_some();
                 all = ui
                     .add_enabled(!busy && any, egui::Button::new("Aplicar todo").small())
-                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, reverb y delay, y el master. Vuelve a medir después de cada uno")
+                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, voz nivelada, reverb y delay, y el master. Vuelve a medir después de cada uno")
                     .clicked();
             }
         }
@@ -1887,8 +2080,21 @@ fn compare_row(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
 }
 
+/// A track `db` louder: its fader, and its volume automation if it has
+/// some (which would hold it where it was).
+fn louder(track: &mut crate::project::Track, db: f32) {
+    let factor = 10f32.powf(db / 20.0);
+    track.mixer.gain *= factor;
+    for lane in track.automation.iter_mut().filter(|l| l.param == Param::Volume) {
+        for p in &mut lane.points {
+            p.value = (p.value * factor).min(FADER_TOP);
+        }
+    }
+}
+
 fn fix_hint(fix: &Fix) -> String {
     match fix {
+        Fix::Ride { name, .. } => format!("Escribe automatización de volumen en «{name}»: cada frase sube o baja (como mucho {RIDE_MAX} dB) para quedar igual de por encima de la base. Los cambios caen en los silencios entre frases"),
         Fix::MasterLimiter { gain_db, ceiling_db } => format!("Limiter en el master: ganancia {gain_db:+.1} dB, techo {ceiling_db:.1} dB"),
         Fix::TrackGain { name, db, .. } => format!("Volumen de «{name}» {db:+.1} dB"),
         Fix::Duck { name, source_name, .. } => format!("Añade un Ducker a «{name}» que escucha a «{source_name}» (sidechain): baja cuando suena, para dejarle sitio"),
@@ -1938,11 +2144,11 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS] }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 } }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0 }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -1995,7 +2201,7 @@ mod tests {
         assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
         // Over it: no platform turns a club track down, so it isn't said.
-        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default() };
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0 };
         let told = advise(&loud, Target::HardTechno, None);
         assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
@@ -2830,5 +3036,111 @@ mod tests {
         app.project.tracks[0].mixer.gain *= 0.5;
         app.follow_mix(&ctx);
         assert!(app.mix.listening.is_none());
+    }
+
+    /// Phrases found where the voice sounds, each brought to as far over the
+    /// rest as most are; the a cappella one is not measured.
+    #[test]
+    fn each_phrase_is_brought_to_the_others() {
+        // 1 s phrases with 0.5 s gaps: -20, -26, -20, -14 dB over a base at -30;
+        // then one more over silence.
+        let mut voice = Vec::new();
+        for level in [-20.0, -26.0, -20.0, -14.0, -20.0] {
+            voice.extend(std::iter::repeat(level).take(20));
+            voice.extend(std::iter::repeat(-90.0).take(10));
+        }
+        let mut base = vec![-30.0f32; 120];
+        base.extend(std::iter::repeat(-90.0).take(30));
+        let found = phrases(&voice, &base);
+        assert_eq!(found.len(), 4, "{found:?}");
+        let overs: Vec<f32> = found.iter().map(|p| p.over.round()).collect();
+        assert_eq!(overs, [10.0, 4.0, 10.0, 16.0]);
+        assert!((found[1].start - 1.5).abs() < 1e-9 && (found[1].end - 2.65).abs() < 1e-9, "{:?}", found[1]);
+        assert_eq!(ride(&found), [0.0, 6.0, 0.0, -6.0]);
+        // Changes in the gaps, each phrase held at its own.
+        let points = ride_points(&found, &ride(&found), 0.5);
+        assert_eq!(points.len(), 8);
+        assert!(points[2].0 > found[0].end && points[2].0 < found[1].start);
+        assert!((points[2].1 - 0.5 * 10f32.powf(0.3)).abs() < 1e-6);
+        // Beats: 1 s is two at 120, one with the tempo automated to 60.
+        let mut project = crate::project::Project::empty();
+        assert!((beat_after(&project, 4.0, 1.0) - 6.0).abs() < 1e-9);
+        let mut lane = engine::model::AutomationLane::new(Param::Tempo);
+        lane.points.push(engine::model::AutomationPoint { beat: 0.0, value: 60.0, curve: 0.0 });
+        project.master.automation.push(lane);
+        assert!((beat_after(&project, 4.0, 1.0) - 5.0).abs() < 1e-3);
+    }
+
+    /// For real: a voice singing phrases loud and soft over a steady pad.
+    /// Ridden, every phrase sits within a couple of dB of the rest, and its
+    /// fader moved afterwards takes the ride with it.
+    #[test]
+    fn a_voice_is_ridden_phrase_by_phrase() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let levels_of = [0.3f32, 0.15, 0.3, 0.55, 0.16, 0.3, 0.3, 0.17];
+        let voice: Vec<f32> = (0..(16.0 * rate) as usize)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let (phrase, within) = ((t / 2.0) as usize, t % 2.0);
+                if within < 1.4 {
+                    let x = std::f32::consts::TAU * 330.0 * t;
+                    levels_of[phrase.min(7)] * (x.sin() + 0.4 * (2.0 * x).sin()) / 1.4
+                } else {
+                    0.0
+                }
+            })
+            .collect();
+        let pad: Vec<f32> = (0..(16.0 * rate) as usize).map(|i| i as f32 / rate).map(|t| 0.05 * ((std::f32::consts::TAU * 220.0 * t).sin() + (std::f32::consts::TAU * 277.2 * t).sin())).collect();
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let clip = |name: &str, audio: &[f32]| {
+            let path = dir.join(format!("nivelar-{name}-{}.wav", std::process::id()));
+            crate::export::write(&path, audio, audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+            engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+        };
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        let mut v = Track::new_audio("Voz", [0; 3]);
+        v.arrangement.push(clip("voz", &voice));
+        let mut p = Track::new_audio("Pad", [0; 3]);
+        p.arrangement.push(clip("pad", &pad));
+        project.tracks = vec![v, p];
+        let mut app = PulseApp::headless(project);
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 60);
+            }
+        };
+        let spread = |report: &Report| {
+            let found = phrases(&report.tracks[0].levels, &base_levels(&report.tracks, 0));
+            let (lo, hi) = found.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.over), b.max(p.over)));
+            (found.len(), hi - lo)
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let (count, before) = spread(app.mix.report.as_ref().unwrap());
+        assert_eq!(count, 8);
+        let advice = advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None);
+        let fix = advice.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::Ride { .. }))).expect("a ride");
+        app.mix.report = None;
+        app.apply_fix(&fix);
+        wait(&mut app);
+        let (count, after) = spread(app.mix.report.as_ref().unwrap());
+        println!("de frase a frase: {before:.1} → {after:.1} dB");
+        assert_eq!(count, 8);
+        assert!(before > 10.0 && after < 2.0, "{before} → {after}");
+        assert!(!advise(app.mix.report.as_ref().unwrap(), Target::Streaming, None).iter().any(|a| matches!(a.fix, Some(Fix::Ride { .. }))));
+        // The fader 6 dB up: the ride comes with it.
+        let lane = |app: &PulseApp| app.project.tracks[0].automation.iter().find(|l| l.param == Param::Volume).unwrap().points.iter().map(|p| p.value).collect::<Vec<f32>>();
+        let was = lane(&app);
+        app.apply_fix(&Fix::TrackGain { track: 0, name: "Voz".into(), db: 6.0 });
+        let now = lane(&app);
+        assert!(was.iter().zip(&now).all(|(a, b)| (b / a - 10f32.powf(0.3)).abs() < 1e-3 || *b == FADER_TOP));
     }
 }

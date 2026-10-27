@@ -946,6 +946,11 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
     - Cuenta como batería una Drum Machine, una Drum Rack, el **Kick Designer** (el bombo en su propia pista) y una pista de audio con nombre de batería («Kick», «Tops», «Perc»…).
     - Si las dos son batería y una es el Kick Designer, el bombo se queda los graves y se recortan los de la otra.
     - Si una ya se aparta de la otra con un sidechain (el bajo del bombo, o un rumble), no es un choque: lo dice en verde.
+  - **Se tapan en los medios**: dos pistas que suenan a la vez en la misma zona, de 250 Hz a 4 kHz, y con un nivel parecido (a menos de 6 dB) la mayor parte del tiempo que coinciden, como una voz y unos acordes, o un sinte y una guitarra. Dice en qué frecuencia, y **Aplicar** abre ahí un hueco de 4 dB, una campana estrecha en el **EQ Eight** de la pista que cede (en uno nuevo si no tiene). Así la otra se oye clara sin bajar el volumen de ninguna.
+    - Cede la que no es protagonista: la voz manda sobre todo, luego la solista, los coros, la batería, el bajo, los acordes, los pads, la percusión y los efectos. Entre dos del mismo papel, cede la más floja.
+    - El hueco va donde la protagonista suena más fuerte de entre las zonas en que se tapan: su cuerpo, que es lo que necesita para oírse.
+    - No cuenta batería contra percusión (se turnan) ni el bombo o el bajo (su sitio son los graves: para eso está **Graves que chocan**).
+    - Si la pista ya tiene un hueco ahí, sale en verde.
   - **Fase**: mezcla o pistas en contrafase, que en mono (un móvil, un club) se pierden.
   - **Dinámica**: muy apretada o con partes muy lejos en volumen.
 - **Referencia**: **Elegir canción…** carga una canción que suene como quieres. Se compara su sonoridad y su **balance de graves, medios y agudos** con el tuyo (en la gráfica por octavas: barras, tu mezcla; línea, la referencia), y **Aplicar** pone un **EQ Three** en el master que lo acerca.

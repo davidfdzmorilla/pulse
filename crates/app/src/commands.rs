@@ -26,7 +26,9 @@ pub enum Command {
     MixAssistant,
     ImportLive,
     ImportAudio,
+    ImportMidi,
     Export,
+    ExportMidi,
     ShowFolder,
     Quit,
     Undo,
@@ -220,6 +222,8 @@ impl PulseApp {
                 }
             }
             Command::ImportAudio => self.choose_samples(crate::app::Placement::Auto),
+            Command::ImportMidi => self.choose_midi_files(),
+            Command::ExportMidi => self.export_song_midi(),
             Command::Export => self.open_panel(crate::app::Panel::Export),
             Command::Quit => {
                 if self.may_discard() {

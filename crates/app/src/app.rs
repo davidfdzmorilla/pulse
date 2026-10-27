@@ -2554,6 +2554,20 @@ impl PulseApp {
         let dropped: Vec<PathBuf> = ctx.input(|i| i.raw.dropped_files.iter().map(|f| f.path().to_path_buf()).collect());
         // A folder brings the audio files in it.
         let mut other = Vec::new();
+        let (midi, dropped): (Vec<PathBuf>, Vec<PathBuf>) = dropped.into_iter().partition(|p| crate::midi_file::is_midi(p));
+        if !midi.is_empty() {
+            let pos = if self.script.is_some() { ctx.pointer_latest_pos() } else { crate::open_files::pointer_in_window() };
+            match pos {
+                Some(p) => {
+                    self.drop_midi(midi, p);
+                }
+                None => {
+                    for path in midi {
+                        self.import_midi(&path, None);
+                    }
+                }
+            }
+        }
         let audio = audio_in(dropped, &mut other);
         if !audio.is_empty() {
             // Where the mouse is (macOS knows; the drop doesn't say): the slot, lane

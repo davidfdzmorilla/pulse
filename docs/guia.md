@@ -69,6 +69,7 @@ Una columna por pista, con hasta 16 slots (escenas): se ven las que usas y una v
 - **Copiar al Arrangement**: lo pone al final del Arrangement de su pista, en un compás.
 - Solo audio: **Separar en stems…**, **Consolidar**, **Invertir**, **Detectar tempo** y **Usar el tempo de este clip en el proyecto**.
 - **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
+- Solo MIDI: **Exportar MIDI…** (ver «Archivos MIDI»).
 - **Duplicar** (⌘D): al siguiente slot libre de abajo.
 - **Eliminar** (Supr o ⌫).
 - Colores.
@@ -120,6 +121,7 @@ La franja bajo la del loop tiene los **marcadores**: las partes de la canción c
 - **Tomas** (en grabaciones en bucle): elegir la toma que suena y **Mostrar las tomas en filas…** (ver «Tomas y comping»).
 - Solo audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar**, **Invertir**.
 - **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes (ver «Acompañamiento»).
+- Solo MIDI: **Exportar MIDI…** (ver «Archivos MIDI»).
 - **Dividir aquí** (⌘E corta donde hiciste clic en el clip), **Trocear ▸** (en trozos iguales), **Unir N clips** (⌘J).
 - **Desactivar clip** (tecla **0**): el clip se queda donde está, en gris, pero no suena (ni sus notas, ni su audio, ni su automatización); tampoco al exportar. Otra vez lo activa. Si lo desactivas (o mueves, recortas o borras un clip de audio) mientras suena, se apaga con un fundido corto, sin clic. Con varios seleccionados, los desactiva todos (o los activa, si ya lo estaban todos). También en el menú de los clips de Session.
 - **Copiar**, **Cortar**, **Duplicar** (⌘D), **Eliminar** (⌫).
@@ -852,12 +854,14 @@ El panel de la izquierda (☰ lo muestra u oculta). Arriba pone el **destino**: 
   - Audio: **clic** lo escucha (otro clic lo para), **doble clic** lo añade a la pista de audio seleccionada, y se puede **arrastrar** a un slot, una pista, un pad o el Sampler.
   - **A tempo** (arriba, marcado de serie): los loops (hasta 32 s) se escuchan al tempo del proyecto y en bucle, como sonarían en un clip (Beats si son de batería). Si la canción está sonando, entran a tiempo con ella, en su compás, y con el loop activado vuelven atrás con ella, en el mismo instante y sin clic. La primera vez que escuchas un archivo tarda un momento en sonar, mientras busca su tempo; al lado de la casilla pone a qué tempo va el loop. Sin marcar, o con archivos más largos, cada archivo suena una vez a su velocidad.
   - **↑ ↓**: tras hacer clic en un archivo, pasan al anterior o al siguiente y lo escuchan. Un clic fuera del navegador devuelve las flechas al resto de Pulse.
+  - MIDI (.mid): doble clic trae sus partes en pistas nuevas; arrastrado a una pista MIDI, todas sus notas en un clip ahí (ver «Archivos MIDI»).
   - Proyectos: doble clic para abrir. Presets: doble clic para aplicar.
 - **PISTAS**: nueva pista MIDI o de audio.
 
 ### Arrastrar desde Finder
 
 - Un audio suelto en un slot o una pista de audio va ahí; en un pad o el Sampler, se carga; en un hueco vacío, crea una pista de audio. Varios archivos van seguidos; en Session, si no caben en los 16 slots, siguen en una pista nueva. Una **carpeta** trae los audios que tiene (también en sus carpetas), por nombre. La barra de estado dice cuántos se añadieron y cuáles no se pudieron leer.
+- Un `.mid` trae sus partes (ver «Archivos MIDI»).
 - Un `.pulse` se abre y un `.als` se importa (pregunta antes si hay cambios sin guardar).
 - También funciona abrir con doble clic en Finder o soltar en el icono del Dock.
 
@@ -922,6 +926,27 @@ Las versiones viven en la carpeta del proyecto (`Versiones/`) y usan sus mismos 
 - Los **locators** llegan como marcadores.
 - No se importan los sintes de Live (esas pistas reciben Pulse Synth), los efectos ni la automatización.
 - Las muestras se buscan por ruta y, si el set viene de otro ordenador, por nombre en la carpeta del set.
+
+## Archivos MIDI
+
+Pulse abre y guarda archivos MIDI estándar (**.mid**), para traer partes de otro programa (una progresión, una batería, una canción entera) o llevarte las tuyas.
+
+**Traer un MIDI:**
+- **Archivo → Importar MIDI…**, o arrastra el .mid desde el Finder o el navegador de Pulse.
+- En un hueco vacío, o con Importar: cada parte del archivo va a una pista MIDI nueva. Una parte es cada canal de cada pista del archivo.
+  - Las pistas nuevas se llaman como en el archivo. Sin nombre, se llaman por su sonido General MIDI («Bajo», «Piano», «Cuerdas»…).
+  - El canal 10 es la batería y va a una caja de ritmos.
+  - Las demás partes suenan con el sinte; cámbialo por el instrumento que quieras.
+  - En el Arrangement van al principio; en la Session, al primer slot.
+- Sobre una pista MIDI (un slot vacío o su carril, en el tiempo donde sueltas): todas las notas en un solo clip, ahí.
+- Si el proyecto está vacío, toma el tempo del archivo. Si no, suena al tempo del proyecto y te dice a cuál iba el archivo. Los cambios de tempo de dentro del archivo no se traen.
+- Cada clip dura hasta el compás donde acaba su última nota.
+
+**Llevarte el MIDI:**
+- **Archivo → Exportar MIDI…** guarda la canción: cada pista MIDI con clips en el Arrangement es una pista del archivo, con su nombre, al tempo del proyecto y en 4/4.
+  - La batería va en el canal 10 para que otros programas la reconozcan.
+  - Un clip que en el Arrangement dura más que él mismo se repite como suena; los clips desactivados no van.
+- Clic derecho en un clip MIDI → **Exportar MIDI…** guarda solo ese clip.
 
 ## Exportar audio
 

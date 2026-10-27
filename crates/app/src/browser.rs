@@ -66,6 +66,7 @@ pub struct DropTargets {
 #[derive(Clone, Copy, PartialEq)]
 enum Kind {
     Audio,
+    Midi,
     Project,
     Preset,
 }
@@ -73,6 +74,9 @@ enum Kind {
 fn kind(path: &Path) -> Option<Kind> {
     if crate::app::is_audio_file(path) {
         return Some(Kind::Audio);
+    }
+    if crate::midi_file::is_midi(path) {
+        return Some(Kind::Midi);
     }
     match path.extension().and_then(|e| e.to_str()) {
         Some("pulse") => Some(Kind::Project),
@@ -400,7 +404,7 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
     let Some(kind) = kind(path) else { return };
     let name = path.file_stem().map_or(String::new(), |n| n.to_string_lossy().into_owned());
     let width = ui.available_width();
-    let sense = if kind == Kind::Audio { Sense::click_and_drag() } else { Sense::click() };
+    let sense = if matches!(kind, Kind::Audio | Kind::Midi) { Sense::click_and_drag() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), sense);
     crate::widgets::name(&response, egui::WidgetType::Button, &name);
     app.browser.shown.push(path.to_path_buf());
@@ -415,6 +419,7 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
     let icon = match kind {
         Kind::Audio if playing => "►",
         Kind::Audio => "♪",
+        Kind::Midi => "♫",
         Kind::Project => "◆",
         Kind::Preset => "☰",
     };
@@ -425,12 +430,13 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
     ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, TEXT);
     let hint = match kind {
         Kind::Audio => "Clic: escuchar (otra vez: parar) · ↑ ↓: el anterior o el siguiente · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
+        Kind::Midi => "Doble clic: sus partes en pistas nuevas · arrastrar: a una pista MIDI (todo en un clip) o a un hueco vacío (pistas nuevas)",
         Kind::Project => "Doble clic: abrir el proyecto",
         Kind::Preset => "Doble clic: aplicar el preset a la pista seleccionada",
     };
     let response = response.on_hover_text(format!("{}\n{hint}", path.display()));
 
-    if response.drag_started() && kind == Kind::Audio {
+    if response.drag_started() && matches!(kind, Kind::Audio | Kind::Midi) {
         egui::DragAndDrop::set_payload(ui.ctx(), Dragged(path.to_path_buf()));
     }
     if response.double_clicked() {
@@ -438,6 +444,9 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
             Kind::Audio => {
                 app.preview(None);
                 app.add_samples(vec![path.to_path_buf()], Placement::Auto);
+            }
+            Kind::Midi => {
+                app.import_midi(path, None);
             }
             Kind::Project => app.open_documents(vec![path.to_path_buf()]),
             Kind::Preset => app.apply_preset_file(path),
@@ -557,6 +566,13 @@ impl PulseApp {
     /// sampler, a session slot, an arrangement lane, or empty space in the view (a
     /// new audio track). False if `pos` is none of these.
     pub fn drop_files(&mut self, paths: Vec<PathBuf>, pos: egui::Pos2) -> bool {
+        let (midi, paths): (Vec<PathBuf>, Vec<PathBuf>) = paths.into_iter().partition(|p| crate::midi_file::is_midi(p));
+        if !midi.is_empty() {
+            let placed = self.drop_midi(midi, pos);
+            if paths.is_empty() {
+                return placed;
+            }
+        }
         if let Some(&(_, track, slot)) = self.sample_drop_zones.iter().find(|(rect, ..)| rect.contains(pos)) {
             self.set_instrument_samples(track, slot, paths);
             return true;
@@ -599,6 +615,41 @@ impl PulseApp {
             }
             None => false
         }
+    }
+
+    /// MIDI files dropped at `pos`: on a MIDI track's empty slot or its lane,
+    /// all the notes in a clip there; anywhere else, each part on a track of
+    /// its own.
+    pub fn drop_midi(&mut self, paths: Vec<PathBuf>, pos: egui::Pos2) -> bool {
+        let targets = &self.drop_targets;
+        let place = if let Some(&(track, slot, _)) = targets.slots.iter().find(|(.., r)| r.contains(pos)) {
+            Some((track, Placement::Session { track, slot }))
+        } else if let Some(&(track, _, left, ppb)) = targets.lanes.iter().find(|(_, r, ..)| r.contains(pos)) {
+            Some((track, Placement::Arrangement { track, start: (((pos.x - left) / ppb) as f64).max(0.0).floor() }))
+        } else {
+            None
+        };
+        let into = match place {
+            Some((track, placement)) => {
+                let t = &self.project.tracks[track];
+                if t.is_audio() || t.is_group() {
+                    self.status = Some("Suelta el MIDI en una pista MIDI, o en un hueco vacío para crear pistas".into());
+                    return true;
+                }
+                if let Placement::Session { slot, .. } = placement {
+                    if t.clips[slot].is_some() {
+                        self.status = Some("Ese slot ya tiene un clip".into());
+                        return true;
+                    }
+                }
+                Some(placement)
+            }
+            None => None,
+        };
+        for path in paths {
+            self.import_midi(&path, into);
+        }
+        true
     }
 }
 

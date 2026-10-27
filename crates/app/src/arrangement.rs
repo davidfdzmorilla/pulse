@@ -1235,6 +1235,10 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             }
         });
     }
+    if !audio && count == 1 && ui.button("Exportar MIDI…").on_hover_text("Sus notas a un archivo .mid, para llevarlas a otro programa").clicked() {
+        app.export_clip_midi(clip);
+        ui.close();
+    }
     if audio && count == 1 && ui.button("Sacar groove").on_hover_text(GROOVE_HINT).clicked() {
         app.take_groove(clip);
         ui.close();

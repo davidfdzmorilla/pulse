@@ -1356,7 +1356,7 @@ Un piano, dos pianos eléctricos y un órgano, sintetizados por Pulse: no cargan
 
 1. Selecciona una pista MIDI.
 2. En el navegador, abre **INSTRUMENTOS** y haz clic en **Pulse Keys**.
-3. Elige el **Modelo** a la izquierda del dispositivo, o un sonido en **Presets › De fábrica**.
+3. Elige el **Modelo** a la izquierda del dispositivo, o uno de sus 34 sonidos en **Presets › De fábrica**, agrupados en Piano, Púas, Lengüetas y Órgano: pianos de pop, balada, jazz, cine o lo-fi, eléctricos de soul, funk o chill, y órganos de blues, reggae, iglesia, rock o house.
 
 Al cambiar de modelo empiezas desde su sonido de partida; el volumen se queda como estaba.
 
@@ -1409,7 +1409,7 @@ Al cambiar de modelo empiezas desde su sonido de partida; el volumen se queda co
 - **Tono** quita agudos y **Drive** satura, para un órgano de rock.
 - El órgano no responde a la fuerza de las notas.
 
-> Consejo: algunas registraciones conocidas (cada cifra es una barra): **888000000** jazz, **888800000** gospel, **006802000** balada y **888888888** todo fuera. Están entre los presets de fábrica.
+> Consejo: algunas registraciones conocidas (cada cifra es una barra): **888000000** jazz, **888800000** gospel, **838000000** blues, **886000000** iglesia, **800000888** silbante, **006802000** balada y **888888888** todo fuera. Están entre los presets de fábrica.
 
 +++ Cómo funciona
 - No hay muestras: cada nota es una suma de parciales (senos que se apagan), afinados con exactitud.

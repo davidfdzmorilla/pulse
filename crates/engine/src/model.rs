@@ -1851,17 +1851,41 @@ impl KeysParams {
             ("Piano · Suave", KeysParams { tone: 0.22, dynamics: 0.9, hammer: 0.2, body: 0.65, release: 0.5, ..piano }),
             ("Piano · De pared", KeysParams { tone: 0.6, strings: 0.95, body: 0.75, length: 0.6, width: 0.3, ..piano }),
             ("Púas · Clásico", tines),
-            ("Púas · Trémolo", KeysParams { tremolo: 0.6, tremolo_rate: 4.2, bell: 0.35, width: 0.7, ..tines }),
+            ("Púas · Trémolo", KeysParams { tremolo: 0.6, tremolo_rate: 4.2, bell: 0.35, width: 0.7, gain: 0.4, ..tines }),
             ("Púas · Con ladrido", KeysParams { tone: 0.65, bark: 0.85, bell: 0.5, drive: 0.25, ..tines }),
             ("Púas · Campana", KeysParams { tone: 0.6, bell: 0.85, bark: 0.2, length: 1.4, ..tines }),
             ("Lengüetas · Clásico", reed),
             ("Lengüetas · Trémolo", KeysParams { tremolo: 0.5, ..reed }),
-            ("Lengüetas · Saturado", KeysParams { bark: 0.8, drive: 0.45, tone: 0.65, ..reed }),
+            ("Lengüetas · Saturado", KeysParams { bark: 0.8, drive: 0.45, tone: 0.65, gain: 0.36, ..reed }),
             ("Órgano · Jazz", KeysParams { drawbars: bars("888000000"), percussion: 0.7, perc_decay: 0.35, leslie_fast: 0.0, ..organ }),
             ("Órgano · Gospel", KeysParams { drawbars: bars("888800000"), percussion: 0.0, leslie_fast: 1.0, click: 0.45, ..organ }),
             ("Órgano · Rock", KeysParams { drawbars: bars("888000000"), percussion: 0.0, drive: 0.6, leslie: 0.75, click: 0.5, ..organ }),
             ("Órgano · Balada", KeysParams { drawbars: bars("006802000"), percussion: 0.0, click: 0.1, leslie: 0.5, ..organ }),
-            ("Órgano · Completo", KeysParams { drawbars: bars("888888888"), percussion: 0.0, leslie_fast: 1.0, ..organ }),
+            ("Órgano · Completo", KeysParams { drawbars: bars("888888888"), percussion: 0.0, leslie_fast: 1.0, gain: 0.4, ..organ }),
+            // Pianos for songs: pop cuts through, the ballad sings on, the dark one
+            // under film cues, the worn-out one for lo-fi beats, the touchy jazz one.
+            ("Piano · Pop", KeysParams { tone: 0.72, hammer: 0.5, dynamics: 0.6, body: 0.4, length: 0.8, release: 0.3, width: 0.7, gain: 0.5, ..piano }),
+            ("Piano · Balada", KeysParams { tone: 0.42, hammer: 0.25, dynamics: 0.85, strings: 0.5, body: 0.7, length: 1.6, release: 0.9, width: 0.8, gain: 0.45, ..piano }),
+            ("Piano · Cine oscuro", KeysParams { tone: 0.08, hammer: 0.1, dynamics: 1.0, strings: 0.6, body: 0.85, length: 2.5, release: 1.6, width: 0.9, gain: 0.42, ..piano }),
+            ("Piano · Lo-fi", KeysParams { tone: 0.3, hammer: 0.6, dynamics: 0.4, strings: 1.0, body: 0.9, length: 0.45, release: 0.18, drive: 0.35, width: 0.25, gain: 0.47, ..piano }),
+            ("Piano · Jazz", KeysParams { tone: 0.55, hammer: 0.35, dynamics: 0.95, strings: 0.3, body: 0.55, length: 1.1, release: 0.25, width: 0.45, gain: 0.5, ..piano }),
+            // Tines: warm soul, dark neo-soul with a lazy tremolo, the glassy seventies
+            // ballad, a short barking funk comp and a slow wide chill tremolo.
+            ("Púas · Soul", KeysParams { tone: 0.4, hammer: 0.15, dynamics: 0.85, bell: 0.3, bark: 0.45, length: 1.2, release: 0.35, gain: 0.53, ..tines }),
+            ("Púas · Neo-soul", KeysParams { tone: 0.26, hammer: 0.1, dynamics: 0.9, bell: 0.22, bark: 0.2, tremolo: 0.35, tremolo_rate: 3.0, length: 1.3, release: 0.45, width: 0.85, gain: 0.46, ..tines }),
+            ("Púas · Balada de los 70", KeysParams { tone: 0.55, dynamics: 0.8, bell: 0.65, bark: 0.25, tremolo: 0.25, tremolo_rate: 6.0, length: 1.5, release: 0.5, width: 0.8, gain: 0.46, ..tines }),
+            ("Púas · Funk", KeysParams { tone: 0.7, hammer: 0.4, dynamics: 1.0, bell: 0.4, bark: 0.8, drive: 0.3, length: 0.6, release: 0.12, width: 0.4, gain: 0.5, ..tines }),
+            ("Púas · Chill", KeysParams { tone: 0.32, hammer: 0.1, dynamics: 0.75, bell: 0.3, bark: 0.15, tremolo: 0.6, tremolo_rate: 1.2, length: 1.6, release: 0.6, width: 0.75, gain: 0.34, ..tines }),
+            // Reeds: a soul one that growls when hit hard, a crunchy rock one.
+            ("Lengüetas · Soul", KeysParams { tone: 0.35, dynamics: 0.95, bell: 0.45, bark: 0.6, tremolo: 0.2, tremolo_rate: 6.0, length: 1.1, gain: 0.55, ..reed }),
+            ("Lengüetas · Rock", KeysParams { tone: 0.85, hammer: 0.4, dynamics: 0.9, bell: 0.5, bark: 1.0, drive: 0.75, length: 0.7, release: 0.15, gain: 0.36, ..reed }),
+            // Organs by style and registration.
+            ("Órgano · Blues", KeysParams { drawbars: bars("838000000"), percussion: 0.8, perc_decay: 0.2, perc_third: true, click: 0.5, leslie: 0.7, leslie_fast: 0.0, drive: 0.25, gain: 0.55, ..organ }),
+            ("Órgano · Reggae", KeysParams { drawbars: bars("008400000"), percussion: 0.8, perc_decay: 0.15, perc_third: true, click: 0.6, leslie: 0.3, leslie_fast: 0.0, tone: 0.55, gain: 0.89, ..organ }),
+            ("Órgano · Iglesia", KeysParams { drawbars: bars("886000000"), percussion: 0.0, click: 0.05, leslie: 0.55, leslie_fast: 0.0, tone: 0.35, width: 0.7, gain: 0.6, ..organ }),
+            ("Órgano · Silbante", KeysParams { drawbars: bars("800000888"), percussion: 0.0, click: 0.35, leslie: 0.8, leslie_fast: 1.0, tone: 0.6, gain: 0.37, ..organ }),
+            ("Órgano · Rugido", KeysParams { drawbars: bars("888500000"), percussion: 0.0, click: 0.6, leslie: 1.0, leslie_fast: 1.0, drive: 0.85, tone: 0.8, width: 0.8, gain: 0.38, ..organ }),
+            ("Órgano · House", KeysParams { drawbars: bars("006060300"), percussion: 1.0, perc_decay: 0.25, perc_third: false, click: 0.7, leslie: 0.0, tone: 0.7, drive: 0.15, gain: 0.95, ..organ }),
         ]
     }
 

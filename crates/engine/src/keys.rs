@@ -1014,6 +1014,41 @@ pub(crate) mod tests {
         }
     }
 
+    fn preset(name: &str) -> KeysParams {
+        KeysParams::presets().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("{name}")).1
+    }
+
+    #[test]
+    fn presets_do_what_their_names_say() {
+        // The chill tines pan slowly: the left side swells and fades about once a second.
+        let mut k = Keys::new(preset("Púas · Chill"), SR);
+        k.note_on(60, 0.8, HELD);
+        let (l, r) = render(&mut k, 2.0);
+        let balance: Vec<f32> = l.chunks(2400).zip(r.chunks(2400)).map(|(a, b)| rms(a) / rms(b).max(1e-9)).collect();
+        let (lo, hi) = balance.iter().fold((f32::MAX, 0.0f32), |(lo, hi), &x| (lo.min(x), hi.max(x)));
+        assert!(hi > lo * 2.0, "the slow tremolo pans: {lo} .. {hi}");
+
+        // The funk tines bark on hard notes and are clearly louder than soft ones.
+        let funk = |vel| {
+            let mut k = Keys::new(preset("Púas · Funk"), SR);
+            k.note_on(48, vel, HELD);
+            let (l, _) = render(&mut k, 0.3);
+            let f0 = midi_to_freq(48);
+            (at(&l[2000..], f0 * 2.0) / at(&l[2000..], f0), rms(&l))
+        };
+        let ((soft_bark, soft), (hard_bark, hard)) = (funk(0.3), funk(1.0));
+        assert!(hard_bark > soft_bark * 1.5, "bark soft {soft_bark} hard {hard_bark}");
+        assert!(hard > soft * 2.0, "level soft {soft} hard {hard}");
+
+        // The house organ's percussion makes a stab that settles to the drawbars.
+        let mut k = Keys::new(KeysParams { leslie: 0.0, ..preset("Órgano · House") }, SR);
+        k.note_on(60, 1.0, HELD);
+        let (early, _) = render(&mut k, 0.03);
+        render(&mut k, 0.5);
+        let (late, _) = render(&mut k, 0.1);
+        assert!(rms(&early) > rms(&late) * 1.5, "early {} late {}", rms(&early), rms(&late));
+    }
+
     #[test]
     fn it_renders_the_same_every_time() {
         let play = || {

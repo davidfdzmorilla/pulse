@@ -17,6 +17,7 @@ use crate::note_edit::{self, Selection, MIN_LENGTH};
 use crate::project::{is_black_key, note_name};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
+use engine::meter::TimeSig;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Key, Rect, Sense, Stroke, StrokeKind};
 use engine::model::{Clip, MidiClip, Note};
 use engine::Command;
@@ -47,7 +48,7 @@ const NOTE_LENGTHS: [(f64, &str); 8] = [
     (0.5, "1/8"),
     (1.0, "1/4"),
     (2.0, "1/2"),
-    (4.0, "1 Compás"),
+    (4.0, "1/1"),
 ];
 
 #[derive(Clone)]
@@ -90,6 +91,8 @@ pub struct State {
     /// The drum model playing a beat in the background (it takes a moment), for
     /// the clip that asked, with the settings it was asked with.
     drum_job: Option<DrumJob>,
+    /// The time signature where the clip plays (its bars and counts).
+    sig: TimeSig,
 }
 
 type Beat = Result<(Vec<Note>, Option<engine::model::Groove>), String>;
@@ -124,6 +127,7 @@ impl Default for State {
             drum_takes: 0,
             drum_error: None,
             drum_job: None,
+            sig: TimeSig::COMMON,
         }
     }
 }
@@ -224,7 +228,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut vary = app.can_vary(clip_ref).then_some(false);
     let grooves = app.project.grooves.clone();
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
+    // On the Arrangement, the signature where the clip starts; in the Session, the song's first.
+    let sig = match clip_ref {
+        ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement.get(index).map_or(app.project.meter.first(), |p| app.project.meter.sig_at(p.start)),
+        ClipRef::Session { .. } => app.project.meter.first(),
+    };
     let state = &mut app.piano_roll;
+    state.sig = sig;
     if state.selection_clip != Some(clip_ref) {
         state.selection.clear();
         state.selection_clip = Some(clip_ref);
@@ -291,8 +301,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         };
 
         // Ruler and insert marker.
-        for bar in 0..=(clip.length / 4.0).ceil() as usize {
-            painter.text(pos2(x_of(bar as f64 * 4.0) + 3.0, rect.top() + 2.0), Align2::LEFT_TOP, (bar + 1).to_string(), theme::small(), TEXT_DIM);
+        let bar_len = state.sig.bar();
+        for bar in 0..=(clip.length / bar_len).ceil() as usize {
+            painter.text(pos2(x_of(bar as f64 * bar_len) + 3.0, rect.top() + 2.0), Align2::LEFT_TOP, (bar + 1).to_string(), theme::small(), TEXT_DIM);
         }
         let insert_x = x_of(state.insert_at);
         painter.line_segment([pos2(insert_x, rect.top()), pos2(insert_x, rect.top() + RULER_H)], Stroke::new(2.0, ACCENT));
@@ -348,7 +359,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let beat = step as f64 * state.grid;
             // Triplet steps are not exact in floating point, so compare with a tolerance.
             let on = |unit: f64| ((beat / unit) - (beat / unit).round()).abs() < 1e-6;
-            let gray = if on(4.0) { 95 } else if on(1.0) { 66 } else { 50 };
+            let gray = if on(state.sig.bar()) { 95 } else if on(state.sig.count()) { 66 } else { 50 };
             let x = x_of(beat);
             painter.line_segment([pos2(x, grid.top()), pos2(x, grid.bottom())], Stroke::new(1.0, Color32::from_gray(gray)));
         }
@@ -660,9 +671,9 @@ fn to_scale(notes: &mut [Note], targets: &[usize], scale: Scale) -> usize {
 }
 
 /// The editor's bar; the pitches of any chord written, to preview.
-/// A loop's length as said: «4 comp.» in whole bars, «3/16» otherwise.
-fn length_label(length: f64) -> String {
-    let bars = length / 4.0;
+/// A loop's length as said: «4 comp.» in whole bars of `sig`, «3/16» otherwise.
+fn length_label(length: f64, sig: TimeSig) -> String {
+    let bars = length / sig.bar();
     if (bars - bars.round()).abs() < 1e-9 && bars >= 1.0 {
         format!("{bars} comp.")
     } else {
@@ -682,11 +693,12 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
         ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(110.0));
         label(ui, "Loop");
-        let bars = clip.length / 4.0;
-        egui::ComboBox::from_id_salt("clip_length").selected_text(length_label(clip.length)).width(70.0).show_ui(ui, |ui| {
+        let bar = state.sig.bar();
+        let bars = clip.length / bar;
+        egui::ComboBox::from_id_salt("clip_length").selected_text(length_label(clip.length, state.sig)).width(70.0).show_ui(ui, |ui| {
             for option in [1.0, 2.0, 4.0, 8.0, 16.0] {
-                if ui.selectable_label(bars == option, format!("{option} comp.")).clicked() {
-                    clip.length = option * 4.0;
+                if ui.selectable_label((bars - option).abs() < 1e-9, format!("{option} comp.")).clicked() {
+                    clip.length = option * bar;
                 }
             }
         });
@@ -694,7 +706,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         let mut sixteenths = (clip.length * 4.0).round().max(1.0) as u32;
         let changed = ui
             .add(egui::DragValue::new(&mut sixteenths).range(1..=256).speed(0.2).suffix("/16"))
-            .on_hover_text("Longitud del loop en semicorcheas: 3/16, 5/16 o 7/16 sobre un compás de 4/4 hacen polirritmos")
+            .on_hover_text("Longitud del loop en semicorcheas: 3/16, 5/16 o 7/16 sobre el compás de la canción hacen polirritmos")
             .changed();
         if changed {
             clip.length = sixteenths as f64 / 4.0;
@@ -1045,7 +1057,7 @@ fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Opt
                         state.selection.clear();
                     }
                     Key::ArrowLeft | Key::ArrowRight if !selected.is_empty() => {
-                        let step = if modifiers.shift { 4.0 } else { state.grid };
+                        let step = if modifiers.shift { state.sig.bar() } else { state.grid };
                         let sign = if key == Key::ArrowLeft { -1.0 } else { 1.0 };
                         note_edit::shift(&mut clip.notes, &selected, sign * step, clip.length);
                     }
@@ -1225,7 +1237,9 @@ mod tests {
     /// every three sixteenths, across the bar lines.
     #[test]
     fn a_loop_can_be_any_number_of_sixteenths() {
-        assert_eq!((length_label(4.0), length_label(16.0), length_label(0.75), length_label(5.0)), ("1 comp.".into(), "4 comp.".into(), "3/16".into(), "20/16".into()));
+        let common = TimeSig::COMMON;
+        assert_eq!((length_label(4.0, common), length_label(16.0, common), length_label(0.75, common), length_label(5.0, common)), ("1 comp.".into(), "4 comp.".into(), "3/16".into(), "20/16".into()));
+        assert_eq!(length_label(6.0, TimeSig::new(3, 4)), "2 comp.");
         let mut project = crate::project::Project::empty();
         let mut track = crate::project::Track::new("Perc", [0; 3], engine::model::InstrumentKind::DrumMachine(Default::default()));
         let mut clip = engine::model::MidiClip::new("3/16", 0.75, [0; 3]);

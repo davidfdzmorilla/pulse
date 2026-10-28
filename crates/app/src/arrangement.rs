@@ -11,6 +11,7 @@
 use crate::app::{ClipRef, Placement, PulseApp};
 use crate::theme::{self, ACCENT, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
+use engine::meter::Meter;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::{ArrangementClip, AutomationPoint, Clip, MidiClip, Param};
 use std::collections::{HashMap, HashSet};
@@ -165,24 +166,75 @@ impl Default for State {
     }
 }
 
-fn snap_unit(pixels_per_beat: f32) -> f64 {
-    if pixels_per_beat >= 10.0 {
-        1.0
-    } else {
-        4.0
+/// What clips, the loop and points snap to: the song's bar lines, its counts (a
+/// beat of 4/4, a dotted quarter of 6/8…), or a step in beats.
+#[derive(Clone, Copy)]
+pub(crate) enum Grid {
+    Bars(Meter),
+    Counts(Meter),
+    Step(f64),
+}
+
+impl Grid {
+    pub(crate) fn snap(self, beat: f64) -> f64 {
+        match self {
+            Grid::Bars(meter) => meter.round_to_bar(beat),
+            Grid::Counts(meter) => {
+                let (bar, into) = meter.bar_at(beat);
+                let sig = meter.sig_at_bar(bar);
+                let start = meter.bar_start(bar);
+                let near = ((into / sig.count()).round() * sig.count()).min(sig.bar());
+                start + near
+            }
+            Grid::Step(step) => (beat / step).round() * step,
+        }
+    }
+
+    /// The shortest length on the grid at `beat`: a bar, a count, a step.
+    pub(crate) fn length_at(self, beat: f64) -> f64 {
+        match self {
+            Grid::Bars(meter) => meter.bar_length_at(beat),
+            Grid::Counts(meter) => meter.sig_at(beat).count(),
+            Grid::Step(step) => step,
+        }
     }
 }
 
-fn snap(beat: f64, unit: f64) -> f64 {
-    (beat / unit).round() * unit
+fn snap_unit(pixels_per_beat: f32, meter: &Meter) -> Grid {
+    if pixels_per_beat >= 10.0 {
+        Grid::Counts(*meter)
+    } else {
+        Grid::Bars(*meter)
+    }
 }
 
 /// Breakpoints snap more finely than clips when zoomed in.
-fn point_unit(pixels_per_beat: f32) -> f64 {
+fn point_unit(pixels_per_beat: f32, meter: &Meter) -> Grid {
     if pixels_per_beat >= 24.0 {
-        0.25
+        Grid::Step(0.25)
     } else {
-        snap_unit(pixels_per_beat)
+        snap_unit(pixels_per_beat, meter)
+    }
+}
+
+/// The ruler's menu for time signatures: change it from the bar at `beat` on, or
+/// take a change there away.
+fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64) {
+    let meter = app.project.meter;
+    let bar = meter.bar_at(meter.round_to_bar(beat).max(0.0)).0.max(0) as u32;
+    let current = meter.sig_at_bar(bar as i64);
+    let here = meter.changes().iter().any(|c| c.bar == bar && bar > 0);
+    ui.menu_button(format!("Compás desde el {} ({})", bar + 1, current.label()), |ui| {
+        for sig in engine::meter::TimeSig::PRESETS {
+            if ui.selectable_label(sig == current, sig.label()).clicked() {
+                app.set_meter(meter.with_change(bar, sig));
+                ui.close();
+            }
+        }
+    });
+    if here && ui.button(format!("Quitar el cambio de compás del {}", bar + 1)).clicked() {
+        app.set_meter(meter.without_change(bar));
+        ui.close();
     }
 }
 
@@ -284,7 +336,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     ui.add_space(2.0);
 
     let ppb = app.arrangement.pixels_per_beat;
-    let unit = snap_unit(ppb);
+    let unit = snap_unit(ppb, &app.project.meter);
     let tracks = app.project.tracks.len();
     let content_end = app
         .project
@@ -369,29 +421,41 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 lane_rects.push((t, lane_rect(t)));
                 app.drop_targets.lanes.push((t, lane_rect(t).intersect(ui.clip_rect()), rect.left(), ppb));
             }
-            let label_every = if ppb < 6.0 { 4 } else if ppb < 10.0 { 2 } else { 1 };
-            for beat in 0..=total_beats as i64 {
-                let x = x_at(beat as f64);
-                let bar = beat % 4 == 0;
-                if !bar && ppb < 8.0 {
-                    continue;
-                }
-                let color = if bar { Color32::from_gray(58) } else { Color32::from_gray(44) };
-                painter.line_segment([pos2(x, lanes_top), pos2(x, rect.bottom())], Stroke::new(1.0, color));
-                if bar && (beat / 4) % label_every == 0 {
+            // The song's counts and bar lines, in its time signatures.
+            let meter = app.project.meter;
+            let bar_px = 4.0 * ppb.max(0.01) as f64;
+            let label_every = if bar_px < 24.0 { 4 } else if bar_px < 40.0 { 2 } else { 1 };
+            if ppb >= 8.0 {
+                meter.counts(0.0, total_beats, |beat, downbeat| {
+                    if !downbeat {
+                        let x = x_at(beat);
+                        painter.line_segment([pos2(x, lanes_top), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::from_gray(44)));
+                    }
+                });
+            }
+            let changes = meter.changes();
+            meter.bars(0.0, total_beats + 1e-9, |bar, beat| {
+                let x = x_at(beat);
+                painter.line_segment([pos2(x, lanes_top), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::from_gray(58)));
+                // Where the signature changes (and at the start, if it isn't 4/4), it says so.
+                let change = changes.iter().find(|c| c.bar as i64 == bar).filter(|c| c.bar > 0 || !meter.is_common());
+                if bar % label_every == 0 || change.is_some() {
                     painter.line_segment(
                         [pos2(x, rect.top() + LOOP_H + MARKER_H + 8.0), pos2(x, lanes_top)],
                         Stroke::new(1.0, TEXT_DIM),
                     );
-                    painter.text(
+                    let number = painter.text(
                         pos2(x + 3.0, rect.top() + LOOP_H + MARKER_H + 2.0),
                         Align2::LEFT_TOP,
-                        (beat / 4 + 1).to_string(),
+                        (bar + 1).to_string(),
                         theme::small(),
                         TEXT_DIM,
                     );
+                    if let Some(change) = change {
+                        painter.text(pos2(number.right() + 4.0, number.top()), Align2::LEFT_TOP, change.sig.label(), theme::small(), ACCENT);
+                    }
                 }
-            }
+            });
 
             // Loop region.
             let loop_rect = Rect::from_min_max(
@@ -1045,12 +1109,12 @@ fn marker_at(app: &PulseApp, x: f32, origin_x: f32) -> Option<usize> {
 /// dragging moves it, a double click on empty space adds one, a right click
 /// opens its menu. Returns whether it took the pointer.
 #[allow(clippy::too_many_arguments)]
-fn handle_markers(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, rect: Rect, pos: egui::Pos2, beat: f64, unit: f64, origin_x: f32) -> bool {
+fn handle_markers(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, rect: Rect, pos: egui::Pos2, beat: f64, unit: Grid, origin_x: f32) -> bool {
     let strip = pos.y >= rect.top() + LOOP_H && pos.y < rect.top() + LOOP_H + MARKER_H;
     if let Some(Drag::Marker { index, moved }) = app.arrangement.drag {
         if response.dragged() {
             if let Some(marker) = app.project.markers.get_mut(index) {
-                let to = snap(beat, unit);
+                let to = unit.snap(beat);
                 if (to - marker.beat).abs() > 1e-9 {
                     marker.beat = to;
                     app.arrangement.drag = Some(Drag::Marker { index, moved: true });
@@ -1075,12 +1139,12 @@ fn handle_markers(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, 
     if response.secondary_clicked() {
         app.arrangement.menu = Some(match under {
             Some(i) => Menu::Marker(i),
-            None => Menu::Markers(snap(beat, unit)),
+            None => Menu::Markers(unit.snap(beat)),
         });
         return true;
     }
     if response.double_clicked() && under.is_none() {
-        app.add_marker(snap(beat, unit));
+        app.add_marker(unit.snap(beat));
         return true;
     }
     if ui.input(|i| i.pointer.primary_pressed()) && response.hovered() {
@@ -1132,13 +1196,15 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                     app.add_marker(beat);
                     ui.close();
                 }
-                crate::transitions::menu(app, ui, (beat / 4.0).round() * 4.0);
+                meter_menu(app, ui, beat);
+                crate::transitions::menu(app, ui, app.project.meter.round_to_bar(beat));
             }
             Menu::Clip(clip, beat) => clip_menu(app, ui, clip, beat),
             Menu::Lane { track, beat } => {
                 let Some(t) = app.project.tracks.get(track) else { return ui.close() };
                 let audio = t.is_audio();
-                let bar = (beat / 4.0).floor() * 4.0;
+                let bar = app.project.meter.prev_bar(beat);
+                let bar_length = app.project.meter.bar_length_at(bar);
                 if app.clip_clipboard.is_some() && ui.button("Pegar aquí").clicked() {
                     app.paste_clips_at(track, beat);
                     ui.close();
@@ -1151,13 +1217,13 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                 }
                 if !audio && ui.button("Nuevo clip MIDI aquí").clicked() {
                     let color = app.project.tracks[track].color;
-                    app.project.tracks[track].arrangement.push(ArrangementClip { start: bar, length: 4.0, clip: Clip::Midi(MidiClip::new("MIDI", 4.0, color)) });
+                    app.project.tracks[track].arrangement.push(ArrangementClip { start: bar, length: bar_length, clip: Clip::Midi(MidiClip::new("MIDI", bar_length, color)) });
                     let index = app.project.tracks[track].arrangement.len() - 1;
                     app.sync_arrangement(track);
                     app.select_clip(ClipRef::Arrangement { track, index });
                     ui.close();
                 }
-                crate::transitions::menu(app, ui, (beat / 4.0).round() * 4.0);
+                crate::transitions::menu(app, ui, app.project.meter.round_to_bar(beat));
             }
             Menu::Automation { track, param } => {
                 let target = row_target(app, track);
@@ -1343,7 +1409,7 @@ fn handle_pointer(
     response: &egui::Response,
     rect: Rect,
     lanes_top: f32,
-    unit: f64,
+    unit: Grid,
     origin_x: f32,
     layout: &Layout,
 ) {
@@ -1373,11 +1439,11 @@ fn handle_pointer(
                     if !app.is_clip_selected(clip) {
                         app.select_clip(clip);
                     }
-                    Menu::Clip(clip, snap(beat, unit))
+                    Menu::Clip(clip, unit.snap(beat))
                 }
                 None => {
                     app.selected_target = Target::Track(t);
-                    Menu::Lane { track: t, beat: snap(beat, unit) }
+                    Menu::Lane { track: t, beat: unit.snap(beat) }
                 }
             }),
             (None, Some((t, param, _))) => Some(Menu::Automation { track: t, param }),
@@ -1418,9 +1484,9 @@ fn handle_pointer(
     let pressed = ui.input(|i| i.pointer.primary_pressed()) && response.hovered();
     if pressed {
         app.arrangement.drag = if pos.y < rect.top() + LOOP_H {
-            Some(Drag::Loop { anchor: snap(beat, unit) })
+            Some(Drag::Loop { anchor: unit.snap(beat) })
         } else if pos.y < lanes_top {
-            app.audio.send(Command::SetPosition(snap(beat, unit)));
+            app.audio.send(Command::SetPosition(unit.snap(beat)));
             // ⌘E cuts at the playhead again.
             app.arrangement.cut = None;
             Some(Drag::Scrub)
@@ -1478,23 +1544,24 @@ fn handle_pointer(
             if app.clip_selection().len() > 1 {
                 app.select_clip(clip);
             }
-            app.arrangement.cut = Some(if ui.input(|i| i.modifiers.alt) { beat.max(0.0) } else { snap(beat, unit) });
+            app.arrangement.cut = Some(if ui.input(|i| i.modifiers.alt) { beat.max(0.0) } else { unit.snap(beat) });
         }
     }
 
     if response.double_clicked() && automation.is_none() {
         if let Some(t) = lane {
             if clip_at(app, t, beat, pos.x, ppb, origin_x).is_none() {
-                let start = (beat / 4.0).floor() * 4.0;
+                let start = app.project.meter.prev_bar(beat);
                 if app.project.tracks[t].is_audio() {
                     app.choose_samples(Placement::Arrangement { track: t, start });
                     return;
                 }
                 let color = app.project.tracks[t].color;
+                let length = app.project.meter.bar_length_at(start);
                 app.project.tracks[t].arrangement.push(ArrangementClip {
                     start,
-                    length: 4.0,
-                    clip: Clip::Midi(MidiClip::new("MIDI", 4.0, color)),
+                    length,
+                    clip: Clip::Midi(MidiClip::new("MIDI", length, color)),
                 });
                 let index = app.project.tracks[t].arrangement.len() - 1;
                 app.sync_arrangement(t);
@@ -1510,7 +1577,7 @@ fn handle_pointer(
                 // The grabbed clip snaps to the grid; the others keep their distance to it.
                 let original = snapshot[pt][pi].start;
                 let earliest = moved.iter().map(|&(t, i)| snapshot[t][i].start).fold(f64::INFINITY, f64::min);
-                let beats = (snap(original + beat - grab, unit) - original).max(-earliest);
+                let beats = (unit.snap(original + beat - grab) - original).max(-earliest);
                 let wanted = lane.map_or(applied.1, |l| l as isize - grab_track as isize);
                 let fits = |dt: isize| {
                     moved.iter().all(|&(t, i)| {
@@ -1531,16 +1598,16 @@ fn handle_pointer(
             }
             Some(Drag::Resize { track, index }) => {
                 let placed = &mut app.project.tracks[track].arrangement[index];
-                let length = (snap(beat, unit) - placed.start).max(unit);
+                let length = (unit.snap(beat) - placed.start).max(unit.length_at(placed.start));
                 if placed.length != length {
                     placed.length = length;
                     app.sync_arrangement(track);
                 }
             }
             Some(Drag::Loop { anchor }) => {
-                let here = snap(beat, unit);
+                let here = unit.snap(beat);
                 let (start, end) = (anchor.min(here), anchor.max(here));
-                if end - start >= unit {
+                if end - start >= unit.length_at(start) {
                     app.project.loop_start = start;
                     app.project.loop_end = end;
                     app.project.loop_enabled = true;
@@ -1548,7 +1615,7 @@ fn handle_pointer(
                 }
             }
             Some(Drag::Scrub) => {
-                app.audio.send(Command::SetPosition(snap(beat, unit)));
+                app.audio.send(Command::SetPosition(unit.snap(beat)));
             }
             Some(Drag::Fade { track, index, out }) => {
                 let Some(placed) = app.project.tracks[track].arrangement.get_mut(index) else { return };
@@ -1563,7 +1630,7 @@ fn handle_pointer(
                     fades = fades.without_in();
                 }
                 // Free, not on the grid; ⇧ snaps it to the grid.
-                let at = if ui.input(|i| i.modifiers.shift) { snap(beat, unit) } else { beat };
+                let at = if ui.input(|i| i.modifiers.shift) { unit.snap(beat) } else { beat };
                 if out {
                     fades.fade_out = (end - at).clamp(0.0, length - fades.fade_in);
                 } else {
@@ -1588,7 +1655,7 @@ fn handle_pointer(
 /// Returns true if the pointer was handled.
 fn handle_takes(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, beat: f64, lane: Option<(usize, usize)>) -> bool {
     let ppb = app.arrangement.pixels_per_beat;
-    let unit = point_unit(ppb);
+    let unit = point_unit(ppb, &app.project.meter);
     match app.arrangement.drag {
         Some(Drag::Comp { .. }) => {}
         Some(_) => return false,
@@ -1611,7 +1678,7 @@ fn handle_takes(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, be
                 app.comp_takes(track, take, a, b);
             }
         } else {
-            app.comp_takes(track, take, snap(anchor, unit), snap(beat, unit));
+            app.comp_takes(track, take, unit.snap(anchor), unit.snap(beat));
         }
     }
     true
@@ -1632,7 +1699,7 @@ fn handle_automation(
         return false;
     }
     let ppb = app.arrangement.pixels_per_beat;
-    let unit = point_unit(ppb);
+    let unit = point_unit(ppb, &app.project.meter);
     let x_at = |b: f64| origin_x + b as f32 * ppb;
 
     // Dragging a breakpoint continues even if the pointer leaves the lane.
@@ -1645,7 +1712,7 @@ fn handle_automation(
                 let lo = if index > 0 { lane.points[index - 1].beat } else { 0.0 };
                 let hi = lane.points.get(index + 1).map_or(f64::INFINITY, |p| p.beat);
                 let point = &mut lane.points[index];
-                point.beat = snap(beat, unit).clamp(lo, hi);
+                point.beat = unit.snap(beat).clamp(lo, hi);
                 point.value = value;
                 app.sync_automation(target);
             }
@@ -1725,7 +1792,7 @@ fn handle_automation(
             None => {
                 let value = info.denormalize((rect.bottom() - 4.0 - pos.y) / (rect.height() - 8.0));
                 let lane = app.lane_mut(target, param);
-                let point = AutomationPoint { beat: snap(beat, unit), value, curve: 0.0 };
+                let point = AutomationPoint { beat: unit.snap(beat), value, curve: 0.0 };
                 let index = lane.points.partition_point(|p| p.beat <= point.beat);
                 lane.points.insert(index, point);
                 app.sync_automation(target);

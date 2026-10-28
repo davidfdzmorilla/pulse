@@ -582,7 +582,7 @@ impl PulseApp {
         for command in commands {
             self.audio.send(command);
         }
-        self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+        self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64));
         self.audio.send(Command::SetCompensation(self.settings.compensate));
         self.sync_midi_map();
         self.show_sample_errors();
@@ -607,7 +607,7 @@ impl PulseApp {
         }
         let project = &self.project;
         self.samples.plugins.retain(|id, _| project.plugin(*id).is_some());
-        self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+        self.audio.send(Command::SetCountIn(self.settings.count_in_bars as f64));
         self.audio.send(Command::SetCompensation(self.settings.compensate));
         self.sync_midi_map();
         self.show_sample_errors();
@@ -723,7 +723,7 @@ impl PulseApp {
                         Placement::Session { track, slot }
                     }
                     View::Arrangement => {
-                        let start = (self.project.tracks[track].arrangement_end() / 4.0).ceil() * 4.0;
+                        let start = self.project.meter.next_bar(self.project.tracks[track].arrangement_end());
                         Placement::Arrangement { track, start }
                     }
                 }
@@ -1046,6 +1046,12 @@ impl PulseApp {
     }
 
     /// Sets a parameter by hand. Moving an automated parameter overrides its automation.
+    /// Puts the song in `meter` (its time signatures and changes).
+    pub fn set_meter(&mut self, meter: engine::meter::Meter) {
+        self.project.meter = meter;
+        self.audio.send(Command::SetMeter(meter));
+    }
+
     pub fn set_param(&mut self, target: Target, param: Param, value: f32) {
         self.touched(crate::midi_map::Control::Param { target, param });
         // Picking a control for MIDI learn sets it to itself: not a move (it would
@@ -1243,13 +1249,14 @@ impl PulseApp {
 
     /// Places a copy of a session clip at the end of the track's arrangement.
     pub fn copy_to_arrangement(&mut self, track: usize, slot: usize) {
+        let meter = self.project.meter;
         let t = &mut self.project.tracks[track];
         let Some(clip) = t.clips[slot].clone() else { return };
-        let start = (t.arrangement_end() / 4.0).ceil() * 4.0;
-        let length = clip.length().max(4.0);
+        let start = meter.next_bar(t.arrangement_end());
+        let length = clip.length().max(meter.bar_length_at(start));
         t.arrangement.push(engine::model::ArrangementClip { start, length, clip });
         self.sync_arrangement(track);
-        self.status = Some(format!("Clip copiado al Arrangement en el compás {}", start as i64 / 4 + 1));
+        self.status = Some(format!("Clip copiado al Arrangement en el compás {}", meter.bar_at(start).0 + 1));
     }
 
     pub fn add_device(&mut self, target: Target, device: Device) {
@@ -2152,7 +2159,8 @@ impl PulseApp {
         }
         self.audio.send(Command::SetArrangementRecord(true));
         self.audio.send(Command::Play);
-        let bar = |beat: f64| beat / 4.0 + 1.0;
+        let meter = self.project.meter;
+        let bar = |beat: f64| crate::transport::bars_label(crate::transport::bars_between(&meter, 0.0, beat) + 1.0).trim_end_matches(" c.").to_string();
         match self.project.punch() {
             (Some(i), Some(o)) => self.status = Some(format!("Punch: graba del compás {} al {}", bar(i), bar(o))),
             (Some(i), None) => self.status = Some(format!("Punch in: empieza a grabar en el compás {}", bar(i))),
@@ -2213,7 +2221,8 @@ impl PulseApp {
         if state.arrangement_recording.load(Ordering::Relaxed) {
             self.follow_session_capture(&state);
         }
-        let finished = self.recorder.update(notes, &state, &armed, looped, punch);
+        let meter = self.project.meter;
+        let finished = self.recorder.update(notes, &state, &armed, looped, punch, &meter);
         let recording: Vec<(usize, usize, f64)> = self
             .recorder
             .session

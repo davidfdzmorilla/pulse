@@ -403,7 +403,8 @@ pub enum Command {
     StopRecording(usize),
     /// Records armed tracks onto the arrangement while the transport runs.
     SetArrangementRecord(bool),
-    /// Beats the metronome counts before a recording starts the transport (0: none).
+    /// Bars the metronome counts before a recording starts the transport (0: none),
+    /// in the time signature where the song starts.
     SetCountIn(f64),
     /// Plays an audio file once over the output (the browser's preview), or stops
     /// the one playing.
@@ -1731,6 +1732,8 @@ pub struct Engine {
     loop_start: f64,
     loop_end: f64,
     metronome: bool,
+    count_in_bars: f64,
+    /// Beats of the count-in under way (its bars, in the signature it starts in).
     count_in_beats: f64,
     /// Beats counted in so far, while counting in.
     counting: Option<f64>,
@@ -1968,6 +1971,7 @@ impl Engine {
             loop_start: 0.0,
             loop_end: 16.0,
             metronome: false,
+            count_in_bars: 0.0,
             count_in_beats: 0.0,
             counting: None,
             click: Click::new(sample_rate),
@@ -2127,6 +2131,7 @@ impl Engine {
         if self.playing || self.counting.is_some() {
             return;
         }
+        self.count_in_beats = self.count_in_bars * self.meter.sig_at(self.start_marker).bar();
         if self.count_in_beats > 0.0 {
             self.counting = Some(0.0);
         } else {
@@ -2140,7 +2145,7 @@ impl Engine {
         let Some(done) = self.counting else { return };
         let end = done + n as f64 * beats_per_sample;
         // Counted in the signature where the song will start.
-        let sig = self.meter.sig_at(self.position);
+        let sig = self.meter.sig_at(self.start_marker);
         let beat = ((done - 1e-9) / sig.count()).ceil() * sig.count();
         if beat < end && beat < self.count_in_beats - 1e-9 {
             let frame = ((beat - done) / beats_per_sample).round() as usize;
@@ -2501,7 +2506,7 @@ impl Engine {
                     self.start_recording_transport();
                 }
             }
-            Command::SetCountIn(beats) => self.count_in_beats = beats.max(0.0),
+            Command::SetCountIn(bars) => self.count_in_bars = bars.max(0.0),
             Command::PreviewSample(sample) => {
                 self.stop_previews();
                 self.preview = sample.map(|s| (s, 0.0));
@@ -4044,7 +4049,7 @@ mod tests {
     #[test]
     fn recording_counts_in_before_the_transport_starts() {
         let mut h = Harness::new();
-        h.send(Command::SetCountIn(4.0));
+        h.send(Command::SetCountIn(1.0));
         h.send(Command::SetPosition(8.0));
         h.send(Command::SetArm { track: 0, armed: true });
         h.send(Command::SetArrangementRecord(true));

@@ -5,6 +5,7 @@ use crate::midi_map::{Control, Transport};
 use crate::theme::{self, ACCENT, PLAY, TEXT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, vec2, Align2, Color32, RichText, Sense};
+use engine::meter::{Meter, TimeSig};
 use engine::Command;
 
 const QUANTIZE_OPTIONS: [(f64, &str); 7] = [
@@ -17,12 +18,66 @@ const QUANTIZE_OPTIONS: [(f64, &str); 7] = [
     (8.0, "2 Compases"),
 ];
 
-/// Formats a beat position as bar.beat.sixteenth, 1-based like most DAWs.
-pub fn format_position(beats: f64) -> String {
-    let bar = (beats / 4.0).floor() as i64 + 1;
-    let beat = beats.rem_euclid(4.0).floor() as i64 + 1;
-    let sixteenth = (beats.fract() * 4.0).floor() as i64 + 1;
-    format!("{bar}. {beat}. {sixteenth}")
+/// Formats a beat position as bar.count.sixteenth, 1-based like most DAWs, in the
+/// song's time signatures (a count is a beat of 4/4, a dotted quarter of 6/8…).
+pub fn format_position(meter: &Meter, beats: f64) -> String {
+    let (bar, count, sixteenth) = meter.position(beats);
+    format!("{bar}. {count}. {sixteenth}")
+}
+
+/// Bars from `from` to `to`, as a whole number when they are whole.
+pub fn bars_between(meter: &Meter, from: f64, to: f64) -> f64 {
+    let at = |beat: f64| {
+        let (bar, into) = meter.bar_at(beat);
+        bar as f64 + into / meter.sig_at_bar(bar).bar()
+    };
+    at(to) - at(from)
+}
+
+/// «4 c.», «2,5 c.».
+pub fn bars_label(bars: f64) -> String {
+    let rounded = (bars * 100.0).round() / 100.0;
+    if rounded.fract().abs() < 1e-9 { format!("{rounded:.0} c.") } else { format!("{} c.", rounded.to_string().replace('.', ",")) }
+}
+
+/// The song's first time signature, to choose (changes along the song are made on
+/// the Arrangement's ruler).
+fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui) {
+    let first = app.project.meter.first();
+    let changes = app.project.meter.changes().len() > 1;
+    let mut chosen = None;
+    let response = egui::ComboBox::from_id_salt("meter")
+        .selected_text(if changes { format!("{} …", first.label()) } else { first.label() })
+        .width(52.0)
+        .show_ui(ui, |ui| {
+            for sig in TimeSig::PRESETS {
+                if ui.selectable_label(sig == first, sig.label()).clicked() {
+                    chosen = Some(sig);
+                }
+            }
+            ui.separator();
+            // Any other: beats and note.
+            let (mut beats, mut unit) = (first.beats as u32, first.unit as u32);
+            ui.horizontal(|ui| {
+                ui.label(RichText::new("Otro").color(TEXT_DIM).size(10.5));
+                let a = ui.add(egui::DragValue::new(&mut beats).range(1..=32).speed(0.1));
+                ui.label("/");
+                let b = ui.add(egui::DragValue::new(&mut unit).range(1..=32).speed(0.05));
+                if a.changed() || b.changed() {
+                    chosen = Some(TimeSig::new(beats, unit));
+                }
+            });
+        })
+        .response;
+    let hint = if changes {
+        "Compás del principio de la canción. Cambia más adelante: clic derecho en la regla del Arrangement para ver o quitar los cambios"
+    } else {
+        "Compás de la canción (clic derecho en la regla del Arrangement para cambiarlo a partir de un compás)"
+    };
+    response.on_hover_text(hint);
+    if let Some(sig) = chosen.filter(|&s| s != first) {
+        app.set_meter(app.project.meter.with_change(0, sig));
+    }
 }
 
 /// A boxed numeric readout like the tempo and position fields.
@@ -92,6 +147,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             crate::widgets::outline(ui.painter(), tempo.rect, theme::METER_RED);
         }
         ui.label(RichText::new("BPM").color(TEXT_DIM).size(10.5));
+        meter_menu(app, ui);
         if icon_button(ui, "●", app.project.metronome, ACCENT, "Metrónomo").clicked() {
             press(app, Transport::Metronome);
         }
@@ -120,7 +176,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         // Transport.
         // While counting in, the beats left instead of the position.
         let count_in = app.audio.state().map_or(0.0, |s| s.count_in());
-        let shown = if count_in > 0.0 { format!("Cuenta {}", count_in.ceil() as u32) } else { format_position(position) };
+        let count = app.project.meter.sig_at(position).count();
+        let shown = if count_in > 0.0 { format!("Cuenta {}", (count_in / count - 1e-9).ceil().max(1.0) as u32) } else { format_position(&app.project.meter, position) };
         readout(ui, &shown, 84.0);
         if icon_button(ui, "play", playing, PLAY, "Reproducir (Espacio)").clicked() {
             if app.learn.on {
@@ -166,8 +223,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         if icon_button(ui, "⟲", app.project.loop_enabled, ACCENT, "Loop del Arrangement").clicked() {
             press(app, Transport::Loop);
         }
-        readout(ui, &format_position(app.project.loop_start), 84.0);
-        readout(ui, &format!("{} c.", (app.project.loop_end - app.project.loop_start) / 4.0), 54.0);
+        readout(ui, &format_position(&app.project.meter, app.project.loop_start), 84.0);
+        readout(ui, &bars_label(bars_between(&app.project.meter, app.project.loop_start, app.project.loop_end)), 54.0);
         if icon_button(ui, "punch in", app.project.punch_in, theme::METER_RED, "Punch in: al grabar en el Arrangement, empieza a grabar en el inicio del loop (lo de antes solo suena)").clicked() {
             app.project.punch_in = !app.project.punch_in;
         }

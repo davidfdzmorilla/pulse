@@ -3233,6 +3233,48 @@ mod modulation_tests {
     }
 
     #[test]
+    fn harmonic_arpeggio_bouncing_curve_and_feedback_presets() {
+        use super::tests::{frequency, rms};
+        let preset = |name: &str| ModularParams::presets().into_iter().find(|(n, _)| *n == name).unwrap().1;
+        // One held key climbs the harmonics 1, 2, 3, 4, a sixteenth (6000 samples) each.
+        let mut p = preset("Mod · Arpegio armónico");
+        p.lanes[0].fx[0] = None;
+        let (_, audio) = run(p, blocks(0.6), |s, b| {
+            if b == 0 {
+                s.note_on(48, 1.0, HELD);
+            }
+        });
+        let root = crate::wavesynth::note_freq(48.0);
+        for step in 0..4 {
+            let at = step * 6000 + 300;
+            let f = frequency(&audio[at..at + 3000]);
+            let harmonic = (step + 1) as f32;
+            assert!((f / (root * harmonic) - 1.0).abs() < 0.06, "step {step}: {f} Hz");
+        }
+        // The drawn level falls to nothing and hits again, twice.
+        let mut p = preset("Curve · Pelota que rebota");
+        p.lanes[0].fx[0] = None;
+        let (_, audio) = run(p, blocks(1.3), |s, b| {
+            if b == 0 {
+                s.note_on(60, 1.0, 4800);
+            }
+        });
+        let level = |t: f32| rms(&audio[(t * SR) as usize..(t * SR) as usize + 480]);
+        for (gap, hit) in [(0.285, 0.315), (0.515, 0.542)] {
+            assert!(level(hit) > level(gap) * 3.0, "bounce at {hit} s: {} after {}", level(hit), level(gap));
+        }
+        // Full feedback on a high note stays bounded.
+        let mut p = preset("Aux · Realimentación");
+        p.macros[0] = 1.0;
+        let (_, audio) = run(p, blocks(1.0), |s, b| {
+            if b == 0 {
+                s.note_on(96, 1.0, HELD);
+            }
+        });
+        assert!(audio.iter().all(|x| x.is_finite() && x.abs() < 1.0), "peak {}", audio.iter().fold(0f32, |m, x| m.max(x.abs())));
+    }
+
+    #[test]
     fn removing_a_modulator_disconnects_it() {
         let mut p = patch(&[]);
         p.modulators[0] = Modulator::new(ModulatorKind::Lfo);

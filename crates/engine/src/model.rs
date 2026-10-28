@@ -6938,7 +6938,7 @@ impl ModularParams {
         let mut p = build(&[group, sine(&[]), out(0.002, 1.5, 0.3, 0.6), group, sine(&[(slot::HARMONIC, 2.0)])]);
         let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
         p.audio[c].amount = 0.35;
-        p.gain = 0.4;
+        p.gain = 0.35;
         list.push(("FM · Two Groups", p));
 
         let mut p = build(&[group, sine(&[]), out(0.002, 3.0, 0.0, 2.0), group, sine(&[(slot::HARMONIC, 3.5)])]);
@@ -6951,7 +6951,7 @@ impl ModularParams {
         decay.targets[0] = ModTarget::new(MOD_AUDIO_AMOUNT + c, 0.25);
         p.modulators[0] = decay;
         p.lanes[0].fx[0] = reverb(0.75, 0.3);
-        p.gain = 0.3;
+        p.gain = 0.25;
         list.push(("FM · Bell", p));
 
         let mut p = build(&[group, sine(&[]), out(0.002, 1.2, 0.2, 0.8), group, sine(&[(slot::HARMONIC, 1.0), (slot::SEMI, 7.0), (slot::CENT, 13.0)])]);
@@ -7101,7 +7101,7 @@ impl ModularParams {
         p.legato = true;
         p.glide = 60.0;
         p.lanes[0].fx[0] = delay(0.75, 0.2);
-        p.gain = 0.9;
+        p.gain = 0.75;
         list.push(("Nonlinear · Acid", p));
 
         // A drawn rhythmic gate that loops while the note is held.
@@ -7147,10 +7147,12 @@ impl ModularParams {
         let tri = Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]);
 
         // An eighth-note LFO, remapped so the filter snaps open, on a saw and its sub.
+        // Locked to the transport: restarting it on every note snapped the cutoff shut
+        // mid-sweep, and the resonant filter answered the jump with a burst.
         let mut p = build(&[group, saw(&[]), sine(&[(slot::SEMI, -12.0), (slot::LEVEL, 0.8)]), filter(0, 120.0, 3.0, true), out(0.003, 1.0, 1.0, 0.15)]);
         let mut wobble = modulator(ModulatorKind::Lfo, &[]);
         wobble.shape = tri;
-        wobble.mode = LfoMode::Retrig;
+        wobble.mode = LfoMode::Free;
         wobble.sync_beats = 0.5;
         let mut remap = modulator(ModulatorKind::Remap, &[]);
         remap.source = 0;
@@ -7191,7 +7193,7 @@ impl ModularParams {
         p.mono = true;
         p.legato = true;
         p.glide = 60.0;
-        p.gain = 0.75;
+        p.gain = 0.62;
         list.push(("Mod · Delayed Vibrato", p));
 
         // A one-bar drawn filter rhythm that loops while the chord is held.
@@ -7300,6 +7302,243 @@ impl ModularParams {
         p.modules[4].set(slot::LEVEL, 1.8);
         p.gain = 1.0;
         list.push(("Lanes · Poly Echo Pluck", p));
+
+        // ----- Sounds only a modular stack makes -----
+        let envelope = |attack: f32, decay: f32, sustain: f32, release: f32| {
+            modulator(ModulatorKind::Envelope, &[(mslot::ATTACK, attack), (mslot::DECAY, decay), (mslot::SUSTAIN, sustain), (mslot::RELEASE, release)])
+        };
+        // An output with its gain (0..2) above unity.
+        let loud_out = |attack: f32, decay: f32, sustain: f32, release: f32, gain: f32| {
+            let mut o = out(attack, decay, sustain, release);
+            o.set(slot::LEVEL, gain);
+            o
+        };
+        // An audio connection's amount runs -1..1: a depth of d moves it by 2d.
+        let amount = |c: usize, depth: f32| ModTarget::new(MOD_AUDIO_AMOUNT + c, depth);
+
+        // FM bass: the index falls fast after the hit and rises with velocity.
+        let mut p = build(&[group, sine(&[]), out(0.002, 0.8, 0.7, 0.12), group, sine(&[])]);
+        let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[c].amount = 0.08;
+        let mut hit = envelope(0.0005, 0.22, 0.0, 0.1);
+        hit.targets[0] = amount(c, 0.17);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = amount(c, 0.06);
+        p.modulators[..2].copy_from_slice(&[hit, velocity]);
+        p.mono = true;
+        p.glide = 30.0;
+        p.gain = 0.67;
+        list.push(("Bass · FM con golpe", p));
+
+        // Three saws a little apart beat against each other into a warm, saturated
+        // low pass that breathes with a slow LFO.
+        let mut dark = module(K::NonlinearFilter, &[(slot::CUTOFF, 320.0), (slot::Q, 2.0), (slot::NL_DRIVE, 9.0)], 0);
+        dark.choice[1] = 1;
+        let mut p = build(&[group, saw(&[(slot::LEVEL, 0.7)]), saw(&[(slot::CENT, 14.0), (slot::LEVEL, 0.7)]), saw(&[(slot::SEMI, -12.0), (slot::CENT, -7.0), (slot::LEVEL, 0.5)]), dark, loud_out(0.005, 1.0, 1.0, 0.2, 1.8)]);
+        let mut breathe = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 0.3)]);
+        breathe.shape = tri;
+        breathe.bipolar = true;
+        breathe.targets[0] = target(4, slot::CUTOFF, 0.1);
+        p.modulators[0] = breathe;
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.gain = 0.9;
+        list.push(("Bass · Desafinado oscuro", p));
+
+        // Electric piano: two modulators in a silent group, a bright tine (14×) that
+        // dies at once and a body (1×) that fades slowly; velocity opens both.
+        let mut p = build(&[group, sine(&[]), out(0.002, 2.2, 0.0, 0.5), group, sine(&[(slot::HARMONIC, 14.0)]), sine(&[])]);
+        let tine = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[tine].amount = 0.0;
+        let body = p.connect_audio(5, 1, AudioParam::Phase).unwrap();
+        p.audio[body].amount = 0.05;
+        let mut strike = envelope(0.0005, 0.08, 0.0, 0.05);
+        strike.targets[0] = amount(tine, 0.06);
+        let mut fade = envelope(0.0005, 1.2, 0.0, 0.3);
+        fade.targets[0] = amount(body, 0.06);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = amount(tine, 0.04);
+        velocity.targets[1] = amount(body, 0.05);
+        p.modulators[..3].copy_from_slice(&[strike, fade, velocity]);
+        p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams { rate: 0.5, depth: 0.3, delay_ms: 7.0, mix: 0.35 }));
+        p.lanes[0].fx[1] = reverb(0.55, 0.18);
+        p.gain = 0.55;
+        list.push(("FM · Piano eléctrico", p));
+
+        // Hard sync swept by an LFO, ring modulated by a sine a slightly detuned
+        // octave up in its own group: a lead that snarls and shimmers.
+        let mut p = build(&[group, saw(&[(slot::A, 2.0)]), filter(0, 4500.0, 0.8, false), loud_out(0.005, 0.5, 0.8, 0.25, 1.25), group, sine(&[(slot::HARMONIC, 2.0), (slot::CENT, 7.0)])]);
+        let c = p.connect_audio(5, 1, AudioParam::Level).unwrap();
+        p.audio[c].amount = 0.5;
+        let mut sweep = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 0.5)]);
+        sweep.shape = tri;
+        sweep.mode = LfoMode::Retrig;
+        sweep.targets[0] = target(1, slot::A, 0.2);
+        p.modulators[0] = sweep;
+        p.lanes[0].fx[0] = delay(0.75, 0.22);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 50.0;
+        p.gain = 1.0;
+        list.push(("Lead · Sync y anillo", p));
+
+        // A sine folded over and over: the hit (and velocity) push the drive up, a
+        // diode-flavoured low pass rounds the folds off.
+        let mut round = module(K::NonlinearFilter, &[(slot::CUTOFF, 3000.0), (slot::Q, 1.5), (slot::NL_DRIVE, 6.0)], 0);
+        round.choice[1] = 3;
+        let mut p = build(&[group, sine(&[]), module(K::Distortion, &[(slot::DRIVE, 6.0)], 2), round, out(0.002, 0.5, 0.4, 0.2)]);
+        let mut hit = envelope(0.0005, 0.4, 0.0, 0.2);
+        hit.targets[0] = target(2, slot::DRIVE, 0.4);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = target(2, slot::DRIVE, 0.15);
+        p.modulators[..2].copy_from_slice(&[hit, velocity]);
+        p.lanes[0].fx[0] = delay(0.5, 0.2);
+        p.gain = 0.53;
+        list.push(("Nonlinear · Plegado vivo", p));
+
+        // A stepped LFO walks the harmonic from 1 to 4 (root, octave, fifth, octave)
+        // every sixteenth while a falling saw plucks each step: an arpeggio from one
+        // held key, locked to the beat.
+        let mut p = build(&[group, module(K::Analog, &[], 2), module(K::Mix, &[], 0), filter(0, 3000.0, 0.7, false), out(0.003, 1.0, 1.0, 0.3)]);
+        let mut steps = modulator(ModulatorKind::Lfo, &[]);
+        steps.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (0.249, 0.0, 0.0), (0.25, 0.25, 0.0), (0.499, 0.25, 0.0), (0.5, 0.5, 0.0), (0.749, 0.5, 0.0), (0.75, 0.75, 0.0), (1.0, 0.75, 0.0)]);
+        steps.sync_beats = 1.0;
+        // A quarter of the 0..16 range at full: the steps (0, 1/4, 1/2, 3/4) add 0 to 3.
+        steps.targets[0] = target(1, slot::HARMONIC, 0.25);
+        let mut pluck = modulator(ModulatorKind::Lfo, &[]);
+        pluck.shape = Shape::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.0, 0.6)]);
+        pluck.sync_beats = 0.25;
+        // The Mix level (0..2, at 1) follows the saw from 1 down to 0.
+        pluck.targets[0] = ModTarget { offset: -0.5, ..target(2, slot::LEVEL, 0.5) };
+        p.modulators[..2].copy_from_slice(&[steps, pluck]);
+        p.lanes[0].fx[0] = delay(0.75, 0.3);
+        p.gain = 0.5;
+        list.push(("Mod · Arpegio armónico", p));
+
+        // Two layers that keep changing: a wavetable scanned by a looping 4-bar curve,
+        // and a pulse an octave up whose width an LFO moves, band-passed and to the side.
+        let mut p = build(&[
+            group,
+            module(K::Wavetable, &[(slot::UNISON, 3.0), (slot::DETUNE, 0.15), (slot::PHASE_RANDOM, 180.0)], 0),
+            filter(0, 2500.0, 0.7, false),
+            out(1.0, 1.5, 0.9, 2.0),
+            group,
+            module(K::Analog, &[(slot::SEMI, 12.0), (slot::LEVEL, 0.4)], 1),
+            filter(1, 1500.0, 1.0, false),
+            module(K::Output, &[(slot::ATTACK, 1.5), (slot::SUSTAIN, 1.0), (slot::RELEASE, 2.0), (slot::PAN, 0.4)], 0),
+        ]);
+        p.modules[1].table = 2;
+        let mut scan = modulator(ModulatorKind::Timeline, &[]);
+        scan.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (0.3, 0.8, 0.5), (0.6, 0.3, -0.3), (1.0, 0.0, 0.3)]);
+        scan.sync_beats = 16.0;
+        scan.loop_mode = 1;
+        scan.targets[0] = target(1, slot::A, 0.6);
+        let mut width = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 0.25)]);
+        width.shape = tri;
+        width.bipolar = true;
+        width.targets[0] = target(5, slot::B, 0.3);
+        let mut drift = modulator(ModulatorKind::Random, &[(mslot::RATE, 0.4), (mslot::SMOOTH, 1.0), (mslot::CHAOS, 0.5)]);
+        drift.bipolar = true;
+        drift.targets[0] = target(2, slot::CUTOFF, 0.08);
+        drift.targets[1] = target(6, slot::CUTOFF, -0.1);
+        p.modulators[..3].copy_from_slice(&[scan, width, drift]);
+        p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams::default()));
+        p.lanes[0].fx[1] = reverb(0.9, 0.35);
+        p.gain = 0.42;
+        list.push(("Layers · Pad en evolución", p));
+
+        // A tuned tom: the pitch falls an octave in a moment and the FM index with it.
+        let mut p = build(&[group, sine(&[]), out(0.0005, 0.35, 0.0, 0.3), group, sine(&[(slot::HARMONIC, 1.5)])]);
+        let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[c].amount = 0.03;
+        let mut drop = envelope(0.0005, 0.12, 0.0, 0.1);
+        // About an octave of the 96 semitones the setting spans, on carrier and modulator.
+        drop.targets[0] = target(1, slot::SEMI, 0.12);
+        drop.targets[1] = target(4, slot::SEMI, 0.12);
+        drop.targets[2] = amount(c, 0.1);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = amount(c, 0.05);
+        p.modulators[..2].copy_from_slice(&[drop, velocity]);
+        p.lanes[0].fx[0] = reverb(0.4, 0.12);
+        p.gain = 0.38;
+        list.push(("Perc · Tom FM", p));
+
+        // Two pulses a little under a fifth apart, one ringing the other, through a band pass.
+        let mut p = build(&[group, module(K::Analog, &[], 1), filter(1, 2600.0, 1.5, false), out(0.0005, 0.25, 0.0, 0.2), group, module(K::Analog, &[(slot::HARMONIC, 1.48)], 1)]);
+        let c = p.connect_audio(5, 1, AudioParam::Level).unwrap();
+        p.audio[c].amount = 0.8;
+        p.lanes[0].fx[0] = reverb(0.35, 0.1);
+        p.gain = 0.95;
+        list.push(("Perc · Cencerro metálico", p));
+
+        // Noise through two very narrow band passes that follow the keyboard and
+        // wander on their own: whistles drifting left and right.
+        let whistle = |cutoff: f32| module(K::NonlinearFilter, &[(slot::CUTOFF, cutoff), (slot::Q, 18.0), (slot::NL_DRIVE, 0.0)], 1);
+        let side = |pan: f32| module(K::Output, &[(slot::ATTACK, 0.3), (slot::SUSTAIN, 1.0), (slot::RELEASE, 1.5), (slot::PAN, pan)], 0);
+        let mut p = build(&[group, module(K::Noise, &[], 0), whistle(50.0), side(-0.6), group, module(K::Noise, &[], 0), whistle(75.0), side(0.6)]);
+        let mut note = modulator(ModulatorKind::Note, &[]);
+        note.targets[0] = target(2, slot::CUTOFF, 1.0);
+        note.targets[1] = target(6, slot::CUTOFF, 1.0);
+        let wander = |rate: f32| {
+            let mut m = modulator(ModulatorKind::Random, &[(mslot::RATE, rate), (mslot::SMOOTH, 1.0), (mslot::JITTER, 0.7), (mslot::CHAOS, 0.6)]);
+            m.bipolar = true;
+            m
+        };
+        let mut left = wander(0.5);
+        left.targets[0] = target(2, slot::CUTOFF, 0.12);
+        let mut right = wander(0.35);
+        right.targets[0] = target(6, slot::CUTOFF, 0.12);
+        p.modulators[..3].copy_from_slice(&[note, left, right]);
+        p.lanes[0].fx[0] = delay(0.75, 0.3);
+        p.lanes[0].fx[1] = reverb(0.85, 0.35);
+        p.gain = 0.1;
+        list.push(("Noise · Silbidos al azar", p));
+
+        // The global unison as a stack of fifths: root, fifth and ninth from every key.
+        let mut p = build(&[group, saw(&[]), filter(0, 2200.0, 1.0, false), out(0.003, 0.4, 0.3, 0.3)]);
+        p.unison = unison(3, UnisonMode::PitchStack, 0.1, 0.6, 0.5, -5.0 / 12.0);
+        let mut env = envelope(0.0005, 0.3, 0.0, 0.2);
+        env.targets[0] = target(2, slot::CUTOFF, 0.2);
+        p.modulators[0] = env;
+        p.lanes[0].fx[0] = delay(0.75, 0.25);
+        p.lanes[0].fx[1] = reverb(0.6, 0.2);
+        p.gain = 0.5;
+        list.push(("Unison · Quintas apiladas", p));
+
+        // Additive organ: the unison stacks the first six harmonics of one sine,
+        // with a chorus for the spin.
+        let mut p = build(&[group, sine(&[]), out(0.005, 1.0, 1.0, 0.08)]);
+        p.unison = unison(6, UnisonMode::FrequencyStack, 0.02, 0.3, 0.4, 0.0);
+        p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams { rate: 4.8, depth: 0.25, delay_ms: 4.0, mix: 0.4 }));
+        p.lanes[0].fx[1] = reverb(0.5, 0.15);
+        p.gain = 0.25;
+        list.push(("Unison · Órgano aditivo", p));
+
+        // A drawn level that bounces like a dropped ball: one note, several hits,
+        // each lower and closer than the last.
+        let mut bounce = module(K::CurveOutput, &[(slot::CURVE_LENGTH, 1.2)], 0);
+        bounce.curve = Shape::from_points(&[(0.0, 0.0, 0.0), (0.01, 1.0, 0.0), (0.25, 0.0, 0.7), (0.26, 0.6, 0.0), (0.44, 0.0, 0.7), (0.45, 0.35, 0.0), (0.58, 0.0, 0.7), (1.0, 0.0, 0.0)]);
+        let mut p = build(&[group, module(K::Analog, &[], 2), sine(&[(slot::HARMONIC, 2.0), (slot::LEVEL, 0.3)]), filter(0, 3500.0, 0.7, false), bounce]);
+        p.lanes[0].fx[0] = reverb(0.6, 0.2);
+        p.gain = 0.56;
+        list.push(("Curve · Pelota que rebota", p));
+
+        // Feedback: the distortion at the bottom feeds back into an Aux at the top
+        // (a sample late), round a resonant saturating filter. Macro 1 adds more.
+        let mut warm = module(K::NonlinearFilter, &[(slot::CUTOFF, 1500.0), (slot::Q, 3.0), (slot::NL_DRIVE, 6.0)], 0);
+        warm.choice[1] = 1;
+        let mut p = build(&[group, saw(&[]), module(K::Aux, &[], 0), warm, module(K::Distortion, &[(slot::DRIVE, 6.0)], 0), out(0.005, 0.6, 0.8, 0.25)]);
+        let c = p.connect_audio(4, 2, AudioParam::Input).unwrap();
+        p.audio[c].amount = 0.35;
+        let mut knob = modulator(ModulatorKind::Macro, &[]);
+        knob.targets[0] = amount(c, 0.2);
+        let mut env = envelope(0.0005, 0.5, 0.2, 0.2);
+        env.targets[0] = target(3, slot::CUTOFF, 0.2);
+        p.modulators[..2].copy_from_slice(&[knob, env]);
+        p.lanes[0].fx[0] = delay(0.5, 0.2);
+        p.gain = 0.35;
+        list.push(("Aux · Realimentación", p));
         list
     }
 

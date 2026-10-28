@@ -9,6 +9,7 @@ mod instruments;
 mod drumkit;
 mod keys;
 mod kick;
+pub mod meter;
 mod midi_fx;
 mod offline;
 pub mod model;

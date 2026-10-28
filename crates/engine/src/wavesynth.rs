@@ -871,6 +871,7 @@ impl WaveSynth {
                     beat: self.clock * tempo / 60.0,
                     beats_per_sample: tempo / 60.0 / self.sample_rate as f64,
                     scale: 0,
+                    meter: Default::default(),
                 };
                 let [l, r] = &mut scratch;
                 for (processor, _) in self.fx.iter_mut().flatten().filter(|(_, enabled)| *enabled) {

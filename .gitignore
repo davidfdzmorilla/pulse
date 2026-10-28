@@ -10,3 +10,6 @@ ml/drums/runs.log
 ml/drums/__pycache__/
 /dist
 __pycache__/
+
+# Worktrees of Claude Code agents
+.claude/worktrees/

@@ -1530,7 +1530,7 @@ Un preset guarda el sonido de un instrumento para usarlo en otros proyectos. Se 
 
 ### Usar un preset
 
-- **DE FÁBRICA**: Kick Designer, Wavetable, Polychrome y Modular traen presets de fábrica.
+- **DE FÁBRICA**: los sonidos que trae Pulse, en todos sus instrumentos menos el Sampler y los Drum Pads (que tocan tus muestras). Van por categorías (Bajo, Lead, Pad, Teclas…, o por estilo en las baterías): pasa el ratón por una para ver sus sonidos. Los instrumentos con pocos presets los muestran en una sola lista.
 - **MIS PRESETS**: los tuyos.
 - En el navegador (**BIBLIOTECA › Presets**), doble clic en un preset lo aplica a la pista MIDI seleccionada.
 

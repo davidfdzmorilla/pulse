@@ -1216,6 +1216,8 @@ mod tests {
             ("atajos", 1440.0, 900.0, "Atajos de teclado", "", vec![]),
             ("buscar", 1440.0, 900.0, "Primeros pasos", "comping", vec![]),
             ("estrecha", 1000.0, 720.0, "Grabar", "", vec![]),
+            ("keys", 1440.0, 900.0, "Pulse Keys", "", vec![]),
+            ("keys-organo", 1440.0, 900.0, "Pulse Keys", "", vec!["scroll"]),
         ];
         for (name, w, h, topic, search, actions) in shots {
             let ctx = egui::Context::default();

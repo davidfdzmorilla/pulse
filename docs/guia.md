@@ -497,6 +497,7 @@ Conéctalo y toca: Pulse escucha **todos** los teclados MIDI conectados, en todo
 - Las notas van a las pistas armadas o, si no hay ninguna, a la seleccionada.
 - **Pitch bend**: ±2 semitonos en los instrumentos de Pulse (el Modular tiene su propio rango).
 - **Rueda de modulación** (CC 1): vibrato.
+- **Pedal de sustain** (CC 64): las teclas que sueltas con el pedal pisado siguen sonando hasta que lo levantas, en cualquier instrumento. Al grabar, cada nota queda tan larga como sonó, así que se reproduce igual sin pedal. Volver a tocar una tecla sostenida termina la nota anterior.
 - El Kick Designer y las baterías no usan bend ni rueda. Los plugins lo reciben todo.
 
 ### Asignar un knob a un control (MIDI learn)
@@ -1288,6 +1289,7 @@ Los editores grandes (**Editor ⤢**) se abren de uno en uno dentro de la ventan
 | Instrumento | Para qué |
 |---|---|
 | **Pulse Synth** | Sintetizador sustractivo sencillo. |
+| **Pulse Keys** | Piano, pianos eléctricos y órgano. Ver [[Pulse Keys]]. |
 | **Super Saw** | Hasta 7 dientes de sierra desafinados: leads y pads. |
 | **Acid Bass** | Bajo monofónico con filtro resonante, acento y slide. |
 | **FM Synth** | Dos operadores con realimentación: campanas, pianos eléctricos. |
@@ -1345,6 +1347,77 @@ Para instrumentos grabados nota a nota (un piano, unas cuerdas):
 - Por pad: **Tune**, **Length**, **Level**, **Pan** y grupo de **choke**: los pads del mismo grupo se cortan entre sí, como el hi-hat abierto y el cerrado.
 - **Kit básico** carga los sonidos de la Drum Machine.
 - **Trocear archivo…** corta un loop en los pads (ver [[Trocear y separar stems]]).
+
+## Pulse Keys
+
+Un piano, dos pianos eléctricos y un órgano, sintetizados por Pulse: no cargan muestras, ocupan poco y responden a cómo tocas.
+
+### Ponerlo en una pista
+
+1. Selecciona una pista MIDI.
+2. En el navegador, abre **INSTRUMENTOS** y haz clic en **Pulse Keys**.
+3. Elige el **Modelo** a la izquierda del dispositivo, o un sonido en **Presets › De fábrica**.
+
+Al cambiar de modelo empiezas desde su sonido de partida; el volumen se queda como estaba.
+
+| Modelo | Suena como |
+|---|---|
+| **Piano** | Un piano acústico de cola. |
+| **Púas** | Un piano eléctrico de púas, tipo Rhodes: redondo, con campana al atacar. |
+| **Lengüetas** | Un piano eléctrico de lengüetas, tipo Wurlitzer: más nasal y con mordida. |
+| **Órgano** | Un órgano de ruedas fónicas, tipo Hammond, con altavoz giratorio. |
+
+### Tocar con expresión
+
+- La fuerza de cada nota cambia el volumen y, en el piano y los eléctricos, también el brillo: suave suena oscuro y fuerte, brillante. **Dinámica** dice cuánto; a 0, todas suenan igual.
+- **Pedal de sustain**: las notas que sueltas siguen sonando hasta que levantas el pedal, y se graban así de largas. Ver [[Controladores MIDI#Tocar con un teclado MIDI]].
+- Pitch bend y rueda de modulación (vibrato), como en los demás instrumentos de Pulse.
+
+### Piano
+
+- **Tono**: lo duros que son los martillos. Más alto, más brillante.
+- **Duración**: cuánto tardan las notas en apagarse solas mientras las mantienes.
+- **Apagado**: cuánto suena una nota al soltarla.
+- **Martillo**: el golpe del martillo al empezar la nota.
+- **Cuerdas**: cuánto se desafinan entre sí las cuerdas de cada nota. Poco es un piano recién afinado; mucho, un piano de bar.
+- **Cuerpo**: la resonancia de la tabla armónica y de la tapa.
+- **Ancho**: los graves a la izquierda y los agudos a la derecha, como sentado al piano.
+
+> Nota: como en un piano de verdad, las teclas más agudas (de F#5 hacia arriba) no tienen apagadores y siguen sonando al soltarlas.
+
+### Pianos eléctricos
+
+**Púas** y **Lengüetas** comparten controles:
+
+- **Campana**: el brillo metálico del ataque.
+- **Ladrido**: lo que gruñe la pastilla cuando tocas fuerte. En las notas suaves apenas se nota.
+- **Tono**, **Duración**, **Apagado** y **Martillo**, como en el piano.
+- **Trémolo** y **Vel. trémolo**: en Púas el sonido va de un lado a otro; en Lengüetas, el volumen sube y baja.
+- **Drive**: satura el amplificador.
+
+### Órgano
+
+1. Saca los **registros** (las nueve barras) arrastrándolos hacia abajo: 0 es dentro y 8, del todo fuera. Con doble clic, uno sale o entra entero.
+2. Elige la velocidad del altavoz giratorio con **Lento** o **Rápido**.
+
+- Los registros, de izquierda a derecha: 16' (una octava por debajo), 5⅓', 8' (la nota), 4', 2⅔', 2', 1⅗', 1⅓' y 1'. Los marrones son los graves, los blancos las octavas y los negros las quintas y terceras.
+- Puedes moverlos mientras tocas: cambian también las notas que ya suenan.
+- **Percusión**: un golpe brillante al empezar la nota, en la **2ª** o la **3ª** armónica. Como en el órgano de verdad, solo suena si no hay otra tecla pulsada: toca ligado para que no se repita.
+- **Perc. caída**: cuánto dura la percusión.
+- **Click**: el chasquido de los contactos al pulsar y soltar.
+- **Leslie**: cuánto suena por el altavoz giratorio. Al cambiar de velocidad, la bocina tarda alrededor de un segundo en llegar y el tambor, varios. La velocidad se puede automatizar (**Leslie rápido**).
+- **Tono** quita agudos y **Drive** satura, para un órgano de rock.
+- El órgano no responde a la fuerza de las notas.
+
+> Consejo: algunas registraciones conocidas (cada cifra es una barra): **888000000** jazz, **888800000** gospel, **006802000** balada y **888888888** todo fuera. Están entre los presets de fábrica.
+
++++ Cómo funciona
+- No hay muestras: cada nota es una suma de parciales (senos que se apagan), afinados con exactitud.
+- **Piano**: hasta 40 parciales, que suben un poco por encima de los armónicos exactos porque las cuerdas son rígidas. La afinación también va estirada, como la de un piano afinado a oído. Cada nota tiene dos cuerdas: una se apaga deprisa y la otra, un poco desafinada, sostiene y bate contra la primera. El martillo suaviza los agudos según la fuerza. El punto de golpe, cerca de un octavo de la cuerda, quita algunos armónicos. Los apagadores apagan antes los agudos. La tabla armónica son cinco resonancias entre 98 y 1700 Hz y dos reflejos cortos.
+- **Púas y Lengüetas**: la púa o la lengüeta vibra con pocos armónicos y un parcial de campana, inarmónico, que se apaga en décimas de segundo. Luego pasa por una pastilla descentrada: las oscilaciones grandes salen torcidas y aparecen armónicos pares, que son el «ladrido».
+- **Órgano**: cada registro es una rueda fónica de seno puro con su propia fase. Por encima de la última rueda (unos 5,9 kHz), los registros vuelven una octava atrás, como en el original. El altavoz giratorio separa graves y agudos en 800 Hz. La bocina (agudos) gira a 0,8 Hz en lento y 6,8 Hz en rápido; el tambor (graves), a 0,67 y 5,9 Hz. Hay efecto Doppler y dos micrófonos para el estéreo.
+- Suenan hasta 32 notas a la vez; si hace falta otra, se reutiliza la que menos suena.
++++
 
 ## Kick Designer
 
@@ -2232,7 +2305,8 @@ Cómo quedan:
 
 - Las pistas nuevas se llaman como en el archivo. Sin nombre, se llaman por su sonido General MIDI («Bajo», «Piano», «Cuerdas»…).
 - El canal 10 es la batería y va a una caja de ritmos.
-- Las demás partes suenan con el sinte: cámbialo por el instrumento que quieras.
+- Los pianos, pianos eléctricos y órganos (por su sonido General MIDI) entran con [[Pulse Keys]] y un preset parecido. Las demás partes suenan con el sinte: cámbialo por el instrumento que quieras.
+- El pedal de sustain del archivo alarga las notas que sostiene, igual que al tocarlas.
 - Cada clip dura hasta el compás donde acaba su última nota.
 - Si el proyecto está vacío, toma el tempo del archivo. Si no, suena al tempo del proyecto y te dice a cuál iba el archivo.
 

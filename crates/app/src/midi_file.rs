@@ -4,7 +4,7 @@
 
 use crate::app::{ClipRef, PulseApp};
 use crate::project::{Track, PALETTE};
-use engine::model::{ArrangementClip, Clip, InstrumentKind, MidiClip, Note, SynthParams};
+use engine::model::{ArrangementClip, Clip, InstrumentKind, KeysParams, MidiClip, Note, SynthParams};
 use std::path::Path;
 
 /// The drums' channel in General MIDI (10, counting from 1).
@@ -118,16 +118,29 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
         let mut tick = 0u64;
         let mut status = 0u8;
         let mut name = String::new();
-        // Per channel: its notes, the notes sounding (pitch → start tick, velocity), its program.
+        // Per channel: its notes, the notes sounding (channel, pitch, start tick,
+        // velocity, let go under the sustain pedal), its program, its pedal.
         let mut notes: [Vec<Note>; 16] = Default::default();
-        let mut sounding: Vec<(u8, u8, u64, u8)> = Vec::new();
+        let mut sounding: Vec<(u8, u8, u64, u8, bool)> = Vec::new();
         let mut programs: [Option<u8>; 16] = [None; 16];
+        let mut pedal = [false; 16];
         let beats = |t: u64| t as f64 / ppq;
-        let close = |notes: &mut [Vec<Note>; 16], sounding: &mut Vec<(u8, u8, u64, u8)>, channel: u8, pitch: u8, tick: u64| {
-            // The earliest of that note still sounding ends.
-            if let Some(i) = sounding.iter().position(|&(c, p, ..)| c == channel && p == pitch) {
-                let (_, _, start, velocity) = sounding.remove(i);
+        // The earliest of that note still sounding (or, with `pedalled`, the earliest
+        // let go under the pedal) ends.
+        let close = |notes: &mut [Vec<Note>; 16], sounding: &mut Vec<(u8, u8, u64, u8, bool)>, channel: u8, pitch: u8, tick: u64, pedalled: bool| {
+            if let Some(i) = sounding.iter().position(|&(c, p, _, _, held)| c == channel && p == pitch && held == pedalled) {
+                let (_, _, start, velocity, _) = sounding.remove(i);
                 notes[channel as usize].push(Note { start: beats(start), length: (beats(tick) - beats(start)).max(1.0 / 64.0), pitch, velocity: velocity as f32 / 127.0, chance: 1.0 });
+            }
+        };
+        // A key let go: with the pedal down the note goes on until the pedal comes up.
+        let let_go = |notes: &mut [Vec<Note>; 16], sounding: &mut Vec<(u8, u8, u64, u8, bool)>, pedal: &[bool; 16], channel: u8, pitch: u8, tick: u64| {
+            if pedal[channel as usize & 15] {
+                if let Some(n) = sounding.iter_mut().find(|n| n.0 == channel && n.1 == pitch && !n.4) {
+                    n.4 = true;
+                }
+            } else {
+                close(notes, sounding, channel, pitch, tick, false);
             }
         };
         while r.at < end {
@@ -168,15 +181,29 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
                         0x90 => {
                             let (pitch, velocity) = (r.byte()? & 0x7F, r.byte()? & 0x7F);
                             if velocity == 0 {
-                                close(&mut notes, &mut sounding, channel, pitch, tick);
+                                let_go(&mut notes, &mut sounding, &pedal, channel, pitch, tick);
                             } else {
-                                sounding.push((channel, pitch, tick, velocity));
+                                // Struck again while the pedal holds it: the old note ends.
+                                close(&mut notes, &mut sounding, channel, pitch, tick, true);
+                                sounding.push((channel, pitch, tick, velocity, false));
                             }
                         }
                         0x80 => {
                             let pitch = r.byte()? & 0x7F;
                             r.byte()?;
-                            close(&mut notes, &mut sounding, channel, pitch, tick);
+                            let_go(&mut notes, &mut sounding, &pedal, channel, pitch, tick);
+                        }
+                        0xB0 => {
+                            let (controller, value) = (r.byte()? & 0x7F, r.byte()? & 0x7F);
+                            if controller == 64 {
+                                let down = value >= 64;
+                                if pedal[channel as usize] && !down {
+                                    while let Some(&(_, pitch, ..)) = sounding.iter().find(|n| n.0 == channel && n.4) {
+                                        close(&mut notes, &mut sounding, channel, pitch, tick, true);
+                                    }
+                                }
+                                pedal[channel as usize] = down;
+                            }
                         }
                         0xC0 => {
                             let program = r.byte()? & 0x7F;
@@ -185,7 +212,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
                         0xD0 => {
                             r.byte()?;
                         }
-                        0xA0 | 0xB0 | 0xE0 => {
+                        0xA0 | 0xE0 => {
                             r.take(2)?;
                         }
                         _ => return Err("El archivo MIDI tiene un mensaje que no se entiende".into()),
@@ -195,8 +222,8 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
         }
         r.at = end;
         // Notes never let go end where the track does.
-        while let Some(&(channel, pitch, ..)) = sounding.first() {
-            close(&mut notes, &mut sounding, channel, pitch, tick);
+        while let Some(&(channel, pitch, _, _, pedalled)) = sounding.first() {
+            close(&mut notes, &mut sounding, channel, pitch, tick, pedalled);
         }
         let used: Vec<usize> = (0..16).filter(|&c| !notes[c].is_empty()).collect();
         for &c in &used {
@@ -217,6 +244,25 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
         }
     }
     Ok(finish(tempos, parts))
+}
+
+/// What a part plays in Pulse, from its General MIDI program: pianos, electric pianos
+/// and organs get Pulse Keys with a sound like it; the rest the synth.
+pub(crate) fn instrument_for(program: Option<u8>) -> InstrumentKind {
+    let preset = match program {
+        Some(0) => "Piano · De cola",
+        Some(1 | 2) => "Piano · Brillante",
+        Some(3) => "Piano · De pared",
+        Some(4) => "Púas · Clásico",
+        Some(5) => "Púas · Campana",
+        Some(6 | 7) => "Lengüetas · Clásico",
+        Some(16 | 17) => "Órgano · Jazz",
+        Some(18) => "Órgano · Rock",
+        Some(19) => "Órgano · Completo",
+        Some(20) => "Órgano · Balada",
+        _ => return InstrumentKind::Synth(SynthParams::default()),
+    };
+    KeysParams::presets().into_iter().find(|(name, _)| *name == preset).map_or(InstrumentKind::Synth(SynthParams::default()), |(_, p)| InstrumentKind::Keys(p))
 }
 
 fn finish(mut tempos: Vec<(u64, f64)>, parts: Vec<Part>) -> Song {
@@ -373,7 +419,7 @@ impl PulseApp {
                     }
                     let color = PALETTE[(index * 5 + 1) % PALETTE.len()];
                     let drums = part.channel == DRUM_CHANNEL;
-                    let instrument = if drums { InstrumentKind::DrumMachine(Default::default()) } else { InstrumentKind::Synth(SynthParams::default()) };
+                    let instrument = if drums { InstrumentKind::DrumMachine(Default::default()) } else { instrument_for(part.program) };
                     let mut track = Track::new(part.name.clone(), color, instrument);
                     let clip = MidiClip { notes: part.notes.clone(), ..MidiClip::new(&part.name, length_of(&part.notes), color) };
                     if session {
@@ -526,6 +572,38 @@ mod tests {
         assert_eq!(song.parts[2].notes, [note(3.0, 0.25, 42, 1.0)]);
         assert!(read(b"RIFF....").unwrap_err().contains("No es un archivo MIDI"));
         assert!(read(&bytes[..30]).is_err(), "cut short");
+    }
+
+    /// The sustain pedal (controller 64) holds the keys let go under it until it
+    /// comes up, or until the same key is struck again; pianos, electric pianos
+    /// and organs come in on Pulse Keys.
+    #[test]
+    fn the_sustain_pedal_lengthens_the_notes_it_holds() {
+        let mut track = Vec::new();
+        track.extend([0x00, 0xC0, 4]); // an electric piano
+        track.extend([0x00, 0xB0, 64, 127]); // pedal down
+        track.extend([0x00, 0x90, 60, 100]); // C4
+        track.extend([0x60, 0x80, 60, 0]); // let go a beat later: held
+        track.extend([0x00, 0x90, 64, 100]); // E4
+        track.extend([0x30, 0x90, 64, 0]); // let go half a beat later: held
+        track.extend([0x30, 0x90, 64, 90]); // E4 again: the first E4 ends here
+        track.extend([0x30, 0xB0, 64, 0]); // pedal up at beat 2.5: C4 ends
+        track.extend([0x30, 0x80, 64, 0]); // E4 let go with the pedal up
+        track.extend([0x00, 0xFF, 0x2F, 0x00]);
+        let mut bytes = b"MThd".to_vec();
+        bytes.extend([0, 0, 0, 6, 0, 0, 0, 1, 0, 96]);
+        bytes.extend(b"MTrk");
+        bytes.extend((track.len() as u32).to_be_bytes());
+        bytes.extend(track);
+        let song = read(&bytes).unwrap();
+        let mut notes = song.parts[0].notes.clone();
+        notes.sort_by(|a, b| a.start.total_cmp(&b.start));
+        let got: Vec<(f64, f64, u8)> = notes.iter().map(|n| (n.start, n.length, n.pitch)).collect();
+        assert_eq!(got, [(0.0, 2.5, 60), (1.0, 1.0, 64), (2.0, 1.0, 64)]);
+        assert!(matches!(instrument_for(song.parts[0].program), InstrumentKind::Keys(p) if p.model == engine::model::KeysModel::Tines));
+        assert!(matches!(instrument_for(Some(18)), InstrumentKind::Keys(p) if p.model == engine::model::KeysModel::Organ));
+        assert!(matches!(instrument_for(Some(33)), InstrumentKind::Synth(_)));
+        assert!(matches!(instrument_for(None), InstrumentKind::Synth(_)));
     }
 
     /// Into an empty project: a track a part, drums on a drum machine, the

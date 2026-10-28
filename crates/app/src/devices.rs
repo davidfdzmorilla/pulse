@@ -830,6 +830,67 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             });
             actions.extend(body_actions);
         }
+        InstrumentKind::Keys(base) => {
+            use engine::model::{KeysModel, KeysParams, KEYS_DRAWBAR, KEYS_LESLIE_FAST};
+            let width = if base.model == KeysModel::Organ { 560.0 } else { 470.0 };
+            device_frame(ui, kind.label(), width, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
+                ui.vertical(|ui| {
+                    ui.spacing_mut().item_spacing.y = 2.0;
+                    ui.label(egui::RichText::new("Modelo").color(TEXT_DIM).size(10.5));
+                    let mut model = base.model;
+                    for m in KeysModel::ALL {
+                        ui.selectable_value(&mut model, m, m.label()).on_hover_text(m.hint());
+                    }
+                    if model != base.model {
+                        // Each model starts from its own sound; the volume stays.
+                        actions.push(Action::Instrument(InstrumentKind::Keys(KeysParams { gain: base.gain, ..KeysParams::model_default(model) })));
+                    }
+                    if ui.small_button("►").on_hover_text("Escuchar").clicked() {
+                        actions.push(Action::Preview(60));
+                    }
+                });
+                if base.model == KeysModel::Organ {
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 1.0;
+                        for i in 0..9 {
+                            let id = Param::Instrument(KEYS_DRAWBAR + i);
+                            if let Some(v) = crate::keys_ui::drawbar(ui, i, app.display_value(target, id)) {
+                                actions.push(Action::Param(id, v));
+                            }
+                        }
+                    });
+                }
+                ui.vertical(|ui| {
+                    for row in crate::keys_ui::rows(base.model) {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 0.0;
+                            for &i in *row {
+                                ui.scope(|ui| knob(ui, actions, i, kind.params()[i].name, 26.0)).response.on_hover_text(crate::keys_ui::hint(i, base.model));
+                            }
+                        });
+                    }
+                    if base.model == KeysModel::Organ {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 2.0;
+                            let mut third = base.perc_third;
+                            ui.selectable_value(&mut third, false, "2ª").on_hover_text("La percusión suena una octava por encima");
+                            ui.selectable_value(&mut third, true, "3ª").on_hover_text("La percusión suena una octava y una quinta por encima");
+                            if third != base.perc_third {
+                                actions.push(Action::Instrument(InstrumentKind::Keys(KeysParams { perc_third: third, ..base })));
+                            }
+                            ui.add_space(8.0);
+                            let fast = app.display_value(target, Param::Instrument(KEYS_LESLIE_FAST)) >= 0.5;
+                            let mut want = fast;
+                            ui.selectable_value(&mut want, false, "Lento").on_hover_text("El altavoz giratorio despacio (coral)");
+                            ui.selectable_value(&mut want, true, "Rápido").on_hover_text("El altavoz giratorio deprisa (trémolo); tarda un momento en llegar");
+                            if want != fast {
+                                actions.push(Action::Param(Param::Instrument(KEYS_LESLIE_FAST), if want { 1.0 } else { 0.0 }));
+                            }
+                        });
+                    }
+                });
+            });
+        }
         InstrumentKind::SuperSaw(_) | InstrumentKind::Fm(_) => {
             let width = kind.params().len() as f32 * 52.0 + 24.0;
             device_frame(ui, kind.label(), width, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {

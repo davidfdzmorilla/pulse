@@ -583,8 +583,30 @@ impl Default for SynthParams {
 impl SynthParams {
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, SynthParams)> {
+        use Waveform::*;
         let base = SynthParams::default();
-        vec![("Init", base)]
+        // The synth has no filter envelope: plucks and stabs come from the amplitude
+        // decay (sustain 0 or low), the tone from the waveform and the fixed cutoff.
+        let tone = |waveform, cutoff, resonance, gain| SynthParams { waveform, cutoff, resonance, gain, ..base };
+        vec![
+            ("Init", base),
+            ("Bajo · Sub puro", SynthParams { attack: 0.002, decay: 0.3, sustain: 1.0, release: 0.08, ..tone(Sine, 18000.0, 0.0, 0.22) }),
+            ("Bajo · Triángulo cálido", SynthParams { attack: 0.002, decay: 0.4, sustain: 0.8, release: 0.1, ..tone(Triangle, 900.0, 0.1, 0.33) }),
+            ("Bajo · Sierra con mordida", SynthParams { attack: 0.001, decay: 0.25, sustain: 0.55, release: 0.06, ..tone(Saw, 850.0, 0.55, 0.29) }),
+            ("Bajo · Pulso corto", SynthParams { attack: 0.001, decay: 0.22, sustain: 0.3, release: 0.06, ..tone(Square, 700.0, 0.2, 0.29) }),
+            ("Lead · Sierra brillante", SynthParams { attack: 0.004, decay: 0.3, sustain: 0.8, release: 0.25, ..tone(Saw, 7000.0, 0.15, 0.27) }),
+            ("Lead · Chip cuadrado", SynthParams { attack: 0.001, decay: 0.05, sustain: 1.0, release: 0.03, ..tone(Square, 18000.0, 0.0, 0.16) }),
+            ("Lead · Flauta suave", SynthParams { attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.3, ..tone(Triangle, 3000.0, 0.0, 0.27) }),
+            ("Lead · Resonante", SynthParams { attack: 0.003, decay: 0.4, sustain: 0.75, release: 0.2, ..tone(Saw, 1800.0, 0.65, 0.22) }),
+            ("Pluck · Corto", SynthParams { attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.2, ..tone(Saw, 3000.0, 0.3, 0.35) }),
+            ("Pluck · Marimba", SynthParams { attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.3, ..tone(Triangle, 5000.0, 0.0, 0.35) }),
+            ("Pluck · Arpegio de 8 bits", SynthParams { attack: 0.001, decay: 0.12, sustain: 0.0, release: 0.05, ..tone(Square, 6000.0, 0.0, 0.3) }),
+            ("Pad · Cálido", SynthParams { attack: 0.8, decay: 1.0, sustain: 0.8, release: 1.5, ..tone(Saw, 1200.0, 0.1, 0.35) }),
+            ("Pad · Hueco", SynthParams { attack: 1.2, decay: 1.0, sustain: 0.85, release: 2.0, ..tone(Square, 900.0, 0.2, 0.23) }),
+            ("Pad · Niebla", SynthParams { attack: 1.5, decay: 1.0, sustain: 1.0, release: 2.5, ..tone(Triangle, 1500.0, 0.0, 0.36) }),
+            ("Acordes · Stab de house", SynthParams { attack: 0.001, decay: 0.3, sustain: 0.15, release: 0.15, ..tone(Saw, 2200.0, 0.35, 0.33) }),
+            ("Acordes · Órgano cuadrado", SynthParams { attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.05, ..tone(Square, 2500.0, 0.0, 0.13) }),
+        ]
     }
 }
 
@@ -1542,7 +1564,30 @@ impl SuperSawParams {
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, SuperSawParams)> {
         let base = SuperSawParams::default();
-        vec![("Init", base)]
+        // The filter envelope follows the amplitude envelope: with sustain 0 a note
+        // closes its filter as it fades (plucks), a slow attack opens it (swells).
+        let saws = |voices, detune, spread, gain| SuperSawParams { voices, detune, spread, gain, ..base };
+        vec![
+            ("Init", base),
+            ("Lead · Trance clásico", SuperSawParams { cutoff: 5000.0, resonance: 0.1, env_amount: 0.0, attack: 0.005, decay: 0.5, sustain: 0.85, release: 0.3, ..saws(7.0, 0.4, 0.8, 0.45) }),
+            ("Lead · Estrecho", SuperSawParams { cutoff: 3500.0, resonance: 0.25, env_amount: 1.0, attack: 0.003, decay: 0.4, sustain: 0.7, release: 0.2, ..saws(5.0, 0.2, 0.3, 0.42) }),
+            ("Lead · Rave desafinado", SuperSawParams { cutoff: 8000.0, resonance: 0.05, env_amount: 0.0, attack: 0.002, decay: 0.3, sustain: 0.9, release: 0.25, ..saws(7.0, 0.9, 1.0, 0.4) }),
+            ("Pad · Ancho", SuperSawParams { cutoff: 2500.0, resonance: 0.05, env_amount: 0.0, attack: 1.2, decay: 1.0, sustain: 0.9, release: 2.0, ..saws(7.0, 0.3, 1.0, 0.45) }),
+            ("Pad · Amanecer", SuperSawParams { cutoff: 350.0, resonance: 0.15, env_amount: 3.5, attack: 1.2, decay: 1.0, sustain: 1.0, release: 2.5, ..saws(7.0, 0.35, 0.9, 0.43) }),
+            ("Pad · Oscuro", SuperSawParams { cutoff: 600.0, resonance: 0.3, env_amount: 0.0, attack: 0.8, decay: 1.0, sustain: 1.0, release: 2.0, ..saws(6.0, 0.15, 0.7, 0.4) }),
+            ("Acordes · Progressive", SuperSawParams { cutoff: 1500.0, resonance: 0.1, env_amount: 1.5, attack: 0.002, decay: 0.35, sustain: 0.4, release: 0.3, ..saws(7.0, 0.3, 0.8, 0.45) }),
+            ("Acordes · Stab de house", SuperSawParams { cutoff: 1200.0, resonance: 0.3, env_amount: 2.0, attack: 0.001, decay: 0.25, sustain: 0.2, release: 0.15, ..saws(5.0, 0.25, 0.6, 0.44) }),
+            ("Acordes · Rave de los 90", SuperSawParams { cutoff: 2500.0, resonance: 0.2, env_amount: 1.0, attack: 0.001, decay: 0.3, sustain: 0.6, release: 0.2, ..saws(7.0, 0.6, 0.8, 0.38) }),
+            ("Pluck · Trance", SuperSawParams { cutoff: 600.0, resonance: 0.25, env_amount: 3.0, attack: 0.001, decay: 0.25, sustain: 0.0, release: 0.25, ..saws(7.0, 0.35, 0.8, 0.48) }),
+            ("Pluck · Corto y brillante", SuperSawParams { cutoff: 2000.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.16, sustain: 0.0, release: 0.1, ..saws(3.0, 0.2, 0.6, 0.5) }),
+            ("Pluck · Largo", SuperSawParams { cutoff: 900.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.8, sustain: 0.0, release: 0.5, ..saws(5.0, 0.3, 0.9, 0.33) }),
+            ("Bajo · Sierra única", SuperSawParams { cutoff: 700.0, resonance: 0.3, env_amount: 1.5, attack: 0.001, decay: 0.3, sustain: 0.5, release: 0.08, ..saws(1.0, 0.0, 0.0, 0.52) }),
+            ("Bajo · Progressive", SuperSawParams { cutoff: 400.0, resonance: 0.2, env_amount: 2.0, attack: 0.001, decay: 0.2, sustain: 0.5, release: 0.1, ..saws(3.0, 0.12, 0.2, 0.57) }),
+            ("Bajo · Reese", SuperSawParams { cutoff: 500.0, resonance: 0.1, env_amount: 0.5, attack: 0.003, decay: 0.5, sustain: 1.0, release: 0.15, ..saws(2.0, 0.25, 0.0, 0.4) }),
+            ("Bajo · Rebotado", SuperSawParams { cutoff: 250.0, resonance: 0.35, env_amount: 3.0, attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.08, ..saws(2.0, 0.06, 0.0, 0.75) }),
+            ("Textura · Enjambre", SuperSawParams { cutoff: 1800.0, resonance: 0.5, env_amount: 0.0, attack: 1.2, decay: 1.0, sustain: 1.0, release: 3.0, ..saws(7.0, 1.0, 1.0, 0.36) }),
+            ("FX · Barrido", SuperSawParams { cutoff: 150.0, resonance: 0.6, env_amount: 4.0, attack: 1.5, decay: 1.0, sustain: 1.0, release: 1.5, ..saws(7.0, 0.5, 1.0, 0.41) }),
+        ]
     }
 }
 

@@ -1905,7 +1905,7 @@ impl KeysParams {
             ("Órgano · Jazz", KeysParams { drawbars: bars("888000000"), percussion: 0.7, perc_decay: 0.35, leslie_fast: 0.0, ..organ }),
             ("Órgano · Gospel", KeysParams { drawbars: bars("888800000"), percussion: 0.0, leslie_fast: 1.0, click: 0.45, ..organ }),
             ("Órgano · Rock", KeysParams { drawbars: bars("888000000"), percussion: 0.0, drive: 0.6, leslie: 0.75, click: 0.5, ..organ }),
-            ("Órgano · Balada", KeysParams { drawbars: bars("006802000"), percussion: 0.0, click: 0.1, leslie: 0.5, ..organ }),
+            ("Órgano · Balada", KeysParams { drawbars: bars("006802000"), percussion: 0.0, click: 0.1, leslie: 0.5, gain: 0.9, ..organ }),
             ("Órgano · Completo", KeysParams { drawbars: bars("888888888"), percussion: 0.0, leslie_fast: 1.0, gain: 0.4, ..organ }),
             // Pianos for songs: pop cuts through, the ballad sings on, the dark one
             // under film cues, the worn-out one for lo-fi beats, the touchy jazz one.

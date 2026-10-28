@@ -1401,8 +1401,8 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 let seconds = (end - start) * 60.0 / app.project.tempo;
                 ui.label(
                     egui::RichText::new(format!(
-                        "{:.0} compases · {:.1} s, más la cola de los efectos. La automatización se exporta tal como está escrita.",
-                        (end - start) / 4.0,
+                        "{} · {:.1} s, más la cola de los efectos. La automatización se exporta tal como está escrita.",
+                        crate::transport::bars_label(crate::transport::bars_between(&app.project.meter, start, end)).replace(" c.", " compases"),
                         seconds
                     ))
                     .color(TEXT_DIM)

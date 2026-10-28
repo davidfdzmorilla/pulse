@@ -21,6 +21,8 @@ pub struct ProcessContext {
     /// The project's scale (its pitch classes as bits, C first; 0: none),
     /// for a Tuner.
     pub scale: u16,
+    /// The song's time signatures (plugins are told the bar and signature).
+    pub meter: crate::meter::Meter,
 }
 
 /// Topology-preserving-transform state variable filter returning (low, band, high).
@@ -1644,7 +1646,7 @@ impl EffectProcessor {
             Self::Limiter(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Utility(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Plugin(_, Some(plugin)) => {
-                plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0);
+                plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &ctx.meter);
                 plugin.process(l, r);
             }
             Self::Plugin(_, None) => {}
@@ -1663,6 +1665,7 @@ mod tests {
             beat: 0.0,
             beats_per_sample: 120.0 / 60.0 / 48_000.0,
             scale: 0,
+            meter: Default::default(),
         }
     }
 
@@ -2168,7 +2171,7 @@ mod tests {
         };
         let mut worst = (0f32, String::new());
         for rate in [44_100.0f32, 48_000.0] {
-            let ctx = ProcessContext { sample_rate: rate, tempo: 120.0, beat: 0.0, beats_per_sample: 2.0 / rate as f64, scale: 0 };
+            let ctx = ProcessContext { sample_rate: rate, tempo: 120.0, beat: 0.0, beats_per_sample: 2.0 / rate as f64, scale: 0, meter: Default::default() };
             for mode in [FilterMode::LowPass, FilterMode::HighPass, FilterMode::BandPass] {
                 for (steep, drive_db) in [(false, 0.0), (true, 0.0), (false, 24.0)] {
                     for resonance in [0.95f32, 1.0, 1.1, 1.2] {

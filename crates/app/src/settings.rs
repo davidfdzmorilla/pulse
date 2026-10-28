@@ -139,7 +139,7 @@ impl PulseApp {
             }
         }
         if count_in {
-            self.audio.send(engine::Command::SetCountIn(self.settings.count_in_bars as f64 * 4.0));
+            self.audio.send(engine::Command::SetCountIn(self.settings.count_in_bars as f64));
         }
         if compensate {
             self.audio.send(engine::Command::SetCompensation(self.settings.compensate));

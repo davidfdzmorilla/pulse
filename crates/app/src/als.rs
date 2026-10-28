@@ -14,6 +14,7 @@ use engine::model::{
     rack_pad, ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, RackParams, SamplerParams, SynthParams, WarpMarker, WarpMode, RACK_FIRST_NOTE,
 };
 use engine::{MAX_TRACKS, MAX_RETURNS, NUM_SCENES};
+use engine::meter::{Meter, TimeSig};
 use roxmltree::{Document, Node};
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -108,6 +109,9 @@ pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport
     let master = child(set, "MasterTrack").or_else(|| child(set, "MainTrack"));
     if let Some(tempo) = master.and_then(|m| number(m, &["DeviceChain", "Mixer", "Tempo", "Manual"])) {
         project.tempo = tempo.clamp(20.0, 999.0);
+    }
+    if let Some(meter) = master.and_then(meter_of) {
+        project.meter = meter;
     }
     if let Some(gain) = master.and_then(|m| number(m, &["DeviceChain", "Mixer", "Volume", "Manual"])) {
         project.master.mixer.gain = gain as f32;
@@ -215,6 +219,38 @@ fn value<'a>(node: Node<'a, '_>, names: &[&str]) -> Option<&'a str> {
 /// A number from the set; «NaN» or «inf» (which Rust reads as numbers) are not.
 fn number(node: Node, names: &[&str]) -> Option<f64> {
     value(node, names)?.parse().ok().filter(|n: &f64| n.is_finite())
+}
+
+/// A time signature as Live saves it in a number: (beats − 1) + 99 × log2(note).
+fn live_sig(value: f64) -> Option<TimeSig> {
+    let v = value.round() as i64;
+    (v >= 0).then(|| TimeSig::new((v % 99 + 1) as u32, 1u32 << (v / 99).min(5)))
+}
+
+/// The set's time signature, and its changes along the song (the master's
+/// automation of it).
+fn meter_of(master: Node) -> Option<Meter> {
+    let node = path(master, &["DeviceChain", "Mixer", "TimeSignature"])?;
+    let older = || {
+        let sig = path(node, &["TimeSignatures", "RemoteableTimeSignature"])?;
+        Some(TimeSig::new(number(sig, &["Numerator"])? as u32, number(sig, &["Denominator"])? as u32))
+    };
+    let mut meter = Meter::new(number(node, &["Manual"]).and_then(live_sig).or_else(older)?);
+    let Some(id) = path(node, &["AutomationTarget"]).and_then(|t| t.attribute("Id")) else { return Some(meter) };
+    let Some(envelopes) = path(master, &["AutomationEnvelopes", "Envelopes"]) else { return Some(meter) };
+    let Some(envelope) = envelopes.children().filter(|n| n.has_tag_name("AutomationEnvelope")).find(|e| value(*e, &["EnvelopeTarget", "PointeeId"]) == Some(id)) else {
+        return Some(meter);
+    };
+    let Some(events) = path(envelope, &["Automation", "Events"]) else { return Some(meter) };
+    let mut changes: Vec<(f64, TimeSig)> =
+        events.children().filter(|n| n.has_tag_name("EnumEvent")).filter_map(|e| Some((attribute_number(e, "Time")?, live_sig(attribute_number(e, "Value")?)?))).collect();
+    changes.sort_by(|a, b| a.0.total_cmp(&b.0));
+    for (time, sig) in changes {
+        // Live's first event sits far before the song: it is the signature at the start.
+        let bar = if time <= 0.0 { 0 } else { meter.bar_at(meter.next_bar(time - 1e-6)).0.max(0) as u32 };
+        meter = meter.with_change(bar, sig);
+    }
+    Some(meter)
 }
 
 fn flag(node: Node, names: &[&str]) -> Option<bool> {
@@ -940,6 +976,33 @@ mod tests {
         assert_eq!(params.root, 48.0);
         assert_eq!(keys.sample(0), Some("/nowhere/piano.wav"));
         assert_eq!(report.missing_samples, 3);
+    }
+
+    /// The set's time signature (Live's number for it) and its changes, from
+    /// the master's automation; Live 9's older form too.
+    #[test]
+    fn time_signatures_come_across() {
+        // 3/4 is 2 + 99 × 2 = 200; 7/8 is 6 + 99 × 3 = 303; 4/4 is 201.
+        let set = r#"<Ableton><LiveSet><Tracks><MidiTrack/></Tracks><MasterTrack>
+            <AutomationEnvelopes><Envelopes><AutomationEnvelope>
+              <EnvelopeTarget><PointeeId Value="77"/></EnvelopeTarget>
+              <Automation><Events>
+                <EnumEvent Time="-63072000" Value="200"/>
+                <EnumEvent Time="6" Value="303"/>
+                <EnumEvent Time="13" Value="201"/>
+              </Events></Automation>
+            </AutomationEnvelope></Envelopes></AutomationEnvelopes>
+            <DeviceChain><Mixer><Tempo><Manual Value="100"/></Tempo>
+              <TimeSignature><Manual Value="200"/><AutomationTarget Id="77"/></TimeSignature>
+            </Mixer></DeviceChain></MasterTrack></LiveSet></Ableton>"#;
+        let (project, _) = parse(set).unwrap();
+        let expected = Meter::new(TimeSig::new(3, 4)).with_change(2, TimeSig::new(7, 8)).with_change(4, TimeSig::COMMON);
+        assert_eq!(project.meter, expected);
+        let older = r#"<Ableton><LiveSet><Tracks><MidiTrack/></Tracks><MasterTrack><DeviceChain><Mixer>
+            <TimeSignature><TimeSignatures><RemoteableTimeSignature><Numerator Value="6"/><Denominator Value="8"/></RemoteableTimeSignature></TimeSignatures></TimeSignature>
+            </Mixer></DeviceChain></MasterTrack></LiveSet></Ableton>"#;
+        assert_eq!(parse(older).unwrap().0.meter, Meter::new(TimeSig::new(6, 8)));
+        assert!(parse(&audio_set("/nowhere/a.wav")).unwrap().0.meter.is_common(), "none said: 4/4");
     }
 
     #[test]

@@ -1061,11 +1061,14 @@ impl Vst3Processor {
     }
 
     /// Where the song is at this block's start, and whether it plays.
-    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool) {
+    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool, meter: &crate::meter::Meter) {
         use ProcessContext_::StatesAndFlags_::{kBarPositionValid, kPlaying};
         self.context.tempo = tempo;
         self.context.projectTimeMusic = beat;
-        self.context.barPositionMusic = (beat / 4.0).floor() * 4.0;
+        self.context.barPositionMusic = meter.prev_bar(beat);
+        let sig = meter.sig_at(beat);
+        self.context.timeSigNumerator = sig.beats as i32;
+        self.context.timeSigDenominator = sig.unit as i32;
         self.context.projectTimeSamples = (beat * 60.0 / tempo.max(1.0) * self.sample_rate as f64).round() as i64;
         self.context.state |= kBarPositionValid as u32;
         if playing {
@@ -1480,8 +1483,8 @@ impl PluginProcessor {
 
     /// The tempo, where the song is at the block's start and whether it plays:
     /// what tempo-synced plugins (delays, LFOs, sequencers) follow.
-    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool) {
-        each!(&mut self.inner, p => p.set_transport(tempo, beat, playing))
+    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool, meter: &crate::meter::Meter) {
+        each!(&mut self.inner, p => p.set_transport(tempo, beat, playing, meter))
     }
 
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
@@ -1968,12 +1971,12 @@ pub(crate) mod tests {
             Processor::Vst3(v) => v.context,
             Processor::Clap(_) => unreachable!("the test plugin is VST3"),
         };
-        p.set_transport(140.0, 17.5, true);
+        p.set_transport(140.0, 17.5, true, &Default::default());
         p.process(&mut l, &mut r);
         let c = context(&p);
         assert_eq!((c.tempo, c.projectTimeMusic, c.barPositionMusic), (140.0, 17.5, 16.0));
         assert!(c.state & kPlaying as u32 != 0);
-        p.set_transport(140.0, 4.0, false);
+        p.set_transport(140.0, 4.0, false, &Default::default());
         p.process(&mut l, &mut r);
         p.process(&mut l, &mut r);
         let c = context(&p);

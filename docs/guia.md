@@ -52,9 +52,10 @@ El transporte es la barra de arriba: desde ahí reproduces, paras, grabas y cont
 | Control | Para qué sirve |
 |---|---|
 | **Tempo** | La velocidad de la canción, de 20 a 999 BPM. Arrastra o escribe. |
+| **Compás** | 4/4, 3/4, 6/8, 7/8… El de la canción, o el del principio si cambia más adelante. Ver [[#Cambiar el compás]]. |
 | **●** junto al tempo | El **metrónomo**. |
 | **Cuantización de lanzamiento** | Cuándo arrancan los clips que lanzas: Ninguna, 1/16 … 1 Compás, 2 Compases. Por defecto, 1 Compás. |
-| **Posición** | Por dónde va la canción (compás. tiempo. semicorchea). Durante la cuenta atrás muestra «Cuenta N». |
+| **Posición** | Por dónde va la canción (compás. tiempo. semicorchea), contada en su compás. Durante la cuenta atrás muestra «Cuenta N». |
 | **► Reproducir** / **■ Parar** | {Espacio}. |
 | **● Grabar** | {F9}: graba en el Arrangement. |
 | **Cuenta atrás** | Sin cuenta, 1, 2 o 4 compases de metrónomo antes de grabar. |
@@ -70,6 +71,35 @@ El transporte es la barra de arriba: desde ahí reproduces, paras, grabas y cont
 | **MIDI** | Encendido si hay teclados MIDI conectados. Clic para volver a buscarlos. |
 | **Asignar** | Asignar knobs y botones de un controlador MIDI. Ver [[Controladores MIDI]]. |
 | **☰**, **Session** / **Arrangement** | A la derecha: el navegador, la vista y el medidor del master. |
+
+### Cambiar el compás
+
+1. Abre el menú **Compás**, junto al tempo, y elige uno: 4/4, 3/4, 2/4, 6/8, 12/8, 5/4, 7/8, 9/8, 5/8, 7/4 o 2/2. En **Otro**, cualquier otro: los tiempos y la figura.
+2. Para que cambie a mitad de canción, haz clic derecho en la franja de marcadores del Arrangement, sobre el compás donde cambia, y elige **Compás desde el N**. El cambio se ve en la regla, junto al número del compás.
+3. Para quitar un cambio, haz clic derecho sobre ese compás y elige **Quitar el cambio de compás**.
+
+Todo sigue el compás:
+
+- la regla y la rejilla;
+- el ajuste al mover clips y el loop;
+- **Trocear** por compases;
+- la cuantización de lanzamiento («1 Compás» espera al compás que suena);
+- el metrónomo y la cuenta atrás;
+- el redondeo de las tomas;
+- los clips nuevos, que miden un compás;
+- la posición de la barra de transporte;
+- los plugins, que reciben el compás.
+
+En el editor MIDI, la regla y el loop cuentan los compases donde está el clip; los clips de Session, los del compás del principio.
+
+> Nota: los generadores (ritmos, acompañamiento, arreglo automático y de tarareo a canción) todavía escriben en 4/4.
+
++++ Cómo cuenta
+- Los tiempos son negras: un compás de 3/4 dura 3, uno de 6/8 también 3 (seis corcheas) y uno de 7/8, 3,5.
+- El metrónomo marca cada **pulso**: la negra en 4/4 y 3/4, la negra con puntillo en los compases compuestos (6/8, 9/8, 12/8) y la corchea en los irregulares (5/8, 7/8). El primero de cada compás suena más agudo.
+- Un cambio va siempre al principio de un compás. Si cambias un compás anterior, los cambios de después siguen en el mismo número de compás.
+- Una canción puede tener hasta 16 cambios.
++++
 
 ### Tempo que cambia a lo largo de la canción
 
@@ -816,7 +846,7 @@ Elige **Velocidad** en el carril de abajo y arrastra arriba o abajo cerca de una
 ### La barra del editor
 
 - **Nombre** del clip.
-- **Loop**: 1, 2, 4, 8 o 16 compases, o cualquier número de semicorcheas en el campo **/16**. Un clip de 3/16, 5/16 o 7/16 sobre el 4/4 se desplaza en cada compás: sirve para polirritmos.
+- **Loop**: 1, 2, 4, 8 o 16 compases (del compás donde está el clip), o cualquier número de semicorcheas en el campo **/16**. Un clip de 3/16, 5/16 o 7/16 sobre un 4/4 se desplaza en cada compás: sirve para polirritmos.
 - **Rejilla** (1/4 a 1/32, con tresillos) y **Nota** (longitud de las notas nuevas).
 - **Dibujar** ({B}): modo lápiz.
 - **Cuantizar** ({⌘U}) con su **intensidad** (%) y **finales** (cuantiza también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
@@ -2279,7 +2309,7 @@ Abre en Pulse un set de Ableton Live (`.als`) con sus pistas, clips y mezcla. Us
 
 ### Qué se importa
 
-- Tempo, loop y escenas.
+- Tempo, compás (y sus cambios), loop y escenas.
 - Pistas MIDI y de audio, con nombre, color, volumen, panorama, envíos, activador y solo.
 - Los clips de Session y del Arrangement, con sus notas o sus muestras y su warp.
 - Los **grupos**, como grupos de Pulse, con sus pistas dentro y su mezclador.
@@ -2312,13 +2342,13 @@ Cómo quedan:
 - Los pianos, pianos eléctricos y órganos (por su sonido General MIDI) entran con [[Pulse Keys]] y un preset parecido. Las demás partes suenan con el sinte: cámbialo por el instrumento que quieras.
 - El pedal de sustain del archivo alarga las notas que sostiene, igual que al tocarlas.
 - Cada clip dura hasta el compás donde acaba su última nota.
-- Si el proyecto está vacío, toma el tempo del archivo. Si no, suena al tempo del proyecto y te dice a cuál iba el archivo.
+- Si el proyecto está vacío, toma el tempo y el compás del archivo (con sus cambios). Si no, suena al tempo y en el compás del proyecto, y te dice cuáles traía el archivo.
 
 > Nota: los cambios de tempo de dentro del archivo no se traen.
 
 ### Llevarte el MIDI
 
-- **Archivo › Exportar MIDI…** guarda la canción: cada pista MIDI con clips en el Arrangement es una pista del archivo, con su nombre, al tempo del proyecto y en 4/4.
+- **Archivo › Exportar MIDI…** guarda la canción: cada pista MIDI con clips en el Arrangement es una pista del archivo, con su nombre, al tempo y con los compases del proyecto (y sus cambios).
 - Clic derecho en un clip MIDI › **Exportar MIDI…** guarda solo ese clip.
 
 +++ Detalles

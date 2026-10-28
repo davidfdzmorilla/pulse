@@ -383,14 +383,17 @@ impl ClapProcessor {
     }
 
     /// Where the song is at this block's start, and whether it plays.
-    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool) {
+    pub fn set_transport(&mut self, tempo: f64, beat: f64, playing: bool, meter: &crate::meter::Meter) {
         let t = &mut self.transport;
         t.tempo = tempo;
         t.song_pos_beats = (beat * CLAP_BEATTIME_FACTOR as f64).round() as i64;
         t.song_pos_seconds = (beat * 60.0 / tempo.max(1.0) * clap_sys::fixedpoint::CLAP_SECTIME_FACTOR as f64).round() as i64;
-        let bar = (beat / 4.0).floor();
-        t.bar_start = (bar * 4.0 * CLAP_BEATTIME_FACTOR as f64).round() as i64;
+        let (bar, _) = meter.bar_at(beat);
+        t.bar_start = (meter.bar_start(bar) * CLAP_BEATTIME_FACTOR as f64).round() as i64;
         t.bar_number = bar as i32;
+        let sig = meter.sig_at(beat);
+        t.tsig_num = sig.beats as u16;
+        t.tsig_denom = sig.unit as u16;
         t.flags |= CLAP_TRANSPORT_HAS_SECONDS_TIMELINE;
         if playing {
             t.flags |= CLAP_TRANSPORT_IS_PLAYING;

@@ -5,6 +5,7 @@ use engine::model::{
     InstrumentKind, MidiClip, Note, Param, PluginId, ReverbParams, SynthParams, RACK_FIRST_NOTE, RACK_PADS,
 };
 use engine::{MAX_RETURNS, NUM_SCENES};
+use engine::meter::Meter;
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
@@ -380,6 +381,9 @@ pub struct Project {
     /// Audio a MIDI fits melodies to it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub key: Option<stems::key::Key>,
+    /// The song's time signature and where it changes (4/4 if it never says).
+    #[serde(default, skip_serializing_if = "Meter::is_common")]
+    pub meter: Meter,
     pub tracks: Vec<Track>,
     pub returns: Vec<ReturnTrack>,
     pub master: MasterTrack,
@@ -532,6 +536,7 @@ impl Project {
             punch_in: false,
             punch_out: false,
             key: None,
+            meter: Meter::COMMON,
             markers: Vec::new(),
             macros: Vec::new(),
             next_id: 0,

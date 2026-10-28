@@ -263,7 +263,8 @@ impl PulseApp {
     }
 
     /// Cuts the selected arrangement clips at every multiple of `every` beats
-    /// inside them; the pieces end up selected.
+    /// inside them (4 and over: every that many bars, 4 a bar, on the song's bar
+    /// lines); the pieces end up selected.
     pub fn slice_selected(&mut self, every: f64) {
         let selected: Vec<(usize, usize)> = self
             .clip_selection()
@@ -280,13 +281,29 @@ impl PulseApp {
             pieces.push(ClipRef::Arrangement { track, index });
             // Each cut leaves the rest at the end of the lane: cut that next.
             let mut rest = index;
-            let mut at = ((start + MIN_PART) / every).ceil() * every;
-            while at < end - MIN_PART && pieces.len() < MAX_PIECES {
+            let mut cuts = Vec::new();
+            if every >= 4.0 - 1e-9 {
+                let bars = (every / 4.0).round().max(1.0) as i64;
+                self.project.meter.bars(start + MIN_PART, end - MIN_PART, |bar, beat| {
+                    if bar.rem_euclid(bars) == 0 {
+                        cuts.push(beat);
+                    }
+                });
+            } else {
+                let mut at = ((start + MIN_PART) / every).ceil() * every;
+                while at < end - MIN_PART {
+                    cuts.push(at);
+                    at += every;
+                }
+            }
+            for at in cuts {
+                if pieces.len() >= MAX_PIECES {
+                    break;
+                }
                 if self.split_clip_at(track, rest, at) {
                     rest = self.project.tracks[track].arrangement.len() - 1;
                     pieces.push(ClipRef::Arrangement { track, index: rest });
                 }
-                at += every;
             }
         }
         if pieces.is_empty() {

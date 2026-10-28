@@ -255,6 +255,8 @@ pub enum Command {
     SetMetronome(bool),
     /// Launch quantization in beats; 0 launches immediately.
     SetQuantize(f64),
+    /// The song's time signatures.
+    SetMeter(crate::meter::Meter),
     SetLoop {
         enabled: bool,
         start: f64,
@@ -401,7 +403,8 @@ pub enum Command {
     StopRecording(usize),
     /// Records armed tracks onto the arrangement while the transport runs.
     SetArrangementRecord(bool),
-    /// Beats the metronome counts before a recording starts the transport (0: none).
+    /// Bars the metronome counts before a recording starts the transport (0: none),
+    /// in the time signature where the song starts.
     SetCountIn(f64),
     /// Plays an audio file once over the output (the browser's preview), or stops
     /// the one playing.
@@ -929,6 +932,22 @@ impl Instrument {
             Self::Plugin(_, None) => {}
         }
     }
+}
+
+/// Where a launch at `start` waits for: the next step of the `quantize` grid
+/// (beats), or for 4 and over the next line of that many bars (4: each bar, 8:
+/// every other), following the song's time signatures.
+fn launch_boundary(meter: &crate::meter::Meter, quantize: f64, start: f64) -> f64 {
+    if quantize <= 0.0 {
+        return start;
+    }
+    if quantize < 4.0 - 1e-9 {
+        // Small epsilon so a launch exactly on a boundary is not pushed a step later.
+        return ((start - 1e-9) / quantize).ceil() * quantize;
+    }
+    let every = (quantize / 4.0).round().max(1.0) as i64;
+    let (bar, _) = meter.bar_at(meter.next_bar(start - 1e-9));
+    meter.bar_start(bar.div_euclid(every) * every + if bar.rem_euclid(every) == 0 { 0 } else { every })
 }
 
 /// MIDI controller number of the sustain pedal.
@@ -1706,11 +1725,15 @@ pub struct Engine {
     position: f64,
     start_marker: f64,
     tempo: f64,
+    /// Launches wait for this many beats' grid; 4 and over are whole bars (4: one, 8: two).
     quantize: f64,
+    meter: crate::meter::Meter,
     loop_enabled: bool,
     loop_start: f64,
     loop_end: f64,
     metronome: bool,
+    count_in_bars: f64,
+    /// Beats of the count-in under way (its bars, in the signature it starts in).
     count_in_beats: f64,
     /// Beats counted in so far, while counting in.
     counting: Option<f64>,
@@ -1943,10 +1966,12 @@ impl Engine {
             start_marker: 0.0,
             tempo: 120.0,
             quantize: 4.0,
+            meter: Default::default(),
             loop_enabled: false,
             loop_start: 0.0,
             loop_end: 16.0,
             metronome: false,
+            count_in_bars: 0.0,
             count_in_beats: 0.0,
             counting: None,
             click: Click::new(sample_rate),
@@ -2106,6 +2131,7 @@ impl Engine {
         if self.playing || self.counting.is_some() {
             return;
         }
+        self.count_in_beats = self.count_in_bars * self.meter.sig_at(self.start_marker).bar();
         if self.count_in_beats > 0.0 {
             self.counting = Some(0.0);
         } else {
@@ -2118,10 +2144,13 @@ impl Engine {
     fn count_in(&mut self, n: usize, beats_per_sample: f64) {
         let Some(done) = self.counting else { return };
         let end = done + n as f64 * beats_per_sample;
-        let beat = (done - 1e-9).ceil();
+        // Counted in the signature where the song will start.
+        let sig = self.meter.sig_at(self.start_marker);
+        let beat = ((done - 1e-9) / sig.count()).ceil() * sig.count();
         if beat < end && beat < self.count_in_beats - 1e-9 {
             let frame = ((beat - done) / beats_per_sample).round() as usize;
-            self.click.trigger((beat as i64).rem_euclid(4) == 0, frame.min(n - 1));
+            let downbeat = ((beat / sig.bar()) - (beat / sig.bar()).round()).abs() < 1e-6;
+            self.click.trigger(downbeat, frame.min(n - 1));
         }
         if end >= self.count_in_beats - 1e-9 {
             self.counting = None;
@@ -2158,6 +2187,7 @@ impl Engine {
             Command::SetTempo(_) => {}
             Command::SetMetronome(on) => self.metronome = on,
             Command::SetQuantize(beats) => self.quantize = beats.max(0.0),
+            Command::SetMeter(meter) => self.meter = meter,
             Command::SetLoop { enabled, start, end } => {
                 self.loop_enabled = enabled && end > start;
                 self.loop_start = start.max(0.0);
@@ -2476,7 +2506,7 @@ impl Engine {
                     self.start_recording_transport();
                 }
             }
-            Command::SetCountIn(beats) => self.count_in_beats = beats.max(0.0),
+            Command::SetCountIn(bars) => self.count_in_bars = bars.max(0.0),
             Command::PreviewSample(sample) => {
                 self.stop_previews();
                 self.preview = sample.map(|s| (s, 0.0));
@@ -2680,6 +2710,7 @@ impl Engine {
             beat: self.position,
             beats_per_sample: if self.playing { beats_per_sample } else { 0.0 },
             scale: self.scale,
+            meter: self.meter,
         };
         for track in &mut self.tracks {
             track.audio_left[..n].fill(0.0);
@@ -2767,7 +2798,7 @@ impl Engine {
             }
             track.instrument.set_tempo(self.tempo);
             if let Instrument::Plugin(_, Some(plugin)) = &mut track.instrument {
-                plugin.set_transport(self.tempo, ctx.beat, ctx.beats_per_sample > 0.0);
+                plugin.set_transport(self.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &self.meter);
             }
             let mut cursor = 0;
             for &(frame, _, event) in &track.events {
@@ -3105,12 +3136,7 @@ impl Engine {
 
     /// Applies quantized launches and schedules the notes in `[start, end)`.
     fn sequence_segment(&mut self, start: f64, end: f64, timing: &Timing) {
-        let boundary = if self.quantize <= 0.0 {
-            start
-        } else {
-            // Small epsilon so a launch exactly on a boundary is not pushed a bar later.
-            ((start - 1e-9) / self.quantize).ceil() * self.quantize
-        };
+        let boundary = launch_boundary(&self.meter, self.quantize, start);
 
         let segment = (timing.segment_frame, timing.segment_end);
         let bps = timing.beats_per_sample;
@@ -3153,10 +3179,8 @@ impl Engine {
         }
 
         if self.metronome {
-            let beat = (start - 1e-9).ceil();
-            if beat < end {
-                self.click.trigger((beat as i64).rem_euclid(4) == 0, timing.frame(beat));
-            }
+            let click = &mut self.click;
+            self.meter.counts(start, end, |beat, downbeat| click.trigger(downbeat, timing.frame(beat)));
         }
     }
 
@@ -3605,6 +3629,52 @@ mod tests {
     }
 
     #[test]
+    fn launches_wait_for_the_bars_of_the_song_s_signature() {
+        use crate::meter::{Meter, TimeSig};
+        let waltz = Meter::new(TimeSig::new(3, 4));
+        assert_eq!(launch_boundary(&waltz, 4.0, 1.0), 3.0, "one bar of 3/4");
+        assert_eq!(launch_boundary(&waltz, 4.0, 3.0), 3.0, "on the line: now");
+        assert_eq!(launch_boundary(&waltz, 8.0, 3.5), 6.0, "two bars: bars 0, 2, 4…");
+        assert_eq!(launch_boundary(&waltz, 1.0, 1.2), 2.0, "fractions stay in beats");
+        let mixed = Meter::default().with_change(1, TimeSig::new(7, 8));
+        assert_eq!(launch_boundary(&mixed, 4.0, 4.5), 7.5);
+        assert_eq!(launch_boundary(&Meter::default(), 4.0, 0.5), 4.0, "4/4 as always");
+
+        let mut h = Harness::new();
+        h.send(Command::SetMeter(waltz));
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
+        h.send(Command::SetClip { track: 0, slot: 1, clip: Some(one_note_clip()) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(1.0);
+        h.send(Command::LaunchClip { track: 0, slot: 1 });
+        h.run_beats(1.5); // beat 2.5
+        assert_eq!(h.playing(0), 0);
+        h.run_beats(1.0); // past beat 3: the 3/4 bar
+        assert_eq!(h.playing(0), 1);
+    }
+
+    #[test]
+    fn the_metronome_accents_the_bars_of_the_signature() {
+        use crate::meter::{Meter, TimeSig};
+        let mut h = Harness::new();
+        h.send(Command::SetMeter(Meter::new(TimeSig::new(6, 8))));
+        h.send(Command::SetMetronome(true));
+        h.send(Command::Play);
+        let out = h.run_beats(6.0);
+        // Zero crossings just after each count: the accent is higher (1600 Hz against 1000).
+        let pitch = |beat: f64| {
+            let frame = (beat * 0.5 * SR as f64) as usize + 8;
+            let left: Vec<f32> = out[frame * 2..(frame + 480) * 2].iter().step_by(2).copied().collect();
+            left.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count()
+        };
+        // 6/8: counts every 1.5 beats, a bar every 3.
+        let (bar, second, next_bar) = (pitch(0.0), pitch(1.5), pitch(3.0));
+        assert!(bar > second + 5 && next_bar > second + 5, "accents {bar} {next_bar}, count {second}");
+        let silent = pitch(1.0);
+        assert!(silent < 3, "nothing between counts: {silent}");
+    }
+
+    #[test]
     fn scene_launch_stops_tracks_with_empty_slots() {
         let mut h = Harness::new();
         h.send(Command::SetClip { track: 0, slot: 0, clip: Some(one_note_clip()) });
@@ -3979,7 +4049,7 @@ mod tests {
     #[test]
     fn recording_counts_in_before_the_transport_starts() {
         let mut h = Harness::new();
-        h.send(Command::SetCountIn(4.0));
+        h.send(Command::SetCountIn(1.0));
         h.send(Command::SetPosition(8.0));
         h.send(Command::SetArm { track: 0, armed: true });
         h.send(Command::SetArrangementRecord(true));

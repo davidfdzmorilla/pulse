@@ -301,6 +301,7 @@ fn commands_from(
         Command::SetTempo(project.tempo),
         Command::SetMetronome(project.metronome),
         Command::SetQuantize(project.quantize),
+        Command::SetMeter(project.meter),
         Command::SetLoop { enabled: project.loop_enabled, start: project.loop_start, end: project.loop_end },
         Command::SetSwing { amount: project.swing, grid: project.swing_grid },
         scale_command(project),

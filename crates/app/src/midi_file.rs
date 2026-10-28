@@ -4,6 +4,7 @@
 
 use crate::app::{ClipRef, PulseApp};
 use crate::project::{Track, PALETTE};
+use engine::meter::{Meter, TimeSig};
 use engine::model::{ArrangementClip, Clip, InstrumentKind, KeysParams, MidiClip, Note, SynthParams};
 use std::path::Path;
 
@@ -28,6 +29,8 @@ pub struct Song {
     pub tempo: Option<f64>,
     /// How many times the tempo changes after the first.
     pub tempo_changes: usize,
+    /// Its time signatures, if it says.
+    pub meter: Option<Meter>,
     pub parts: Vec<Part>,
 }
 
@@ -99,12 +102,13 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
     }
     let ppq = division.max(1) as f64;
     let mut tempos: Vec<(u64, f64)> = Vec::new();
+    let mut sigs: Vec<(f64, TimeSig)> = Vec::new();
     let mut parts = Vec::new();
     for index in 0..tracks {
         // Chunks Pulse doesn't know are passed over.
         let (id, length) = loop {
             if r.at >= bytes.len() {
-                return Ok(finish(tempos, parts));
+                return Ok(finish(tempos, sigs, parts));
             }
             let id = r.take(4)?;
             let length = r.u32()? as usize;
@@ -161,6 +165,8 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
                     let data = r.take(len)?;
                     match kind {
                         0x03 if name.is_empty() => name = String::from_utf8_lossy(data).trim().to_string(),
+                        // Time signature: beats, and the note as a power of two.
+                        0x58 if len >= 2 => sigs.push((tick as f64 / ppq, TimeSig::new(data[0] as u32, 1 << data[1].min(5)))),
                         0x51 if len == 3 => {
                             let micros = ((data[0] as u32) << 16) | ((data[1] as u32) << 8) | data[2] as u32;
                             if micros > 0 {
@@ -243,7 +249,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
             parts.push(Part { name, channel: c as u8, program, notes: list });
         }
     }
-    Ok(finish(tempos, parts))
+    Ok(finish(tempos, sigs, parts))
 }
 
 /// What a part plays in Pulse, from its General MIDI program: pianos, electric pianos
@@ -265,10 +271,25 @@ pub(crate) fn instrument_for(program: Option<u8>) -> InstrumentKind {
     KeysParams::presets().into_iter().find(|(name, _)| *name == preset).map_or(InstrumentKind::Synth(SynthParams::default()), |(_, p)| InstrumentKind::Keys(p))
 }
 
-fn finish(mut tempos: Vec<(u64, f64)>, parts: Vec<Part>) -> Song {
+fn finish(mut tempos: Vec<(u64, f64)>, sigs: Vec<(f64, TimeSig)>, parts: Vec<Part>) -> Song {
     tempos.sort_by_key(|t| t.0);
     tempos.dedup_by(|a, b| (a.1 - b.1).abs() < 1e-6);
-    Song { tempo: tempos.first().map(|t| t.1), tempo_changes: tempos.len().saturating_sub(1), parts }
+    Song { tempo: tempos.first().map(|t| t.1), tempo_changes: tempos.len().saturating_sub(1), meter: meter_of(sigs), parts }
+}
+
+/// The meter of time signatures found at beats: each from the bar it falls in
+/// (or the next, if it falls inside one).
+fn meter_of(mut sigs: Vec<(f64, TimeSig)>) -> Option<Meter> {
+    if sigs.is_empty() {
+        return None;
+    }
+    sigs.sort_by(|a, b| a.0.total_cmp(&b.0));
+    let mut meter = Meter::COMMON;
+    for (beat, sig) in sigs {
+        let bar = meter.bar_at(meter.next_bar(beat - 1e-6)).0.max(0) as u32;
+        meter = meter.with_change(bar, sig);
+    }
+    Some(meter)
 }
 
 fn vlq(out: &mut Vec<u8>, mut value: u32) {
@@ -298,9 +319,9 @@ fn chunk(out: &mut Vec<u8>, events: Vec<(u64, Vec<u8>)>) {
     out.extend(body);
 }
 
-/// A format 1 file: a tempo track (`tempo`, in 4/4), then each part on its
-/// own track and channel (drums on the 10th).
-pub fn write(parts: &[Part], tempo: f64) -> Vec<u8> {
+/// A format 1 file: a tempo track (`tempo`, and the time signatures of `meter`),
+/// then each part on its own track and channel (drums on the 10th).
+pub fn write(parts: &[Part], tempo: f64, meter: &Meter) -> Vec<u8> {
     let mut out = Vec::new();
     out.extend(b"MThd");
     out.extend(6u32.to_be_bytes());
@@ -309,8 +330,14 @@ pub fn write(parts: &[Part], tempo: f64) -> Vec<u8> {
     out.extend(PPQ.to_be_bytes());
     let micros = (60_000_000.0 / tempo.max(1.0)).round() as u32;
     let m = micros.to_be_bytes();
-    chunk(&mut out, vec![(0, vec![0xFF, 0x51, 0x03, m[1], m[2], m[3]]), (0, vec![0xFF, 0x58, 0x04, 4, 2, 24, 8])]);
     let tick = |beat: f64| (beat.max(0.0) * PPQ as f64).round() as u64;
+    let mut tempo_track = vec![(0, vec![0xFF, 0x51, 0x03, m[1], m[2], m[3]])];
+    for change in meter.changes() {
+        let at = tick(meter.bar_start(change.bar as i64));
+        // Clocks a click (a quarter: 24) and 32nds a quarter (8), as everyone writes them.
+        tempo_track.push((at, vec![0xFF, 0x58, 0x04, change.sig.beats, change.sig.unit.trailing_zeros() as u8, 24, 8]));
+    }
+    chunk(&mut out, tempo_track);
     for part in parts {
         let c = part.channel & 0x0F;
         let mut events: Vec<(u64, u8, Vec<u8>)> = Vec::new();
@@ -341,10 +368,11 @@ fn part_of(name: &str, clip: &MidiClip, drums: bool) -> Part {
     Part { name: name.to_string(), channel: if drums { DRUM_CHANNEL } else { 0 }, program: None, notes }
 }
 
-/// How long a clip for `notes` is: up to the bar the last one ends in.
-fn length_of(notes: &[Note]) -> f64 {
+/// How long a clip for `notes` starting at `start` is: up to the song's bar the
+/// last one ends in, a bar at least.
+fn length_of(notes: &[Note], meter: &Meter, start: f64) -> f64 {
     let end = notes.iter().map(|n| n.start + n.length).fold(0.0, f64::max);
-    ((end - 1e-9) / 4.0).ceil().max(1.0) * 4.0
+    (meter.next_bar(start + end - 1e-9) - start).max(meter.add_bars(start, 1) - start)
 }
 
 impl PulseApp {
@@ -389,6 +417,14 @@ impl PulseApp {
         if song.tempo_changes > 0 {
             tempo_note.push_str(". Sus cambios de tempo no se traen");
         }
+        if let Some(meter) = song.meter.filter(|m| *m != self.project.meter) {
+            if empty {
+                self.set_meter(meter);
+                tempo_note.push_str(&format!(", en {}", meter.first().label()));
+            } else {
+                tempo_note.push_str(&format!(". El archivo va en {}: suena en el compás del proyecto", meter.first().label()));
+            }
+        }
         let before = self.project.clone();
         let placed = match into {
             Some(placement) => {
@@ -397,7 +433,11 @@ impl PulseApp {
                     all.sort_by(|a, b| a.start.total_cmp(&b.start));
                     all
                 };
-                let clip = MidiClip { notes: notes.clone(), ..MidiClip::new(&file, length_of(&notes), PALETTE[(self.project.tracks.len() * 3) % PALETTE.len()]) };
+                let at = match placement {
+                    crate::app::Placement::Arrangement { start, .. } => start,
+                    _ => 0.0,
+                };
+                let clip = MidiClip { notes: notes.clone(), ..MidiClip::new(&file, length_of(&notes, &self.project.meter, at), PALETTE[(self.project.tracks.len() * 3) % PALETTE.len()]) };
                 match placement {
                     crate::app::Placement::Session { track, slot } => self.project.tracks[track].clips[slot] = Some(Clip::Midi(clip)),
                     crate::app::Placement::Arrangement { track, start } => {
@@ -421,7 +461,7 @@ impl PulseApp {
                     let drums = part.channel == DRUM_CHANNEL;
                     let instrument = if drums { InstrumentKind::DrumMachine(Default::default()) } else { instrument_for(part.program) };
                     let mut track = Track::new(part.name.clone(), color, instrument);
-                    let clip = MidiClip { notes: part.notes.clone(), ..MidiClip::new(&part.name, length_of(&part.notes), color) };
+                    let clip = MidiClip { notes: part.notes.clone(), ..MidiClip::new(&part.name, length_of(&part.notes, &self.project.meter, 0.0), color) };
                     if session {
                         track.clips[0] = Some(Clip::Midi(clip));
                     } else {
@@ -500,7 +540,7 @@ impl PulseApp {
     }
 
     pub(crate) fn write_midi(&mut self, path: &Path, parts: &[Part]) {
-        let bytes = write(parts, self.project.tempo);
+        let bytes = write(parts, self.project.tempo, &self.project.meter);
         self.status = Some(match crate::store::write_atomic(path, &bytes) {
             Ok(()) => format!("MIDI guardado en «{}»", path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned())),
             Err(e) => format!("No se pudo guardar el MIDI: {e}"),
@@ -529,7 +569,7 @@ mod tests {
         let melody = Part { name: "Melodía".into(), channel: 0, program: Some(80), notes: vec![note(0.0, 1.0, 60, 0.8), note(1.0, 0.5, 64, 0.5), note(1.0, 0.5, 67, 0.5), note(2.5, 1.5, 60, 1.0)] };
         // The same note again right where it ends: not cut.
         let drums = Part { name: "Batería".into(), channel: DRUM_CHANNEL, program: None, notes: vec![note(0.0, 0.25, 36, 1.0), note(0.25, 0.25, 36, 0.7), note(1.0, 0.25, 38, 0.9)] };
-        let bytes = write(&[melody.clone(), drums.clone()], 128.0);
+        let bytes = write(&[melody.clone(), drums.clone()], 128.0, &Meter::COMMON);
         let song = read(&bytes).unwrap();
         assert!((song.tempo.unwrap() - 128.0).abs() < 0.01);
         assert_eq!(song.parts.len(), 2);
@@ -574,6 +614,31 @@ mod tests {
         assert!(read(&bytes[..30]).is_err(), "cut short");
     }
 
+    /// Time signatures go out and come back: a waltz that turns 7/8 at its third
+    /// bar, and an empty project takes them (a project with songs keeps its own).
+    #[test]
+    fn time_signatures_go_out_and_come_back() {
+        let meter = Meter::new(TimeSig::new(3, 4)).with_change(2, TimeSig::new(7, 8));
+        let part = Part { name: "Vals".into(), channel: 0, program: None, notes: vec![note(0.0, 1.0, 60, 0.8), note(6.0, 0.5, 62, 0.8)] };
+        let song = read(&write(&[part.clone()], 90.0, &meter)).unwrap();
+        assert_eq!(song.meter, Some(meter));
+        assert_eq!(read(&write(&[part.clone()], 90.0, &Meter::COMMON)).unwrap().meter, Some(Meter::COMMON));
+
+        let dir = std::env::temp_dir().join(format!("pulse-midi-meter-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Vals.mid");
+        std::fs::write(&path, write(&[part], 90.0, &meter)).unwrap();
+        let mut project = Project::empty();
+        project.tracks.clear();
+        let mut app = PulseApp::headless(project);
+        app.view = crate::app::View::Arrangement;
+        assert!(app.import_midi(&path, None));
+        assert_eq!(app.project.meter, meter);
+        // Up to the bar the last note ends in: bars 0 and 1 are 3 beats, bar 2 is 3.5.
+        assert_eq!(app.project.tracks[0].arrangement[0].length, 9.5);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
     /// The sustain pedal (controller 64) holds the keys let go under it until it
     /// comes up, or until the same key is struck again; pianos, electric pianos
     /// and organs come in on Pulse Keys.
@@ -616,7 +681,7 @@ mod tests {
         let path = dir.join("Tema.mid");
         let keys = Part { name: "Piano".into(), channel: 0, program: None, notes: vec![note(0.0, 2.0, 60, 0.8), note(4.0, 2.0, 62, 0.8), note(8.0, 2.0, 64, 0.8)] };
         let drums = Part { name: "Batería".into(), channel: DRUM_CHANNEL, program: None, notes: (0..8).map(|b| note(b as f64, 0.25, 36, 1.0)).collect() };
-        std::fs::write(&path, write(&[keys, drums], 92.0)).unwrap();
+        std::fs::write(&path, write(&[keys, drums], 92.0, &Meter::COMMON)).unwrap();
         let mut project = Project::empty();
         project.tracks.clear();
         let mut app = PulseApp::headless(project);
@@ -640,7 +705,7 @@ mod tests {
         assert_eq!(parts[1].channel, DRUM_CHANNEL);
         assert_eq!(parts[1].notes.len(), 16, "the loop's second time too");
         assert_eq!(parts[1].notes[8].start, 8.0);
-        let back = read(&write(&parts, app.project.tempo)).unwrap();
+        let back = read(&write(&parts, app.project.tempo, &app.project.meter)).unwrap();
         assert_eq!(back.parts[0].notes.len(), 3 + 11);
         assert!((back.parts[0].notes.last().unwrap().start - 24.0).abs() < 1e-9);
         // A project with clips keeps its tempo, and says the file's.
@@ -669,7 +734,7 @@ mod lakh {
             match super::read(&std::fs::read(path).unwrap()) {
                 Ok(song) => {
                     read += 1;
-                    let again = super::read(&super::write(&song.parts, song.tempo.unwrap_or(120.0))).unwrap();
+                    let again = super::read(&super::write(&song.parts, song.tempo.unwrap_or(120.0), &engine::meter::Meter::COMMON)).unwrap();
                     assert_eq!(again.parts.len(), song.parts.len(), "{}", path.display());
                     for (a, b) in again.parts.iter().zip(&song.parts) {
                         assert_eq!(a.notes.len(), b.notes.len(), "{}", path.display());

@@ -53,9 +53,10 @@ pub struct Recorder {
     pub arrangement: Option<ArrangementTake>,
 }
 
-/// Rounds a take up to whole bars, at least one.
-fn bars(length: f64) -> f64 {
-    ((length / 4.0).ceil() * 4.0).max(4.0)
+/// Rounds a take starting at `start` up to whole bars of the song, at least one.
+fn bars(meter: &engine::meter::Meter, start: f64, length: f64) -> f64 {
+    let end = meter.next_bar(start + length - 1e-9);
+    (end - start).max(meter.add_bars(start, 1) - start)
 }
 
 /// How early, in beats, a note may come and still belong to a take.
@@ -102,7 +103,7 @@ impl Recorder {
     /// `looped` is the arrangement loop, if it is on: passes wrap at its end.
     /// `punch` (in, out): an arrangement take keeps only what was played between
     /// them.
-    pub fn update(&mut self, notes: Vec<RecordedNote>, state: &SharedState, armed: &[bool], looped: Option<(f64, f64)>, punch: (Option<f64>, Option<f64>)) -> Vec<Finished> {
+    pub fn update(&mut self, notes: Vec<RecordedNote>, state: &SharedState, armed: &[bool], looped: Option<(f64, f64)>, punch: (Option<f64>, Option<f64>), meter: &engine::meter::Meter) -> Vec<Finished> {
         for note in notes {
             if let Some(take) = self.session.iter_mut().find(|t| t.track == note.track) {
                 take.notes.push(note);
@@ -131,7 +132,7 @@ impl Recorder {
                 Some(start) => {
                     let notes_end = take.notes.iter().map(|n| n.start + n.length).fold(start, f64::max);
                     let end = take.stop_at.unwrap_or(position).max(notes_end);
-                    let length = bars(end - start);
+                    let length = bars(meter, start, end - start);
                     finished.push(Finished::Session {
                         track: take.track,
                         slot: take.slot,
@@ -185,7 +186,7 @@ impl Recorder {
                     let length = match looped {
                         Some((_, loop_end)) if wrapped => loop_end - start,
                         _ if punch.1.is_some() && take.last_position >= punch_out - 1e-6 => punch_out - start,
-                        _ => bars(notes.iter().map(|n| n.start + n.length).fold(take.last_position, f64::max) - start),
+                        _ => bars(meter, start, notes.iter().map(|n| n.start + n.length).fold(take.last_position, f64::max) - start),
                     };
                     if length <= 0.0 {
                         continue;
@@ -214,9 +215,14 @@ mod tests {
     #[test]
     fn takes_round_up_to_bars_and_use_clip_time() {
         let notes = [note(8.5, 1.0, 60), note(10.0, 0.5, 62), note(7.0, 0.5, 40)];
-        let local = local_notes(&notes, 8.0, bars(3.0));
-        assert_eq!(bars(3.0), 4.0);
-        assert_eq!(bars(4.5), 8.0);
+        let common = engine::meter::Meter::COMMON;
+        let local = local_notes(&notes, 8.0, bars(&common, 8.0, 3.0));
+        assert_eq!(bars(&common, 8.0, 3.0), 4.0);
+        assert_eq!(bars(&common, 8.0, 4.5), 8.0);
+        // In 3/4 a take ends on its bars: from bar 2 (beat 3), 4 beats make two bars.
+        let waltz = engine::meter::Meter::new(engine::meter::TimeSig::new(3, 4));
+        assert_eq!(bars(&waltz, 3.0, 4.0), 6.0);
+        assert_eq!(bars(&waltz, 3.0, 0.5), 3.0, "at least one bar");
         // The note before the take start is dropped; the rest are relative to it.
         assert_eq!(local.iter().map(|n| (n.start, n.pitch)).collect::<Vec<_>>(), vec![(0.5, 60), (2.0, 62)]);
     }

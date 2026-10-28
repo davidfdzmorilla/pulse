@@ -81,8 +81,8 @@ struct TrackPlayState {
     clip_position: f64,
     recording: i32,
     queued_record: bool,
-    /// Beats recorded so far in the current take.
-    recorded_beats: f64,
+    /// The bar of the current take being recorded (from 1).
+    recorded_bar: i64,
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
@@ -109,7 +109,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         clip_position: 0.0,
                         recording: NONE,
                         queued_record: false,
-                        recorded_beats: 0.0,
+                        recorded_bar: 1,
                     },
                     |s| {
                         let status = &s.tracks[t];
@@ -119,7 +119,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                             clip_position: status.clip_position(),
                             recording: status.recording.load(Ordering::Relaxed),
                             queued_record: status.queued_record.load(Ordering::Relaxed),
-                            recorded_beats: (s.position() - status.record_start()).max(0.0),
+                            recorded_bar: {
+                                let meter = &app.project.meter;
+                                (meter.bar_at(s.position()).0 - meter.bar_at(status.record_start()).0).max(0) + 1
+                            },
                         }
                     },
                 );
@@ -482,7 +485,7 @@ fn clip_slot(
         None if is_recording => {
             painter.rect_filled(rect, 2.0, theme::shade(theme::METER_RED, 0.75));
             painter.circle_filled(launch.center(), 5.0, Color32::WHITE);
-            let bar = (play.recorded_beats / 4.0).floor() as i64 + 1;
+            let bar = play.recorded_bar;
             painter.text(
                 pos2(launch.right() + 2.0, rect.center().y),
                 Align2::LEFT_CENTER,
@@ -844,7 +847,9 @@ fn apply(app: &mut PulseApp, action: Action) {
                 app.choose_samples(Placement::Session { track: t, slot });
             } else {
                 let color = app.project.tracks[t].color;
-                app.set_clip(t, slot, Some(Clip::Midi(MidiClip::new("MIDI", 4.0, color))));
+                // A bar long, in the song's first signature (Session clips loop on their own).
+                let length = app.project.meter.first().bar();
+                app.set_clip(t, slot, Some(Clip::Midi(MidiClip::new("MIDI", length, color))));
                 app.select_clip(ClipRef::Session { track: t, slot });
             }
         }

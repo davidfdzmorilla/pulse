@@ -141,7 +141,7 @@ impl PulseApp {
             let start = match at {
                 Some(start) => start,
                 None if selected_end.is_finite() => selected_end,
-                None => (self.audio.position() / 4.0).floor() * 4.0,
+                None => self.project.meter.prev_bar(self.audio.position()),
             };
             for item in &board.items {
                 let t = first_track + item.track;

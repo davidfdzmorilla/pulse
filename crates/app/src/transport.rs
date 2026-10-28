@@ -48,7 +48,7 @@ fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut chosen = None;
     let response = egui::ComboBox::from_id_salt("meter")
         .selected_text(if changes { format!("{} …", first.label()) } else { first.label() })
-        .width(52.0)
+        .width(62.0)
         .show_ui(ui, |ui| {
             for sig in TimeSig::PRESETS {
                 if ui.selectable_label(sig == first, sig.label()).clicked() {
@@ -531,5 +531,54 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
     if let Some(command) = chosen {
         app.run(command, &ctx);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn positions_and_lengths_count_the_song_s_bars() {
+        let meter = Meter::new(TimeSig::new(6, 8)).with_change(2, TimeSig::COMMON);
+        assert_eq!(format_position(&meter, 0.0), "1. 1. 1");
+        assert_eq!(format_position(&meter, 1.75), "1. 2. 2", "6/8 counts dotted quarters");
+        assert_eq!(format_position(&meter, 7.0), "3. 2. 1");
+        assert_eq!(bars_label(bars_between(&meter, 0.0, 10.0)), "3 c.");
+        assert_eq!(bars_label(bars_between(&meter, 0.0, 1.5)), "0,5 c.");
+        assert_eq!(format_position(&Meter::COMMON, 5.5), "2. 2. 3");
+    }
+
+    /// The transport and an Arrangement with a waltz that turns 7/8, to PNG:
+    /// `PULSE_SHOTS=dir cargo test --release -p app meter_shots -- --ignored`.
+    #[test]
+    #[ignore]
+    fn meter_shots() {
+        let Some(dir) = std::env::var_os("PULSE_SHOTS").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut project = crate::project::Project::empty();
+        project.meter = Meter::new(TimeSig::new(3, 4)).with_change(4, TimeSig::new(7, 8)).with_change(8, TimeSig::COMMON);
+        project.loop_enabled = true;
+        project.loop_end = 12.0;
+        let mut app = PulseApp::headless(project);
+        app.view = View::Arrangement;
+        app.arrangement.pixels_per_beat = 30.0;
+        let mut canvas = crate::offscreen::Canvas::default();
+        let size = vec2(1400.0, 420.0);
+        let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        let mut output = None;
+        for frame in 0..4 {
+            ctx.set_pixels_per_point(2.0);
+            output = Some(ctx.run_ui(input(), |ui| {
+                egui::Panel::top("t").show(ui, |ui| show(&mut app, ui));
+                egui::CentralPanel::default().show(ui, |ui| crate::arrangement::show(&mut app, ui));
+            }));
+            if frame < 3 {
+                canvas.draw(&ctx, output.take().unwrap(), size, 2.0);
+            }
+        }
+        canvas.draw(&ctx, output.unwrap(), size, 2.0).save_png(&dir.join("compases.png")).unwrap();
     }
 }

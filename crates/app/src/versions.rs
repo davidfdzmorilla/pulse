@@ -207,6 +207,9 @@ pub fn diff(old: &Project, new: &Project) -> Vec<String> {
     if old.master != new.master {
         out.push("Master cambiado".into());
     }
+    if old.meter != new.meter {
+        out.push(format!("Compás: {}", new.meter.changes().iter().map(|c| if c.bar == 0 { c.sig.label() } else { format!("{} desde el compás {}", c.sig.label(), c.bar + 1) }).collect::<Vec<_>>().join(", ")));
+    }
     let rest = |p: &Project| (p.loop_enabled, p.loop_start, p.loop_end, p.swing, p.swing_grid, p.quantize, p.scene_names.clone());
     if rest(old) != rest(new) {
         out.push("Loop, swing, escenas u otros ajustes".into());

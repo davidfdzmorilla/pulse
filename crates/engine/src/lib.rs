@@ -12,6 +12,7 @@ mod kick;
 pub mod meter;
 mod midi_fx;
 mod offline;
+mod piano;
 pub mod model;
 pub mod plugin;
 mod clap_host;

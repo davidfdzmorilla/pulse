@@ -1409,7 +1409,7 @@ Al cambiar de modelo empiezas desde su sonido de partida; el volumen se queda co
 - **Duración**: cuánto tardan las notas en apagarse solas mientras las mantienes.
 - **Apagado**: cuánto suena una nota al soltarla.
 - **Martillo**: el golpe del martillo al empezar la nota.
-- **Cuerdas**: cuánto se desafinan entre sí las cuerdas de cada nota. Poco es un piano recién afinado; mucho, un piano de bar.
+- **Cuerdas**: cuánto se desafinan entre sí las cuerdas de cada nota, hasta unos 7 cents. Poco es un piano recién afinado; mucho, un piano de bar.
 - **Cuerpo**: la resonancia de la tabla armónica y de la tapa.
 - **Ancho**: los graves a la izquierda y los agudos a la derecha, como sentado al piano.
 
@@ -1442,8 +1442,8 @@ Al cambiar de modelo empiezas desde su sonido de partida; el volumen se queda co
 > Consejo: algunas registraciones conocidas (cada cifra es una barra): **888000000** jazz, **888800000** gospel, **838000000** blues, **886000000** iglesia, **800000888** silbante, **006802000** balada y **888888888** todo fuera. Están entre los presets de fábrica.
 
 +++ Cómo funciona
-- No hay muestras: cada nota es una suma de parciales (senos que se apagan), afinados con exactitud.
-- **Piano**: hasta 40 parciales, que suben un poco por encima de los armónicos exactos porque las cuerdas son rígidas. La afinación también va estirada, como la de un piano afinado a oído. Cada nota tiene dos cuerdas: una se apaga deprisa y la otra, un poco desafinada, sostiene y bate contra la primera. El martillo suaviza los agudos según la fuerza. El punto de golpe, cerca de un octavo de la cuerda, quita algunos armónicos. Los apagadores apagan antes los agudos. La tabla armónica son cinco resonancias entre 98 y 1700 Hz y dos reflejos cortos.
+- No hay muestras: todo se sintetiza mientras tocas.
+- **Piano**: un modelo físico de cuerdas (guías de onda). Cada tecla tiene dos cuerdas en los graves y tres en el resto, afinadas unos cents entre sí. Una cede su energía deprisa y las otras sostienen y baten: es la doble caída del piano. Cada cuerda es un retardo cerrado por un filtro de pérdidas (los agudos se apagan antes), uno de dispersión (la rigidez de la cuerda estira los armónicos hacia arriba) y uno de afinación fina. La afinación también va estirada, como la de un piano afinado a oído. El martillo empuja la cuerda unos milisegundos: menos y más seco cuanto más fuerte tocas, y por eso suena más brillante. Golpea cerca de un octavo de la cuerda, lo que quita algunos armónicos. Aparte suena la tabla armónica: decenas de modos de madera que dan el golpe del ataque (**Martillo**), más cinco resonancias entre 98 y 1700 Hz y dos reflejos cortos (**Cuerpo**). Los apagadores apagan antes los agudos.
 - **Púas y Lengüetas**: la púa o la lengüeta vibra con pocos armónicos y un parcial de campana, inarmónico, que se apaga en décimas de segundo. Luego pasa por una pastilla descentrada: las oscilaciones grandes salen torcidas y aparecen armónicos pares, que son el «ladrido».
 - **Órgano**: cada registro es una rueda fónica de seno puro con su propia fase. Por encima de la última rueda (unos 5,9 kHz), los registros vuelven una octava atrás, como en el original. El altavoz giratorio separa graves y agudos en 800 Hz. La bocina (agudos) gira a 0,8 Hz en lento y 6,8 Hz en rápido; el tambor (graves), a 0,67 y 5,9 Hz. Hay efecto Doppler y dos micrófonos para el estéreo.
 - Suenan hasta 32 notas a la vez; si hace falta otra, se reutiliza la que menos suena.

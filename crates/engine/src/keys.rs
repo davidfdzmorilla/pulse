@@ -14,13 +14,13 @@
 
 use crate::instruments::{svf_g, Gate, Svf};
 use crate::model::{KeysModel, KeysParams};
+use crate::piano::{PianoVoice, Soundboard, Strike};
 use crate::synth::midi_to_freq;
 use std::f32::consts::{PI, TAU};
 
 const VOICES: usize = 32;
 /// Rotators a voice can hold (the piano's two strings × 40 partials).
 const OSC: usize = 80;
-const PARTIALS: usize = 40;
 const LANES: usize = 8;
 const CHUNK: usize = 32;
 /// Footage of each drawbar, as a multiple of the note.
@@ -34,6 +34,8 @@ const UNDAMPED: u8 = 90;
 const ORGAN_RELEASE: f32 = 0.05;
 /// ln(1000): turns "seconds to fall 60 dB" into a decay rate.
 const SIXTY_DB: f32 = 6.9078;
+/// How hard the strike drives the strings (sets the piano's loudness).
+const PIANO_LEVEL: f32 = 11.0;
 
 fn hash(mut x: u32) -> u32 {
     x ^= x >> 16;
@@ -41,6 +43,11 @@ fn hash(mut x: u32) -> u32 {
     x ^= x >> 15;
     x = x.wrapping_mul(0x846c_a68b);
     x ^ (x >> 16)
+}
+
+/// 0..1 from a hash (the piano's strings vary with it).
+pub(crate) fn unit_noise(x: u32) -> f32 {
+    unit(x)
 }
 
 /// 0..1 from a hash.
@@ -137,10 +144,13 @@ struct Voice {
     onset: f32,
     onset_step: f32,
     pan: (f32, f32),
+    /// The piano's strings (the other models use the rotators).
+    piano: PianoVoice,
 }
 
 impl Voice {
-    const IDLE: Voice = Voice {
+    fn idle() -> Voice {
+        Voice {
         gate: Gate::OFF,
         active: false,
         released: false,
@@ -169,7 +179,9 @@ impl Voice {
         onset: 1.0,
         onset_step: 1.0,
         pan: (0.707, 0.707),
-    };
+        piano: PianoVoice::default(),
+        }
+    }
 
     /// Adds a rotator starting at amplitude `amp` and phase `phase` (turns).
     fn push(&mut self, ratio: f32, amp: f32, rate: f32, phase: f32) {
@@ -227,7 +239,10 @@ impl Voice {
             return;
         }
         self.released = true;
-        if self.model == KeysModel::Piano && self.gate.pitch >= UNDAMPED {
+        if self.model == KeysModel::Piano {
+            if self.gate.pitch < UNDAMPED {
+                self.piano.damp(p.release, sr);
+            }
             return;
         }
         let damp = SIXTY_DB / if self.model == KeysModel::Organ { ORGAN_RELEASE } else { p.release.max(0.01) };
@@ -244,6 +259,9 @@ impl Voice {
 
     /// Fades out within a few milliseconds (the same key struck again).
     fn choke(&mut self, sr: f32) {
+        if self.model == KeysModel::Piano {
+            self.piano.damp(0.04, sr);
+        }
         for k in 0..self.count {
             self.rate[k] += SIXTY_DB / 0.04;
         }
@@ -252,6 +270,10 @@ impl Voice {
     }
 
     fn measure(&mut self) {
+        if self.model == KeysModel::Piano {
+            self.level = self.piano.energy;
+            return;
+        }
         let mut sum = 0.0;
         for k in 0..self.count {
             sum += self.re[k] * self.re[k] + self.im[k] * self.im[k];
@@ -366,13 +388,17 @@ pub struct Keys {
     dc: [(f32, f32); 2],
     /// Frames into the current chunk.
     offset: usize,
+    /// The piano's soundboard, and each voice's string lines (see `piano`).
+    soundboard: Soundboard,
+    lines: Vec<f32>,
+    voice_lines: usize,
 }
 
 impl Keys {
     pub fn new(params: KeysParams, sample_rate: f32) -> Self {
         Self {
             params,
-            voices: [Voice::IDLE; VOICES],
+            voices: [Voice::idle(); VOICES],
             sample_rate,
             counter: 0,
             pitch: 1.0,
@@ -384,6 +410,9 @@ impl Keys {
             tone: [Svf::default(); 2],
             dc: [(0.0, 0.0); 2],
             offset: 0,
+            soundboard: Soundboard::new(sample_rate),
+            lines: vec![0.0; VOICES * crate::piano::voice_size(sample_rate)],
+            voice_lines: crate::piano::voice_size(sample_rate),
         }
     }
 
@@ -410,7 +439,7 @@ impl Keys {
         // Percussion only on a note played with no other key down (single trigger).
         let legato = self.voices.iter().any(|v| v.active && !v.released && v.model == KeysModel::Organ);
         let index = self.free_voice();
-        let mut v = Voice::IDLE;
+        let mut v = Voice::idle();
         v.gate = Gate::new(pitch, velocity.clamp(0.0, 1.0), gate, self.counter);
         v.active = true;
         v.model = p.model;
@@ -418,7 +447,13 @@ impl Keys {
         let vel = v.gate.velocity;
         v.gain = if p.model == KeysModel::Organ { 1.0 } else { (1.0 - p.dynamics) + p.dynamics * vel * vel };
         match p.model {
-            KeysModel::Piano => start_piano(&mut v, &p, pitch, vel, sr),
+            KeysModel::Piano => {
+                let lines = &mut self.lines[index * self.voice_lines..(index + 1) * self.voice_lines];
+                start_piano(&mut v, &p, pitch, vel, sr, lines);
+                if (self.pitch - 1.0).abs() > 1e-6 {
+                    v.piano.bend(self.pitch, sr);
+                }
+            }
             KeysModel::Tines | KeysModel::Reed => start_electric(&mut v, &p, pitch, vel, sr),
             KeysModel::Organ => start_organ(&mut v, &p, pitch, !legato, sr),
         }
@@ -480,20 +515,25 @@ impl Keys {
         let mut out_l = [0.0f32; CHUNK];
         let mut out_r = [0.0f32; CHUNK];
         let bars = p.drawbars.map(|d| drawbar(d) / 3.2);
-        for v in self.voices.iter_mut().filter(|v| v.active) {
+        let size = self.voice_lines;
+        for (index, v) in self.voices.iter_mut().enumerate().filter(|(_, v)| v.active) {
             if (v.bend - bend).abs() > 1e-6 {
                 v.tune(bend, sr);
+                if v.model == KeysModel::Piano {
+                    v.piano.bend(bend, sr);
+                }
             }
             // Drawbars move while notes sound; the held organ notes follow them.
             if starts && v.model == KeysModel::Organ && !v.released {
                 hold_drawbars(v, &bars);
             }
             let mut mono = [0.0f32; CHUNK];
+            let lines = &mut self.lines[index * size..(index + 1) * size];
             for slot in mono.iter_mut().take(n) {
                 if v.gate.tick() {
                     v.release(&p, sr);
                 }
-                *slot = rotate(v);
+                *slot = if v.model == KeysModel::Piano { v.piano.tick(&self.soundboard, lines) } else { rotate(v) };
             }
             shape(v, &mut mono[..n], sr);
             for i in 0..n {
@@ -503,7 +543,8 @@ impl Keys {
             if ends {
                 v.measure();
                 let organ_held = v.model == KeysModel::Organ && !v.released;
-                if v.level < 1e-10 && v.noise < 1e-5 && !organ_held {
+                let striking = v.model == KeysModel::Piano && v.piano.striking(&self.soundboard);
+                if v.level < 1e-10 && v.noise < 1e-5 && !organ_held && !striking {
                     v.active = false;
                 }
             }
@@ -649,14 +690,8 @@ fn hold_drawbars(v: &mut Voice, bars: &[f32; 9]) {
 /// A voice's own sound around its rotators: the hammer, the pickup, its tone.
 fn shape(v: &mut Voice, mono: &mut [f32], sr: f32) {
     match v.model {
-        KeysModel::Piano => {
-            for x in mono.iter_mut() {
-                let noise = v.white() * v.noise;
-                v.noise *= v.noise_decay;
-                let (_, band, _) = v.noise_filter.tick(noise, v.noise_g, 1.2);
-                *x = *x * v.gain + band;
-            }
-        }
+        // The strings and the strike are the whole sound.
+        KeysModel::Piano => {}
         KeysModel::Tines | KeysModel::Reed => {
             let (k, o) = (v.drive, v.offset);
             let rest = (k * o).tanh();
@@ -698,52 +733,25 @@ fn key_pan(pitch: u8, width: f32) -> (f32, f32) {
     (angle.cos(), angle.sin())
 }
 
-fn start_piano(v: &mut Voice, p: &KeysParams, pitch: u8, vel: f32, sr: f32) {
-    let f0 = midi_to_freq(pitch) * cents(stretch(pitch));
-    v.freq = f0;
-    let b = inharmonicity(pitch);
-    let h = v.seed;
-    // Where the hammer hits the string: about an eighth of the way along.
-    let strike = 1.0 / (7.2 + unit(h) * 0.8);
-    let hard = (vel * (0.35 + 1.1 * p.tone)).clamp(0.02, 1.45);
-    let corner = (250.0 + 6500.0 * hard.powf(1.6)).max(f0 * 1.5);
+fn start_piano(v: &mut Voice, p: &KeysParams, pitch: u8, vel: f32, sr: f32, lines: &mut [f32]) {
     let length = p.length.max(0.05);
-    let tau = 4.0 * 2f32.powf(-(pitch as f32 - 60.0) / 24.0) * length;
-    let spread = cents(p.strings * 3.0 * (0.55 + 0.45 * unit(h ^ 0x51ed)) * if h & 2 == 0 { 1.0 } else { -1.0 });
-    let mut amps = [0.0f32; PARTIALS];
-    let mut ratios = [0.0f32; PARTIALS];
-    let mut used = 0;
-    for n in 1..=PARTIALS {
-        let ratio = partial(n as f32, b);
-        let f = f0 * ratio;
-        if f > sr * 0.45 {
-            break;
-        }
-        let comb = (n as f32 * PI * strike).sin().abs();
-        let hammer = 1.0 / (1.0 + (f / corner).powi(4)).sqrt();
-        // The soundboard hardly radiates the bass strings' fundamentals.
-        let radiation = f * f / (f * f + 80.0 * 80.0);
-        amps[n - 1] = comb * (n as f32).powf(-0.7) * hammer * radiation;
-        ratios[n - 1] = ratio;
-        used = n;
-    }
-    let peak = amps.iter().cloned().fold(0.0, f32::max).max(1e-9);
-    let energy = amps.iter().map(|a| a * a).sum::<f32>().sqrt().max(1e-9);
-    for n in 0..used {
-        if amps[n] < peak * 0.002 {
-            continue;
-        }
-        let a = amps[n] / energy * 0.5;
-        let f = f0 * ratios[n];
-        let rate = (1.0 / tau + 0.5 * (f / 1000.0).powi(2)) / length;
-        // Two strings: one dies fast (the prompt sound), the other, a little detuned,
-        // sings on (the aftersound) and beats against it.
-        v.push(ratios[n], a * 0.72, rate * 3.0, 0.0);
-        v.push(ratios[n] * spread, a * 0.28, rate, 0.0);
-    }
-    v.noise = p.hammer * 0.22 * vel.powf(1.5) * v.gain;
-    v.noise_decay = (-1.0 / (0.004 * sr)).exp();
-    v.noise_g = svf_g((f0 * 6.0).clamp(600.0, 5000.0), sr);
+    // Seconds the singing string takes to fall 60 dB: long in the bass, short up top.
+    let t60 = SIXTY_DB as f64 * 4.0 * 2f64.powf(-(pitch as f64 - 60.0) / 24.0) * length as f64;
+    let strike = Strike {
+        pitch,
+        freq: (midi_to_freq(pitch) * cents(stretch(pitch))) as f64,
+        velocity: vel,
+        // Short treble strings take less from the strike: they get it back here.
+        gain: v.gain * PIANO_LEVEL * 10f32.powf(0.4 * (pitch as f32 - 48.0).max(0.0) / 20.0),
+        tone: p.tone,
+        knock: p.hammer * 0.12,
+        detune: p.strings,
+        t60,
+        inharmonicity: inharmonicity(pitch),
+        seed: v.seed,
+    };
+    v.piano = PianoVoice::strike(&strike, sr, lines);
+    v.freq = strike.freq as f32;
     v.pan = key_pan(pitch, p.width);
 }
 
@@ -837,12 +845,6 @@ pub(crate) mod tests {
         (-100..=100).map(|c| around * cents(c as f32)).max_by(|a, b| at(x, *a).total_cmp(&at(x, *b))).unwrap()
     }
 
-    fn centroid(x: &[f32]) -> f32 {
-        let bins: Vec<f32> = (1..120).map(|k| k as f32 * 50.0).collect();
-        let mags: Vec<f32> = bins.iter().map(|&f| at(x, f)).collect();
-        bins.iter().zip(&mags).map(|(f, m)| f * m).sum::<f32>() / mags.iter().sum::<f32>()
-    }
-
     fn keys(model: KeysModel) -> Keys {
         Keys::new(KeysParams::model_default(model), SR)
     }
@@ -896,14 +898,17 @@ pub(crate) mod tests {
 
     #[test]
     fn harder_piano_notes_are_brighter() {
+        // The 4th to 10th partials against the fundamental.
         let brightness = |vel| {
             let mut k = keys(KeysModel::Piano);
             k.note_on(48, vel, HELD);
             let (l, _) = render(&mut k, 0.3);
-            centroid(&l[1000..])
+            let (f0, b) = (midi_to_freq(48) * cents(stretch(48)), inharmonicity(48));
+            let highs: f32 = (4..=10).map(|n| at(&l[1000..], f0 * partial(n as f32, b)).powi(2)).sum();
+            highs.sqrt() / at(&l[1000..], f0)
         };
         let (soft, hard) = (brightness(0.25), brightness(1.0));
-        assert!(hard > soft * 1.3, "soft {soft} Hz, hard {hard} Hz");
+        assert!(hard > soft * 4.0, "soft {soft}, hard {hard}");
     }
 
     #[test]

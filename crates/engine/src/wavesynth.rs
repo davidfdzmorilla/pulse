@@ -1793,6 +1793,50 @@ mod polychrome_tests {
         assert!(rms(&l[2400..20_000]) > 0.05, "step 1: lane 0, full level");
         assert!(rms(&l[30_000..44_000]) < 0.01, "step 2: lane 1 turns the level down");
     }
+
+    fn factory(name: &str) -> WaveParams {
+        WaveParams::polychrome_presets().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("no preset {name}")).1
+    }
+
+    fn play_at_120(p: WaveParams, note: u8, frames: usize) -> Vec<f32> {
+        let mut synth = WaveSynth::new(p, SR);
+        synth.set_tempo(120.0);
+        synth.note_on(note, 1.0, HELD);
+        render(&mut synth, frames).0
+    }
+
+    #[test]
+    fn the_plucked_string_rings_at_the_played_note_and_dies_away() {
+        let p = factory("Dual Filter · Cuerda pulsada");
+        for (note, hz) in [(57, 220.0), (69, 440.0)] {
+            let l = play_at_120(p, note, 48_000);
+            let near = harmonics(&l[1200..], hz, 1)[0];
+            let off = harmonics(&l[1200..], hz * 1.12, 1)[0];
+            assert!(near > 4.0 * off, "note {note}: {near} at the note, {off} beside it");
+            assert!(rms(&l[0..4800]) > 3.0 * rms(&l[38_400..43_200]), "note {note} decays");
+        }
+    }
+
+    #[test]
+    fn the_noise_riser_climbs_over_eight_beats() {
+        let l = play_at_120(factory("FX · Subida de ruido"), 60, 180_000);
+        let (early, late) = (frequency(&l[14_400..24_000]), frequency(&l[163_200..172_800]));
+        assert!(late > 3.0 * early, "brighter at the end: {early} → {late}");
+    }
+
+    #[test]
+    fn the_crossed_filters_move_from_low_to_high_pass() {
+        let l = play_at_120(factory("Dual Filter · LP/HP cruzado"), 60, 110_000);
+        let (low, high) = (frequency(&l[19_200..28_800]), frequency(&l[91_200..100_800]));
+        assert!(high > 2.0 * low, "the high-pass side is brighter: {low} → {high}");
+    }
+
+    #[test]
+    fn the_rolling_bass_rests_on_the_beat() {
+        let l = play_at_120(factory("Seq · Bajo rodante"), 45, 24_000);
+        let step = |k: usize| &l[k * 6000 + 600..k * 6000 + 5400];
+        assert!(rms(step(0)) < 1e-3 && rms(step(2)) > 0.02 && rms(step(3)) > 0.02, "{} {} {}", rms(step(0)), rms(step(2)), rms(step(3)));
+    }
 }
 
 #[cfg(test)]

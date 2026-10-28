@@ -1487,6 +1487,8 @@ El mismo motor que Wavetable, en páginas **SYNTH**, **SEQ**, **FX** y **MATRIX*
   - Mientras mantienes una tecla, toca los pasos transpuestos a ella.
   - **Variar** cambia notas al azar dentro de la escala.
 
+Trae 34 presets de fábrica por categorías: metales, cuerdas y leads analógicos, bajos, órganos, campanas y flautas armónicos, filtros dobles (vocales, cruces y una cuerda pulsada), secuencias, pads y efectos (ver [[Presets]]).
+
 ## Modular Synth
 
 Un sinte modular de pila: apilas módulos que generan y procesan sonido, de arriba abajo, y los modulas arrastrando. **Editor ⤢** abre el editor.

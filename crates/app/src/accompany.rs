@@ -67,7 +67,18 @@ impl Part {
         }
     }
 
-    fn short(self) -> &'static str {
+    /// Names a track of its role goes by (a template's «Bajo», an imported «Bass»).
+    fn roles(self) -> &'static [&'static str] {
+        match self {
+            Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => &["bajo", "bass", "sub", "subbass", "sub bass"],
+            Part::ArpUp | Part::ArpUpDown => &["arpegio", "arp", "arpeggio", "arpegiador"],
+            Part::Pad => &["pad", "pads"],
+            Part::Stabs => &["acordes", "chords", "stabs"],
+        }
+    }
+
+    /// The name of the track it is written on.
+    pub(crate) fn short(self) -> &'static str {
         match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => "Bajo",
             Part::ArpUp | Part::ArpUpDown => "Arpegio",
@@ -304,45 +315,83 @@ impl PulseApp {
         }
     }
 
-    /// Writes `part` for the clip's chords on a new track under it.
+    /// An empty MIDI track for `part`'s role, other than `source`: a template's
+    /// «Bajo» waiting for its bass line (named «Bajo», «Bajo 2», «Bass»…).
+    fn track_for(&self, part: Part, source: usize) -> Option<usize> {
+        self.project.tracks.iter().enumerate().position(|(i, t)| {
+            let name = t.name.trim().to_lowercase();
+            let name = name.trim_end_matches(|c: char| c.is_ascii_digit() || c == ' ');
+            let empty = t.clips.iter().all(|c| c.is_none()) && t.arrangement.is_empty();
+            i != source && empty && !t.is_audio() && !t.is_drums() && !t.is_group() && part.roles().contains(&name)
+        })
+    }
+
+    /// Writes `part` for the clip's chords: on the empty track of its role if
+    /// there is one, else on a new track under the clip's.
     pub fn accompany(&mut self, clip: ClipRef, part: Part) {
         let (chords, length) = self.clip_chords(clip);
         if chords.is_empty() {
             self.status = Some("No se encuentran acordes en este clip para acompañarlos".into());
             return;
         }
-        if self.project.tracks.len() >= MAX_TRACKS {
-            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
-            return;
-        }
         let seed = crate::versions::now() ^ (part as u64) << 32;
         let notes = generate(part, &chords, length, seed, self.clip_sig(clip));
         let source = clip.track();
-        let color = self.clip(clip).map_or([128; 3], |c| c.color());
-        let name = format!("{} · {}", self.clip(clip).map_or("Clip", |c| c.name()), part.short());
-        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(name.clone(), length, color) });
-        let mut track = crate::project::Track::new(name, color, part.instrument());
-        let new = match clip {
-            ClipRef::Session { slot, .. } => {
-                track.clips[slot] = Some(midi);
-                ClipRef::Session { track: source + 1, slot }
-            }
-            ClipRef::Arrangement { track: t, index } => {
-                let Some(placed) = self.project.tracks[t].arrangement.get(index) else { return };
-                track.arrangement.push(engine::model::ArrangementClip { start: placed.start, length: placed.length, clip: midi });
-                ClipRef::Arrangement { track: source + 1, index: 0 }
+        let existing = self.track_for(part, source);
+        if existing.is_none() && self.project.tracks.len() >= MAX_TRACKS {
+            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            return;
+        }
+        let color = existing.map_or_else(|| self.clip(clip).map_or([128; 3], |c| c.color()), |t| self.project.tracks[t].color);
+        // The clip says what it plays: «Bajo: contratiempo», «Pad».
+        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.label(), length, color) });
+        let placed = match clip {
+            ClipRef::Session { .. } => None,
+            ClipRef::Arrangement { track: t, index } => match self.project.tracks[t].arrangement.get(index) {
+                Some(p) => Some((p.start, p.length)),
+                None => return,
+            },
+        };
+        let (index, mut track) = match existing {
+            Some(t) => (t, None),
+            None => {
+                let mut track = crate::project::Track::new(self.free_track_name(part.short()), color, part.instrument());
+                // Beside its source, in the same group.
+                track.depth = self.project.tracks[source].depth;
+                (source + 1, Some(track))
             }
         };
-        // Beside its source, in the same group.
-        track.depth = self.project.tracks[source].depth;
-        let ids = self.track_ids();
-        self.project.tracks.insert(source + 1, track);
-        self.follow_tracks(&ids);
-        self.selected_target = Target::Track(source + 1);
+        let target = track.as_mut().unwrap_or_else(|| &mut self.project.tracks[index]);
+        let new = match (clip, placed) {
+            (ClipRef::Session { slot, .. }, _) => {
+                target.clips[slot] = Some(midi);
+                ClipRef::Session { track: index, slot }
+            }
+            (_, Some((start, length))) => {
+                target.arrangement.push(engine::model::ArrangementClip { start, length, clip: midi });
+                ClipRef::Arrangement { track: index, index: target.arrangement.len() - 1 }
+            }
+            _ => return,
+        };
+        if let Some(track) = track {
+            let ids = self.track_ids();
+            self.project.tracks.insert(index, track);
+            self.follow_tracks(&ids);
+        }
+        self.selected_target = Target::Track(index);
         self.sync_all();
         self.select_clip(new);
         self.accompaniment = Some(Generated { clip: new, part, seed, chords, notes });
         self.status = Some(format!("{} para {} acordes: «Otra variación» en el editor escribe otra", part.label(), self.accompaniment.as_ref().map_or(0, |g| g.chords.len())));
+    }
+
+    /// `name`, or «name 2», «name 3»… if a track already has it.
+    pub(crate) fn free_track_name(&self, name: &str) -> String {
+        let taken = |n: &str| self.project.tracks.iter().any(|t| t.name == n);
+        if !taken(name) {
+            return name.to_string();
+        }
+        (2..).map(|i| format!("{name} {i}")).find(|n| !taken(n)).expect("some number is free")
     }
 
     /// Whether `clip` is the accompaniment written last, unedited.
@@ -369,6 +418,7 @@ impl PulseApp {
         }
         generated.notes = notes;
         self.accompaniment = Some(generated);
+        self.piano_roll.recenter();
         self.sync_clip_ref(clip);
         self.status = Some("Otra variación".into());
     }
@@ -452,6 +502,36 @@ mod tests {
         assert_eq!(generate(Part::Stabs, &chords, 16.0, 7, TimeSig::COMMON), generate(Part::Stabs, &chords, 16.0, 7, TimeSig::COMMON));
         let takes: std::collections::HashSet<String> = (0..8).map(|s| format!("{:?}", generate(Part::BassRoot, &chords, 16.0, s, TimeSig::COMMON))).collect();
         assert!(takes.len() > 1);
+    }
+
+    /// The «Beat» template has an empty «Bajo»: the bass goes there, not on a
+    /// new track; the pad, which has none, gets its own, named «Pad»; and the
+    /// clips say what they play.
+    #[test]
+    fn the_empty_track_of_its_role_is_used() {
+        let template = crate::templates::all().into_iter().find(|t| t.name == "Beat").unwrap();
+        let mut app = PulseApp::headless(crate::templates::project(&template).unwrap());
+        let chords = app.project.tracks.iter().position(|t| t.name == "Acordes").unwrap();
+        let bass = app.project.tracks.iter().position(|t| t.name == "Bajo").unwrap();
+        let instrument = app.project.tracks[bass].instrument.clone();
+        let c = chord::progressions(stems::key::Key { tonic: 9, minor: true })[0].degrees.iter().map(|&d| chord::on_degree(stems::key::Key { tonic: 9, minor: true }, d, false, false)).collect::<Vec<_>>();
+        let mut clip = MidiClip::new("Acordes", 4.0, [0; 3]);
+        crate::harmony::write(&mut clip, &mut 0.0, 4.0, &c, None, 4.0);
+        app.project.tracks[chords].clips[0] = Some(Clip::Midi(clip));
+        let tracks = app.project.tracks.len();
+        app.accompany(ClipRef::Session { track: chords, slot: 0 }, Part::BassOffbeat);
+        assert_eq!(app.project.tracks.len(), tracks, "{:?}", app.status);
+        assert_eq!(app.project.tracks[bass].clips[0].as_ref().map(|c| c.name()), Some("Bajo: contratiempo"));
+        assert_eq!(app.project.tracks[bass].instrument, instrument, "the template's sound stays");
+        assert_eq!(app.selected_clip, Some(ClipRef::Session { track: bass, slot: 0 }));
+        // Again: that «Bajo» is no longer empty, so a new one, «Bajo 2».
+        app.accompany(ClipRef::Session { track: chords, slot: 0 }, Part::BassRoot);
+        assert_eq!(app.project.tracks[chords + 1].name, "Bajo 2");
+        app.accompany(ClipRef::Session { track: chords, slot: 0 }, Part::Pad);
+        assert_eq!(app.project.tracks[chords + 1].name, "Pad");
+        assert_eq!(app.project.tracks.len(), tracks + 2);
+        let names: Vec<&str> = app.project.tracks.iter().map(|t| t.name.as_str()).collect();
+        assert!(names.iter().all(|n| !n.contains('·')), "{names:?}");
     }
 
     /// From the demo's «Am F C G»: a bass track under it, and another take.

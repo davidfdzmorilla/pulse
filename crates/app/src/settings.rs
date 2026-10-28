@@ -61,6 +61,9 @@ pub struct Settings {
     /// Tracks wait for those whose effects sound late (see `Engine::compensate`).
     #[serde(default = "yes")]
     pub compensate: bool,
+    /// Bars a new MIDI clip lasts (double click in the Session or the Arrangement).
+    #[serde(default = "four")]
+    pub new_clip_bars: u32,
     /// Settings this Pulse doesn't know (a newer one wrote them): kept, so going
     /// back to an older version and forward again loses none.
     #[serde(flatten)]
@@ -71,9 +74,13 @@ fn yes() -> bool {
     true
 }
 
+fn four() -> u32 {
+    4
+}
+
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, unknown: Default::default() }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, unknown: Default::default() }
     }
 }
 
@@ -318,6 +325,13 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 }
             });
         });
+        ui.horizontal(|ui| {
+            ui.label("Clips MIDI nuevos");
+            for bars in [1, 2, 4, 8] {
+                ui.selectable_value(&mut next.new_clip_bars, bars, if bars == 1 { "1 compás".to_string() } else { format!("{bars} compases") })
+                    .on_hover_text("Lo que mide un clip MIDI al crearlo con doble clic (en la Session o en el Arrangement) o con «Nuevo clip MIDI aquí». Luego cambias el de cada uno en «Loop», en el editor");
+            }
+        });
         ui.checkbox(&mut next.check_updates, "Buscar actualizaciones al arrancar");
     });
     if next != app.settings {
@@ -361,7 +375,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

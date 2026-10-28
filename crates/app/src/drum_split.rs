@@ -6,12 +6,12 @@
 //! clip on the drum track.
 
 use crate::app::PulseApp;
-use crate::project::{Monitor, Track};
-use engine::model::{InstrumentKind, DRUM_SOUNDS, DRUM_VOICES};
+use crate::project::{voice_name, Monitor, Track};
+use engine::model::{InstrumentKind, DRUM_SOUNDS};
 
-/// The names of the sounds in `mask`, quoted: «Kick», «Clap».
+/// The names of the sounds in `mask`, quoted: «Bombo», «Palmada».
 pub fn sound_names(mask: u16) -> String {
-    let names: Vec<String> = (0..DRUM_SOUNDS).filter(|v| mask >> v & 1 == 1).map(|v| format!("«{}»", DRUM_VOICES[v].1)).collect();
+    let names: Vec<String> = (0..DRUM_SOUNDS).filter(|v| mask >> v & 1 == 1).map(|v| format!("«{}»", voice_name(v))).collect();
     names.join(", ")
 }
 
@@ -55,7 +55,7 @@ impl PulseApp {
             return;
         }
         if let Some(name) = self.sound_track(t, voice) {
-            self.status = Some(format!("«{}» ya suena en «{name}»", DRUM_VOICES[voice].1));
+            self.status = Some(format!("«{}» ya suena en «{name}»", voice_name(voice)));
             return;
         }
         if self.project.tracks.len() >= engine::MAX_TRACKS {
@@ -64,7 +64,7 @@ impl PulseApp {
         }
         let before = self.project.clone();
         let drums = &self.project.tracks[t];
-        let mut track = Track::new_audio(format!("{} {}", drums.name, DRUM_VOICES[voice].1), drums.color);
+        let mut track = Track::new_audio(format!("{} {}", drums.name, voice_name(voice)), drums.color);
         (track.depth, track.monitor, track.audio_from, track.sounds_from) = (drums.depth, Monitor::Off, Some(drums.id), 1 << voice);
         let at = self.takers(t).max().map_or(t, |last| last.max(t)) + 1;
         let ids = self.track_ids();
@@ -74,7 +74,7 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         // The tracks after it moved: those go again; the rest play on.
         self.sync_from(&before);
-        self.status = Some(format!("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»", DRUM_VOICES[voice].1, self.project.tracks[at].name, self.project.tracks[t].name));
+        self.status = Some(format!("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»", voice_name(voice), self.project.tracks[at].name, self.project.tracks[t].name));
     }
 }
 
@@ -129,12 +129,12 @@ mod tests {
         app.sound_apart(0, 0);
         assert_eq!(app.project.tracks.len(), 2);
         let kick = &app.project.tracks[1];
-        assert_eq!(kick.name, "Drums Kick");
+        assert_eq!(kick.name, "Drums Bombo");
         assert_eq!((kick.audio_from, kick.sounds_from), (Some(app.project.tracks[0].id), 1));
         assert!(kick.arrangement.is_empty(), "no clips of its own");
         assert_eq!(app.sounds_taken(0), 1);
-        assert_eq!(app.sound_track(0, 0), Some("Drums Kick"));
-        assert!(app.follows_hint(1).unwrap().contains("«Kick»"));
+        assert_eq!(app.sound_track(0, 0), Some("Drums Bombo"));
+        assert!(app.follows_hint(1).unwrap().contains("«Bombo»"));
         let split = render(&app.project, 8.0);
         let differ = split.iter().zip(&whole).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(differ < 1e-4, "the same song: {differ}");
@@ -155,7 +155,7 @@ mod tests {
         app.sound_apart(0, 0);
         assert_eq!(app.project.tracks.len(), 2);
         app.sound_apart(0, 3);
-        assert_eq!(app.project.tracks[2].name, "Drums Clap");
+        assert_eq!(app.project.tracks[2].name, "Drums Palmada");
         assert_eq!(app.sounds_taken(0), 0b1001);
         // Frozen, it would play them all again: refused.
         app.freeze(0);

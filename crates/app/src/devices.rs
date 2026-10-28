@@ -400,7 +400,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
     knobs as f32 * 52.0 + columns as f32 * 100.0 + 24.0
 }
 
-fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) {
+fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) -> egui::Response {
     egui::ComboBox::from_id_salt(id)
         .selected_text(beats_label(*value))
         .width(84.0)
@@ -408,7 +408,8 @@ fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) {
             for &option in options {
                 ui.selectable_value(value, option, beats_label(option));
             }
-        });
+        })
+        .response
 }
 
 /// What a compressor's or ducker's sidechain does.
@@ -500,8 +501,15 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         }
         Effect::Ducker(p) => {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new(if p.sidechain.is_some() { "Release" } else { "Ritmo" }).color(TEXT_DIM).size(10.5));
-                beats_combo(ui, &format!("ducker{index}"), &mut p.rate_beats, &[0.25, 0.5, 1.0, 2.0, 4.0]);
+                // With a sidechain the period is the time it takes to come back, and
+                // the «Release» knob the part of it spent coming back: two names.
+                let (name, hint) = if p.sidechain.is_some() {
+                    ("Vuelve en", "Tras cada golpe del sidechain, el tiempo en que el sonido vuelve a su volumen. El knob «Release» dice qué parte de este tiempo tarda en subir (100 %: todo)")
+                } else {
+                    ("Ritmo", "Cada cuánto baja el volumen, a tempo. El knob «Release» dice qué parte de este tiempo tarda en volver (100 %: todo)")
+                };
+                ui.label(egui::RichText::new(name).color(TEXT_DIM).size(10.5)).on_hover_text(hint);
+                beats_combo(ui, &format!("ducker{index}"), &mut p.rate_beats, &[0.25, 0.5, 1.0, 2.0, 4.0]).on_hover_text(hint);
                 if !sources.is_empty() {
                     sidechain_combo(ui, &format!("duck_sc{index}"), &mut p.sidechain, sources, DUCKS);
                 }
@@ -602,7 +610,8 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                     });
                 }
                 egui::Grid::new("drum_machine").spacing([8.0, 2.0]).show(ui, |ui| {
-                    for (voice, (pitch, name)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
+                    for (voice, (pitch, _)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
+                        let name = crate::project::voice_name(voice);
                         ui.vertical(|ui| {
                             // A sound on a track of its own (see `drum_split`): marked, and where.
                             let elsewhere = app.sound_track(t, voice);
@@ -1090,7 +1099,7 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
             if groups.len() > 1 && groups.iter().map(|g| g.1.len()).sum::<usize>() > 12 {
                 // Many sounds: one submenu a category («Bajos · …»).
                 for (group, presets) in groups {
-                    ui.menu_button(format!("{group}  ({})", presets.len()), |ui| {
+                    crate::widgets::menu_button(ui, format!("{group}  ({})", presets.len()), |ui| {
                         ui.set_min_width(180.0);
                         egui::ScrollArea::vertical().id_salt(("factory_group", &group)).max_height(420.0).show(ui, |ui| {
                             for (short, preset) in presets {

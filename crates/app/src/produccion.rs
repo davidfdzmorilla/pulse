@@ -37,6 +37,8 @@ pub struct Studio {
     status: Option<String>,
     shots: usize,
     last: Option<egui::FullOutput>,
+    /// The screen, in points.
+    pub size: egui::Vec2,
 }
 
 impl Studio {
@@ -58,9 +60,14 @@ impl Studio {
             status: None,
             shots: 0,
             last: None,
+            size: SIZE,
         };
         s.frames(4);
         s
+    }
+
+    pub fn ctx(&self) -> &egui::Context {
+        &self.ctx
     }
 
     pub fn note(&mut self, line: impl Into<String>) {
@@ -73,7 +80,7 @@ impl Studio {
     pub fn frame_with(&mut self, events: Vec<Event>, modifiers: Modifiers) {
         self.time += 1.0 / 60.0;
         let mut raw = egui::RawInput {
-            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, SIZE)),
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, self.size)),
             time: Some(self.time),
             focused: true,
             ..Default::default()
@@ -142,7 +149,7 @@ impl Studio {
         self.shots += 1;
         let path = self.out.join(format!("{:02}-{name}.png", self.shots));
         let output = self.last.take().unwrap();
-        let image = self.canvas.draw(&self.ctx, output, SIZE, SCALE);
+        let image = self.canvas.draw(&self.ctx, output, self.size, SCALE);
         image.save_png(&path).unwrap();
         self.note(format!("  captura {}", path.display()));
         path
@@ -380,39 +387,15 @@ fn produccion() {
         let Some(engine::model::Clip::Midi(c)) = &s.app.project.tracks[2].clips[0] else { panic!() };
         s.note(format!("  acordes: {} notas, loop {} tiempos, tonos {:?}", c.notes.len(), c.length, c.notes.iter().map(|n| n.pitch).collect::<Vec<_>>()));
     }
-    s.shot("progresion-un-acorde");
-    // Only the first chord fits a new one-bar clip: undo, four bars, again.
-    s.key(Key::Z, Modifiers::COMMAND);
-    s.note(format!("  tras ⌘Z: {} notas", notes(&s.app, 2, 0)));
-    s.click("1 comp.");
-    s.shot("menu-loop");
-    s.click("4 comp.");
-    let grid = s.find("A2").unwrap();
-    s.note(format!("  tecla A2 en {grid:?}"));
-    s.click_at(pos2(258.0, grid.center().y - 30.0));
-    let menu = s.seen.iter().filter(|w| w.text == "Acordes" && w.role == "Button" && w.rect.top() > 250.0).map(|w| w.rect).last().unwrap();
-    s.click_at(menu.center());
-    s.click("Épica (i–VI–III–VII)");
-    s.key(Key::Escape, Modifiers::NONE);
-    {
-        let Some(engine::model::Clip::Midi(c)) = &s.app.project.tracks[2].clips[0] else { panic!() };
-        s.note(format!("  acordes: {} notas, loop {} tiempos, empiezan en {:?}", c.notes.len(), c.length, c.notes.iter().map(|n| n.start).fold(f64::MAX, f64::min)));
-    }
     s.shot("progresion");
 
     // Bass and pad from the chords.
     s.rclick_at(pos2(458.0, 99.0));
     s.click("Acompañar ⏵");
     s.shot("menu-acompanar");
-    // Straight to «Bajo: contratiempo», diagonally, crosses «De tarareo a canción ⏵»:
-    // its submenu opens instead and the click writes a whole song.
+    // Straight to «Bajo: contratiempo», diagonally, across «De tarareo a canción ⏵»:
+    // the bass, on the template's empty «Bajo».
     s.click("Bajo: contratiempo");
-    s.shot("tarareo-sin-querer");
-    s.key(Key::Z, Modifiers::COMMAND);
-    s.note(format!("  tras ⌘Z: {} pistas", s.app.project.tracks.len()));
-    s.rclick_at(pos2(458.0, 99.0));
-    s.click("Acompañar ⏵");
-    s.submenu("Bajo: contratiempo");
     s.rclick_at(pos2(458.0, 99.0));
     s.click("Acompañar ⏵");
     s.submenu("Pad");
@@ -429,22 +412,22 @@ fn produccion() {
     s.note(format!("  pistas: {names:?}"));
 
     // Sounds: the bass's factory presets.
-    let bass = s.find("Pista MIDI · Bajo").unwrap();
+    let bass = s.find("Pista Bajo").unwrap();
     s.click_at(bass.center());
     s.click("Dispositivos");
     s.shot("bajo-dispositivos");
-    preset(&mut s, "Pista MIDI · Bajo", "Bajo", "Techno rodante");
+    preset(&mut s, "Pista Bajo", "Bajo", "Techno rodante");
     s.shot("presets-bajo");
-    preset(&mut s, "Pista MIDI · Pad", "Pad", "");
-    preset(&mut s, "Pista MIDI · Arpegio", "Pluck", "");
+    preset(&mut s, "Pista Pad", "Pad", "");
+    preset(&mut s, "Pista Arpegio", "Pluck", "");
     preset(&mut s, "Pista Acordes", "Acordes", "");
     s.shot("presets-acordes");
 
-    // The template's empty Bajo and Melodía go: the accompaniment made its own.
-    for name in ["Pista Bajo", "Pista Melodía"] {
+    // The template's empty Melodía goes: the arpeggio is the lead.
+    for name in ["Pista Melodía"] {
         let header = s.find(name).unwrap();
         s.rclick_at(header.center());
-        if name == "Pista Bajo" {
+        if name == "Pista Melodía" {
             s.shot("menu-pista");
             s.dump("menu-pista");
         }
@@ -458,22 +441,22 @@ fn produccion() {
     s.rclick_at(drums.center());
     s.click("Sacar a su pista ⏵");
     s.shot("sacar-a-su-pista");
-    s.submenu("Kick");
+    s.submenu("Bombo");
     let names: Vec<&str> = s.app.project.tracks.iter().map(|t| t.name.as_str()).collect();
     s.note(format!("  pistas: {names:?}"));
 
     // Bass and pad duck under the kick.
-    for track in ["Pista MIDI · Bajo", "Pista MIDI · Pad"] {
+    for track in ["Pista Bajo", "Pista Pad"] {
         let header = s.find(track).unwrap();
         s.click_at(header.center());
         s.click("Ducker");
         s.click("Ninguno");
-        let kick = s.seen.iter().filter(|w| w.text == "Batería Kick" && w.rect.top() > 380.0).map(|w| w.rect).next();
+        let kick = s.seen.iter().filter(|w| w.text == "Batería Bombo" && w.rect.top() > 380.0).map(|w| w.rect).next();
         match kick {
             Some(k) => s.click_at(k.center()),
             None => {
                 s.dump("sidechain");
-                panic!("no está «Batería Kick» en el menú Sidechain");
+                panic!("no está «Batería Bombo» en el menú Sidechain");
             }
         }
     }

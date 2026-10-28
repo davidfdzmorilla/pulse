@@ -101,13 +101,15 @@ impl Default for ChordMenu {
     }
 }
 
-/// What a click in the menu writes: the chords in order, from `at`.
-pub fn write(clip: &mut MidiClip, at: &mut f64, length: f64, chords: &[Chord], key: Option<Key>) -> (Vec<usize>, Vec<u8>) {
+/// What a click in the menu writes: the chords in order, from `at`. A clip too
+/// short for them grows, in whole bars of `bar` beats, so every chord is written.
+pub fn write(clip: &mut MidiClip, at: &mut f64, length: f64, chords: &[Chord], key: Option<Key>, bar: f64) -> (Vec<usize>, Vec<u8>) {
+    let end = *at + length * chords.len() as f64;
+    if end > clip.length + 1e-9 {
+        clip.length = (end / bar - 1e-9).ceil() * bar;
+    }
     let (mut added, mut sounded) = (Vec::new(), Vec::new());
     for chord in chords {
-        if *at >= clip.length - 1e-9 {
-            break;
-        }
         let (previous, _) = before(&clip.notes, *at, key);
         let (new, pitches) = insert(clip, *at, length, chord, &previous);
         added.extend(new);
@@ -119,17 +121,30 @@ pub fn write(clip: &mut MidiClip, at: &mut f64, length: f64, chords: &[Chord], k
     (added, sounded)
 }
 
+/// What the «Acordes» menu wrote this frame.
+pub struct Written {
+    /// The new notes, and the pitches to preview.
+    pub added: Vec<usize>,
+    pub pitches: Vec<u8>,
+    /// The clip as it was, and the insert marker, to put back on ⌘Z.
+    pub before: MidiClip,
+    pub at: f64,
+    /// A whole progression: its chords' names, for a clip still unnamed.
+    pub progression: Option<String>,
+}
+
 /// «Acordes»: the key's chords (the ones that usually follow the chord before
 /// the insert marker lit), progressions, and the chord length. Writes at `at`
 /// and moves it on, so clicking chords one after another builds a progression;
 /// returns the new notes and the pitches to preview.
-pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at: &mut f64, key: Option<Key>, sig: TimeSig) -> (Vec<usize>, Vec<u8>) {
+pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at: &mut f64, key: Option<Key>, sig: TimeSig) -> Option<Written> {
     // The lengths offered, in the clip's bars; a length from another meter becomes a bar.
     let lengths = [(chord_step(sig), "½ c."), (sig.bar(), "1 c."), (sig.bar() * 2.0, "2 c.")];
     if !lengths.iter().any(|l| (l.0 - settings.length).abs() < 1e-9) {
         settings.length = sig.bar();
     }
-    let mut result = (Vec::new(), Vec::new());
+    // What was clicked: the chords, and whether they are a progression.
+    let mut chosen: Option<(Vec<Chord>, bool)> = None;
     widgets::field_menu_button(ui, "Acordes", |ui| {
         ui.set_min_width(300.0);
         let Some(key) = key else {
@@ -158,7 +173,7 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
                     text = text.color(ACCENT);
                 }
                 if ui.add(egui::Button::new(text).min_size(egui::vec2(38.0, 34.0))).clicked() {
-                    result = write(clip, at, settings.length, &[*c], Some(key));
+                    chosen = Some((vec![*c], false));
                 }
             }
             ui.end_row();
@@ -166,7 +181,7 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         if key.minor {
             let five = chord::on_degree(key, 4, settings.sevenths, true);
             if ui.button(format!("V {} (menor armónica)", five.name())).on_hover_text("La dominante mayor, que lleva con más fuerza a la tónica").clicked() {
-                result = write(clip, at, settings.length, &[five], Some(key));
+                chosen = Some((vec![five], false));
             }
         }
         ui.horizontal(|ui| {
@@ -183,13 +198,17 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         for progression in chord::progressions(key) {
             let chords: Vec<Chord> = progression.degrees.iter().map(|&d| chord::on_degree(key, d, settings.sevenths, progression.major_five)).collect();
             let names: Vec<String> = chords.iter().map(|c| c.name()).collect();
-            if ui.button(progression.name).on_hover_text(names.join(" – ")).clicked() {
-                result = write(clip, at, settings.length, &chords, Some(key));
+            if ui.button(progression.name).on_hover_text(format!("{} (si no caben, el clip se alarga)", names.join(" – "))).clicked() {
+                chosen = Some((chords, true));
             }
         }
         ui.label(RichText::new("Las voces se enlazan con el acorde anterior: se mueven lo menos posible.").color(theme::TEXT_DIM).size(10.0));
     });
-    result
+    let (chords, progression) = chosen?;
+    let (before, from) = (clip.clone(), *at);
+    let (added, pitches) = write(clip, at, settings.length, &chords, key, sig.bar());
+    let progression = progression.then(|| chords.iter().map(|c| c.name()).collect::<Vec<_>>().join(" "));
+    Some(Written { added, pitches, before, at: from, progression })
 }
 
 #[cfg(test)]
@@ -220,7 +239,7 @@ mod tests {
         let mut clip = MidiClip::new("Acordes", 16.0, [0; 3]);
         let mut at = 0.0;
         let progression = chord::progressions(c_major)[0].degrees.iter().map(|&d| chord::on_degree(c_major, d, false, false)).collect::<Vec<_>>();
-        let (added, sounded) = write(&mut clip, &mut at, 4.0, &progression, Some(c_major));
+        let (added, sounded) = write(&mut clip, &mut at, 4.0, &progression, Some(c_major), 4.0);
         assert_eq!(added.len(), 16, "four chords of a bass and three notes");
         assert_eq!(sounded.len(), 4);
         assert_eq!(at, 16.0);
@@ -236,8 +255,9 @@ mod tests {
             let moved: i32 = upper(bar - 1).iter().zip(upper(bar)).map(|(a, b)| (a - b).abs()).sum();
             assert!(moved <= 5, "bar {bar}: {:?} → {:?}", upper(bar - 1), upper(bar));
         }
-        // Past the clip's end nothing is written.
-        assert_eq!(write(&mut clip, &mut at, 4.0, &progression, Some(c_major)).0.len(), 0);
+        // Past the clip's end the clip grows: the progression again, bars 5 to 8.
+        assert_eq!(write(&mut clip, &mut at, 4.0, &progression, Some(c_major), 4.0).0.len(), 16);
+        assert_eq!((clip.length, at), (32.0, 32.0));
     }
 
     #[test]
@@ -245,11 +265,32 @@ mod tests {
         let c_major = Key { tonic: 0, minor: false };
         let mut clip = MidiClip::new("Acordes", 8.0, [0; 3]);
         let mut at = 0.0;
-        write(&mut clip, &mut at, 4.0, &[chord::on_degree(c_major, 4, false, false)], Some(c_major));
+        write(&mut clip, &mut at, 4.0, &[chord::on_degree(c_major, 4, false, false)], Some(c_major), 4.0);
         let (pitches, chord) = before(&clip.notes, at, Some(c_major));
         assert_eq!(chord.map(|c| c.name()).as_deref(), Some("Sol"));
         assert_eq!(pitches.len(), 4);
         // After V: I, then vi.
         assert_eq!(chord::next_degrees(c_major, 4), &[0, 5]);
+    }
+
+    /// A new clip is a bar long: «Épica» makes it four, a chord a bar; in 3/4,
+    /// from the bar's third beat, it grows to whole bars of three.
+    #[test]
+    fn a_progression_lengthens_a_short_clip() {
+        let a_minor = Key { tonic: 9, minor: true };
+        let epic = chord::progressions(a_minor).into_iter().find(|p| p.name.starts_with("Épica")).unwrap();
+        let epic: Vec<Chord> = epic.degrees.iter().map(|&d| chord::on_degree(a_minor, d, false, epic.major_five)).collect();
+        let mut clip = MidiClip::new("MIDI", 4.0, [0; 3]);
+        let mut at = 0.0;
+        write(&mut clip, &mut at, 4.0, &epic, Some(a_minor), 4.0);
+        assert_eq!((clip.length, at), (16.0, 16.0));
+        let named: Vec<String> = chords(&clip.notes, clip.length, Some(a_minor), TimeSig::COMMON).iter().filter_map(|c| c.2.map(|c| c.name())).collect();
+        assert_eq!(named.len(), 4, "{named:?}");
+        assert_eq!(named[0], "Lam");
+        let mut clip = MidiClip::new("MIDI", 3.0, [0; 3]);
+        let mut at = 2.0;
+        write(&mut clip, &mut at, 3.0, &epic, Some(a_minor), 3.0);
+        assert_eq!(clip.length, 15.0);
+        assert!(clip.notes.iter().all(|n| n.start + n.length <= clip.length + 1e-9));
     }
 }

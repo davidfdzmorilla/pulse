@@ -29,11 +29,13 @@ Alrededor de la vista están siempre las mismas piezas:
 
 1. Crea una pista MIDI con {⌘T}.
 2. Elige un instrumento en el navegador: clic en **INSTRUMENTOS**.
-3. Haz doble clic en un slot vacío de la pista. Se crea un clip MIDI de un compás y se abre en el editor.
+3. Haz doble clic en un slot vacío de la pista. Se crea un clip MIDI de cuatro compases y se abre en el editor.
 4. Haz doble clic en el editor para poner notas, o pulsa {M} y toca con el teclado del ordenador.
 5. Pulsa el **►** del clip para lanzarlo, y {Espacio} para parar.
 
 > Consejo: la primera vez, Pulse abre una canción de demostración (Drums, Bass, Chords, Lead) para que tengas algo que escuchar y desmontar. Después abre el último proyecto; puedes cambiarlo en [[Ajustes]].
+
+> Consejo: en los menús, para llegar a una opción de un submenú (**⏵**) puedes ir en diagonal: mientras el puntero va hacia el submenú abierto, pasar por encima de otras opciones no lo cambia. Si te paras un momento sobre otra opción con **⏵**, se abre la suya.
 
 > Nota: en Windows, los menús están en la barra de arriba de la ventana de Pulse, donde la guía dice Finder es el Explorador de archivos, y la pantalla completa es {F11}. Las teclas de la guía ya se muestran como en tu sistema (⌘ es Ctrl, ⇧ es Mayús, ⌥ es Alt y ⌫ es Supr).
 
@@ -86,7 +88,7 @@ Todo sigue el compás:
 - la cuantización de lanzamiento («1 Compás» espera al compás que suena);
 - el metrónomo y la cuenta atrás;
 - el redondeo de las tomas;
-- los clips nuevos, que miden un compás;
+- los clips nuevos, que miden cuatro compases (o los que elijas en [[Ajustes]]);
 - la posición de la barra de transporte;
 - los plugins, que reciben el compás.
 
@@ -133,7 +135,7 @@ Cada pista es una columna de slots, y cada fila es una **escena**. Se ven las es
 
 ### Crear, seleccionar y mover clips
 
-- **Doble clic en un slot vacío**: en una pista MIDI crea un clip vacío de un compás; en una de audio abre el selector de archivos.
+- **Doble clic en un slot vacío**: en una pista MIDI crea un clip vacío de cuatro compases, con el nombre de la pista; en una de audio abre el selector de archivos. Cuánto miden los clips nuevos se elige en [[Ajustes#Proyectos]], y el de cada uno, en **Loop** del [[Editor MIDI]].
 - **Clic en un clip**: lo selecciona y lo abre en el editor. {⌘ clic} o {⇧ clic} añade o quita clips de la selección.
 - **Arrastrar un clip**: mueve los clips seleccionados a otros slots; con {⌥} los copia. Los slots de destino se marcan en azul si caben y en rojo si no. Cada clip necesita un slot libre en una pista de su tipo (audio o MIDI).
 - **Arrastrar desde un slot vacío**: dibuja un recuadro que selecciona los clips y pistas que toque.
@@ -199,7 +201,7 @@ Los **marcadores** dan nombre a las partes de la canción (intro, estrofa, estri
 
 ### Poner y mover clips
 
-- **Doble clic en un hueco**: en una pista MIDI crea un clip vacío de un compás; en una de audio abre el selector de archivos.
+- **Doble clic en un hueco**: en una pista MIDI crea un clip vacío de cuatro compases (los de [[Ajustes#Proyectos]]), que acaba antes si hay otro clip más adelante; en una de audio abre el selector de archivos.
 - **Clic**: selecciona el clip y lo abre en el editor. {⌘ clic} o {⇧ clic}: varios.
 - **Arrastrar en un hueco**: recuadro de selección de clips y pistas ({⌘} o {⇧} añaden).
 - **Arrastrar un clip**: mueve los seleccionados, también a otras pistas del mismo tipo. {⌥} + arrastrar los copia.
@@ -335,7 +337,7 @@ Con una **Drum Machine**, puedes llevar uno de sus sonidos (por ejemplo el bombo
 2. Elige **Sacar a su pista ▸** y el sonido. Aparece una pista nueva debajo que lo toca.
 3. Repite con otros sonidos si quieres; cada uno va a su pista.
 
-En la Drum Machine, un sonido sacado lleva una flecha (**Kick →**); al pasar por encima dice en qué pista suena. Si borras la pista nueva (o deshaces), el sonido vuelve a la batería.
+En la Drum Machine, un sonido sacado lleva una flecha (**Bombo →**); al pasar por encima dice en qué pista suena. Si borras la pista nueva (o deshaces), el sonido vuelve a la batería.
 
 +++ Cómo funciona
 - La pista nueva no tiene clips: toca ese sonido tal como sale de la Drum Machine, antes de los efectos de la batería, y la batería deja de tocarlo. El patrón sigue siendo un solo clip en la pista de la batería.
@@ -820,6 +822,8 @@ Automatización dentro de un clip, que se repite con él cada vez que suena.
 
 Donde escribes y editas las notas de un clip MIDI. Se abre al seleccionar un clip MIDI; en las pistas de batería, cada fila lleva el nombre de su sonido.
 
+Al abrir un clip, y al escribir notas con **Acordes**, **Generar ritmo**, **Acompañar** u **Otra variación**, el editor va a donde están las notas: en una batería, a las filas que suenan (el bombo y la caja primero, si no caben todas).
+
 ### Escribir y editar notas
 
 | Acción | Qué hace |
@@ -1073,6 +1077,10 @@ Necesitas una **Escala** en el proyecto (ver [[Tonalidad y escala]]).
 
 Las notas nuevas quedan seleccionadas, para moverlas o transponerlas.
 
+- Si los acordes no caben, el **loop del clip se alarga** en compases enteros hasta que caben todos (en el Arrangement, también el clip, hasta el siguiente). Una progresión de cuatro acordes en un clip de un compás lo deja en cuatro.
+- {⌘Z} quita los acordes y devuelve el marcador naranja adonde estaba; {⇧⌘Z} los vuelve a poner.
+- Un clip que aún no tiene nombre propio pasa a llamarse como su progresión: «Lam Fa Do Sol».
+
 > Consejo: los acordes que suelen ir después del que hay antes del marcador salen en naranja («Después de Sol suelen ir: Do, Lam»). Si no sabes cómo seguir, empieza por ellos.
 
 ### Opciones del menú Acordes
@@ -1100,9 +1108,14 @@ Pulse toca contigo: a partir de un clip con acordes escribe un bajo, un arpegio,
 
 1. Haz clic derecho en un clip con acordes: MIDI, o audio (un piano, una guitarra, una canción).
 2. Elige **Acompañar** y una parte.
-3. La parte se escribe en una pista nueva justo debajo, en el mismo slot de Session o en el mismo tramo del Arrangement.
+3. La parte se escribe en el mismo slot de Session o en el mismo tramo del Arrangement.
 
-Cada parte llega con un instrumento que le va: Acid para los bajos, FM para los arpegios y SuperSaw para el pad. Cámbialo como cualquier otro.
+¿En qué pista?
+
+- Si hay una **pista vacía de su papel** (la **Bajo** de una plantilla, una «Pad», «Arpegio» o «Acordes»), en esa, con su sonido.
+- Si no, en una pista nueva justo debajo, que se llama como la parte: **Bajo**, **Pad**, **Arpegio** o **Acordes** (o **Bajo 2** si ya hay otra).
+
+El clip se llama como lo que toca («Bajo: contratiempo»). Una pista nueva llega con un instrumento que le va: Acid para los bajos, FM para los arpegios y SuperSaw para el pad. Cámbialo como cualquier otro.
 
 ### Las partes
 
@@ -1130,7 +1143,7 @@ En el [[Editor MIDI]] del clip nuevo, **Otra variación** lo vuelve a escribir d
 
 1. Abre en el [[Editor MIDI]] un clip de una pista de batería (Drum Machine o Drum Pads).
 2. En **Generar ritmo**, elige el **estilo**, el **nivel** y el **largo**.
-3. Pulsa **Generar**. Las notas del clip se sustituyen por la base.
+3. Pulsa **Generar**. Las notas del clip se sustituyen por la base, y un clip que aún no tiene nombre propio toma el del estilo («Techno»).
 4. **Otra versión** pasa a otra base del mismo estilo y nivel. {⌘Z} recupera las anteriores.
 
 > Consejo: cada estilo suena a sí mismo a su tempo. **Tempo del proyecto a… BPM** lo pone.
@@ -1367,7 +1380,7 @@ Para instrumentos grabados nota a nota (un piano, unas cuerdas):
 
 16 sonidos sintetizados: bombo, rimshot, caja, palmas, hats cerrado y abierto, tres toms, cencerro, crash, ride, shaker, pandereta, conga y clave.
 
-- Haz clic en un sonido para escucharlo.
+- Haz clic en un sonido para escucharlo. Se llaman como en **Generar ritmo**: Bombo, Caja, Palmada, Charles, Charles abierto, toms, Cencerro, Pandereta…
 - Cada sonido tiene **Tune**, **Decay**, **Level** y **Drive**. Drive lo recorta como un clipper: más sucio y con más pegada; Level sigue siendo su volumen.
 - **Máquina** cambia todos los sonidos a la vez:
   - **808**: bombo largo y redondo, palma, cencerro. Hip hop, trap, reggaetón.
@@ -1832,7 +1845,7 @@ Un filtro paso bajo, paso alto o paso banda, con un LFO sincronizado al tempo qu
 Hace que la pista **bombee**: baja el volumen y vuelve, al ritmo.
 
 - Sin sidechain, va sincronizado al tempo (**Ritmo**).
-- Con **Sidechain**, bombea con cada golpe de la pista elegida (normalmente el bombo): baja de golpe y vuelve en **Release** (fracción del tiempo elegido).
+- Con **Sidechain**, bombea con cada golpe de la pista elegida (normalmente el bombo): baja de golpe y vuelve. **Vuelve en** (el menú, 1/4 por defecto) es el tiempo de esa vuelta; el knob **Release** es qué parte de ese tiempo tarda en subir (100 %: todo).
 - **Threshold**: el golpe más flojo que lo hace bombear. Súbelo si bombea con cosas que no son el bombo.
 - **Solo graves** (activado por defecto): solo escucha por debajo de 600 Hz, así que bombea con el bombo y no con los charles o las palmas de la misma pista.
 
@@ -1840,7 +1853,7 @@ Hace que la pista **bombee**: baja el volumen y vuelve, al ritmo.
 - Vuelve en Release aunque la cola del bombo siga sonando, así que con bombos largos de 140–150 BPM también respira entre golpe y golpe.
 - Threshold: bombea del todo a partir de 12 dB por encima del umbral.
 - Quita **Solo graves** con un bombo de hardstyle, cuya cola suena tan fuerte en graves como el golpe.
-- Con la Drum Machine entera como sidechain, los toms graves y las congas también lo mueven un poco. Si molesta, saca el bombo a su pista (**Sacar a su pista ▸ Kick**) y escucha esa.
+- Con la Drum Machine entera como sidechain, los toms graves y las congas también lo mueven un poco. Si molesta, saca el bombo a su pista (**Sacar a su pista ▸ Bombo**) y escucha esa.
 +++
 
 #### Chorus, Phaser, Delay y Reverb
@@ -1917,7 +1930,7 @@ El asistente escucha tu canción, te dice cómo suena y qué arreglar antes de p
 3. Pulsa **Analizar la mezcla**.
 4. Lee los **Consejos** y pulsa **Aplicar** en los que quieras, o **Aplicar todo** para que lo haga en orden.
 
-Tras cada **Aplicar** vuelve a analizar solo, para que veas el resultado.
+Tras cada **Aplicar** vuelve a analizar solo, para que veas el resultado. Si el informe no cabe en la pantalla, la ventana se desplaza.
 
 > Consejo: todo lo que hace el asistente se deshace con {⌘Z}, paso a paso.
 
@@ -2460,6 +2473,7 @@ Dónde está, **Cambiar…** (lo que ya hay no se mueve) y **Mostrar en Finder**
 
 - Abrir el último proyecto al arrancar.
 - De qué plantilla parte {⌘N} (ver [[Proyectos y carpeta de Pulse]]).
+- **Clips MIDI nuevos**: cuántos compases mide un clip MIDI al crearlo con doble clic o con **Nuevo clip MIDI aquí** (1, 2, 4 u 8; cuatro de entrada).
 - Buscar actualizaciones al arrancar.
 
 ## Actualizaciones

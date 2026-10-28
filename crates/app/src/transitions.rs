@@ -268,7 +268,7 @@ impl PulseApp {
 
 /// The «Transición» submenu for beat `at` (a bar, a marker).
 pub fn menu(app: &mut PulseApp, ui: &mut eframe::egui::Ui, at: f64) {
-    ui.menu_button("Transición aquí", |ui| {
+    crate::widgets::menu_button(ui, "Transición aquí", |ui| {
         for kind in Kind::ALL {
             let bars = kind.bars();
             if let [only] = bars {
@@ -278,7 +278,7 @@ pub fn menu(app: &mut PulseApp, ui: &mut eframe::egui::Ui, at: f64) {
                 }
                 continue;
             }
-            ui.menu_button(kind.label(), |ui| {
+            crate::widgets::menu_button(ui, kind.label(), |ui| {
                 for &n in bars {
                     if ui.button(bars_label(n)).on_hover_text(kind.hint()).clicked() {
                         app.add_transition(kind, n, at);

@@ -1356,7 +1356,7 @@ Un piano, dos pianos eléctricos y un órgano, sintetizados por Pulse: no cargan
 
 1. Selecciona una pista MIDI.
 2. En el navegador, abre **INSTRUMENTOS** y haz clic en **Pulse Keys**.
-3. Elige el **Modelo** a la izquierda del dispositivo, o un sonido en **Presets › De fábrica**.
+3. Elige el **Modelo** a la izquierda del dispositivo, o uno de sus 34 sonidos en **Presets › De fábrica**, agrupados en Piano, Púas, Lengüetas y Órgano: pianos de pop, balada, jazz, cine o lo-fi, eléctricos de soul, funk o chill, y órganos de blues, reggae, iglesia, rock o house.
 
 Al cambiar de modelo empiezas desde su sonido de partida; el volumen se queda como estaba.
 
@@ -1409,7 +1409,7 @@ Al cambiar de modelo empiezas desde su sonido de partida; el volumen se queda co
 - **Tono** quita agudos y **Drive** satura, para un órgano de rock.
 - El órgano no responde a la fuerza de las notas.
 
-> Consejo: algunas registraciones conocidas (cada cifra es una barra): **888000000** jazz, **888800000** gospel, **006802000** balada y **888888888** todo fuera. Están entre los presets de fábrica.
+> Consejo: algunas registraciones conocidas (cada cifra es una barra): **888000000** jazz, **888800000** gospel, **838000000** blues, **886000000** iglesia, **800000888** silbante, **006802000** balada y **888888888** todo fuera. Están entre los presets de fábrica.
 
 +++ Cómo funciona
 - No hay muestras: cada nota es una suma de parciales (senos que se apagan), afinados con exactitud.
@@ -1463,6 +1463,8 @@ Una wavetable es una serie de formas de onda por la que el oscilador se desplaza
 - **FX**: hasta 6 efectos propios, que se guardan con el preset.
 - **MATRIX**: 16 rutas de modulación (fuente, cantidad, destino).
 
+Trae 38 presets de fábrica por categorías: Bass, Lead, Pad, Pluck, Keys, Arp y FX (ver [[Presets]]). En varios, la **Macro 1** hace lo más útil del sonido: abre el filtro, cambia la vocal o da la profundidad del wobble.
+
 #### Wavetables propias
 
 - Trae 12 wavetables. **Cargar wavetable…** abre las tuyas.
@@ -1484,6 +1486,8 @@ El mismo motor que Wavetable, en páginas **SYNTH**, **SEQ**, **FX** y **MATRIX*
   - Los pasos se dibujan arrastrando sobre ellos.
   - Mientras mantienes una tecla, toca los pasos transpuestos a ella.
   - **Variar** cambia notas al azar dentro de la escala.
+
+Trae 34 presets de fábrica por categorías: metales, cuerdas y leads analógicos, bajos, órganos, campanas y flautas armónicos, filtros dobles (vocales, cruces y una cuerda pulsada), secuencias, pads y efectos (ver [[Presets]]).
 
 ## Modular Synth
 
@@ -1530,7 +1534,7 @@ Un preset guarda el sonido de un instrumento para usarlo en otros proyectos. Se 
 
 ### Usar un preset
 
-- **DE FÁBRICA**: Kick Designer, Wavetable, Polychrome y Modular traen presets de fábrica.
+- **DE FÁBRICA**: los sonidos que trae Pulse, en todos sus instrumentos menos el Sampler y los Drum Pads (que tocan tus muestras). Van por categorías (Bajo, Lead, Pad, Teclas…, o por estilo en las baterías): pasa el ratón por una para ver sus sonidos. Los instrumentos con pocos presets los muestran en una sola lista.
 - **MIS PRESETS**: los tuyos.
 - En el navegador (**BIBLIOTECA › Presets**), doble clic en un preset lo aplica a la pista MIDI seleccionada.
 

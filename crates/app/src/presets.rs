@@ -1,7 +1,7 @@
 //! Instrument presets: the factory ones built into Pulse and the user's own,
 //! saved as JSON files (one folder per instrument) with the samples they use.
 
-use engine::model::{InstrumentKind, KickParams};
+use engine::model::InstrumentKind;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
@@ -16,29 +16,24 @@ pub struct Preset {
 
 /// Presets that ship with Pulse for this kind of instrument.
 pub fn factory(kind: &InstrumentKind) -> Vec<Preset> {
-    match kind {
-        InstrumentKind::Kick(_) => KickParams::presets()
-            .into_iter()
-            .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Kick(params), samples: Vec::new() })
-            .collect(),
-        InstrumentKind::Wavetable(_) => engine::model::WaveParams::presets()
-            .into_iter()
-            .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Wavetable(params), samples: Vec::new() })
-            .collect(),
-        InstrumentKind::Polychrome(_) => engine::model::WaveParams::polychrome_presets()
-            .into_iter()
-            .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Polychrome(params), samples: Vec::new() })
-            .collect(),
-        InstrumentKind::Modular(_) => engine::model::ModularParams::presets()
-            .into_iter()
-            .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Modular(params), samples: Vec::new() })
-            .collect(),
-        InstrumentKind::Keys(_) => engine::model::KeysParams::presets()
-            .into_iter()
-            .map(|(name, params)| Preset { name: name.to_string(), instrument: InstrumentKind::Keys(params), samples: Vec::new() })
-            .collect(),
-        _ => Vec::new(),
+    kind.factory_presets().into_iter().map(|(name, instrument)| Preset { name: name.to_string(), instrument, samples: Vec::new() }).collect()
+}
+
+/// Presets by category, in their order: the part of the name before « · » (the
+/// rest is the name shown inside it). Presets without one go in «General».
+pub fn grouped(presets: Vec<Preset>) -> Vec<(String, Vec<(String, Preset)>)> {
+    let mut groups: Vec<(String, Vec<(String, Preset)>)> = Vec::new();
+    for preset in presets {
+        let (group, short) = match preset.name.split_once(" · ") {
+            Some((g, n)) => (g.to_string(), n.to_string()),
+            None => ("General".to_string(), preset.name.clone()),
+        };
+        match groups.iter_mut().find(|g| g.0 == group) {
+            Some(g) => g.1.push((short, preset)),
+            None => groups.push((group, vec![(short, preset)])),
+        }
     }
+    groups
 }
 
 /// Folder with the user's presets for this kind of instrument, under `root`.
@@ -88,6 +83,7 @@ pub fn delete(root: &Path, preset: &Preset) -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::model::KickParams;
     use engine::model::{AcidParams, SynthParams};
 
     #[test]
@@ -124,5 +120,16 @@ mod tests {
         let presets = factory(&InstrumentKind::Kick(KickParams::default()));
         assert!(presets.len() >= 15);
         assert!(presets.iter().any(|p| matches!(p.instrument, InstrumentKind::Kick(k) if k.pitch_shape.count > 2)), "some use drawn curves");
+    }
+
+    #[test]
+    fn factory_presets_group_by_category() {
+        let kind = InstrumentKind::Keys(Default::default());
+        let groups = grouped(factory(&kind));
+        assert_eq!(groups.iter().map(|g| g.0.as_str()).collect::<Vec<_>>(), ["Piano", "Púas", "Lengüetas", "Órgano"]);
+        assert_eq!(groups[0].1[0].0, "De cola");
+        assert_eq!(groups.iter().map(|g| g.1.len()).sum::<usize>(), factory(&kind).len());
+        let init = grouped(factory(&InstrumentKind::Synth(Default::default())));
+        assert_eq!(init[0].0, "General");
     }
 }

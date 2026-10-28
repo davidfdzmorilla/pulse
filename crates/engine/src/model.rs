@@ -580,6 +580,36 @@ impl Default for SynthParams {
     }
 }
 
+impl SynthParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, SynthParams)> {
+        use Waveform::*;
+        let base = SynthParams::default();
+        // The synth has no filter envelope: plucks and stabs come from the amplitude
+        // decay (sustain 0 or low), the tone from the waveform and the fixed cutoff.
+        let tone = |waveform, cutoff, resonance, gain| SynthParams { waveform, cutoff, resonance, gain, ..base };
+        vec![
+            ("Init", base),
+            ("Bajo · Sub puro", SynthParams { attack: 0.002, decay: 0.3, sustain: 1.0, release: 0.08, ..tone(Sine, 18000.0, 0.0, 0.22) }),
+            ("Bajo · Triángulo cálido", SynthParams { attack: 0.002, decay: 0.4, sustain: 0.8, release: 0.1, ..tone(Triangle, 900.0, 0.1, 0.33) }),
+            ("Bajo · Sierra con mordida", SynthParams { attack: 0.001, decay: 0.25, sustain: 0.55, release: 0.06, ..tone(Saw, 850.0, 0.55, 0.29) }),
+            ("Bajo · Pulso corto", SynthParams { attack: 0.001, decay: 0.22, sustain: 0.3, release: 0.06, ..tone(Square, 700.0, 0.2, 0.29) }),
+            ("Lead · Sierra brillante", SynthParams { attack: 0.004, decay: 0.3, sustain: 0.8, release: 0.25, ..tone(Saw, 7000.0, 0.15, 0.27) }),
+            ("Lead · Chip cuadrado", SynthParams { attack: 0.001, decay: 0.05, sustain: 1.0, release: 0.03, ..tone(Square, 18000.0, 0.0, 0.16) }),
+            ("Lead · Flauta suave", SynthParams { attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.3, ..tone(Triangle, 3000.0, 0.0, 0.27) }),
+            ("Lead · Resonante", SynthParams { attack: 0.003, decay: 0.4, sustain: 0.75, release: 0.2, ..tone(Saw, 1800.0, 0.65, 0.22) }),
+            ("Pluck · Corto", SynthParams { attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.2, ..tone(Saw, 3000.0, 0.3, 0.35) }),
+            ("Pluck · Marimba", SynthParams { attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.3, ..tone(Triangle, 5000.0, 0.0, 0.35) }),
+            ("Pluck · Arpegio de 8 bits", SynthParams { attack: 0.001, decay: 0.12, sustain: 0.0, release: 0.05, ..tone(Square, 6000.0, 0.0, 0.3) }),
+            ("Pad · Cálido", SynthParams { attack: 0.8, decay: 1.0, sustain: 0.8, release: 1.5, ..tone(Saw, 1200.0, 0.1, 0.35) }),
+            ("Pad · Hueco", SynthParams { attack: 1.2, decay: 1.0, sustain: 0.85, release: 2.0, ..tone(Square, 900.0, 0.2, 0.23) }),
+            ("Pad · Niebla", SynthParams { attack: 1.5, decay: 1.0, sustain: 1.0, release: 2.5, ..tone(Triangle, 1500.0, 0.0, 0.36) }),
+            ("Acordes · Stab de house", SynthParams { attack: 0.001, decay: 0.3, sustain: 0.15, release: 0.15, ..tone(Saw, 2200.0, 0.35, 0.33) }),
+            ("Acordes · Órgano cuadrado", SynthParams { attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.05, ..tone(Square, 2500.0, 0.0, 0.13) }),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum InstrumentKind {
     Synth(SynthParams),
@@ -972,9 +1002,9 @@ impl KickParams {
                 KickParams {
                     tune: 28.0,
                     pitch_amount: 30.0,
-                    pitch_time: 700.0,
+                    pitch_time: 500.0,
                     pitch_curve: 0.0,
-                    pitch_shape: shape(&[(0.0, 1.0, 0.0), (0.04, 0.6, 0.8), (1.0, 0.0, -0.3)]),
+                    pitch_shape: shape(&[(0.0, 1.0, 0.0), (0.056, 0.6, 0.8), (1.0, 0.0, -0.3)]),
                     hold: 300.0,
                     decay: 1200.0,
                     decay_curve: 0.3,
@@ -1003,6 +1033,47 @@ impl KickParams {
                 },
             ),
             ("FX · Zap", KickParams { tune: 33.0, pitch_amount: 72.0, pitch_time: 120.0, pitch_curve: 0.9, hold: 30.0, decay: 200.0, decay_curve: 0.5, click: 0.2, click_tone: 9000.0, drive: 0.2, click_type: 10, ..base }),
+            (
+                // A worn sample: tape-warm, boxy, no highs, a soft thud of noise for the beater.
+                "Lo-Fi · Polvoriento",
+                KickParams { tune: 30.0, pitch_amount: 18.0, pitch_time: 40.0, pitch_curve: 0.4, hold: 20.0, decay: 200.0, decay_curve: 0.5, harmonics: 0.15, click: 0.3, click_tone: 2000.0, click_length: 20.0, click_type: 6, drive: 0.35, drive_mode: KickDrive::Tube, eq_mid: 3.0, eq_mid_freq: 250.0, eq_high: -10.0, gain: 0.7, velocity: 0.6, limiter: true, ..base },
+            ),
+            (
+                // Round and warm, with a woody knock: sits under congas and shakers.
+                "Afro House · Cálido",
+                KickParams { tune: 31.0, pitch_amount: 28.0, pitch_time: 50.0, hold: 50.0, decay: 280.0, harmonics: 0.1, click: 0.35, click_tone: 1200.0, click_type: 7, drive: 0.2, sub_level: 0.2, eq_mid: -2.0, eq_mid_freq: 300.0, punch: 0.25, limiter: true, ..base },
+            ),
+            ("Reggaetón · Dembow", KickParams { tune: 31.0, pitch_amount: 30.0, pitch_time: 40.0, hold: 60.0, decay: 380.0, decay_curve: 0.35, click: 0.45, click_tone: 3000.0, click_type: 2, drive: 0.3, drive_mode: KickDrive::Tube, sub_level: 0.35, punch: 0.35, limiter: true, ..base }),
+            (
+                // Tight and loud: a hard knock, the low mids scooped, compressed hard.
+                "Dubstep · Pesado",
+                KickParams { tune: 33.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 40.0, decay: 300.0, decay_curve: 0.5, harmonics: 0.2, click: 0.75, click_tone: 5000.0, click_type: 8, drive: 0.5, gain: 0.6, sub_level: 0.3, eq_mid: -4.0, eq_mid_freq: 350.0, eq_high: 3.0, phase: 90.0, punch: 0.5, limiter: true, ..base },
+            ),
+            (
+                // A slow attack and a gentle sweep: a felt-like pulse with no click to speak of.
+                "Ambient · Suave",
+                KickParams { tune: 29.0, pitch_amount: 14.0, pitch_time: 80.0, pitch_curve: 0.3, attack: 3.0, hold: 40.0, decay: 600.0, decay_curve: 0.5, click: 0.1, click_tone: 2500.0, click_length: 20.0, click_type: 9, drive: 0.0, gain: 0.85, sub_level: 0.25, eq_high: -6.0, velocity: 0.8, ..base },
+            ),
+            (
+                // Higher and bouncy, with a little pitch blip: skippy two-step grooves.
+                "UK Garage · Rebotado",
+                KickParams { tune: 36.0, pitch_amount: 30.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 20.0, decay: 170.0, decay_curve: 0.55, harmonics: 0.2, click: 0.5, click_tone: 2200.0, click_length: 5.0, click_type: 4, drive: 0.25, phase: 90.0, punch: 0.35, eq_low: 2.0, limiter: true, ..base },
+            ),
+            (
+                // An acoustic kick through an old sampler: the beater's knock, boxiness scooped, crunchy.
+                "Hip Hop · Boom Bap",
+                KickParams { tune: 33.0, pitch_amount: 20.0, pitch_time: 30.0, pitch_curve: 0.5, hold: 20.0, decay: 220.0, decay_curve: 0.55, harmonics: 0.3, click: 0.55, click_tone: 2500.0, click_length: 8.0, click_type: 7, drive: 0.35, drive_mode: KickDrive::Tube, eq_mid: -3.0, eq_mid_freq: 400.0, eq_high: 2.0, punch: 0.45, velocity: 0.8, limiter: true, ..base },
+            ),
+            (
+                // Gated: it holds full, then shuts fast; a tom-like sweep and a metallic edge.
+                "Synthwave · Ochentero",
+                KickParams { tune: 33.0, pitch_amount: 30.0, pitch_time: 60.0, pitch_curve: 0.5, hold: 100.0, decay: 120.0, decay_curve: 0.1, harmonics: 0.15, click: 0.5, click_tone: 3000.0, click_type: 5, drive: 0.2, eq_high: 2.0, punch: 0.3, limiter: true, ..base },
+            ),
+            (
+                // A long, hot 808: punchy start and a saturated tail that cuts through on small speakers.
+                "808 · Saturado",
+                KickParams { tune: 30.0, pitch_amount: 36.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 150.0, decay: 700.0, decay_curve: 0.4, click: 0.4, click_tone: 2500.0, click_type: 2, drive: 0.45, sub_level: 0.3, punch: 0.3, limiter: true, ..base },
+            ),
         ]
     }
 }
@@ -1194,6 +1265,208 @@ impl Default for DrumParams {
     }
 }
 
+impl DrumParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, DrumParams)> {
+        let base = DrumParams::default();
+        // Each kit's tune, decay, level and drive, a value a sound in `DRUM_VOICES` order:
+        // kick, rim, snare, clap, closed and open hat, low tom, cowbell, mid and high tom,
+        // crash, ride, shaker, tambourine, conga, clave. The sounds a style doesn't use
+        // stay low but playable. (The 808's hats are soft: a touch of drive lifts them.)
+        let kit = |model: DrumModel, tune: [f32; DRUM_SOUNDS], decay: [f32; DRUM_SOUNDS], level: [f32; DRUM_SOUNDS], drive: [f32; DRUM_SOUNDS]| DrumParams { tune, decay, level, drive, model };
+        vec![
+            ("Init", base),
+            (
+                // Four on the floor: a round 909 kick, a long clap and the open hat on the off-beat.
+                "House · Clásico",
+                kit(
+                    DrumModel::Tr909,
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.9, 1.0, 1.0, 1.2, 0.8, 0.7, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.62, 0.4, 0.35, 0.7, 0.55, 0.5, 0.35, 0.3, 0.35, 0.35, 0.4, 0.8, 0.45, 0.45, 0.4, 0.35],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Soft and warm: a rounder 808 kick, a rim, a dark long clap and soft hats.
+                "House · Deep",
+                kit(
+                    DrumModel::Tr808,
+                    [1.0, 0.0, 0.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0],
+                    [1.1, 1.0, 1.0, 1.4, 1.2, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0, 1.2, 1.0],
+                    [0.85, 0.6, 0.35, 0.65, 0.9, 0.7, 0.35, 0.3, 0.35, 0.35, 0.35, 0.6, 0.55, 0.35, 0.5, 0.4],
+                    [0.0, 0.0, 0.0, 0.0, 0.08, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Tight and dry: a short, slightly clipped kick, a quick clap, short hats and bongo-like congas.
+                "Tech House · Seco",
+                kit(
+                    DrumModel::Tr909,
+                    [1.0, 2.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 3.0, 0.0],
+                    [0.7, 1.0, 1.0, 0.9, 0.6, 0.55, 1.0, 1.0, 1.0, 1.0, 1.0, 0.8, 0.9, 0.8, 0.8, 1.0],
+                    [0.62, 0.55, 0.35, 0.7, 0.6, 0.55, 0.35, 0.3, 0.35, 0.35, 0.35, 0.5, 0.55, 0.5, 0.5, 0.4],
+                    [0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Lower and longer: a deep kick with a little grit, a dark clap, rim and ride.
+                "Techno · Oscuro",
+                kit(
+                    DrumModel::Tr909,
+                    [-2.0, 0.0, -2.0, -2.0, 0.0, 1.0, -2.0, 0.0, -2.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.1, 1.0, 1.0, 1.1, 0.8, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0, 1.0],
+                    [0.6, 0.55, 0.4, 0.65, 0.6, 0.55, 0.4, 0.3, 0.4, 0.4, 0.4, 0.85, 0.45, 0.35, 0.35, 0.35],
+                    [0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Distorted: a long, clipped kick, a crushed clap and snare, and dirty low toms.
+                "Techno · Industrial",
+                kit(
+                    DrumModel::Tr909,
+                    [-3.0, -2.0, -3.0, -3.0, 1.0, 0.0, -4.0, 0.0, -4.0, -4.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.5, 1.0, 1.2, 1.4, 0.7, 0.7, 1.2, 1.0, 1.2, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.48, 0.4, 0.42, 0.5, 0.45, 0.42, 0.32, 0.3, 0.32, 0.32, 0.36, 0.5, 0.35, 0.3, 0.3, 0.3],
+                    [0.35, 0.15, 0.12, 0.12, 0.1, 0.08, 0.1, 0.0, 0.1, 0.1, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Short and clicky: a short kick, a bright rim, a small clap, shaker, clave and high congas.
+                "Minimal · Clic",
+                kit(
+                    DrumModel::Tr909,
+                    [1.0, 3.0, 0.0, 1.0, 2.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 0.0],
+                    [0.55, 0.8, 1.0, 0.8, 0.5, 0.5, 1.0, 0.8, 1.0, 1.0, 1.0, 0.8, 0.7, 0.8, 0.7, 1.0],
+                    [0.6, 0.65, 0.3, 0.55, 0.55, 0.35, 0.3, 0.35, 0.3, 0.3, 0.3, 0.45, 0.6, 0.45, 0.5, 0.55],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // A long, slightly saturated 808 boom, a tight snare and clap, and bright hats for rolls.
+                "Trap · 808 largo",
+                kit(
+                    DrumModel::Tr808,
+                    [-2.0, 0.0, 2.0, 0.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [3.2, 1.0, 0.9, 1.0, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.78, 0.5, 0.75, 0.8, 0.9, 0.6, 0.35, 0.3, 0.35, 0.35, 0.35, 0.35, 0.4, 0.35, 0.35, 0.35],
+                    [0.04, 0.0, 0.0, 0.0, 0.08, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Knocking: a full, gritty kick, a fat low snare with some crunch, dull hats, rim and shaker.
+                "Hip Hop · Boom Bap",
+                kit(
+                    DrumModel::Classic,
+                    [-1.0, -1.0, -2.0, -1.0, -1.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0],
+                    [1.2, 1.0, 1.4, 1.0, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.95, 0.6, 0.85, 0.45, 0.85, 0.6, 0.35, 0.3, 0.35, 0.35, 0.35, 0.4, 0.5, 0.45, 0.35, 0.35],
+                    [0.03, 0.0, 0.05, 0.0, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Muffled and soft: everything tuned down and shortened, a gentle kick, a low snare and rim, dark hats.
+                "Lo-Fi · Polvoriento",
+                kit(
+                    DrumModel::Tr808,
+                    [-1.0, -2.0, -3.0, -2.0, -4.0, -4.0, -2.0, -2.0, -2.0, -2.0, -3.0, -3.0, -3.0, -3.0, -2.0, -2.0],
+                    [0.8, 1.0, 0.8, 0.9, 0.8, 0.7, 0.8, 1.0, 0.8, 0.8, 0.7, 0.8, 0.9, 0.8, 1.0, 1.0],
+                    [0.9, 0.65, 0.75, 0.35, 0.85, 0.5, 0.35, 0.3, 0.35, 0.35, 0.3, 0.35, 0.55, 0.35, 0.45, 0.35],
+                    [0.02, 0.0, 0.0, 0.0, 0.06, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Dembow: a booming 808 kick, a high, tight snare and rim, hats, tambourine, conga and clave.
+                "Reggaetón · Dembow",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 2.0, 3.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.3, 1.0, 0.7, 0.9, 0.7, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.9, 0.6, 0.8, 0.6, 0.85, 0.4, 0.4, 0.3, 0.4, 0.4, 0.35, 0.35, 0.5, 0.55, 0.5, 0.45],
+                    [0.0, 0.0, 0.0, 0.0, 0.06, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Fast breaks: a short, high kick, a cracking high snare, tight hats and a ride.
+                "Drum & Bass · Rodante",
+                kit(
+                    DrumModel::Tr909,
+                    [2.0, 2.0, 4.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0],
+                    [0.6, 1.0, 0.8, 0.9, 0.6, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.8, 1.0, 1.0, 1.0],
+                    [0.6, 0.5, 0.75, 0.4, 0.6, 0.4, 0.35, 0.3, 0.35, 0.35, 0.45, 0.9, 0.5, 0.35, 0.3, 0.3],
+                    [0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Half-time weight: a driven kick, a huge low snare and clap, hats kept back.
+                "Dubstep · Pesado",
+                kit(
+                    DrumModel::Tr909,
+                    [-1.0, 0.0, -2.0, -1.0, 0.0, 0.0, -3.0, 0.0, -3.0, -3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.0, 1.0, 1.5, 1.4, 0.8, 0.7, 1.2, 1.0, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.6, 0.45, 0.75, 0.7, 0.55, 0.4, 0.45, 0.3, 0.45, 0.45, 0.45, 0.4, 0.35, 0.3, 0.3, 0.3],
+                    [0.08, 0.0, 0.06, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Skippy: a short, bouncy kick, a crisp rim and snare, quick hats, shaker and tambourine.
+                "UK Garage · Shuffle",
+                kit(
+                    DrumModel::Tr909,
+                    [1.0, 2.0, 2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0],
+                    [0.75, 1.0, 0.8, 0.9, 0.7, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 1.0, 1.0],
+                    [0.62, 0.65, 0.7, 0.6, 0.6, 0.45, 0.35, 0.3, 0.35, 0.35, 0.35, 0.4, 0.6, 0.5, 0.35, 0.35],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Electro: a punchy 808 kick, snappy snare and clap, cowbell, clave and high toms up front.
+                "Electro · Robótico",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.7, 1.0, 0.6, 0.8, 0.6, 0.7, 0.9, 1.0, 0.9, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.9, 0.6, 0.85, 0.75, 0.9, 0.5, 0.6, 0.75, 0.6, 0.6, 0.35, 0.35, 0.4, 0.35, 0.5, 0.6],
+                    [0.02, 0.0, 0.0, 0.0, 0.08, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Eighties: a big, long snare and clap, a solid kick, deep long toms and a crash.
+                "Synthwave · Ochentera",
+                kit(
+                    DrumModel::Tr909,
+                    [-1.0, 0.0, -1.0, -1.0, 0.0, 0.0, -2.0, 0.0, -2.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.8, 1.0, 1.6, 1.3, 0.8, 0.8, 1.6, 1.0, 1.6, 1.6, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.6, 0.4, 0.8, 0.65, 0.55, 0.45, 0.6, 0.3, 0.6, 0.6, 0.5, 0.4, 0.35, 0.4, 0.3, 0.3],
+                    [0.0, 0.0, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Percussive: a round kick, toms, congas, shaker, clave and cowbell carry the groove.
+                "Afro House · Tribal",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 1.2, 1.0, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0, 1.3, 1.0],
+                    [0.88, 0.55, 0.4, 0.6, 0.8, 0.5, 0.7, 0.45, 0.7, 0.65, 0.3, 0.4, 0.7, 0.55, 0.8, 0.6],
+                    [0.0, 0.0, 0.0, 0.0, 0.06, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Latin percussion: congas, clave, cowbell and high, short toms like timbales over a light kick.
+                "Latino · Percusión",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 4.0, 2.0, 4.0, 4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+                    [0.8, 1.0, 0.8, 1.0, 0.7, 0.7, 0.6, 1.0, 0.6, 0.6, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0],
+                    [0.7, 0.65, 0.45, 0.35, 0.7, 0.4, 0.65, 0.7, 0.65, 0.65, 0.3, 0.35, 0.7, 0.6, 0.85, 0.7],
+                    [0.0, 0.0, 0.0, 0.0, 0.05, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+        ]
+    }
+}
+
 fn clean(drive: &[f32; DRUM_SOUNDS]) -> bool {
     drive.iter().all(|&d| d == 0.0)
 }
@@ -1287,6 +1560,37 @@ impl Default for SuperSawParams {
     }
 }
 
+impl SuperSawParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, SuperSawParams)> {
+        let base = SuperSawParams::default();
+        // The filter envelope follows the amplitude envelope: with sustain 0 a note
+        // closes its filter as it fades (plucks), a slow attack opens it (swells).
+        let saws = |voices, detune, spread, gain| SuperSawParams { voices, detune, spread, gain, ..base };
+        vec![
+            ("Init", base),
+            ("Lead · Trance clásico", SuperSawParams { cutoff: 5000.0, resonance: 0.1, env_amount: 0.0, attack: 0.005, decay: 0.5, sustain: 0.85, release: 0.3, ..saws(7.0, 0.4, 0.8, 0.45) }),
+            ("Lead · Estrecho", SuperSawParams { cutoff: 3500.0, resonance: 0.25, env_amount: 1.0, attack: 0.003, decay: 0.4, sustain: 0.7, release: 0.2, ..saws(5.0, 0.2, 0.3, 0.42) }),
+            ("Lead · Rave desafinado", SuperSawParams { cutoff: 8000.0, resonance: 0.05, env_amount: 0.0, attack: 0.002, decay: 0.3, sustain: 0.9, release: 0.25, ..saws(7.0, 0.9, 1.0, 0.4) }),
+            ("Pad · Ancho", SuperSawParams { cutoff: 2500.0, resonance: 0.05, env_amount: 0.0, attack: 1.2, decay: 1.0, sustain: 0.9, release: 2.0, ..saws(7.0, 0.3, 1.0, 0.45) }),
+            ("Pad · Amanecer", SuperSawParams { cutoff: 350.0, resonance: 0.15, env_amount: 3.5, attack: 1.2, decay: 1.0, sustain: 1.0, release: 2.5, ..saws(7.0, 0.35, 0.9, 0.43) }),
+            ("Pad · Oscuro", SuperSawParams { cutoff: 600.0, resonance: 0.3, env_amount: 0.0, attack: 0.8, decay: 1.0, sustain: 1.0, release: 2.0, ..saws(6.0, 0.15, 0.7, 0.4) }),
+            ("Acordes · Progressive", SuperSawParams { cutoff: 1500.0, resonance: 0.1, env_amount: 1.5, attack: 0.002, decay: 0.35, sustain: 0.4, release: 0.3, ..saws(7.0, 0.3, 0.8, 0.45) }),
+            ("Acordes · Stab de house", SuperSawParams { cutoff: 1200.0, resonance: 0.3, env_amount: 2.0, attack: 0.001, decay: 0.25, sustain: 0.2, release: 0.15, ..saws(5.0, 0.25, 0.6, 0.44) }),
+            ("Acordes · Rave de los 90", SuperSawParams { cutoff: 2500.0, resonance: 0.2, env_amount: 1.0, attack: 0.001, decay: 0.3, sustain: 0.6, release: 0.2, ..saws(7.0, 0.6, 0.8, 0.38) }),
+            ("Pluck · Trance", SuperSawParams { cutoff: 600.0, resonance: 0.25, env_amount: 3.0, attack: 0.001, decay: 0.25, sustain: 0.0, release: 0.25, ..saws(7.0, 0.35, 0.8, 0.48) }),
+            ("Pluck · Corto y brillante", SuperSawParams { cutoff: 2000.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.16, sustain: 0.0, release: 0.1, ..saws(3.0, 0.2, 0.6, 0.5) }),
+            ("Pluck · Largo", SuperSawParams { cutoff: 900.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.8, sustain: 0.0, release: 0.5, ..saws(5.0, 0.3, 0.9, 0.33) }),
+            ("Bajo · Sierra única", SuperSawParams { cutoff: 700.0, resonance: 0.3, env_amount: 1.5, attack: 0.001, decay: 0.3, sustain: 0.5, release: 0.08, ..saws(1.0, 0.0, 0.0, 0.52) }),
+            ("Bajo · Progressive", SuperSawParams { cutoff: 400.0, resonance: 0.2, env_amount: 2.0, attack: 0.001, decay: 0.2, sustain: 0.5, release: 0.1, ..saws(3.0, 0.12, 0.2, 0.57) }),
+            ("Bajo · Reese", SuperSawParams { cutoff: 500.0, resonance: 0.1, env_amount: 0.5, attack: 0.003, decay: 0.5, sustain: 1.0, release: 0.15, ..saws(2.0, 0.25, 0.0, 0.4) }),
+            ("Bajo · Rebotado", SuperSawParams { cutoff: 250.0, resonance: 0.35, env_amount: 3.0, attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.08, ..saws(2.0, 0.06, 0.0, 0.75) }),
+            ("Textura · Enjambre", SuperSawParams { cutoff: 1800.0, resonance: 0.5, env_amount: 0.0, attack: 1.2, decay: 1.0, sustain: 1.0, release: 3.0, ..saws(7.0, 1.0, 1.0, 0.36) }),
+            ("FX · Barrido", SuperSawParams { cutoff: 150.0, resonance: 0.6, env_amount: 4.0, attack: 1.5, decay: 1.0, sustain: 1.0, release: 1.5, ..saws(7.0, 0.5, 1.0, 0.41) }),
+        ]
+    }
+}
+
 /// Monophonic acid bassline synth with a resonant 4-pole filter and slides.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AcidParams {
@@ -1321,6 +1625,32 @@ impl Default for AcidParams {
     }
 }
 
+impl AcidParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, AcidParams)> {
+        let base = AcidParams::default();
+        vec![
+            ("Init", base),
+            ("Acid · Clásico", AcidParams { cutoff: 320.0, resonance: 0.8, env_mod: 0.6, decay: 0.35, accent: 0.7, glide_ms: 60.0, drive: 0.25, gain: 0.5, ..base }),
+            ("Acid · Squelch", AcidParams { cutoff: 180.0, resonance: 0.92, env_mod: 0.85, decay: 0.22, accent: 0.9, glide_ms: 50.0, drive: 0.35, gain: 0.445, ..base }),
+            ("Acid · Cuadrada hueca", AcidParams { square: true, cutoff: 260.0, resonance: 0.78, env_mod: 0.55, decay: 0.3, accent: 0.6, glide_ms: 60.0, drive: 0.2, gain: 0.4 }),
+            ("Acid · Gritón", AcidParams { cutoff: 400.0, resonance: 0.9, env_mod: 0.7, decay: 0.4, accent: 1.0, glide_ms: 60.0, drive: 1.0, gain: 0.25, ..base }),
+            ("Acid · Glide largo", AcidParams { cutoff: 300.0, resonance: 0.85, env_mod: 0.5, decay: 0.6, accent: 0.6, glide_ms: 250.0, drive: 0.3, gain: 0.5, ..base }),
+            ("Acid · Burbuja", AcidParams { square: true, cutoff: 500.0, resonance: 0.95, env_mod: 0.4, decay: 0.12, accent: 0.5, glide_ms: 30.0, drive: 0.15, gain: 0.4 }),
+            ("Acid · Barrido lento", AcidParams { cutoff: 120.0, resonance: 0.88, env_mod: 0.8, decay: 1.5, accent: 0.5, glide_ms: 80.0, drive: 0.3, gain: 0.5, ..base }),
+            ("Acid · Solo acentos", AcidParams { cutoff: 250.0, resonance: 0.85, env_mod: 0.25, decay: 0.3, accent: 1.0, glide_ms: 60.0, drive: 0.4, gain: 0.42, ..base }),
+            ("Bajo · Sub oscuro", AcidParams { cutoff: 80.0, resonance: 0.6, env_mod: 0.25, decay: 0.2, accent: 0.4, glide_ms: 40.0, drive: 0.2, gain: 0.8, ..base }),
+            ("Bajo · Techno rodante", AcidParams { cutoff: 220.0, resonance: 0.55, env_mod: 0.45, decay: 0.15, accent: 0.5, glide_ms: 20.0, drive: 0.5, gain: 0.5, ..base }),
+            ("Bajo · Minimal seco", AcidParams { square: true, cutoff: 350.0, resonance: 0.4, env_mod: 0.35, decay: 0.08, accent: 0.4, glide_ms: 5.0, drive: 0.1, gain: 0.5 }),
+            ("Bajo · Gordo saturado", AcidParams { cutoff: 600.0, resonance: 0.35, env_mod: 0.3, decay: 0.3, accent: 0.5, glide_ms: 30.0, drive: 0.8, gain: 0.32, ..base }),
+            ("Bajo · Pulso hueco", AcidParams { square: true, cutoff: 700.0, resonance: 0.15, env_mod: 0.1, decay: 0.3, accent: 0.3, glide_ms: 30.0, drive: 0.1, gain: 0.42 }),
+            ("Lead · Chillón", AcidParams { cutoff: 1200.0, resonance: 0.88, env_mod: 0.6, decay: 0.5, accent: 0.8, glide_ms: 80.0, drive: 0.7, gain: 0.32, ..base }),
+            ("Lead · Silbido", AcidParams { square: true, cutoff: 900.0, resonance: 0.96, env_mod: 0.2, decay: 0.8, accent: 0.4, glide_ms: 120.0, drive: 0.1, gain: 0.5 }),
+            ("FX · Láser", AcidParams { cutoff: 60.0, resonance: 0.95, env_mod: 1.0, decay: 0.08, accent: 1.0, glide_ms: 400.0, drive: 0.5, gain: 0.4, ..base }),
+        ]
+    }
+}
+
 /// Two-operator FM synth: a modulator with feedback driving a sine carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FmParams {
@@ -1352,6 +1682,41 @@ impl Default for FmParams {
             release: 0.6,
             gain: 0.45,
         }
+    }
+}
+
+impl FmParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, FmParams)> {
+        let base = FmParams::default();
+        vec![
+            ("Init", base),
+            ("Teclas · Piano eléctrico", FmParams { ratio: 1.0, index: 1.8, mod_decay: 0.8, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 3.0, sustain: 0.0, release: 0.4, gain: 0.3 }),
+            ("Teclas · Púa brillante", FmParams { ratio: 14.0, index: 1.2, mod_decay: 0.08, mod_sustain: 0.0, feedback: 0.0, attack: 0.002, decay: 2.5, sustain: 0.0, release: 0.4, gain: 0.24 }),
+            ("Teclas · Funky percusivo", FmParams { ratio: 1.0, index: 3.0, mod_decay: 0.15, mod_sustain: 0.25, feedback: 0.4, attack: 0.001, decay: 0.8, sustain: 0.2, release: 0.12, gain: 0.38 }),
+            ("Teclas · Órgano FM", FmParams { ratio: 2.0, index: 1.0, mod_decay: 4.0, mod_sustain: 1.0, feedback: 0.0, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.08, gain: 0.18 }),
+            ("Teclas · Órgano saturado", FmParams { ratio: 1.0, index: 1.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.35, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.1, gain: 0.27 }),
+            ("Campanas · Tubular", FmParams { ratio: 3.5, index: 4.0, mod_decay: 2.5, mod_sustain: 0.2, feedback: 0.0, attack: 0.001, decay: 6.0, sustain: 0.0, release: 2.0, gain: 0.17 }),
+            ("Campanas · Iglesia", FmParams { ratio: 1.4, index: 5.0, mod_decay: 3.0, mod_sustain: 0.15, feedback: 0.0, attack: 0.001, decay: 7.0, sustain: 0.0, release: 3.0, gain: 0.15 }),
+            ("Campanas · Cristal", FmParams { ratio: 7.07, index: 2.0, mod_decay: 0.6, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 1.5, gain: 0.19 }),
+            ("Campanas · Caja de música", FmParams { ratio: 5.0, index: 1.5, mod_decay: 0.3, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 1.5, sustain: 0.0, release: 0.8, gain: 0.24 }),
+            ("Pluck · Marimba", FmParams { ratio: 4.0, index: 3.0, mod_decay: 0.03, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.6, sustain: 0.0, release: 0.3, gain: 0.3 }),
+            ("Pluck · Vibráfono", FmParams { ratio: 4.0, index: 1.5, mod_decay: 0.25, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 0.8, gain: 0.17 }),
+            ("Pluck · Metálico", FmParams { ratio: 3.17, index: 6.0, mod_decay: 0.12, mod_sustain: 0.0, feedback: 0.2, attack: 0.001, decay: 0.4, sustain: 0.0, release: 0.2, gain: 0.33 }),
+            ("Pluck · Arpegio digital", FmParams { ratio: 2.0, index: 4.0, mod_decay: 0.1, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.15, gain: 0.31 }),
+            ("Bajo · FM de los 80", FmParams { ratio: 1.0, index: 4.0, mod_decay: 0.18, mod_sustain: 0.2, feedback: 0.3, attack: 0.001, decay: 0.6, sustain: 0.5, release: 0.08, gain: 0.31 }),
+            ("Bajo · Slap", FmParams { ratio: 2.0, index: 5.0, mod_decay: 0.04, mod_sustain: 0.1, feedback: 0.2, attack: 0.001, decay: 0.5, sustain: 0.3, release: 0.08, gain: 0.31 }),
+            ("Bajo · Sub FM", FmParams { ratio: 1.0, index: 0.6, mod_decay: 0.3, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 0.5, sustain: 0.8, release: 0.1, gain: 0.31 }),
+            ("Bajo · Gruñido", FmParams { ratio: 1.0, index: 6.0, mod_decay: 0.5, mod_sustain: 0.6, feedback: 0.7, attack: 0.002, decay: 0.3, sustain: 0.8, release: 0.1, gain: 0.28 }),
+            ("Lead · Feedback", FmParams { ratio: 1.0, index: 2.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.85, attack: 0.005, decay: 0.3, sustain: 0.8, release: 0.2, gain: 0.27 }),
+            ("Lead · Flauta FM", FmParams { ratio: 1.0, index: 0.8, mod_decay: 0.15, mod_sustain: 0.3, feedback: 0.0, attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.2, gain: 0.32 }),
+            ("Metales · Stab FM", FmParams { ratio: 1.0, index: 3.5, mod_decay: 0.25, mod_sustain: 0.45, feedback: 0.4, attack: 0.015, decay: 0.4, sustain: 0.6, release: 0.15, gain: 0.37 }),
+            ("Pad · Cristal lento", FmParams { ratio: 3.0, index: 1.2, mod_decay: 4.0, mod_sustain: 0.6, feedback: 0.0, attack: 1.2, decay: 2.0, sustain: 0.8, release: 2.5, gain: 0.23 }),
+            ("Textura · Inarmónica", FmParams { ratio: 2.71, index: 5.0, mod_decay: 3.0, mod_sustain: 0.5, feedback: 0.0, attack: 0.6, decay: 2.0, sustain: 0.7, release: 2.0, gain: 0.183 }),
+            ("Textura · Metal oxidado", FmParams { ratio: 0.73, index: 7.0, mod_decay: 2.0, mod_sustain: 0.6, feedback: 0.5, attack: 0.3, decay: 3.0, sustain: 0.6, release: 2.0, gain: 0.163 }),
+            ("FX · Gong", FmParams { ratio: 0.586, index: 8.0, mod_decay: 4.0, mod_sustain: 0.1, feedback: 0.0, attack: 0.001, decay: 8.0, sustain: 0.0, release: 4.0, gain: 0.125 }),
+            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.33 }),
+        ]
     }
 }
 
@@ -1531,17 +1896,41 @@ impl KeysParams {
             ("Piano · Suave", KeysParams { tone: 0.22, dynamics: 0.9, hammer: 0.2, body: 0.65, release: 0.5, ..piano }),
             ("Piano · De pared", KeysParams { tone: 0.6, strings: 0.95, body: 0.75, length: 0.6, width: 0.3, ..piano }),
             ("Púas · Clásico", tines),
-            ("Púas · Trémolo", KeysParams { tremolo: 0.6, tremolo_rate: 4.2, bell: 0.35, width: 0.7, ..tines }),
+            ("Púas · Trémolo", KeysParams { tremolo: 0.6, tremolo_rate: 4.2, bell: 0.35, width: 0.7, gain: 0.4, ..tines }),
             ("Púas · Con ladrido", KeysParams { tone: 0.65, bark: 0.85, bell: 0.5, drive: 0.25, ..tines }),
             ("Púas · Campana", KeysParams { tone: 0.6, bell: 0.85, bark: 0.2, length: 1.4, ..tines }),
             ("Lengüetas · Clásico", reed),
             ("Lengüetas · Trémolo", KeysParams { tremolo: 0.5, ..reed }),
-            ("Lengüetas · Saturado", KeysParams { bark: 0.8, drive: 0.45, tone: 0.65, ..reed }),
+            ("Lengüetas · Saturado", KeysParams { bark: 0.8, drive: 0.45, tone: 0.65, gain: 0.36, ..reed }),
             ("Órgano · Jazz", KeysParams { drawbars: bars("888000000"), percussion: 0.7, perc_decay: 0.35, leslie_fast: 0.0, ..organ }),
             ("Órgano · Gospel", KeysParams { drawbars: bars("888800000"), percussion: 0.0, leslie_fast: 1.0, click: 0.45, ..organ }),
             ("Órgano · Rock", KeysParams { drawbars: bars("888000000"), percussion: 0.0, drive: 0.6, leslie: 0.75, click: 0.5, ..organ }),
-            ("Órgano · Balada", KeysParams { drawbars: bars("006802000"), percussion: 0.0, click: 0.1, leslie: 0.5, ..organ }),
-            ("Órgano · Completo", KeysParams { drawbars: bars("888888888"), percussion: 0.0, leslie_fast: 1.0, ..organ }),
+            ("Órgano · Balada", KeysParams { drawbars: bars("006802000"), percussion: 0.0, click: 0.1, leslie: 0.5, gain: 0.9, ..organ }),
+            ("Órgano · Completo", KeysParams { drawbars: bars("888888888"), percussion: 0.0, leslie_fast: 1.0, gain: 0.4, ..organ }),
+            // Pianos for songs: pop cuts through, the ballad sings on, the dark one
+            // under film cues, the worn-out one for lo-fi beats, the touchy jazz one.
+            ("Piano · Pop", KeysParams { tone: 0.72, hammer: 0.5, dynamics: 0.6, body: 0.4, length: 0.8, release: 0.3, width: 0.7, gain: 0.5, ..piano }),
+            ("Piano · Balada", KeysParams { tone: 0.42, hammer: 0.25, dynamics: 0.85, strings: 0.5, body: 0.7, length: 1.6, release: 0.9, width: 0.8, gain: 0.45, ..piano }),
+            ("Piano · Cine oscuro", KeysParams { tone: 0.08, hammer: 0.1, dynamics: 1.0, strings: 0.6, body: 0.85, length: 2.5, release: 1.6, width: 0.9, gain: 0.42, ..piano }),
+            ("Piano · Lo-fi", KeysParams { tone: 0.3, hammer: 0.6, dynamics: 0.4, strings: 1.0, body: 0.9, length: 0.45, release: 0.18, drive: 0.35, width: 0.25, gain: 0.47, ..piano }),
+            ("Piano · Jazz", KeysParams { tone: 0.55, hammer: 0.35, dynamics: 0.95, strings: 0.3, body: 0.55, length: 1.1, release: 0.25, width: 0.45, gain: 0.5, ..piano }),
+            // Tines: warm soul, dark neo-soul with a lazy tremolo, the glassy seventies
+            // ballad, a short barking funk comp and a slow wide chill tremolo.
+            ("Púas · Soul", KeysParams { tone: 0.4, hammer: 0.15, dynamics: 0.85, bell: 0.3, bark: 0.45, length: 1.2, release: 0.35, gain: 0.53, ..tines }),
+            ("Púas · Neo-soul", KeysParams { tone: 0.26, hammer: 0.1, dynamics: 0.9, bell: 0.22, bark: 0.2, tremolo: 0.35, tremolo_rate: 3.0, length: 1.3, release: 0.45, width: 0.85, gain: 0.46, ..tines }),
+            ("Púas · Balada de los 70", KeysParams { tone: 0.55, dynamics: 0.8, bell: 0.65, bark: 0.25, tremolo: 0.25, tremolo_rate: 6.0, length: 1.5, release: 0.5, width: 0.8, gain: 0.46, ..tines }),
+            ("Púas · Funk", KeysParams { tone: 0.7, hammer: 0.4, dynamics: 1.0, bell: 0.4, bark: 0.8, drive: 0.3, length: 0.6, release: 0.12, width: 0.4, gain: 0.5, ..tines }),
+            ("Púas · Chill", KeysParams { tone: 0.32, hammer: 0.1, dynamics: 0.75, bell: 0.3, bark: 0.15, tremolo: 0.6, tremolo_rate: 1.2, length: 1.6, release: 0.6, width: 0.75, gain: 0.34, ..tines }),
+            // Reeds: a soul one that growls when hit hard, a crunchy rock one.
+            ("Lengüetas · Soul", KeysParams { tone: 0.35, dynamics: 0.95, bell: 0.45, bark: 0.6, tremolo: 0.2, tremolo_rate: 6.0, length: 1.1, gain: 0.55, ..reed }),
+            ("Lengüetas · Rock", KeysParams { tone: 0.85, hammer: 0.4, dynamics: 0.9, bell: 0.5, bark: 1.0, drive: 0.75, length: 0.7, release: 0.15, gain: 0.36, ..reed }),
+            // Organs by style and registration.
+            ("Órgano · Blues", KeysParams { drawbars: bars("838000000"), percussion: 0.8, perc_decay: 0.2, perc_third: true, click: 0.5, leslie: 0.7, leslie_fast: 0.0, drive: 0.25, gain: 0.55, ..organ }),
+            ("Órgano · Reggae", KeysParams { drawbars: bars("008400000"), percussion: 0.8, perc_decay: 0.15, perc_third: true, click: 0.6, leslie: 0.3, leslie_fast: 0.0, tone: 0.55, gain: 0.89, ..organ }),
+            ("Órgano · Iglesia", KeysParams { drawbars: bars("886000000"), percussion: 0.0, click: 0.05, leslie: 0.55, leslie_fast: 0.0, tone: 0.35, width: 0.7, gain: 0.6, ..organ }),
+            ("Órgano · Silbante", KeysParams { drawbars: bars("800000888"), percussion: 0.0, click: 0.35, leslie: 0.8, leslie_fast: 1.0, tone: 0.6, gain: 0.37, ..organ }),
+            ("Órgano · Rugido", KeysParams { drawbars: bars("888500000"), percussion: 0.0, click: 0.6, leslie: 1.0, leslie_fast: 1.0, drive: 0.85, tone: 0.8, width: 0.8, gain: 0.38, ..organ }),
+            ("Órgano · House", KeysParams { drawbars: bars("006060300"), percussion: 1.0, perc_decay: 0.25, perc_third: false, click: 0.7, leslie: 0.0, tone: 0.7, drive: 0.15, gain: 0.95, ..organ }),
         ]
     }
 
@@ -2691,6 +3080,26 @@ impl InstrumentKind {
             InstrumentKind::DrumMachine(DrumParams::default()),
             InstrumentKind::DrumRack(RackParams::default()),
         ]
+    }
+
+    /// The presets that ship with this kind of instrument, each as a whole instrument.
+    pub fn factory_presets(&self) -> Vec<(&'static str, InstrumentKind)> {
+        fn all<P>(list: Vec<(&'static str, P)>, wrap: fn(P) -> InstrumentKind) -> Vec<(&'static str, InstrumentKind)> {
+            list.into_iter().map(|(name, p)| (name, wrap(p))).collect()
+        }
+        match self {
+            InstrumentKind::Synth(_) => all(SynthParams::presets(), InstrumentKind::Synth),
+            InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => all(DrumParams::presets(), InstrumentKind::DrumMachine),
+            InstrumentKind::SuperSaw(_) => all(SuperSawParams::presets(), InstrumentKind::SuperSaw),
+            InstrumentKind::Acid(_) => all(AcidParams::presets(), InstrumentKind::Acid),
+            InstrumentKind::Fm(_) => all(FmParams::presets(), InstrumentKind::Fm),
+            InstrumentKind::Kick(_) => all(KickParams::presets(), InstrumentKind::Kick),
+            InstrumentKind::Wavetable(_) => all(WaveParams::presets(), InstrumentKind::Wavetable),
+            InstrumentKind::Polychrome(_) => all(WaveParams::polychrome_presets(), InstrumentKind::Polychrome),
+            InstrumentKind::Modular(_) => all(ModularParams::presets(), InstrumentKind::Modular),
+            InstrumentKind::Keys(_) => all(KeysParams::presets(), InstrumentKind::Keys),
+            InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Plugin(_) => Vec::new(),
+        }
     }
 
     pub fn label(&self) -> &'static str {
@@ -3989,6 +4398,362 @@ impl WaveParams {
         p.fx[0] = delay(0.5, 0.2);
         p.gain = 0.45;
         list.push(("FX · Combo Pulse", p));
+
+        // ----- Second bank. Matrix destinations used below: 0 A Pos, 2 A Semi,
+        // 3 A Fine, 12 A Warp (pulse width / formant gain / FM depth), 16 B Fine,
+        // 17 B Level, 29 Noise Level, 32 Cutoff, 99 F2 Cutoff, 104 F Balance.
+        let swing = |source, dest: usize, amount| ModSlot { source, dest: dest as u8, amount, bipolar: true };
+        let ramp = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
+        let phaser = |rate: f32, mix: f32| fx(Effect::Phaser(PhaserParams { rate, mix, ..PhaserParams::default() }));
+        let saturator = |kind: KickDrive, drive_db: f32, output_db: f32| fx(Effect::Saturator(SaturatorParams { kind, drive_db, output_db, ..SaturatorParams::default() }));
+        let echo = |time_beats: f64, feedback: f32, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback, mix, ping_pong: true, ..DelayParams::default() }));
+
+        // Bright poly brass: saw and pulse, a filter swell that opens with velocity
+        // and a short pitch scoop into each note.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 3.0, detune: 0.12, drift: 0.25, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, fine: 6.0, level: 0.5, warp_amount: 0.25, drift: 0.25, ..analog(1.0) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 700.0, resonance: 0.1, key_track: 0.5, ..init.filter };
+        p.env[0] = env(0.02, 0.4, 0.85, 0.35);
+        p.env[1] = env(0.05, 0.5, 0.4, 0.3);
+        p.env[2] = env(0.0005, 0.08, 0.0, 0.05);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.35);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.15);
+        p.matrix[2] = slot(ModSource::Env3, 3, -0.08);
+        p.matrix[3] = slot(ModSource::Env3, 16, -0.08);
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.6, 0.18);
+        p.gain = 0.52;
+        list.push(("Analog · Metales de los 80", p));
+
+        // String machine: wide detuned saws an octave apart, thinned below and
+        // smeared by phaser and chorus.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 6.0, detune: 0.28, blend: 0.8, drift: 0.3, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, octave: 1.0, unison: 4.0, detune: 0.3, level: 0.35, drift: 0.3, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 3200.0, resonance: 0.05, key_track: 0.4, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Hp12, cutoff: 220.0, resonance: 0.1, ..p.filter2 };
+        p.env[0] = env(0.35, 1.0, 1.0, 1.1);
+        p.lfo[0] = WaveLfo { rate: 5.0, rise: 0.6, ..init.lfo[0] };
+        p.matrix[0] = swing(ModSource::Lfo1, 3, 0.02);
+        p.fx[0] = phaser(0.15, 0.35);
+        p.fx[1] = chorus;
+        p.fx[2] = reverb(0.75, 0.25);
+        p.gain = 0.75;
+        list.push(("Analog · Cuerdas de conjunto", p));
+
+        // Mono pulse lead: the width swept by a slow LFO, delayed vibrato, glide.
+        let mut p = init;
+        p.osc[0] = WaveOsc { warp_amount: 0.4, drift: 0.3, ..analog(1.0) };
+        p.osc[1] = WaveOsc { on: true, fine: 8.0, level: 0.45, drift: 0.3, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 2200.0, resonance: 0.35, drive: 0.2, key_track: 0.6, ..init.filter };
+        p.env[0] = env(0.004, 0.6, 0.8, 0.2);
+        p.env[1] = env(0.001, 0.3, 0.3, 0.2);
+        p.lfo[0] = WaveLfo { rate: 0.7, shape: triangle, ..init.lfo[0] };
+        p.lfo[1] = WaveLfo { rate: 5.5, rise: 0.6, mode: LfoMode::Retrig, ..init.lfo[1] };
+        p.matrix[0] = swing(ModSource::Lfo1, 12, 0.35);
+        p.matrix[1] = swing(ModSource::Lfo2, 3, 0.05);
+        p.matrix[2] = swing(ModSource::Lfo2, 16, 0.05);
+        p.matrix[3] = slot(ModSource::Env2, 32, 0.2);
+        p.matrix[4] = slot(ModSource::Velocity, 32, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 70.0;
+        p.fx[0] = echo(0.5, 0.3, 0.18);
+        p.gain = 0.67;
+        list.push(("Analog · Lead PWM", p));
+
+        // Poly chords: a plucky filter over a held body, brighter the harder you play.
+        let mut p = init;
+        p.osc[0] = WaveOsc { drift: 0.2, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, fine: -5.0, level: 0.6, warp_amount: 0.1, drift: 0.2, ..analog(1.0) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 900.0, resonance: 0.25, key_track: 0.5, ..init.filter };
+        p.env[0] = env(0.002, 0.8, 0.5, 0.35);
+        p.env[1] = env(0.001, 0.45, 0.15, 0.3);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.4);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.15);
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.6, 0.2);
+        p.gain = 0.56;
+        list.push(("Analog · Acordes polifónicos", p));
+
+        // Driven mono bass: saw and square into a saturating ladder, a sine sub below.
+        let mut p = init;
+        p.osc[0] = WaveOsc { drift: 0.1, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, fine: -7.0, level: 0.5, drift: 0.1, ..analog(1.0) };
+        p.sub = WaveSub { on: true, level: 0.5, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 260.0, resonance: 0.55, drive: 0.6, key_track: 0.3, ..init.filter };
+        p.env[0] = env(0.001, 1.0, 1.0, 0.06);
+        p.env[1] = env(0.001, 0.25, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.35);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.1);
+        p.mono = true;
+        p.fx[0] = saturator(KickDrive::Soft, 4.0, -3.0);
+        p.gain = 0.6;
+        list.push(("Bass · Saturado", p));
+
+        // Reese: two detuned saws, a notch sweeping slowly through them for the phasing.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.15, drift: 0.2, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, fine: -14.0, unison: 2.0, detune: 0.1, level: 0.6, drift: 0.2, ..analog(saw) };
+        p.sub = WaveSub { on: true, level: 0.45, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 900.0, resonance: 0.2, drive: 0.3, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Notch, cutoff: 400.0, resonance: 0.3, ..p.filter2 };
+        p.env[0] = env(0.003, 1.0, 1.0, 0.12);
+        p.lfo[0] = WaveLfo { rate: 0.3, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 99, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 30.0;
+        p.gain = 0.6;
+        list.push(("Bass · Reese", p));
+
+        // Long sine sub that glides between overlapping notes, with a pitch click
+        // and tube saturation so it carries on small speakers.
+        let mut p = init;
+        p.osc[0] = analog(0.0);
+        p.filter.on = false;
+        p.env[0] = WaveEnv { attack: 0.002, hold: 0.05, decay: 1.8, sustain: 0.0, release: 0.3 };
+        p.env[2] = env(0.0005, 0.03, 0.0, 0.03);
+        p.matrix[0] = slot(ModSource::Env3, 2, 0.15);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 120.0;
+        p.fx[0] = saturator(KickDrive::Tube, 8.0, -4.0);
+        p.gain = 0.7;
+        list.push(("Bass · Sub con glide", p));
+
+        // Short square pluck for house basslines.
+        let mut p = init;
+        p.osc[0] = WaveOsc { warp_amount: 0.2, ..analog(1.0) };
+        p.sub = WaveSub { on: true, level: 0.4, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 350.0, resonance: 0.25, key_track: 0.5, ..init.filter };
+        p.env[0] = env(0.001, 0.5, 0.15, 0.12);
+        p.env[1] = env(0.001, 0.18, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.35);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.1);
+        p.mono = true;
+        p.gain = 0.85;
+        list.push(("Bass · Pluck de house", p));
+
+        // FM bells: a sine phase-modulated by a silent sine at an inharmonic ratio
+        // (an octave and a sixth up); the depth fades with envelope 2.
+        let mut p = init;
+        p.osc[0] = WaveOsc { warp: OscWarp::Fm, warp_amount: 0.1, ..harmonic(1.0, 0.0, 0.0) };
+        p.osc[1] = WaveOsc { on: true, octave: 1.0, semi: 9.0, level: 0.0, ..harmonic(1.0, 0.0, 0.0) };
+        p.filter.on = false;
+        p.env[0] = env(0.001, 3.0, 0.0, 1.5);
+        p.env[1] = env(0.001, 1.0, 0.0, 1.0);
+        p.matrix[0] = slot(ModSource::Env2, 12, 0.6);
+        p.matrix[1] = slot(ModSource::Velocity, 12, 0.2);
+        p.fx[0] = reverb(0.8, 0.3);
+        p.gain = 0.25;
+        list.push(("Harmonic · Campanas FM", p));
+
+        // Rock organ: a drawbar mix with a fading percussion partial, rotary-style
+        // wobble and a little tube drive.
+        let mut p = init;
+        p.osc[0] = harmonic(9.0, -0.3, -0.2);
+        p.osc[1] = WaveOsc { on: true, octave: 1.0, semi: 7.0, level: 0.0, ..harmonic(1.0, 0.0, 0.0) };
+        p.filter.on = false;
+        p.env[0] = env(0.003, 0.2, 1.0, 0.06);
+        p.env[1] = env(0.001, 0.25, 0.0, 0.05);
+        p.lfo[0] = WaveLfo { rate: 6.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Env2, 17, 0.6);
+        p.matrix[1] = swing(ModSource::Lfo1, 3, 0.015);
+        p.fx[0] = saturator(KickDrive::Tube, 6.0, -4.0);
+        p.fx[1] = chorus;
+        p.gain = 0.28;
+        list.push(("Harmonic · Órgano con percusión", p));
+
+        // Flute: a few odd-leaning partials, a breath of noise at each attack and
+        // vibrato that comes in late.
+        let mut p = init;
+        p.osc[0] = harmonic(6.0, -0.6, -0.5);
+        p.noise = WaveNoise { on: true, level: 0.05, color: 6000.0, ..init.noise };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 4000.0, resonance: 0.1, key_track: 0.5, ..init.filter };
+        p.env[0] = env(0.06, 0.3, 0.9, 0.25);
+        p.env[1] = env(0.001, 0.08, 0.0, 0.05);
+        p.lfo[0] = WaveLfo { rate: 5.0, rise: 0.5, mode: LfoMode::Retrig, ..init.lfo[0] };
+        p.matrix[0] = swing(ModSource::Lfo1, 3, 0.04);
+        p.matrix[1] = slot(ModSource::Env2, 29, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 20.0;
+        p.fx[0] = reverb(0.7, 0.25);
+        p.gain = 0.43;
+        list.push(("Harmonic · Flauta", p));
+
+        // Hollow pluck: odd partials only, a formant peak that sweeps down each note.
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: 0.1, warp_amount: 0.6, ..harmonic(24.0, 0.2, -1.0) };
+        p.filter.on = false;
+        p.env[0] = env(0.001, 0.5, 0.0, 0.2);
+        p.env[1] = env(0.001, 0.2, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.5);
+        p.matrix[1] = slot(ModSource::Velocity, 0, 0.15);
+        p.fx[0] = delay(0.75, 0.2);
+        p.gain = 0.75;
+        list.push(("Harmonic · Pluck hueco", p));
+
+        // Talking wah: formants sweep from "i" to "a" on each note, smoothed by a
+        // low-pass in series.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.1, drift: 0.2, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Formant, cutoff: 20.0, resonance: 0.6, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 2500.0, resonance: 0.1, ..p.filter2 };
+        p.env[0] = env(0.005, 0.5, 0.8, 0.2);
+        p.env[1] = env(0.01, 0.35, 0.0, 0.2);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.45);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.1);
+        p.mono = true;
+        p.glide = 40.0;
+        p.gain = 0.24;
+        list.push(("Dual Filter · Wah vocal", p));
+
+        // Low-pass and high-pass side by side; an LFO over two bars crossfades them.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 4.0, detune: 0.2, drift: 0.3, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, octave: -1.0, level: 0.4, warp_amount: 0.3, drift: 0.3, ..analog(1.0) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 600.0, resonance: 0.3, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Hp12, cutoff: 2500.0, resonance: 0.3, ..p.filter2 };
+        p.filter_parallel = true;
+        p.filter_balance = 0.0;
+        p.lfo[0] = WaveLfo { shape: triangle, sync_beats: 8.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 104, 1.0);
+        p.env[0] = env(0.3, 1.0, 1.0, 1.0);
+        p.fx[0] = reverb(0.7, 0.25);
+        p.gain = 0.66;
+        list.push(("Dual Filter · LP/HP cruzado", p));
+
+        // Plucked string: a burst of noise rings a comb tuned to the note (key
+        // tracking 1, C4 at 261.6 Hz), then a low-pass darkens it.
+        let mut p = init;
+        p.osc[0] = WaveOsc { level: 0.0, ..analog(0.5) };
+        p.noise = WaveNoise { on: true, level: 0.0, color: 9000.0, ..init.noise };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Comb, cutoff: 261.6, resonance: 1.0, key_track: 1.0, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 3500.0, resonance: 0.1, key_track: 0.5, ..p.filter2 };
+        p.env[0] = env(0.001, 2.0, 0.0, 0.4);
+        p.env[1] = env(0.0005, 0.03, 0.0, 0.01);
+        p.matrix[0] = slot(ModSource::Env2, 29, 0.6);
+        p.matrix[1] = slot(ModSource::Env2, 4, 1.0);
+        p.fx[0] = reverb(0.5, 0.15);
+        p.gain = 0.5;
+        list.push(("Dual Filter · Cuerda pulsada", p));
+
+        // Rolling techno bass: the off-beat sixteenths, accents opening the filter
+        // through the sequencer lane.
+        let mut p = init;
+        p.osc[0] = WaveOsc { drift: 0.1, ..analog(saw) };
+        p.sub = WaveSub { on: true, level: 0.4, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 400.0, resonance: 0.3, drive: 0.3, ..init.filter };
+        p.env[0] = env(0.001, 0.2, 0.3, 0.05);
+        p.env[1] = env(0.001, 0.12, 0.0, 0.05);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.3);
+        p.matrix[1] = slot(ModSource::Sequencer, 32, 0.2);
+        p.mono = true;
+        let mut rolling = steps(&[(0.0, false, 0.5, false), (0.0, true, 0.6, false), (0.0, true, 0.8, false), (0.0, true, 0.6, false)].repeat(4));
+        rolling[14].pitch = 12.0;
+        rolling[11].pitch = 7.0;
+        p.seq = SeqParams { on: true, length: 16, rate_beats: 0.25, steps: rolling };
+        p.gain = 0.78;
+        list.push(("Seq · Bajo rodante", p));
+
+        // Trance arpeggio: minor sixteenths with octave jumps, a supersaw pluck
+        // into a dotted delay.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 3.0, detune: 0.15, drift: 0.2, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 2500.0, resonance: 0.2, key_track: 0.5, ..init.filter };
+        p.env[0] = env(0.001, 0.18, 0.0, 0.15);
+        p.env[1] = env(0.001, 0.12, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.25);
+        p.matrix[1] = slot(ModSource::Sequencer, 32, 0.1);
+        p.seq = SeqParams {
+            on: true,
+            length: 16,
+            rate_beats: 0.25,
+            steps: steps(&[
+                (0.0, true, 0.9, false),
+                (12.0, true, 0.6, false),
+                (7.0, true, 0.7, false),
+                (3.0, true, 0.6, false),
+                (0.0, true, 0.9, false),
+                (12.0, true, 0.6, false),
+                (7.0, true, 0.7, false),
+                (5.0, true, 0.6, false),
+                (-4.0, true, 0.9, false),
+                (12.0, true, 0.6, false),
+                (8.0, true, 0.7, false),
+                (3.0, true, 0.6, false),
+                (-2.0, true, 0.9, false),
+                (14.0, true, 0.6, false),
+                (10.0, true, 0.7, false),
+                (7.0, true, 0.6, false),
+            ]),
+        };
+        p.fx[0] = delay(0.75, 0.25);
+        p.fx[1] = reverb(0.7, 0.2);
+        p.gain = 1.0;
+        list.push(("Seq · Arpegio trance", p));
+
+        // Dub chord stab: two saws a fifth apart on syncopated steps, each a little
+        // brighter or darker, into a long echo.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.1, drift: 0.2, level: 0.85, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, semi: 7.0, unison: 2.0, detune: 0.1, level: 0.7, drift: 0.2, ..analog(saw) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 1200.0, resonance: 0.25, key_track: 0.5, ..init.filter };
+        p.env[0] = env(0.002, 0.4, 0.2, 0.2);
+        p.matrix[0] = slot(ModSource::Sequencer, 32, 0.25);
+        let mut dub = steps(&[(0.0, false, 0.5, false); 16]);
+        for (i, value) in [(3, 0.9), (6, 0.5), (10, 0.8), (13, 0.4)] {
+            dub[i] = SeqStep { on: true, velocity: 0.8, value, gate: 0.4, ..dub[i] };
+        }
+        p.seq = SeqParams { on: true, length: 16, rate_beats: 0.25, steps: dub };
+        p.fx[0] = echo(0.75, 0.55, 0.35);
+        p.fx[1] = reverb(0.8, 0.25);
+        p.gain = 1.0;
+        list.push(("Seq · Stab de quintas", p));
+
+        // Glass pad: bright even partials with a formant peak drifting along them.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 5.0, detune: 0.12, warp_amount: 0.8, ..harmonic(32.0, 0.0, 0.6) };
+        p.osc[1] = WaveOsc { on: true, octave: 1.0, level: 0.3, ..harmonic(8.0, -0.4, 0.0) };
+        p.filter.on = false;
+        p.lfo[0] = WaveLfo { rate: 0.08, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.5);
+        p.env[0] = env(1.2, 1.0, 1.0, 2.5);
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.9, 0.4);
+        p.gain = 0.32;
+        list.push(("Pad · Cristal armónico", p));
+
+        // Dark film pad: drifting saws low in a 24 dB filter that wanders at random.
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 4.0, detune: 0.25, drift: 0.6, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, octave: -1.0, level: 0.5, drift: 0.5, ..analog(0.85) };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 450.0, resonance: 0.25, key_track: 0.3, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Hp12, cutoff: 80.0, resonance: 0.1, ..p.filter2 };
+        p.random_rate = 0.5;
+        p.matrix[0] = slot(ModSource::Smooth, 32, 0.15);
+        p.env[0] = env(0.9, 1.0, 1.0, 3.0);
+        p.fx[0] = reverb(0.9, 0.4);
+        p.gain = 0.27;
+        list.push(("Pad · Oscuro de cine", p));
+
+        // Noise riser: a band-pass climbs five octaves and the saws an octave over
+        // eight beats (the LFO plays its ramp once per note).
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 7.0, detune: 0.5, level: 0.3, ..analog(saw) };
+        p.noise = WaveNoise { on: true, level: 0.6, ..init.noise };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Bp12, cutoff: 300.0, resonance: 0.6, ..init.filter };
+        p.lfo[0] = WaveLfo { shape: ramp, mode: LfoMode::Envelope, sync_beats: 8.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.55);
+        p.matrix[1] = slot(ModSource::Lfo1, 2, 0.5);
+        p.env[0] = env(0.5, 1.0, 1.0, 1.5);
+        p.fx[0] = delay(0.75, 0.2);
+        p.fx[1] = reverb(0.8, 0.35);
+        p.gain = 0.95;
+        list.push(("FX · Subida de ruido", p));
         list
     }
 
@@ -4063,7 +4828,7 @@ impl WaveParams {
         p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 0.5, ..init.lfo[0] };
         p.matrix[0] = slot(ModSource::Lfo1, 32, 0.75);
         p.mono = true;
-        p.gain = 0.6;
+        p.gain = 0.45;
         list.push(("Bass · Wobble 1/8", p));
 
         let mut p = init;
@@ -4152,7 +4917,7 @@ impl WaveParams {
         p.env[0] = env(0.001, 2.0, 0.0, 1.5);
         p.env[1] = env(0.001, 0.8, 0.0, 0.5);
         p.matrix[0] = slot(ModSource::Env2, 0, 0.35);
-        p.gain = 0.55;
+        p.gain = 0.43;
                 p.fx[0] = reverb(0.7, 0.25);
         list.push(("Keys · Bell", p));
 
@@ -4167,6 +4932,428 @@ impl WaveParams {
         p.gain = 0.5;
                 p.fx[0] = reverb(0.9, 0.3);
         list.push(("FX · Riser 4 bars", p));
+
+        // ----- Second bank: modern bass, leads, chords, textures and FX.
+        let bi = |source, dest: usize, amount| ModSlot { source, dest: dest as u8, amount, bipolar: true };
+        let down = Shape::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.0, 0.0)]);
+        let pulse_lfo = Shape::from_points(&[(0.0, 1.0, 0.0), (0.49, 1.0, 0.0), (0.5, 0.0, 0.0), (1.0, 0.0, 0.0)]);
+        // Four held steps, for rhythmic jumps of the filter.
+        let steps = Shape::from_points(&[(0.0, 0.1, 0.0), (0.249, 0.1, 0.0), (0.25, 0.8, 0.0), (0.499, 0.8, 0.0), (0.5, 0.35, 0.0), (0.749, 0.35, 0.0), (0.75, 1.0, 0.0), (1.0, 1.0, 0.0)]);
+        let hard = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.6, kind: KickDrive::Hard, oversample: true, ..SaturatorParams::default() }));
+        let tube = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, kind: KickDrive::Tube, ..SaturatorParams::default() }));
+        let glue = fx(Effect::Compressor(CompressorParams { threshold_db: -16.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 2.0, ..CompressorParams::default() }));
+        let phaser = |rate: f32, mix: f32| fx(Effect::Phaser(PhaserParams { rate, depth: 0.6, center: 700.0, feedback: 0.45, mix }));
+        let duck = |depth: f32| fx(Effect::Ducker(DuckerParams { depth, release: 0.55, rate_beats: 1.0, ..DuckerParams::default() }));
+        let wide_chorus = fx(Effect::Chorus(ChorusParams { rate: 0.35, depth: 0.6, delay_ms: 12.0, mix: 0.45 }));
+
+        // Talking dubstep bass: the formant table glides from U to an open vowel on every note.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 3, position: 0.9, unison: 2.0, detune: 0.08, width: 0.3, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { table: 6, position: 0.35, level: 0.4, width: 0.0, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.6, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 2600.0, resonance: 0.2, drive: 0.4, routes: [true, true, false, true], ..init.filter };
+        p.env[0] = env(0.003, 1.0, 1.0, 0.12);
+        p.env[1] = env(0.12, 0.3, 0.4, 0.2);
+        p.matrix[0] = slot(ModSource::Env2, 0, -0.8);
+        // Macro 1: vowel.
+        p.matrix[1] = slot(ModSource::Macro1, 0, -0.6);
+        p.matrix[2] = slot(ModSource::Velocity, 32, 0.12);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 70.0;
+        p.gain = 0.6;
+        p.fx[0] = drive(9.0);
+        p.fx[1] = glue;
+        list.push(("Bass · Yoi", p));
+
+        // Neuro: sync and stepped tables through a comb that jumps every beat.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 4, position: 0.4, unison: 3.0, detune: 0.12, width: 0.4, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { table: 7, position: 0.5, level: 0.5, warp: OscWarp::Fm, warp_amount: 0.3, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.55, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Comb, cutoff: 500.0, resonance: 0.6, mix: 0.6, routes: [true, true, false, true], ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 3500.0, resonance: 0.25, ..default_filter2() };
+        p.lfo[0] = WaveLfo { shape: steps, mode: LfoMode::Retrig, sync_beats: 1.0, ..init.lfo[0] };
+        p.lfo[1] = WaveLfo { shape: pulse_lfo, mode: LfoMode::Retrig, sync_beats: 0.25, ..init.lfo[1] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.25);
+        p.matrix[1] = slot(ModSource::Lfo2, 0, 0.3);
+        p.matrix[2] = slot(ModSource::Lfo1, 13, 0.3);
+        // Macro 1: filter 2 opens; Macro 2: more FM grit.
+        p.matrix[3] = slot(ModSource::Macro1, 99, 0.25);
+        p.matrix[4] = slot(ModSource::Macro2, 25, 0.5);
+        p.mono = true;
+        p.gain = 0.67;
+        p.fx[0] = hard(8.0);
+        p.fx[1] = glue;
+        list.push(("Bass · Neuro", p));
+
+        // Dark drum & bass reese: two detuned saws low-passed, with a slowly moving notch.
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, unison: 2.0, detune: 0.22, width: 0.6, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: saw, unison: 2.0, detune: 0.35, width: 0.6, level: 0.6, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.6, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 520.0, resonance: 0.25, drive: 0.4, routes: [true, true, false, true], ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Notch, cutoff: 260.0, resonance: 0.4, ..default_filter2() };
+        p.lfo[0] = WaveLfo { rate: 0.15, ..init.lfo[0] };
+        p.lfo[1] = WaveLfo { rate: 0.23, ..init.lfo[1] };
+        p.matrix[0] = bi(ModSource::Lfo1, 99, 0.12);
+        p.matrix[1] = bi(ModSource::Lfo2, 32, 0.05);
+        // Macro 1: opens the filter; Macro 2: wider detune.
+        p.matrix[2] = slot(ModSource::Macro1, 32, 0.35);
+        p.matrix[3] = slot(ModSource::Macro2, 7, 0.4);
+        p.matrix[4] = slot(ModSource::Macro2, 20, 0.4);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 50.0;
+        p.gain = 0.65;
+        p.fx[0] = phaser(0.15, 0.3);
+        p.fx[1] = drive(6.0);
+        list.push(("Bass · Reese oscuro", p));
+
+        // Future bass: wide saw and pulse that glide between notes, with a filter blip.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 1, position: 0.1, unison: 4.0, detune: 0.2, width: 0.7, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: saw, octave: 1.0, unison: 3.0, detune: 0.25, level: 0.3, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.55, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 700.0, resonance: 0.3, key_track: 0.5, routes: [true, true, false, true], ..init.filter };
+        p.env[0] = env(0.003, 1.0, 1.0, 0.15);
+        p.env[1] = env(0.001, 0.4, 0.3, 0.3);
+        p.lfo[0] = WaveLfo { rate: 0.3, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.3);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.12);
+        p.matrix[2] = slot(ModSource::Lfo1, 0, 0.3);
+        // Macro 1: brightness.
+        p.matrix[3] = slot(ModSource::Macro1, 32, 0.3);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 120.0;
+        p.gain = 0.7;
+        p.fx[0] = drive(4.0);
+        p.fx[1] = chorus;
+        list.push(("Bass · Future con glide", p));
+
+        // Triplet wobble whose depth is Macro 1 (LFO × macro), with Macro 2 as drive.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 5, position: 0.3, unison: 2.0, detune: 0.1, width: 0.3, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: 1.0, level: 0.4, width: 0.0, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.65, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 180.0, resonance: 0.45, drive: 0.4, routes: [true, true, false, true], ..init.filter };
+        p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 1.0 / 3.0, ..init.lfo[0] };
+        p.combos[0] = Combo { a: ModSource::Lfo1, b: ModSource::Macro1, op: ComboOp::Multiply };
+        p.macros = [0.85, 0.3, 0.0, 0.0];
+        p.matrix[0] = slot(ModSource::Combo1, 32, 0.55);
+        p.matrix[1] = slot(ModSource::Combo1, 0, 0.5);
+        p.matrix[2] = slot(ModSource::Macro2, 34, 0.5);
+        p.mono = true;
+        p.gain = 0.67;
+        p.fx[0] = drive(7.0);
+        p.fx[1] = glue;
+        list.push(("Bass · Wobble tresillo", p));
+
+        // Synthwave lead: analog square with slow PWM, a second saw, vibrato that fades in.
+        let mut p = init;
+        p.osc[0] = WaveOsc { kind: OscKind::Analog, position: 1.0, warp_amount: 0.3, drift: 0.35, level: 1.0, unison: 2.0, detune: 0.1, width: 0.5, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { kind: OscKind::Analog, position: saw, fine: 7.0, drift: 0.3, level: 0.7, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 2800.0, resonance: 0.2, key_track: 0.4, ..init.filter };
+        p.env[0] = env(0.004, 0.6, 0.85, 0.3);
+        p.env[1] = env(0.005, 0.6, 0.3, 0.4);
+        p.lfo[0] = WaveLfo { rate: 0.4, ..init.lfo[0] };
+        p.lfo[1] = WaveLfo { rate: 5.5, rise: 0.5, ..init.lfo[1] };
+        p.matrix[0] = slot(ModSource::Lfo1, 12, 0.4);
+        p.matrix[1] = slot(ModSource::Env2, 32, 0.15);
+        p.matrix[2] = bi(ModSource::Lfo2, 3, 0.06);
+        p.matrix[3] = bi(ModSource::Lfo2, 16, 0.06);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 60.0;
+        p.gain = 1.0;
+        p.fx[0] = chorus;
+        p.fx[1] = delay(0.75, 0.25);
+        p.fx[2] = reverb(0.75, 0.25);
+        list.push(("Lead · Synthwave", p));
+
+        // Trance lead: a pulse-width supersaw over a bright octave, thinned at the bottom.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 1, position: 0.05, unison: 9.0, detune: 0.3, blend: 0.75, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { table: 2, position: 1.0, octave: 1.0, unison: 5.0, detune: 0.2, level: 0.35, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 3500.0, resonance: 0.25, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, cutoff: 180.0, ..default_filter2() };
+        p.env[0] = env(0.004, 0.5, 0.8, 0.35);
+        p.env[1] = env(0.002, 0.35, 0.4, 0.3);
+        p.lfo[0] = WaveLfo { shape: triangle, sync_beats: 4.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.18);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.1);
+        p.matrix[2] = slot(ModSource::Lfo1, 0, 0.25);
+        p.gain = 0.7;
+        p.fx[0] = delay(0.75, 0.22);
+        p.fx[1] = reverb(0.8, 0.3);
+        list.push(("Lead · Trance brillante", p));
+
+        // Early-90s rave lead: very detuned pulse and saw that bend up into pitch.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 1, position: 0.5, unison: 6.0, detune: 0.45, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: saw, octave: -1.0, unison: 4.0, detune: 0.4, level: 0.6, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 6000.0, resonance: 0.15, ..init.filter };
+        p.env[0] = env(0.005, 0.5, 0.9, 0.3);
+        p.env[1] = env(0.001, 0.25, 0.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 0.5, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Env2, 3, -0.25);
+        p.matrix[1] = slot(ModSource::Env2, 16, -0.25);
+        p.matrix[2] = slot(ModSource::Lfo1, 0, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 150.0;
+        p.gain = 0.8;
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.7, 0.22);
+        list.push(("Lead · Rave noventero", p));
+
+        // Future bass pluck: a spectral comb that sweeps shut, over a sine an octave up.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 10, position: 0.6, unison: 5.0, detune: 0.2, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: 0.0, octave: 1.0, level: 0.35, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 1800.0, resonance: 0.2, ..init.filter };
+        p.env[0] = env(0.001, 0.3, 0.0, 0.2);
+        p.env[1] = env(0.001, 0.2, 0.0, 0.15);
+        p.matrix[0] = slot(ModSource::Env2, 0, -0.5);
+        p.matrix[1] = slot(ModSource::Env2, 32, 0.25);
+        p.matrix[2] = slot(ModSource::Velocity, 32, 0.1);
+        p.gain = 0.95;
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.7, 0.25);
+        list.push(("Pluck · Future", p));
+
+        // Plucked string: a click of noise rings a comb tuned to the note.
+        let mut p = init;
+        p.osc[0].on = false;
+        p.noise = WaveNoise { on: true, level: 0.0, color: 12000.0, pan: 0.0 };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Comb, cutoff: 261.6, resonance: 1.0, key_track: 1.0, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 5000.0, resonance: 0.1, key_track: 0.5, ..default_filter2() };
+        p.env[0] = env(0.001, 1.2, 0.0, 0.6);
+        p.env[2] = env(0.0005, 0.12, 0.0, 0.03);
+        p.matrix[0] = slot(ModSource::Env3, 29, 1.0);
+        // Macro 1: darker.
+        p.matrix[1] = slot(ModSource::Macro1, 99, -0.3);
+        p.gain = 1.0;
+        p.fx[0] = reverb(0.6, 0.2);
+        list.push(("Pluck · Cuerda pulsada", p));
+
+        // FM electric piano: velocity brightens the bark, a short tine on top, auto-pan.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 5, position: 0.12, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: 0.0, octave: 2.0, level: 0.0, random_phase: 0.0, ..WaveOsc::default() };
+        p.env[0] = env(0.001, 2.5, 0.15, 0.4);
+        p.env[1] = env(0.001, 0.6, 0.0, 0.3);
+        p.env[2] = env(0.001, 0.15, 0.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 4.5, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.3);
+        p.matrix[1] = slot(ModSource::Velocity, 0, 0.15);
+        p.matrix[2] = slot(ModSource::Env3, 17, 0.4);
+        p.matrix[3] = bi(ModSource::Lfo1, 5, 0.25);
+        p.matrix[4] = bi(ModSource::Lfo1, 18, 0.25);
+        p.gain = 0.45;
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.5, 0.18);
+        list.push(("Keys · Piano FM", p));
+
+        // Future bass chords: wide saws that pump on every beat; Macro 1 adds an 1/8 wobble.
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, unison: 8.0, detune: 0.32, blend: 0.75, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { table: 1, position: 0.4, octave: 1.0, unison: 4.0, detune: 0.25, level: 0.35, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 2500.0, resonance: 0.2, ..init.filter };
+        p.env[0] = env(0.003, 1.0, 0.9, 0.35);
+        p.env[1] = env(0.005, 0.5, 0.35, 0.4);
+        p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 0.5, ..init.lfo[0] };
+        p.combos[0] = Combo { a: ModSource::Lfo1, b: ModSource::Macro1, op: ComboOp::Multiply };
+        p.macros = [0.5, 0.0, 0.0, 0.0];
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.2);
+        p.matrix[1] = slot(ModSource::Combo1, 32, 0.25);
+        p.gain = 0.5;
+        p.fx[0] = duck(0.6);
+        p.fx[1] = wide_chorus;
+        p.fx[2] = reverb(0.7, 0.22);
+        list.push(("Keys · Acordes future", p));
+
+        // House organ stab: short, bright drawbars through a closing filter.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 8, position: 0.85, level: 1.0, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { table: 2, position: 0.6, fine: 8.0, level: 0.55, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 1500.0, resonance: 0.3, ..init.filter };
+        p.env[0] = env(0.001, 0.6, 0.0, 0.25);
+        p.env[1] = env(0.001, 0.22, 0.0, 0.15);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.25);
+        p.matrix[1] = slot(ModSource::Velocity, 32, 0.15);
+        p.gain = 0.72;
+        p.fx[0] = delay(0.75, 0.12);
+        p.fx[1] = reverb(0.55, 0.2);
+        list.push(("Keys · Stab de house", p));
+
+        // Evolving pad: two tables scanned by a slow LFO and smooth randomness, through
+        // a low-pass and a band-pass side by side whose balance drifts.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 2, position: 0.3, level: 0.9, unison: 5.0, detune: 0.22, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { table: 10, position: 0.2, fine: 5.0, unison: 4.0, detune: 0.3, level: 0.45, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 2200.0, resonance: 0.2, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Bp12, cutoff: 900.0, resonance: 0.5, ..default_filter2() };
+        p.filter_parallel = true;
+        p.filter_balance = 0.3;
+        p.random_rate = 0.3;
+        p.env[0] = env(1.0, 1.0, 1.0, 2.5);
+        p.lfo[0] = WaveLfo { rate: 0.07, ..init.lfo[0] };
+        p.lfo[2] = WaveLfo { rate: 0.05, ..init.lfo[2] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.5);
+        p.matrix[1] = slot(ModSource::Smooth, 13, 0.5);
+        p.matrix[2] = bi(ModSource::Lfo3, 104, 0.3);
+        // Macro 1: brightness.
+        p.matrix[3] = slot(ModSource::Macro1, 32, 0.3);
+        p.gain = 1.0;
+        p.fx[0] = chorus;
+        p.fx[1] = delay(1.5, 0.15);
+        p.fx[2] = reverb(0.9, 0.38);
+        list.push(("Pad · Evolutivo", p));
+
+        // Airy pad: hollow additive partials with a moving formant and a breath of noise.
+        let mut p = init;
+        p.osc[0] = WaveOsc { kind: OscKind::Harmonic, position: 0.4, warp_amount: 0.5, partials: 24.0, tilt: -0.4, parity: -0.6, unison: 3.0, detune: 0.15, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { position: 1.0 / 3.0, octave: 1.0, unison: 3.0, detune: 0.2, level: 0.25, ..WaveOsc::default() };
+        p.noise = WaveNoise { on: true, level: 0.15, color: 6000.0, pan: 0.0 };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 2800.0, resonance: 0.15, ..init.filter };
+        p.env[0] = env(1.2, 1.0, 1.0, 2.5);
+        p.lfo[0] = WaveLfo { rate: 0.08, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.3);
+        // Macro 1: more breath.
+        p.matrix[1] = slot(ModSource::Macro1, 29, 0.3);
+        p.gain = 0.5;
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.85, 0.35);
+        list.push(("Pad · Aire", p));
+
+        // Warm analog pad: drifting saws and a square below, a filter that opens slowly.
+        let mut p = init;
+        p.osc[0] = WaveOsc { kind: OscKind::Analog, position: saw, drift: 0.5, unison: 4.0, detune: 0.15, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { kind: OscKind::Analog, position: 1.0, warp_amount: 0.2, octave: -1.0, drift: 0.5, unison: 2.0, detune: 0.1, level: 0.45, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 900.0, resonance: 0.2, key_track: 0.3, ..init.filter };
+        p.env[0] = env(0.6, 1.0, 1.0, 1.8);
+        p.env[1] = env(1.2, 2.0, 0.6, 2.0);
+        p.lfo[0] = WaveLfo { rate: 0.2, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.18);
+        p.matrix[1] = bi(ModSource::Lfo1, 32, 0.04);
+        p.gain = 0.5;
+        p.fx[0] = chorus;
+        p.fx[1] = reverb(0.8, 0.3);
+        list.push(("Pad · Analógico cálido", p));
+
+        // Synthwave arpeggio: sixteenths up three octaves, the filter breathing over two bars.
+        let mut p = init;
+        p.osc[0] = WaveOsc { kind: OscKind::Analog, position: 0.8, drift: 0.2, level: 0.9, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { kind: OscKind::Analog, position: 1.0, octave: -1.0, level: 0.35, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 1400.0, resonance: 0.35, ..init.filter };
+        p.env[0] = env(0.001, 0.25, 0.2, 0.12);
+        p.env[1] = env(0.001, 0.12, 0.0, 0.1);
+        p.lfo[0] = WaveLfo { shape: triangle, sync_beats: 8.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.25);
+        p.matrix[1] = slot(ModSource::Lfo1, 32, 0.15);
+        p.arp = ArpParams { on: true, mode: ArpMode::Up, rate_beats: 0.25, octaves: 3 };
+        p.arp_gate = 0.5;
+        p.gain = 1.0;
+        p.fx[0] = delay(0.75, 0.2);
+        p.fx[1] = reverb(0.7, 0.22);
+        list.push(("Arp · Synthwave", p));
+
+        // Techno sequence: a 16-step line with slides on the held key; its lane opens the filter.
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, wave: KickWave::Square, level: 0.25, ..init.sub };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 350.0, resonance: 0.6, drive: 0.4, ..init.filter };
+        p.env[0] = env(0.002, 0.3, 0.6, 0.08);
+        p.env[1] = env(0.001, 0.15, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.25);
+        p.matrix[1] = slot(ModSource::Sequencer, 32, 0.3);
+        // Macro 1: opens the filter.
+        p.matrix[2] = slot(ModSource::Macro1, 32, 0.3);
+        // (semitones, on, slide, lane value) per step.
+        let line: [(f32, bool, bool, f32); SEQ_STEPS] = [
+            (0.0, true, false, 0.2),
+            (0.0, true, false, 0.0),
+            (12.0, true, true, 0.6),
+            (0.0, true, false, 0.1),
+            (7.0, true, false, 0.4),
+            (0.0, false, false, 0.0),
+            (10.0, true, true, 0.8),
+            (12.0, true, false, 0.3),
+            (0.0, true, false, 0.2),
+            (3.0, true, false, 0.5),
+            (0.0, false, false, 0.0),
+            (12.0, true, true, 0.9),
+            (5.0, true, false, 0.3),
+            (0.0, true, false, 0.0),
+            (7.0, true, true, 0.7),
+            (15.0, true, false, 1.0),
+        ];
+        for (step, &(pitch, on, slide, value)) in p.seq.steps.iter_mut().zip(&line) {
+            *step = SeqStep { on, pitch, slide, value, velocity: if value > 0.5 { 0.8 } else { 0.65 }, ..SeqStep::default() };
+        }
+        p.seq.on = true;
+        p.mono = true;
+        p.glide = 50.0;
+        p.gain = 0.55;
+        p.fx[0] = delay(0.75, 0.15);
+        list.push(("Arp · Secuencia techno", p));
+
+        // Impact: a noise burst and a sub through a filter that falls fast, in a big room.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 11, position: 0.8, octave: -2.0, level: 0.5, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.6, ..init.sub };
+        p.noise = WaveNoise { on: true, level: 0.4, ..init.noise };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Lp24, cutoff: 80.0, resonance: 0.15, routes: [true, true, false, true], ..init.filter };
+        p.env[0] = env(0.001, 2.5, 0.0, 2.0);
+        p.env[1] = env(0.001, 0.8, 0.0, 0.5);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.7);
+        p.gain = 0.17;
+        p.fx[0] = tube(6.0);
+        p.fx[1] = reverb(0.95, 0.35);
+        list.push(("FX · Impacto", p));
+
+        // Downlifter: filtered noise falling over two bars.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 11, position: 0.5, unison: 4.0, detune: 0.6, level: 0.25, ..WaveOsc::default() };
+        p.noise = WaveNoise { on: true, level: 0.8, color: 12000.0, pan: 0.0 };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Bp12, cutoff: 150.0, resonance: 0.55, ..init.filter };
+        p.env[0] = env(0.001, 4.0, 0.0, 1.5);
+        p.lfo[0] = WaveLfo { shape: down, mode: LfoMode::Envelope, sync_beats: 8.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.75);
+        p.matrix[1] = slot(ModSource::Lfo1, 0, 0.5);
+        p.gain = 0.9;
+        p.fx[0] = delay(0.75, 0.25);
+        p.fx[1] = reverb(0.9, 0.35);
+        list.push(("FX · Caída de ruido", p));
+
+        // Laser zap: hard sync swept down in a quarter of a second, with echoes.
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 4, position: 1.0, warp: OscWarp::Sync, warp_amount: 0.0, level: 1.0, unison: 2.0, detune: 0.1, ..WaveOsc::default() };
+        p.env[0] = env(0.001, 0.6, 0.0, 0.25);
+        p.env[1] = env(0.001, 0.25, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 0, -1.0);
+        p.matrix[1] = slot(ModSource::Env2, 12, 0.9);
+        p.gain = 0.8;
+        p.fx[0] = delay(0.5, 0.3);
+        p.fx[1] = reverb(0.6, 0.2);
+        list.push(("FX · Láser", p));
+
+        // Wind: band-passed noise wandering at random and drifting across the stereo field.
+        let mut p = init;
+        p.osc[0].on = false;
+        p.noise = WaveNoise { on: true, level: 1.0, color: 9000.0, pan: 0.0 };
+        p.filter = WaveFilterParams { on: true, mode: WaveFilter::Bp12, cutoff: 800.0, resonance: 0.5, ..init.filter };
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Lp12, cutoff: 5000.0, ..default_filter2() };
+        p.random_rate = 0.4;
+        p.env[0] = env(0.8, 1.0, 1.0, 3.0);
+        p.lfo[0] = WaveLfo { rate: 0.06, ..init.lfo[0] };
+        p.matrix[0] = bi(ModSource::Smooth, 32, 0.25);
+        p.matrix[1] = bi(ModSource::Lfo1, 31, 0.6);
+        p.gain = 0.75;
+        p.fx[0] = reverb(0.9, 0.4);
+        list.push(("FX · Viento", p));
         list
     }
 
@@ -5751,7 +6938,7 @@ impl ModularParams {
         let mut p = build(&[group, sine(&[]), out(0.002, 1.5, 0.3, 0.6), group, sine(&[(slot::HARMONIC, 2.0)])]);
         let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
         p.audio[c].amount = 0.35;
-        p.gain = 0.4;
+        p.gain = 0.35;
         list.push(("FM · Two Groups", p));
 
         let mut p = build(&[group, sine(&[]), out(0.002, 3.0, 0.0, 2.0), group, sine(&[(slot::HARMONIC, 3.5)])]);
@@ -5764,7 +6951,7 @@ impl ModularParams {
         decay.targets[0] = ModTarget::new(MOD_AUDIO_AMOUNT + c, 0.25);
         p.modulators[0] = decay;
         p.lanes[0].fx[0] = reverb(0.75, 0.3);
-        p.gain = 0.3;
+        p.gain = 0.25;
         list.push(("FM · Bell", p));
 
         let mut p = build(&[group, sine(&[]), out(0.002, 1.2, 0.2, 0.8), group, sine(&[(slot::HARMONIC, 1.0), (slot::SEMI, 7.0), (slot::CENT, 13.0)])]);
@@ -5914,7 +7101,7 @@ impl ModularParams {
         p.legato = true;
         p.glide = 60.0;
         p.lanes[0].fx[0] = delay(0.75, 0.2);
-        p.gain = 0.9;
+        p.gain = 0.75;
         list.push(("Nonlinear · Acid", p));
 
         // A drawn rhythmic gate that loops while the note is held.
@@ -5960,10 +7147,12 @@ impl ModularParams {
         let tri = Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]);
 
         // An eighth-note LFO, remapped so the filter snaps open, on a saw and its sub.
+        // Locked to the transport: restarting it on every note snapped the cutoff shut
+        // mid-sweep, and the resonant filter answered the jump with a burst.
         let mut p = build(&[group, saw(&[]), sine(&[(slot::SEMI, -12.0), (slot::LEVEL, 0.8)]), filter(0, 120.0, 3.0, true), out(0.003, 1.0, 1.0, 0.15)]);
         let mut wobble = modulator(ModulatorKind::Lfo, &[]);
         wobble.shape = tri;
-        wobble.mode = LfoMode::Retrig;
+        wobble.mode = LfoMode::Free;
         wobble.sync_beats = 0.5;
         let mut remap = modulator(ModulatorKind::Remap, &[]);
         remap.source = 0;
@@ -6004,7 +7193,7 @@ impl ModularParams {
         p.mono = true;
         p.legato = true;
         p.glide = 60.0;
-        p.gain = 0.75;
+        p.gain = 0.62;
         list.push(("Mod · Delayed Vibrato", p));
 
         // A one-bar drawn filter rhythm that loops while the chord is held.
@@ -6113,6 +7302,243 @@ impl ModularParams {
         p.modules[4].set(slot::LEVEL, 1.8);
         p.gain = 1.0;
         list.push(("Lanes · Poly Echo Pluck", p));
+
+        // ----- Sounds only a modular stack makes -----
+        let envelope = |attack: f32, decay: f32, sustain: f32, release: f32| {
+            modulator(ModulatorKind::Envelope, &[(mslot::ATTACK, attack), (mslot::DECAY, decay), (mslot::SUSTAIN, sustain), (mslot::RELEASE, release)])
+        };
+        // An output with its gain (0..2) above unity.
+        let loud_out = |attack: f32, decay: f32, sustain: f32, release: f32, gain: f32| {
+            let mut o = out(attack, decay, sustain, release);
+            o.set(slot::LEVEL, gain);
+            o
+        };
+        // An audio connection's amount runs -1..1: a depth of d moves it by 2d.
+        let amount = |c: usize, depth: f32| ModTarget::new(MOD_AUDIO_AMOUNT + c, depth);
+
+        // FM bass: the index falls fast after the hit and rises with velocity.
+        let mut p = build(&[group, sine(&[]), out(0.002, 0.8, 0.7, 0.12), group, sine(&[])]);
+        let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[c].amount = 0.08;
+        let mut hit = envelope(0.0005, 0.22, 0.0, 0.1);
+        hit.targets[0] = amount(c, 0.17);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = amount(c, 0.06);
+        p.modulators[..2].copy_from_slice(&[hit, velocity]);
+        p.mono = true;
+        p.glide = 30.0;
+        p.gain = 0.67;
+        list.push(("Bass · FM con golpe", p));
+
+        // Three saws a little apart beat against each other into a warm, saturated
+        // low pass that breathes with a slow LFO.
+        let mut dark = module(K::NonlinearFilter, &[(slot::CUTOFF, 320.0), (slot::Q, 2.0), (slot::NL_DRIVE, 9.0)], 0);
+        dark.choice[1] = 1;
+        let mut p = build(&[group, saw(&[(slot::LEVEL, 0.7)]), saw(&[(slot::CENT, 14.0), (slot::LEVEL, 0.7)]), saw(&[(slot::SEMI, -12.0), (slot::CENT, -7.0), (slot::LEVEL, 0.5)]), dark, loud_out(0.005, 1.0, 1.0, 0.2, 1.8)]);
+        let mut breathe = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 0.3)]);
+        breathe.shape = tri;
+        breathe.bipolar = true;
+        breathe.targets[0] = target(4, slot::CUTOFF, 0.1);
+        p.modulators[0] = breathe;
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.gain = 0.9;
+        list.push(("Bass · Desafinado oscuro", p));
+
+        // Electric piano: two modulators in a silent group, a bright tine (14×) that
+        // dies at once and a body (1×) that fades slowly; velocity opens both.
+        let mut p = build(&[group, sine(&[]), out(0.002, 2.2, 0.0, 0.5), group, sine(&[(slot::HARMONIC, 14.0)]), sine(&[])]);
+        let tine = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[tine].amount = 0.0;
+        let body = p.connect_audio(5, 1, AudioParam::Phase).unwrap();
+        p.audio[body].amount = 0.05;
+        let mut strike = envelope(0.0005, 0.08, 0.0, 0.05);
+        strike.targets[0] = amount(tine, 0.06);
+        let mut fade = envelope(0.0005, 1.2, 0.0, 0.3);
+        fade.targets[0] = amount(body, 0.06);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = amount(tine, 0.04);
+        velocity.targets[1] = amount(body, 0.05);
+        p.modulators[..3].copy_from_slice(&[strike, fade, velocity]);
+        p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams { rate: 0.5, depth: 0.3, delay_ms: 7.0, mix: 0.35 }));
+        p.lanes[0].fx[1] = reverb(0.55, 0.18);
+        p.gain = 0.55;
+        list.push(("FM · Piano eléctrico", p));
+
+        // Hard sync swept by an LFO, ring modulated by a sine a slightly detuned
+        // octave up in its own group: a lead that snarls and shimmers.
+        let mut p = build(&[group, saw(&[(slot::A, 2.0)]), filter(0, 4500.0, 0.8, false), loud_out(0.005, 0.5, 0.8, 0.25, 1.25), group, sine(&[(slot::HARMONIC, 2.0), (slot::CENT, 7.0)])]);
+        let c = p.connect_audio(5, 1, AudioParam::Level).unwrap();
+        p.audio[c].amount = 0.5;
+        let mut sweep = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 0.5)]);
+        sweep.shape = tri;
+        sweep.mode = LfoMode::Retrig;
+        sweep.targets[0] = target(1, slot::A, 0.2);
+        p.modulators[0] = sweep;
+        p.lanes[0].fx[0] = delay(0.75, 0.22);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 50.0;
+        p.gain = 1.0;
+        list.push(("Lead · Sync y anillo", p));
+
+        // A sine folded over and over: the hit (and velocity) push the drive up, a
+        // diode-flavoured low pass rounds the folds off.
+        let mut round = module(K::NonlinearFilter, &[(slot::CUTOFF, 3000.0), (slot::Q, 1.5), (slot::NL_DRIVE, 6.0)], 0);
+        round.choice[1] = 3;
+        let mut p = build(&[group, sine(&[]), module(K::Distortion, &[(slot::DRIVE, 6.0)], 2), round, out(0.002, 0.5, 0.4, 0.2)]);
+        let mut hit = envelope(0.0005, 0.4, 0.0, 0.2);
+        hit.targets[0] = target(2, slot::DRIVE, 0.4);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = target(2, slot::DRIVE, 0.15);
+        p.modulators[..2].copy_from_slice(&[hit, velocity]);
+        p.lanes[0].fx[0] = delay(0.5, 0.2);
+        p.gain = 0.53;
+        list.push(("Nonlinear · Plegado vivo", p));
+
+        // A stepped LFO walks the harmonic from 1 to 4 (root, octave, fifth, octave)
+        // every sixteenth while a falling saw plucks each step: an arpeggio from one
+        // held key, locked to the beat.
+        let mut p = build(&[group, module(K::Analog, &[], 2), module(K::Mix, &[], 0), filter(0, 3000.0, 0.7, false), out(0.003, 1.0, 1.0, 0.3)]);
+        let mut steps = modulator(ModulatorKind::Lfo, &[]);
+        steps.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (0.249, 0.0, 0.0), (0.25, 0.25, 0.0), (0.499, 0.25, 0.0), (0.5, 0.5, 0.0), (0.749, 0.5, 0.0), (0.75, 0.75, 0.0), (1.0, 0.75, 0.0)]);
+        steps.sync_beats = 1.0;
+        // A quarter of the 0..16 range at full: the steps (0, 1/4, 1/2, 3/4) add 0 to 3.
+        steps.targets[0] = target(1, slot::HARMONIC, 0.25);
+        let mut pluck = modulator(ModulatorKind::Lfo, &[]);
+        pluck.shape = Shape::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.0, 0.6)]);
+        pluck.sync_beats = 0.25;
+        // The Mix level (0..2, at 1) follows the saw from 1 down to 0.
+        pluck.targets[0] = ModTarget { offset: -0.5, ..target(2, slot::LEVEL, 0.5) };
+        p.modulators[..2].copy_from_slice(&[steps, pluck]);
+        p.lanes[0].fx[0] = delay(0.75, 0.3);
+        p.gain = 0.5;
+        list.push(("Mod · Arpegio armónico", p));
+
+        // Two layers that keep changing: a wavetable scanned by a looping 4-bar curve,
+        // and a pulse an octave up whose width an LFO moves, band-passed and to the side.
+        let mut p = build(&[
+            group,
+            module(K::Wavetable, &[(slot::UNISON, 3.0), (slot::DETUNE, 0.15), (slot::PHASE_RANDOM, 180.0)], 0),
+            filter(0, 2500.0, 0.7, false),
+            out(1.0, 1.5, 0.9, 2.0),
+            group,
+            module(K::Analog, &[(slot::SEMI, 12.0), (slot::LEVEL, 0.4)], 1),
+            filter(1, 1500.0, 1.0, false),
+            module(K::Output, &[(slot::ATTACK, 1.5), (slot::SUSTAIN, 1.0), (slot::RELEASE, 2.0), (slot::PAN, 0.4)], 0),
+        ]);
+        p.modules[1].table = 2;
+        let mut scan = modulator(ModulatorKind::Timeline, &[]);
+        scan.shape = Shape::from_points(&[(0.0, 0.0, 0.0), (0.3, 0.8, 0.5), (0.6, 0.3, -0.3), (1.0, 0.0, 0.3)]);
+        scan.sync_beats = 16.0;
+        scan.loop_mode = 1;
+        scan.targets[0] = target(1, slot::A, 0.6);
+        let mut width = modulator(ModulatorKind::Lfo, &[(mslot::RATE, 0.25)]);
+        width.shape = tri;
+        width.bipolar = true;
+        width.targets[0] = target(5, slot::B, 0.3);
+        let mut drift = modulator(ModulatorKind::Random, &[(mslot::RATE, 0.4), (mslot::SMOOTH, 1.0), (mslot::CHAOS, 0.5)]);
+        drift.bipolar = true;
+        drift.targets[0] = target(2, slot::CUTOFF, 0.08);
+        drift.targets[1] = target(6, slot::CUTOFF, -0.1);
+        p.modulators[..3].copy_from_slice(&[scan, width, drift]);
+        p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams::default()));
+        p.lanes[0].fx[1] = reverb(0.9, 0.35);
+        p.gain = 0.42;
+        list.push(("Layers · Pad en evolución", p));
+
+        // A tuned tom: the pitch falls an octave in a moment and the FM index with it.
+        let mut p = build(&[group, sine(&[]), out(0.0005, 0.35, 0.0, 0.3), group, sine(&[(slot::HARMONIC, 1.5)])]);
+        let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[c].amount = 0.03;
+        let mut drop = envelope(0.0005, 0.12, 0.0, 0.1);
+        // About an octave of the 96 semitones the setting spans, on carrier and modulator.
+        drop.targets[0] = target(1, slot::SEMI, 0.12);
+        drop.targets[1] = target(4, slot::SEMI, 0.12);
+        drop.targets[2] = amount(c, 0.1);
+        let mut velocity = modulator(ModulatorKind::Velocity, &[]);
+        velocity.targets[0] = amount(c, 0.05);
+        p.modulators[..2].copy_from_slice(&[drop, velocity]);
+        p.lanes[0].fx[0] = reverb(0.4, 0.12);
+        p.gain = 0.38;
+        list.push(("Perc · Tom FM", p));
+
+        // Two pulses a little under a fifth apart, one ringing the other, through a band pass.
+        let mut p = build(&[group, module(K::Analog, &[], 1), filter(1, 2600.0, 1.5, false), out(0.0005, 0.25, 0.0, 0.2), group, module(K::Analog, &[(slot::HARMONIC, 1.48)], 1)]);
+        let c = p.connect_audio(5, 1, AudioParam::Level).unwrap();
+        p.audio[c].amount = 0.8;
+        p.lanes[0].fx[0] = reverb(0.35, 0.1);
+        p.gain = 0.95;
+        list.push(("Perc · Cencerro metálico", p));
+
+        // Noise through two very narrow band passes that follow the keyboard and
+        // wander on their own: whistles drifting left and right.
+        let whistle = |cutoff: f32| module(K::NonlinearFilter, &[(slot::CUTOFF, cutoff), (slot::Q, 18.0), (slot::NL_DRIVE, 0.0)], 1);
+        let side = |pan: f32| module(K::Output, &[(slot::ATTACK, 0.3), (slot::SUSTAIN, 1.0), (slot::RELEASE, 1.5), (slot::PAN, pan)], 0);
+        let mut p = build(&[group, module(K::Noise, &[], 0), whistle(50.0), side(-0.6), group, module(K::Noise, &[], 0), whistle(75.0), side(0.6)]);
+        let mut note = modulator(ModulatorKind::Note, &[]);
+        note.targets[0] = target(2, slot::CUTOFF, 1.0);
+        note.targets[1] = target(6, slot::CUTOFF, 1.0);
+        let wander = |rate: f32| {
+            let mut m = modulator(ModulatorKind::Random, &[(mslot::RATE, rate), (mslot::SMOOTH, 1.0), (mslot::JITTER, 0.7), (mslot::CHAOS, 0.6)]);
+            m.bipolar = true;
+            m
+        };
+        let mut left = wander(0.5);
+        left.targets[0] = target(2, slot::CUTOFF, 0.12);
+        let mut right = wander(0.35);
+        right.targets[0] = target(6, slot::CUTOFF, 0.12);
+        p.modulators[..3].copy_from_slice(&[note, left, right]);
+        p.lanes[0].fx[0] = delay(0.75, 0.3);
+        p.lanes[0].fx[1] = reverb(0.85, 0.35);
+        p.gain = 0.1;
+        list.push(("Noise · Silbidos al azar", p));
+
+        // The global unison as a stack of fifths: root, fifth and ninth from every key.
+        let mut p = build(&[group, saw(&[]), filter(0, 2200.0, 1.0, false), out(0.003, 0.4, 0.3, 0.3)]);
+        p.unison = unison(3, UnisonMode::PitchStack, 0.1, 0.6, 0.5, -5.0 / 12.0);
+        let mut env = envelope(0.0005, 0.3, 0.0, 0.2);
+        env.targets[0] = target(2, slot::CUTOFF, 0.2);
+        p.modulators[0] = env;
+        p.lanes[0].fx[0] = delay(0.75, 0.25);
+        p.lanes[0].fx[1] = reverb(0.6, 0.2);
+        p.gain = 0.5;
+        list.push(("Unison · Quintas apiladas", p));
+
+        // Additive organ: the unison stacks the first six harmonics of one sine,
+        // with a chorus for the spin.
+        let mut p = build(&[group, sine(&[]), out(0.005, 1.0, 1.0, 0.08)]);
+        p.unison = unison(6, UnisonMode::FrequencyStack, 0.02, 0.3, 0.4, 0.0);
+        p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams { rate: 4.8, depth: 0.25, delay_ms: 4.0, mix: 0.4 }));
+        p.lanes[0].fx[1] = reverb(0.5, 0.15);
+        p.gain = 0.25;
+        list.push(("Unison · Órgano aditivo", p));
+
+        // A drawn level that bounces like a dropped ball: one note, several hits,
+        // each lower and closer than the last.
+        let mut bounce = module(K::CurveOutput, &[(slot::CURVE_LENGTH, 1.2)], 0);
+        bounce.curve = Shape::from_points(&[(0.0, 0.0, 0.0), (0.01, 1.0, 0.0), (0.25, 0.0, 0.7), (0.26, 0.6, 0.0), (0.44, 0.0, 0.7), (0.45, 0.35, 0.0), (0.58, 0.0, 0.7), (1.0, 0.0, 0.0)]);
+        let mut p = build(&[group, module(K::Analog, &[], 2), sine(&[(slot::HARMONIC, 2.0), (slot::LEVEL, 0.3)]), filter(0, 3500.0, 0.7, false), bounce]);
+        p.lanes[0].fx[0] = reverb(0.6, 0.2);
+        p.gain = 0.56;
+        list.push(("Curve · Pelota que rebota", p));
+
+        // Feedback: the distortion at the bottom feeds back into an Aux at the top
+        // (a sample late), round a resonant saturating filter. Macro 1 adds more.
+        let mut warm = module(K::NonlinearFilter, &[(slot::CUTOFF, 1500.0), (slot::Q, 3.0), (slot::NL_DRIVE, 6.0)], 0);
+        warm.choice[1] = 1;
+        let mut p = build(&[group, saw(&[]), module(K::Aux, &[], 0), warm, module(K::Distortion, &[(slot::DRIVE, 6.0)], 0), out(0.005, 0.6, 0.8, 0.25)]);
+        let c = p.connect_audio(4, 2, AudioParam::Input).unwrap();
+        p.audio[c].amount = 0.35;
+        let mut knob = modulator(ModulatorKind::Macro, &[]);
+        knob.targets[0] = amount(c, 0.2);
+        let mut env = envelope(0.0005, 0.5, 0.2, 0.2);
+        env.targets[0] = target(3, slot::CUTOFF, 0.2);
+        p.modulators[..2].copy_from_slice(&[knob, env]);
+        p.lanes[0].fx[0] = delay(0.5, 0.2);
+        p.gain = 0.35;
+        list.push(("Aux · Realimentación", p));
         list
     }
 

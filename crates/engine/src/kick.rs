@@ -524,6 +524,14 @@ mod tests {
     }
 
     #[test]
+    fn the_808_glide_keeps_gliding_after_the_hit() {
+        let (_, p) = KickParams::presets().into_iter().find(|(n, _)| *n == "808 · Glide").unwrap();
+        // Still well above its note a quarter of a second in, and on it once the sweep is over.
+        assert!(pitch_offset(&p, 250.0) > 10.0 && pitch_offset(&p, 250.0) < pitch_offset(&p, 30.0));
+        assert!(pitch_offset(&p, p.pitch_time + 20.0).abs() < 0.01);
+    }
+
+    #[test]
     fn a_click_sample_replaces_the_synthesized_click() {
         let click = Arc::new(Sample::from_channels(vec![0.9; 100], vec![0.9; 100], SR));
         let params = KickParams { click: 1.0, pitch_amount: 0.0, drive: 0.0, attack: 20.0, ..Default::default() };

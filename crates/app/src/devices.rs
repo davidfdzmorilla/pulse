@@ -1086,14 +1086,32 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
         let factory = crate::presets::factory(&kind);
         if !factory.is_empty() {
             ui.label(egui::RichText::new("DE FÁBRICA").color(TEXT_DIM).size(10.0));
-            egui::ScrollArea::vertical().id_salt("factory_presets").max_height(260.0).show(ui, |ui| {
-                for preset in factory {
-                    if ui.button(&preset.name).clicked() {
-                        actions.push(Action::ApplyPreset(preset));
-                        ui.close();
-                    }
+            let groups = crate::presets::grouped(factory);
+            if groups.len() > 1 && groups.iter().map(|g| g.1.len()).sum::<usize>() > 12 {
+                // Many sounds: one submenu a category («Bajos · …»).
+                for (group, presets) in groups {
+                    ui.menu_button(format!("{group}  ({})", presets.len()), |ui| {
+                        ui.set_min_width(180.0);
+                        egui::ScrollArea::vertical().id_salt(("factory_group", &group)).max_height(420.0).show(ui, |ui| {
+                            for (short, preset) in presets {
+                                if ui.button(short).clicked() {
+                                    actions.push(Action::ApplyPreset(preset));
+                                    ui.close();
+                                }
+                            }
+                        });
+                    });
                 }
-            });
+            } else {
+                egui::ScrollArea::vertical().id_salt("factory_presets").max_height(260.0).show(ui, |ui| {
+                    for preset in groups.into_iter().flat_map(|g| g.1) {
+                        if ui.button(&preset.1.name).clicked() {
+                            actions.push(Action::ApplyPreset(preset.1));
+                            ui.close();
+                        }
+                    }
+                });
+            }
             ui.separator();
         }
         ui.label(egui::RichText::new("MIS PRESETS").color(TEXT_DIM).size(10.0));

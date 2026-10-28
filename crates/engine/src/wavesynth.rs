@@ -1793,6 +1793,50 @@ mod polychrome_tests {
         assert!(rms(&l[2400..20_000]) > 0.05, "step 1: lane 0, full level");
         assert!(rms(&l[30_000..44_000]) < 0.01, "step 2: lane 1 turns the level down");
     }
+
+    fn factory(name: &str) -> WaveParams {
+        WaveParams::polychrome_presets().into_iter().find(|(n, _)| *n == name).unwrap_or_else(|| panic!("no preset {name}")).1
+    }
+
+    fn play_at_120(p: WaveParams, note: u8, frames: usize) -> Vec<f32> {
+        let mut synth = WaveSynth::new(p, SR);
+        synth.set_tempo(120.0);
+        synth.note_on(note, 1.0, HELD);
+        render(&mut synth, frames).0
+    }
+
+    #[test]
+    fn the_plucked_string_rings_at_the_played_note_and_dies_away() {
+        let p = factory("Dual Filter · Cuerda pulsada");
+        for (note, hz) in [(57, 220.0), (69, 440.0)] {
+            let l = play_at_120(p, note, 48_000);
+            let near = harmonics(&l[1200..], hz, 1)[0];
+            let off = harmonics(&l[1200..], hz * 1.12, 1)[0];
+            assert!(near > 4.0 * off, "note {note}: {near} at the note, {off} beside it");
+            assert!(rms(&l[0..4800]) > 3.0 * rms(&l[38_400..43_200]), "note {note} decays");
+        }
+    }
+
+    #[test]
+    fn the_noise_riser_climbs_over_eight_beats() {
+        let l = play_at_120(factory("FX · Subida de ruido"), 60, 180_000);
+        let (early, late) = (frequency(&l[14_400..24_000]), frequency(&l[163_200..172_800]));
+        assert!(late > 3.0 * early, "brighter at the end: {early} → {late}");
+    }
+
+    #[test]
+    fn the_crossed_filters_move_from_low_to_high_pass() {
+        let l = play_at_120(factory("Dual Filter · LP/HP cruzado"), 60, 110_000);
+        let (low, high) = (frequency(&l[19_200..28_800]), frequency(&l[91_200..100_800]));
+        assert!(high > 2.0 * low, "the high-pass side is brighter: {low} → {high}");
+    }
+
+    #[test]
+    fn the_rolling_bass_rests_on_the_beat() {
+        let l = play_at_120(factory("Seq · Bajo rodante"), 45, 24_000);
+        let step = |k: usize| &l[k * 6000 + 600..k * 6000 + 5400];
+        assert!(rms(step(0)) < 1e-3 && rms(step(2)) > 0.02 && rms(step(3)) > 0.02, "{} {} {}", rms(step(0)), rms(step(2)), rms(step(3)));
+    }
 }
 
 #[cfg(test)]
@@ -1818,6 +1862,79 @@ mod preset_tests {
             assert!(l.iter().chain(&r).all(|s| s.is_finite()), "{name}");
             assert!(rms > 0.01 && peak < 2.0, "{name}: rms {rms}, peak {peak}");
         }
+    }
+
+    fn factory(name: &str) -> WaveParams {
+        WaveParams::presets().into_iter().find(|(n, _)| *n == name).map(|(_, p)| p).unwrap_or_else(|| panic!("no preset {name}"))
+    }
+
+    /// Left channel of `p` holding `note` for `frames` samples, at 120 BPM.
+    fn hold(p: WaveParams, note: u8, frames: usize) -> Vec<f32> {
+        let tables = vec![Arc::new(builtin(p.osc[0].table as usize)), Arc::new(builtin(p.osc[1].table as usize))];
+        let mut synth = WaveSynth::new(p, 48_000.0);
+        synth.note_on(note, 1.0, HELD);
+        let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+        for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+            synth.render(&[], &tables, a, b);
+        }
+        l
+    }
+
+    fn rms(x: &[f32]) -> f32 {
+        (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    /// Fundamental by autocorrelation, between 50 Hz and 2 kHz.
+    fn pitch(x: &[f32]) -> f32 {
+        let lag = (24..960).max_by(|&a, &b| {
+            let corr = |lag: usize| x.iter().zip(&x[lag..]).map(|(a, b)| a * b).sum::<f32>();
+            corr(a).total_cmp(&corr(b))
+        });
+        48_000.0 / lag.unwrap() as f32
+    }
+
+    /// Brightness: the level of the signal's slope against its own level.
+    fn brightness(x: &[f32]) -> f32 {
+        rms(&x.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>()) / rms(x).max(1e-9)
+    }
+
+    #[test]
+    fn the_plucked_string_rings_at_the_played_note() {
+        for note in [48u8, 55, 60] {
+            let l = hold(factory("Pluck · Cuerda pulsada"), note, 12_000);
+            let (found, expected) = (pitch(&l[2_400..8_400]), note_freq(note as f32));
+            assert!((found / expected - 1.0).abs() < 0.03, "{note}: {found} Hz, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn macro_one_sets_the_depth_of_the_triplet_wobble() {
+        // Spread of the brightness over 20 ms windows, across a second.
+        let movement = |macro_one: f32| {
+            let mut p = factory("Bass · Wobble tresillo");
+            p.macros[0] = macro_one;
+            let l = hold(p, 36, 48_000);
+            let levels: Vec<f32> = l[4_800..].chunks(960).map(brightness).collect();
+            let (low, high) = levels.iter().fold((f32::MAX, 0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+            high / low.max(1e-6)
+        };
+        let (still, wobbling) = (movement(0.0), movement(0.85));
+        assert!(wobbling > still * 2.0, "macro at 0: {still}, at 0.85: {wobbling}");
+    }
+
+    #[test]
+    fn the_downlifter_falls_over_two_bars() {
+        let l = hold(factory("FX · Caída de ruido"), 60, 48_000 * 4);
+        let (start, end) = (brightness(&l[4_800..28_800]), brightness(&l[144_000..168_000]));
+        assert!(start > end * 2.0, "brightness {start} at the start, {end} at the end");
+    }
+
+    #[test]
+    fn the_evolving_pad_keeps_changing_its_tone() {
+        let l = hold(factory("Pad · Evolutivo"), 60, 48_000 * 8);
+        let tones: Vec<f32> = l[48_000..].chunks(48_000).map(brightness).collect();
+        let (low, high) = tones.iter().fold((f32::MAX, 0f32), |(lo, hi), &v| (lo.min(v), hi.max(v)));
+        assert!(high > low * 1.2, "brightness per second: {tones:?}");
     }
 }
 

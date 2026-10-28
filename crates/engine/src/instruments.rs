@@ -866,6 +866,29 @@ mod tests {
         assert_eq!(bass.freq, midi_to_freq(40));
     }
 
+    fn acid_preset(name: &str) -> AcidParams {
+        AcidParams::presets().into_iter().find(|(n, _)| *n == name).unwrap().1
+    }
+
+    /// The presets built on accent and slide really play them: «Solo acentos» only
+    /// squelches on hard notes, «Glide largo» is still on its way a tenth of a second in.
+    #[test]
+    fn acid_presets_answer_to_accent_and_glide() {
+        let first_tenth = |velocity: f32| {
+            let mut bass = AcidBass::new(acid_preset("Acid · Solo acentos"), SR);
+            bass.note_on(36, velocity, 4_800);
+            energy(&run(&mut |l, r| bass.render(l, r), 4_800).0)
+        };
+        assert!(first_tenth(1.0) > 2.0 * first_tenth(0.6), "accented notes stand out");
+
+        let mut bass = AcidBass::new(acid_preset("Acid · Glide largo"), SR);
+        bass.note_on(36, 0.7, 24_000);
+        run(&mut |l, r| bass.render(l, r), 2_400);
+        bass.note_on(48, 0.7, 24_000);
+        run(&mut |l, r| bass.render(l, r), 4_800);
+        assert!(bass.freq < midi_to_freq(46), "a long glide is still sliding after 100 ms");
+    }
+
     #[test]
     fn fm_and_acid_render_audible_bounded_audio() {
         let mut fm = FmSynth::new(FmParams::default(), SR);
@@ -876,6 +899,52 @@ mod tests {
         acid.note_on(36, 1.0, 24_000);
         let (l, _) = run(&mut |l, r| acid.render(l, r), 24_000);
         assert!(energy(&l) > 1.0);
+    }
+
+    /// The swelling Super Saw presets open their filter with the slow attack (the
+    /// audition's short notes barely show it): later in a held note the sound is
+    /// brighter, measured as the share of energy in its sample-to-sample changes.
+    #[test]
+    fn supersaw_swell_presets_open_their_filter() {
+        let brightness = |s: &[f32]| s.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>() / energy(s).max(1e-9);
+        for name in ["Pad · Amanecer", "FX · Barrido"] {
+            let (_, preset) = SuperSawParams::presets().into_iter().find(|(n, _)| *n == name).unwrap();
+            let mut synth = SuperSaw::new(preset, SR);
+            synth.note_on(48, 1.0, HELD);
+            let (l, _) = run(&mut |l, r| synth.render(l, r), 48_000 * 2);
+            let (early, late) = (brightness(&l[9_600..14_400]), brightness(&l[86_400..91_200]));
+            assert!(late > early * 4.0, "{name}: the filter should open ({early} → {late})");
+        }
+    }
+
+    /// A chord held long enough for the slow attacks and filter swells to arrive
+    /// still leaves headroom (the audition's notes are too short to show it).
+    #[test]
+    fn synth_and_supersaw_presets_leave_headroom_on_a_held_chord() {
+        let chord = [48, 55, 60, 64];
+        let frames = 48_000 * 4;
+        let peak = |l: &[f32], r: &[f32]| l.iter().chain(r).fold(0.0f32, |m, s| m.max(s.abs()));
+        let mut problems = Vec::new();
+        for (name, preset) in crate::model::SynthParams::presets().into_iter().skip(1) {
+            let mut synth = crate::synth::PolySynth::new(preset, SR);
+            chord.iter().for_each(|&p| synth.note_on(p, 0.75, HELD));
+            let mut l = vec![0.0; frames];
+            synth.render(&mut l);
+            let peak = peak(&l, &[]);
+            if peak > 1.0 {
+                problems.push(format!("Pulse Synth {name}: peak {:.1} dB", 20.0 * peak.log10()));
+            }
+        }
+        for (name, preset) in SuperSawParams::presets().into_iter().skip(1) {
+            let mut synth = SuperSaw::new(preset, SR);
+            chord.iter().for_each(|&p| synth.note_on(p, 0.75, HELD));
+            let (l, r) = run(&mut |l, r| synth.render(l, r), frames);
+            let peak = peak(&l, &r);
+            if peak > 1.0 {
+                problems.push(format!("Super Saw {name}: peak {:.1} dB", 20.0 * peak.log10()));
+            }
+        }
+        assert!(problems.is_empty(), "held chords clip:\n{}", problems.join("\n"));
     }
 
     #[test]

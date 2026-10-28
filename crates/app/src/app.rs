@@ -2920,7 +2920,11 @@ impl eframe::App for PulseApp {
             let dt = ctx.input(|i| i.stable_dt).min(0.1);
             self.meters.update(&state, dt);
         }
-        self.handle_shortcuts(&ctx);
+        // The guide covers the window: keys don't reach what is under it.
+        let reading = self.guide.open;
+        if !reading {
+            self.handle_shortcuts(&ctx);
+        }
         self.handle_dropped_files(&ctx);
         // Sent by Finder or the Dock: projects open, audio files land as samples.
         let mut opened = Vec::new();
@@ -2932,39 +2936,43 @@ impl eframe::App for PulseApp {
         self.sample_drop_zones.clear();
         self.drop_targets = Default::default();
         let live = self.audio.live();
-        self.keyboard.handle(&ctx, live.as_ref());
+        if !reading {
+            self.keyboard.handle(&ctx, live.as_ref());
+        }
         self.update_input_track();
         self.update_recording();
         self.follow_voice(&ctx);
 
-        let bar = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 5));
-        egui::Panel::top("transport").frame(bar).show(ui, |ui| transport::show(self, ui));
-        let status = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 2));
-        egui::Panel::bottom("status").frame(status).show(ui, |ui| transport::status_bar(self, ui));
-        if self.show_browser {
+        if !reading {
+            let bar = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 5));
+            egui::Panel::top("transport").frame(bar).show(ui, |ui| transport::show(self, ui));
+            let status = egui::Frame::new().fill(theme::SURFACE).inner_margin(egui::Margin::symmetric(8, 2));
+            egui::Panel::bottom("status").frame(status).show(ui, |ui| transport::status_bar(self, ui));
+            if self.show_browser {
+                let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(6));
+                egui::Panel::left("browser")
+                    .frame(frame)
+                    .resizable(true)
+                    .default_size(180.0)
+                    .min_size(140.0)
+                    .show(ui, |ui| browser::show(self, ui));
+            }
             let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(6));
-            egui::Panel::left("browser")
+            egui::Panel::bottom("detail")
                 .frame(frame)
                 .resizable(true)
-                .default_size(180.0)
-                .min_size(140.0)
-                .show(ui, |ui| browser::show(self, ui));
+                .default_size(290.0)
+                .min_size(200.0)
+                .show(ui, |ui| detail::show(self, ui));
+            let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(6));
+            egui::CentralPanel::default().frame(frame).show(ui, |ui| {
+                self.drop_targets.view = Some(ui.max_rect());
+                match self.view {
+                    View::Session => session::show(self, ui),
+                    View::Arrangement => arrangement::show(self, ui),
+                }
+            });
         }
-        let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(6));
-        egui::Panel::bottom("detail")
-            .frame(frame)
-            .resizable(true)
-            .default_size(290.0)
-            .min_size(200.0)
-            .show(ui, |ui| detail::show(self, ui));
-        let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(6));
-        egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-            self.drop_targets.view = Some(ui.max_rect());
-            match self.view {
-                View::Session => session::show(self, ui),
-                View::Arrangement => arrangement::show(self, ui),
-            }
-        });
         crate::kick_ui::window(self, &ctx);
         crate::wave_ui::window(self, &ctx);
         crate::poly_ui::window(self, &ctx);

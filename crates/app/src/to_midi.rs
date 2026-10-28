@@ -641,7 +641,7 @@ mod tests {
         let (events, key) = convert(&sample, &audio, 120.0, ToMidi::Chords, &context, &Mutex::new(0.0)).unwrap();
         assert_eq!(key.map(|k| k.name()).as_deref(), Some("Do mayor"));
         let notes = clip_notes(&events, &audio, 120.0, false);
-        let named: Vec<(f64, String)> = crate::harmony::chords(&notes, 16.0, key).iter().filter_map(|(a, _, c)| c.map(|c| (*a, c.name()))).collect();
+        let named: Vec<(f64, String)> = crate::harmony::chords(&notes, 16.0, key, engine::meter::TimeSig::COMMON).iter().filter_map(|(a, _, c)| c.map(|c| (*a, c.name()))).collect();
         let expected = [(0.0, "Lam"), (4.0, "Fa"), (8.0, "Do"), (12.0, "Sol")].map(|(b, n)| (b, n.to_string()));
         assert_eq!(named, expected);
         assert_eq!(notes.len(), 16, "a bass and three notes each");

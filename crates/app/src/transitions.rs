@@ -207,7 +207,9 @@ impl PulseApp {
     /// there) on the Arrangement.
     pub fn add_transition(&mut self, kind: Kind, bars: u32, at: f64) {
         let tempo = self.project.tempo;
-        let mut beats = bars as f64 * 4.0;
+        // Its bars in the song's meter: the ones before `at` for what leads in.
+        let meter = self.project.meter;
+        let mut beats = if kind.leads_in() { at - meter.add_bars(at, -(bars as i64)) } else { meter.add_bars(at, bars as i64) - at };
         let start = if kind.leads_in() {
             // From the song's start at the earliest: shorter, then.
             beats = beats.min(at);

@@ -252,19 +252,22 @@ pub fn plan(tracks: &[Track], scene_names: &[String], template: Template) -> Vec
         .collect()
 }
 
-/// The note a drum track's snare is: its snare or clap if they play on beats
-/// 2 and 4; else the one played most on 2 and 4 more than on 1 and 3 (not a
-/// kick on every beat, which would roll the kick).
-fn snare(track: &Track) -> u8 {
+/// The note a drum track's snare is: its snare or clap if they play on the
+/// backbeat (the bar's even pulses: 2 and 4 in 4/4, the second dotted beat in
+/// 6/8); else the one played most there more than on the other pulses (not a kick
+/// on every beat, which would roll the kick). `sig` is the song's meter.
+fn snare(track: &Track, sig: engine::meter::TimeSig) -> u8 {
     use engine::model::drum_note::{CLAP, KICK, SNARE};
     let (mut backbeat, mut downbeat) = ([0i32; 128], [0i32; 128]);
+    let pulses = sig.pulses();
     for clip in track.clips.iter().flatten() {
         if let Clip::Midi(m) = clip {
             for n in &m.notes {
-                let at = n.start.rem_euclid(2.0);
-                if (at - 1.0).abs() < 0.1 {
+                let at = n.start.rem_euclid(sig.bar());
+                let Some(k) = pulses.iter().position(|p| (at - p.0).abs() < 0.1 || (at - p.0 - sig.bar()).abs() < 0.1) else { continue };
+                if k % 2 == 1 {
                     backbeat[n.pitch as usize & 127] += 1;
-                } else if at < 0.1 || at > 1.9 {
+                } else {
                     downbeat[n.pitch as usize & 127] += 1;
                 }
             }
@@ -281,13 +284,13 @@ fn snare(track: &Track) -> u8 {
         .map_or(SNARE, |(p, _)| p as u8)
 }
 
-/// A bar's snare roll: eighths, then sixteenths, getting louder.
-fn roll(pitch: u8, color: [u8; 3]) -> MidiClip {
-    let mut clip = MidiClip::new("Redoble", 4.0, color);
+/// A bar's snare roll, `bar` beats long: eighths, then sixteenths, getting louder.
+fn roll(pitch: u8, color: [u8; 3], bar: f64) -> MidiClip {
+    let mut clip = MidiClip::new("Redoble", bar, color);
     let mut beat = 0.0;
-    while beat < 4.0 - 1e-9 {
-        let step = if beat < 2.0 { 0.5 } else { 0.25 };
-        clip.notes.push(Note { start: beat, length: step * 0.8, pitch, velocity: (0.45 + 0.13 * beat as f32).min(1.0), chance: 1.0 });
+    while beat < bar - 1e-9 {
+        let step = if beat < bar / 2.0 { 0.5 } else { 0.25 };
+        clip.notes.push(Note { start: beat, length: step * 0.8, pitch, velocity: (0.45 + 0.52 * (beat / bar) as f32).min(1.0), chance: 1.0 });
         beat += step;
     }
     clip
@@ -304,8 +307,11 @@ impl PulseApp {
         }
         let mut start = 0.0;
         self.project.markers.clear();
+        let meter = self.project.meter;
         for (k, section) in sections.iter().enumerate() {
-            let length = section.bars as f64 * 4.0;
+            // Its bars in the song's meter, and the last one's length (for the roll).
+            let length = meter.add_bars(start, section.bars as i64) - start;
+            let last_bar = meter.bar_length_at(meter.add_bars(start, section.bars as i64 - 1));
             self.project.markers.push(crate::project::SongMarker { beat: start, name: section.name.clone() });
             // A cut: the last beat silent, before what comes next.
             let cut = if section.cut && k + 1 < sections.len() { 1.0 } else { 0.0 };
@@ -316,11 +322,11 @@ impl PulseApp {
                 let Some(track) = self.project.tracks.get_mut(t) else { continue };
                 let Some(clip) = source.and_then(|s| track.clips.get(s).cloned().flatten()) else { continue };
                 let rolls = rolling && track.is_drums() && matches!(clip, Clip::Midi(_));
-                let body = if rolling && role(track) == Role::Drums { length - 4.0 } else { length - cut };
+                let body = if rolling && role(track) == Role::Drums { length - last_bar } else { length - cut };
                 track.arrangement.push(ArrangementClip { start, length: body, clip: clip.clone() });
                 if rolls {
-                    let pitch = snare(track);
-                    track.arrangement.push(ArrangementClip { start: start + length - 4.0, length: 4.0 - cut, clip: Clip::Midi(roll(pitch, track.color)) });
+                    let pitch = snare(track, meter.first());
+                    track.arrangement.push(ArrangementClip { start: start + length - last_bar, length: last_bar - cut, clip: Clip::Midi(roll(pitch, track.color, last_bar)) });
                 }
             }
             start += length;
@@ -332,7 +338,8 @@ impl PulseApp {
         self.sync_all();
         self.sync_loop();
         self.back_to_arrangement();
-        self.status = Some(crate::theme::keys(&format!("Canción de {} compases en {} partes en el Arrangement (⌘Z la deshace)", (start / 4.0) as u32, sections.len())));
+        let bars: u32 = sections.iter().map(|s| s.bars).sum();
+        self.status = Some(crate::theme::keys(&format!("Canción de {bars} compases en {} partes en el Arrangement (⌘Z la deshace)", sections.len())));
     }
 }
 
@@ -495,7 +502,7 @@ mod tests {
         sounds[drum_gen::Sound::Kick as usize] = false;
         for (scene, level) in [(0, Level::Basic), (1, Level::Medium), (2, Level::Intense)] {
             let settings = drum_gen::Settings { style: Style::HardTechno, level, bars: 4, sounds, ..Default::default() };
-            let (notes, groove) = drum_gen::generate(&kit, &settings, 16.0, &[], 0);
+            let (notes, groove) = drum_gen::generate(&kit, &settings, 16.0, &[], 0, engine::meter::TimeSig::COMMON);
             drums.clips[scene] = Some(Clip::Midi(MidiClip { notes, groove, ..MidiClip::new("Beat", 16.0, [0; 3]) }));
         }
         let mut kick = Track::new("Bd", [0; 3], InstrumentKind::Kick(KickParams::presets().into_iter().find(|(n, _)| *n == "Hard · Kick").unwrap().1));
@@ -552,6 +559,21 @@ mod tests {
             let lane = &app.project.tracks[t].arrangement;
             assert!(lane.iter().all(|c| c.start >= build_end || c.end() <= last_bar + 1e-9), "{}: {:?}", app.project.tracks[t].name, lane.iter().map(|c| (c.start, c.end())).collect::<Vec<_>>());
         }
+    }
+
+    /// In 3/4 the sections are bars of three and the roll fills the last one.
+    #[test]
+    fn a_waltz_lays_out_in_its_bars() {
+        let mut app = PulseApp::headless(Project::demo());
+        app.project.meter = engine::meter::Meter::new(engine::meter::TimeSig::new(3, 4));
+        let sections = plan(&app.project.tracks, &app.project.scene_names, Template::Electronic);
+        app.lay_out(&sections);
+        let drums = app.project.tracks.iter().position(|t| t.name == "Drums").unwrap();
+        let lane = &app.project.tracks[drums].arrangement;
+        assert_eq!((lane[0].start, lane[0].length), (0.0, 48.0), "16 bars of 3");
+        let roll = lane.iter().find(|c| c.clip.name() == "Redoble").expect("a roll");
+        assert_eq!((roll.start, roll.length), (48.0 + 21.0, 2.0), "the build's last bar, a beat short");
+        assert_eq!(app.project.loop_end, 96.0 * 3.0);
     }
 
     #[test]

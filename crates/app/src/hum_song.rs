@@ -13,14 +13,13 @@ use crate::app::{ClipRef, PulseApp};
 use crate::drum_gen::{self, Level, Style};
 use engine::model::{AudioClip, Clip, InstrumentKind, MidiClip, Note, SynthParams};
 use engine::{Target, MAX_TRACKS};
+use engine::meter::TimeSig;
 use stems::chord::{self, Chord};
 use stems::key::Key;
 use std::sync::{Arc, Mutex};
 
 /// The grid the melody's notes go to (a sixteenth).
 const GRID: f64 = 0.25;
-/// Beats a chord lasts: a bar.
-const CHORD_BEATS: f64 = 4.0;
 
 /// `notes` on the grid, one at a time (a later one cuts the one before),
 /// within `length` beats.
@@ -58,10 +57,13 @@ pub fn key_of(notes: &[Note], project: Option<Key>) -> Option<Key> {
     })
 }
 
-/// The chords for a melody `length` beats long in `key`: one per
-/// [`CHORD_BEATS`], the same one running on joined (start and end beats).
-pub fn harmonize(notes: &[Note], length: f64, key: Key) -> Vec<(f64, f64, Chord)> {
-    let segments = (length / CHORD_BEATS).ceil().max(1.0) as usize;
+/// The chords for a melody `length` beats long in `key`, in bars of `sig`: one a
+/// bar, the same one running on joined (start and end beats).
+pub fn harmonize(notes: &[Note], length: f64, key: Key, sig: TimeSig) -> Vec<(f64, f64, Chord)> {
+    let chord_beats = sig.bar();
+    // The strong pulses of a bar: the first, the third…
+    let strong_at: Vec<f64> = sig.pulses().iter().step_by(2).map(|p| p.0).collect();
+    let segments = (length / chord_beats - 1e-9).ceil().max(1.0) as usize;
     // The chords it chooses from (by degree), and in a minor key a major V too.
     let mut options: Vec<(usize, Chord)> = (0..7).map(|d| (d, chord::on_degree(key, d, false, false))).collect();
     if key.minor {
@@ -70,7 +72,7 @@ pub fn harmonize(notes: &[Note], length: f64, key: Key) -> Vec<(f64, f64, Chord)
     let scale = key.scale();
     // How well a chord fits the melody over a segment.
     let fit = |s: usize, chord: &Chord, degree: usize| -> f64 {
-        let (from, to) = (s as f64 * CHORD_BEATS, (s as f64 + 1.0) * CHORD_BEATS);
+        let (from, to) = (s as f64 * chord_beats, (s as f64 + 1.0) * chord_beats);
         let tones = chord.classes();
         let mut score = 0.0;
         for n in notes {
@@ -78,8 +80,8 @@ pub fn harmonize(notes: &[Note], length: f64, key: Key) -> Vec<(f64, f64, Chord)
             if overlap <= 0.0 {
                 continue;
             }
-            // On a strong beat (the first or third of the bar), it counts more.
-            let strong = n.start >= from - 1e-9 && ((n.start - from) % 2.0).abs() < 1e-9;
+            // On a strong pulse (the first or third of the bar), it counts more.
+            let strong = n.start >= from - 1e-9 && strong_at.iter().any(|&p| (n.start - from - p).abs() < 1e-9);
             let weight = overlap * if strong { 1.5 } else { 1.0 };
             let class = n.pitch % 12;
             score += weight * if tones.contains(&class) { 1.0 } else if scale[class as usize] { -0.25 } else { -0.6 };
@@ -123,7 +125,7 @@ pub fn harmonize(notes: &[Note], length: f64, key: Key) -> Vec<(f64, f64, Chord)
     // The same chord on: one.
     let mut chords: Vec<(f64, f64, Chord)> = Vec::new();
     for (s, &i) in path.iter().enumerate() {
-        let (from, to) = (s as f64 * CHORD_BEATS, ((s + 1) as f64 * CHORD_BEATS).min(length));
+        let (from, to) = (s as f64 * chord_beats, ((s + 1) as f64 * chord_beats).min(length));
         match chords.last_mut() {
             Some(last) if last.2 == options[i].1 => last.1 = to,
             _ => chords.push((from, to, options[i].1)),
@@ -220,7 +222,8 @@ impl PulseApp {
     /// The song: the melody, its chords, a bass and a beat, on new tracks under
     /// `clip`'s, where it is (its scene, or its place on the Arrangement).
     fn build_song(&mut self, clip: ClipRef, notes: &[Note], length: f64, heard: Option<Key>, style: Style, name: &str) {
-        let length = (length / 4.0).ceil().max(1.0) * 4.0;
+        let sig = self.clip_sig(clip);
+        let length = (length / sig.bar() - 1e-9).ceil().max(1.0) * sig.bar();
         let melody = quantize(notes, length);
         if melody.len() < 2 {
             self.status = Some(format!("No se oye una melodía en «{name}»: tararea, canta o silba unas notas, con el metrónomo"));
@@ -237,15 +240,15 @@ impl PulseApp {
         if self.project.key.is_none() {
             self.set_key(Some(key));
         }
-        let chords = harmonize(&melody, length, key);
+        let chords = harmonize(&melody, length, key, sig);
         let (harmony, bass_part) = parts(style);
         let seed = crate::versions::now();
-        let chord_notes = crate::accompany::generate(harmony, &chords, length, seed);
-        let bass = crate::accompany::generate(bass_part, &chords, length, seed ^ 0x9E37);
+        let chord_notes = crate::accompany::generate(harmony, &chords, length, seed, sig);
+        let bass = crate::accompany::generate(bass_part, &chords, length, seed ^ 0x9E37, sig);
         let mut drums = crate::project::Track::new("Batería", crate::project::PALETTE[0], InstrumentKind::DrumMachine(style.sound()));
         let kit = drum_gen::Kit::from_rows(&drums.drum_rows());
-        let settings = drum_gen::Settings { style, level: Level::Medium, bars: (length / 4.0) as u32, sounds: style.sounds(), ..Default::default() };
-        let (beat, groove) = drum_gen::generate(&kit, &settings, length, &[], seed);
+        let settings = drum_gen::Settings { style, level: Level::Medium, bars: (length / sig.bar()).round() as u32, sounds: style.sounds(), ..Default::default() };
+        let (beat, groove) = drum_gen::generate(&kit, &settings, length, &[], seed, sig);
         let colour = self.clip(clip).map_or([128; 3], |c| c.color());
         let mut lead = crate::project::Track::new("Melodía", colour, InstrumentKind::Synth(SynthParams::default()));
         let mut keys = crate::project::Track::new("Acordes", crate::project::PALETTE[4], harmony.instrument());
@@ -296,6 +299,16 @@ mod tests {
         Note { start, length, pitch, velocity: 0.8, chance: 1.0 }
     }
 
+    /// In 3/4 a chord lasts a bar of three.
+    #[test]
+    fn a_waltz_gets_a_chord_a_bar() {
+        let c = Key { tonic: 0, minor: false };
+        let melody = [note(0.0, 3.0, 60), note(3.0, 3.0, 65), note(6.0, 3.0, 67), note(9.0, 3.0, 60)];
+        let chords = harmonize(&melody, 12.0, c, TimeSig::new(3, 4));
+        assert!(chords.iter().all(|&(a, b, _)| (a / 3.0).fract().abs() < 1e-9 && (b / 3.0).fract().abs() < 1e-9), "{chords:?}");
+        assert!(chords.len() >= 2);
+    }
+
     /// A tune: each bar's notes (a quarter each).
     fn tune(bars: &[[u8; 4]]) -> Vec<Note> {
         bars.iter().enumerate().flat_map(|(b, ns)| ns.iter().enumerate().map(move |(k, &p)| note(b as f64 * 4.0 + k as f64, 1.0, p))).collect()
@@ -310,7 +323,7 @@ mod tests {
         let c = Key { tonic: 0, minor: false };
         // C E G E | F A C A | G B D B | C G E C.
         let melody = tune(&[[60, 64, 67, 64], [65, 69, 72, 69], [67, 71, 74, 71], [72, 67, 64, 60]]);
-        let chords = harmonize(&melody, 16.0, c);
+        let chords = harmonize(&melody, 16.0, c, TimeSig::COMMON);
         assert_eq!(names(&chords), ["Do", "Fa", "Sol", "Do"]);
         assert_eq!(chords.iter().map(|c| (c.0, c.1)).collect::<Vec<_>>(), [(0.0, 4.0), (4.0, 8.0), (8.0, 12.0), (12.0, 16.0)]);
     }
@@ -321,7 +334,7 @@ mod tests {
     fn a_minor_tune_has_its_major_five() {
         let a = Key { tonic: 9, minor: true };
         let melody = tune(&[[69, 72, 76, 72], [74, 77, 81, 77], [68, 71, 76, 71], [69, 64, 60, 57]]);
-        assert_eq!(names(&harmonize(&melody, 16.0, a)), ["Lam", "Rem", "Mi", "Lam"]);
+        assert_eq!(names(&harmonize(&melody, 16.0, a, TimeSig::COMMON)), ["Lam", "Rem", "Mi", "Lam"]);
     }
 
     /// Where the tune says little (a held note that fits several, a bar of
@@ -331,7 +344,7 @@ mod tests {
         let c = Key { tonic: 0, minor: false };
         // C held a bar, G held a bar (G fits C, Em and G), silence, C.
         let melody = vec![note(0.0, 4.0, 60), note(4.0, 4.0, 67), note(12.0, 4.0, 60)];
-        let chords = harmonize(&melody, 16.0, c);
+        let chords = harmonize(&melody, 16.0, c, TimeSig::COMMON);
         println!("{:?}", names(&chords));
         assert_eq!(names(&chords), ["Do", "Sol", "Do"]);
         assert!(chords.iter().all(|c| !c.2.name().contains('°')), "no diminished chord");

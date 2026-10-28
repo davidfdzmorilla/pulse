@@ -92,7 +92,15 @@ Todo sigue el compás:
 
 En el editor MIDI, la regla y el loop cuentan los compases donde está el clip; los clips de Session, los del compás del principio.
 
-> Nota: los generadores (ritmos, acompañamiento, arreglo automático y de tarareo a canción) todavía escriben en 4/4.
+Los generadores escriben también en el compás:
+
+- **Generar ritmo** hace sus compases del compás del clip. El primer pulso lleva el bombo y el segundo, la caja: el 2 en 3/4, el segundo pulso en 6/8. Los charles van en corcheas y el redoble, en el último pulso.
+- El **acompañamiento** toca los bajos por pulsos (negras con puntillo en 6/8, grupos de 2+2+3 en 7/8) y acentúa el primero de cada compás.
+- **De tarareo a canción** pone un acorde por compás.
+- El **arreglo automático** cuenta sus secciones en compases del proyecto, y el redoble dura el último compás.
+- Las **transiciones** miden sus compases.
+
+> Nota: la IA de batería solo sabe tocar en 4/4. En otros compases, **Generar ritmo** usa el ritmo escrito y lo avisa.
 
 +++ Cómo cuenta
 - Los tiempos son negras: un compás de 3/4 dura 3, uno de 6/8 también 3 (seis corcheas) y uno de 7/8, 3,5.

@@ -61,6 +61,38 @@ impl TimeSig {
         (self.bar() / self.count()).round().max(1.0) as u32
     }
 
+    /// The bar's pulses, as felt: (start, length) in beats. Quarters in 4/4 and 3/4,
+    /// dotted quarters in 6/8, and in odd eighths groups of two with one of three
+    /// (5/8 is 3+2, 7/8 is 2+2+3).
+    pub fn pulses(self) -> Vec<(f64, f64)> {
+        let note = 4.0 / self.unit.max(1) as f64;
+        let groups: Vec<u32> = if self.compound() {
+            vec![3; self.beats as usize / 3]
+        } else if self.unit >= 8 && self.beats > 3 {
+            let n = self.beats as u32;
+            if n == 5 {
+                vec![3, 2]
+            } else if n % 2 == 0 {
+                vec![2; n as usize / 2]
+            } else {
+                let mut g = vec![2; (n as usize - 3) / 2];
+                g.push(3);
+                g
+            }
+        } else {
+            vec![1; self.beats.max(1) as usize]
+        };
+        let mut at = 0.0;
+        groups
+            .into_iter()
+            .map(|g| {
+                let pulse = (at, g as f64 * note);
+                at += g as f64 * note;
+                pulse
+            })
+            .collect()
+    }
+
     pub fn label(self) -> String {
         format!("{}/{}", self.beats, self.unit)
     }
@@ -330,6 +362,20 @@ mod tests {
         assert_eq!(sig(5, 5).unit, 4, "units are powers of two");
         assert_eq!(TimeSig::parse(" 6 / 8"), Some(sig(6, 8)));
         assert_eq!(TimeSig::parse("x/8"), None);
+    }
+
+    #[test]
+    fn bars_are_felt_in_pulses() {
+        assert_eq!(sig(4, 4).pulses(), [(0.0, 1.0), (1.0, 1.0), (2.0, 1.0), (3.0, 1.0)]);
+        assert_eq!(sig(3, 4).pulses().len(), 3);
+        assert_eq!(sig(6, 8).pulses(), [(0.0, 1.5), (1.5, 1.5)]);
+        assert_eq!(sig(7, 8).pulses(), [(0.0, 1.0), (1.0, 1.0), (2.0, 1.5)]);
+        assert_eq!(sig(5, 8).pulses(), [(0.0, 1.5), (1.5, 1.0)]);
+        assert_eq!(sig(12, 8).pulses().len(), 4);
+        for s in TimeSig::PRESETS {
+            let total: f64 = s.pulses().iter().map(|p| p.1).sum();
+            assert!((total - s.bar()).abs() < 1e-9, "{}", s.label());
+        }
     }
 
     #[test]

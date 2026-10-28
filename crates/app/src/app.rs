@@ -1046,6 +1046,16 @@ impl PulseApp {
     }
 
     /// Sets a parameter by hand. Moving an automated parameter overrides its automation.
+    /// The time signature a clip plays in: on the Arrangement, where it starts;
+    /// in the Session (where clips loop on their own), the song's first.
+    pub fn clip_sig(&self, clip: ClipRef) -> engine::meter::TimeSig {
+        let meter = &self.project.meter;
+        match clip {
+            ClipRef::Arrangement { track, index } => self.project.tracks.get(track).and_then(|t| t.arrangement.get(index)).map_or(meter.first(), |p| meter.sig_at(p.start)),
+            ClipRef::Session { .. } => meter.first(),
+        }
+    }
+
     /// Puts the song in `meter` (its time signatures and changes).
     pub fn set_meter(&mut self, meter: engine::meter::Meter) {
         self.project.meter = meter;

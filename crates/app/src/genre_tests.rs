@@ -50,7 +50,7 @@ fn kicks() -> Vec<(String, InstrumentKind, MidiClip)> {
     let kit = drum_gen::Kit::from_rows(&DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
     for style in [Style::Hardgroove, Style::HardTechno] {
         let settings = drum_gen::Settings { style, level: Level::Intense, bars: 8, fills: false, sounds: style.sounds(), ..Default::default() };
-        let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0);
+        let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0, engine::meter::TimeSig::COMMON);
         kicks.push((format!("Drum Machine {style:?}"), InstrumentKind::DrumMachine(style.sound()), MidiClip { notes, groove, ..MidiClip::new("Beat", 32.0, [0; 3]) }));
     }
     kicks
@@ -120,7 +120,7 @@ fn lufs(left: &[f32], right: &[f32]) -> f64 {
 fn a_rumble_is_loud_enough_breathes_and_follows_its_kick() {
     let kit = drum_gen::Kit::from_rows(&DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
     let settings = drum_gen::Settings { style: Style::HardTechno, level: Level::Medium, bars: 8, sounds: Style::HardTechno.sounds(), ..Default::default() };
-    let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0);
+    let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0, engine::meter::TimeSig::COMMON);
     let cases = [
         ("Kick Designer «Hard · Kick»", kick_designer("Hard · Kick"), four_on_the_floor(8, 36)),
         ("Kick Designer «Techno · Rumble»", kick_designer("Techno · Rumble"), four_on_the_floor(8, 36)),

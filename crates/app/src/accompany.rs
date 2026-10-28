@@ -3,6 +3,7 @@
 //! track under it. «Otra variación» writes another take of the same part.
 
 use crate::app::{ClipRef, PulseApp};
+use engine::meter::TimeSig;
 use engine::model::{AcidParams, Clip, FmParams, InstrumentKind, MidiClip, Note, SuperSawParams, SynthParams};
 use engine::{Target, MAX_TRACKS};
 use stems::chord::{self, Chord};
@@ -111,9 +112,28 @@ fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
     Note { start, length, pitch, velocity, chance: 1.0 }
 }
 
+/// The pulses (start, length, first of its bar) from `from` to `to`, in bars of
+/// `sig` from the clip's start.
+fn pulses(sig: TimeSig, from: f64, to: f64) -> Vec<(f64, f64, bool)> {
+    let bar = sig.bar();
+    let mut out = Vec::new();
+    let mut start = (from / bar - 1e-9).floor().max(0.0) * bar;
+    while start < to - 1e-9 {
+        for (i, &(at, length)) in sig.pulses().iter().enumerate() {
+            let beat = start + at;
+            if beat >= from - 1e-9 && beat < to - 1e-9 {
+                out.push((beat, length, i == 0));
+            }
+        }
+        start += bar;
+    }
+    out
+}
+
 /// The notes of `part` over `chords` (start and end beats, and the chord), for
-/// a clip `length` beats long; `seed` picks among the variations.
-pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64) -> Vec<Note> {
+/// a clip `length` beats long in bars of `sig`; `seed` picks among the variations.
+pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64, sig: TimeSig) -> Vec<Note> {
+    let stab_steps = crate::drum_gen::steps_from_four(sig);
     let mut dice = Dice::new(seed);
     let mut notes = Vec::new();
     let mut previous: Vec<u8> = Vec::new();
@@ -140,9 +160,8 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
         };
         match part {
             Part::BassRoot => {
-                let mut beat = from;
-                while beat < to - 1e-9 {
-                    let last = beat + 1.0 >= to - 1e-9;
+                for (beat, pulse, downbeat) in pulses(sig, from, to) {
+                    let last = beat + pulse >= to - 1e-9;
                     let pitch = match (last, next) {
                         // Into the next chord: a semitone or a fifth away, now and then.
                         (true, Some(n)) if dice.chance(0.5) => {
@@ -153,8 +172,7 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
                         _ if dice.chance(0.15) => root + 12,
                         _ => root,
                     };
-                    notes.push(note(beat, (to - beat).min(0.9), pitch, if (beat - from) % 4.0 == 0.0 { 0.9 } else { 0.75 }));
-                    beat += 1.0;
+                    notes.push(note(beat, (to - beat).min(pulse * 0.9), pitch, if downbeat { 0.9 } else { 0.75 }));
                 }
             }
             Part::BassOctaves => {
@@ -168,20 +186,24 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
                 }
             }
             Part::BassOffbeat => {
-                let mut beat = from.floor() + 0.5;
-                while beat < to - 1e-9 {
-                    if beat >= from {
-                        let pitch = if dice.chance(0.1) { root + 12 } else { root };
-                        notes.push(note(beat, (to - beat).min(0.4), pitch, 0.85));
+                // Halfway through each pulse, on an eighth.
+                let bar = sig.bar();
+                let mut start = (from / bar - 1e-9).floor().max(0.0) * bar;
+                while start < to - 1e-9 {
+                    for &(at, length) in &sig.pulses() {
+                        let beat = start + at + ((length / 2.0) / 0.5).round() * 0.5;
+                        if beat >= from - 1e-9 && beat < to - 1e-9 {
+                            let pitch = if dice.chance(0.1) { root + 12 } else { root };
+                            notes.push(note(beat, (to - beat).min(0.4), pitch, 0.85));
+                        }
                     }
-                    beat += 1.0;
+                    start += bar;
                 }
             }
             Part::BassWalking => {
-                let mut beat = from;
                 let mut k = 0;
-                while beat < to - 1e-9 {
-                    let last = beat + 1.0 >= to - 1e-9;
+                for (i, (beat, pulse, _)) in pulses(sig, from, to).into_iter().enumerate() {
+                    let last = beat + pulse >= to - 1e-9;
                     let pitch = match next {
                         // A semitone below or above the next root.
                         Some(n) if last && beat > from => {
@@ -194,8 +216,7 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
                             p
                         }
                     };
-                    notes.push(note(beat, (to - beat).min(0.95), pitch, if (beat - from) % 2.0 == 0.0 { 0.85 } else { 0.7 }));
-                    beat += 1.0;
+                    notes.push(note(beat, (to - beat).min(pulse * 0.95), pitch, if i % 2 == 0 { 0.85 } else { 0.7 }));
                 }
             }
             Part::ArpUp | Part::ArpUpDown => {
@@ -208,10 +229,11 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
                     let down: Vec<u8> = steps[1..steps.len() - 1].iter().rev().copied().collect();
                     steps.extend(down);
                 }
+                let starts: Vec<f64> = pulses(sig, from, to).iter().map(|p| p.0).collect();
                 let mut beat = from;
                 let mut k = 0;
                 while beat < to - 1e-9 {
-                    let accent = ((beat / 1.0) - (beat / 1.0).round()).abs() < 1e-9;
+                    let accent = starts.iter().any(|s| (s - beat).abs() < 1e-9);
                     notes.push(note(beat, (to - beat).min(arp_step * 0.9), steps[k % steps.len()], if accent { 0.85 } else { 0.65 }));
                     k += 1;
                     beat += arp_step;
@@ -229,10 +251,13 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
             Part::Stabs => {
                 let voiced = chord::voice(&chord, &previous);
                 previous = voiced[1..].to_vec();
-                let bar_start = (from / 4.0).floor() * 4.0;
-                let mut bar = bar_start;
+                // The rhythm is written in a 4/4 bar: in the song's meter, where its hits fall.
+                let line: String = (0..16).map(|i| if stabs.contains(&(i as f64)) { 'x' } else { '.' }).collect();
+                let steps: Vec<f64> = crate::drum_gen::in_meter(&line, &stab_steps, sig, None).char_indices().filter(|c| c.1 == 'x').map(|c| c.0 as f64).collect();
+                let bar_length = sig.bar();
+                let mut bar = (from / bar_length - 1e-9).floor().max(0.0) * bar_length;
                 while bar < to - 1e-9 {
-                    for &sixteenth in stabs {
+                    for &sixteenth in &steps {
                         let beat = bar + sixteenth * 0.25;
                         if beat >= from - 1e-9 && beat < to - 1e-9 {
                             for &p in &voiced[1..] {
@@ -240,7 +265,7 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
                             }
                         }
                     }
-                    bar += 4.0;
+                    bar += bar_length;
                 }
             }
         }
@@ -265,9 +290,10 @@ impl PulseApp {
     /// audio one's heard.
     fn clip_chords(&mut self, clip: ClipRef) -> (Vec<(f64, f64, Chord)>, f64) {
         let key = self.project.key;
+        let sig = self.clip_sig(clip);
         match self.clip(clip).cloned() {
             Some(Clip::Midi(m)) => {
-                let chords = crate::harmony::chords(&m.notes, m.length, key).into_iter().filter_map(|(a, b, c)| c.map(|c| (a, b, c))).collect();
+                let chords = crate::harmony::chords(&m.notes, m.length, key, sig).into_iter().filter_map(|(a, b, c)| c.map(|c| (a, b, c))).collect();
                 (chords, m.length)
             }
             Some(Clip::Audio(a)) => {
@@ -290,7 +316,7 @@ impl PulseApp {
             return;
         }
         let seed = crate::versions::now() ^ (part as u64) << 32;
-        let notes = generate(part, &chords, length, seed);
+        let notes = generate(part, &chords, length, seed, self.clip_sig(clip));
         let source = clip.track();
         let color = self.clip(clip).map_or([128; 3], |c| c.color());
         let name = format!("{} · {}", self.clip(clip).map_or("Clip", |c| c.name()), part.short());
@@ -332,7 +358,7 @@ impl PulseApp {
             Some(Clip::Midi(m)) => m.length,
             _ => return,
         };
-        let notes = generate(generated.part, &generated.chords, length, generated.seed);
+        let notes = generate(generated.part, &generated.chords, length, generated.seed, self.clip_sig(generated.clip));
         let clip = generated.clip;
         let target = match clip {
             ClipRef::Session { track, slot } => self.project.tracks[track].clips[slot].as_mut(),
@@ -353,6 +379,28 @@ mod tests {
     use super::*;
     use stems::chord::Quality;
 
+    /// In 6/8 the bass walks the dotted beats and the stabs keep inside the bars;
+    /// in 3/4 the root comes on each beat, the first of each bar accented.
+    #[test]
+    fn parts_follow_the_song_s_meter() {
+        let mut w = [0.0; 12];
+        for class in [9, 0, 4] {
+            w[class] = 1.0;
+        }
+        let am = Chord::detect(&w, Some(9), None).unwrap();
+        let chords = [(0.0, 6.0, am)];
+        let six = TimeSig::new(6, 8);
+        let starts: Vec<f64> = generate(Part::BassWalking, &chords, 6.0, 1, six).iter().map(|n| n.start).collect();
+        assert_eq!(starts, [0.0, 1.5, 3.0, 4.5]);
+        let waltz = TimeSig::new(3, 4);
+        let root = generate(Part::BassRoot, &chords, 6.0, 1, waltz);
+        assert_eq!(root.iter().map(|n| n.start).collect::<Vec<_>>(), [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]);
+        assert!(root[0].velocity > root[1].velocity && root[3].velocity > root[4].velocity);
+        let seven = TimeSig::new(7, 8);
+        let stabs = generate(Part::Stabs, &[(0.0, 7.0, am)], 7.0, 3, seven);
+        assert!(!stabs.is_empty() && stabs.iter().all(|n| n.start < 7.0));
+    }
+
     /// Am, F, C, G, a bar each.
     fn progression() -> Vec<(f64, f64, Chord)> {
         [(9, Quality::Minor), (5, Quality::Major), (0, Quality::Major), (7, Quality::Major)]
@@ -367,7 +415,7 @@ mod tests {
         let chords = progression();
         for part in Part::ALL {
             for seed in 0..5 {
-                let notes = generate(part, &chords, 16.0, seed);
+                let notes = generate(part, &chords, 16.0, seed, TimeSig::COMMON);
                 assert!(!notes.is_empty(), "{part:?}");
                 for n in &notes {
                     assert!(n.start >= 0.0 && n.start + n.length <= 16.0 + 1e-9, "{part:?}: {n:?}");
@@ -384,13 +432,13 @@ mod tests {
     #[test]
     fn basses_are_low_and_on_their_rhythm() {
         let chords = progression();
-        let root = generate(Part::BassRoot, &chords, 16.0, 1);
+        let root = generate(Part::BassRoot, &chords, 16.0, 1, TimeSig::COMMON);
         assert_eq!(root.len(), 16, "a note a beat");
         assert!(root.iter().all(|n| (40..=64).contains(&n.pitch)));
         assert_eq!(root[0].pitch, 45, "A1 first");
-        let offbeat = generate(Part::BassOffbeat, &chords, 16.0, 1);
+        let offbeat = generate(Part::BassOffbeat, &chords, 16.0, 1, TimeSig::COMMON);
         assert!(offbeat.iter().all(|n| n.start % 1.0 == 0.5));
-        let octaves = generate(Part::BassOctaves, &chords, 16.0, 1);
+        let octaves = generate(Part::BassOctaves, &chords, 16.0, 1, TimeSig::COMMON);
         assert_eq!(octaves.len(), 32);
         assert_eq!(octaves[1].pitch, octaves[0].pitch + 12);
     }
@@ -398,11 +446,11 @@ mod tests {
     #[test]
     fn pads_lead_smoothly_and_seeds_vary_the_take() {
         let chords = progression();
-        let pad = generate(Part::Pad, &chords, 16.0, 1);
+        let pad = generate(Part::Pad, &chords, 16.0, 1, TimeSig::COMMON);
         assert_eq!(pad.len(), 16, "three voices and a bass, four chords");
         // The same seed, the same take; another seed, another (for the varied parts).
-        assert_eq!(generate(Part::Stabs, &chords, 16.0, 7), generate(Part::Stabs, &chords, 16.0, 7));
-        let takes: std::collections::HashSet<String> = (0..8).map(|s| format!("{:?}", generate(Part::BassRoot, &chords, 16.0, s))).collect();
+        assert_eq!(generate(Part::Stabs, &chords, 16.0, 7, TimeSig::COMMON), generate(Part::Stabs, &chords, 16.0, 7, TimeSig::COMMON));
+        let takes: std::collections::HashSet<String> = (0..8).map(|s| format!("{:?}", generate(Part::BassRoot, &chords, 16.0, s, TimeSig::COMMON))).collect();
         assert!(takes.len() > 1);
     }
 

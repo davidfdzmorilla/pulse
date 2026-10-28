@@ -229,10 +229,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let grooves = app.project.grooves.clone();
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     // On the Arrangement, the signature where the clip starts; in the Session, the song's first.
-    let sig = match clip_ref {
-        ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement.get(index).map_or(app.project.meter.first(), |p| app.project.meter.sig_at(p.start)),
-        ClipRef::Session { .. } => app.project.meter.first(),
-    };
+    let sig = app.clip_sig(clip_ref);
     let state = &mut app.piano_roll;
     state.sig = sig;
     if state.selection_clip != Some(clip_ref) {
@@ -311,7 +308,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         // The chords, with their degree in the project's key.
         if !is_drums {
             let strip_y = rect.top() + RULER_H;
-            for (from, to, chord) in crate::harmony::chords(&clip.notes, clip.length, key) {
+            for (from, to, chord) in crate::harmony::chords(&clip.notes, clip.length, key, state.sig) {
                 let Some(chord) = chord else { continue };
                 let r = Rect::from_min_max(pos2(x_of(from) + 1.0, strip_y + 1.0), pos2(x_of(to) - 1.0, strip_y + CHORD_H - 1.0));
                 painter.rect_filled(r, 2.0, Color32::from_gray(52));
@@ -720,7 +717,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         }
         groove_menu(ui, clip, grooves);
         if !is_drums {
-            let (added, pitches) = crate::harmony::menu(ui, &mut state.chords, clip, &mut state.insert_at, key);
+            let (added, pitches) = crate::harmony::menu(ui, &mut state.chords, clip, &mut state.insert_at, key, state.sig);
             if !added.is_empty() {
                 state.selection = added.into_iter().collect();
                 previews = pitches;
@@ -878,9 +875,14 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
                 let take = state.drum_takes;
                 state.drum_takes += 1;
                 let bass: Vec<f64> = if state.drums.follow_bass { bass.to_vec() } else { Vec::new() };
-                let length = state.drums.bars as f64 * 4.0;
+                let length = state.drums.bars as f64 * state.sig.bar();
                 state.drum_error = None;
-                if state.drums.ai {
+                // The drum model learned in 4/4: in other meters, the written beat.
+                let four = crate::drum_gen::steps_from_four(state.sig).is_none();
+                if state.drums.ai && !four {
+                    state.drum_error = Some(format!("La IA de batería solo toca en 4/4: en {} suena el ritmo escrito", state.sig.label()));
+                }
+                if state.drums.ai && four {
                     // The model takes a moment: on its own thread, so Pulse goes on.
                     let result = std::sync::Arc::new(std::sync::Mutex::new(None));
                     let (shared, kit, settings) = (result.clone(), *kit, state.drums.clone());
@@ -893,7 +895,7 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
                     state.drum_job = Some(DrumJob { clip: clip_ref, settings: state.drums.clone(), result });
                 } else {
                     let settings = state.drums.clone();
-                    let beat = Ok(crate::drum_gen::generate(kit, &settings, length, &bass, take));
+                    let beat = Ok(crate::drum_gen::generate(kit, &settings, length, &bass, take, state.sig));
                     if let Some(sound) = take_beat(state, clip, &settings, beat).filter(|_| machine) {
                         model = Some(sound);
                     }

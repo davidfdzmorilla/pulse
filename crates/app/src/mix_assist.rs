@@ -2685,7 +2685,7 @@ mod tests {
         project.tempo = 150.0;
         let kit = drum_gen::Kit::from_rows(&engine::model::DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
         let settings = drum_gen::Settings { style: Style::HardTechno, level: drum_gen::Level::Medium, bars: 8, sounds: Style::HardTechno.sounds(), ..Default::default() };
-        let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0);
+        let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0, engine::meter::TimeSig::COMMON);
         let mut drums = Track::new("Drums", [0; 3], InstrumentKind::DrumMachine(Style::HardTechno.sound()));
         drums.arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(MidiClip { notes, groove, ..MidiClip::new("Beat", 32.0, [0; 3]) }) });
         let mut bass = Track::new("Acid", [0; 3], InstrumentKind::Acid(Default::default()));

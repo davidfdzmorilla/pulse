@@ -4,6 +4,7 @@
 //! kick following the bass. Each take is different; the same seed, the same take.
 
 use crate::project::Track;
+use engine::meter::TimeSig;
 use engine::model::Note;
 pub use stems::drums::Voice as Sound;
 
@@ -662,36 +663,97 @@ fn velocity(c: char) -> Option<f32> {
     }
 }
 
-/// A beat `length` beats long for `kit`, and the swing it wants. `take` picks
-/// among the style's grooves (each a different take); `bass` are the beats (in
-/// the clip) where the bass starts its notes, for `follow_bass`.
-pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take: u64) -> (Vec<Note>, Option<engine::model::Groove>) {
+/// Where each sixteenth of a bar of `sig` takes its hit from in a bar written in
+/// 4/4: the same place in a pulse with the same role (the first pulse is the
+/// downbeat, even ones the backbeat, the others the third beat); in a dotted
+/// pulse its eighths after the first are the off-beat. None in 4/4 (or 2/2).
+pub(crate) fn steps_from_four(sig: TimeSig) -> Option<Vec<usize>> {
+    if (sig.bar() - 4.0).abs() < 1e-9 && !sig.compound() {
+        return None;
+    }
+    let pulses = sig.pulses();
+    let mut map = Vec::new();
+    for (b, &(_, length)) in pulses.iter().enumerate() {
+        let role = match b {
+            0 => 0,
+            1 => 1,
+            _ if b % 2 == 1 => 3,
+            _ => 2,
+        };
+        let steps = (length * 4.0).round() as usize;
+        for o in 0..steps {
+            let within = if steps <= 4 { o.min(3) } else { (if o / 2 == 0 { 0 } else { 2 }) + o % 2 };
+            map.push(role * 4 + within);
+        }
+    }
+    Some(map)
+}
+
+/// A written 4/4 line in a bar of the song's meter (see [`steps_from_four`]);
+/// `last` keeps only (true) or leaves out (false) the bar's last pulse, for fills,
+/// which take it from the 4/4 bar's last beat.
+pub(crate) fn in_meter(line: &str, map: &Option<Vec<usize>>, sig: TimeSig, last: Option<bool>) -> String {
+    let chars: Vec<char> = line.chars().collect();
+    let Some(map) = map else {
+        return match last {
+            Some(true) => line.chars().enumerate().map(|(i, c)| if i >= 12 { c } else { '.' }).collect(),
+            Some(false) => line.chars().enumerate().map(|(i, c)| if i < 12 { c } else { '.' }).collect(),
+            None => line.to_string(),
+        };
+    };
+    let final_from = map.len() - (sig.pulses().last().map_or(1.0, |p| p.1) * 4.0).round() as usize;
+    map.iter()
+        .enumerate()
+        .map(|(t, &from)| {
+            let in_last = t >= final_from;
+            match last {
+                Some(true) if !in_last => '.',
+                Some(false) if in_last => '.',
+                // The fill plays the 4/4 bar's last beat over the last pulse.
+                Some(true) => {
+                    let o = t - final_from;
+                    let within = if map.len() - final_from <= 4 { o.min(3) } else { (if o / 2 == 0 { 0 } else { 2 }) + o % 2 };
+                    chars.get(12 + within).copied().unwrap_or('.')
+                }
+                _ => chars.get(from).copied().unwrap_or('.'),
+            }
+        })
+        .collect()
+}
+
+/// A beat `length` beats long for `kit`, in bars of `sig`, and the swing it wants.
+/// `take` picks among the style's grooves (each a different take); `bass` are the
+/// beats (in the clip) where the bass starts its notes, for `follow_bass`.
+pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take: u64, sig: TimeSig) -> (Vec<Note>, Option<engine::model::Groove>) {
     let options = takes(settings.style, settings.level);
     let groove = &options[take as usize % options.len()];
     let pitch = |v: V| sound_of(settings, v).and_then(|s| kit.pitch(s));
     let mut dice = Dice(take.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
-    let bars = (length / 4.0).ceil().max(1.0) as usize;
+    let bar_length = sig.bar();
+    let map = steps_from_four(sig);
+    let bars = (length / bar_length - 1e-9).ceil().max(1.0) as usize;
     let mut notes = Vec::new();
     for bar in 0..bars {
-        let start = bar as f64 * 4.0;
+        let start = bar as f64 * bar_length;
         // A A A B: the fourth bar of each four turns the phrase around.
         let written = if bar % 4 == 3 { groove.b } else { groove.a };
         // The phrase's end (every eight bars, or the clip's if it has four or more).
         let phrase_end = bars >= 4 && (bar + 1 == bars || (bar + 1) % 8 == 0);
         let filled = if settings.fills && phrase_end { fill(settings.style) } else { None };
-        let mut lines: Vec<(V, &str)> = written.to_vec();
+        let mut lines: Vec<(V, String)> = written.iter().map(|&(v, l)| (v, in_meter(l, &map, sig, None))).collect();
         if let Some((fill_bar, kick_stops)) = filled {
             // The fill's beat: its sounds, and nothing else but the kick.
-            for line in &mut lines {
-                if line.0 != Kick || kick_stops {
-                    line.1 = &line.1[..12];
+            for (line, &(v, written_line)) in lines.iter_mut().zip(written.iter()) {
+                if v != Kick || kick_stops {
+                    line.1 = in_meter(written_line, &map, sig, Some(false));
                 }
             }
-            lines.extend(fill_bar.iter().copied());
+            lines.extend(fill_bar.iter().map(|&(v, l)| (v, in_meter(l, &map, sig, Some(true)))));
         }
         // Where the open hat plays, the closed one doesn't (it would choke it).
         let open_steps: Vec<usize> = lines.iter().filter(|l| l.0 == Open).flat_map(|l| l.1.char_indices().filter(|c| velocity(c.1).is_some()).map(|c| c.0)).collect();
-        for &(voice, steps) in &lines {
+        for (voice, steps) in &lines {
+            let (voice, steps) = (*voice, steps.as_str());
             let Some(pitch) = pitch(voice) else { continue };
             for (s, c) in steps.char_indices() {
                 let Some(v) = velocity(c) else { continue };
@@ -716,7 +778,7 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
             }
         }
     }
-    crash_phrases(kit, settings, &mut notes, length);
+    crash_phrases(kit, settings, &mut notes, length, bar_length);
     follow_bass(kit, settings, &mut notes, bass, length);
     (notes, swing(settings.style, settings.level))
 }
@@ -741,15 +803,15 @@ fn sound_of(settings: &Settings, v: V) -> Option<Sound> {
 
 /// A crash where each phrase starts (every eight bars, from the first), if
 /// it's chosen and the clip is long enough for it not to crash every bar.
-fn crash_phrases(kit: &Kit, settings: &Settings, notes: &mut Vec<Note>, length: f64) {
+fn crash_phrases(kit: &Kit, settings: &Settings, notes: &mut Vec<Note>, length: f64, bar: f64) {
     let Some(crash) = kit.pitch(Sound::Crash).filter(|_| settings.sounds[Sound::Crash as usize]) else { return };
-    if length < 16.0 {
+    if length < bar * 4.0 - 1e-9 {
         return;
     }
     let mut beat = 0.0;
     while beat < length {
         notes.push(Note { start: beat, length: 0.25, pitch: crash, velocity: 0.9, chance: 1.0 });
-        beat += 32.0;
+        beat += bar * 8.0;
     }
 }
 
@@ -934,6 +996,36 @@ mod tests {
         Kit::from_rows(&rows)
     }
 
+    /// Beats in other meters: the bars are the meter's, the kick opens each one, the
+    /// backbeat falls on the second pulse (the waltz's beat 2, 6/8's second dotted
+    /// beat), the hats keep to the eighths, and 4/4 is as written.
+    #[test]
+    fn beats_are_written_in_the_song_s_meter() {
+        let kit = machine();
+        let settings = |style| Settings { style, level: Level::Basic, fills: false, sounds: [true; stems::drums::VOICES], ..Settings::default() };
+        let at = |notes: &[Note], pitch: u8, bar: f64| -> Vec<f64> {
+            notes.iter().filter(|n| n.pitch == pitch && n.start < bar).map(|n| n.start).collect()
+        };
+        let waltz = TimeSig::new(3, 4);
+        let (notes, _) = generate(&kit, &settings(Style::House), 12.0, &[], 0, waltz);
+        assert_eq!(at(&notes, drum_note::KICK, 3.0), [0.0, 1.0, 2.0], "four on the floor: every pulse");
+        assert!(notes.iter().all(|n| n.start < 12.0));
+        let back: Vec<f64> = notes.iter().filter(|n| [drum_note::CLAP, drum_note::SNARE].contains(&n.pitch) && n.start < 3.0).map(|n| n.start).collect();
+        assert_eq!(back, [1.0], "the backbeat on 2");
+        let six = TimeSig::new(6, 8);
+        let (notes, _) = generate(&kit, &settings(Style::PopRock), 6.0, &[], 0, six);
+        let back: Vec<f64> = notes.iter().filter(|n| n.pitch == drum_note::SNARE && n.start < 3.0).map(|n| n.start).collect();
+        assert!(back.contains(&1.5), "6/8: the snare on the second dotted beat: {back:?}");
+        assert!(at(&notes, drum_note::KICK, 3.0).contains(&0.0));
+        // Bars repeat at their length.
+        let seven = TimeSig::new(7, 8);
+        let (notes, _) = generate(&kit, &settings(Style::Techno), 14.0, &[], 0, seven);
+        let bar = |k: f64| -> Vec<(i64, u8)> { notes.iter().filter(|n| n.pitch != drum_note::CRASH && n.start >= k * 3.5 && n.start < (k + 1.0) * 3.5).map(|n| (((n.start - k * 3.5) * 4.0).round() as i64, n.pitch)).collect() };
+        assert_eq!(bar(0.0), bar(1.0));
+        // 4/4 is untouched.
+        assert_eq!(generate(&kit, &settings(Style::House), 8.0, &[], 0, TimeSig::COMMON).0, generate(&kit, &settings(Style::House), 8.0, &[], 0, TimeSig::new(2, 2)).0);
+    }
+
     /// A beat of `style` on its machine, at its tempo, eight bars, to a WAV in
     /// `dir`; written, or played by the drum model (`ai`).
     fn beat_to_wav(dir: &std::path::Path, style: Style, level: Level, take: u64, ai: bool) -> String {
@@ -942,7 +1034,7 @@ mod tests {
         let params = style.sound();
         let mut track = crate::project::Track::new("Drums", [0; 3], engine::model::InstrumentKind::DrumMachine(params));
         let settings = Settings { style, level, fills: true, follow_bass: false, bars: 8, machine: true, ai, sounds: style.sounds() };
-        let (notes, groove) = if ai { generate_ai(&machine(), &settings, 32.0, &[], take).unwrap() } else { generate(&machine(), &settings, 32.0, &[], take) };
+        let (notes, groove) = if ai { generate_ai(&machine(), &settings, 32.0, &[], take).unwrap() } else { generate(&machine(), &settings, 32.0, &[], take, TimeSig::COMMON) };
         let clip = engine::model::MidiClip { notes, groove, ..engine::model::MidiClip::new("Beat", 32.0, [0; 3]) };
         track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: engine::model::Clip::Midi(clip) });
         project.tracks = vec![track];
@@ -954,6 +1046,32 @@ mod tests {
         crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
         let peak = l.iter().chain(&r).fold(0.0f32, |p, s| p.max(s.abs()));
         format!("{name}: pico {:.1} dBFS", 20.0 * peak.log10())
+    }
+
+    /// Beats in other meters, eight bars each with fills, to WAV files to listen to:
+    /// `PULSE_BEATS=dir cargo test --release -p app meter_beats -- --ignored`.
+    #[test]
+    #[ignore]
+    fn meter_beats() {
+        let Some(dir) = std::env::var_os("PULSE_BEATS").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        for (style, sig) in [(Style::PopRock, TimeSig::new(3, 4)), (Style::House, TimeSig::new(3, 4)), (Style::PopRock, TimeSig::new(6, 8)), (Style::BoomBap, TimeSig::new(6, 8)), (Style::Techno, TimeSig::new(7, 8)), (Style::PopRock, TimeSig::new(5, 4)), (Style::DrumAndBass, TimeSig::new(5, 8))] {
+            let mut project = crate::project::Project::empty();
+            project.tempo = style.tempo() as f64;
+            project.meter = engine::meter::Meter::new(sig);
+            let length = sig.bar() * 8.0;
+            let mut track = crate::project::Track::new("Drums", [0; 3], engine::model::InstrumentKind::DrumMachine(style.sound()));
+            let settings = Settings { style, level: Level::Medium, fills: true, follow_bass: false, bars: 8, machine: true, ai: false, sounds: style.sounds() };
+            let (notes, groove) = generate(&machine(), &settings, length, &[], 0, sig);
+            let clip = engine::model::MidiClip { notes, groove, ..engine::model::MidiClip::new("Beat", length, [0; 3]) };
+            track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length, clip: engine::model::Clip::Midi(clip) });
+            project.tracks = vec![track];
+            let mut samples = crate::sync::SampleCache::default();
+            let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+            let (l, r) = crate::export::render(commands, (0.0, length), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap();
+            let name = format!("{} en {}.wav", style.label().replace(['/', '&'], "y"), sig.label().replace('/', "-"));
+            crate::export::write(&dir.join(&name), &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
+        }
     }
 
     /// The Hard techno machine's kick is clipped: as much presence (1–4 kHz
@@ -1047,7 +1165,7 @@ mod tests {
     }
 
     fn beat(style: Style, level: Level, fills: bool, bars: f64) -> Vec<Note> {
-        generate(&machine(), &Settings { style, level, fills, follow_bass: false, bars: 4, machine: false, ai: false, sounds: [true; stems::drums::VOICES] }, bars * 4.0, &[], 0).0
+        generate(&machine(), &Settings { style, level, fills, follow_bass: false, bars: 4, machine: false, ai: false, sounds: [true; stems::drums::VOICES] }, bars * 4.0, &[], 0, TimeSig::COMMON).0
     }
 
     #[test]
@@ -1091,7 +1209,7 @@ mod tests {
     /// and its claps roll at the end of a phrase. Both on the 909.
     #[test]
     fn hardgroove_and_hard_techno_have_their_backbone() {
-        let own = |style: Style, level: Level| generate(&machine(), &Settings { style, level, fills: false, sounds: style.sounds(), ..Settings::default() }, 4.0, &[], 0).0;
+        let own = |style: Style, level: Level| generate(&machine(), &Settings { style, level, fills: false, sounds: style.sounds(), ..Settings::default() }, 4.0, &[], 0, TimeSig::COMMON).0;
         let groove = own(Style::Hardgroove, Level::Medium);
         assert_eq!(hits(&groove, drum_note::KICK, 0), vec![0, 4, 8, 12]);
         assert_eq!(hits(&groove, drum_note::OPEN_HAT, 0), vec![2, 6, 10, 14]);
@@ -1117,14 +1235,14 @@ mod tests {
         let kit = machine();
         let mut settings = Settings { style: Style::PopRock, level: Level::Intense, bars: 16, ..Settings::default() };
         settings.sounds = Style::PopRock.sounds();
-        let (notes, _) = generate(&kit, &settings, 64.0, &[], 0);
+        let (notes, _) = generate(&kit, &settings, 64.0, &[], 0, TimeSig::COMMON);
         let crashes: Vec<f64> = notes.iter().filter(|n| n.pitch == drum_note::CRASH).map(|n| n.start).collect();
         assert_eq!(crashes, vec![0.0, 32.0]);
         // Without hats the hat lines go silent; without the crash, no crash.
         settings.sounds[Sound::Hat as usize] = false;
         settings.sounds[Sound::Open as usize] = false;
         settings.sounds[Sound::Crash as usize] = false;
-        let (notes, _) = generate(&kit, &settings, 64.0, &[], 0);
+        let (notes, _) = generate(&kit, &settings, 64.0, &[], 0, TimeSig::COMMON);
         assert!(notes.iter().all(|n| ![drum_note::CLOSED_HAT, drum_note::OPEN_HAT, drum_note::CRASH].contains(&n.pitch)));
         assert!(notes.iter().any(|n| n.pitch == drum_note::KICK) && notes.iter().any(|n| n.pitch == drum_note::SNARE));
         // Techno keeps its ride and cowbell out.
@@ -1156,7 +1274,7 @@ mod tests {
         // Takes differ.
         let kit = machine();
         let settings = Settings { style: Style::Techno, level: Level::Intense, fills: false, follow_bass: false, bars: 4, machine: false, ai: false, sounds: [true; stems::drums::VOICES] };
-        assert_ne!(generate(&kit, &settings, 16.0, &[], 0).0, generate(&kit, &settings, 16.0, &[], 1).0);
+        assert_ne!(generate(&kit, &settings, 16.0, &[], 0, TimeSig::COMMON).0, generate(&kit, &settings, 16.0, &[], 1, TimeSig::COMMON).0);
         // Busier levels have more.
         let count = |level| beat(Style::PopRock, level, false, 4.0).len();
         assert!(count(Level::Intense) > count(Level::Medium) && count(Level::Medium) > count(Level::Basic));
@@ -1176,20 +1294,20 @@ mod tests {
         let dembow = beat(Style::Reggaeton, Level::Basic, true, 8.0);
         assert_eq!(dembow, beat(Style::Reggaeton, Level::Basic, false, 8.0));
         // Hip hop swings; techno doesn't.
-        assert!(generate(&machine(), &Settings { style: Style::BoomBap, ..Default::default() }, 4.0, &[], 0).1.is_some());
-        assert!(generate(&machine(), &Settings { style: Style::Techno, ..Default::default() }, 4.0, &[], 0).1.is_none());
+        assert!(generate(&machine(), &Settings { style: Style::BoomBap, ..Default::default() }, 4.0, &[], 0, TimeSig::COMMON).1.is_some());
+        assert!(generate(&machine(), &Settings { style: Style::Techno, ..Default::default() }, 4.0, &[], 0, TimeSig::COMMON).1.is_none());
     }
 
     #[test]
     fn the_kick_can_follow_the_bass_and_small_kits_still_play() {
         let kit = machine();
         let settings = Settings { style: Style::PopRock, level: Level::Basic, fills: false, follow_bass: true, bars: 1, machine: false, ai: false, sounds: [true; stems::drums::VOICES] };
-        let (notes, _) = generate(&kit, &settings, 4.0, &[1.5, 3.0, 2.3], 0);
+        let (notes, _) = generate(&kit, &settings, 4.0, &[1.5, 3.0, 2.3], 0, TimeSig::COMMON);
         let kicks: Vec<f64> = notes.iter().filter(|n| n.pitch == drum_note::KICK).map(|n| n.start).collect();
         assert!(kicks.contains(&1.5) && kicks.contains(&3.0) && !kicks.contains(&2.3), "{kicks:?}");
         // No snare: the clap stands in.
         let small = Kit { kick: Some(36), clap: Some(39), ..Default::default() };
-        let (beat, _) = generate(&small, &Settings { style: Style::DrumAndBass, ..Default::default() }, 8.0, &[], 0);
+        let (beat, _) = generate(&small, &Settings { style: Style::DrumAndBass, ..Default::default() }, 8.0, &[], 0, TimeSig::COMMON);
         assert!(beat.iter().any(|n| n.pitch == 39));
     }
 
@@ -1205,7 +1323,7 @@ mod tests {
             for level in [Level::Basic, Level::Intense] {
                 for take in [0, 2] {
                     let settings = Settings { style, level, bars: 8, sounds: style.sounds(), ..Default::default() };
-                    let (written, _) = generate(&machine(), &settings, 32.0, &[], take);
+                    let (written, _) = generate(&machine(), &settings, 32.0, &[], take, TimeSig::COMMON);
                     let (played, _) = generate_ai(&machine(), &Settings { ai: true, ..settings }, 32.0, &[], take).unwrap();
                     let (written, played) = (on_beats(&written), on_beats(&played));
                     let missing: Vec<usize> = written.iter().filter(|b| !played.contains(b)).copied().collect();

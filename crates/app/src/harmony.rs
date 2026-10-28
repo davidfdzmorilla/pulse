@@ -7,19 +7,28 @@ use crate::widgets;
 use eframe::egui::{self, RichText};
 use engine::model::{MidiClip, Note};
 use stems::chord::{self, Chord};
+use engine::meter::TimeSig;
 use stems::key::Key;
 
-/// The shortest stretch a chord is named for: half a bar.
+/// How far back the chord to lead on from is heard.
 const STEP: f64 = 2.0;
 
-/// The chords of `notes` over `0..length` beats, half a bar at a time, equal
-/// ones run together: where each starts and ends, and the chord (None where
-/// none sounds).
-pub fn chords(notes: &[Note], length: f64, key: Option<Key>) -> Vec<(f64, f64, Option<Chord>)> {
+/// The shortest stretch a chord is named for in bars of `sig`: half a bar where
+/// it halves (4/4, 6/8, 2/4), else the whole bar (3/4, 5/4, 7/8).
+pub fn chord_step(sig: TimeSig) -> f64 {
+    let pulses = sig.pulses();
+    if pulses.len() % 2 == 0 { pulses[pulses.len() / 2].0 } else { sig.bar() }
+}
+
+/// The chords of `notes` over `0..length` beats in bars of `sig`, a
+/// [`chord_step`] at a time, equal ones run together: where each starts and
+/// ends, and the chord (None where none sounds).
+pub fn chords(notes: &[Note], length: f64, key: Option<Key>, sig: TimeSig) -> Vec<(f64, f64, Option<Chord>)> {
+    let step = chord_step(sig);
     let mut out: Vec<(f64, f64, Option<Chord>)> = Vec::new();
     let mut from = 0.0;
     while from < length - 1e-9 {
-        let to = (from + STEP).min(length);
+        let to = (from + step).min(length);
         let chord = chord_between(notes, from, to, key);
         match out.last_mut() {
             Some(last) if last.2 == chord => last.1 = to,
@@ -114,7 +123,12 @@ pub fn write(clip: &mut MidiClip, at: &mut f64, length: f64, chords: &[Chord], k
 /// the insert marker lit), progressions, and the chord length. Writes at `at`
 /// and moves it on, so clicking chords one after another builds a progression;
 /// returns the new notes and the pitches to preview.
-pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at: &mut f64, key: Option<Key>) -> (Vec<usize>, Vec<u8>) {
+pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at: &mut f64, key: Option<Key>, sig: TimeSig) -> (Vec<usize>, Vec<u8>) {
+    // The lengths offered, in the clip's bars; a length from another meter becomes a bar.
+    let lengths = [(chord_step(sig), "½ c."), (sig.bar(), "1 c."), (sig.bar() * 2.0, "2 c.")];
+    if !lengths.iter().any(|l| (l.0 - settings.length).abs() < 1e-9) {
+        settings.length = sig.bar();
+    }
     let mut result = (Vec::new(), Vec::new());
     widgets::field_menu_button(ui, "Acordes", |ui| {
         ui.set_min_width(300.0);
@@ -158,8 +172,10 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         ui.horizontal(|ui| {
             ui.checkbox(&mut settings.sevenths, "Con séptima");
             ui.label(RichText::new("Duración").color(TEXT_DIM).size(10.5));
-            for (beats, label) in [(2.0, "2 t."), (4.0, "1 c."), (8.0, "2 c.")] {
-                ui.selectable_value(&mut settings.length, beats, label);
+            for (beats, label) in lengths {
+                if beats < sig.bar() - 1e-9 || label != "½ c." {
+                    ui.selectable_value(&mut settings.length, beats, label);
+                }
             }
         });
         ui.separator();
@@ -191,7 +207,7 @@ mod tests {
         notes.extend([note(4.0, 2.0, 41), note(4.0, 2.0, 60), note(4.0, 2.0, 65), note(4.0, 2.0, 69)]);
         notes.extend([note(6.0, 2.0, 43), note(6.0, 2.0, 62), note(6.0, 2.0, 67), note(6.0, 2.0, 71)]);
         notes.extend([note(0.0, 0.5, 76), note(1.0, 0.5, 74), note(5.0, 0.5, 72)]);
-        let found: Vec<(f64, f64, Option<String>)> = chords(&notes, 12.0, None).into_iter().map(|(a, b, c)| (a, b, c.map(|c| c.name()))).collect();
+        let found: Vec<(f64, f64, Option<String>)> = chords(&notes, 12.0, None, TimeSig::COMMON).into_iter().map(|(a, b, c)| (a, b, c.map(|c| c.name()))).collect();
         assert_eq!(
             found,
             vec![(0.0, 4.0, Some("Lam".into())), (4.0, 6.0, Some("Fa".into())), (6.0, 8.0, Some("Sol".into())), (8.0, 12.0, None)]
@@ -208,7 +224,7 @@ mod tests {
         assert_eq!(added.len(), 16, "four chords of a bass and three notes");
         assert_eq!(sounded.len(), 4);
         assert_eq!(at, 16.0);
-        let named: Vec<String> = chords(&clip.notes, 16.0, Some(c_major)).iter().filter_map(|c| c.2.map(|c| c.name())).collect();
+        let named: Vec<String> = chords(&clip.notes, 16.0, Some(c_major), TimeSig::COMMON).iter().filter_map(|c| c.2.map(|c| c.name())).collect();
         assert_eq!(named, ["Do", "Sol", "Lam", "Fa"]);
         // Voice leading: the upper notes of each chord stay close to the last's.
         for bar in 1..4 {

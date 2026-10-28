@@ -980,9 +980,9 @@ impl KickParams {
                 KickParams {
                     tune: 28.0,
                     pitch_amount: 30.0,
-                    pitch_time: 700.0,
+                    pitch_time: 500.0,
                     pitch_curve: 0.0,
-                    pitch_shape: shape(&[(0.0, 1.0, 0.0), (0.04, 0.6, 0.8), (1.0, 0.0, -0.3)]),
+                    pitch_shape: shape(&[(0.0, 1.0, 0.0), (0.056, 0.6, 0.8), (1.0, 0.0, -0.3)]),
                     hold: 300.0,
                     decay: 1200.0,
                     decay_curve: 0.3,
@@ -1011,6 +1011,47 @@ impl KickParams {
                 },
             ),
             ("FX · Zap", KickParams { tune: 33.0, pitch_amount: 72.0, pitch_time: 120.0, pitch_curve: 0.9, hold: 30.0, decay: 200.0, decay_curve: 0.5, click: 0.2, click_tone: 9000.0, drive: 0.2, click_type: 10, ..base }),
+            (
+                // A worn sample: tape-warm, boxy, no highs, a soft thud of noise for the beater.
+                "Lo-Fi · Polvoriento",
+                KickParams { tune: 30.0, pitch_amount: 18.0, pitch_time: 40.0, pitch_curve: 0.4, hold: 20.0, decay: 200.0, decay_curve: 0.5, harmonics: 0.15, click: 0.3, click_tone: 2000.0, click_length: 20.0, click_type: 6, drive: 0.35, drive_mode: KickDrive::Tube, eq_mid: 3.0, eq_mid_freq: 250.0, eq_high: -10.0, gain: 0.7, velocity: 0.6, limiter: true, ..base },
+            ),
+            (
+                // Round and warm, with a woody knock: sits under congas and shakers.
+                "Afro House · Cálido",
+                KickParams { tune: 31.0, pitch_amount: 28.0, pitch_time: 50.0, hold: 50.0, decay: 280.0, harmonics: 0.1, click: 0.35, click_tone: 1200.0, click_type: 7, drive: 0.2, sub_level: 0.2, eq_mid: -2.0, eq_mid_freq: 300.0, punch: 0.25, limiter: true, ..base },
+            ),
+            ("Reggaetón · Dembow", KickParams { tune: 31.0, pitch_amount: 30.0, pitch_time: 40.0, hold: 60.0, decay: 380.0, decay_curve: 0.35, click: 0.45, click_tone: 3000.0, click_type: 2, drive: 0.3, drive_mode: KickDrive::Tube, sub_level: 0.35, punch: 0.35, limiter: true, ..base }),
+            (
+                // Tight and loud: a hard knock, the low mids scooped, compressed hard.
+                "Dubstep · Pesado",
+                KickParams { tune: 33.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 40.0, decay: 300.0, decay_curve: 0.5, harmonics: 0.2, click: 0.75, click_tone: 5000.0, click_type: 8, drive: 0.5, gain: 0.6, sub_level: 0.3, eq_mid: -4.0, eq_mid_freq: 350.0, eq_high: 3.0, phase: 90.0, punch: 0.5, limiter: true, ..base },
+            ),
+            (
+                // A slow attack and a gentle sweep: a felt-like pulse with no click to speak of.
+                "Ambient · Suave",
+                KickParams { tune: 29.0, pitch_amount: 14.0, pitch_time: 80.0, pitch_curve: 0.3, attack: 3.0, hold: 40.0, decay: 600.0, decay_curve: 0.5, click: 0.1, click_tone: 2500.0, click_length: 20.0, click_type: 9, drive: 0.0, gain: 0.85, sub_level: 0.25, eq_high: -6.0, velocity: 0.8, ..base },
+            ),
+            (
+                // Higher and bouncy, with a little pitch blip: skippy two-step grooves.
+                "UK Garage · Rebotado",
+                KickParams { tune: 36.0, pitch_amount: 30.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 20.0, decay: 170.0, decay_curve: 0.55, harmonics: 0.2, click: 0.5, click_tone: 2200.0, click_length: 5.0, click_type: 4, drive: 0.25, phase: 90.0, punch: 0.35, eq_low: 2.0, limiter: true, ..base },
+            ),
+            (
+                // An acoustic kick through an old sampler: the beater's knock, boxiness scooped, crunchy.
+                "Hip Hop · Boom Bap",
+                KickParams { tune: 33.0, pitch_amount: 20.0, pitch_time: 30.0, pitch_curve: 0.5, hold: 20.0, decay: 220.0, decay_curve: 0.55, harmonics: 0.3, click: 0.55, click_tone: 2500.0, click_length: 8.0, click_type: 7, drive: 0.35, drive_mode: KickDrive::Tube, eq_mid: -3.0, eq_mid_freq: 400.0, eq_high: 2.0, punch: 0.45, velocity: 0.8, limiter: true, ..base },
+            ),
+            (
+                // Gated: it holds full, then shuts fast; a tom-like sweep and a metallic edge.
+                "Synthwave · Ochentero",
+                KickParams { tune: 33.0, pitch_amount: 30.0, pitch_time: 60.0, pitch_curve: 0.5, hold: 100.0, decay: 120.0, decay_curve: 0.1, harmonics: 0.15, click: 0.5, click_tone: 3000.0, click_type: 5, drive: 0.2, eq_high: 2.0, punch: 0.3, limiter: true, ..base },
+            ),
+            (
+                // A long, hot 808: punchy start and a saturated tail that cuts through on small speakers.
+                "808 · Saturado",
+                KickParams { tune: 30.0, pitch_amount: 36.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 150.0, decay: 700.0, decay_curve: 0.4, click: 0.4, click_tone: 2500.0, click_type: 2, drive: 0.45, sub_level: 0.3, punch: 0.3, limiter: true, ..base },
+            ),
         ]
     }
 }
@@ -1206,7 +1247,201 @@ impl DrumParams {
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, DrumParams)> {
         let base = DrumParams::default();
-        vec![("Init", base)]
+        // Each kit's tune, decay, level and drive, a value a sound in `DRUM_VOICES` order:
+        // kick, rim, snare, clap, closed and open hat, low tom, cowbell, mid and high tom,
+        // crash, ride, shaker, tambourine, conga, clave. The sounds a style doesn't use
+        // stay low but playable. (The 808's hats are soft: a touch of drive lifts them.)
+        let kit = |model: DrumModel, tune: [f32; DRUM_SOUNDS], decay: [f32; DRUM_SOUNDS], level: [f32; DRUM_SOUNDS], drive: [f32; DRUM_SOUNDS]| DrumParams { tune, decay, level, drive, model };
+        vec![
+            ("Init", base),
+            (
+                // Four on the floor: a round 909 kick, a long clap and the open hat on the off-beat.
+                "House · Clásico",
+                kit(
+                    DrumModel::Tr909,
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.9, 1.0, 1.0, 1.2, 0.8, 0.7, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.62, 0.4, 0.35, 0.7, 0.55, 0.5, 0.35, 0.3, 0.35, 0.35, 0.4, 0.8, 0.45, 0.45, 0.4, 0.35],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Soft and warm: a rounder 808 kick, a rim, a dark long clap and soft hats.
+                "House · Deep",
+                kit(
+                    DrumModel::Tr808,
+                    [1.0, 0.0, 0.0, -1.0, -1.0, -1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0],
+                    [1.1, 1.0, 1.0, 1.4, 1.2, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0, 1.2, 1.0],
+                    [0.85, 0.6, 0.35, 0.65, 0.9, 0.7, 0.35, 0.3, 0.35, 0.35, 0.35, 0.6, 0.55, 0.35, 0.5, 0.4],
+                    [0.0, 0.0, 0.0, 0.0, 0.08, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Tight and dry: a short, slightly clipped kick, a quick clap, short hats and bongo-like congas.
+                "Tech House · Seco",
+                kit(
+                    DrumModel::Tr909,
+                    [1.0, 2.0, 0.0, 1.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 3.0, 0.0],
+                    [0.7, 1.0, 1.0, 0.9, 0.6, 0.55, 1.0, 1.0, 1.0, 1.0, 1.0, 0.8, 0.9, 0.8, 0.8, 1.0],
+                    [0.62, 0.55, 0.35, 0.7, 0.6, 0.55, 0.35, 0.3, 0.35, 0.35, 0.35, 0.5, 0.55, 0.5, 0.5, 0.4],
+                    [0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Lower and longer: a deep kick with a little grit, a dark clap, rim and ride.
+                "Techno · Oscuro",
+                kit(
+                    DrumModel::Tr909,
+                    [-2.0, 0.0, -2.0, -2.0, 0.0, 1.0, -2.0, 0.0, -2.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.1, 1.0, 1.0, 1.1, 0.8, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0, 1.0, 1.0, 1.0],
+                    [0.6, 0.55, 0.4, 0.65, 0.6, 0.55, 0.4, 0.3, 0.4, 0.4, 0.4, 0.85, 0.45, 0.35, 0.35, 0.35],
+                    [0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Distorted: a long, clipped kick, a crushed clap and snare, and dirty low toms.
+                "Techno · Industrial",
+                kit(
+                    DrumModel::Tr909,
+                    [-3.0, -2.0, -3.0, -3.0, 1.0, 0.0, -4.0, 0.0, -4.0, -4.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.5, 1.0, 1.2, 1.4, 0.7, 0.7, 1.2, 1.0, 1.2, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.48, 0.4, 0.42, 0.5, 0.45, 0.42, 0.32, 0.3, 0.32, 0.32, 0.36, 0.5, 0.35, 0.3, 0.3, 0.3],
+                    [0.35, 0.15, 0.12, 0.12, 0.1, 0.08, 0.1, 0.0, 0.1, 0.1, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Short and clicky: a short kick, a bright rim, a small clap, shaker, clave and high congas.
+                "Minimal · Clic",
+                kit(
+                    DrumModel::Tr909,
+                    [1.0, 3.0, 0.0, 1.0, 2.0, 1.0, 0.0, 2.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 0.0],
+                    [0.55, 0.8, 1.0, 0.8, 0.5, 0.5, 1.0, 0.8, 1.0, 1.0, 1.0, 0.8, 0.7, 0.8, 0.7, 1.0],
+                    [0.6, 0.65, 0.3, 0.55, 0.55, 0.35, 0.3, 0.35, 0.3, 0.3, 0.3, 0.45, 0.6, 0.45, 0.5, 0.55],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // A long, slightly saturated 808 boom, a tight snare and clap, and bright hats for rolls.
+                "Trap · 808 largo",
+                kit(
+                    DrumModel::Tr808,
+                    [-2.0, 0.0, 2.0, 0.0, 2.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [3.2, 1.0, 0.9, 1.0, 0.6, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.78, 0.5, 0.75, 0.8, 0.9, 0.6, 0.35, 0.3, 0.35, 0.35, 0.35, 0.35, 0.4, 0.35, 0.35, 0.35],
+                    [0.04, 0.0, 0.0, 0.0, 0.08, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Knocking: a full, gritty kick, a fat low snare with some crunch, dull hats, rim and shaker.
+                "Hip Hop · Boom Bap",
+                kit(
+                    DrumModel::Classic,
+                    [-1.0, -1.0, -2.0, -1.0, -1.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, 0.0, 0.0],
+                    [1.2, 1.0, 1.4, 1.0, 1.0, 0.8, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.95, 0.6, 0.85, 0.45, 0.85, 0.6, 0.35, 0.3, 0.35, 0.35, 0.35, 0.4, 0.5, 0.45, 0.35, 0.35],
+                    [0.03, 0.0, 0.05, 0.0, 0.15, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Muffled and soft: everything tuned down and shortened, a gentle kick, a low snare and rim, dark hats.
+                "Lo-Fi · Polvoriento",
+                kit(
+                    DrumModel::Tr808,
+                    [-1.0, -2.0, -3.0, -2.0, -4.0, -4.0, -2.0, -2.0, -2.0, -2.0, -3.0, -3.0, -3.0, -3.0, -2.0, -2.0],
+                    [0.8, 1.0, 0.8, 0.9, 0.8, 0.7, 0.8, 1.0, 0.8, 0.8, 0.7, 0.8, 0.9, 0.8, 1.0, 1.0],
+                    [0.9, 0.65, 0.75, 0.35, 0.85, 0.5, 0.35, 0.3, 0.35, 0.35, 0.3, 0.35, 0.55, 0.35, 0.45, 0.35],
+                    [0.02, 0.0, 0.0, 0.0, 0.06, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Dembow: a booming 808 kick, a high, tight snare and rim, hats, tambourine, conga and clave.
+                "Reggaetón · Dembow",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 2.0, 3.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.3, 1.0, 0.7, 0.9, 0.7, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.9, 0.6, 0.8, 0.6, 0.85, 0.4, 0.4, 0.3, 0.4, 0.4, 0.35, 0.35, 0.5, 0.55, 0.5, 0.45],
+                    [0.0, 0.0, 0.0, 0.0, 0.06, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Fast breaks: a short, high kick, a cracking high snare, tight hats and a ride.
+                "Drum & Bass · Rodante",
+                kit(
+                    DrumModel::Tr909,
+                    [2.0, 2.0, 4.0, 2.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0, 0.0, 0.0, 0.0],
+                    [0.6, 1.0, 0.8, 0.9, 0.6, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.8, 1.0, 1.0, 1.0],
+                    [0.6, 0.5, 0.75, 0.4, 0.6, 0.4, 0.35, 0.3, 0.35, 0.35, 0.45, 0.9, 0.5, 0.35, 0.3, 0.3],
+                    [0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Half-time weight: a driven kick, a huge low snare and clap, hats kept back.
+                "Dubstep · Pesado",
+                kit(
+                    DrumModel::Tr909,
+                    [-1.0, 0.0, -2.0, -1.0, 0.0, 0.0, -3.0, 0.0, -3.0, -3.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.0, 1.0, 1.5, 1.4, 0.8, 0.7, 1.2, 1.0, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.6, 0.45, 0.75, 0.7, 0.55, 0.4, 0.45, 0.3, 0.45, 0.45, 0.45, 0.4, 0.35, 0.3, 0.3, 0.3],
+                    [0.08, 0.0, 0.06, 0.1, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Skippy: a short, bouncy kick, a crisp rim and snare, quick hats, shaker and tambourine.
+                "UK Garage · Shuffle",
+                kit(
+                    DrumModel::Tr909,
+                    [1.0, 2.0, 2.0, 1.0, 1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0, 1.0, 0.0, 0.0],
+                    [0.75, 1.0, 0.8, 0.9, 0.7, 0.6, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 1.0, 1.0],
+                    [0.62, 0.65, 0.7, 0.6, 0.6, 0.45, 0.35, 0.3, 0.35, 0.35, 0.35, 0.4, 0.6, 0.5, 0.35, 0.35],
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Electro: a punchy 808 kick, snappy snare and clap, cowbell, clave and high toms up front.
+                "Electro · Robótico",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 2.0, 0.0, 2.0, 2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.7, 1.0, 0.6, 0.8, 0.6, 0.7, 0.9, 1.0, 0.9, 0.9, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.9, 0.6, 0.85, 0.75, 0.9, 0.5, 0.6, 0.75, 0.6, 0.6, 0.35, 0.35, 0.4, 0.35, 0.5, 0.6],
+                    [0.02, 0.0, 0.0, 0.0, 0.08, 0.06, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Eighties: a big, long snare and clap, a solid kick, deep long toms and a crash.
+                "Synthwave · Ochentera",
+                kit(
+                    DrumModel::Tr909,
+                    [-1.0, 0.0, -1.0, -1.0, 0.0, 0.0, -2.0, 0.0, -2.0, -2.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                    [0.8, 1.0, 1.6, 1.3, 0.8, 0.8, 1.6, 1.0, 1.6, 1.6, 1.2, 1.0, 1.0, 1.0, 1.0, 1.0],
+                    [0.6, 0.4, 0.8, 0.65, 0.55, 0.45, 0.6, 0.3, 0.6, 0.6, 0.5, 0.4, 0.35, 0.4, 0.3, 0.3],
+                    [0.0, 0.0, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Percussive: a round kick, toms, congas, shaker, clave and cowbell carry the groove.
+                "Afro House · Tribal",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0],
+                    [1.0, 1.0, 1.0, 1.0, 0.8, 0.8, 1.2, 1.0, 1.2, 1.2, 1.0, 1.0, 1.0, 1.0, 1.3, 1.0],
+                    [0.88, 0.55, 0.4, 0.6, 0.8, 0.5, 0.7, 0.45, 0.7, 0.65, 0.3, 0.4, 0.7, 0.55, 0.8, 0.6],
+                    [0.0, 0.0, 0.0, 0.0, 0.06, 0.04, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+            (
+                // Latin percussion: congas, clave, cowbell and high, short toms like timbales over a light kick.
+                "Latino · Percusión",
+                kit(
+                    DrumModel::Tr808,
+                    [0.0, 1.0, 1.0, 0.0, 1.0, 0.0, 4.0, 2.0, 4.0, 4.0, 0.0, 0.0, 1.0, 0.0, 1.0, 0.0],
+                    [0.8, 1.0, 0.8, 1.0, 0.7, 0.7, 0.6, 1.0, 0.6, 0.6, 1.0, 1.0, 1.0, 1.0, 1.2, 1.0],
+                    [0.7, 0.65, 0.45, 0.35, 0.7, 0.4, 0.65, 0.7, 0.65, 0.65, 0.3, 0.35, 0.7, 0.6, 0.85, 0.7],
+                    [0.0, 0.0, 0.0, 0.0, 0.05, 0.03, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+                ),
+            ),
+        ]
     }
 }
 

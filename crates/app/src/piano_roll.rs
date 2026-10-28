@@ -1023,7 +1023,8 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
 fn take_beat(state: &mut State, clip: &mut MidiClip, settings: &crate::drum_gen::Settings, beat: Beat) -> Option<engine::model::DrumParams> {
     match beat {
         Ok((notes, swing)) => {
-            let length = settings.bars as f64 * 4.0;
+            // Bars of the clip's meter, as the beat was written.
+            let length = settings.bars as f64 * state.sig.bar();
             state.grew |= length > clip.length;
             clip.length = length;
             clip.notes = notes;

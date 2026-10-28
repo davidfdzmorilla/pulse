@@ -108,6 +108,8 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         ("Modular", InstrumentKind::Modular(Default::default())),
         ("Sampler", InstrumentKind::Sampler(Default::default())),
         ("Rack", InstrumentKind::DrumRack(Default::default())),
+        // An organ: drawbars, percussion and rotary settings away from the defaults.
+        ("Keys", InstrumentKind::Keys(engine::model::KeysParams::presets().into_iter().find(|(n, _)| *n == "Órgano · Jazz").unwrap().1)),
     ];
     let mut eq = engine::model::EqEightParams::default();
     eq.bands[0].on = true;

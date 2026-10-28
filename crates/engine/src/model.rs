@@ -603,6 +603,8 @@ pub enum InstrumentKind {
     Polychrome(WaveParams),
     /// Free-form synth: generators with modifier chains, effect lanes and modulators.
     Modular(ModularParams),
+    /// Pulse Keys: synthesized piano, electric pianos and organ.
+    Keys(KeysParams),
     /// A VST3 plugin: which one, and its state, is in the project's plugin list.
     Plugin(PluginId),
 }
@@ -1352,6 +1354,254 @@ impl Default for FmParams {
         }
     }
 }
+
+/// What Pulse Keys plays: which instrument its synthesis models.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum KeysModel {
+    /// Hammered strings: inharmonic partials, two strings a note, a soundboard.
+    #[default]
+    Piano,
+    /// Electric piano with struck tines and a magnetic pickup (Rhodes-like).
+    Tines,
+    /// Electric piano with struck steel reeds and an electrostatic pickup (Wurlitzer-like).
+    Reed,
+    /// Tonewheel organ with drawbars, percussion, key click and a rotary speaker.
+    Organ,
+}
+
+impl KeysModel {
+    pub const ALL: [KeysModel; 4] = [Self::Piano, Self::Tines, Self::Reed, Self::Organ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Piano => "Piano",
+            Self::Tines => "Púas",
+            Self::Reed => "Lengüetas",
+            Self::Organ => "Órgano",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            Self::Piano => "Piano acústico: cuerdas golpeadas por martillos, con su tabla armónica",
+            Self::Tines => "Piano eléctrico de púas, como un Rhodes: redondo, con campana al atacar",
+            Self::Reed => "Piano eléctrico de lengüetas, como un Wurlitzer: más nasal y con mordida",
+            Self::Organ => "Órgano de ruedas fónicas, como un Hammond: registros, percusión y altavoz giratorio",
+        }
+    }
+
+    /// True when parameter `index` of [`KEYS_PARAMS`] changes this model's sound.
+    pub fn uses(self, index: usize) -> bool {
+        match index {
+            KEYS_TONE | KEYS_DRIVE | KEYS_WIDTH | KEYS_GAIN => true,
+            // The organ sustains, stops at once and is not touch-sensitive.
+            KEYS_LENGTH | KEYS_RELEASE | KEYS_DYNAMICS | KEYS_HAMMER => self != Self::Organ,
+            KEYS_STRINGS | KEYS_BODY => self == Self::Piano,
+            KEYS_BELL | KEYS_BARK | KEYS_TREMOLO_RATE | KEYS_TREMOLO => matches!(self, Self::Tines | Self::Reed),
+            _ => self == Self::Organ && index < KEYS_PARAMS.len(),
+        }
+    }
+}
+
+/// Indices of Pulse Keys' parameters (see [`KEYS_PARAMS`]).
+pub const KEYS_TONE: usize = 0;
+pub const KEYS_LENGTH: usize = 1;
+pub const KEYS_RELEASE: usize = 2;
+pub const KEYS_DYNAMICS: usize = 3;
+pub const KEYS_HAMMER: usize = 4;
+pub const KEYS_STRINGS: usize = 5;
+pub const KEYS_BODY: usize = 6;
+pub const KEYS_BELL: usize = 7;
+pub const KEYS_BARK: usize = 8;
+pub const KEYS_TREMOLO_RATE: usize = 9;
+pub const KEYS_TREMOLO: usize = 10;
+/// The first of the nine drawbars, 16' (then 5 1/3', 8', 4', 2 2/3', 2', 1 3/5', 1 1/3', 1').
+pub const KEYS_DRAWBAR: usize = 11;
+pub const KEYS_PERCUSSION: usize = 20;
+pub const KEYS_PERC_DECAY: usize = 21;
+pub const KEYS_CLICK: usize = 22;
+pub const KEYS_LESLIE: usize = 23;
+pub const KEYS_LESLIE_FAST: usize = 24;
+pub const KEYS_DRIVE: usize = 25;
+pub const KEYS_WIDTH: usize = 26;
+pub const KEYS_GAIN: usize = 27;
+
+/// Pulse Keys: synthesized piano, electric pianos and organ. Every model keeps all
+/// the settings; each uses the ones [`KeysModel::uses`] says.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct KeysParams {
+    pub model: KeysModel,
+    /// Brightness, 0..1: how hard the hammers are, how open the pickup sounds.
+    pub tone: f32,
+    /// How long notes ring, as a multiple of the model's own.
+    pub length: f32,
+    /// Seconds a released note takes to fall 60 dB (the dampers).
+    pub release: f32,
+    /// How much velocity changes loudness (and brightness), 0..1.
+    pub dynamics: f32,
+    /// Hammer knock at the start of a note, 0..1.
+    pub hammer: f32,
+    /// How far apart a piano note's strings are tuned, 0..1 (up to 3 cents).
+    pub strings: f32,
+    /// Soundboard and cabinet resonance, 0..1.
+    pub body: f32,
+    /// Bell-like attack of the tines or reeds, 0..1.
+    pub bell: f32,
+    /// How much the pickup growls on hard notes, 0..1.
+    pub bark: f32,
+    pub tremolo_rate: f32,
+    /// Tremolo depth, 0..1 (the tines pan side to side, the reeds pulse).
+    pub tremolo: f32,
+    /// Organ drawbars, 0 (in) .. 8 (out): 16', 5 1/3', 8', 4', 2 2/3', 2', 1 3/5', 1 1/3', 1'.
+    pub drawbars: [f32; 9],
+    /// Level of the organ's percussion, 0 (off) .. 1.
+    pub percussion: f32,
+    /// Seconds the percussion takes to fall 60 dB.
+    pub perc_decay: f32,
+    /// The percussion sounds the third harmonic (else the second).
+    pub perc_third: bool,
+    pub click: f32,
+    /// Rotary speaker mix, 0 (dry) .. 1.
+    pub leslie: f32,
+    /// Rotary speaker speed, 0 (slow) .. 1 (fast); the rotors take time to get there.
+    pub leslie_fast: f32,
+    pub drive: f32,
+    pub width: f32,
+    pub gain: f32,
+}
+
+impl Default for KeysParams {
+    fn default() -> Self {
+        Self {
+            model: KeysModel::Piano,
+            tone: 0.5,
+            length: 1.0,
+            release: 0.35,
+            dynamics: 0.8,
+            hammer: 0.4,
+            strings: 0.4,
+            body: 0.5,
+            bell: 0.4,
+            bark: 0.4,
+            tremolo_rate: 4.5,
+            tremolo: 0.0,
+            drawbars: [8.0, 8.0, 8.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            percussion: 0.0,
+            perc_decay: 0.5,
+            perc_third: false,
+            click: 0.3,
+            leslie: 0.6,
+            leslie_fast: 0.0,
+            drive: 0.0,
+            width: 0.5,
+            gain: 0.5,
+        }
+    }
+}
+
+impl KeysParams {
+    /// The starting sound of `model` (what choosing it in the device gives).
+    pub fn model_default(model: KeysModel) -> Self {
+        let base = KeysParams::default();
+        match model {
+            KeysModel::Piano => base,
+            KeysModel::Tines => KeysParams { model, tone: 0.45, release: 0.25, hammer: 0.2, bell: 0.45, bark: 0.35, ..base },
+            KeysModel::Reed => KeysParams { model, tone: 0.5, release: 0.2, hammer: 0.25, bell: 0.35, bark: 0.5, tremolo_rate: 5.5, ..base },
+            KeysModel::Organ => KeysParams { model, release: 0.05, dynamics: 0.0, percussion: 0.6, perc_decay: 0.4, perc_third: true, leslie: 0.6, ..base },
+        }
+    }
+
+    /// Factory presets: (name, settings), grouped by model.
+    pub fn presets() -> Vec<(&'static str, KeysParams)> {
+        let piano = Self::model_default(KeysModel::Piano);
+        let tines = Self::model_default(KeysModel::Tines);
+        let reed = Self::model_default(KeysModel::Reed);
+        let organ = Self::model_default(KeysModel::Organ);
+        let bars = |s: &str| {
+            let mut d = [0.0; 9];
+            for (slot, c) in d.iter_mut().zip(s.chars()) {
+                *slot = c.to_digit(10).unwrap_or(0) as f32;
+            }
+            d
+        };
+        vec![
+            ("Piano · De cola", piano),
+            ("Piano · Brillante", KeysParams { tone: 0.85, hammer: 0.5, body: 0.35, width: 0.6, ..piano }),
+            ("Piano · Suave", KeysParams { tone: 0.22, dynamics: 0.9, hammer: 0.2, body: 0.65, release: 0.5, ..piano }),
+            ("Piano · De pared", KeysParams { tone: 0.6, strings: 0.95, body: 0.75, length: 0.6, width: 0.3, ..piano }),
+            ("Púas · Clásico", tines),
+            ("Púas · Trémolo", KeysParams { tremolo: 0.6, tremolo_rate: 4.2, bell: 0.35, width: 0.7, ..tines }),
+            ("Púas · Con ladrido", KeysParams { tone: 0.65, bark: 0.85, bell: 0.5, drive: 0.25, ..tines }),
+            ("Púas · Campana", KeysParams { tone: 0.6, bell: 0.85, bark: 0.2, length: 1.4, ..tines }),
+            ("Lengüetas · Clásico", reed),
+            ("Lengüetas · Trémolo", KeysParams { tremolo: 0.5, ..reed }),
+            ("Lengüetas · Saturado", KeysParams { bark: 0.8, drive: 0.45, tone: 0.65, ..reed }),
+            ("Órgano · Jazz", KeysParams { drawbars: bars("888000000"), percussion: 0.7, perc_decay: 0.35, leslie_fast: 0.0, ..organ }),
+            ("Órgano · Gospel", KeysParams { drawbars: bars("888800000"), percussion: 0.0, leslie_fast: 1.0, click: 0.45, ..organ }),
+            ("Órgano · Rock", KeysParams { drawbars: bars("888000000"), percussion: 0.0, drive: 0.6, leslie: 0.75, click: 0.5, ..organ }),
+            ("Órgano · Balada", KeysParams { drawbars: bars("006802000"), percussion: 0.0, click: 0.1, leslie: 0.5, ..organ }),
+            ("Órgano · Completo", KeysParams { drawbars: bars("888888888"), percussion: 0.0, leslie_fast: 1.0, ..organ }),
+        ]
+    }
+
+    fn param_mut(&mut self, index: usize) -> Option<&mut f32> {
+        Some(match index {
+            KEYS_TONE => &mut self.tone,
+            KEYS_LENGTH => &mut self.length,
+            KEYS_RELEASE => &mut self.release,
+            KEYS_DYNAMICS => &mut self.dynamics,
+            KEYS_HAMMER => &mut self.hammer,
+            KEYS_STRINGS => &mut self.strings,
+            KEYS_BODY => &mut self.body,
+            KEYS_BELL => &mut self.bell,
+            KEYS_BARK => &mut self.bark,
+            KEYS_TREMOLO_RATE => &mut self.tremolo_rate,
+            KEYS_TREMOLO => &mut self.tremolo,
+            i if (KEYS_DRAWBAR..KEYS_DRAWBAR + 9).contains(&i) => &mut self.drawbars[i - KEYS_DRAWBAR],
+            KEYS_PERCUSSION => &mut self.percussion,
+            KEYS_PERC_DECAY => &mut self.perc_decay,
+            KEYS_CLICK => &mut self.click,
+            KEYS_LESLIE => &mut self.leslie,
+            KEYS_LESLIE_FAST => &mut self.leslie_fast,
+            KEYS_DRIVE => &mut self.drive,
+            KEYS_WIDTH => &mut self.width,
+            KEYS_GAIN => &mut self.gain,
+            _ => return None,
+        })
+    }
+}
+
+pub const KEYS_PARAMS: [ParamInfo; 28] = [
+    ParamInfo::linear("Tono", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::log("Duración", 0.25, 4.0, 1.0, Times),
+    ParamInfo::log("Apagado", 0.02, 3.0, 0.35, Seconds),
+    ParamInfo::linear("Dinámica", 0.0, 1.0, 0.8, Percent),
+    ParamInfo::linear("Martillo", 0.0, 1.0, 0.4, Percent),
+    ParamInfo::linear("Cuerdas", 0.0, 1.0, 0.4, Percent),
+    ParamInfo::linear("Cuerpo", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Campana", 0.0, 1.0, 0.4, Percent),
+    ParamInfo::linear("Ladrido", 0.0, 1.0, 0.4, Percent),
+    ParamInfo::log("Vel. trémolo", 0.5, 12.0, 4.5, Hertz),
+    ParamInfo::linear("Trémolo", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("16'", 0.0, 8.0, 8.0, Plain),
+    ParamInfo::linear("5 1/3'", 0.0, 8.0, 8.0, Plain),
+    ParamInfo::linear("8'", 0.0, 8.0, 8.0, Plain),
+    ParamInfo::linear("4'", 0.0, 8.0, 0.0, Plain),
+    ParamInfo::linear("2 2/3'", 0.0, 8.0, 0.0, Plain),
+    ParamInfo::linear("2'", 0.0, 8.0, 0.0, Plain),
+    ParamInfo::linear("1 3/5'", 0.0, 8.0, 0.0, Plain),
+    ParamInfo::linear("1 1/3'", 0.0, 8.0, 0.0, Plain),
+    ParamInfo::linear("1'", 0.0, 8.0, 0.0, Plain),
+    ParamInfo::linear("Percusión", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::log("Perc. caída", 0.1, 2.0, 0.5, Seconds),
+    ParamInfo::linear("Click", 0.0, 1.0, 0.3, Percent),
+    ParamInfo::linear("Leslie", 0.0, 1.0, 0.6, Percent),
+    ParamInfo::linear("Leslie rápido", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Drive", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Ancho", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Volumen", 0.0, 1.0, 0.5, Percent),
+];
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Eq3Params {
@@ -2426,9 +2676,10 @@ impl InstrumentKind {
     }
 
     /// Every instrument, in browser order.
-    pub fn catalog() -> [InstrumentKind; 11] {
+    pub fn catalog() -> [InstrumentKind; 12] {
         [
             InstrumentKind::Synth(SynthParams::default()),
+            InstrumentKind::Keys(KeysParams::default()),
             InstrumentKind::SuperSaw(SuperSawParams::default()),
             InstrumentKind::Acid(AcidParams::default()),
             InstrumentKind::Fm(FmParams::default()),
@@ -2455,6 +2706,7 @@ impl InstrumentKind {
             InstrumentKind::Wavetable(_) => "Wavetable Synth",
             InstrumentKind::Polychrome(_) => "Polychrome Synth",
             InstrumentKind::Modular(_) => "Modular Synth",
+            InstrumentKind::Keys(_) => "Pulse Keys",
             InstrumentKind::Plugin(_) => "Plugin",
         }
     }
@@ -2522,6 +2774,7 @@ impl InstrumentKind {
             InstrumentKind::Kick(_) => &KICK_PARAMS,
             InstrumentKind::Wavetable(_) | InstrumentKind::Polychrome(_) => &WAVE_PARAMS,
             InstrumentKind::Modular(_) => &MODULAR_PARAMS,
+            InstrumentKind::Keys(_) => &KEYS_PARAMS,
         }
     }
 
@@ -2588,6 +2841,7 @@ impl InstrumentKind {
             },
             InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) => return p.param_mut(index),
             InstrumentKind::Modular(p) => return p.param_mut(index),
+            InstrumentKind::Keys(p) => return p.param_mut(index),
             InstrumentKind::Kick(p) => match index {
                 0 => &mut p.tune,
                 1 => &mut p.pitch_amount,

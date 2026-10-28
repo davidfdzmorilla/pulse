@@ -11,6 +11,7 @@ use crate::model::{db_to_gain, AudioClip, AutomationLane, Fades, Device, Effect,
 use crate::plugin::PluginProcessor;
 use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
+use crate::keys::Keys;
 use crate::kick::KickSynth;
 use crate::sampler::{DrumRack, Sampler};
 use crate::modsynth::ModSynth;
@@ -732,6 +733,7 @@ enum Instrument {
     /// The wavetable engine; true when it is the polychrome synth.
     Wavetable(Box<WaveSynth>, bool),
     Modular(Box<ModSynth>),
+    Keys(Box<Keys>),
     /// A VST3 instrument; None (silent) until the app loads it.
     Plugin(PluginId, Option<Box<PluginProcessor>>),
 }
@@ -750,6 +752,7 @@ impl Instrument {
             InstrumentKind::Wavetable(p) => Self::Wavetable(Box::new(WaveSynth::new(p, sample_rate)), false),
             InstrumentKind::Polychrome(p) => Self::Wavetable(Box::new(WaveSynth::new(p, sample_rate)), true),
             InstrumentKind::Modular(p) => Self::Modular(Box::new(ModSynth::new(p, sample_rate))),
+            InstrumentKind::Keys(p) => Self::Keys(Box::new(Keys::new(p, sample_rate))),
             InstrumentKind::Plugin(id) => Self::Plugin(id, None),
             InstrumentKind::Drums => unreachable!("upgraded above"),
         }
@@ -768,6 +771,7 @@ impl Instrument {
             Self::Wavetable(w, false) => InstrumentKind::Wavetable(w.params()),
             Self::Wavetable(w, true) => InstrumentKind::Polychrome(w.params()),
             Self::Modular(m) => InstrumentKind::Modular(m.params()),
+            Self::Keys(k) => InstrumentKind::Keys(k.params()),
             Self::Plugin(id, _) => InstrumentKind::Plugin(*id),
         }
     }
@@ -785,6 +789,7 @@ impl Instrument {
             (Self::Kick(k), InstrumentKind::Kick(p)) => k.set_params(p),
             (Self::Wavetable(w, false), InstrumentKind::Wavetable(p)) | (Self::Wavetable(w, true), InstrumentKind::Polychrome(p)) => w.set_params(p),
             (Self::Modular(m), InstrumentKind::Modular(p)) => m.set_params(p),
+            (Self::Keys(k), InstrumentKind::Keys(p)) => k.set_params(p),
             (Self::Plugin(id, _), InstrumentKind::Plugin(other)) => return *id == other,
             _ => return false,
         }
@@ -836,6 +841,7 @@ impl Instrument {
             Self::Kick(k) => k.note_on(pitch, velocity),
             Self::Wavetable(w, _) => w.note_on(pitch, velocity, gate_samples),
             Self::Modular(m) => m.note_on(pitch, velocity, gate_samples),
+            Self::Keys(k) => k.note_on(pitch, velocity, gate_samples),
             Self::Plugin(_, Some(p)) => p.note_on(pitch, velocity, gate_samples),
             Self::Plugin(_, None) => {}
         }
@@ -852,6 +858,7 @@ impl Instrument {
             Self::Rack(_) | Self::Kick(_) => {}
             Self::Wavetable(w, _) => w.note_off(pitch),
             Self::Modular(m) => m.note_off(pitch),
+            Self::Keys(k) => k.note_off(pitch),
             Self::Plugin(_, Some(p)) => p.note_off(pitch),
             Self::Plugin(_, None) => {}
         }
@@ -867,6 +874,7 @@ impl Instrument {
             Self::Fm(f) => f.set_pitch(ratio),
             Self::Sampler(s) => s.set_pitch(ratio),
             Self::Wavetable(w, _) => w.set_pitch(ratio),
+            Self::Keys(k) => k.set_pitch(ratio),
             Self::Drums(_) | Self::Rack(_) | Self::Kick(_) | Self::Modular(_) | Self::Plugin(..) => return false,
         }
         true
@@ -893,6 +901,7 @@ impl Instrument {
             Self::Kick(k) => k.all_notes_off(),
             Self::Wavetable(w, _) => w.all_notes_off(),
             Self::Modular(m) => m.all_notes_off(),
+            Self::Keys(k) => k.all_notes_off(),
             Self::Plugin(_, Some(p)) => p.all_notes_off(),
             Self::Plugin(_, None) => {}
         }
@@ -915,9 +924,22 @@ impl Instrument {
             Self::Kick(k) => k.render(samples, left, right),
             Self::Wavetable(w, _) => w.render(samples, tables, left, right),
             Self::Modular(m) => m.render(samples, tables, left, right),
+            Self::Keys(k) => k.render(left, right),
             Self::Plugin(_, Some(p)) => p.render(left, right),
             Self::Plugin(_, None) => {}
         }
+    }
+}
+
+/// MIDI controller number of the sustain pedal.
+const SUSTAIN_PEDAL: u8 = 64;
+
+/// A live note on track `index` ends at `beat`: if it was being recorded, it is sent
+/// to the UI with its length.
+fn capture_end(held: &mut [Option<(f64, f32)>; 128], recorded: &mut rtrb::Producer<RecordedNote>, index: usize, pitch: u8, beat: f64) {
+    if let Some((start, velocity)) = held[pitch as usize].take() {
+        let length = (beat - start).max(0.05);
+        let _ = recorded.push(RecordedNote { track: index, pitch, velocity, start, length });
     }
 }
 
@@ -1532,6 +1554,9 @@ struct Track {
     record_start: f64,
     /// Live notes being captured: (start beat, velocity) per pitch.
     held: [Option<(f64, f32)>; 128],
+    /// The sustain pedal is down; keys let go meanwhile wait in `sustained`.
+    pedal: bool,
+    sustained: [bool; 128],
     /// The track (by id; 0 for none) whose sound it plays too, after that
     /// one's effects and before its fader (see [`Command::SetAudioFrom`]).
     audio_from: u32,
@@ -1588,6 +1613,8 @@ impl Track {
             recording: None,
             record_start: 0.0,
             held: [None; 128],
+            pedal: false,
+            sustained: [false; 128],
             audio_from: 0,
             sounds_from: 0,
         }
@@ -2485,21 +2512,39 @@ impl Engine {
                 continue;
             }
             if let Some(controller) = note.controller {
+                // The sustain pedal: keys let go while it is down sound on until it
+                // comes up, and are recorded that long.
+                if controller == Controller::Cc(SUSTAIN_PEDAL) {
+                    let down = note.velocity >= 0.5;
+                    if track.pedal && !down {
+                        for held in 0..128u8 {
+                            if std::mem::take(&mut track.sustained[held as usize]) {
+                                push_event(&mut track.events, 0, Event::NoteOff { pitch: held });
+                                capture_end(&mut track.held, &mut self.recorded, index, held, beat);
+                            }
+                        }
+                    }
+                    track.pedal = down;
+                }
                 push_event(&mut track.events, 0, Event::Control { controller, pitch, value: note.velocity });
                 continue;
             }
             if note.velocity > 0.0 {
+                // A key still sounding from the pedal, struck again: that note ends here.
+                if std::mem::take(&mut track.sustained[pitch as usize]) {
+                    push_event(&mut track.events, 0, Event::NoteOff { pitch });
+                    capture_end(&mut track.held, &mut self.recorded, index, pitch, beat);
+                }
                 push_event(&mut track.events, 0, Event::NoteOn { pitch, velocity: note.velocity, gate: HELD });
                 let capturing = self.playing && (track.recording.is_some() || (arrangement_record && track.armed));
                 if capturing {
                     track.held[pitch as usize] = Some((beat, note.velocity));
                 }
+            } else if track.pedal {
+                track.sustained[pitch as usize] = true;
             } else {
                 push_event(&mut track.events, 0, Event::NoteOff { pitch });
-                if let Some((start, velocity)) = track.held[pitch as usize].take() {
-                    let length = (beat - start).max(0.05);
-                    let _ = self.recorded.push(RecordedNote { track: index, pitch, velocity, start, length });
-                }
+                capture_end(&mut track.held, &mut self.recorded, index, pitch, beat);
             }
         }
     }
@@ -3881,6 +3926,52 @@ mod tests {
         assert_eq!((notes[0].track, notes[0].pitch), (3, 48));
         assert!((notes[0].start - 1.0).abs() < 0.05 && (notes[0].length - 1.0).abs() < 0.05);
         assert!(!h.shared.arrangement_recording.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn the_sustain_pedal_holds_notes_and_records_them_that_long() {
+        let mut h = Harness::new();
+        h.send(Command::SetArm { track: 0, armed: true });
+        h.send(Command::SetArrangementRecord(true));
+        h.send(Command::Play);
+        h.run_beats(1.0);
+        let pedal = |h: &mut Harness, value: f32| assert!(h.live.push(LiveNote::control(Controller::Cc(64), 0, value)).is_ok());
+        pedal(&mut h, 1.0);
+        h.play_note(60, 0.8);
+        h.run_beats(0.5);
+        h.play_note(60, 0.0); // let go with the pedal down: still sounding
+        h.play_note(64, 0.8);
+        h.run_beats(0.5);
+        h.play_note(64, 0.0);
+        h.run_beats(1.0);
+        assert!(h.recorded().is_empty(), "nothing ends while the pedal is down");
+        let sounding = h.run_beats(0.2);
+        assert!(sounding.iter().any(|s| s.abs() > 0.01), "the notes ring on");
+        pedal(&mut h, 0.0);
+        h.run_beats(0.1);
+        let mut notes = h.recorded();
+        notes.sort_by_key(|n| n.pitch);
+        assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), [60, 64]);
+        assert!((notes[0].start - 1.0).abs() < 0.05 && (notes[0].length - 2.2).abs() < 0.05, "{:?}", notes[0]);
+        assert!((notes[1].length - 1.7).abs() < 0.05, "{:?}", notes[1]);
+
+        // Struck again under the pedal: the first note ends at the second.
+        pedal(&mut h, 1.0);
+        h.play_note(67, 0.8);
+        h.run_beats(0.2);
+        h.play_note(67, 0.0);
+        h.run_beats(0.3);
+        h.play_note(67, 0.9);
+        h.run_beats(0.1);
+        let notes = h.recorded();
+        assert_eq!(notes.len(), 1);
+        assert!((notes[0].length - 0.5).abs() < 0.05, "{:?}", notes[0]);
+        pedal(&mut h, 0.0);
+        h.run_beats(0.1);
+        assert!(h.recorded().is_empty(), "the key struck again is still held");
+        h.play_note(67, 0.0);
+        h.run_beats(0.1);
+        assert_eq!(h.recorded().len(), 1);
     }
 
     #[test]

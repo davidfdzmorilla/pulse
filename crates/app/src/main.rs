@@ -45,6 +45,7 @@ mod history;
 mod groove_audio;
 mod hum_song;
 mod input;
+mod keys_ui;
 mod kick_ui;
 mod kits;
 mod library;

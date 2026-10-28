@@ -998,7 +998,7 @@ pub fn role_hint(name: &str, instrument: &InstrumentKind, drums: bool) -> Option
     let has = |keys: &[&str]| words.iter().any(|w| keys.iter().any(|k| w.starts_with(k)));
     // The most telling first: «Kick Rumble» is low end, «Voz FX» an effect.
     let by_name = [
-        (Role::Fx, &["fx", "riser", "sweep", "impact", "efecto", "noise", "ruido"][..]),
+        (Role::Fx, &["fx", "riser", "sweep", "impact", "efecto", "noise", "ruido", "transici"][..]),
         (Role::Backing, &["coro", "backing", "bvs", "dobl"]),
         (Role::Vocal, &["voz", "voces", "vocal", "vox", "voice", "cant"]),
         (Role::Bass, &["bass", "bajo", "sub", "808", "rumble"]),
@@ -1736,6 +1736,14 @@ pub struct Assistant {
     /// Comparing: whether «Antes» plays, the project when it started, and
     /// what the engine plays (see [`PulseApp::listen`]).
     pub(crate) listening: Option<Listening>,
+}
+
+#[cfg(test)]
+impl Assistant {
+    /// Analysing, or applying everything.
+    pub fn busy(&self) -> bool {
+        self.job.is_some() || self.auto.is_some()
+    }
 }
 
 pub(crate) struct Listening {
@@ -2943,6 +2951,8 @@ mod tests {
             ("Voz principal", Role::Vocal),
             ("Coros", Role::Backing),
             ("Voz FX", Role::Fx),
+            // The track Pulse puts its risers and impacts on.
+            ("Transiciones", Role::Fx),
             ("Melodía", Role::Lead),
             ("Acordes", Role::Chords),
             ("Piano", Role::Chords),

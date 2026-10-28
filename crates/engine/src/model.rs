@@ -1349,7 +1349,25 @@ impl AcidParams {
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, AcidParams)> {
         let base = AcidParams::default();
-        vec![("Init", base)]
+        vec![
+            ("Init", base),
+            ("Acid · Clásico", AcidParams { cutoff: 320.0, resonance: 0.8, env_mod: 0.6, decay: 0.35, accent: 0.7, glide_ms: 60.0, drive: 0.25, gain: 0.5, ..base }),
+            ("Acid · Squelch", AcidParams { cutoff: 180.0, resonance: 0.92, env_mod: 0.85, decay: 0.22, accent: 0.9, glide_ms: 50.0, drive: 0.35, gain: 0.445, ..base }),
+            ("Acid · Cuadrada hueca", AcidParams { square: true, cutoff: 260.0, resonance: 0.78, env_mod: 0.55, decay: 0.3, accent: 0.6, glide_ms: 60.0, drive: 0.2, gain: 0.4 }),
+            ("Acid · Gritón", AcidParams { cutoff: 400.0, resonance: 0.9, env_mod: 0.7, decay: 0.4, accent: 1.0, glide_ms: 60.0, drive: 1.0, gain: 0.25, ..base }),
+            ("Acid · Glide largo", AcidParams { cutoff: 300.0, resonance: 0.85, env_mod: 0.5, decay: 0.6, accent: 0.6, glide_ms: 250.0, drive: 0.3, gain: 0.5, ..base }),
+            ("Acid · Burbuja", AcidParams { square: true, cutoff: 500.0, resonance: 0.95, env_mod: 0.4, decay: 0.12, accent: 0.5, glide_ms: 30.0, drive: 0.15, gain: 0.4 }),
+            ("Acid · Barrido lento", AcidParams { cutoff: 120.0, resonance: 0.88, env_mod: 0.8, decay: 1.5, accent: 0.5, glide_ms: 80.0, drive: 0.3, gain: 0.5, ..base }),
+            ("Acid · Solo acentos", AcidParams { cutoff: 250.0, resonance: 0.85, env_mod: 0.25, decay: 0.3, accent: 1.0, glide_ms: 60.0, drive: 0.4, gain: 0.42, ..base }),
+            ("Bajo · Sub oscuro", AcidParams { cutoff: 80.0, resonance: 0.6, env_mod: 0.25, decay: 0.2, accent: 0.4, glide_ms: 40.0, drive: 0.2, gain: 0.8, ..base }),
+            ("Bajo · Techno rodante", AcidParams { cutoff: 220.0, resonance: 0.55, env_mod: 0.45, decay: 0.15, accent: 0.5, glide_ms: 20.0, drive: 0.5, gain: 0.5, ..base }),
+            ("Bajo · Minimal seco", AcidParams { square: true, cutoff: 350.0, resonance: 0.4, env_mod: 0.35, decay: 0.08, accent: 0.4, glide_ms: 5.0, drive: 0.1, gain: 0.5 }),
+            ("Bajo · Gordo saturado", AcidParams { cutoff: 600.0, resonance: 0.35, env_mod: 0.3, decay: 0.3, accent: 0.5, glide_ms: 30.0, drive: 0.8, gain: 0.32, ..base }),
+            ("Bajo · Pulso hueco", AcidParams { square: true, cutoff: 700.0, resonance: 0.15, env_mod: 0.1, decay: 0.3, accent: 0.3, glide_ms: 30.0, drive: 0.1, gain: 0.42 }),
+            ("Lead · Chillón", AcidParams { cutoff: 1200.0, resonance: 0.88, env_mod: 0.6, decay: 0.5, accent: 0.8, glide_ms: 80.0, drive: 0.7, gain: 0.32, ..base }),
+            ("Lead · Silbido", AcidParams { square: true, cutoff: 900.0, resonance: 0.96, env_mod: 0.2, decay: 0.8, accent: 0.4, glide_ms: 120.0, drive: 0.1, gain: 0.5 }),
+            ("FX · Láser", AcidParams { cutoff: 60.0, resonance: 0.95, env_mod: 1.0, decay: 0.08, accent: 1.0, glide_ms: 400.0, drive: 0.5, gain: 0.4, ..base }),
+        ]
     }
 }
 
@@ -1391,7 +1409,34 @@ impl FmParams {
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, FmParams)> {
         let base = FmParams::default();
-        vec![("Init", base)]
+        vec![
+            ("Init", base),
+            ("Teclas · Piano eléctrico", FmParams { ratio: 1.0, index: 1.8, mod_decay: 0.8, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 3.0, sustain: 0.0, release: 0.4, gain: 0.3 }),
+            ("Teclas · Púa brillante", FmParams { ratio: 14.0, index: 1.2, mod_decay: 0.08, mod_sustain: 0.0, feedback: 0.0, attack: 0.002, decay: 2.5, sustain: 0.0, release: 0.4, gain: 0.24 }),
+            ("Teclas · Funky percusivo", FmParams { ratio: 1.0, index: 3.0, mod_decay: 0.15, mod_sustain: 0.25, feedback: 0.4, attack: 0.001, decay: 0.8, sustain: 0.2, release: 0.12, gain: 0.38 }),
+            ("Teclas · Órgano FM", FmParams { ratio: 2.0, index: 1.0, mod_decay: 4.0, mod_sustain: 1.0, feedback: 0.0, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.08, gain: 0.18 }),
+            ("Teclas · Órgano saturado", FmParams { ratio: 1.0, index: 1.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.35, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.1, gain: 0.27 }),
+            ("Campanas · Tubular", FmParams { ratio: 3.5, index: 4.0, mod_decay: 2.5, mod_sustain: 0.2, feedback: 0.0, attack: 0.001, decay: 6.0, sustain: 0.0, release: 2.0, gain: 0.17 }),
+            ("Campanas · Iglesia", FmParams { ratio: 1.4, index: 5.0, mod_decay: 3.0, mod_sustain: 0.15, feedback: 0.0, attack: 0.001, decay: 7.0, sustain: 0.0, release: 3.0, gain: 0.15 }),
+            ("Campanas · Cristal", FmParams { ratio: 7.07, index: 2.0, mod_decay: 0.6, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 1.5, gain: 0.19 }),
+            ("Campanas · Caja de música", FmParams { ratio: 5.0, index: 1.5, mod_decay: 0.3, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 1.5, sustain: 0.0, release: 0.8, gain: 0.24 }),
+            ("Pluck · Marimba", FmParams { ratio: 4.0, index: 3.0, mod_decay: 0.03, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.6, sustain: 0.0, release: 0.3, gain: 0.3 }),
+            ("Pluck · Vibráfono", FmParams { ratio: 4.0, index: 1.5, mod_decay: 0.25, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 0.8, gain: 0.17 }),
+            ("Pluck · Metálico", FmParams { ratio: 3.17, index: 6.0, mod_decay: 0.12, mod_sustain: 0.0, feedback: 0.2, attack: 0.001, decay: 0.4, sustain: 0.0, release: 0.2, gain: 0.33 }),
+            ("Pluck · Arpegio digital", FmParams { ratio: 2.0, index: 4.0, mod_decay: 0.1, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.15, gain: 0.31 }),
+            ("Bajo · FM de los 80", FmParams { ratio: 1.0, index: 4.0, mod_decay: 0.18, mod_sustain: 0.2, feedback: 0.3, attack: 0.001, decay: 0.6, sustain: 0.5, release: 0.08, gain: 0.31 }),
+            ("Bajo · Slap", FmParams { ratio: 2.0, index: 5.0, mod_decay: 0.04, mod_sustain: 0.1, feedback: 0.2, attack: 0.001, decay: 0.5, sustain: 0.3, release: 0.08, gain: 0.31 }),
+            ("Bajo · Sub FM", FmParams { ratio: 1.0, index: 0.6, mod_decay: 0.3, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 0.5, sustain: 0.8, release: 0.1, gain: 0.31 }),
+            ("Bajo · Gruñido", FmParams { ratio: 1.0, index: 6.0, mod_decay: 0.5, mod_sustain: 0.6, feedback: 0.7, attack: 0.002, decay: 0.3, sustain: 0.8, release: 0.1, gain: 0.28 }),
+            ("Lead · Feedback", FmParams { ratio: 1.0, index: 2.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.85, attack: 0.005, decay: 0.3, sustain: 0.8, release: 0.2, gain: 0.27 }),
+            ("Lead · Flauta FM", FmParams { ratio: 1.0, index: 0.8, mod_decay: 0.15, mod_sustain: 0.3, feedback: 0.0, attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.2, gain: 0.32 }),
+            ("Metales · Stab FM", FmParams { ratio: 1.0, index: 3.5, mod_decay: 0.25, mod_sustain: 0.45, feedback: 0.4, attack: 0.015, decay: 0.4, sustain: 0.6, release: 0.15, gain: 0.37 }),
+            ("Pad · Cristal lento", FmParams { ratio: 3.0, index: 1.2, mod_decay: 4.0, mod_sustain: 0.6, feedback: 0.0, attack: 1.2, decay: 2.0, sustain: 0.8, release: 2.5, gain: 0.23 }),
+            ("Textura · Inarmónica", FmParams { ratio: 2.71, index: 5.0, mod_decay: 3.0, mod_sustain: 0.5, feedback: 0.0, attack: 0.6, decay: 2.0, sustain: 0.7, release: 2.0, gain: 0.183 }),
+            ("Textura · Metal oxidado", FmParams { ratio: 0.73, index: 7.0, mod_decay: 2.0, mod_sustain: 0.6, feedback: 0.5, attack: 0.3, decay: 3.0, sustain: 0.6, release: 2.0, gain: 0.163 }),
+            ("FX · Gong", FmParams { ratio: 0.586, index: 8.0, mod_decay: 4.0, mod_sustain: 0.1, feedback: 0.0, attack: 0.001, decay: 8.0, sustain: 0.0, release: 4.0, gain: 0.125 }),
+            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.33 }),
+        ]
     }
 }
 

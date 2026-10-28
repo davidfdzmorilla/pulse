@@ -866,6 +866,29 @@ mod tests {
         assert_eq!(bass.freq, midi_to_freq(40));
     }
 
+    fn acid_preset(name: &str) -> AcidParams {
+        AcidParams::presets().into_iter().find(|(n, _)| *n == name).unwrap().1
+    }
+
+    /// The presets built on accent and slide really play them: «Solo acentos» only
+    /// squelches on hard notes, «Glide largo» is still on its way a tenth of a second in.
+    #[test]
+    fn acid_presets_answer_to_accent_and_glide() {
+        let first_tenth = |velocity: f32| {
+            let mut bass = AcidBass::new(acid_preset("Acid · Solo acentos"), SR);
+            bass.note_on(36, velocity, 4_800);
+            energy(&run(&mut |l, r| bass.render(l, r), 4_800).0)
+        };
+        assert!(first_tenth(1.0) > 2.0 * first_tenth(0.6), "accented notes stand out");
+
+        let mut bass = AcidBass::new(acid_preset("Acid · Glide largo"), SR);
+        bass.note_on(36, 0.7, 24_000);
+        run(&mut |l, r| bass.render(l, r), 2_400);
+        bass.note_on(48, 0.7, 24_000);
+        run(&mut |l, r| bass.render(l, r), 4_800);
+        assert!(bass.freq < midi_to_freq(46), "a long glide is still sliding after 100 ms");
+    }
+
     #[test]
     fn fm_and_acid_render_audible_bounded_audio() {
         let mut fm = FmSynth::new(FmParams::default(), SR);

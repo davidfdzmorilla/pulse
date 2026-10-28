@@ -1807,7 +1807,7 @@ pub struct KeysParams {
     pub dynamics: f32,
     /// Hammer knock at the start of a note, 0..1.
     pub hammer: f32,
-    /// How far apart a piano note's strings are tuned, 0..1 (up to 3 cents).
+    /// How far apart a piano note's strings are tuned, 0..1 (up to about 7 cents).
     pub strings: f32,
     /// Soundboard and cabinet resonance, 0..1.
     pub body: f32,
@@ -1891,10 +1891,10 @@ impl KeysParams {
             d
         };
         vec![
-            ("Piano · De cola", piano),
-            ("Piano · Brillante", KeysParams { tone: 0.85, hammer: 0.5, body: 0.35, width: 0.6, ..piano }),
-            ("Piano · Suave", KeysParams { tone: 0.22, dynamics: 0.9, hammer: 0.2, body: 0.65, release: 0.5, ..piano }),
-            ("Piano · De pared", KeysParams { tone: 0.6, strings: 0.95, body: 0.75, length: 0.6, width: 0.3, ..piano }),
+            ("Piano · De cola", KeysParams { gain: 0.6, ..piano }),
+            ("Piano · Brillante", KeysParams { tone: 0.85, hammer: 0.5, body: 0.35, width: 0.6, gain: 0.45, ..piano }),
+            ("Piano · Suave", KeysParams { tone: 0.22, dynamics: 0.9, hammer: 0.2, body: 0.65, release: 0.5, gain: 0.7, ..piano }),
+            ("Piano · De pared", KeysParams { tone: 0.6, strings: 0.95, body: 0.75, length: 0.6, width: 0.3, gain: 0.7, ..piano }),
             ("Púas · Clásico", tines),
             ("Púas · Trémolo", KeysParams { tremolo: 0.6, tremolo_rate: 4.2, bell: 0.35, width: 0.7, gain: 0.4, ..tines }),
             ("Púas · Con ladrido", KeysParams { tone: 0.65, bark: 0.85, bell: 0.5, drive: 0.25, ..tines }),
@@ -1909,11 +1909,11 @@ impl KeysParams {
             ("Órgano · Completo", KeysParams { drawbars: bars("888888888"), percussion: 0.0, leslie_fast: 1.0, gain: 0.4, ..organ }),
             // Pianos for songs: pop cuts through, the ballad sings on, the dark one
             // under film cues, the worn-out one for lo-fi beats, the touchy jazz one.
-            ("Piano · Pop", KeysParams { tone: 0.72, hammer: 0.5, dynamics: 0.6, body: 0.4, length: 0.8, release: 0.3, width: 0.7, gain: 0.5, ..piano }),
-            ("Piano · Balada", KeysParams { tone: 0.42, hammer: 0.25, dynamics: 0.85, strings: 0.5, body: 0.7, length: 1.6, release: 0.9, width: 0.8, gain: 0.45, ..piano }),
-            ("Piano · Cine oscuro", KeysParams { tone: 0.08, hammer: 0.1, dynamics: 1.0, strings: 0.6, body: 0.85, length: 2.5, release: 1.6, width: 0.9, gain: 0.42, ..piano }),
-            ("Piano · Lo-fi", KeysParams { tone: 0.3, hammer: 0.6, dynamics: 0.4, strings: 1.0, body: 0.9, length: 0.45, release: 0.18, drive: 0.35, width: 0.25, gain: 0.47, ..piano }),
-            ("Piano · Jazz", KeysParams { tone: 0.55, hammer: 0.35, dynamics: 0.95, strings: 0.3, body: 0.55, length: 1.1, release: 0.25, width: 0.45, gain: 0.5, ..piano }),
+            ("Piano · Pop", KeysParams { tone: 0.72, hammer: 0.5, dynamics: 0.6, body: 0.4, length: 0.8, release: 0.3, width: 0.7, gain: 0.47, ..piano }),
+            ("Piano · Balada", KeysParams { tone: 0.42, hammer: 0.25, dynamics: 0.85, strings: 0.5, body: 0.7, length: 1.6, release: 0.9, width: 0.8, gain: 0.59, ..piano }),
+            ("Piano · Cine oscuro", KeysParams { tone: 0.08, hammer: 0.1, dynamics: 1.0, strings: 0.6, body: 0.85, length: 2.5, release: 1.6, width: 0.9, gain: 0.75, ..piano }),
+            ("Piano · Lo-fi", KeysParams { tone: 0.3, hammer: 0.6, dynamics: 0.4, strings: 1.0, body: 0.9, length: 0.45, release: 0.18, drive: 0.35, width: 0.25, gain: 0.5, ..piano }),
+            ("Piano · Jazz", KeysParams { tone: 0.55, hammer: 0.35, dynamics: 0.95, strings: 0.3, body: 0.55, length: 1.1, release: 0.25, width: 0.45, gain: 0.61, ..piano }),
             // Tines: warm soul, dark neo-soul with a lazy tremolo, the glassy seventies
             // ballad, a short barking funk comp and a slow wide chill tremolo.
             ("Púas · Soul", KeysParams { tone: 0.4, hammer: 0.15, dynamics: 0.85, bell: 0.3, bark: 0.45, length: 1.2, release: 0.35, gain: 0.53, ..tines }),

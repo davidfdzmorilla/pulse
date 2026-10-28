@@ -1463,6 +1463,8 @@ Una wavetable es una serie de formas de onda por la que el oscilador se desplaza
 - **FX**: hasta 6 efectos propios, que se guardan con el preset.
 - **MATRIX**: 16 rutas de modulación (fuente, cantidad, destino).
 
+Trae 38 presets de fábrica por categorías: Bass, Lead, Pad, Pluck, Keys, Arp y FX (ver [[Presets]]). En varios, la **Macro 1** hace lo más útil del sonido: abre el filtro, cambia la vocal o da la profundidad del wobble.
+
 #### Wavetables propias
 
 - Trae 12 wavetables. **Cargar wavetable…** abre las tuyas.

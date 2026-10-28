@@ -47,11 +47,20 @@ static DIALOGS: Mutex<Option<VecDeque<Vec<PathBuf>>>> = Mutex::new(None);
 /// While a script runs, the answer to a file dialog (empty: cancelled), else None.
 pub fn dialog_answer() -> Option<Vec<PathBuf>> {
     let mut answers = DIALOGS.lock().ok()?;
-    let queue = answers.as_mut()?;
+    // A test never opens a real dialog: without an answer, it is cancelled.
+    let queue = if cfg!(test) { answers.get_or_insert_with(VecDeque::new) } else { answers.as_mut()? };
     Some(queue.pop_front().unwrap_or_else(|| {
         log_line("  (un diálogo de archivo sin respuesta en el guion: cancelado)");
         Vec::new()
     }))
+}
+
+/// A test's answer to the next file dialog (empty: cancelled).
+#[cfg(test)]
+pub fn answer_dialog(paths: Vec<PathBuf>) {
+    if let Ok(mut d) = DIALOGS.lock() {
+        d.get_or_insert_with(VecDeque::new).push_back(paths);
+    }
 }
 
 static LOG: Mutex<Option<std::fs::File>> = Mutex::new(None);

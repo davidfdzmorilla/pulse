@@ -746,6 +746,7 @@ Efectos para los cambios de sección (subidas, bajadas, impactos), hechos a la m
 - Cada transición es un clip de audio a tu tempo en una pista **Transiciones**, que se crea la primera vez; las siguientes van a ella.
 - Si cambias el tempo, la transición lo sigue.
 - Los archivos van a `Samples/Transiciones` dentro del proyecto.
+- El [[Asistente de mezcla y master]] trata esa pista como efectos: no la comprime ni la mezcla como un bajo.
 
 > Consejo: suenan a −6 dBFS. Bájalas con el fader de la pista y dales reverb o delay con los envíos (ver [[Mezclador]]).
 

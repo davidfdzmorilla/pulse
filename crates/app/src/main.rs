@@ -77,6 +77,8 @@ mod export_identity_tests;
 mod plugins;
 mod poly_ui;
 mod presets;
+#[cfg(test)]
+mod produccion;
 mod project;
 mod recording;
 mod recovery;

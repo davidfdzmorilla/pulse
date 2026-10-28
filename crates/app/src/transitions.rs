@@ -225,7 +225,7 @@ impl PulseApp {
         let tonic = self.project.key.map_or(9, |k| k.tonic);
         let (left, right) = render(kind, beats * 60.0 / tempo, rate, tonic);
         let dir = self.media_dir(crate::library::TRANSITIONS);
-        let name = format!("{} {bars} compás{}", kind.label(), if bars == 1 { "" } else { "es" });
+        let name = format!("{} {}", kind.label(), bars_label(bars));
         let written = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| {
             let path = crate::library::claim(&dir.join(format!("{name}.wav")));
             crate::export::write(&path, &left, &right, rate as u32, crate::export::BitDepth::Float32, 1.0).map(|_| path)
@@ -280,7 +280,7 @@ pub fn menu(app: &mut PulseApp, ui: &mut eframe::egui::Ui, at: f64) {
             }
             ui.menu_button(kind.label(), |ui| {
                 for &n in bars {
-                    if ui.button(format!("{n} compás{}", if n == 1 { "" } else { "es" })).on_hover_text(kind.hint()).clicked() {
+                    if ui.button(bars_label(n)).on_hover_text(kind.hint()).clicked() {
                         app.add_transition(kind, n, at);
                         ui.close();
                     }
@@ -290,10 +290,20 @@ pub fn menu(app: &mut PulseApp, ui: &mut eframe::egui::Ui, at: f64) {
     });
 }
 
+/// «1 compás», «4 compases».
+fn bars_label(bars: u32) -> String {
+    if bars == 1 { "1 compás".into() } else { format!("{bars} compases") }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::project::Project;
+
+    #[test]
+    fn bars_are_spelled_right() {
+        assert_eq!((bars_label(1).as_str(), bars_label(8).as_str()), ("1 compás", "8 compases"));
+    }
 
     const RATE: f32 = 48_000.0;
 

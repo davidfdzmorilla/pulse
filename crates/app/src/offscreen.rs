@@ -15,7 +15,38 @@ pub struct Canvas {
 impl Canvas {
     /// Draws one frame's output, `size` points at `scale` pixels per point.
     pub fn draw(&mut self, ctx: &egui::Context, output: egui::FullOutput, size: egui::Vec2, scale: f32) -> Image {
-        for (id, deltas) in &output.textures_delta.set {
+        self.load(&output.textures_delta);
+        let width = (size.x * scale).round() as usize;
+        let height = (size.y * scale).round() as usize;
+        let mut image = Image { width, height, pixels: vec![Color32::BLACK; width * height] };
+        for primitive in ctx.tessellate(output.shapes, scale) {
+            let epaint::Primitive::Mesh(mesh) = &primitive.primitive else { continue };
+            let Some((tex_size, texture)) = self.textures.get(&mesh.texture_id) else { continue };
+            let clip = primitive.clip_rect;
+            let clip = [clip.min.x * scale, clip.min.y * scale, clip.max.x * scale, clip.max.y * scale];
+            for triangle in mesh.indices.chunks_exact(3) {
+                let [a, b, c] = [0, 1, 2].map(|i| &mesh.vertices[triangle[i] as usize]);
+                image.triangle([a, b, c], scale, clip, *tex_size, texture);
+            }
+        }
+        self.free(&output.textures_delta);
+        image
+    }
+
+    /// Keeps up with a frame's textures without drawing it (frames between pictures).
+    pub fn skip(&mut self, output: &egui::FullOutput) {
+        self.load(&output.textures_delta);
+        self.free(&output.textures_delta);
+    }
+
+    fn free(&mut self, delta: &egui::TexturesDelta) {
+        for id in &delta.free {
+            self.textures.remove(id);
+        }
+    }
+
+    fn load(&mut self, delta: &egui::TexturesDelta) {
+        for (id, deltas) in &delta.set {
             for delta in deltas {
                 let epaint::ImageData::Color(image) = &delta.image;
                 match delta.pos {
@@ -33,23 +64,6 @@ impl Canvas {
                 }
             }
         }
-        let width = (size.x * scale).round() as usize;
-        let height = (size.y * scale).round() as usize;
-        let mut image = Image { width, height, pixels: vec![Color32::BLACK; width * height] };
-        for primitive in ctx.tessellate(output.shapes, scale) {
-            let epaint::Primitive::Mesh(mesh) = &primitive.primitive else { continue };
-            let Some((tex_size, texture)) = self.textures.get(&mesh.texture_id) else { continue };
-            let clip = primitive.clip_rect;
-            let clip = [clip.min.x * scale, clip.min.y * scale, clip.max.x * scale, clip.max.y * scale];
-            for triangle in mesh.indices.chunks_exact(3) {
-                let [a, b, c] = [0, 1, 2].map(|i| &mesh.vertices[triangle[i] as usize]);
-                image.triangle([a, b, c], scale, clip, *tex_size, texture);
-            }
-        }
-        for id in &output.textures_delta.free {
-            self.textures.remove(id);
-        }
-        image
     }
 }
 

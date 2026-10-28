@@ -580,6 +580,14 @@ impl Default for SynthParams {
     }
 }
 
+impl SynthParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, SynthParams)> {
+        let base = SynthParams::default();
+        vec![("Init", base)]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub enum InstrumentKind {
     Synth(SynthParams),
@@ -1194,6 +1202,14 @@ impl Default for DrumParams {
     }
 }
 
+impl DrumParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, DrumParams)> {
+        let base = DrumParams::default();
+        vec![("Init", base)]
+    }
+}
+
 fn clean(drive: &[f32; DRUM_SOUNDS]) -> bool {
     drive.iter().all(|&d| d == 0.0)
 }
@@ -1287,6 +1303,14 @@ impl Default for SuperSawParams {
     }
 }
 
+impl SuperSawParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, SuperSawParams)> {
+        let base = SuperSawParams::default();
+        vec![("Init", base)]
+    }
+}
+
 /// Monophonic acid bassline synth with a resonant 4-pole filter and slides.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AcidParams {
@@ -1321,6 +1345,14 @@ impl Default for AcidParams {
     }
 }
 
+impl AcidParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, AcidParams)> {
+        let base = AcidParams::default();
+        vec![("Init", base)]
+    }
+}
+
 /// Two-operator FM synth: a modulator with feedback driving a sine carrier.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct FmParams {
@@ -1352,6 +1384,14 @@ impl Default for FmParams {
             release: 0.6,
             gain: 0.45,
         }
+    }
+}
+
+impl FmParams {
+    /// Factory presets: (name as «Categoría · Nombre», settings).
+    pub fn presets() -> Vec<(&'static str, FmParams)> {
+        let base = FmParams::default();
+        vec![("Init", base)]
     }
 }
 
@@ -2691,6 +2731,26 @@ impl InstrumentKind {
             InstrumentKind::DrumMachine(DrumParams::default()),
             InstrumentKind::DrumRack(RackParams::default()),
         ]
+    }
+
+    /// The presets that ship with this kind of instrument, each as a whole instrument.
+    pub fn factory_presets(&self) -> Vec<(&'static str, InstrumentKind)> {
+        fn all<P>(list: Vec<(&'static str, P)>, wrap: fn(P) -> InstrumentKind) -> Vec<(&'static str, InstrumentKind)> {
+            list.into_iter().map(|(name, p)| (name, wrap(p))).collect()
+        }
+        match self {
+            InstrumentKind::Synth(_) => all(SynthParams::presets(), InstrumentKind::Synth),
+            InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => all(DrumParams::presets(), InstrumentKind::DrumMachine),
+            InstrumentKind::SuperSaw(_) => all(SuperSawParams::presets(), InstrumentKind::SuperSaw),
+            InstrumentKind::Acid(_) => all(AcidParams::presets(), InstrumentKind::Acid),
+            InstrumentKind::Fm(_) => all(FmParams::presets(), InstrumentKind::Fm),
+            InstrumentKind::Kick(_) => all(KickParams::presets(), InstrumentKind::Kick),
+            InstrumentKind::Wavetable(_) => all(WaveParams::presets(), InstrumentKind::Wavetable),
+            InstrumentKind::Polychrome(_) => all(WaveParams::polychrome_presets(), InstrumentKind::Polychrome),
+            InstrumentKind::Modular(_) => all(ModularParams::presets(), InstrumentKind::Modular),
+            InstrumentKind::Keys(_) => all(KeysParams::presets(), InstrumentKind::Keys),
+            InstrumentKind::Sampler(_) | InstrumentKind::DrumRack(_) | InstrumentKind::Plugin(_) => Vec::new(),
+        }
     }
 
     pub fn label(&self) -> &'static str {

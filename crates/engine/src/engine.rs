@@ -3193,6 +3193,153 @@ impl Engine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The audition phrase for presets at 120 BPM: drums hit every sound, the kick
+    /// four times, the rest play a low note, a chord and a quick line. Returns the
+    /// stereo sound.
+    pub(crate) fn audition(kind: InstrumentKind) -> (Vec<f32>, Vec<f32>) {
+        flush_denormals();
+        let beat = (SR * 0.5) as usize;
+        let mut notes: Vec<(usize, u8, f32, usize)> = Vec::new(); // (start, pitch, velocity, length)
+        if kind.is_drums() {
+            for (i, (pitch, _)) in crate::model::DRUM_VOICES.into_iter().enumerate() {
+                notes.push((i * beat / 2, pitch, 0.9, beat / 4));
+            }
+        } else if matches!(kind, InstrumentKind::Kick(_)) {
+            for i in 0..4 {
+                notes.push((i * beat, 36, 1.0, beat / 2));
+            }
+        } else {
+            notes.push((0, 36, 0.9, beat));
+            for (i, pitch) in [48, 55, 60, 64].into_iter().enumerate() {
+                notes.push((beat * 2 + i * 200, pitch, 0.75, beat * 2));
+            }
+            for (i, pitch) in [72, 74, 76, 79, 76, 74, 72, 67].into_iter().enumerate() {
+                notes.push((beat * 5 + i * beat / 4, pitch, 0.6 + (i % 3) as f32 * 0.15, beat / 5));
+            }
+        }
+        let total = notes.iter().map(|n| n.0 + n.3).max().unwrap_or(0) + beat * 3;
+        // The built-in wavetables its oscillators ask for, as the app sends them.
+        let table = |index: f32| Arc::new(crate::wavetable::builtin((index.max(0.0) as usize).min(crate::wavetable::BUILTIN.len() - 1)));
+        let tables: Vec<Arc<crate::wavetable::Wavetable>> = match kind {
+            InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) => p.osc.iter().map(|o| table(o.table as f32)).collect(),
+            InstrumentKind::Modular(p) => p
+                .modules
+                .iter()
+                .map(|g| table(g.table as f32))
+                .chain(p.modulators.iter().map(|m| table(if m.kind == crate::model::ModulatorKind::LfoTable { m.index as f32 } else { 0.0 })))
+                .collect(),
+            _ => Vec::new(),
+        };
+        let mut instrument = Instrument::new(kind, SR);
+        instrument.set_tempo(120.0);
+        let (mut l, mut r) = (vec![0.0f32; total], vec![0.0f32; total]);
+        let mut at = 0;
+        for &(start, pitch, velocity, length) in &notes {
+            while at < start {
+                let n = (start - at).min(256);
+                instrument.render(&[], &tables, &mut l[at..at + n], &mut r[at..at + n]);
+                at += n;
+            }
+            instrument.note_on(&[], pitch, velocity, length as u32);
+        }
+        while at < total {
+            let n = (total - at).min(256);
+            instrument.render(&[], &tables, &mut l[at..at + n], &mut r[at..at + n]);
+            at += n;
+        }
+        (l, r)
+    }
+
+    /// Peak and loudness (RMS) of a sound, in dBFS.
+    pub(crate) fn peak_and_rms(l: &[f32], r: &[f32]) -> (f32, f32) {
+        let peak = l.iter().chain(r).fold(0.0f32, |m, s| m.max(s.abs()));
+        let rms = (l.iter().chain(r).map(|s| s * s).sum::<f32>() / (2 * l.len().max(1)) as f32).sqrt();
+        (20.0 * peak.max(1e-9).log10(), 20.0 * rms.max(1e-9).log10())
+    }
+
+    /// Highest peak a factory preset may reach in the audition phrase, in dBFS.
+    const PRESET_PEAK_DB: f32 = 0.0;
+    /// Loudness a factory preset keeps to in the audition, in dBFS RMS: none so
+    /// quiet it seems broken next to the rest, none blasting.
+    const PRESET_RMS_DB: (f32, f32) = (-30.0, -9.0);
+    /// The same for drums and kicks, whose long booms are loud by nature.
+    const PRESET_RMS_DB_DRUMS: (f32, f32) = (-30.0, -5.0);
+
+    /// Every factory preset of every instrument sounds, stays finite, leaves headroom
+    /// and sits at a loudness close to the others. («Init» is the instrument as it
+    /// comes, and only has to sound.)
+    #[test]
+    fn every_factory_preset_sounds_and_leaves_headroom() {
+        let presets: Vec<(String, InstrumentKind)> = InstrumentKind::catalog()
+            .into_iter()
+            .flat_map(|kind| kind.factory_presets().into_iter().map(move |(name, p)| (format!("{} · {name}", kind.label()), p)))
+            .collect();
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let problems: Vec<String> = std::thread::scope(|scope| {
+            // Dealt out in turn: the heavy instruments' presets come together.
+            let presets = &presets;
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    scope.spawn(move || {
+                        let mut problems = Vec::new();
+                        for (name, preset) in presets.iter().skip(t).step_by(threads) {
+                            let (l, r) = audition(*preset);
+                            let (peak, rms) = peak_and_rms(&l, &r);
+                            let init = name.ends_with(" · Init");
+                            let (quiet, loud) = if preset.is_drums() || matches!(preset, InstrumentKind::Kick(_)) { PRESET_RMS_DB_DRUMS } else { PRESET_RMS_DB };
+                            let outside: Vec<&str> = (0..preset.params().len())
+                                .filter_map(|i| {
+                                    let info = preset.param_info(i)?;
+                                    let v = preset.get(i);
+                                    (info.clamp(v) != v).then_some(info.name)
+                                })
+                                .collect();
+                            if !outside.is_empty() {
+                                problems.push(format!("{name}: outside its range: {}", outside.join(", ")));
+                            } else if !l.iter().chain(&r).all(|s| s.is_finite()) {
+                                problems.push(format!("{name}: not finite"));
+                            } else if peak < -34.0 {
+                                problems.push(format!("{name}: silent (peak {peak:.1} dB)"));
+                            } else if !init && peak > PRESET_PEAK_DB {
+                                problems.push(format!("{name}: peak {peak:.1} dB"));
+                            } else if !init && !(quiet..=loud).contains(&rms) {
+                                problems.push(format!("{name}: loudness {rms:.1} dB RMS"));
+                            }
+                        }
+                        problems
+                    })
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        });
+        assert!(problems.is_empty(), "factory presets out of bounds:\n{}", problems.join("\n"));
+    }
+
+    /// Writes the audition of every factory preset as WAV files, one folder an
+    /// instrument, to listen to:
+    /// `PULSE_DEMOS=dir cargo test --release -p engine preset_demos -- --ignored --nocapture`
+    /// (prints each preset's peak and loudness too). `PULSE_ONLY=Acid` keeps the
+    /// instruments whose name has that text.
+    #[test]
+    #[ignore]
+    fn preset_demos() {
+        let Ok(dir) = std::env::var("PULSE_DEMOS") else { return };
+        let only = std::env::var("PULSE_ONLY").unwrap_or_default().to_lowercase();
+        for kind in InstrumentKind::catalog().into_iter().filter(|k| k.label().to_lowercase().contains(&only)) {
+            let folder = format!("{dir}/{}", kind.label());
+            std::fs::create_dir_all(&folder).unwrap();
+            for (name, preset) in kind.factory_presets() {
+                let started = std::time::Instant::now();
+                let (l, r) = audition(preset);
+                let took = started.elapsed().as_secs_f32();
+                let (peak, rms) = peak_and_rms(&l, &r);
+                println!("{:18} {name:32} pico {peak:6.1} dB  rms {rms:6.1} dB  {took:.2} s", kind.label());
+                let file: String = name.chars().map(|c| if c.is_alphanumeric() { c } else { '_' }).collect();
+                crate::keys::tests::write_wav(&format!("{folder}/{file}.wav"), &l, &r);
+            }
+        }
+    }
     use crate::model::{AudioClip, Device, Effect, InstrumentKind, MidiClip, Note, WarpMarker, WarpMode};
     use crate::model::AutomationLane;
     use rtrb::RingBuffer;

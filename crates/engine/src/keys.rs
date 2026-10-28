@@ -533,9 +533,9 @@ impl Keys {
         let width = p.width * 2.0;
         // Similar loudness from every model at the same Volumen.
         let model_level = match p.model {
-            KeysModel::Piano => 0.64,
-            KeysModel::Tines => 0.96,
-            KeysModel::Reed => 0.72,
+            KeysModel::Piano => 1.28,
+            KeysModel::Tines => 1.5,
+            KeysModel::Reed => 1.15,
             KeysModel::Organ => 0.8,
         };
         let level = p.gain * 2.0;
@@ -802,7 +802,7 @@ fn start_organ(v: &mut Voice, p: &KeysParams, pitch: u8, percussion: bool, sr: f
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::synth::HELD;
 
@@ -1096,7 +1096,7 @@ mod tests {
         }
     }
 
-    fn write_wav(path: &str, l: &[f32], r: &[f32]) {
+    pub(crate) fn write_wav(path: &str, l: &[f32], r: &[f32]) {
         let mut data = Vec::with_capacity(l.len() * 4);
         for (a, b) in l.iter().zip(r) {
             for s in [a, b] {

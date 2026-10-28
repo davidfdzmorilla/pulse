@@ -423,6 +423,10 @@ impl AcidBass {
 
 const FM_VOICES: usize = 8;
 
+/// How much of the modulation index velocity takes away: a full hit plays the
+/// index as set, the softest about half of it (darker, as on a DX7).
+const FM_VELOCITY_INDEX: f32 = 0.5;
+
 #[derive(Clone, Copy)]
 struct FmVoice {
     gate: Gate,
@@ -493,6 +497,7 @@ impl FmSynth {
         for voice in self.voices.iter_mut().filter(|v| v.env.stage != Stage::Idle) {
             let freq = midi_to_freq(voice.gate.pitch) * pitch;
             let (carrier_inc, mod_inc) = (freq / sr, freq * p.ratio / sr);
+            let index = p.index * (1.0 - FM_VELOCITY_INDEX * (1.0 - voice.gate.velocity.clamp(0.0, 1.0)));
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.gate.tick() {
                     voice.env.release(p.release, sr);
@@ -504,7 +509,7 @@ impl FmSynth {
                 voice.mod_env = p.mod_sustain + (voice.mod_env - p.mod_sustain) * mod_decay;
                 let modulator = (TAU * voice.modulator + p.feedback * PI * voice.last_mod).sin();
                 voice.last_mod = modulator;
-                let out = (TAU * voice.carrier + p.index * voice.mod_env * modulator).sin();
+                let out = (TAU * voice.carrier + index * voice.mod_env * modulator).sin();
                 voice.carrier = (voice.carrier + carrier_inc) % 1.0;
                 voice.modulator = (voice.modulator + mod_inc) % 1.0;
                 let s = out * level * voice.gate.velocity * p.gain;
@@ -899,6 +904,24 @@ mod tests {
         acid.note_on(36, 1.0, 24_000);
         let (l, _) = run(&mut |l, r| acid.render(l, r), 24_000);
         assert!(energy(&l) > 1.0);
+    }
+
+    /// Playing harder brightens the FM Synth, not only louder: velocity
+    /// scales the modulation index (a full hit plays the index as set).
+    #[test]
+    fn fm_velocity_brightens() {
+        let brightness = |s: &[f32]| s.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum::<f32>() / energy(s).max(1e-9);
+        let play = |velocity: f32| {
+            let mut fm = FmSynth::new(FmParams { mod_decay: 5.0, mod_sustain: 1.0, ..FmParams::default() }, SR);
+            fm.note_on(57, velocity, 12_000);
+            run(&mut |l, r| fm.render(l, r), 12_000).0
+        };
+        let (soft, hard) = (play(0.3), play(1.0));
+        let (soft, hard) = (&soft[2_400..], &hard[2_400..]);
+        assert!(brightness(hard) > brightness(soft) * 1.5, "{} against {}", brightness(hard), brightness(soft));
+        // Its loudness still follows the velocity (a change of index moves it a little).
+        let ratio = (energy(hard) / energy(soft)).sqrt() * 0.3;
+        assert!((0.8..1.25).contains(&ratio), "{ratio}");
     }
 
     /// The swelling Super Saw presets open their filter with the slow attack (the

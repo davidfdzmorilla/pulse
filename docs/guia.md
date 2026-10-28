@@ -1330,7 +1330,7 @@ Los editores grandes (**Editor ⤢**) se abren de uno en uno dentro de la ventan
 | **Pulse Keys** | Piano, pianos eléctricos y órgano. Ver [[Pulse Keys]]. |
 | **Super Saw** | Hasta 7 dientes de sierra desafinados: leads y pads. |
 | **Acid Bass** | Bajo monofónico con filtro resonante, acento y slide. |
-| **FM Synth** | Dos operadores con realimentación: campanas, pianos eléctricos. |
+| **FM Synth** | Dos operadores con realimentación: campanas, pianos eléctricos. Cuanto más fuerte tocas, más brillante suena. |
 | **Wavetable Synth** y **Polychrome Synth** | Ver [[Wavetable y Polychrome]]. |
 | **Modular Synth** | Ver [[Modular Synth]]. |
 | **Kick Designer** | Bombos. Ver [[Kick Designer]]. |
@@ -1495,7 +1495,7 @@ Dos sintetizadores grandes con el mismo motor. **Wavetable** es el de uso genera
 Una wavetable es una serie de formas de onda por la que el oscilador se desplaza: al moverse por ella, el sonido cambia de timbre.
 
 - **Dos osciladores**. Cada uno puede ser **Wavetable**, **Sample**, **Granular**, **Spectral**, **Analog** o **Harmonic**, con Pos, octava, semitono, fino, nivel, pan, unísono y warp (Sync, Bend, PWM, Mirror, Quantize, FM).
-- **Sub**, **ruido** y **filtro** (9 modos, con su curva).
+- **Sub**, **ruido** y **filtro** (9 modos, con su curva). El modo **Comb** suena afinado a su corte en todo el teclado; con mucha resonancia y un golpe corto de ruido, hace de cuerda pulsada.
 - 3 envolventes y 4 **LFOs dibujables** (clic derecho para formas básicas).
 - **Arpegiador**, y modos Poly, Mono y Legato con Glide.
 - **FX**: hasta 6 efectos propios, que se guardan con el preset.

@@ -139,6 +139,31 @@ impl FilterState {
     }
 }
 
+/// The comb's period for `cutoff`, in samples: fractional, so it is in tune
+/// high up too; at least 3 for the taps around it.
+fn comb_delay(cutoff: f32, sr: f32) -> f32 {
+    (sr / cutoff).clamp(3.0, (COMB - 4) as f32)
+}
+
+/// How much of each neighbour the comb's loop takes in: a gentle low pass
+/// (centred, so it doesn't detune), as a string loses its highs first.
+const COMB_DAMP: f32 = 0.1;
+
+/// The comb's taps for a `delay` (fractional, samples): third-order Lagrange
+/// interpolation, through the damping low pass `[d, 1 - 2d, d]` around it.
+/// Tap `j` reads `floor(delay) - 2 + j` samples back.
+fn comb_taps(delay: f32) -> [f32; 6] {
+    let f = delay - delay.floor();
+    let lagrange = [-f * (f - 1.0) * (f - 2.0) / 6.0, (f + 1.0) * (f - 1.0) * (f - 2.0) / 2.0, -(f + 1.0) * f * (f - 2.0) / 2.0, (f + 1.0) * f * (f - 1.0) / 6.0];
+    let mut taps = [0.0; 6];
+    for (o, w) in [COMB_DAMP, 1.0 - 2.0 * COMB_DAMP, COMB_DAMP].into_iter().enumerate() {
+        for (k, h) in lagrange.iter().enumerate() {
+            taps[o + k] += w * h;
+        }
+    }
+    taps
+}
+
 /// Filter settings for a control block.
 pub(crate) struct FilterCoefs {
     mode: WaveFilter,
@@ -146,7 +171,10 @@ pub(crate) struct FilterCoefs {
     k: f32,
     ladder_g: f32,
     ladder_feedback: f32,
+    /// The comb's delay in whole samples, and its taps over delays
+    /// `comb_delay - 2 ..= comb_delay + 3` (see `comb_taps`).
     comb_delay: usize,
+    comb_taps: [f32; 6],
     comb_feedback: f32,
     formants: [(f32, f32); 3],
     formant_k: f32,
@@ -175,7 +203,8 @@ impl FilterCoefs {
             k: (2.0 - 1.98 * resonance).max(0.02),
             ladder_g: 1.0 - (-TAU * cutoff / sr).exp(),
             ladder_feedback: resonance * 4.2,
-            comb_delay: ((sr / cutoff) as usize).clamp(1, COMB - 1),
+            comb_delay: comb_delay(cutoff, sr) as usize,
+            comb_taps: comb_taps(comb_delay(cutoff, sr)),
             comb_feedback: resonance * 0.97,
             formants,
             formant_k: 0.6 - resonance * 0.55,
@@ -220,8 +249,9 @@ impl FilterCoefs {
             }
             WaveFilter::Comb => match &mut s.comb {
                 Some(comb) => {
-                    let read = (s.comb_pos + COMB - self.comb_delay) % COMB;
-                    let y = input + self.comb_feedback * comb[read];
+                    let oldest = s.comb_pos + COMB - (self.comb_delay - 2);
+                    let fed: f32 = self.comb_taps.iter().enumerate().map(|(j, tap)| tap * comb[(oldest - j) % COMB]).sum();
+                    let y = input + self.comb_feedback * fed;
                     comb[s.comb_pos] = y.clamp(-4.0, 4.0);
                     s.comb_pos = (s.comb_pos + 1) % COMB;
                     y * (1.0 - self.comb_feedback * 0.5)
@@ -1284,6 +1314,52 @@ mod tests {
 
     fn rms(x: &[f32]) -> f32 {
         (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    /// The comb's ringing to an impulse, `seconds` long, tuned to `hz` at full resonance.
+    fn comb_ring(hz: f32, seconds: f32) -> Vec<f32> {
+        let coefs = FilterCoefs::new(WaveFilter::Comb, hz, 1.0, 0.0, 1.0, SR);
+        let mut state = FilterState::new();
+        (0..(SR * seconds) as usize).map(|n| coefs.process(&mut state, if n == 0 { 1.0 } else { 0.0 })).collect()
+    }
+
+    /// The magnitude of `x` at `hz` (a direct DFT).
+    fn magnitude(x: &[f32], hz: f32) -> f32 {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (n, &v) in x.iter().enumerate() {
+            let w = std::f64::consts::TAU * hz as f64 * n as f64 / SR as f64;
+            re += v as f64 * w.cos();
+            im -= v as f64 * w.sin();
+        }
+        (re * re + im * im).sqrt() as f32
+    }
+
+    /// The comb rings at the note it is set to, high up too (a whole-sample
+    /// delay put C6 a third of a semitone sharp): its strongest peak within
+    /// a semitone of the cutoff, a quarter of a cent apart, is under 2 cents off.
+    #[test]
+    fn the_comb_is_in_tune() {
+        let mut off = Vec::new();
+        for note in [36.0f32, 48.0, 60.0, 72.0, 84.0, 91.0, 96.0] {
+            let hz = note_freq(note);
+            let ring = comb_ring(hz, 0.5);
+            let cents = (-400..=400).map(|c| c as f32 / 4.0).max_by(|a, b| magnitude(&ring, hz * 2f32.powf(a / 1200.0)).total_cmp(&magnitude(&ring, hz * 2f32.powf(b / 1200.0)))).unwrap();
+            if cents.abs() > 2.0 {
+                off.push(format!("note {note}: {cents:+.2} cents"));
+            }
+        }
+        assert!(off.is_empty(), "{}", off.join(", "));
+    }
+
+    /// A plucked comb loses its high harmonics sooner than its fundamental,
+    /// as a string does (a bare comb rings every harmonic as long: metallic).
+    #[test]
+    fn the_comb_darkens_as_it_rings() {
+        let hz = note_freq(57.0);
+        let ring = comb_ring(hz, 1.0);
+        let share = |x: &[f32]| magnitude(x, hz * 8.0) / magnitude(x, hz);
+        let (early, late) = (share(&ring[..4800]), share(&ring[38_400..43_200]));
+        assert!(late < early * 0.5, "the 8th harmonic against the first: {early} early, {late} late");
     }
 
     fn frequency(signal: &[f32]) -> f32 {

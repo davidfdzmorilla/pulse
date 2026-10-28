@@ -214,8 +214,8 @@ impl ModelKit {
                 if cymbal_on {
                     cymbal += square(*phase);
                 }
-                cymbal /= 6.0;
             }
+            cymbal /= 6.0;
 
             // Kick.
             let v = &mut self.voices[0];
@@ -362,7 +362,7 @@ impl ModelKit {
                 let source = cymbal * 0.85 + noise * 0.15;
                 let out = v.filters[0].tick(source) * 1.4 + v.filters[1].tick(source) * 0.3;
                 let env = (t / 0.0008).min(1.0) * (0.45 * decay(t, 0.015) + 0.55 * decay(t, tau));
-                per[11] += out * env * v.velocity * p.level[11] * 1.2;
+                per[11] += out * env * v.velocity * p.level[11] * 2.4;
                 v.t += dt;
                 v.active = v.t < tau * 7.0;
             }
@@ -550,6 +550,34 @@ mod tests {
     fn pitch(x: &[f32]) -> f32 {
         let crossings = x.windows(2).filter(|w| (w[0] < 0.0) != (w[1] < 0.0)).count();
         crossings as f32 / 2.0 / (x.len() as f32 / SR)
+    }
+
+    /// The magnitude of `x` at `hz` (a direct DFT, against a full-scale sine's 1).
+    fn magnitude(x: &[f32], hz: f32) -> f32 {
+        let (mut re, mut im) = (0.0f64, 0.0f64);
+        for (n, &v) in x.iter().enumerate() {
+            let w = std::f64::consts::TAU * hz as f64 * n as f64 / SR as f64;
+            re += v as f64 * w.cos();
+            im -= v as f64 * w.sin();
+        }
+        (2.0 * (re * re + im * im).sqrt() / x.len() as f64) as f32
+    }
+
+    /// All six cymbal squares sound, not only the last: the ride's band has
+    /// the 7th harmonic of the second square about as strong as the 3rd of
+    /// the sixth (a square's harmonics fall as 1/n: 3/7 of it), and the ride
+    /// sits as loud as the crash.
+    #[test]
+    fn the_cymbals_ring_with_all_six_squares() {
+        for model in [DrumModel::Tr808, DrumModel::Tr909] {
+            let ride = render(model, 11, 1.0, 0.6);
+            let stretch = &ride[(SR * 0.05) as usize..(SR * 0.55) as usize];
+            let (second, sixth) = (magnitude(stretch, CYMBAL[1] * 7.0), magnitude(stretch, CYMBAL[5] * 3.0));
+            assert!(second > 0.2 * sixth, "{model:?}: {second} against {sixth}");
+            let crash = render(model, 10, 1.0, 0.6);
+            let level = |x: &[f32]| 20.0 * rms(&x[..(SR * 0.3) as usize]).log10();
+            assert!((level(&ride) - level(&crash)).abs() < 3.0, "{model:?}: ride {} dB, crash {} dB", level(&ride), level(&crash));
+        }
     }
 
     #[test]

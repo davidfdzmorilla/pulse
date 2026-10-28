@@ -129,56 +129,50 @@ fn saturate(mode: u8, x: f32) -> f32 {
     }
 }
 
-/// Normalised biquad coefficients (RBJ cookbook).
+/// A linear state-variable filter, topology preserving (Simper's trapezoidal
+/// SVF): the RBJ cookbook's responses, but its state stays meaningful when the
+/// coefficients jump, so a modulated cutoff doesn't burst as a direct form does.
 #[derive(Clone, Copy, Default)]
-struct Biquad {
-    b0: f32,
-    b1: f32,
-    b2: f32,
+struct LinearSvf {
     a1: f32,
     a2: f32,
+    a3: f32,
+    /// Output mix of the input, band and low pass.
+    m0: f32,
+    m1: f32,
+    m2: f32,
 }
 
-impl Biquad {
+impl LinearSvf {
+    const THROUGH: LinearSvf = LinearSvf { a1: 1.0, a2: 0.0, a3: 0.0, m0: 1.0, m1: 0.0, m2: 0.0 };
+
+    /// `kind` in `FILTER_TYPES` order.
     fn new(kind: u8, cutoff: f32, q: f32, gain_db: f32, sr: f32) -> Self {
-        let w0 = TAU * cutoff.clamp(10.0, sr * 0.45) / sr;
-        let (sin, cos) = w0.sin_cos();
-        let alpha = sin / (2.0 * q.max(0.05));
+        let g = (PI * cutoff.clamp(10.0, sr * 0.45) / sr).tan();
+        let k = 1.0 / q.max(0.05);
         let a = 10f32.powf(gain_db / 40.0);
-        let sq = 2.0 * a.sqrt() * alpha;
-        let (b0, b1, b2, a0, a1, a2) = match kind {
-            0 => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
-            1 => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
-            2 => ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
-            3 => (1.0, -2.0 * cos, 1.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
-            4 => (
-                a * ((a + 1.0) - (a - 1.0) * cos + sq),
-                2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
-                a * ((a + 1.0) - (a - 1.0) * cos - sq),
-                (a + 1.0) + (a - 1.0) * cos + sq,
-                -2.0 * ((a - 1.0) + (a + 1.0) * cos),
-                (a + 1.0) + (a - 1.0) * cos - sq,
-            ),
-            5 => (1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a),
-            _ => (
-                a * ((a + 1.0) + (a - 1.0) * cos + sq),
-                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
-                a * ((a + 1.0) + (a - 1.0) * cos - sq),
-                (a + 1.0) - (a - 1.0) * cos + sq,
-                2.0 * ((a - 1.0) - (a + 1.0) * cos),
-                (a + 1.0) - (a - 1.0) * cos - sq,
-            ),
+        // (g, k, m0, m1, m2): the shelves move g by √A and the peak k by 1/A.
+        let (g, k, m0, m1, m2) = match kind {
+            0 => (g, k, 0.0, 0.0, 1.0),
+            1 => (g, k, 0.0, k, 0.0),
+            2 => (g, k, 1.0, -k, -1.0),
+            3 => (g, k, 1.0, -k, 0.0),
+            4 => (g / a.sqrt(), k, 1.0, k * (a - 1.0), a * a - 1.0),
+            5 => (g, k / a, 1.0, k / a * (a * a - 1.0), 0.0),
+            _ => (g * a.sqrt(), k, a * a, k * (1.0 - a) * a, 1.0 - a * a),
         };
-        Self { b0: b0 / a0, b1: b1 / a0, b2: b2 / a0, a1: a1 / a0, a2: a2 / a0 }
+        let a1 = 1.0 / (1.0 + g * (g + k));
+        Self { a1, a2: g * a1, a3: g * g * a1, m0, m1, m2 }
     }
 
-    /// Transposed direct form II.
     #[inline]
     fn tick(&self, z: &mut [f32; 2], x: f32) -> f32 {
-        let y = self.b0 * x + z[0];
-        z[0] = self.b1 * x - self.a1 * y + z[1];
-        z[1] = self.b2 * x - self.a2 * y;
-        y
+        let v3 = x - z[1];
+        let v1 = self.a1 * z[0] + self.a2 * v3;
+        let v2 = z[1] + self.a2 * z[0] + self.a3 * v3;
+        z[0] = 2.0 * v1 - z[0];
+        z[1] = 2.0 * v2 - z[1];
+        self.m0 * x + self.m1 * v1 + self.m2 * v2
     }
 }
 
@@ -199,8 +193,8 @@ struct ModuleState {
     /// Keytracked noise: phase through the note's cycle, and the old and new value per channel.
     keyed_phase: f32,
     keyed: [[f32; 2]; 2],
-    /// Filter memory: [channel][stage].
-    biquad: [[[f32; 2]; 2]; 2],
+    /// Filter integrators: [channel][stage].
+    filter: [[[f32; 2]; 2]; 2],
     /// Nonlinear filter integrators, per channel.
     svf: [[f32; 2]; 2],
     env: Env,
@@ -453,7 +447,7 @@ struct Block {
     chord: usize,
     chord_notes: usize,
     period: f64,
-    biquad: Biquad,
+    filter: LinearSvf,
     stages: usize,
     /// Nonlinear filter: TPT state-variable coefficients and its drive.
     svf: (f32, f32, f32, f32),
@@ -509,7 +503,7 @@ impl Block {
         chord: 0,
         chord_notes: 1,
         period: 0.0,
-        biquad: Biquad { b0: 1.0, b1: 0.0, b2: 0.0, a1: 0.0, a2: 0.0 },
+        filter: LinearSvf::THROUGH,
         stages: 1,
         svf: (1.0, 0.0, 0.0, 1.0),
         drive: 1.0,
@@ -921,7 +915,7 @@ impl ModSynth {
                 previous: [[0.0; 2]; 2],
                 keyed_phase: 0.0,
                 keyed: [[0.0; 2]; 2],
-                biquad: [[[0.0; 2]; 2]; 2],
+                filter: [[[0.0; 2]; 2]; 2],
                 svf: [[0.0; 2]; 2],
                 env: Env::IDLE,
                 spawn: 1.0,
@@ -1091,7 +1085,7 @@ impl ModSynth {
                 state.positions = [-1.0; UNISON];
                 state.back = [false; UNISON];
                 if !was_active {
-                    state.biquad = [[[0.0; 2]; 2]; 2];
+                    state.filter = [[[0.0; 2]; 2]; 2];
                     state.svf = [[0.0; 2]; 2];
                     state.pink = [[0.0; 7]; 2];
                     state.brown = [0.0; 2];
@@ -1611,7 +1605,7 @@ impl ModSynth {
                     b.steps = (2f32.powf(8.0 - at(slot::DRIVE) / 48.0 * 7.0)).max(1.0);
                 }
                 ModuleKind::Filter => {
-                    b.biquad = Biquad::new(module.choice[0], at(slot::CUTOFF), at(slot::Q), at(slot::GAIN), sr);
+                    b.filter = LinearSvf::new(module.choice[0], at(slot::CUTOFF), at(slot::Q), at(slot::GAIN), sr);
                     b.stages = if module.choice[1] == 1 { 2 } else { 1 };
                 }
                 ModuleKind::NonlinearFilter => {
@@ -1802,8 +1796,8 @@ impl ModSynth {
                     }
                     ModuleKind::Filter => {
                         for stage in 0..b.stages {
-                            l = b.biquad.tick(&mut state.biquad[0][stage], l);
-                            r = b.biquad.tick(&mut state.biquad[1][stage], r);
+                            l = b.filter.tick(&mut state.filter[0][stage], l);
+                            r = b.filter.tick(&mut state.filter[1][stage], r);
                         }
                         l *= ring;
                         r *= ring;
@@ -2136,6 +2130,112 @@ mod tests {
         generator.set(slot::SEMI, 12.0);
         let (l, _) = play(stack(&[group(), generator, output()]), &[57], 48_000);
         assert!((frequency(&l[2400..]) - 440.0).abs() < 2.0);
+    }
+
+    /// The RBJ cookbook biquad the filter was, as the reference for its response.
+    fn cookbook(kind: u8, cutoff: f32, q: f32, gain_db: f32) -> [f32; 5] {
+        let w0 = TAU * cutoff.clamp(10.0, SR * 0.45) / SR;
+        let (sin, cos) = w0.sin_cos();
+        let alpha = sin / (2.0 * q.max(0.05));
+        let a = 10f32.powf(gain_db / 40.0);
+        let sq = 2.0 * a.sqrt() * alpha;
+        let (b0, b1, b2, a0, a1, a2) = match kind {
+            0 => ((1.0 - cos) / 2.0, 1.0 - cos, (1.0 - cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
+            1 => (alpha, 0.0, -alpha, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
+            2 => ((1.0 + cos) / 2.0, -(1.0 + cos), (1.0 + cos) / 2.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
+            3 => (1.0, -2.0 * cos, 1.0, 1.0 + alpha, -2.0 * cos, 1.0 - alpha),
+            4 => (
+                a * ((a + 1.0) - (a - 1.0) * cos + sq),
+                2.0 * a * ((a - 1.0) - (a + 1.0) * cos),
+                a * ((a + 1.0) - (a - 1.0) * cos - sq),
+                (a + 1.0) + (a - 1.0) * cos + sq,
+                -2.0 * ((a - 1.0) + (a + 1.0) * cos),
+                (a + 1.0) + (a - 1.0) * cos - sq,
+            ),
+            5 => (1.0 + alpha * a, -2.0 * cos, 1.0 - alpha * a, 1.0 + alpha / a, -2.0 * cos, 1.0 - alpha / a),
+            _ => (
+                a * ((a + 1.0) + (a - 1.0) * cos + sq),
+                -2.0 * a * ((a - 1.0) + (a + 1.0) * cos),
+                a * ((a + 1.0) + (a - 1.0) * cos - sq),
+                (a + 1.0) - (a - 1.0) * cos + sq,
+                2.0 * ((a - 1.0) - (a + 1.0) * cos),
+                (a + 1.0) - (a - 1.0) * cos - sq,
+            ),
+        };
+        [b0 / a0, b1 / a0, b2 / a0, a1 / a0, a2 / a0]
+    }
+
+    /// Held still, the state-variable filter answers as the cookbook biquad
+    /// did, every type: the same magnitude at every frequency.
+    #[test]
+    fn the_filter_keeps_the_cookbook_response() {
+        // The gain of a biquad at `hz`, from its coefficients.
+        let biquad_db = |c: [f32; 5], hz: f32| {
+            let w = std::f64::consts::TAU * hz as f64 / SR as f64;
+            let c = c.map(|v| v as f64);
+            let (cos1, sin1, cos2, sin2) = (w.cos(), w.sin(), (2.0 * w).cos(), (2.0 * w).sin());
+            let num = (c[0] + c[1] * cos1 + c[2] * cos2, -(c[1] * sin1 + c[2] * sin2));
+            let den = (1.0 + c[3] * cos1 + c[4] * cos2, -(c[3] * sin1 + c[4] * sin2));
+            10.0 * ((num.0 * num.0 + num.1 * num.1) / (den.0 * den.0 + den.1 * den.1)).log10()
+        };
+        // The filter's gain at `hz`, from its response to an impulse.
+        let svf_db = |f: LinearSvf, hz: f32| {
+            let mut z = [0.0; 2];
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for n in 0..96_000 {
+                let y = f.tick(&mut z, if n == 0 { 1.0 } else { 0.0 }) as f64;
+                let w = std::f64::consts::TAU * hz as f64 * n as f64 / SR as f64;
+                re += y * w.cos();
+                im -= y * w.sin();
+            }
+            10.0 * (re * re + im * im).log10()
+        };
+        for kind in 0..7u8 {
+            for (cutoff, q, gain) in [(1000.0, 0.707, 9.0), (150.0, 4.0, -12.0), (6000.0, 0.3, 18.0), (12_000.0, 10.0, 6.0)] {
+                let reference = cookbook(kind, cutoff, q, gain);
+                let svf = LinearSvf::new(kind, cutoff, q, gain, SR);
+                for hz in [40.0, 100.0, 300.0, 700.0, 1000.0, 2500.0, 6000.0, 9000.0, 12_000.0, 16_000.0] {
+                    let (want, got) = (biquad_db(reference, hz), svf_db(svf, hz));
+                    // Deep notches are compared down to -60 dB.
+                    assert!((want.max(-60.0) - got.max(-60.0)).abs() < 0.05, "type {kind} at {cutoff} Hz, Q {q}, {gain} dB: {hz} Hz is {got:.2} dB, was {want:.2} dB");
+                }
+            }
+        }
+    }
+
+    /// A filter whose cutoff jumps (a square LFO, a sample and hold) rings
+    /// no louder than it does held anywhere on its way: no bursts out of the jump.
+    #[test]
+    fn a_jumping_cutoff_gives_no_bursts() {
+        let peak = |x: &[f32]| x.iter().fold(0.0f32, |m, s| m.max(s.abs()));
+        let mut bursts = Vec::new();
+        for (kind, q, stages) in [(0u8, 4.0, 0u8), (0, 8.0, 1), (1, 6.0, 0), (2, 4.0, 0), (5, 4.0, 0)] {
+            let patch = |cutoff: f32, jumps: bool| {
+                let mut filter = Module::new(ModuleKind::Filter);
+                (filter.choice[0], filter.choice[1]) = (kind, stages);
+                filter.set(slot::CUTOFF, cutoff);
+                filter.set(slot::Q, q);
+                filter.set(slot::GAIN, 9.0);
+                let mut p = stack(&[group(), Module::new(ModuleKind::Analog), filter, output()]);
+                if jumps {
+                    // Five octaves up for half of each cycle, eight cycles a second.
+                    let mut lfo = Modulator::new(ModulatorKind::Lfo);
+                    lfo.shape = crate::model::Shape::from_points(&[(0.0, 1.0, 0.0), (0.5, 1.0, 0.0), (0.501, 0.0, 0.0), (1.0, 0.0, 0.0)]);
+                    lfo.set(mslot::RATE, 8.0);
+                    lfo.targets[0] = ModTarget::new(ModularParams::module_param(2, slot::CUTOFF), 0.5);
+                    p.modulators[0] = lfo;
+                }
+                play(p, &[36], 48_000).0
+            };
+            // Held anywhere on the way, a third of an octave apart.
+            let held = (0..=15).map(|k| peak(&patch(300.0 * 2f32.powf(k as f32 / 3.0), false)[4800..])).fold(0.0, f32::max);
+            let jumping = peak(&patch(300.0, true)[4800..]);
+            let burst = 20.0 * (jumping / held).log10();
+            if burst > 1.0 {
+                bursts.push(format!("type {kind}, Q {q}, {} stages: {burst:.1} dB over its held peak", stages + 1));
+            }
+        }
+        assert!(bursts.is_empty(), "{}", bursts.join("\n"));
     }
 
     #[test]

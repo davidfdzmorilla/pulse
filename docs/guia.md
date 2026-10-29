@@ -1644,6 +1644,8 @@ Los plugins saben el tempo, en qué compás está la canción y si suena o está
 
 Si un plugin ya no está instalado, su dispositivo lo avisa y no suena.
 
+Una pista o un retorno con un plugin se procesa siempre en el núcleo del audio, no en los otros (ver [[Ajustes]]): algunos plugins solo aceptan que se les llame desde ahí.
+
 ### Plugins de otras carpetas
 
 Un plugin es código que se ejecuta dentro de Pulse. Por eso un proyecto solo carga plugins de tus carpetas de plugins: las del sistema y las de **Ajustes › Plugins**.
@@ -2482,6 +2484,8 @@ Dónde elegir la tarjeta de sonido, los dispositivos MIDI, las carpetas de plugi
 - **Frecuencia** y **tamaño del búfer**: más pequeño responde antes; si oyes cortes, súbelo.
 - **Latencias medidas**, también la de los **efectos**.
 - **Ajuste fino de la grabación** y **Compensar la latencia de los efectos** (ver [[Grabar]]).
+
+Cuando el proyecto pesa, Pulse reparte las pistas y los retornos entre varios núcleos del procesador (hasta la mitad de los que tiene, y como mucho seis). Así caben muchas más pistas, instrumentos y efectos sin cortes, y suena exactamente igual que en un solo núcleo (así exporta): lo que oyes es lo que exportas. Con poco que procesar, lo hace todo en uno y los demás descansan.
 
 ### MIDI
 

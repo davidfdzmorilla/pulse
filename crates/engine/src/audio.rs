@@ -161,7 +161,10 @@ pub fn start_with(settings: &AudioSettings) -> Result<(AudioOutput, EngineHandle
         cpal::BufferSize::Default => None,
     };
 
-    let (engine, mut handle) = detached(sample_rate);
+    let (mut engine, mut handle) = detached(sample_rate);
+    // The tracks are shared among several cores (PULSE_THREADS=1: all on the audio thread).
+    let threads = std::env::var("PULSE_THREADS").ok().and_then(|t| t.parse().ok()).unwrap_or_else(crate::workers::default_threads);
+    engine.set_threads(threads);
     handle.device_name = device_name;
     handle.buffer = buffer;
 

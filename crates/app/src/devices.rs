@@ -398,6 +398,8 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::DeEsser(_) => (3, 0),
         Effect::Delay(_) => (3, 1),
         Effect::Reverb(_) => (4, 0),
+        // Space and presets, the drawing, then Decay and Size and the five knobs.
+        Effect::Convolution(_) => return 7.0 * 52.0 + 100.0 + SKETCH.x + 32.0,
         Effect::Saturator(_) => (3, 0),
         Effect::AutoFilter(_) => (3, 2),
         Effect::Chorus(_) => (4, 0),
@@ -663,6 +665,7 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 }
             });
         }
+        Effect::Convolution(p) => convolution_controls(ui, p, index),
         Effect::Eq3(_)
         | Effect::EqEight(_)
         | Effect::Multiband(_)
@@ -677,6 +680,83 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         | Effect::Limiter(_)
         | Effect::Plugin(_) => {}
     }
+}
+
+/// The Convolution Reverb's drawing.
+const SKETCH: egui::Vec2 = egui::vec2(150.0, 112.0);
+
+/// The Convolution Reverb's space, presets, drawing, and the two knobs that
+/// make its response (not automated: each change builds a new one).
+fn convolution_controls(ui: &mut egui::Ui, p: &mut engine::model::ConvolutionParams, index: usize) {
+    use engine::model::{ConvolutionParams, ReverbSpace};
+    ui.vertical(|ui| {
+        ui.label(egui::RichText::new("Espacio").color(TEXT_DIM).size(10.5));
+        egui::ComboBox::from_id_salt(format!("space{index}"))
+            .selected_text(p.space.label())
+            .width(92.0)
+            .show_ui(ui, |ui| {
+                for space in ReverbSpace::ALL {
+                    ui.selectable_value(&mut p.space, space, space.label()).on_hover_text(space.hint());
+                }
+            })
+            .response
+            .on_hover_text(p.space.hint());
+    });
+    space_sketch(ui, p);
+    let base = *p;
+    let seconds = move |decay: f32| engine::convolution::space_sketch(&ConvolutionParams { decay, ..base }).t60[1];
+    widgets::Knob::new(&mut p.decay, ConvolutionParams::DECAY, 1.0, "Decay")
+        .taper(widgets::Taper::Log)
+        .format(move |v| format!("{:.1} s", seconds(v)))
+        .show(ui)
+        .on_hover_text("Lo que dura la cola (lo que tarda en caer 60 dB en los medios). Al cambiarlo, Pulse calcula el espacio de nuevo y pasa a él sin cortes en menos de medio segundo; por eso no se automatiza");
+    widgets::Knob::new(&mut p.size, ConvolutionParams::SIZE, 1.0, "Size")
+        .format(|v| format!("{:.0} %", v * 100.0))
+        .show(ui)
+        .on_hover_text("El tamaño del espacio: más grande, las primeras reflexiones llegan más tarde y más separadas. No se automatiza");
+}
+
+/// The response at a glance: the early reflections as lines, and how the tail
+/// dies in the lows, mids and highs (time across, 0 to -60 dB down).
+fn space_sketch(ui: &mut egui::Ui, p: &engine::model::ConvolutionParams) {
+    let (rect, response) = ui.allocate_exact_size(SKETCH, Sense::hover());
+    let painter = ui.painter_at(rect);
+    painter.rect_filled(rect, 3.0, theme::BG);
+    let sketch = engine::convolution::space_sketch(p);
+    let pre = p.predelay_ms.clamp(0.0, 250.0) * 0.001;
+    let span = (pre + sketch.length).max(0.1);
+    let plot = rect.shrink2(vec2(4.0, 6.0));
+    // Time on a square-root scale, so the first milliseconds show.
+    let x = |t: f32| plot.left() + (t / span).clamp(0.0, 1.0).sqrt() * plot.width();
+    let y = |db: f32| plot.top() + (-db / 60.0).clamp(0.0, 1.0) * plot.height();
+    let line = Color32::from_rgba_unmultiplied(0xd8, 0xd8, 0xd8, 90);
+    // The first ones: later they are too many to tell apart.
+    for (t, db) in sketch.reflections.iter().take(24) {
+        let at = x(pre + t);
+        painter.line_segment([pos2(at, y(-60.0)), pos2(at, y(*db - 3.0))], Stroke::new(1.0, line));
+    }
+    let colors = [Color32::from_rgb(120, 150, 255), ACCENT, Color32::from_rgb(255, 210, 120)];
+    for (band, color) in sketch.t60.iter().zip(colors) {
+        // From the tail's peak until it is 60 dB down.
+        let start = pre + sketch.tail_peak;
+        let peak = if sketch.reflections.is_empty() { 0.0 } else { -6.0 };
+        let end = (start + band * (60.0 + peak) / 60.0).min(span);
+        let points: Vec<egui::Pos2> = (0..=48)
+            .map(|i| {
+                let t = start + (end - start) * i as f32 / 48.0;
+                pos2(x(t), y(peak - 60.0 * (t - start) / band.max(0.01)))
+            })
+            .collect();
+        painter.add(egui::Shape::line(points, Stroke::new(1.5, color)));
+    }
+    if pre > 0.0 {
+        painter.text(pos2(x(pre), plot.top()), Align2::CENTER_TOP, "▾", theme::small(), TEXT_DIM);
+    }
+    painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, format!("{:.1} s", span), theme::small(), TEXT_DIM);
+    response.on_hover_text(format!(
+        "Las primeras reflexiones (rayas) y cómo cae la cola: graves (azul) {:.1} s, medios {:.1} s, agudos (amarillo) {:.1} s",
+        sketch.t60[0], sketch.t60[1], sketch.t60[2]
+    ));
 }
 
 pub(crate) type Zones = Vec<(Rect, usize, usize)>;
@@ -1330,6 +1410,7 @@ pub(crate) fn click_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &
 mod tests {
     use super::*;
     use crate::project::{Project, Track};
+    use engine::model::{ConvolutionParams, ReverbSpace};
 
     /// The devices of `app`'s selected chain drawn a few frames without a window.
     /// Also the picture of the last frame (each frame's textures go to the canvas).
@@ -1403,5 +1484,60 @@ mod tests {
         let temp = dir.join(".dinamica.png.tmp");
         image.save_png(&temp).unwrap();
         std::fs::rename(temp, dir.join("dinamica.png")).unwrap();
+    }
+
+    /// The device panel of a track with a Convolution Reverb, drawn off screen.
+    fn draw_convolution(space: ReverbSpace, frames: usize) -> (egui::Context, crate::offscreen::Image) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let mut project = Project::empty();
+        project.tracks.clear();
+        let mut track = Track::new("Voz", [200, 120, 60], InstrumentKind::Synth(Default::default()));
+        track.devices.push(Device::new(Effect::Convolution(ConvolutionParams { space, predelay_ms: 30.0, ..Default::default() })));
+        project.tracks.push(track);
+        let mut app = crate::app::PulseApp::headless(project);
+        app.selected_target = Target::Track(0);
+        let mut canvas = crate::offscreen::Canvas::default();
+        let size = vec2(1400.0, 200.0);
+        let input = || egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        let mut image = None;
+        for _ in 0..frames {
+            ctx.set_pixels_per_point(2.0);
+            let output = ctx.run_ui(input(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| show(&mut app, ui));
+            });
+            image = Some(canvas.draw(&ctx, output, size, 2.0));
+        }
+        (ctx, image.unwrap())
+    }
+
+    #[test]
+    fn the_convolution_reverb_has_its_device() {
+        for space in ReverbSpace::ALL {
+            draw_convolution(space, 2);
+            assert!(!space.hint().is_empty());
+        }
+        // Factory settings by category, and within the ranges.
+        let presets = ConvolutionParams::presets();
+        assert!(presets.len() >= 10 && presets.iter().all(|(name, _)| name.contains(" · ")));
+        for (name, p) in presets {
+            assert!(ConvolutionParams::DECAY.contains(&p.decay) && ConvolutionParams::SIZE.contains(&p.size), "{name}");
+            let effect = Effect::Convolution(p);
+            for (i, info) in effect.params().iter().enumerate() {
+                assert_eq!(info.clamp(effect.get(i)), effect.get(i), "{name}: {}", info.name);
+            }
+        }
+    }
+
+    /// `PULSE_SHOTS=dir cargo test --release -p app convolution_shots -- --ignored`.
+    #[test]
+    #[ignore]
+    fn convolution_shots() {
+        let Some(dir) = std::env::var_os("PULSE_SHOTS").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        for space in [ReverbSpace::Room, ReverbSpace::Hall, ReverbSpace::Plate, ReverbSpace::Infinite] {
+            let (_, image) = draw_convolution(space, 4);
+            image.save_png(&dir.join(format!("espacio-{}.png", space.label()))).unwrap();
+        }
     }
 }

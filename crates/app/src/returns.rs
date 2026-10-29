@@ -226,8 +226,8 @@ mod tests {
         assert_eq!(format(&utility), 13);
         utility.tracks[1].devices[0] = engine::model::Device::new(engine::model::Effect::Utility(engine::model::UtilityParams { flip_right: true, ..Default::default() }));
         assert_eq!(format(&utility), 13);
-        // A bus compressor or a multiband: 14.
-        for effect in [engine::model::Effect::Glue(Default::default()), engine::model::Effect::Multiband(Default::default())] {
+        // A bus compressor, a multiband or a convolution reverb: 14.
+        for effect in [engine::model::Effect::Glue(Default::default()), engine::model::Effect::Multiband(Default::default()), engine::model::Effect::Convolution(Default::default())] {
             let mut glued = Project::demo();
             glued.master.devices.push(engine::model::Device::new(effect));
             assert_eq!(format(&glued), 14);

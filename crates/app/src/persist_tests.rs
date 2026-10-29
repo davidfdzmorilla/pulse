@@ -127,6 +127,7 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         Effect::Multiband(engine::model::MultibandParams { depth: 0.4, band_in_db: [1.0, -2.0, 3.0], band_out_db: [-1.0, 0.5, 2.0], ..Default::default() }),
         Effect::Delay(Default::default()),
         Effect::Reverb(Default::default()),
+        Effect::Convolution(engine::model::ConvolutionParams { space: engine::model::ReverbSpace::Plate, decay: 1.4, predelay_ms: 25.0, ..Default::default() }),
         Effect::Saturator(Default::default()),
         Effect::AutoFilter(Default::default()),
         Effect::Chorus(Default::default()),

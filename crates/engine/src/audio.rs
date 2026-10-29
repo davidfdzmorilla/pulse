@@ -31,12 +31,32 @@ pub struct EngineHandle {
     pub device_name: String,
     /// Frames per buffer, if fixed.
     pub buffer: Option<u32>,
+    /// Builds Convolution Reverbs' new responses off this thread.
+    reverbs: crate::convolution::KernelBuilder,
 }
 
 impl EngineHandle {
     /// Sends a command to the audio thread. Returns false if the queue is full.
     pub fn send(&mut self, command: Command) -> bool {
-        self.commands.push(command).is_ok()
+        // A Convolution Reverb's new settings may need a new response: built
+        // on another thread, it reaches the engine after this command.
+        let rebuild = match &command {
+            Command::UpdateDevice { target, index, device } => match device.effect {
+                crate::model::Effect::Convolution(p) => Some((*target, *index, p)),
+                _ => None,
+            },
+            _ => None,
+        };
+        let sent = self.commands.push(command).is_ok();
+        if let (true, Some((target, index, p))) = (sent, rebuild) {
+            self.reverbs.request(target, index, &p, self.sample_rate);
+        }
+        sent
+    }
+
+    /// Convolution Reverb responses still being built for the engine.
+    pub fn building_reverbs(&self) -> usize {
+        self.reverbs.pending()
     }
 
     /// Notes captured by recording since the last call.
@@ -190,8 +210,11 @@ pub fn detached(sample_rate: f32) -> (Engine, EngineHandle) {
     let (garbage_tx, garbage_rx) = RingBuffer::new(crate::engine::GARBAGE_QUEUE);
     let (live_tx, live_rx) = RingBuffer::new(1024);
     let (recorded_tx, recorded_rx) = RingBuffer::new(4096);
-    let (engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);
+    let (mut engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);
+    let (kernel_tx, kernel_rx) = RingBuffer::new(crate::convolution::DELIVERIES);
+    engine.set_kernel_queue(kernel_rx);
     let handle = EngineHandle {
+        reverbs: crate::convolution::KernelBuilder::new(kernel_tx),
         commands: command_tx,
         recorded: recorded_rx,
         live: LiveInput(Arc::new(Mutex::new(live_tx))),

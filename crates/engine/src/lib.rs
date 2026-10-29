@@ -1,6 +1,7 @@
 //! Pulse audio engine: clip launcher, arrangement sequencer, device chains and mixer.
 
 mod audio;
+pub mod convolution;
 pub mod dsp;
 mod dynamics;
 mod effects;

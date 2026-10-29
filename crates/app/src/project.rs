@@ -636,7 +636,7 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Glue(_) | Effect::Multiband(_))) {
+            let format = if self.has_effect(|e| matches!(e, Effect::Glue(_) | Effect::Multiband(_) | Effect::Convolution(_))) {
                 FORMAT
             } else if self.has_effect(|e| matches!(e, Effect::Utility(u) if u.flip_right || u.bass_mono_hz > 0.0)) {
                 13

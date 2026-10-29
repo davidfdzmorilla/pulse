@@ -1738,6 +1738,7 @@ Si haces clic en un instrumento del navegador, sustituye al de la pista MIDI sel
 | **Chorus** y **Phaser** | Movimiento y anchura. |
 | **Delay** | Eco a tempo. |
 | **Reverb** | Sala. |
+| **Espacio** | Reverb de convolución: salas, placa y muelle de verdad, sin sonido metálico. |
 | **Utility** | Volumen, anchura estéreo, graves en mono y arreglar fase. |
 
 #### EQ Eight
@@ -1893,6 +1894,38 @@ Hace que la pista **bombee**: baja el volumen y vuelve, al ritmo.
 - Delay: Feedback (hasta 95 %), Filter 500–18 000 Hz, Dry/Wet.
 - Reverb: Size, Damping, Width, Dry/Wet.
 +++
+
+#### Espacio (reverb de convolución)
+
+Una reverb que suena a un sitio de verdad: Pulse calcula la respuesta de cada espacio (cómo rebota un golpe en sus paredes y cómo se apaga), y el sonido pasa por ella. Es más natural y más suave que la **Reverb**, que puede sonar metálica en colas largas. Gasta poco: alrededor de un 1 % de un núcleo, aunque la cola dure 8 segundos, y nada mientras no le llega sonido. No retrasa nada.
+
+1. Elige el **Espacio**:
+   - **Ambiente**: solo las primeras reflexiones; aire y cuerpo sin cola.
+   - **Habitación** y **Estudio**: cerca y natural, para batería y guitarras.
+   - **Sala** y **Sala grande**: la reverb larga y redonda.
+   - **Catedral**: muy larga, y los graves duran más.
+   - **Placa**: densa desde el primer instante y brillante; la de las voces y la caja.
+   - **Muelle**: el «boing» del dub y el surf.
+   - **Infinito**: una cola de muchos segundos que entra despacio, para pads y ambient.
+2. Ajusta **Decay** (lo que dura la cola, en segundos) y **Size** (más grande, las primeras reflexiones llegan más tarde).
+3. Con **Pre-delay** separas la voz de su reverb; con **Low Cut** y **High Cut** le quitas graves que embarran y agudos que chillan.
+
+El dibujo muestra las primeras reflexiones (rayas) y cómo cae la cola en graves (azul), medios (naranja) y agudos (amarillo): en un espacio real, los agudos se apagan antes.
+
+**Presets** trae ajustes por uso: **Voces · Placa brillante**, **Batería · Habitación**, **Pads · Catedral**, **Ambiente · Infinito**, y los **Retorno · …**, con todo el sonido mojado, para un retorno.
+
+- En un retorno, deja **Dry/Wet** al 100 % y manda más o menos desde cada pista.
+- Al cambiar el espacio, **Decay** o **Size**, Pulse calcula el espacio nuevo y pasa a él sin cortes en menos de medio segundo. Por eso esos tres no se automatizan; el resto sí.
+- Entra en mono y sale en estéreo: una pista a la izquierda tiene su reverb repartida por los dos lados, como en una sala.
+
++++ Todos los parámetros
+- Espacio: Ambiente, Habitación, Estudio, Sala, Sala grande, Catedral, Placa, Muelle, Infinito.
+- Decay: del 25 % al 200 % de lo que dura el espacio (hasta 10 s de cola).
+- Size: 50–150 %.
+- Pre-delay 0–250 ms, Low Cut 20–2000 Hz (20 Hz: apagado), High Cut 1000–20 000 Hz (20 000 Hz: apagado), Width, Dry/Wet.
++++
+
+> Nota: un proyecto que use Espacio no se abre en un Pulse anterior: pide actualizar.
 
 #### Utility
 

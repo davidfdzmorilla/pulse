@@ -6,6 +6,7 @@ use crate::model::{
     DeEsserParams, EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, GateParams, TransientParams, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
 use crate::dynamics::{Glue, Multiband};
+use crate::convolution::Convolution;
 use crate::plugin::PluginProcessor;
 use crate::tuner::Tuner;
 use std::f32::consts::{PI, TAU};
@@ -28,13 +29,13 @@ pub struct ProcessContext {
 
 /// Topology-preserving-transform state variable filter returning (low, band, high).
 #[derive(Clone, Copy, Default)]
-struct Svf {
+pub(crate) struct Svf {
     ic1: f32,
     ic2: f32,
 }
 
 #[derive(Clone, Copy)]
-struct SvfCoefs {
+pub(crate) struct SvfCoefs {
     a1: f32,
     a2: f32,
     a3: f32,
@@ -42,7 +43,7 @@ struct SvfCoefs {
 }
 
 impl SvfCoefs {
-    fn new(cutoff: f32, k: f32, sample_rate: f32) -> Self {
+    pub(crate) fn new(cutoff: f32, k: f32, sample_rate: f32) -> Self {
         let g = (PI * cutoff.clamp(20.0, sample_rate * 0.45) / sample_rate).tan();
         let a1 = 1.0 / (1.0 + g * (g + k));
         Self {
@@ -55,7 +56,7 @@ impl SvfCoefs {
 }
 
 impl Svf {
-    fn tick(&mut self, x: f32, c: &SvfCoefs) -> (f32, f32, f32) {
+    pub(crate) fn tick(&mut self, x: f32, c: &SvfCoefs) -> (f32, f32, f32) {
         let v3 = x - self.ic2;
         let v1 = c.a1 * self.ic1 + c.a2 * v3;
         let v2 = self.ic2 + c.a2 * self.ic1 + c.a3 * v3;
@@ -65,7 +66,7 @@ impl Svf {
     }
 }
 
-const BUTTERWORTH_K: f32 = std::f32::consts::SQRT_2;
+pub(crate) const BUTTERWORTH_K: f32 = std::f32::consts::SQRT_2;
 
 pub struct Eq3 {
     params: Eq3Params,
@@ -1513,6 +1514,7 @@ pub enum EffectProcessor {
     DeEsser(Box<DeEsser>),
     Delay(Delay),
     Reverb(Reverb),
+    Convolution(Box<Convolution>),
     Saturator(Saturator),
     AutoFilter(AutoFilter),
     Chorus(Chorus),
@@ -1548,6 +1550,7 @@ impl EffectProcessor {
             Effect::DeEsser(params) => Self::DeEsser(Box::new(DeEsser::new(params))),
             Effect::Delay(params) => Self::Delay(Delay::new(params, sample_rate)),
             Effect::Reverb(params) => Self::Reverb(Reverb::new(params, sample_rate)),
+            Effect::Convolution(params) => Self::Convolution(Box::new(Convolution::new(params, sample_rate))),
             Effect::Saturator(params) => Self::Saturator(Saturator::new(params)),
             Effect::AutoFilter(params) => Self::AutoFilter(AutoFilter {
                 params,
@@ -1634,6 +1637,8 @@ impl EffectProcessor {
             (Self::DeEsser(fx), Effect::DeEsser(p)) => fx.params = p,
             (Self::Delay(fx), Effect::Delay(p)) => fx.params = p,
             (Self::Reverb(fx), Effect::Reverb(p)) => fx.params = p,
+            // A new space, decay or size comes later, as a new response (see `convolution`).
+            (Self::Convolution(fx), Effect::Convolution(p)) => fx.params = p,
             (Self::Saturator(fx), Effect::Saturator(p)) => fx.params = p,
             (Self::AutoFilter(fx), Effect::AutoFilter(p)) => fx.params = p,
             (Self::Chorus(fx), Effect::Chorus(p)) => fx.params = p,
@@ -1662,6 +1667,7 @@ impl EffectProcessor {
             Self::DeEsser(fx) => Effect::DeEsser(fx.params),
             Self::Delay(fx) => Effect::Delay(fx.params),
             Self::Reverb(fx) => Effect::Reverb(fx.params),
+            Self::Convolution(fx) => Effect::Convolution(fx.params),
             Self::Saturator(fx) => Effect::Saturator(fx.params),
             Self::AutoFilter(fx) => Effect::AutoFilter(fx.params),
             Self::Chorus(fx) => Effect::Chorus(fx.params),
@@ -1728,6 +1734,7 @@ impl EffectProcessor {
                     allpass.index = 0;
                 }
             }
+            Self::Convolution(fx) => fx.reset(),
             Self::AutoFilter(fx) => {
                 fx.filters = Default::default();
                 fx.first = Default::default();
@@ -1773,6 +1780,7 @@ impl EffectProcessor {
             Self::DeEsser(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Delay(fx) => fx.process(l, r, ctx),
             Self::Reverb(fx) => fx.process(l, r),
+            Self::Convolution(fx) => fx.process(l, r),
             Self::Saturator(fx) => fx.process(l, r),
             Self::AutoFilter(fx) => fx.process(l, r, ctx),
             Self::Chorus(fx) => fx.process(l, r, ctx.sample_rate),

@@ -1724,6 +1724,8 @@ Si haces clic en un instrumento del navegador, sustituye al de la pista MIDI sel
 | **EQ Three** | Subir o bajar graves, medios y agudos, rápido. |
 | **EQ Eight** | Ecualizar con precisión: quitar graves que sobran, una frecuencia que pita, dar brillo. |
 | **Compressor** | Igualar lo fuerte y lo suave para que la pista no se pierda ni salte. |
+| **Compresor de bus** | Pegar una batería, un grupo o la mezcla entera (ver [[Compresor de bus]]). |
+| **Multibanda (OTT)** | Aplastar y abrillantar a lo OTT: sube lo flojo y baja lo fuerte en tres bandas (ver [[Multibanda (OTT)]]). |
 | **Limiter** | Subir el volumen sin pasar de un techo; para el master. |
 | **Gate** | Silenciar el ruido de fondo entre golpes o frases. |
 | **Transient** | Dar más o menos pegada y más o menos cola a cada golpe. |
@@ -1771,6 +1773,8 @@ Las formas:
 El **Compressor** baja lo que pasa del umbral, para que las partes fuertes y las suaves queden más juntas. Controles: **Threshold** (umbral), **Ratio**, **Attack**, **Release** y **Makeup** (ganancia para recuperar volumen), y **Sidechain** (ver abajo).
 
 El **Limiter** sube el volumen con **Gain** sin dejar que nada pase del techo (**Ceiling**). **Release** es lo que tarda en soltar.
+
+Los dos tienen a la derecha un medidor **GR**: cuántos dB bajan el volumen en cada momento.
 
 +++ Todos los parámetros
 - Compressor: Threshold −60 a 0 dB (−18), Ratio 1:1 a 20:1 (4:1), Attack 0,1–200 ms (10), Release 5–2000 ms (120), Makeup 0–24 dB.
@@ -1925,9 +1929,9 @@ Cambian las notas antes de que lleguen al instrumento, en pistas MIDI.
 
 ### Sidechain: que una pista se aparte de otra
 
-El **Compressor**, el **Gate** y el **Ducker** pueden escuchar a otra pista en vez de a la suya. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
+El **Compressor**, el **Compresor de bus**, el **Gate** y el **Ducker** pueden escuchar a otra pista en vez de a la suya. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
 
-1. Pon un Compressor, un Gate o un Ducker en la pista que debe apartarse (el bajo).
+1. Pon un Compressor, un Compresor de bus, un Gate o un Ducker en la pista que debe apartarse (el bajo).
 2. En su menú **Sidechain**, elige la pista que manda (el bombo).
 
 - Escucha el sonido de la pista elegida **tras sus efectos y antes de su fader**: funciona aunque esa pista esté silenciada o con el fader abajo. Puedes tener un bombo solo para disparar el sidechain.
@@ -1937,6 +1941,97 @@ El **Compressor**, el **Gate** y el **Ducker** pueden escuchar a otra pista en v
 - Sigue funcionando con otra pista en solo, en los stems y al congelar.
 - La fuente se recuerda aunque muevas, agrupes o renombres las pistas.
 - Vale también en pistas de grupos, retornos y el Master.
++++
+
+## Compresor de bus
+
+Un compresor para pegar: hace que una batería, un grupo de sintes o la mezcla entera suenen como una sola cosa, como el compresor de bus de una mesa SSL (el Glue Compressor de Live). Ponlo en el **grupo** de la batería o en el **Master**.
+
+### Usarlo en el bus de batería
+
+1. Agrupa la batería (ver [[Pistas#Agrupar pistas]]) y selecciona el grupo.
+2. En el navegador, **EFECTOS DE AUDIO** → **Compresor de bus**. O abre **Presets** en su barra y elige **Bus de batería**.
+3. Baja **Threshold** hasta que el medidor **GR** marque 2–4 dB en los golpes.
+4. Sube **Makeup** lo que ha bajado, para comparar al mismo volumen encendiéndolo y apagándolo.
+
+> Consejo: con **Attack** a 10–30 ms el principio de cada golpe pasa antes de que comprima: más pegada. Con 0,1–1 ms lo aplasta todo.
+
+### Los controles
+
+- **Ratio**: **2:1** pega sin notarse (master, grupos), **4:1** es el de siempre en batería y **10:1** casi limita (para el paralelo).
+- **Attack** (0,01–30 ms) y **Release** (0,1–1,2 s): lo que tarda en bajar y en soltar.
+- **Auto**: release automático. Suelta rápido tras un golpe suelto y despacio cuando lleva rato comprimiendo, así no bombea. Con él encendido, el knob **Release** no hace nada.
+- **Makeup**: recupera el volumen que quita.
+- **Knee**: lo suave que entra. A 0 dB comprime de golpe al pasar el umbral; con más, va entrando poco a poco.
+- **SC Filter**: el compresor deja de oír los graves por debajo de esta frecuencia. Con 80–150 Hz el bombo ya no hace bajar toda la batería en cada golpe. Abajo del todo (20 Hz) está apagado.
+- **Dry/Wet**: mezcla el sonido sin comprimir. Con un 30–50 % y mucha compresión tienes **compresión en paralelo**: el cuerpo aplastado y los golpes intactos.
+- **Clip**: recorta suave los picos a la salida, por debajo de 0 dBFS.
+- **Sidechain**: que escuche a otra pista (ver [[Dispositivos y efectos#Sidechain: que una pista se aparte de otra]]).
+
+### Presets
+
+| Preset | Para qué |
+|---|---|
+| **Bus de batería** | 4:1, ataque de 10 ms, release Auto y filtro a 90 Hz: la batería junta sin perder el bombo. |
+| **Paralelo duro** | 10:1 muy rápido y aplastado, al 40 %: cuerpo y sala sin tocar los golpes. |
+| **Pegada (ataque lento)** | 30 ms de ataque: los golpes salen hacia delante. |
+| **Pegar la mezcla** | 2:1 suave en el master, 1–2 dB de GR. |
+| **Master con clip** | Como el anterior y con **Clip**: un poco más de volumen. |
+| **Sintes juntos** y **Voces** | Para grupos de sintes o de voces. |
+
++++ Detalles
+- Detecta los picos de los dos canales juntos (no mueve la imagen estéreo) y no retrasa el sonido.
+- Las ruedas se pueden automatizar y asignar a MIDI; Ratio, Auto y Clip se eligen en el dispositivo.
+- Threshold −40 a 0 dB (−12), Attack 0,01–30 ms (10), Release 0,1–1,2 s (0,4), Makeup 0–20 dB, Knee 0–12 dB (3), SC Filter 20–1000 Hz (apagado), Dry/Wet 0–100 % (100).
+- Un proyecto con un Compresor de bus no se abre en un Pulse anterior: pide actualizar.
++++
+
+## Multibanda (OTT)
+
+El sonido «OTT» de la EDM: parte el sonido en graves, medios y agudos y, en cada banda, **baja lo fuerte y sube lo flojo**. Todo queda delante, denso y brillante: pads que respiran, leads que cortan, colas y ruiditos que salen a la luz. Es el preset OTT de Live y el plugin OTT de Xfer.
+
+### Usarlo
+
+1. Ponlo en la pista (un pad, un lead, un bajo de future bass) o en un retorno.
+2. Empieza con **Depth** al 20–40 %: al 100 % es exagerado a propósito.
+3. Mueve **Time**: más corto es más agresivo y bombea; más largo, más suave.
+4. Ajusta el volumen con **Output** para comparar encendido y apagado.
+
+> Consejo: en un pad, baja **Low Out** y sube **High Out** un poco: brillo sin más barro.
+
+> Atención: sube lo flojo hasta 18 dB más sus ganancias. Las colas, el ruido y las reverbs se oyen mucho más; si sobra, baja **Upward**.
+
+### Los controles
+
+- **Depth**: cuánto hace. A 0 % no cambia nada; al 100 %, todo.
+- **Time**: multiplica los tiempos de ataque y release de las tres bandas (×0,1 a ×10).
+- **Downward** y **Upward**: cuánto baja lo fuerte y cuánto sube lo flojo, por separado.
+- **Input** y **Output**: volumen a la entrada (empuja más hacia la compresión) y a la salida.
+- **Dry/Wet**: mezcla el sonido sin procesar, en fase con el procesado.
+- **Low/Mid** y **Mid/High**: dónde se cortan las bandas (88 Hz y 2,5 kHz al empezar).
+- **Low In**, **Mid In**, **High In**: cuánto entra en cada banda; más es más compresión en esa banda.
+- **Low Out**, **Mid Out**, **High Out**: el volumen de cada banda a la salida.
+
+A la derecha, los medidores **L**, **M** y **H** muestran qué hace cada banda: hacia arriba (verde) la está subiendo, hacia abajo (naranja) la está bajando.
+
+### Presets
+
+| Preset | Para qué |
+|---|---|
+| **OTT clásico** | Todo al 100 %: el sonido OTT entero. |
+| **OTT suave** | Al 30 %: más denso sin que se note. |
+| **Solo hacia abajo** | Sin upward: aplasta lo fuerte sin subir el ruido. |
+| **Brillo en pads** | Menos graves y más agudos, más lento: pads abiertos. |
+| **Lead que corta** | Rápido, con los medios y agudos delante. |
+| **Bajo gordo** | Corte a 120 Hz y agudos abajo: un bajo denso que no silba. |
+| **Batería aplastada** | En paralelo, al 60 %. |
+| **Voz de cerca** | Muy poco, para una voz delante. |
+
++++ Detalles
+- Las bandas se cortan con filtros Linkwitz-Riley de 24 dB por octava; sin compresión suman plano (las tres juntas suenan como la entrada). No retrasa el sonido.
+- Cada banda escucha su nivel RMS. Lo que suena más flojo de −90 dBFS no se sube: el silencio sigue en silencio.
+- Las 15 ruedas se pueden automatizar y asignar a MIDI.
+- Un proyecto con un Multibanda no se abre en un Pulse anterior: pide actualizar.
 +++
 
 ## Asistente de mezcla y master

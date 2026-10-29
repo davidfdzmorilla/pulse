@@ -2187,7 +2187,14 @@ impl PulseApp {
             .map(|t| (t.name.clone(), is_drums(t), matches!(t.instrument, engine::model::InstrumentKind::Kick(_)), t.id, listens(t)))
             .collect();
         // For the balance: the role its name or instrument says, its pan, its low cut.
-        let compressed = |t: &crate::project::Track| t.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::Compressor(c) if c.sidechain.is_none()));
+        let compressed = |t: &crate::project::Track| {
+            t.devices.iter().any(|d| d.enabled && match d.effect {
+                Effect::Compressor(c) => c.sidechain.is_none(),
+                Effect::Glue(c) => c.sidechain.is_none(),
+                Effect::Multiband(_) => true,
+                _ => false,
+            })
+        };
         let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
         let tempo = self.project.tempo;
         let space = Space::of(&self.project.returns);

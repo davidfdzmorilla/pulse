@@ -312,6 +312,8 @@ pub fn stems_add_up(project: &Project) -> bool {
         d.enabled
             && match &d.effect {
                 Effect::Compressor(p) => p.sidechain.is_none(),
+                Effect::Glue(p) => p.sidechain.is_none(),
+                Effect::Multiband(_) => true,
                 Effect::Gate(p) => p.sidechain.is_none(),
                 Effect::Saturator(_) | Effect::Bitcrusher(_) | Effect::Limiter(_) | Effect::Transient(_) | Effect::Tuner(_) | Effect::DeEsser(_) | Effect::Plugin(_) => true,
                 Effect::AutoFilter(p) => p.drive_db > 0.0 || p.resonance > 0.95,

@@ -2417,6 +2417,163 @@ impl Default for DuckerParams {
     }
 }
 
+/// The three ratios of an SSL-style bus compressor.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum GlueRatio {
+    #[default]
+    Two,
+    Four,
+    Ten,
+}
+
+impl GlueRatio {
+    pub const ALL: [GlueRatio; 3] = [GlueRatio::Two, GlueRatio::Four, GlueRatio::Ten];
+
+    pub fn value(self) -> f32 {
+        match self {
+            GlueRatio::Two => 2.0,
+            GlueRatio::Four => 4.0,
+            GlueRatio::Ten => 10.0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            GlueRatio::Two => "2:1",
+            GlueRatio::Four => "4:1",
+            GlueRatio::Ten => "10:1",
+        }
+    }
+}
+
+/// The bus compressor («Compresor de bus»): a feed-forward VCA glue
+/// compressor in the style of an SSL bus compressor.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GlueParams {
+    pub threshold_db: f32,
+    pub ratio: GlueRatio,
+    pub attack_ms: f32,
+    /// Seconds; unused with `auto_release`.
+    pub release_s: f32,
+    /// Program-dependent release: fast after a short hit, slow after a long
+    /// stretch of compression.
+    pub auto_release: bool,
+    pub makeup_db: f32,
+    /// Width of the soft knee, dB (0: hard).
+    pub knee_db: f32,
+    /// The detector doesn't hear below this (Hz; at the bottom, off): the kick
+    /// doesn't pump the whole bus.
+    pub sidechain_hpf_hz: f32,
+    /// Compressed against the dry sound (parallel compression), 0..1.
+    pub mix: f32,
+    /// A soft clipper at the output, under 0 dBFS.
+    pub soft_clip: bool,
+    /// Sidechain: the track (by its id) whose sound it listens to, instead of its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<u32>,
+}
+
+impl Default for GlueParams {
+    fn default() -> Self {
+        Self {
+            threshold_db: -12.0,
+            ratio: GlueRatio::Four,
+            attack_ms: 10.0,
+            release_s: 0.4,
+            auto_release: true,
+            makeup_db: 0.0,
+            knee_db: 3.0,
+            sidechain_hpf_hz: 20.0,
+            mix: 1.0,
+            soft_clip: false,
+            sidechain: None,
+        }
+    }
+}
+
+impl GlueParams {
+    /// Its sidechain filter is off at the bottom of the knob.
+    pub const HPF_OFF_HZ: f32 = 20.5;
+
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, GlueParams)> {
+        let d = GlueParams::default();
+        vec![
+            ("Batería · Bus de batería", GlueParams { threshold_db: -16.0, ratio: GlueRatio::Four, attack_ms: 10.0, auto_release: true, makeup_db: 3.0, sidechain_hpf_hz: 90.0, ..d }),
+            ("Batería · Paralelo duro", GlueParams { threshold_db: -30.0, ratio: GlueRatio::Ten, attack_ms: 0.3, auto_release: false, release_s: 0.1, makeup_db: 10.0, knee_db: 0.0, mix: 0.4, ..d }),
+            ("Batería · Pegada (ataque lento)", GlueParams { threshold_db: -18.0, ratio: GlueRatio::Four, attack_ms: 30.0, auto_release: false, release_s: 0.1, makeup_db: 3.0, sidechain_hpf_hz: 60.0, ..d }),
+            ("Mezcla · Pegar la mezcla", GlueParams { threshold_db: -10.0, ratio: GlueRatio::Two, attack_ms: 30.0, auto_release: true, makeup_db: 1.5, knee_db: 6.0, sidechain_hpf_hz: 60.0, ..d }),
+            ("Mezcla · Master con clip", GlueParams { threshold_db: -8.0, ratio: GlueRatio::Two, attack_ms: 10.0, auto_release: true, makeup_db: 2.0, knee_db: 6.0, sidechain_hpf_hz: 60.0, soft_clip: true, ..d }),
+            ("Grupos · Sintes juntos", GlueParams { threshold_db: -14.0, ratio: GlueRatio::Two, attack_ms: 3.0, release_s: 0.2, auto_release: false, makeup_db: 2.0, knee_db: 6.0, ..d }),
+            ("Grupos · Voces", GlueParams { threshold_db: -16.0, ratio: GlueRatio::Four, attack_ms: 1.0, auto_release: true, makeup_db: 3.0, sidechain_hpf_hz: 120.0, ..d }),
+        ]
+    }
+}
+
+/// How many bands the multiband compressor splits the sound into.
+pub const MULTIBAND_BANDS: usize = 3;
+
+/// The multiband compressor («Multibanda (OTT)»): three bands, each pushed
+/// down above a threshold and pulled up below another, the OTT way.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct MultibandParams {
+    /// How much of the compression (and its make-up) is applied, 0..1.
+    pub depth: f32,
+    /// Scales every band's attack and release (×).
+    pub time: f32,
+    /// Amount of downward compression (loud parts pushed down), 0..1.
+    pub downward: f32,
+    /// Amount of upward compression (quiet parts pulled up), 0..1.
+    pub upward: f32,
+    pub input_db: f32,
+    pub output_db: f32,
+    pub mix: f32,
+    /// Crossovers between low and mid, and mid and high, Hz.
+    pub low_hz: f32,
+    pub high_hz: f32,
+    /// Gain into each band's compressor (low, mid, high), dB.
+    pub band_in_db: [f32; MULTIBAND_BANDS],
+    /// Gain out of each band, dB.
+    pub band_out_db: [f32; MULTIBAND_BANDS],
+}
+
+impl Default for MultibandParams {
+    fn default() -> Self {
+        Self {
+            depth: 1.0,
+            time: 1.0,
+            downward: 1.0,
+            upward: 1.0,
+            input_db: 0.0,
+            output_db: 0.0,
+            mix: 1.0,
+            low_hz: 88.0,
+            high_hz: 2500.0,
+            band_in_db: [0.0; MULTIBAND_BANDS],
+            band_out_db: [0.0; MULTIBAND_BANDS],
+        }
+    }
+}
+
+impl MultibandParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, MultibandParams)> {
+        let d = MultibandParams::default();
+        vec![
+            ("OTT · OTT clásico", d),
+            ("OTT · OTT suave", MultibandParams { depth: 0.3, ..d }),
+            ("OTT · Solo hacia abajo", MultibandParams { depth: 0.6, upward: 0.0, ..d }),
+            ("Sintes · Brillo en pads", MultibandParams { depth: 0.5, time: 1.5, downward: 0.6, band_in_db: [-6.0, 0.0, 3.0], band_out_db: [-3.0, 0.0, 2.0], mix: 0.8, ..d }),
+            ("Sintes · Lead que corta", MultibandParams { depth: 0.6, time: 0.6, band_out_db: [-4.0, 1.0, 1.5], ..d }),
+            ("Bajos · Bajo gordo", MultibandParams { depth: 0.5, time: 1.3, low_hz: 120.0, high_hz: 1800.0, band_in_db: [2.0, 0.0, -4.0], band_out_db: [1.0, 0.0, -6.0], ..d }),
+            ("Batería · Batería aplastada", MultibandParams { depth: 0.45, time: 0.5, upward: 0.6, mix: 0.6, ..d }),
+            ("Voces · Voz de cerca", MultibandParams { depth: 0.25, low_hz: 200.0, high_hz: 4000.0, band_out_db: [-2.0, 0.0, 1.0], ..d }),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LimiterParams {
     pub gain_db: f32,
@@ -2603,17 +2760,23 @@ pub enum Effect {
     Ducker(DuckerParams),
     Limiter(LimiterParams),
     Utility(UtilityParams),
+    /// The bus compressor («Compresor de bus»).
+    Glue(GlueParams),
+    /// The multiband upward and downward compressor («Multibanda (OTT)»).
+    Multiband(MultibandParams),
     /// A VST3 effect plugin (see [`InstrumentKind::Plugin`]).
     Plugin(PluginId),
 }
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 17] {
+    pub fn catalog() -> [Effect; 19] {
         [
             Effect::Eq3(Default::default()),
             Effect::EqEight(Default::default()),
             Effect::Compressor(Default::default()),
+            Effect::Glue(Default::default()),
+            Effect::Multiband(Default::default()),
             Effect::Limiter(Default::default()),
             Effect::Gate(Default::default()),
             Effect::Transient(Default::default()),
@@ -2631,10 +2794,20 @@ impl Effect {
         ]
     }
 
+    /// Its factory settings, «Categoría · Nombre» (most effects have none).
+    pub fn factory_presets(&self) -> Vec<(&'static str, Effect)> {
+        match self {
+            Effect::Glue(_) => GlueParams::presets().into_iter().map(|(n, p)| (n, Effect::Glue(p))).collect(),
+            Effect::Multiband(_) => MultibandParams::presets().into_iter().map(|(n, p)| (n, Effect::Multiband(p))).collect(),
+            _ => Vec::new(),
+        }
+    }
+
     /// The track (by its id) whose sound drives it, if it has a sidechain.
     pub fn sidechain(&self) -> Option<u32> {
         match self {
             Effect::Compressor(p) => p.sidechain,
+            Effect::Glue(p) => p.sidechain,
             Effect::Gate(p) => p.sidechain,
             Effect::Ducker(p) => p.sidechain,
             _ => None,
@@ -2645,6 +2818,7 @@ impl Effect {
     pub fn sidechain_mut(&mut self) -> Option<&mut Option<u32>> {
         match self {
             Effect::Compressor(p) => Some(&mut p.sidechain),
+            Effect::Glue(p) => Some(&mut p.sidechain),
             Effect::Gate(p) => Some(&mut p.sidechain),
             Effect::Ducker(p) => Some(&mut p.sidechain),
             _ => None,
@@ -2678,6 +2852,8 @@ impl Effect {
             Effect::Ducker(_) => "Ducker",
             Effect::Limiter(_) => "Limiter",
             Effect::Utility(_) => "Utility",
+            Effect::Glue(_) => "Compresor de bus",
+            Effect::Multiband(_) => "Multibanda (OTT)",
             Effect::Plugin(_) => "Plugin",
         }
     }
@@ -2913,6 +3089,33 @@ const UTILITY_PARAMS: [ParamInfo; 3] = [
     ParamInfo::linear("Gain", -36.0, 12.0, 0.0, Decibels),
     ParamInfo::linear("Width", 0.0, 2.0, 1.0, Percent),
     ParamInfo::linear("Bass Mono", 0.0, 500.0, 0.0, Hertz),
+];
+const GLUE_PARAMS: [ParamInfo; 7] = [
+    ParamInfo::linear("Threshold", -40.0, 0.0, -12.0, Decibels),
+    ParamInfo::log("Attack", 0.01, 30.0, 10.0, Milliseconds),
+    ParamInfo::log("Release", 0.1, 1.2, 0.4, Seconds),
+    ParamInfo::linear("Makeup", 0.0, 20.0, 0.0, Decibels),
+    ParamInfo::linear("Knee", 0.0, 12.0, 3.0, Decibels),
+    ParamInfo::log("SC Filter", 20.0, 1000.0, 20.0, Hertz),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
+];
+/// The global settings, then each band's in and out (low, mid, high).
+const MULTIBAND_PARAMS: [ParamInfo; 9 + 2 * MULTIBAND_BANDS] = [
+    ParamInfo::linear("Depth", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::log("Time", 0.1, 10.0, 1.0, Times),
+    ParamInfo::linear("Downward", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Upward", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Input", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Output", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::log("Low/Mid", 40.0, 500.0, 88.0, Hertz),
+    ParamInfo::log("Mid/High", 800.0, 12000.0, 2500.0, Hertz),
+    ParamInfo::linear("Low In", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Low Out", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Mid In", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Mid Out", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("High In", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("High Out", -24.0, 24.0, 0.0, Decibels),
 ];
 const SUPERSAW_PARAMS: [ParamInfo; 11] = [
     ParamInfo::linear("Voices", 1.0, 7.0, 7.0, Count),
@@ -3342,6 +3545,8 @@ impl Effect {
             Effect::Ducker(_) => &DUCKER_PARAMS,
             Effect::Limiter(_) => &LIMITER_PARAMS,
             Effect::Utility(_) => &UTILITY_PARAMS,
+            Effect::Glue(_) => &GLUE_PARAMS,
+            Effect::Multiband(_) => &MULTIBAND_PARAMS,
             Effect::Plugin(_) => &[],
         }
     }
@@ -3409,6 +3614,26 @@ impl Effect {
             (Effect::Utility(p), 0) => &mut p.gain_db,
             (Effect::Utility(p), 1) => &mut p.width,
             (Effect::Utility(p), 2) => &mut p.bass_mono_hz,
+            (Effect::Glue(p), 0) => &mut p.threshold_db,
+            (Effect::Glue(p), 1) => &mut p.attack_ms,
+            (Effect::Glue(p), 2) => &mut p.release_s,
+            (Effect::Glue(p), 3) => &mut p.makeup_db,
+            (Effect::Glue(p), 4) => &mut p.knee_db,
+            (Effect::Glue(p), 5) => &mut p.sidechain_hpf_hz,
+            (Effect::Glue(p), 6) => &mut p.mix,
+            (Effect::Multiband(p), 0) => &mut p.depth,
+            (Effect::Multiband(p), 1) => &mut p.time,
+            (Effect::Multiband(p), 2) => &mut p.downward,
+            (Effect::Multiband(p), 3) => &mut p.upward,
+            (Effect::Multiband(p), 4) => &mut p.input_db,
+            (Effect::Multiband(p), 5) => &mut p.output_db,
+            (Effect::Multiband(p), 6) => &mut p.mix,
+            (Effect::Multiband(p), 7) => &mut p.low_hz,
+            (Effect::Multiband(p), 8) => &mut p.high_hz,
+            (Effect::Multiband(p), i @ 9..=14) => {
+                let band = (i - 9) / 2;
+                if (i - 9) % 2 == 0 { &mut p.band_in_db[band] } else { &mut p.band_out_db[band] }
+            }
             _ => return None,
         })
     }

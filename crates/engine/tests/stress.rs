@@ -200,6 +200,10 @@ fn track_devices(t: usize) -> Vec<Device> {
     if t % 4 == 0 {
         devices.push(Device::new(Effect::Reverb(ReverbParams::default())));
     }
+    if t % 6 == 1 {
+        devices.push(Device::new(Effect::Glue(GlueParams { sidechain_hpf_hz: 100.0, ..Default::default() })));
+        devices.push(Device::new(Effect::Multiband(MultibandParams::default())));
+    }
     if t % 5 == 0 {
         devices.push(Device::new(Effect::Bitcrusher(BitcrusherParams::default())));
         devices.push(Device::new(Effect::Limiter(LimiterParams::default())));

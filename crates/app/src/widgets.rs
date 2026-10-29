@@ -185,7 +185,7 @@ pub fn fader_to_gain(position: f32) -> f32 {
 }
 
 /// Meter position for a linear peak: -60..+6 dB mapped onto 0..1.
-fn meter_position(peak: f32) -> f32 {
+pub fn meter_position(peak: f32) -> f32 {
     if peak <= 0.0 {
         return 0.0;
     }
@@ -214,9 +214,7 @@ pub fn paint_meter(painter: &egui::Painter, rect: Rect, peak: f32) {
     }
 }
 
-pub fn horizontal_meter(ui: &mut Ui, size: egui::Vec2, peak: f32) {
-    let (rect, _) = ui.allocate_exact_size(size, Sense::hover());
-    let painter = ui.painter();
+pub fn paint_horizontal_meter(painter: &egui::Painter, rect: Rect, peak: f32) {
     painter.rect_filled(rect, 1.0, theme::BG);
     let level = meter_position(peak);
     let color = if level > 60.0 / 66.0 {

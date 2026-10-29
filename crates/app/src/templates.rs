@@ -87,11 +87,18 @@ fn built_in(name: &str) -> Option<Project> {
             project.tempo = 124.0;
             let mut drums = Track::new("Batería", PALETTE[1], InstrumentKind::DrumMachine(DrumParams { model: DrumModel::Tr909, ..Default::default() }));
             drums.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -14.0, ratio: 3.0, attack_ms: 8.0, release_ms: 90.0, makeup_db: 1.5, sidechain: None })));
-            let bass = Track::new("Bajo", PALETTE[9], InstrumentKind::Acid(AcidParams::default()));
+            let mut bass = Track::new("Bajo", PALETTE[9], InstrumentKind::Acid(AcidParams::default()));
             let mut chords = Track::new("Acordes", PALETTE[6], InstrumentKind::SuperSaw(SuperSawParams { gain: 0.3, ..Default::default() }));
             chords.sends[0] = 0.3;
             let mut lead = Track::new("Melodía", PALETTE[11], InstrumentKind::Fm(FmParams::default()));
             lead.sends[..2].copy_from_slice(&[0.15, 0.25]);
+            // Headroom from the start: the drums at -7 dB, the rest under them
+            // as a mix starts (the accompaniments made from the chords follow
+            // their fader). All at the default fader, the drop went 3 dB over 0.
+            drums.mixer.gain = 0.45;
+            bass.mixer.gain = 0.32;
+            chords.mixer.gain = 0.32;
+            lead.mixer.gain = 0.28;
             project.tracks = vec![drums, bass, chords, lead];
         }
         "Grabar voz" => {

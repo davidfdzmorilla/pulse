@@ -144,6 +144,14 @@ pub struct Track {
     pub sounds_from: u16,
 }
 
+/// The Drum Machine's sound `voice` (in `DRUM_VOICES` order) as the interface
+/// says it: in Spanish, as «Generar ritmo» names them («Bombo», «Charles»…).
+/// The engine keeps its English names (the parameters', the presets').
+pub fn voice_name(voice: usize) -> &'static str {
+    const NAMES: [&str; engine::model::DRUM_SOUNDS] = ["Bombo", "Rim", "Caja", "Palmada", "Charles", "Charles abierto", "Tom grave", "Cencerro", "Tom medio", "Tom agudo", "Crash", "Ride", "Shaker", "Pandereta", "Conga", "Clave"];
+    NAMES.get(voice).copied().unwrap_or("?")
+}
+
 impl Track {
     pub fn new(name: impl Into<String>, color: [u8; 3], instrument: InstrumentKind) -> Self {
         Self {
@@ -228,7 +236,8 @@ impl Track {
         Some(path.file_stem().map_or_else(|| path.display().to_string(), |s| s.to_string_lossy().into_owned()))
     }
 
-    /// Piano roll rows for drum instruments, top to bottom: (note, name).
+    /// Piano roll rows for drum instruments, top to bottom: (note, name), the
+    /// Drum Machine's in Spanish (see [`voice_name`]).
     pub fn drum_rows(&self) -> Vec<(u8, String)> {
         match self.instrument {
             InstrumentKind::DrumRack(_) => (0..RACK_PADS)
@@ -238,7 +247,7 @@ impl Track {
                     (pitch, self.sample_name(pad).unwrap_or_else(|| note_name(pitch)))
                 })
                 .collect(),
-            _ => engine::model::DRUM_VOICES.iter().rev().map(|&(pitch, name)| (pitch, name.to_string())).collect(),
+            _ => engine::model::DRUM_VOICES.iter().enumerate().rev().map(|(voice, &(pitch, _))| (pitch, voice_name(voice).to_string())).collect(),
         }
     }
 

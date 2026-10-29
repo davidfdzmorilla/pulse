@@ -289,6 +289,77 @@ pub fn field_menu_button<R>(ui: &mut Ui, label: &str, add_contents: impl FnOnce(
     egui::containers::menu::MenuButton::new(label).config(config).ui(ui, add_contents).1.map(|r| r.inner)
 }
 
+/// `ui.menu_button`, but a submenu stays open while the pointer heads for it, as
+/// on macOS: crossing the items between its button and the item one wants (going
+/// down diagonally from «Acompañar ⏵» to «Bajo», over «De tarareo a canción ⏵»)
+/// no longer swaps it for theirs. Every menu in Pulse goes through here.
+pub fn menu_button<'a, R>(ui: &mut Ui, atoms: impl egui::IntoAtoms<'a>, add_contents: impl FnOnce(&mut Ui) -> R) -> egui::InnerResponse<Option<R>> {
+    use egui::containers::menu::{self, MenuState, SubMenu, SubMenuButton};
+    if !menu::is_in_menu(ui) {
+        let (response, inner) = menu::MenuButton::new(atoms).ui(ui, add_contents);
+        return egui::InnerResponse::new(inner.map(|i| i.inner), response);
+    }
+    let before = MenuState::from_ui(ui, |state, _| state.open_item);
+    let (response, inner) = SubMenuButton::new(atoms).ui(ui, add_contents);
+    let id = SubMenu::id_from_widget_id(response.id);
+    if let Some(popup) = inner.as_ref().map(|i| i.response.rect) {
+        let (pointer, time, clicked) = ui.input(|i| (i.pointer.hover_pos(), i.time, i.pointer.any_click()));
+        let after = MenuState::from_ui(ui, |state, _| state.open_item);
+        let aim_id = id.with("aim");
+        let aim: Option<(egui::Pos2, f64)> = ui.data(|d| d.get_temp(aim_id));
+        let on_button = pointer.is_some_and(|p| response.rect.expand2(ui.spacing().item_spacing / 2.0).contains(p));
+        let on_popup = pointer.is_some_and(|p| popup.contains(p));
+        let mut keep = None;
+        if let Some(p) = pointer {
+            if on_button || on_popup {
+                keep = Some((p, time));
+            } else if let Some((anchor, since)) = aim {
+                // Still heading for the submenu (inside the triangle from where the
+                // pointer was to its near edge), and not resting for long.
+                let moved = p.distance(anchor) > 0.5;
+                if aiming(anchor, p, popup) && (moved || time - since < SUBMENU_GRACE) {
+                    keep = Some(if moved { (p, time) } else { (anchor, since) });
+                }
+            }
+        }
+        ui.data_mut(|d| {
+            if let Some(aim) = keep {
+                d.insert_temp(aim_id, aim);
+            } else {
+                d.remove::<(egui::Pos2, f64)>(aim_id);
+            }
+        });
+        // egui closed it because another item is hovered: undo that while aiming.
+        if before == Some(id) && after.is_none() && keep.is_some() && !clicked && !response.clicked() {
+            MenuState::from_ui(ui, |state, _| state.open_item = Some(id));
+            ui.ctx().request_repaint();
+        }
+    }
+    egui::InnerResponse::new(inner.map(|i| i.inner), response)
+}
+
+/// How long the pointer may rest on the way to an open submenu before the item
+/// under it takes over (seconds).
+pub const SUBMENU_GRACE: f64 = 0.35;
+
+/// Is `pointer`, coming from `anchor`, inside the triangle from (a little behind)
+/// `anchor` to the near edge of `popup`?
+fn aiming(anchor: egui::Pos2, pointer: egui::Pos2, popup: Rect) -> bool {
+    let (edge, back) = if anchor.x <= popup.left() {
+        (popup.left(), -8.0)
+    } else if anchor.x >= popup.right() {
+        (popup.right(), 8.0)
+    } else {
+        return false;
+    };
+    let apex = pos2(anchor.x + back, anchor.y);
+    let (a, b) = (pos2(edge, popup.top() - 4.0), pos2(edge, popup.bottom() + 4.0));
+    let cross = |o: egui::Pos2, u: egui::Pos2, v: egui::Pos2| (u.x - o.x) * (v.y - o.y) - (u.y - o.y) * (v.x - o.x);
+    let (d1, d2, d3) = (cross(apex, a, pointer), cross(a, b, pointer), cross(b, apex, pointer));
+    let (neg, pos) = (d1 < 0.0 || d2 < 0.0 || d3 < 0.0, d1 > 0.0 || d2 > 0.0 || d3 > 0.0);
+    !(neg && pos)
+}
+
 /// Names a hand-drawn widget for accessibility (VoiceOver, and test scripts).
 pub fn name(response: &Response, typ: egui::WidgetType, label: impl Into<String>) {
     let (enabled, label) = (response.enabled(), label.into());
@@ -493,4 +564,175 @@ pub fn modulation_ring(painter: &egui::Painter, rect: egui::Rect, diameter: f32,
         })
         .collect();
     painter.add(Shape::line(points, Stroke::new(2.0, color)));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use eframe::egui::{Event, Modifiers, PointerButton, Pos2};
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    /// A right-click menu as wide as Pulse's: «Acompañar ⏵» (six items), «Tarareo ⏵», «Otra cosa».
+    struct Menus {
+        ctx: egui::Context,
+        time: f64,
+        rects: RefCell<HashMap<String, Rect>>,
+        clicked: RefCell<Vec<String>>,
+    }
+
+    impl Menus {
+        fn new() -> Self {
+            Self { ctx: egui::Context::default(), time: 0.0, rects: Default::default(), clicked: Default::default() }
+        }
+
+        fn frame(&mut self, events: Vec<Event>) {
+            self.time += 1.0 / 60.0;
+            let raw = egui::RawInput { screen_rect: Some(Rect::from_min_size(Pos2::ZERO, vec2(1000.0, 700.0))), time: Some(self.time), events, ..Default::default() };
+            let (rects, clicked) = (&self.rects, &self.clicked);
+            let item = |ui: &mut Ui, name: &str| {
+                let r = ui.button(name);
+                rects.borrow_mut().insert(name.into(), r.rect);
+                if r.clicked() {
+                    clicked.borrow_mut().push(name.into());
+                }
+            };
+            let _ = self.ctx.run_ui(raw, |ui| {
+                let target = ui.button("Clip");
+                rects.borrow_mut().insert("Clip".into(), target.rect);
+                target.context_menu(|ui| {
+                    ui.set_min_width(220.0);
+                    let r = menu_button(ui, "Acompañar", |ui| {
+                        for name in ["Bajo", "Bajo: corcheas", "Pad", "Arpegio", "Acordes", "Bajo: contratiempo"] {
+                            item(ui, name);
+                        }
+                    });
+                    rects.borrow_mut().insert("Acompañar".into(), r.response.rect);
+                    let r = menu_button(ui, "Tarareo", |ui| {
+                        for name in ["Techno", "House", "Trap"] {
+                            item(ui, name);
+                        }
+                    });
+                    rects.borrow_mut().insert("Tarareo".into(), r.response.rect);
+                    item(ui, "Otra cosa");
+                });
+            });
+        }
+
+        fn idle(&mut self, n: usize) {
+            for _ in 0..n {
+                self.frame(Vec::new());
+            }
+        }
+
+        fn at(&self, name: &str) -> Pos2 {
+            self.rects.borrow()[name].center()
+        }
+
+        /// Shown in the next frame?
+        fn shows(&mut self, name: &str) -> bool {
+            self.rects.borrow_mut().clear();
+            self.idle(1);
+            self.rects.borrow().contains_key(name)
+        }
+
+        /// From `from` to `to` in `steps` frames, a straight line.
+        fn glide(&mut self, from: Pos2, to: Pos2, steps: usize) {
+            for i in 1..=steps {
+                self.frame(vec![Event::PointerMoved(from + (to - from) * (i as f32 / steps as f32))]);
+            }
+        }
+
+        fn click(&mut self, at: Pos2, button: PointerButton) {
+            for pressed in [true, false] {
+                self.frame(vec![Event::PointerButton { pos: at, button, pressed, modifiers: Modifiers::NONE }]);
+            }
+        }
+
+        /// The menu open, the pointer resting on «Acompañar» and its submenu open.
+        fn open(&mut self) {
+            self.idle(2);
+            let clip = self.at("Clip");
+            self.frame(vec![Event::PointerMoved(clip)]);
+            self.click(clip, PointerButton::Secondary);
+            self.idle(3);
+            let acompanar = self.at("Acompañar");
+            self.glide(clip, acompanar, 3);
+            self.idle(10);
+            assert!(self.shows("Bajo: contratiempo"), "«Acompañar» abre su submenú");
+            // Reading the submenu: a still pointer sends no events, so no frames.
+            self.time += 0.6;
+        }
+    }
+
+    #[test]
+    fn a_submenu_stays_open_on_the_way_to_it() {
+        let mut m = Menus::new();
+        m.open();
+        let (from, to) = (m.at("Acompañar"), m.at("Bajo: contratiempo"));
+        let tarareo = m.rects.borrow()["Tarareo"];
+        assert!(to.y > tarareo.top(), "the way down crosses «Tarareo»: {to:?} {tarareo:?}");
+        // The first move after a rest lands on «Tarareo» before egui knows where
+        // the pointer is heading (no recent movement): egui alone swaps the
+        // submenus right then.
+        let t = (tarareo.center().y - from.y) / (to.y - from.y);
+        let over = from + (to - from) * t;
+        assert!(tarareo.contains(over), "the way crosses «Tarareo»: {over:?} {tarareo:?}");
+        m.glide(from, over, 1);
+        for _ in 0..(SUBMENU_GRACE * 60.0) as usize / 2 {
+            assert!(m.shows("Bajo: contratiempo"), "«Acompañar» sigue abierto en {over:?}");
+            assert!(!m.rects.borrow().contains_key("Techno"), "«Tarareo» no se abre al cruzarlo");
+        }
+        m.glide(over, to, 3);
+        assert!(m.shows("Bajo: contratiempo"));
+        m.click(to, PointerButton::Primary);
+        assert_eq!(*m.clicked.borrow(), vec!["Bajo: contratiempo".to_string()]);
+    }
+
+    #[test]
+    fn resting_on_another_submenu_opens_it() {
+        let mut m = Menus::new();
+        m.open();
+        let (from, to) = (m.at("Acompañar"), m.at("Tarareo"));
+        m.glide(from, to, 4);
+        // A moment of rest: «Tarareo» wins.
+        m.idle((SUBMENU_GRACE * 60.0) as usize + 10);
+        assert!(m.shows("Techno"), "parado en «Tarareo» se abre su submenú");
+        assert!(!m.shows("Bajo: contratiempo"));
+    }
+
+    #[test]
+    fn going_away_from_a_submenu_closes_it_at_once() {
+        let mut m = Menus::new();
+        m.open();
+        // Straight down to «Otra cosa», left of the submenu: no triangle.
+        let (from, to) = (m.at("Acompañar"), m.at("Otra cosa") - vec2(20.0, 0.0));
+        m.glide(from, to, 3);
+        m.idle(2);
+        assert!(!m.shows("Bajo: contratiempo"), "lejos del submenú, se cierra");
+    }
+
+    #[test]
+    fn the_triangle_points_at_the_submenu() {
+        let popup = Rect::from_min_max(pos2(200.0, 100.0), pos2(300.0, 200.0));
+        let anchor = pos2(150.0, 110.0);
+        assert!(aiming(anchor, pos2(170.0, 130.0), popup));
+        assert!(aiming(anchor, pos2(195.0, 195.0), popup));
+        assert!(!aiming(anchor, pos2(150.0, 140.0), popup), "straight down is not towards it");
+        assert!(!aiming(anchor, pos2(120.0, 110.0), popup), "nor is going back");
+        // A submenu opened to the left.
+        let left = Rect::from_min_max(pos2(0.0, 100.0), pos2(100.0, 200.0));
+        assert!(aiming(anchor, pos2(130.0, 130.0), left));
+    }
+
+    /// Every submenu goes through [`menu_button`].
+    #[test]
+    fn no_menu_uses_egui_menu_button_directly() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            let text = std::fs::read_to_string(&path).unwrap();
+            assert!(!text.contains(concat!("ui.menu", "_button(")), "{}: usa widgets::menu_button", path.display());
+        }
+    }
 }

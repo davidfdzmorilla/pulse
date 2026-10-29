@@ -2395,10 +2395,13 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         .open(&mut open)
         .collapsible(false)
         .resizable(true)
-        .default_size([640.0, 640.0])
+        .default_size([640.0, 640.0_f32.min(ctx.content_rect().height() - 80.0)])
+        // On a small screen (1440×900) the whole report is taller than it: it scrolls.
+        .max_height(ctx.content_rect().height() - 60.0)
+        .constrain_to(ctx.content_rect())
         .pivot(Align2::CENTER_CENTER)
         .default_pos(ctx.content_rect().center())
-        .show(ctx, |ui| contents(app, ui));
+        .show(ctx, |ui| egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| contents(app, ui)));
     app.mix.open &= open;
 }
 

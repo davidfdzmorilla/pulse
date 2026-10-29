@@ -79,6 +79,8 @@ mod poly_ui;
 mod presets;
 #[cfg(test)]
 mod produccion;
+#[cfg(test)]
+mod interfaz_tests;
 mod project;
 mod recording;
 mod recovery;

@@ -93,6 +93,25 @@ pub struct State {
     drum_job: Option<DrumJob>,
     /// The time signature where the clip plays (its bars and counts).
     sig: TimeSig,
+    /// The name of the clip's track: a clip still called that (or «MIDI») is
+    /// named after what is generated in it.
+    track_name: String,
+    /// Chords written, to move the insert marker back with ⌘Z (and on with ⇧⌘Z).
+    marks: Vec<Mark>,
+    /// The clip grew this frame (chords, a beat): on the Arrangement, its place grows too.
+    grew: bool,
+    /// The pitches of the rows in view.
+    in_view: Vec<u8>,
+}
+
+/// The insert marker before and after a write into a clip, and the clip before
+/// and after: when the clip is back as it was, so is the marker.
+struct Mark {
+    clip: ClipRef,
+    before: MidiClip,
+    after: MidiClip,
+    from: f64,
+    to: f64,
 }
 
 type Beat = Result<(Vec<Note>, Option<engine::model::Groove>), String>;
@@ -128,6 +147,10 @@ impl Default for State {
             drum_error: None,
             drum_job: None,
             sig: TimeSig::COMMON,
+            track_name: String::new(),
+            marks: Vec::new(),
+            grew: false,
+            in_view: Vec::new(),
         }
     }
 }
@@ -136,6 +159,27 @@ impl State {
     /// Whether note-level shortcuts (Delete, ⌘D) should apply to notes rather than clips.
     pub fn has_selection(&self) -> bool {
         !self.selection.is_empty()
+    }
+
+    /// The next time the clip is drawn, the view goes to its notes.
+    pub(crate) fn recenter(&mut self) {
+        self.scrolled = None;
+    }
+
+    /// Whether `name` is what a new clip is called on `track_name`: nobody named it yet.
+    fn unnamed(&self, name: &str) -> bool {
+        name == "MIDI" || name == self.track_name
+    }
+
+    #[cfg(test)]
+    pub fn insert_at(&self) -> f64 {
+        self.insert_at
+    }
+
+    /// The pitches of the rows the editor shows.
+    #[cfg(test)]
+    pub fn in_view(&self) -> &[u8] {
+        &self.in_view
     }
 
     #[cfg(test)]
@@ -230,8 +274,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     // On the Arrangement, the signature where the clip starts; in the Session, the song's first.
     let sig = app.clip_sig(clip_ref);
+    let track_name = app.project.tracks[t].name.clone();
     let state = &mut app.piano_roll;
     state.sig = sig;
+    state.track_name = track_name;
     if state.selection_clip != Some(clip_ref) {
         state.selection.clear();
         state.selection_clip = Some(clip_ref);
@@ -243,6 +289,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement.get_mut(index).map(|a| &mut a.clip),
     };
     let Some(Clip::Midi(clip)) = clip else { return };
+    // Chords undone (or redone): the insert marker goes back (or on) with them.
+    let at = state.insert_at;
+    if let Some(mark) = state.marks.iter().rev().find(|m| m.clip == clip_ref && ((m.to == at && m.before == *clip) || (m.from == at && m.after == *clip))) {
+        state.insert_at = if mark.to == at { mark.from } else { mark.to };
+    }
     let before = clip.clone();
     let mut previews: Vec<u8> = Vec::new();
 
@@ -271,12 +322,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         .id_salt(("piano_roll", format!("{clip_ref:?}")))
         .auto_shrink(false)
         .max_height(lane_height);
-    if !is_drums && state.scrolled != Some(clip_ref) {
+    if state.scrolled != Some(clip_ref) {
         state.scrolled = Some(clip_ref);
-        // Open around the clip's notes, or middle C, the first time it is shown.
-        let center = clip.notes.iter().map(|n| n.pitch as f32).sum::<f32>() / clip.notes.len().max(1) as f32;
-        let center = if clip.notes.is_empty() { 60.0 } else { center };
-        scroll = scroll.vertical_scroll_offset((row_h * (96.0 - center) - 80.0).max(0.0));
+        let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
+        scroll = scroll.vertical_scroll_offset(centered(&pitches, &clip.notes, row_h, header, lane_height, is_drums));
     }
     let output = scroll.show(ui, |ui| {
         let chord_h = if is_drums { 0.0 } else { CHORD_H };
@@ -542,6 +591,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
     });
     state.scroll_x = output.state.offset.x;
+    // The rows in view, for the tests (and nothing else).
+    let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
+    let first = ((output.state.offset.y - header) / row_h).floor().max(0.0) as usize;
+    let last = ((output.state.offset.y + output.inner_rect.height() - header) / row_h).ceil().max(0.0) as usize;
+    state.in_view = pitches.get(first.min(pitches.len())..last.min(pitches.len())).map_or(Vec::new(), |p| p.to_vec());
 
     // ----- The lane under the notes: a clip envelope or the velocities ----------------
     crate::clip_envelope::header(ui, &mut state.lane, &mut clip.envelopes);
@@ -608,6 +662,19 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
 
     let changed = *clip != before;
+    // Grown by what was written: on the Arrangement, all of it is placed, up to the next clip.
+    if std::mem::take(&mut app.piano_roll.grew) {
+        if let ClipRef::Arrangement { track, index } = clip_ref {
+            let lane = &mut app.project.tracks[track].arrangement;
+            let start = lane[index].start;
+            let next = lane.iter().filter(|c| c.start > start + 1e-9).map(|c| c.start).fold(f64::INFINITY, f64::min);
+            let placed = &mut lane[index];
+            let wanted = placed.clip.length().min(next - start);
+            if wanted > placed.length {
+                placed.length = wanted;
+            }
+        }
+    }
     if let Some(bpm) = tempo {
         app.set_param(engine::Target::Master, engine::model::Param::Tempo, bpm as f32);
     }
@@ -630,6 +697,31 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     if changed {
         app.sync_clip_ref(clip_ref);
     }
+}
+
+/// The scroll offset that shows the notes' rows (under `header` px of ruler) in
+/// the middle of a lane `visible` px tall; if they don't all fit, the row most
+/// notes are around (their median), or in a drum kit the lowest (the kick, the
+/// snare). Without notes, middle C, or a kit's lowest rows.
+fn centered(pitches: &[u8], notes: &[Note], row_h: f32, header: f32, visible: f32, drums: bool) -> f32 {
+    let mut rows: Vec<usize> = notes.iter().filter_map(|n| pitches.iter().position(|&p| p == n.pitch)).collect();
+    rows.sort_unstable();
+    let (top, bottom) = match (rows.iter().min(), rows.iter().max()) {
+        (Some(&a), Some(&b)) => (a, b + 1),
+        _ if drums => (pitches.len().saturating_sub(1), pitches.len()),
+        _ => {
+            let c = pitches.iter().position(|&p| p == 60).unwrap_or(pitches.len() / 2);
+            (c, c + 1)
+        }
+    };
+    let y = |row: usize| header + row as f32 * row_h;
+    let offset = match rows.get(rows.len() / 2) {
+        _ if y(bottom) - y(top) <= visible => (y(top) + y(bottom) - visible) * 0.5,
+        _ if drums => y(bottom) - visible,
+        Some(&median) => y(median) + row_h * 0.5 - visible * 0.5,
+        None => y(top),
+    };
+    offset.max(0.0)
 }
 
 /// The piano roll's rows, highest first: every note from C0 to C6, or, folded
@@ -717,10 +809,21 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         }
         groove_menu(ui, clip, grooves);
         if !is_drums {
-            let (added, pitches) = crate::harmony::menu(ui, &mut state.chords, clip, &mut state.insert_at, key, state.sig);
-            if !added.is_empty() {
-                state.selection = added.into_iter().collect();
-                previews = pitches;
+            if let Some(written) = crate::harmony::menu(ui, &mut state.chords, clip, &mut state.insert_at, key, state.sig) {
+                if let Some(names) = written.progression.filter(|_| state.unnamed(&clip.name)) {
+                    clip.name = names;
+                }
+                state.grew |= clip.length > written.before.length;
+                if let Some(c) = state.selection_clip.filter(|_| written.at != state.insert_at) {
+                    state.marks.push(Mark { clip: c, before: written.before, after: clip.clone(), from: written.at, to: state.insert_at });
+                    if state.marks.len() > 50 {
+                        state.marks.remove(0);
+                    }
+                }
+                state.selection = written.added.into_iter().collect();
+                previews = written.pitches;
+                // The view goes where the chords are.
+                state.scrolled = None;
             }
         }
         ui.separator();
@@ -920,10 +1023,18 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
 fn take_beat(state: &mut State, clip: &mut MidiClip, settings: &crate::drum_gen::Settings, beat: Beat) -> Option<engine::model::DrumParams> {
     match beat {
         Ok((notes, swing)) => {
-            clip.length = settings.bars as f64 * 4.0;
+            // Bars of the clip's meter, as the beat was written.
+            let length = settings.bars as f64 * state.sig.bar();
+            state.grew |= length > clip.length;
+            clip.length = length;
             clip.notes = notes;
             clip.groove = swing;
+            if state.unnamed(&clip.name) {
+                clip.name = settings.style.label().to_string();
+            }
             state.selection.clear();
+            // The view goes to the rows the beat plays.
+            state.scrolled = None;
             settings.machine.then(|| settings.style.sound())
         }
         Err(e) => {

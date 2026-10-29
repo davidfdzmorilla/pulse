@@ -1170,11 +1170,33 @@ impl PulseApp {
     }
 
     pub fn select_clip(&mut self, clip: ClipRef) {
+        // Another clip (or another one where it was): the editor goes to its notes.
+        if self.selected_clip != Some(clip) {
+            self.piano_roll.recenter();
+        }
         self.paste_slot = None;
         self.selected_clip = Some(clip);
         self.selected_clips.clear();
         self.selected_target = Target::Track(clip.track());
         self.detail = Detail::Clip;
+    }
+
+    /// An empty MIDI clip for `track`, named after it and as many bars long as
+    /// the settings say (see `Settings::new_clip_bars`): in the Session, of the
+    /// song's first signature; on the Arrangement from `start`, following the
+    /// signature changes, and only up to the next clip there.
+    pub fn new_midi_clip(&self, track: usize, start: Option<f64>) -> engine::model::MidiClip {
+        let bars = self.settings.new_clip_bars.max(1);
+        let meter = &self.project.meter;
+        let t = &self.project.tracks[track];
+        let length = match start {
+            None => meter.first().bar() * bars as f64,
+            Some(start) => {
+                let next = t.arrangement.iter().filter(|c| c.start > start + 1e-9).map(|c| c.start).fold(f64::INFINITY, f64::min);
+                (meter.add_bars(start, bars as i64) - start).min(next - start)
+            }
+        };
+        engine::model::MidiClip::new(t.name.clone(), length, t.color)
     }
 
     pub fn set_clip(&mut self, track: usize, slot: usize, clip: Option<Clip>) {

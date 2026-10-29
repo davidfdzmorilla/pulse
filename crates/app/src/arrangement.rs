@@ -13,7 +13,7 @@ use crate::theme::{self, ACCENT, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
 use engine::meter::Meter;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
-use engine::model::{ArrangementClip, AutomationPoint, Clip, MidiClip, Param};
+use engine::model::{ArrangementClip, AutomationPoint, Clip, Param};
 use std::collections::{HashMap, HashSet};
 use engine::{Sample, PEAK_BLOCK};
 use engine::{Command, Target};
@@ -224,7 +224,7 @@ fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64) {
     let bar = meter.bar_at(meter.round_to_bar(beat).max(0.0)).0.max(0) as u32;
     let current = meter.sig_at_bar(bar as i64);
     let here = meter.changes().iter().any(|c| c.bar == bar && bar > 0);
-    ui.menu_button(format!("Compás desde el {} ({})", bar + 1, current.label()), |ui| {
+    crate::widgets::menu_button(ui, format!("Compás desde el {} ({})", bar + 1, current.label()), |ui| {
         for sig in engine::meter::TimeSig::PRESETS {
             if ui.selectable_label(sig == current, sig.label()).clicked() {
                 app.set_meter(meter.with_change(bar, sig));
@@ -1204,7 +1204,6 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                 let Some(t) = app.project.tracks.get(track) else { return ui.close() };
                 let audio = t.is_audio();
                 let bar = app.project.meter.prev_bar(beat);
-                let bar_length = app.project.meter.bar_length_at(bar);
                 if app.clip_clipboard.is_some() && ui.button("Pegar aquí").clicked() {
                     app.paste_clips_at(track, beat);
                     ui.close();
@@ -1216,8 +1215,8 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                     }
                 }
                 if !audio && ui.button("Nuevo clip MIDI aquí").clicked() {
-                    let color = app.project.tracks[track].color;
-                    app.project.tracks[track].arrangement.push(ArrangementClip { start: bar, length: bar_length, clip: Clip::Midi(MidiClip::new("MIDI", bar_length, color)) });
+                    let clip = app.new_midi_clip(track, Some(bar));
+                    app.project.tracks[track].arrangement.push(ArrangementClip { start: bar, length: clip.length, clip: Clip::Midi(clip) });
                     let index = app.project.tracks[track].arrangement.len() - 1;
                     app.sync_arrangement(track);
                     app.select_clip(ClipRef::Arrangement { track, index });
@@ -1279,7 +1278,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         }
     }
     if count == 1 && !app.project.tracks[track].is_drums() {
-        ui.menu_button("Acompañar", |ui| {
+        crate::widgets::menu_button(ui, "Acompañar", |ui| {
             for part in crate::accompany::Part::ALL {
                 if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
                     app.accompany(clip, part);
@@ -1292,7 +1291,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         song_menu(ui, app, |app, style| app.hum_to_song(clip, style));
     }
     if audio && count == 1 {
-        ui.menu_button("Convertir a MIDI", |ui| {
+        crate::widgets::menu_button(ui, "Convertir a MIDI", |ui| {
             for mode in crate::to_midi::ToMidi::ALL {
                 if ui.add_enabled(app.to_midi.is_none(), egui::Button::new(mode.label())).on_hover_text(mode.hint()).clicked() {
                     app.convert_to_midi(clip, mode);
@@ -1341,7 +1340,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         app.split_clip_at(track, index, beat);
         ui.close();
     }
-    ui.menu_button(label("Trocear"), |ui| {
+    crate::widgets::menu_button(ui, label("Trocear"), |ui| {
         for (name, every) in [("Cada tiempo", 1.0), ("Cada 2 tiempos", 2.0), ("Cada compás", 4.0), ("Cada 2 compases", 8.0), ("Cada 4 compases", 16.0)] {
             if ui.button(name).on_hover_text("Corta los clips en trozos iguales, en las líneas de la rejilla").clicked() {
                 app.slice_selected(every);
@@ -1556,13 +1555,8 @@ fn handle_pointer(
                     app.choose_samples(Placement::Arrangement { track: t, start });
                     return;
                 }
-                let color = app.project.tracks[t].color;
-                let length = app.project.meter.bar_length_at(start);
-                app.project.tracks[t].arrangement.push(ArrangementClip {
-                    start,
-                    length,
-                    clip: Clip::Midi(MidiClip::new("MIDI", length, color)),
-                });
+                let clip = app.new_midi_clip(t, Some(start));
+                app.project.tracks[t].arrangement.push(ArrangementClip { start, length: clip.length, clip: Clip::Midi(clip) });
                 let index = app.project.tracks[t].arrangement.len() - 1;
                 app.sync_arrangement(t);
                 app.select_clip(ClipRef::Arrangement { track: t, index });
@@ -1807,6 +1801,7 @@ fn handle_automation(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use engine::model::MidiClip;
 
     /// Two clips on different tracks moved down together: neither lands on a
     /// group track (which plays no clips: it was lost from sight and sound).
@@ -2139,11 +2134,28 @@ mod tests {
         let (empty, clip, other) = (at(&app, 1, 9.5), at(&app, 0, 5.0), at(&app, 2, 13.0));
         screen.menu(&mut app, empty, "Nuevo clip MIDI aquí");
         let lane: Vec<(f64, f64)> = app.project.tracks[1].arrangement.iter().map(|c| (c.start, c.length)).collect();
-        assert_eq!(lane, vec![(8.0, 4.0)], "at the bar");
+        assert_eq!(lane, vec![(8.0, 16.0)], "at the bar, four bars long");
+        assert_eq!(app.project.tracks[1].arrangement[0].clip.name(), app.project.tracks[1].name, "named after its track");
         screen.menu(&mut app, clip, "Copiar");
         screen.menu(&mut app, other, "Pegar aquí");
         let lane: Vec<f64> = app.project.tracks[2].arrangement.iter().map(|c| c.start).collect();
         assert_eq!(lane, vec![13.0], "where it was right-clicked (on the grid)");
+    }
+
+    /// New MIDI clips last the bars the settings say, in the song's bars, and
+    /// stop where the next clip starts.
+    #[test]
+    fn new_midi_clips_last_the_bars_chosen() {
+        let mut app = app();
+        assert_eq!(app.new_midi_clip(1, Some(8.0)).length, 16.0);
+        assert_eq!(app.new_midi_clip(1, None).length, 16.0, "in the Session too");
+        app.settings.new_clip_bars = 2;
+        assert_eq!(app.new_midi_clip(1, Some(8.0)).length, 8.0);
+        // Track 0 has a clip at beat 4: one before it ends there.
+        assert_eq!(app.new_midi_clip(0, Some(0.0)).length, 4.0);
+        // In 3/4 from bar 3 on, two bars are six beats.
+        app.project.meter = app.project.meter.with_change(2, engine::meter::TimeSig::new(3, 4));
+        assert_eq!(app.new_midi_clip(1, Some(8.0)).length, 6.0);
     }
 
     /// The markers' strip: a double click adds one, dragging moves it, a click
@@ -2317,7 +2329,7 @@ pub(crate) const GROOVE_HINT: &str = "Guarda cómo caen y con qué fuerza los go
 
 /// «De tarareo a canción ▸», a style each.
 pub(crate) fn song_menu(ui: &mut egui::Ui, app: &mut PulseApp, mut make: impl FnMut(&mut PulseApp, crate::drum_gen::Style)) {
-    ui.menu_button("De tarareo a canción", |ui| {
+    crate::widgets::menu_button(ui, "De tarareo a canción", |ui| {
         ui.label(egui::RichText::new("La melodía, sus acordes, un bajo y una batería, en pistas nuevas").color(theme::TEXT_DIM).size(10.5));
         for style in crate::drum_gen::Style::ALL {
             if ui.add_enabled(app.hum_song.is_none(), egui::Button::new(style.label())).on_hover_text("Saca la melodía que tarareas, cantas o silbas (con el metrónomo, al tempo del proyecto), la ajusta a la rejilla, le pone acordes de su escala y añade bajo y batería de este estilo").clicked() {

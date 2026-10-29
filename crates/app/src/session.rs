@@ -5,7 +5,7 @@ use crate::project::PALETTE;
 use crate::theme::{self, ACCENT, PLAY, SLOT, SLOT_HOVER, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense};
-use engine::model::{Clip, MidiClip, Param, PAN_PARAM, SEND_PARAM};
+use engine::model::{Clip, Param, PAN_PARAM, SEND_PARAM};
 use engine::{Command, Target, NONE, MAX_RETURNS, NUM_SCENES, QUEUED_STOP};
 use std::sync::atomic::Ordering;
 
@@ -340,8 +340,9 @@ pub(crate) fn sound_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl FnMut
         return;
     }
     let taken = app.sounds_taken(t);
-    ui.menu_button("Sacar a su pista", |ui| {
-        for (voice, (_, name)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
+    crate::widgets::menu_button(ui, "Sacar a su pista", |ui| {
+        for voice in 0..engine::model::DRUM_SOUNDS {
+            let name = crate::project::voice_name(voice);
             let hint = match app.sound_track(t, voice) {
                 Some(track) => format!("Ya suena en «{track}»"),
                 None => format!("Una pista nueva que toca solo «{name}», con sus efectos y su fader: esta deja de tocarlo y los clips siguen aquí"),
@@ -570,7 +571,7 @@ fn clip_slot(
                 ui.close();
             }
             if matches!(clip, Clip::Audio(_)) {
-                ui.menu_button("Convertir a MIDI", |ui| {
+                crate::widgets::menu_button(ui, "Convertir a MIDI", |ui| {
                     for mode in crate::to_midi::ToMidi::ALL {
                         if ui.button(mode.label()).on_hover_text(mode.hint()).clicked() {
                             actions.push(Action::ToMidi(t, slot, mode));
@@ -580,7 +581,7 @@ fn clip_slot(
                 });
             }
             if !app_drums {
-                ui.menu_button("Acompañar", |ui| {
+                crate::widgets::menu_button(ui, "Acompañar", |ui| {
                     for part in crate::accompany::Part::ALL {
                         if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
                             actions.push(Action::Accompany(t, slot, part));
@@ -588,7 +589,7 @@ fn clip_slot(
                         }
                     }
                 });
-                ui.menu_button("De tarareo a canción", |ui| {
+                crate::widgets::menu_button(ui, "De tarareo a canción", |ui| {
                     ui.label(egui::RichText::new("La melodía, sus acordes, un bajo y una batería, en pistas nuevas").color(crate::theme::TEXT_DIM).size(10.5));
                     for style in crate::drum_gen::Style::ALL {
                         if ui.add_enabled(!hearing, egui::Button::new(style.label())).on_hover_text("Saca la melodía que tarareas, cantas o silbas (con el metrónomo, al tempo del proyecto), la ajusta a la rejilla, le pone acordes de su escala y añade bajo y batería de este estilo").clicked() {
@@ -846,10 +847,8 @@ fn apply(app: &mut PulseApp, action: Action) {
             if app.project.tracks[t].is_audio() {
                 app.choose_samples(Placement::Session { track: t, slot });
             } else {
-                let color = app.project.tracks[t].color;
-                // A bar long, in the song's first signature (Session clips loop on their own).
-                let length = app.project.meter.first().bar();
-                app.set_clip(t, slot, Some(Clip::Midi(MidiClip::new("MIDI", length, color))));
+                let clip = app.new_midi_clip(t, None);
+                app.set_clip(t, slot, Some(Clip::Midi(clip)));
                 app.select_clip(ClipRef::Session { track: t, slot });
             }
         }

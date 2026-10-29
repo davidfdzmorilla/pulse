@@ -67,6 +67,17 @@ impl Part {
         }
     }
 
+    /// Its fader next to the chords' it is made from (dB): where a mix
+    /// starts (the bass a little over the chords, the arpeggio as loud, the
+    /// pad under them), for the sounds it comes with. At the chords' own
+    /// level, a bass, a pad and an arpeggio added up took the master over 0 dB.
+    fn fader_db(self) -> f32 {
+        match self {
+            Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking | Part::Stabs => 0.0,
+            Part::ArpUp | Part::ArpUpDown | Part::Pad => -1.5,
+        }
+    }
+
     /// Names a track of its role goes by (a template's «Bajo», an imported «Bass»).
     fn roles(self) -> &'static [&'static str] {
         match self {
@@ -358,6 +369,8 @@ impl PulseApp {
                 let mut track = crate::project::Track::new(self.free_track_name(part.short()), color, part.instrument());
                 // Beside its source, in the same group.
                 track.depth = self.project.tracks[source].depth;
+                // Next to the chords' fader, so the mix doesn't go over 0 dB.
+                track.mixer.gain = self.project.tracks[source].mixer.gain * 10f32.powf(part.fader_db() / 20.0);
                 (source + 1, Some(track))
             }
         };
@@ -428,6 +441,57 @@ impl PulseApp {
 mod tests {
     use super::*;
     use stems::chord::Quality;
+
+    /// The Beat template with everything a producer adds in a hurry: a techno
+    /// beat, four chords, and a bass, a pad and an arpeggio from them, as they
+    /// come and with the sounds the audit picked. The drop leaves headroom on
+    /// the master (it went 2.7 dB over before: every new track came in at
+    /// the drums' level).
+    #[test]
+    fn a_beat_with_everything_leaves_headroom() {
+        use engine::model::{ArrangementClip, Clip, MidiClip, Note};
+        let presets: [(&str, &str); 4] = [("Acordes", "Rave de los 90"), ("Bajo", "Techno rodante"), ("Pad", "Ancho"), ("Arpegio", "Metálico")];
+        let mut peaks = Vec::new();
+        for with_presets in [false, true] {
+            let mut app = PulseApp::headless(crate::project::Project::empty());
+            app.templates = vec![crate::templates::Template { name: "Beat".into(), file: None }];
+            app.new_from_template(0);
+            let kit = crate::drum_gen::Kit::from_rows(&engine::model::DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
+            let settings = crate::drum_gen::Settings { style: crate::drum_gen::Style::Techno, bars: 8, sounds: crate::drum_gen::Style::Techno.sounds(), ..Default::default() };
+            let (beat, groove) = crate::drum_gen::generate(&kit, &settings, 32.0, &[], 0, TimeSig::COMMON);
+            app.project.tracks[0].arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(MidiClip { notes: beat, groove, ..MidiClip::new("Ritmo", 32.0, [0; 3]) }) });
+            // Am F C G, a bar each, twice.
+            let chords = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]];
+            let notes: Vec<Note> = (0..8).flat_map(|bar| chords[bar % 4].iter().map(move |&p| Note { start: bar as f64 * 4.0, length: 4.0, pitch: p, velocity: 0.8, chance: 1.0 })).collect();
+            app.project.tracks[2].arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(MidiClip { notes, ..MidiClip::new("Acordes", 32.0, [0; 3]) }) });
+            for part in [Part::BassOffbeat, Part::Pad, Part::ArpUpDown] {
+                app.accompany(ClipRef::Arrangement { track: 2, index: 0 }, part);
+            }
+            if with_presets {
+                for t in &mut app.project.tracks {
+                    let Some(&(_, name)) = presets.iter().find(|(part, _)| t.name.ends_with(part)) else { continue };
+                    if t.arrangement.is_empty() {
+                        continue;
+                    }
+                    if let Some((_, kind)) = t.instrument.factory_presets().into_iter().find(|(n, _)| n.ends_with(&format!("· {name}"))) {
+                        t.instrument = kind;
+                    }
+                }
+            }
+            let project = app.project.clone();
+            let mut samples = crate::sync::SampleCache::default();
+            let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+            let (l, r) = crate::export::render(commands, (0.0, 32.0), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap();
+            let peak = stems::loudness::sample_peak(&l, &r);
+            let lufs = stems::loudness::integrated(&l, &r, 48_000.0).unwrap();
+            let faders: Vec<String> = project.tracks.iter().map(|t| format!("{} {:+.1} dB", t.name, 20.0 * t.mixer.gain.log10())).collect();
+            println!("{}: {lufs:.1} LUFS, pico {peak:+.1} dBFS · {faders:?}", if with_presets { "con presets" } else { "de serie" });
+            peaks.push(peak);
+            // Loud enough still for the master to take it where it goes.
+            assert!(lufs > -18.0, "{lufs} LUFS");
+        }
+        assert!(peaks.iter().all(|&p| p <= -1.0), "{peaks:?} dBFS");
+    }
 
     /// In 6/8 the bass walks the dotted beats and the stabs keep inside the bars;
     /// in 3/4 the root comes on each beat, the first of each bar accented.

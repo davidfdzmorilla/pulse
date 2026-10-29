@@ -35,7 +35,15 @@
 //!
 //! «Aplicar todo» does it all, in the order a mix is made (see [`stage`]),
 //! measuring again after each change: the next one depends on what the last
-//! did.
+//! did. While it changes tracks it measures only the tracks it changed (and
+//! one whose fader alone moved, without rendering it: see [`louder_measures`]),
+//! and the mix when what comes next hears it.
+//!
+//! The loudness comes from the master's limiter, a true-peak one: the mix is
+//! rendered once up to it and gains are tried on that (see [`loudest_gain`]),
+//! as far as the goal, but its peaks no more than [`MAX_LIMITER_GAIN`] into it
+//! and the song's parts kept: a drop over its break and its intro (see
+//! [`squashed`]). Short of the goal, it says what else to do.
 //!
 //! «Antes / Después» plays the mix as it was before the assistant's first
 //! change and as it is, at the same loudness (the louder one's master fader
@@ -53,12 +61,17 @@ use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::sync::{Arc, Mutex};
 
 const RATE: f32 = 48_000.0;
-/// The most the assistant drives the master's limiter (dB): past it, a mix is
-/// squashed rather than made louder.
-const MAX_LIMITER_GAIN: f32 = 12.0;
-/// From this loudness (LUFS) on, the master gets a clipper before its limiter
-/// (see `PulseApp::loud_master`): how far it clips (dB), and the limiter's release.
-const LOUD: f64 = -8.5;
+/// The most the assistant drives the mix's peaks into the master's limiter
+/// (dB over its ceiling): past it, a mix is squashed rather than made louder
+/// (a mastering engineer has a limiter take 3 to 6 dB off the peaks; what is
+/// missing then comes from the mix). A mix with headroom under the ceiling
+/// gets that much more gain, which takes nothing off it.
+const MAX_LIMITER_GAIN: f32 = 6.0;
+/// From this loudness (LUFS) on (a club's), the master gets a clipper before
+/// its limiter (see `PulseApp::loud_master`): how far it clips (dB), and the
+/// limiter's release. The kick's peaks stand 15 dB or more over the rest of a
+/// techno mix: a limiter alone gets there squashing everything with them.
+const LOUD: f64 = -9.0;
 const CLIP_DB: f32 = 3.0;
 const LOUD_RELEASE_MS: f32 = 40.0;
 
@@ -272,7 +285,8 @@ const GROW_LU: f64 = 1.5;
 const GROW_MAX: f64 = 6.0;
 
 /// The parts to bring down so the quietest peak is [`GROW_LU`] over each of
-/// them: their indices in `sections` and by how much (dB, rounded to half).
+/// them (those it is less than 1 LU over): their indices in `sections` and by
+/// how much (dB, rounded to half).
 pub fn growth(sections: &[SectionLevel]) -> Vec<(usize, f32)> {
     let peaks = sections.iter().filter(|s| section_kind(&s.name) == Some(true)).filter_map(|s| s.lufs);
     let Some(peak) = peaks.reduce(f64::min) else { return Vec::new() };
@@ -282,7 +296,9 @@ pub fn growth(sections: &[SectionLevel]) -> Vec<(usize, f32)> {
         .filter(|(_, s)| section_kind(&s.name) == Some(false))
         .filter_map(|(i, s)| {
             let over = s.lufs? - (peak - GROW_LU);
-            (over > 0.25).then(|| (i, ((over.min(GROW_MAX) * 2.0).round() / 2.0).max(0.5) as f32))
+            // A LU over what leads to it is enough: the master's limiter may
+            // take a little of the 1.5 (see `squashed`).
+            (over > 0.5).then(|| (i, ((over.min(GROW_MAX) * 2.0).round() / 2.0).max(0.5) as f32))
         })
         .collect()
 }
@@ -893,9 +909,11 @@ pub fn mid_clashes(tracks: &[TrackMeasures]) -> Vec<MidClash> {
 }
 
 /// Whether `carves` (a track's cuts, Hz) make room at `hz` already: one
-/// within a quarter octave.
+/// within a band of it ([`MID_HZ`] are half an octave apart, and a carve,
+/// about an octave wide, still takes 2 dB off the next band). Carved for one
+/// track, the band where it clashes with another next to it is made room in.
 fn carved_at(carves: &[f32], hz: f32) -> bool {
-    carves.iter().any(|c| (c / hz).log2().abs() < 0.25)
+    carves.iter().any(|c| (c / hz).log2().abs() < 0.55)
 }
 
 /// Where a track's EQ Eights cut (Hz): bells at least 2 dB down.
@@ -908,7 +926,7 @@ fn carves(track: &crate::project::Track) -> Vec<f32> {
         .collect()
 }
 
-fn hz_label(hz: f32) -> String {
+fn freq_label(hz: f32) -> String {
     if hz >= 1000.0 { format!("{} kHz", num(hz as f64 / 1000.0)) } else { format!("{hz:.0} Hz") }
 }
 
@@ -1082,6 +1100,20 @@ fn anchor(tracks: &[TrackMeasures]) -> Option<&TrackMeasures> {
         .find_map(|role| tracks.iter().filter(|t| t.role == role && t.lufs.is_some()).max_by(|a, b| a.lufs.partial_cmp(&b.lufs).unwrap()))
 }
 
+/// How far under the kick (LU) drums sit that have no kick of their own (the
+/// kick taken out to a track of its own: hats, claps, percussion). Next to
+/// it as loud as a whole kit, they'd stand over everything else, and an intro
+/// of drums alone would sound nearly as big as the drop.
+const TOPS_LEVEL: f64 = -6.0;
+
+/// Whether `t` is drums without a kick of their own: little of them under
+/// 125 Hz (a fifth of their power at most), with a kick on another track.
+fn tops(t: &TrackMeasures, tracks: &[TrackMeasures]) -> bool {
+    let power: Vec<f64> = t.bands.iter().map(|b| 10f64.powf(b / 10.0)).collect();
+    let total = power.iter().sum::<f64>().max(1e-30);
+    t.role == Role::Drums && power[..3].iter().sum::<f64>() / total < 0.2 && tracks.iter().any(|o| o.index != t.index && o.role == Role::Kick && o.lufs.is_some())
+}
+
 /// A starting balance: what each track needs to sit where its role
 /// usually does, next to the anchor (see [`anchor`]).
 pub fn balance_tracks(tracks: &[TrackMeasures]) -> (Option<&TrackMeasures>, Vec<Change>) {
@@ -1093,7 +1125,8 @@ pub fn balance_tracks(tracks: &[TrackMeasures]) -> (Option<&TrackMeasures>, Vec<
     for t in &sounding {
         let mut change = Change { track: t.index, name: t.name.clone(), role: t.role, gain_db: 0.0, pan: None, low_cut: None };
         // Its level: the role's, shared among the tracks of it.
-        if let (Some(level), Some(lufs)) = (t.role.level(), t.lufs) {
+        let level = if tops(t, tracks) { Some(TOPS_LEVEL) } else { t.role.level() };
+        if let (Some(level), Some(lufs)) = (level, t.lufs) {
             if t.index != anchor.index {
                 let goal = reference + level - 10.0 * (count(t.role) as f64).log10();
                 // Up no further than a dB under full scale, nor past the
@@ -1162,6 +1195,13 @@ pub struct Report {
     /// whether the master's volume is automated already.
     pub sections: Vec<SectionLevel>,
     pub master_automated: bool,
+    /// Whether the assistant left the master's limiter short of the loudness
+    /// on purpose (see [`Limited`]), and it is as it left it.
+    pub limited: Option<Limited>,
+    /// The pairs of tracks (ids: the one that made room, the one it made it
+    /// for) the assistant carved room in the mids for, still carved: once is
+    /// enough, even where the clash moved to another band.
+    pub carved: Vec<(u32, u32)>,
 }
 
 /// A change the assistant can make.
@@ -1359,9 +1399,15 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     // Loudness and true peak.
     if let Some((goal, ceiling)) = target.levels(reference) {
         let off = goal - lufs;
-        let ceiling_db = (ceiling - 0.8) as f32;
+        let ceiling_db = (ceiling - PEAK_MARGIN) as f32;
+        // The limiter as far as it goes for this target (the assistant left it
+        // there, or it is at its most): what else to do, not more of it.
+        let held = report.limited.as_ref().filter(|l| l.target == target).map(|l| l.held.clone());
+        let is_held = held.is_some() && off > 0.0;
         if off.abs() < 1.0 {
             out.push(advice(Level::Good, format!("Sonoridad {} LUFS: justo para {}", num(lufs), target.label()), None));
+        } else if let (true, Some(held)) = (off > 0.0, held) {
+            out.push(advice(Level::Note, format!("Sonoridad {} LUFS: {} dB por debajo del objetivo ({} LUFS). {}. {LOUDER_WITHOUT_SQUASHING}", num(lufs), num(off), num(goal), held.says()), None));
         } else if off > 0.0 {
             out.push(advice(
                 Level::Warning,
@@ -1381,7 +1427,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
                 Some(Fix::MasterLimiter { gain_db: off as f32, ceiling_db }),
             ));
         }
-        if mix.true_peak > ceiling && off.abs() < 1.0 {
+        if mix.true_peak > ceiling && (off.abs() < 1.0 || is_held) {
             out.push(advice(
                 Level::Warning,
                 format!("Pico real {} dBTP, por encima de {} dBTP: al pasarla a MP3 o AAC puede distorsionar", db(mix.true_peak), num(ceiling)),
@@ -1460,6 +1506,16 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         if fix.is_some() && out.iter().any(|a| a.fix == fix) {
             continue;
         }
+        // Its lows cut already: what is left of them is its own.
+        if let Some(Fix::CutLows { track, name }) = &fix {
+            if report.tracks.iter().any(|t| t.index == *track && t.cut) {
+                let text = format!("«{name}» ya tiene los graves recortados");
+                if !out.iter().any(|a| a.text == text) {
+                    out.push(advice(Level::Good, text, None));
+                }
+                continue;
+            }
+        }
         out.push(advice(Level::Warning, text, fix));
     }
     // Tracks whose level moves too much to sit in the mix.
@@ -1502,7 +1558,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
                     "Las eses de «{}» suenan a {} dB de sus vocales: saltan y pinchan, más aún tras comprimirla. Un De-esser en {} las bajaría unos {} dB sin apagar el resto",
                     t.name,
                     db(e.over_vowels as f64),
-                    hz_label(e.freq),
+                    freq_label(e.freq),
                     format!("{takes:.0}")
                 ),
                 Some(Fix::DeEss { track: t.index, name: t.name.clone(), params }),
@@ -1623,13 +1679,14 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     for clash in mid_clashes(&report.tracks).into_iter().take(6) {
         let (yields, to) = (&report.tracks[clash.yields], &report.tracks[clash.to]);
         let hz = MID_HZ[clash.band];
-        if carved_at(&yields.carves, hz) {
-            out.push(advice(Level::Good, format!("«{}» deja hueco a «{}» en {}", yields.name, to.name, hz_label(hz)), None));
+        let made_room = !yields.carves.is_empty() && report.carved.contains(&(yields.id, to.id));
+        if carved_at(&yields.carves, hz) || made_room {
+            out.push(advice(Level::Good, format!("«{}» deja hueco a «{}» en {}", yields.name, to.name, freq_label(hz)), None));
             continue;
         }
         out.push(advice(
             Level::Warning,
-            format!("«{}» y «{}» se tapan en {} el {:.0} % del tiempo: cuesta oír «{}» con claridad", to.name, yields.name, hz_label(hz), clash.share * 100.0, to.name),
+            format!("«{}» y «{}» se tapan en {} el {:.0} % del tiempo: cuesta oír «{}» con claridad", to.name, yields.name, freq_label(hz), clash.share * 100.0, to.name),
             Some(Fix::Carve { track: yields.index, name: yields.name.clone(), hz, for_name: to.name.clone() }),
         ));
     }
@@ -1687,9 +1744,250 @@ pub fn balance(mix: &[f64; 10], reference: &[f64; 10]) -> [f64; 3] {
     [mean(1..=3), mean(4..=6), mean(7..=9)]
 }
 
+// ----- The master's loudness ----------------------------------------------------------
+
+/// How far under the highest true peak allowed the limiter's ceiling goes
+/// (dB): what the master's fader and the encoders may add.
+const PEAK_MARGIN: f64 = 0.3;
+/// The master's fader, read every this many samples (see [`master_gains`]).
+const FADER_BLOCK: usize = 64;
+
+/// Why the limiter stopped short of the loudness asked for.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Held {
+    /// It drives the peaks [`MAX_LIMITER_GAIN`] over its ceiling already.
+    Gain,
+    /// More would take from `peak` (a drop, a chorus) what it grows over `other`.
+    Section { peak: String, other: String },
+    /// More would flatten it (its loudness range).
+    Range,
+}
+
+impl Held {
+    fn says(&self) -> String {
+        match self {
+            Held::Gain => format!("El limitador ya le quita {} dB a los picos, lo razonable: más la aplastaría", num(MAX_LIMITER_GAIN as f64)),
+            Held::Section { peak, other } => format!("Más limitador le quitaría a «{peak}» lo que crece sobre «{other}»"),
+            Held::Range => "Más limitador le quitaría la dinámica: todo sonaría igual de fuerte".into(),
+        }
+    }
+}
+
+/// What to do for more loudness than the limiter gives without squashing.
+const LOUDER_WITHOUT_SQUASHING: &str = "Para más volumen sin aplastarla: sube la mezcla antes del master (los faders, sin que el master pase de 0 dBFS), comprime el bus (un Compressor suave antes del limitador: 2:1, que quite 2 o 3 dB) o satura la batería y el bajo";
+
+/// The limiter held back, for a target: at what gain, and why.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Limited {
+    pub target: Target,
+    pub gain_db: f32,
+    pub held: Held,
+}
+
+/// The mix through a limiter (or none) at one gain, measured: its loudness,
+/// true peak (dBTP), range, and each part's loudness (LUFS).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Trial {
+    pub gain_db: f32,
+    pub lufs: Option<f64>,
+    pub true_peak: f64,
+    pub range: Option<f64>,
+    pub sections: Vec<Option<f64>>,
+}
+
+fn lufs_of(power: f64) -> f64 {
+    -0.691 + 10.0 * power.max(1e-20).log10()
+}
+
+/// Gated loudness (BS.1770) of 400 ms block powers.
+fn gated(blocks: impl Iterator<Item = f64>) -> Option<f64> {
+    let loud: Vec<f64> = blocks.filter(|&p| lufs_of(p) > -70.0).collect();
+    if loud.is_empty() {
+        return None;
+    }
+    let relative = lufs_of(loud.iter().sum::<f64>() / loud.len() as f64) - 10.0;
+    let kept: Vec<f64> = loud.into_iter().filter(|&p| lufs_of(p) > relative).collect();
+    Some(lufs_of(kept.iter().sum::<f64>() / kept.len().max(1) as f64))
+}
+
+/// `left`/`right` (the master before its limiter) through `limiter` (`None`:
+/// as it is), then the master's fader (`fader`, one value every
+/// [`FADER_BLOCK`] samples), measured as the analysis measures the mix, in one
+/// pass: loudness, range and each part (`sections`, samples) from its 100 ms
+/// K-weighted blocks, and the true peak.
+pub fn trial(left: &[f32], right: &[f32], fader: &[f32], limiter: Option<LimiterParams>, sections: &[(usize, usize)]) -> Trial {
+    let mut fx = limiter.map(|p| engine::OfflineLimiter::new(p, RATE));
+    let mut meter = engine::dsp::LoudnessMeter::new(RATE);
+    let mut peak = engine::dsp::TruePeakMeter::default();
+    // The meter's blocks: 100 ms.
+    const BLOCK: usize = RATE as usize / 10;
+    let mut blocks: Vec<f64> = Vec::with_capacity(left.len() / BLOCK + 1);
+    const CHUNK: usize = 4096;
+    let (mut l, mut r) = (vec![0f32; CHUNK], vec![0f32; CHUNK]);
+    let n = left.len().min(right.len());
+    let mut at = 0;
+    while at < n {
+        let m = CHUNK.min(n - at);
+        l[..m].copy_from_slice(&left[at..at + m]);
+        r[..m].copy_from_slice(&right[at..at + m]);
+        if let Some(fx) = &mut fx {
+            fx.process(&mut l[..m], &mut r[..m], RATE);
+        }
+        for i in 0..m {
+            let g = fader.get((at + i) / FADER_BLOCK).or(fader.last()).copied().unwrap_or(1.0);
+            let (a, b) = (l[i] * g, r[i] * g);
+            peak.push(a, b);
+            if let Some(p) = meter.push_block(a, b) {
+                blocks.push(p);
+            }
+        }
+        at += m;
+    }
+    // 400 ms blocks every 100 ms, and 3 s ones, as `stems::loudness` makes them.
+    let mean = |a: usize, k: usize| blocks[a..a + k].iter().sum::<f64>() / k as f64;
+    let momentary = |from: usize, to: usize| (from..to.saturating_sub(3)).map(move |a| (a, mean(a, 4)));
+    let lufs = gated(momentary(0, blocks.len()).map(|(_, p)| p));
+    let range = {
+        let short: Vec<f64> = (0..blocks.len().saturating_sub(29)).map(|a| lufs_of(mean(a, 30))).filter(|&l| l > -70.0).collect();
+        (!short.is_empty()).then(|| {
+            let mean = short.iter().map(|&l| 10f64.powf((l + 0.691) / 10.0)).sum::<f64>() / short.len() as f64;
+            let gate = lufs_of(mean) - 20.0;
+            let mut kept: Vec<f64> = short.into_iter().filter(|&l| l > gate).collect();
+            kept.sort_by(f64::total_cmp);
+            let at = |p: f64| kept[((p * (kept.len() - 1) as f64).round() as usize).min(kept.len() - 1)];
+            at(0.95) - at(0.10)
+        })
+    };
+    let sections = sections.iter().map(|&(a, b)| gated(momentary(a.div_ceil(BLOCK), (b / BLOCK).min(blocks.len())).map(|(_, p)| p))).collect();
+    Trial { gain_db: limiter.map_or(0.0, |p| p.gain_db), lufs, true_peak: 20.0 * (peak.peak() as f64).max(1e-10).log10(), range, sections }
+}
+
+/// Whether `t` (the mix limited) has lost the shape of `base` (the mix
+/// before the limiter): the song's peak (its quietest chorus or drop, else its
+/// loudest part) no longer over the rest by about what it was. A part may lose
+/// a third of its distance to the peak (half a dB to 2.5), and one that leads
+/// to it keeps what makes the peak grow (1.15 LU, or what it had if less).
+/// Without parts, the range
+/// may lose a third (a dB at least).
+pub fn squashed(base: &Trial, t: &Trial, names: &[String]) -> Option<Held> {
+    let kinds: Vec<Option<bool>> = names.iter().map(|n| section_kind(n)).collect();
+    let measured: Vec<usize> = (0..names.len()).filter(|&i| base.sections.get(i).copied().flatten().is_some() && t.sections.get(i).copied().flatten().is_some()).collect();
+    if measured.len() >= 2 {
+        let level = |trial: &Trial, i: usize| trial.sections[i].unwrap();
+        let peaks: Vec<usize> = measured.iter().copied().filter(|&i| kinds[i] == Some(true)).collect();
+        let peaks = if peaks.is_empty() { vec![*measured.iter().max_by(|&&a, &&b| level(base, a).total_cmp(&level(base, b))).unwrap()] } else { peaks };
+        let peak_of = |trial: &Trial| peaks.iter().map(|&i| (level(trial, i), i)).min_by(|a, b| a.0.total_cmp(&b.0)).unwrap();
+        let ((p0, quietest), (p1, _)) = (peak_of(base), peak_of(t));
+        for &i in measured.iter().filter(|i| !peaks.contains(i)) {
+            let (before, after) = (p0 - level(base, i), p1 - level(t, i));
+            let allowed = (before / 3.0).clamp(0.5, 2.5);
+            // What leads to the peak stays far enough under it that it grows
+            // (see `growth`, which asks under a LU), with a little to spare.
+            let grows = kinds[i] == Some(false) && after < (GROW_LU - 0.35).min(before - 0.05);
+            if after < before - allowed || grows {
+                return Some(Held::Section { peak: names[quietest].clone(), other: names[i].clone() });
+            }
+        }
+        return None;
+    }
+    match (base.range, t.range) {
+        (Some(r0), Some(r1)) if r0 - r1 > (r0 / 3.0).max(1.0) => Some(Held::Range),
+        _ => None,
+    }
+}
+
+/// The limiter's gain for `goal` LUFS, its true peak at most `max_peak`: the
+/// most, up to [`MAX_LIMITER_GAIN`] over the ceiling for its peaks (and the
+/// headroom it has under the ceiling), that doesn't go over the goal nor squash
+/// the song (see [`squashed`]), tried on `left`/`right` (the master before its
+/// limiter) a few gains at a time, at once. With why it stopped, if it stopped
+/// short (more than half a dB under).
+pub fn loudest_gain(left: &[f32], right: &[f32], fader: &[f32], limiter: LimiterParams, sections: &[(String, usize, usize)], goal: f64, max_peak: f64, cancel: &AtomicBool) -> Option<(Trial, Option<Held>)> {
+    let names: Vec<String> = sections.iter().map(|s| s.0.clone()).collect();
+    let spans: Vec<(usize, usize)> = sections.iter().map(|s| (s.1, s.2)).collect();
+    let base = trial(left, right, fader, None, &spans);
+    let spans = &spans;
+    let try_all = |gains: &[f32]| -> Vec<Trial> {
+        std::thread::scope(|scope| {
+            let jobs: Vec<_> = gains.iter().map(|&g| scope.spawn(move || trial(left, right, fader, Some(LimiterParams { gain_db: g, ..limiter }), spans))).collect();
+            jobs.into_iter().map(|j| j.join().expect("a trial")).collect()
+        })
+    };
+    // Fine where it's fine: not over the goal, its true peak under, its shape kept.
+    let fine = |t: &Trial| t.lufs.is_some_and(|l| l <= goal + 0.2) && t.true_peak <= max_peak + 0.05 && squashed(&base, t, &names).is_none();
+    let need = (goal - base.lufs?) as f32;
+    let threads = std::thread::available_parallelism().map_or(4, |n| n.get()).clamp(4, 8);
+    // From under what it needs (a limiter gives less than its gain), and at
+    // least 6 dB under its most: the most may squash it.
+    let most = MAX_LIMITER_GAIN + headroom(left, right, limiter.ceiling_db);
+    let low = (need - 1.0).min(most - 6.0).clamp(-24.0, most);
+    let spread = |a: f32, b: f32, n: usize| -> Vec<f32> { if b - a < 0.01 { vec![a] } else { (0..n).map(|k| a + (b - a) * k as f32 / (n - 1) as f32).collect() } };
+    let mut tried = try_all(&spread(low, most, threads));
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
+    // The last fine one, and between it and the next, closer.
+    let best = |tried: &[Trial]| tried.iter().rposition(|t| fine(t));
+    if let Some(k) = best(&tried) {
+        if let Some(next) = tried.get(k + 1).map(|t| t.gain_db) {
+            let from = tried[k].gain_db;
+            let finer: Vec<f32> = spread(from, next, threads + 2)[1..threads + 1].to_vec();
+            tried.extend(try_all(&finer));
+            tried.sort_by(|a, b| a.gain_db.total_cmp(&b.gain_db));
+        }
+    }
+    let chosen = match best(&tried) {
+        Some(k) => k,
+        // Not even the least: the least, and why.
+        None => 0,
+    };
+    let pick = tried[chosen].clone();
+    let short = pick.lufs.is_none_or(|l| l < goal - 0.5);
+    let held = short.then(|| match tried.get(chosen + 1).and_then(|t| squashed(&base, t, &names)).or_else(|| squashed(&base, &pick, &names)) {
+        Some(why) => why,
+        None => Held::Gain,
+    });
+    Some((pick, held))
+}
+
+/// How far (dB) the true peak of `left`/`right` stays under `ceiling` (0 if over).
+fn headroom(left: &[f32], right: &[f32], ceiling: f32) -> f32 {
+    let mut meter = engine::dsp::TruePeakMeter::default();
+    for (&a, &b) in left.iter().zip(right) {
+        meter.push(a, b);
+    }
+    (((ceiling - 20.0 * meter.peak().max(1e-9).log10()) * 10.0).round() / 10.0).max(0.0)
+}
+
+/// The master's fader at every [`FADER_BLOCK`] samples of a render from
+/// `start` (beat), `frames` long: its volume automation, or its fader; at the
+/// tempo (and its automation).
+fn master_gains(master: &crate::project::MasterTrack, tempo: f64, start: f64, frames: usize) -> Vec<f32> {
+    let volume = master.automation.iter().find(|l| l.param == Param::Volume && !l.points.is_empty());
+    let tempo_lane = master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty());
+    let mut beat = start;
+    (0..frames.div_ceil(FADER_BLOCK))
+        .map(|_| {
+            let g = volume.and_then(|l| l.value_at(beat)).unwrap_or(master.mixer.gain);
+            let bpm = tempo_lane.and_then(|l| l.value_at(beat)).map_or(tempo, |b| b as f64).max(1.0);
+            beat += FADER_BLOCK as f64 / RATE as f64 * bpm / 60.0;
+            g
+        })
+        .collect()
+}
+
 // ----- Running it ----------------------------------------------------------------
 
-type Outcome = Result<Report, String>;
+/// What a job brings back: an analysis (and what its tracks were rendered
+/// from, see [`stem_key`]), or the limiter's gain for a loudness.
+enum Done {
+    Report(Report, Vec<crate::project::Project>),
+    /// With the mix as it comes out of the limiter (and its parts), worked
+    /// out from the render before it when nothing follows the limiter.
+    Loud { trial: Trial, held: Option<Held>, ceiling_db: f32, mix: Option<(Measures, Vec<SectionLevel>)> },
+}
+
+type Outcome = Result<Done, String>;
 
 pub struct Job {
     progress: Arc<AtomicU32>,
@@ -1702,14 +2000,6 @@ pub struct ReferenceJob {
     result: Arc<Mutex<Option<Measures>>>,
 }
 
-#[derive(Clone, Copy)]
-struct Chase {
-    goal: f64,
-    max_peak: f64,
-    steps: u8,
-    last: (f32, Option<f64>),
-}
-
 /// The window's state.
 pub struct Assistant {
     pub open: bool,
@@ -1719,14 +2009,18 @@ pub struct Assistant {
     pub report: Option<Report>,
     /// Changed since it was analysed.
     stale: bool,
+    /// The report's mix (its loudness, its parts) is from before the last
+    /// change: «Aplicar todo» measures only the tracks while it changes them.
+    mix_stale: bool,
+    /// What each track of the report was rendered from (see [`stem_key`]),
+    /// and for which range: a track whose key is the same isn't rendered again.
+    keys: Option<(Range, Vec<crate::project::Project>)>,
     pub reference: Option<(String, Measures)>,
     reference_job: Option<ReferenceJob>,
-    /// Bringing the mix to a loudness and under a true peak: the goal (LUFS),
-    /// the highest true peak (dBTP) and the steps taken. A limiter pushed harder
-    /// gives back less than its gain, and its peaks between samples go over its
-    /// ceiling, so it takes a few, each measured. The last step's gain and the
-    /// loudness before it tell how much the next needs.
-    chase: Option<Chase>,
+    /// The limiter stopped short of the loudness: at what gain, and why.
+    limited: Option<Limited>,
+    /// The tracks (ids) it carved room in for others (see [`Report::carved`]).
+    carved: Vec<(u32, u32)>,
     /// What the last «Aplicar» could not do, shown until the next.
     note: Option<String>,
     /// «Aplicar todo» under way: what it has applied so far.
@@ -1778,7 +2072,7 @@ fn levelled(project: &crate::project::Project, db: f32) -> crate::project::Proje
 
 impl Default for Assistant {
     fn default() -> Self {
-        Self { open: false, range: Range::Song, target: Target::Streaming, job: None, report: None, stale: false, reference: None, reference_job: None, chase: None, note: None, auto: None, before: None, listening: None }
+        Self { open: false, range: Range::Song, target: Target::Streaming, job: None, report: None, stale: false, mix_stale: false, keys: None, reference: None, reference_job: None, limited: None, carved: Vec::new(), note: None, auto: None, before: None, listening: None }
     }
 }
 
@@ -1788,28 +2082,103 @@ enum Measured {
     Track(TrackMeasures),
 }
 
+/// A track's measures as they would be `db` louder: everything in dB moves
+/// by that much, its powers by as many tenths of a bel, its shape not at all.
+fn louder_measures(m: &TrackMeasures, db: f64) -> TrackMeasures {
+    let mut m = m.clone();
+    let (d, f) = (db as f32, 10f64.powf(db / 10.0));
+    m.peak += db;
+    m.lufs = m.lufs.map(|l| l + db);
+    m.low_end.iter_mut().for_each(|l| *l += db);
+    m.bands.iter_mut().for_each(|b| *b += db);
+    m.mids.iter_mut().flat_map(|f| f.iter_mut()).for_each(|b| *b += d);
+    m.dynamics = m.dynamics.map(|(a, b)| (a + d, b + d));
+    m.levels.iter_mut().for_each(|l| *l += d);
+    m.esses = m.esses.map(|e| Esses { esses_top: e.esses_top + d, vowels_top: e.vowels_top + d, ..e });
+    let st = m.stereo;
+    m.stereo = Stereo { mid: st.mid * f, side: st.side * f, low_mid: st.low_mid * f, low_side: st.low_side * f };
+    m
+}
+
+/// The project its tracks are rendered from for the analysis: each dry,
+/// without what it sends to the returns (their tails would fill its silences
+/// and pass for its soft parts), and before the master (its chain, its fader
+/// and their automation: a limiter alone on each track would lift the quiet
+/// ones, and it isn't how they sit against each other).
+fn dry_project(project: &crate::project::Project) -> crate::project::Project {
+    let mut dry = project.clone();
+    for t in &mut dry.tracks {
+        t.sends = [0.0; MAX_RETURNS];
+        t.automation.retain(|l| !matches!(l.param, Param::Send(_)));
+    }
+    dry.master.devices.clear();
+    dry.master.mixer.gain = 1.0;
+    dry.master.mixer.pan = 0.0;
+    dry.master.automation.retain(|l| l.param == Param::Tempo);
+    dry
+}
+
+/// What track `t`'s render of the analysis depends on: the dry project (see
+/// [`dry_project`]) as its stem plays it (see [`export::only`]), less its
+/// returns (no track sends to them in it). Two alike sound alike.
+fn stem_key(dry: &crate::project::Project, t: usize) -> crate::project::Project {
+    let mut key = export::only(dry, t);
+    key.returns.clear();
+    key
+}
+
 impl PulseApp {
     /// Renders and measures the mix and each track (in the background).
     pub fn analyze_mix(&mut self) {
+        self.analyze(true);
+    }
+
+    /// Renders and measures the tracks that changed since the last analysis
+    /// (all, the first time) and, with `mix`, the mix; what isn't rendered
+    /// again is kept from the last.
+    fn analyze(&mut self, mix: bool) {
         if export::beat_range(&self.project, self.mix.range).is_none() {
             self.status = Some(match self.mix.range {
                 Range::Song | Range::Sections => "El Arrangement está vacío: coloca clips en él para analizar la canción (o analiza el loop)".into(),
                 Range::Loop => "El loop está vacío".into(),
             });
+            self.mix.auto = None;
             return;
         }
         self.capture_plugins();
-        let settings = export::Settings { range: self.mix.range, stems: true, sample_rate: RATE as u32, ..Default::default() };
+        let range = self.mix.range;
+        let settings = export::Settings { range, stems: true, stems_master: false, sample_rate: RATE as u32, ..Default::default() };
         let live = std::mem::take(&mut self.samples.plugins);
-        let mix = export::plan(&self.project, &mut self.samples, &export::Settings { stems: false, ..settings }, std::path::Path::new("mezcla.wav"));
-        // Each track dry, without what it sends to the returns: their tails
-        // would fill its silences and pass for its soft parts.
-        let mut dry = self.project.clone();
-        for t in &mut dry.tracks {
-            t.sends = [0.0; MAX_RETURNS];
-            t.automation.retain(|l| !matches!(l.param, Param::Send(_)));
+        let old = self.mix.report.as_ref().filter(|_| self.mix.keys.as_ref().is_some_and(|k| k.0 == range));
+        let mix = mix || old.is_none();
+        let mut renders = if mix { export::plan(&self.project, &mut self.samples, &export::Settings { stems: false, ..settings }, std::path::Path::new("mezcla.wav")) } else { Vec::new() };
+        let dry = dry_project(&self.project);
+        let keys: Vec<crate::project::Project> = (0..dry.tracks.len()).map(|t| stem_key(&dry, t)).collect();
+        // Tracks rendered as they are: kept; with only their fader moved
+        // (and no volume automation), kept that much louder or softer.
+        let same = |t: usize| -> Option<TrackMeasures> {
+            let (_, old_keys) = self.mix.keys.as_ref()?;
+            let measured = old?.tracks.iter().find(|m| m.index == t)?;
+            if old_keys.len() != keys.len() {
+                return None;
+            }
+            if old_keys[t] == keys[t] {
+                return Some(measured.clone());
+            }
+            let (was, now) = (&old_keys[t].tracks[t], &keys[t].tracks[t]);
+            let mut moved = old_keys[t].clone();
+            moved.tracks[t].mixer.gain = now.mixer.gain;
+            let automated = now.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty());
+            (moved == keys[t] && !automated && was.mixer.gain > 0.0 && now.mixer.gain > 0.0).then(|| louder_measures(measured, 20.0 * (now.mixer.gain / was.mixer.gain).log10() as f64))
+        };
+        let mut kept: Vec<TrackMeasures> = Vec::new();
+        for render in export::plan(&dry, &mut self.samples, &settings, std::path::Path::new("mezcla.wav")) {
+            match render.track.and_then(|t| same(t)) {
+                Some(m) => kept.push(m),
+                None => renders.push(render),
+            }
         }
-        let tracks = export::plan(&dry, &mut self.samples, &settings, std::path::Path::new("mezcla.wav"));
+        let old_mix = old.map(|r| (r.mix.clone(), r.sections.clone()));
         self.samples.plugins = live;
         let names: Vec<(String, bool, bool, u32, Vec<u32>)> = self
             .project
@@ -1823,7 +2192,7 @@ impl PulseApp {
         let tempo = self.project.tempo;
         let space = Space::of(&self.project.returns);
         // The parts, in seconds of the render (from the song's start).
-        let parts: Vec<(String, f64, f64, f64, f64)> = match self.mix.range {
+        let parts: Vec<(String, f64, f64, f64, f64)> = match range {
             Range::Loop => Vec::new(),
             _ => export::sections(&self.project).into_iter().map(|(name, (a, b))| (name, a, b, seconds_between(&self.project, 0.0, a), seconds_between(&self.project, 0.0, b))).collect(),
         };
@@ -1837,12 +2206,27 @@ impl PulseApp {
         let utilities: Vec<Option<UtilityParams>> = self.project.tracks.iter().map(|t| t.devices.iter().rev().find_map(|d| if let (true, Effect::Utility(u)) = (d.enabled, &d.effect) { Some(*u) } else { None })).collect();
         let thrown: Vec<bool> = self.project.tracks.iter().map(|t| t.automation.iter().any(|l| matches!(l.param, Param::Send(_)) && !l.points.is_empty())).collect();
         let echo = space.delay.and_then(|i| self.project.returns[i].devices.iter().find_map(|d| if let Effect::Delay(p) = &d.effect { Some(p.time_beats) } else { None })).unwrap_or(0.75);
-        let start = export::beat_range(&self.project, self.mix.range).map_or(0.0, |r| r.0);
+        let start = export::beat_range(&self.project, range).map_or(0.0, |r| r.0);
+        let limiter_gain = self.project.master.devices.iter().rev().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(l.gain_db) } else { None });
+        let limited = self.mix.limited.clone().filter(|l| limiter_gain.is_some_and(|g| (g - l.gain_db).abs() < 0.01));
+        let carved = self.mix.carved.clone();
+        // What a kept track was measured with that the project says, as it is now.
+        let meta = move |m: &mut TrackMeasures| {
+            let index = m.index;
+            let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
+            let (hint, pan, cut, gain, carves, compressed) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new(), false));
+            let (group, sends, automated, deessed) = routing.get(index).copied().unwrap_or((false, [0.0; MAX_RETURNS], false, false));
+            (m.name, m.drums, m.kick, m.id, m.listens) = (name, drums, kick, id, listens);
+            (m.role, m.pan, m.cut, m.gain, m.carves, m.compressed) = (hint.unwrap_or_else(|| role_by_sound(&m.bands)), pan, cut, gain, carves, compressed);
+            (m.group, m.sends, m.automated, m.deessed) = (group, sends, automated, deessed);
+            m.thrown = thrown.get(index).copied().unwrap_or(false);
+            m.utility = utilities.get(index).copied().flatten();
+        };
+        let voices: Vec<bool> = self.project.tracks.iter().map(|t| matches!(role_hint(&t.name, &t.instrument, is_drums(t)), Some(Role::Vocal | Role::Backing))).collect();
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
             // The mix and every track at once (see `export::render_each`).
-            let renders: Vec<_> = mix.into_iter().chain(tracks).collect();
             let measured = export::render_each(renders, RATE, &p, &c, |render, left, right| {
                 Ok(match render.track {
                     None => {
@@ -1851,56 +2235,70 @@ impl PulseApp {
                         Measured::Mix(Measures::of(&left, &right, RATE), sections)
                     }
                     Some(index) => {
-                        let (name, drums, kick, id, listens) = names.get(index).cloned().unwrap_or_default();
-                        let (hint, pan, cut, gain, carves, compressed) = mixing.get(index).cloned().unwrap_or((None, 0.0, false, 1.0, Vec::new(), false));
-                        let bands = loudness::bands(&left, &right, RATE);
-                        let (group, sends, automated, deessed) = routing.get(index).copied().unwrap_or((false, [0.0; MAX_RETURNS], false, false));
-                        let voice = matches!(hint, Some(Role::Vocal | Role::Backing));
+                        let voice = voices.get(index).copied().unwrap_or(false);
                         Measured::Track(TrackMeasures {
                             index,
-                            id,
-                            name,
-                            drums,
-                            kick,
-                            listens,
+                            id: 0,
+                            name: String::new(),
+                            drums: false,
+                            kick: false,
+                            listens: Vec::new(),
                             peak: loudness::sample_peak(&left, &right),
                             lufs: loudness::integrated(&left, &right, RATE),
                             correlation: loudness::correlation(&left, &right),
                             low_end: loudness::low_end(&left, &right, RATE),
-                            role: hint.unwrap_or_else(|| role_by_sound(&bands)),
-                            pan,
-                            cut,
-                            bands,
-                            gain,
+                            role: Role::Other,
+                            pan: 0.0,
+                            cut: false,
+                            bands: loudness::bands(&left, &right, RATE),
+                            gain: 1.0,
                             mids: mids(&left, &right, RATE),
-                            carves,
+                            carves: Vec::new(),
                             dynamics: dynamics(&left, &right, RATE),
-                            compressed,
-                            group,
-                            sends,
+                            compressed: false,
+                            group: false,
+                            sends: [0.0; MAX_RETURNS],
                             levels: levels(&left, &right, RATE),
-                            automated,
+                            automated: false,
                             esses: if voice { esses(&left, &right, RATE) } else { None },
-                            deessed,
-                            thrown: thrown.get(index).copied().unwrap_or(false),
+                            deessed: false,
+                            thrown: false,
                             stereo: stereo(&left, &right, RATE),
-                            utility: utilities.get(index).copied().flatten(),
+                            utility: None,
                         })
                     }
                 })
             });
             let outcome = measured.map_err(|_| "Análisis cancelado".to_string()).and_then(|all| {
-                let mut all = all.into_iter();
-                let Some(Measured::Mix(mix, sections)) = all.next() else { return Err("Nada que analizar".to_string()) };
-                let tracks = all.filter_map(|t| if let Measured::Track(t) = t { Some(t) } else { None }).collect();
-                Ok(Report { mix, tracks, tempo, space, start, echo, sections, master_automated })
+                let (mut mix, mut sections) = (None, Vec::new());
+                let mut tracks = kept;
+                for m in all {
+                    match m {
+                        Measured::Mix(m, s) => (mix, sections) = (Some(m), s),
+                        Measured::Track(t) => tracks.push(t),
+                    }
+                }
+                let mix = match (mix, old_mix) {
+                    (Some(m), _) => m,
+                    (None, Some((m, s))) => {
+                        sections = s;
+                        m
+                    }
+                    (None, None) => return Err("Nada que analizar".to_string()),
+                };
+                tracks.sort_by_key(|t| t.index);
+                for t in &mut tracks {
+                    meta(t);
+                }
+                Ok(Done::Report(Report { mix, tracks, tempo, space, start, echo, sections, master_automated, limited, carved }, keys))
             });
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
             }
         });
+        self.mix.mix_stale = !mix;
         self.mix.job = Some(Job { progress, cancel, result });
-        self.status = Some("Analizando la mezcla…".into());
+        self.status = Some(if mix { "Analizando la mezcla…" } else { "Midiendo las pistas…" }.into());
     }
 
     /// Measures a song to compare the mix with (in the background).
@@ -1953,61 +2351,14 @@ impl PulseApp {
         let Some(outcome) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
         self.mix.job = None;
         match outcome {
-            Ok(report) => {
-                // On the way to a loudness: another step, if it is not there yet.
-                if let (Some(chase), Some(lufs)) = (self.mix.chase, report.mix.lufs) {
-                    let over = report.mix.true_peak - chase.max_peak;
-                    // Pushing harder no longer makes it louder: the limiter is
-                    // flattening it. The last step goes back, and that is as far as it goes.
-                    if let (gain, Some(before)) = chase.last {
-                        let gained = (lufs - before) * (gain as f64).signum();
-                        if gain > 0.0 && gained < 0.3 && over <= 0.0 && chase.goal > lufs + 0.5 {
-                            self.mix.chase = None;
-                            self.mix.report = Some(report);
-                            self.apply_fix(&Fix::MasterLimiter { gain_db: -gain, ceiling_db: self.master_ceiling().unwrap_or(-1.0) });
-                            self.mix.note = Some(format!(
-                                "Con el limitador no llega a {} LUFS sin aplastarla: se queda en unos {}. Para más volumen, comprime o satura las pistas (sobre todo la batería y el bajo)",
-                                num(chase.goal),
-                                num(before)
-                            ));
-                            return;
-                        }
-                    }
-                    if ((chase.goal - lufs).abs() > 0.5 || over > 0.0) && chase.steps < 6 {
-                        let ceiling = self.master_ceiling().unwrap_or(-1.0) - if over > 0.0 { (over + 0.1) as f32 } else { 0.0 };
-                        // How much loudness the last dB of gain gave.
-                        let slope = match chase.last {
-                            (gain, Some(before)) if gain.abs() > 0.1 => ((lufs - before) / gain as f64).clamp(0.15, 1.0),
-                            _ => 1.0,
-                        };
-                        let gain = ((chase.goal - lufs) / slope).clamp(-12.0, 12.0) as f32;
-                        self.mix.report = Some(report);
-                        let was = self.master_limiter_gain();
-                        self.apply_fix(&Fix::MasterLimiter { gain_db: gain, ceiling_db: ceiling.max(-12.0) });
-                        // What the limiter took (it stops at its most): going back
-                        // undoes that, not what was asked.
-                        let applied = self.master_limiter_gain() - was;
-                        if gain > 0.0 && applied < 0.05 && chase.goal > lufs + 0.5 {
-                            // The limiter is at its most: that is as far as it goes.
-                            self.mix.chase = None;
-                            let note = format!(
-                                "Con el limitador no llega a {} LUFS sin aplastarla: se queda en unos {}. Para más volumen, comprime o satura las pistas (sobre todo la batería y el bajo)",
-                                num(chase.goal),
-                                num(lufs)
-                            );
-                            self.status = Some(note.clone());
-                            self.mix.note = Some(note);
-                            return;
-                        }
-                        self.mix.chase = Some(Chase { steps: chase.steps + 1, last: (applied, Some(lufs)), ..chase });
-                        return;
-                    }
-                    self.mix.chase = None;
-                }
-                self.status = Some(match report.mix.lufs {
-                    Some(l) => format!("Mezcla analizada: {} LUFS, pico real {} dBTP", num(l), db(report.mix.true_peak)),
-                    None => "Mezcla analizada: está en silencio".into(),
+            Ok(Done::Loud { trial, held, ceiling_db, mix }) => self.set_loudness(trial, held, ceiling_db, mix),
+            Ok(Done::Report(report, keys)) => {
+                self.status = Some(match (self.mix.mix_stale, report.mix.lufs) {
+                    (true, _) => "Pistas medidas".into(),
+                    (false, Some(l)) => format!("Mezcla analizada: {} LUFS, pico real {} dBTP", num(l), db(report.mix.true_peak)),
+                    (false, None) => "Mezcla analizada: está en silencio".into(),
                 });
+                self.mix.keys = Some((self.mix.range, keys));
                 self.mix.report = Some(report);
                 self.mix.stale = false;
                 if self.mix.auto.is_some() {
@@ -2020,7 +2371,6 @@ impl PulseApp {
             }
             Err(e) => {
                 self.mix.auto = None;
-                self.mix.chase = None;
                 self.status = Some(e);
             }
         }
@@ -2049,7 +2399,7 @@ impl PulseApp {
     /// at the loudness of the softer one.
     pub fn heard(&self, before: bool) -> Option<crate::project::Project> {
         let (old, old_lufs) = self.mix.before.as_ref()?;
-        let now = self.mix.report.as_ref().filter(|_| !self.mix.stale && self.mix.job.is_none()).and_then(|r| r.mix.lufs);
+        let now = self.mix.report.as_ref().filter(|_| !self.mix.stale && !self.mix.mix_stale && self.mix.job.is_none()).and_then(|r| r.mix.lufs);
         let (down_before, down_now) = matched(*old_lufs, now);
         Some(if before { levelled(old, down_before) } else { levelled(&self.project, down_now) })
     }
@@ -2081,6 +2431,18 @@ impl PulseApp {
         let advice = advise(&report, self.mix.target, reference.as_ref());
         // A change undone by hand meanwhile, or a mix that keeps asking: a cap.
         let next = if done.len() >= 40 { None } else { next_fix(&advice, &done) };
+        // What comes next hears the mix (its parts, its loudness), or it is
+        // the end: the mix measured again first, as it is now.
+        // Right after the parts that grow (the master's fader, after its
+        // limiter), the loudness measures the mix itself (see `reach_loudness`).
+        let loudness = matches!(next, Some(Fix::MasterLimiter { .. })) && matches!(done.last(), Some(Fix::Grow { .. })) && self.mix.target.levels(reference.as_ref()).is_some();
+        if self.mix.mix_stale && !loudness && next.as_ref().is_none_or(|f| stage(f) >= stage(&Fix::Grow { cuts: Vec::new() })) {
+            self.analyze(true);
+            if self.mix.auto.is_some() {
+                self.status = Some(format!("Mezcla completa, paso {}: midiendo la mezcla…", done.len() + 1));
+            }
+            return;
+        }
         let Some(fix) = next else {
             self.mix.auto = None;
             let mut labels: Vec<String> = Vec::new();
@@ -2110,9 +2472,34 @@ impl PulseApp {
         let mut done = done;
         done.push(fix.clone());
         let step = done.len();
+        // Room in the mids: every pair advised at once (each its own band of
+        // its own track), measured once after. One by one, each would cost a
+        // render of the whole song.
+        if let Fix::Carve { .. } = &fix {
+            let mut carves = vec![fix.clone()];
+            while let Some(more) = next_fix(&advice, &done).filter(|f| matches!(f, Fix::Carve { .. })) {
+                let Fix::Carve { track, hz, .. } = &more else { unreachable!() };
+                let twice = carves.iter().any(|c| matches!(c, Fix::Carve { track: t, hz: h, .. } if t == track && (h / hz).log2().abs() < 0.25));
+                done.push(more.clone());
+                if !twice {
+                    carves.push(more);
+                }
+            }
+            self.mix.auto = Some(done);
+            if carves.iter().all(|c| self.make(c)) {
+                self.sync_all();
+                self.mix.stale = true;
+                self.analyze(false);
+            }
+            if self.mix.auto.is_some() {
+                let names: Vec<String> = carves.iter().map(fix_label).collect();
+                self.status = Some(format!("Mezcla completa, paso {step}: {}…", names.join(", ")));
+            }
+            return;
+        }
         self.mix.auto = Some(done);
         match (&fix, self.mix.target.levels(reference.as_ref())) {
-            (Fix::MasterLimiter { gain_db, ceiling_db }, Some((goal, peak))) => self.reach_loudness(goal, peak, *gain_db, *ceiling_db),
+            (Fix::MasterLimiter { .. }, Some((goal, peak))) => self.reach_loudness(goal, peak),
             _ => self.apply_fix(&fix),
         }
         if self.mix.auto.is_some() {
@@ -2121,16 +2508,111 @@ impl PulseApp {
     }
 
     /// Brings the mix to `goal` LUFS, its true peak at most `max_peak` dBTP,
-    /// with the master's limiter, step by step.
-    pub fn reach_loudness(&mut self, goal: f64, max_peak: f64, gain_db: f32, ceiling_db: f32) {
+    /// with the master's limiter (made if there is none): renders the master
+    /// up to it once, and tries gains on that (see [`loudest_gain`]) in the
+    /// background. Its peaks no more than [`MAX_LIMITER_GAIN`] over the
+    /// ceiling, nor so much that the
+    /// song loses its shape: then it says what else to do.
+    pub fn reach_loudness(&mut self, goal: f64, max_peak: f64) {
+        self.keep_before();
+        let ceiling_db = (max_peak - PEAK_MARGIN) as f32;
         if goal >= LOUD {
             self.loud_master(ceiling_db);
         }
-        let before = self.mix.report.as_ref().and_then(|r| r.mix.lufs);
-        let was = self.master_limiter_gain();
-        self.apply_fix(&Fix::MasterLimiter { gain_db, ceiling_db });
-        let applied = self.master_limiter_gain() - was;
-        self.mix.chase = Some(Chase { goal, max_peak, steps: 1, last: (applied, before) });
+        let devices = &mut self.project.master.devices;
+        let at = match devices.iter().rposition(|d| matches!(d.effect, Effect::Limiter(_))) {
+            Some(i) => i,
+            None => {
+                devices.push(Device::new(Effect::Limiter(LimiterParams { ceiling_db, ..Default::default() })));
+                devices.len() - 1
+            }
+        };
+        let limiter = match &devices[at].effect {
+            Effect::Limiter(l) => LimiterParams { ceiling_db, ..*l },
+            _ => return,
+        };
+        // The master up to its limiter, with no fader: those are tried on it.
+        let mut before = self.project.clone();
+        before.master.devices.truncate(at);
+        before.master.automation.retain(|l| !matches!(l.param, Param::Volume | Param::Device { .. }) || matches!(l.param, Param::Device { device, .. } if device < at));
+        before.master.mixer.gain = 1.0;
+        let range = self.mix.range;
+        self.capture_plugins();
+        let live = std::mem::take(&mut self.samples.plugins);
+        let renders = export::plan(&before, &mut self.samples, &export::Settings { range, stems: false, sample_rate: RATE as u32, ..Default::default() }, std::path::Path::new("mezcla.wav"));
+        self.samples.plugins = live;
+        let master = self.project.master.clone();
+        let tempo = self.project.tempo;
+        let start = export::beat_range(&self.project, range).map_or(0.0, |r| r.0);
+        let parts: Vec<(String, f64, f64, usize, usize)> = match range {
+            Range::Loop => Vec::new(),
+            _ => export::sections(&self.project).into_iter().map(|(name, (a, b))| (name, a, b, (seconds_between(&self.project, 0.0, a) * RATE as f64) as usize, (seconds_between(&self.project, 0.0, b) * RATE as f64) as usize)).collect(),
+        };
+        let sections: Vec<(String, usize, usize)> = parts.iter().map(|p| (p.0.clone(), p.3, p.4)).collect();
+        // Nothing after the limiter, the master in the middle: what comes out
+        // is the limiter on that render, then the fader. Else it is rendered.
+        let alone = at + 1 == self.project.master.devices.len() && self.project.master.mixer.pan.abs() < 1e-6;
+        let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
+        let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
+        std::thread::spawn(move || {
+            let rendered = export::render_each(renders, RATE, &p, &c, |_, left, right| Ok((left, right)));
+            let outcome = rendered.map_err(|_| "Cancelado".to_string()).and_then(|mut all| {
+                let (left, right) = all.pop().ok_or("Nada que medir")?;
+                let fader = master_gains(&master, tempo, start, left.len());
+                let (trial, held) = loudest_gain(&left, &right, &fader, limiter, &sections, goal, max_peak, &c).ok_or("La mezcla está en silencio")?;
+                let mix = alone.then(|| {
+                    let (mut l, mut r) = (left, right);
+                    engine::OfflineLimiter::new(LimiterParams { gain_db: (trial.gain_db * 10.0).round() / 10.0, ..limiter }, RATE).process(&mut l, &mut r, RATE);
+                    for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
+                        let g = fader.get(i / FADER_BLOCK).copied().unwrap_or(1.0);
+                        (*a, *b) = (*a * g, *b * g);
+                    }
+                    let slice = |x: &[f32], a: usize, b: usize| x[a.min(x.len())..b.min(x.len())].to_vec();
+                    let sections = parts.iter().map(|(name, start, end, a, b)| SectionLevel { name: name.clone(), start: *start, end: *end, lufs: loudness::integrated(&slice(&l, *a, *b), &slice(&r, *a, *b), RATE) }).collect();
+                    (Measures::of(&l, &r, RATE), sections)
+                });
+                Ok(Done::Loud { trial, held, ceiling_db, mix })
+            });
+            if let Ok(mut slot) = r.lock() {
+                *slot = Some(outcome);
+            }
+        });
+        self.mix.job = Some(Job { progress, cancel, result });
+        self.status = Some("Buscando la ganancia del limitador…".into());
+    }
+
+    /// The limiter's gain found (see [`PulseApp::reach_loudness`]): set, said
+    /// if short of the goal, and the mix analysed again.
+    fn set_loudness(&mut self, trial: Trial, held: Option<Held>, ceiling_db: f32, mix: Option<(Measures, Vec<SectionLevel>)>) {
+        let devices = &mut self.project.master.devices;
+        if let Some(l) = devices.iter_mut().rev().find_map(|d| if let Effect::Limiter(l) = &mut d.effect { Some(l) } else { None }) {
+            l.gain_db = (trial.gain_db * 10.0).round() / 10.0;
+            l.ceiling_db = ceiling_db;
+        }
+        let gain = self.master_limiter_gain();
+        let reference = self.mix.reference.as_ref().map(|(_, m)| m.clone());
+        let goal = self.mix.target.levels(reference.as_ref()).map(|l| l.0);
+        self.mix.limited = held.clone().map(|held| Limited { target: self.mix.target, gain_db: gain, held });
+        if let (Some(held), Some(goal), Some(lufs)) = (held, goal, trial.lufs) {
+            self.mix.note = Some(format!("Con el limitador a {} dB se queda en unos {} LUFS, {} dB por debajo de {}. {}. {LOUDER_WITHOUT_SQUASHING}", db(gain as f64), num(lufs), num(goal - lufs), num(goal), held.says()));
+        }
+        self.status = Some(format!("Limitador del master: {} dB, techo {} dB", db(gain as f64), num(ceiling_db as f64)));
+        self.sync_all();
+        // The mix as it comes out, measured already: the analysis has it.
+        if let (Some((measures, sections)), Some(report)) = (mix, self.mix.report.as_mut()) {
+            (report.mix, report.sections) = (measures, sections);
+            report.limited = self.mix.limited.clone();
+            self.mix.mix_stale = false;
+            self.mix.stale = false;
+            if self.mix.auto.is_some() {
+                self.next_auto();
+            } else if let Some(note) = &self.mix.note {
+                self.status = Some(note.clone());
+            }
+            return;
+        }
+        self.mix.stale = true;
+        self.analyze(true);
     }
 
     /// A master as loud as hard techno's: a clipper takes the peaks (the
@@ -2160,13 +2642,21 @@ impl PulseApp {
         self.project.master.devices.iter().rev().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(l.gain_db) } else { None }).unwrap_or(0.0)
     }
 
-    /// The ceiling of the master's last limiter.
-    fn master_ceiling(&self) -> Option<f32> {
-        self.project.master.devices.iter().rev().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(l.ceiling_db) } else { None })
-    }
-
     /// Makes the change, and analyses again to show what it did.
     pub fn apply_fix(&mut self, fix: &Fix) {
+        if !self.make(fix) {
+            return;
+        }
+        self.sync_all();
+        self.mix.stale = true;
+        // While applying everything, a track's change is measured on the
+        // tracks alone: the mix, when something hears it (see `next_auto`).
+        let master = matches!(fix, Fix::MasterEq { .. } | Fix::MasterLimiter { .. });
+        self.analyze(self.mix.auto.is_none() || master);
+    }
+
+    /// Makes the change (not analysed); false if it couldn't.
+    fn make(&mut self, fix: &Fix) -> bool {
         self.keep_before();
         let track_ok = |app: &PulseApp, t: usize, name: &str| app.project.tracks.get(t).is_some_and(|tr| tr.name == name);
         match fix {
@@ -2238,6 +2728,9 @@ impl PulseApp {
                 self.status = Some(format!("Mezcla de partida: {} pistas en su sitio (⌘Z lo deshace)", changes.len()));
             }
             Fix::Carve { track, name, hz, for_name } if track_ok(self, *track, name) => {
+                if let Some(to) = self.project.tracks.iter().find(|t| &t.name == for_name).map(|t| t.id) {
+                    self.mix.carved.push((self.project.tracks[*track].id, to));
+                }
                 let devices = &mut self.project.tracks[*track].devices;
                 // In its EQ Eight, in a bell left flat (the nearest); else a new one.
                 let free = devices.iter_mut().filter_map(|d| if let Effect::EqEight(eq) = &mut d.effect { Some(eq) } else { None }).find_map(|eq| {
@@ -2258,7 +2751,7 @@ impl PulseApp {
                         devices.push(Device::new(Effect::EqEight(eq)));
                     }
                 }
-                self.status = Some(format!("«{name}» deja hueco a «{for_name}» en {} (EQ Eight, {CARVE_DB} dB)", hz_label(*hz)));
+                self.status = Some(format!("«{name}» deja hueco a «{for_name}» en {} (EQ Eight, {CARVE_DB} dB)", freq_label(*hz)));
             }
             Fix::Compress { track, name, params } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::Compressor(*params)));
@@ -2303,7 +2796,7 @@ impl PulseApp {
                     None => {
                         self.status = Some("No queda sitio para un retorno de delay".into());
                         self.mix.auto = None;
-                        return;
+                        return false;
                     }
                 };
                 let points: Vec<engine::model::AutomationPoint> =
@@ -2351,7 +2844,7 @@ impl PulseApp {
             }
             Fix::DeEss { track, name, params } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::DeEsser(*params)));
-                self.status = Some(format!("De-esser en «{name}»: {}, umbral {} dB", hz_label(params.freq_hz), num(params.threshold_db as f64)));
+                self.status = Some(format!("De-esser en «{name}»: {}, umbral {} dB", freq_label(params.freq_hz), num(params.threshold_db as f64)));
             }
             Fix::Ride { track, name, from, phrases, gains } if track_ok(self, *track, name) => {
                 let fader = self.project.tracks[*track].mixer.gain;
@@ -2371,12 +2864,10 @@ impl PulseApp {
             _ => {
                 self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
                 self.mix.auto = None;
-                return;
+                return false;
             }
         }
-        self.sync_all();
-        self.mix.stale = true;
-        self.analyze_mix();
+        true
     }
 }
 
@@ -2533,7 +3024,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     if let Some(fix) = chosen {
         app.mix.note = None;
         match (&fix, app.mix.target.levels(reference.as_ref())) {
-            (Fix::MasterLimiter { gain_db, ceiling_db }, Some((goal, peak))) => app.reach_loudness(goal, peak, *gain_db, *ceiling_db),
+            (Fix::MasterLimiter { .. }, Some((goal, peak))) => app.reach_loudness(goal, peak),
             _ => app.apply_fix(&fix),
         }
     }
@@ -2626,14 +3117,14 @@ fn fix_hint(fix: &Fix) -> String {
         }
         Fix::Grow { .. } => "Escribe automatización de volumen en el master: baja lo que lleva al estribillo o al drop para que estos suenen más grandes, sin tocar el limitador".into(),
         Fix::Throws { name, .. } => format!("Escribe automatización en el envío de «{name}» al delay: se abre al {:.0} % en la última palabra de cada frase que acaba en silencio y vuelve a donde estaba al acabar", THROW * 100.0),
-        Fix::DeEss { name, params, .. } => format!("Añade un De-esser a «{name}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)", hz_label(params.freq_hz), num(params.threshold_db as f64), num(params.range_db as f64)),
+        Fix::DeEss { name, params, .. } => format!("Añade un De-esser a «{name}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)", freq_label(params.freq_hz), num(params.threshold_db as f64), num(params.range_db as f64)),
         Fix::Ride { name, .. } => format!("Escribe automatización de volumen en «{name}»: cada frase sube o baja (como mucho {RIDE_MAX} dB) para quedar igual de por encima de la base. Los cambios caen en los silencios entre frases"),
         Fix::MasterLimiter { gain_db, ceiling_db } => format!("Limiter en el master: ganancia {gain_db:+.1} dB, techo {ceiling_db:.1} dB"),
         Fix::TrackGain { name, db, .. } => format!("Volumen de «{name}» {db:+.1} dB"),
         Fix::Duck { name, source_name, .. } => format!("Añade un Ducker a «{name}» que escucha a «{source_name}» (sidechain): baja cuando suena, para dejarle sitio"),
         Fix::CutLows { name, .. } => format!("Añade un EQ Three a «{name}» con los graves (bajo 150 Hz) a −9 dB"),
         Fix::MasterEq { low, mid, high } => format!("EQ Three en el master: graves {low:+.1}, medios {mid:+.1}, agudos {high:+.1} dB"),
-        Fix::Carve { name, hz, for_name, .. } => format!("Baja {} dB «{name}» en {} (un EQ Eight, campana estrecha) para que «{for_name}» se oiga ahí", -CARVE_DB, hz_label(*hz)),
+        Fix::Carve { name, hz, for_name, .. } => format!("Baja {} dB «{name}» en {} (un EQ Eight, campana estrecha) para que «{for_name}» se oiga ahí", -CARVE_DB, freq_label(*hz)),
         Fix::Compress { name, params, .. } => format!(
             "Añade un Compressor a «{name}»: umbral {:.1} dB, ratio {}:1, ataque {:.0} ms, release {:.0} ms (una semicorchea al tempo; el bajo, una corchea) y {:+.1} dB de ganancia para que siga igual de fuerte",
             params.threshold_db, params.ratio, params.attack_ms, params.release_ms, params.makeup_db
@@ -2681,7 +3172,7 @@ mod tests {
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new() }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -2720,8 +3211,8 @@ mod tests {
         let before = app.mix.report.as_ref().unwrap().mix.lufs.unwrap();
         app.mix.target = Target::HardTechno;
         let list = advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None);
-        let Some(Fix::MasterLimiter { gain_db, ceiling_db }) = list.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::MasterLimiter { .. }))) else { panic!("a limiter fix: {list:?}") };
-        app.reach_loudness(-7.0, -1.0, gain_db, ceiling_db);
+        assert!(list.iter().any(|a| matches!(a.fix, Some(Fix::MasterLimiter { .. }))), "a limiter fix: {list:?}");
+        app.reach_loudness(-7.0, -1.0);
         wait(&mut app);
         let mix = app.mix.report.as_ref().unwrap().mix.clone();
         let limiter = app.project.master.devices.iter().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(l.gain_db) } else { None });
@@ -2734,7 +3225,7 @@ mod tests {
         assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
         // Over it: no platform turns a club track down, so it isn't said.
-        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false };
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new() };
         let told = advise(&loud, Target::HardTechno, None);
         assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
@@ -2742,12 +3233,12 @@ mod tests {
     #[test]
     fn quiet_mixes_get_a_limiter_and_loud_ones_are_told() {
         let quiet = advise(&report(-20.0, -6.0, Vec::new()), Target::Streaming, None);
-        assert!(quiet.iter().any(|a| a.fix == Some(Fix::MasterLimiter { gain_db: 6.0, ceiling_db: -1.8 })), "{quiet:?}");
+        assert!(quiet.iter().any(|a| a.fix == Some(Fix::MasterLimiter { gain_db: 6.0, ceiling_db: -1.3 })), "{quiet:?}");
         let right = advise(&report(-14.3, -1.5, Vec::new()), Target::Streaming, None);
         assert!(right.iter().all(|a| a.level == Level::Good), "{right:?}");
         // On target but peaking over -1 dBTP: the ceiling comes down.
         let peaky = advise(&report(-14.0, 0.4, Vec::new()), Target::Streaming, None);
-        assert!(peaky.iter().any(|a| a.fix == Some(Fix::MasterLimiter { gain_db: 0.0, ceiling_db: -1.8 })));
+        assert!(peaky.iter().any(|a| a.fix == Some(Fix::MasterLimiter { gain_db: 0.0, ceiling_db: -1.3 })));
         let club = advise(&report(-14.0, -1.5, Vec::new()), Target::Club, None);
         assert!(club.iter().any(|a| matches!(a.fix, Some(Fix::MasterLimiter { gain_db, .. }) if gain_db == 5.0)));
     }
@@ -2817,20 +3308,19 @@ mod tests {
         // Bring it to the club's -9 LUFS.
         app.mix.target = Target::Club;
         let list = advise(&report, Target::Club, None);
-        let Some(Fix::MasterLimiter { gain_db, ceiling_db }) = list.iter().find_map(|a| a.fix.clone().filter(|f| matches!(f, Fix::MasterLimiter { .. }))) else { panic!("a limiter fix") };
+        assert!(list.iter().any(|a| matches!(a.fix, Some(Fix::MasterLimiter { .. }))), "a limiter fix");
         // -7 is more than this loop gives without squashing it: it stops short
         // and says so, without the limiter driven to the end.
-        app.reach_loudness(-7.0, -1.0, gain_db + 2.0, ceiling_db);
+        app.reach_loudness(-7.0, -1.0);
         wait(&mut app);
         let after = app.mix.report.as_ref().unwrap().mix.lufs.unwrap();
         println!("demo: {before:.1} → {after:.1} LUFS (objetivo -7), pico real {:.1} dBTP", app.mix.report.as_ref().unwrap().mix.true_peak);
         assert!(after > before + 1.5, "{before} → {after}");
         assert!(app.mix.report.as_ref().unwrap().mix.true_peak <= -1.0, "under -1 dBTP");
-        let limiter = |app: &PulseApp| app.project.master.devices.iter().find_map(|d| if let Effect::Limiter(l) = &d.effect { Some(*l) } else { None }).unwrap();
-        assert!(limiter(&app).gain_db <= MAX_LIMITER_GAIN);
+        assert!(app.mix.report.as_ref().unwrap().limited.is_some(), "it stopped short on purpose");
         assert!(app.status.as_deref().is_some_and(|s| s.contains("sin aplastarla")), "{:?}", app.status);
         // A loudness it can reach, it reaches.
-        app.reach_loudness(-11.0, -1.0, (-11.0 - after) as f32, limiter(&app).ceiling_db);
+        app.reach_loudness(-11.0, -1.0);
         wait(&mut app);
         let report = app.mix.report.clone().unwrap();
         println!("demo: → {:.1} LUFS (objetivo -11), pico real {:.1} dBTP", report.mix.lufs.unwrap(), report.mix.true_peak);
@@ -3398,7 +3888,7 @@ mod tests {
     #[test]
     fn everything_is_applied_in_the_order_of_a_mix() {
         let fix = |f: Fix| advice(Level::Note, String::new(), Some(f));
-        let limiter = Fix::MasterLimiter { gain_db: 3.0, ceiling_db: -1.8 };
+        let limiter = Fix::MasterLimiter { gain_db: 3.0, ceiling_db: -1.3 };
         let space = Fix::Space { reverb: Some(0), delay: Some(1), changes: Vec::new() };
         let gain = Fix::TrackGain { track: 0, name: "Voz".into(), db: -2.0 };
         let list = vec![fix(limiter.clone()), fix(space.clone()), fix(Fix::Balance(Vec::new())), fix(gain.clone()), advice(Level::Good, String::new(), None)];
@@ -3451,8 +3941,10 @@ mod tests {
         };
         app.analyze_mix();
         wait(&mut app);
+        let started = std::time::Instant::now();
         app.apply_all();
         wait(&mut app);
+        println!("aplicar todo: {:.1} s", started.elapsed().as_secs_f64());
         let note = app.mix.note.clone().unwrap();
         println!("{note}");
         assert!(note.starts_with("Mezcla completa en "), "{note}");
@@ -3467,11 +3959,133 @@ mod tests {
         assert!((lufs + 14.0).abs() <= 1.0 && report.mix.true_peak <= -1.0, "{lufs} LUFS, {} dBTP", report.mix.true_peak);
         let list = advise(&report, Target::Streaming, None);
         assert!(list.iter().any(|a| a.level == Level::Good && a.text.starts_with("Las pistas tienen su espacio")), "{list:?}");
-        // Nothing left of what it fixes, except what it already tried.
+        // Done: what it advises now is nothing it would change (it doesn't
+        // ask again for what it just did, nor undo it).
         for a in list.iter().filter(|a| a.fix.is_some()) {
             println!("queda: {}", a.text);
         }
+        assert_eq!(next_fix(&list, &[]), None, "{list:?}");
+        // Measured again from nothing, it says the same.
+        app.mix.keys = None;
+        app.analyze_mix();
+        wait(&mut app);
+        let again = app.mix.report.clone().unwrap();
+        assert!((again.mix.lufs.unwrap() - lufs).abs() < 0.1, "{:?} {lufs}", again.mix.lufs);
+        assert_eq!(next_fix(&advise(&again, Target::Streaming, None), &[]), None);
     }
+
+    /// The parts of a song and its range, through the limiter: kept or lost.
+    #[test]
+    fn a_limiter_that_squashes_the_song_is_told_apart() {
+        let names: Vec<String> = ["Intro", "Subida", "Drop", "Break", "Drop"].iter().map(|s| s.to_string()).collect();
+        let at = |sections: [f64; 5], range: f64| Trial { gain_db: 0.0, lufs: Some(-10.0), true_peak: -1.0, range: Some(range), sections: sections.iter().map(|&l| Some(l)).collect() };
+        // The audit's song before its master, and as the old assistant left it.
+        let before = at([-17.8, -10.3, -8.3, -10.5, -8.3], 9.7);
+        let squashed_by_12 = at([-10.7, -10.6, -10.1, -9.3, -10.2], 1.5);
+        assert_eq!(squashed(&before, &squashed_by_12, &names), Some(Held::Section { peak: "Drop".into(), other: "Intro".into() }));
+        // Everything 4 dB up, the drop 1 dB less (its peaks limited): fine.
+        let fine = at([-13.8, -6.8, -5.3, -6.8, -5.3], 8.5);
+        assert_eq!(squashed(&before, &fine, &names), None);
+        // The break catching the drop up: not, whatever else.
+        let break_up = at([-13.8, -6.3, -5.3, -5.6, -5.3], 8.5);
+        assert_eq!(squashed(&before, &break_up, &names), Some(Held::Section { peak: "Drop".into(), other: "Subida".into() }));
+        // The build-up keeps its 1.5 LU under the drop it had.
+        let close = at([-13.8, -5.9, -5.3, -7.5, -5.3], 8.5);
+        assert!(squashed(&before, &close, &names).is_some());
+        // Without parts, the range: a third of it may go.
+        let (a, b) = (at([0.0; 5], 9.0), at([0.0; 5], 6.5));
+        assert_eq!(squashed(&Trial { sections: Vec::new(), ..a.clone() }, &Trial { sections: Vec::new(), ..b }, &[]), None);
+        assert_eq!(squashed(&Trial { sections: Vec::new(), ..a }, &Trial { sections: Vec::new(), ..at([0.0; 5], 5.0) }, &[]), Some(Held::Range));
+    }
+
+    /// A techno song (an intro of kick alone, a drop of kick and a loud
+    /// synth, a break of the synth alone) taken to a club's -9 LUFS by the
+    /// limiter: no more than 6 dB, the drop still over the break and the
+    /// intro by about what it was, and it says why it stopped. The old way
+    /// (12 dB) squashed it.
+    #[test]
+    fn the_limiter_keeps_the_song_s_shape() {
+        let rate = RATE as usize;
+        let part = 8 * rate;
+        let (mut left, mut right) = (vec![0f32; 3 * part], vec![0f32; 3 * part]);
+        for i in 0..3 * part {
+            let t = i as f32 / RATE;
+            let beat = (t * 2.0).fract() / 2.0;
+            let kick = (std::f32::consts::TAU * 50.0 * t).sin() * (-beat * 18.0).exp() * 0.7;
+            // A detuned saw chord, its level breathing a little.
+            let saw = |hz: f32| 2.0 * (t * hz).fract() - 1.0;
+            let synth = (saw(220.0) + saw(220.9) + saw(261.6) + saw(329.6)) * 0.1 * (1.0 + 0.2 * (t * 0.5).sin());
+            let (k, s) = match i / part {
+                0 => (kick, 0.0),
+                1 => (kick, synth),
+                _ => (0.0, synth * 0.7),
+            };
+            left[i] = k + s;
+            right[i] = k + s * 0.95;
+        }
+        let sections = vec![("Intro".to_string(), 0, part), ("Drop".to_string(), part, 2 * part), ("Break".to_string(), 2 * part, 3 * part)];
+        let fader = vec![1.0; 3 * part / FADER_BLOCK + 1];
+        let limiter = LimiterParams { ceiling_db: -1.3, ..Default::default() };
+        let spans: Vec<(usize, usize)> = sections.iter().map(|s| (s.1, s.2)).collect();
+        let names: Vec<String> = sections.iter().map(|s| s.0.clone()).collect();
+        let base = trial(&left, &right, &fader, None, &spans);
+        let (chosen, held) = loudest_gain(&left, &right, &fader, limiter, &sections, -9.0, -1.0, &AtomicBool::new(false)).unwrap();
+        let old = trial(&left, &right, &fader, Some(LimiterParams { gain_db: 12.0, ..limiter }), &spans);
+        let lead = |t: &Trial| (t.sections[1].unwrap() - t.sections[0].unwrap(), t.sections[1].unwrap() - t.sections[2].unwrap());
+        println!("antes: {:.1} LUFS, el drop {:.1} LU sobre la intro y {:.1} sobre el break", base.lufs.unwrap(), lead(&base).0, lead(&base).1);
+        println!("ahora: {:+.1} dB → {:.1} LUFS, pico real {:.1} dBTP, {:.1} y {:.1} LU · {held:?}", chosen.gain_db, chosen.lufs.unwrap(), chosen.true_peak, lead(&chosen).0, lead(&chosen).1);
+        println!("a +12: {:.1} LUFS, {:.1} y {:.1} LU", old.lufs.unwrap(), lead(&old).0, lead(&old).1);
+        // Its peaks at most 6 dB into the limiter (what they had under the
+        // ceiling comes free).
+        assert!(chosen.gain_db - headroom(&left, &right, limiter.ceiling_db) <= MAX_LIMITER_GAIN + 1e-3);
+        assert!(chosen.true_peak <= -1.0 + 0.05);
+        assert!(chosen.lufs.unwrap() > base.lufs.unwrap() + 2.0, "louder");
+        assert_eq!(squashed(&base, &chosen, &names), None);
+        assert!(lead(&chosen).0 > 0.5 * lead(&base).0 && lead(&chosen).1 > 0.5 * lead(&base).1);
+        assert!(held.is_some() && chosen.lufs.unwrap() < -9.5, "short of -9, and said why");
+        assert!(squashed(&base, &old, &names).is_some(), "12 dB squash it");
+    }
+
+    /// A track only its fader moved isn't rendered again: its measures move
+    /// by as many dB, as a render of it would say.
+    #[test]
+    fn a_track_only_louder_is_measured_without_rendering_it() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        for t in 0..app.project.tracks.len() {
+            if let Some(clip) = app.project.tracks[t].clips[0].clone() {
+                app.project.tracks[t].arrangement = vec![engine::model::ArrangementClip { start: 0.0, length: 8.0, clip }];
+            }
+        }
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            while app.mix.job.is_some() || app.mix.report.is_none() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let first = app.mix.report.clone().unwrap();
+        let t = first.tracks[0].index;
+        louder(&mut app.project.tracks[t], -4.5);
+        let started = std::time::Instant::now();
+        app.analyze(false);
+        wait(&mut app);
+        let quick = started.elapsed().as_secs_f64();
+        let kept = app.mix.report.clone().unwrap();
+        app.mix.keys = None;
+        app.analyze_mix();
+        wait(&mut app);
+        let rendered = app.mix.report.clone().unwrap();
+        let (a, b) = (&kept.tracks[0], &rendered.tracks[0]);
+        println!("sin renderizar ({quick:.2} s): {:.2} LUFS, pico {:.2}; renderizada: {:.2} LUFS, pico {:.2}", a.lufs.unwrap(), a.peak, b.lufs.unwrap(), b.peak);
+        assert!((a.lufs.unwrap() - b.lufs.unwrap()).abs() < 0.05 && (a.peak - b.peak).abs() < 0.05);
+        assert!((a.lufs.unwrap() - (first.tracks[0].lufs.unwrap() - 4.5)).abs() < 0.05);
+        assert!(a.bands.iter().zip(&b.bands).all(|(x, y)| (x - y).abs() < 0.1));
+        assert_eq!(a.role, b.role);
+    }
+
+    /// The louder one comes down to the softer one; without both, nothing.
 
     /// The louder one comes down to the softer one; without both, nothing.
     #[test]
@@ -3866,9 +4480,11 @@ mod tests {
         assert_eq!(section_kind("Intro"), None);
         assert_eq!(section_kind("Break"), None);
         let part = |name: &str, lufs: f64| SectionLevel { name: name.into(), start: 0.0, end: 1.0, lufs: Some(lufs) };
-        let song = [part("Intro", -20.0), part("Estrofa", -14.0), part("Estribillo", -13.0), part("Estrofa 2", -16.0), part("Drop", -12.0)];
+        let song = [part("Intro", -20.0), part("Estrofa", -13.8), part("Estribillo", -13.0), part("Estrofa 2", -16.0), part("Drop", -12.0)];
         // The quietest peak, -13: what leads goes to -14.5 at most.
         assert_eq!(growth(&song), [(1, 0.5)]);
+        // A LU under it grows enough.
+        assert_eq!(growth(&[part("Estrofa", -14.0), part("Estribillo", -13.0)]), []);
         let flat = [part("Estrofa", -12.0), part("Estribillo", -12.0)];
         assert_eq!(growth(&flat), [(0, 1.5)]);
         assert_eq!(growth(&[part("Estrofa", -12.0), part("Puente", -10.0)]), []);

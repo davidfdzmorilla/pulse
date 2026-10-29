@@ -253,6 +253,12 @@ impl PulseApp {
         let mut lead = crate::project::Track::new("Melodía", colour, InstrumentKind::Synth(SynthParams::default()));
         let mut keys = crate::project::Track::new("Acordes", crate::project::PALETTE[4], harmony.instrument());
         let mut low = crate::project::Track::new("Bajo", crate::project::PALETTE[8], bass_part.instrument());
+        // Headroom: the drums at -8 dB, the rest under them, as a mix starts.
+        // All four at the default fader, the master went up to 3.7 dB over 0.
+        drums.mixer.gain = 0.4;
+        for track in [&mut lead, &mut keys, &mut low] {
+            track.mixer.gain = 0.3;
+        }
         let clips = [
             (&mut lead, MidiClip { notes: melody.clone(), ..MidiClip::new("Melodía", length, colour) }),
             (&mut keys, MidiClip { notes: chord_notes, ..MidiClip::new("Acordes", length, crate::project::PALETTE[4]) }),
@@ -297,6 +303,33 @@ mod tests {
 
     fn note(start: f64, length: f64, pitch: u8) -> Note {
         Note { start, length, pitch, velocity: 0.8, chance: 1.0 }
+    }
+
+    /// The song a tune becomes leaves headroom on the master in every style.
+    #[test]
+    fn a_hummed_song_leaves_headroom() {
+        use engine::model::{ArrangementClip, Clip, MidiClip};
+        let mut worst = (f64::MIN, String::new());
+        for style in Style::ALL {
+            let mut project = crate::project::Project::empty();
+            let mut voice = crate::project::Track::new("Tarareo", [10, 20, 30], InstrumentKind::Synth(Default::default()));
+            let melody = tune(&[[60, 64, 67, 64], [65, 69, 72, 69], [67, 71, 74, 71], [72, 67, 64, 60]]);
+            voice.arrangement = vec![ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Midi(MidiClip { notes: melody, ..MidiClip::new("Tarareo", 16.0, [10, 20, 30]) }) }];
+            project.tracks = vec![voice];
+            let mut app = PulseApp::headless(project);
+            app.hum_to_song(ClipRef::Arrangement { track: 0, index: 0 }, style);
+            app.project.tracks[0].mixer.active = false;
+            let project = app.project.clone();
+            let mut samples = crate::sync::SampleCache::default();
+            let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+            let (l, r) = crate::export::render(commands, (0.0, 16.0), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap();
+            let peak = stems::loudness::sample_peak(&l, &r);
+            println!("{}: {:?} LUFS, pico {peak:+.1} dBFS", style.label(), stems::loudness::integrated(&l, &r, 48_000.0));
+            if peak > worst.0 {
+                worst = (peak, style.label().to_string());
+            }
+        }
+        assert!(worst.0 <= -1.0, "{worst:?}");
     }
 
     /// In 3/4 a chord lasts a bar of three.

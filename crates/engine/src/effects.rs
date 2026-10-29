@@ -1131,19 +1131,80 @@ impl Ducker {
     }
 }
 
-/// Lookahead peak limiter: the gain drops before a peak arrives, so the output never
-/// exceeds the ceiling. Adds 1.5 ms of latency to its channel.
+use crate::dsp::{true_peak_taps, TP_DELAY, TP_PHASES, TP_TAPS};
+
+/// Lookahead true-peak limiter. Its detector hears the peaks between samples
+/// too (4× interpolation, as a true-peak meter does), and its gain glides down
+/// over the lookahead (the least gain needed, held and then averaged) instead
+/// of stepping: what comes out stays under the ceiling between samples as
+/// well, without clicks. Adds 2 ms (and 6 samples) of latency to its channel.
 pub struct Limiter {
     params: LimiterParams,
+    /// The input (times its gain) on its way out, both channels.
     delay: [Vec<f32>; 2],
     position: usize,
-    gain: f32,
+    /// The last [`TP_TAPS`] input samples of each channel, written twice (reads
+    /// are contiguous), and where the newest went.
+    history: [[f32; 2 * TP_TAPS]; 2],
+    at: usize,
+    taps: [[f32; TP_TAPS]; TP_PHASES - 1],
+    /// The least gain needed over the last `hold_len` samples: a ring of
+    /// (sample number, gain) rising from front to back.
+    hold: Vec<(u64, f32)>,
+    hold_front: usize,
+    hold_count: usize,
+    hold_len: usize,
+    count: u64,
+    /// The held gain after the release.
+    envelope: f32,
+    /// The moving average over the lookahead: its ring, where it is, its sum.
+    average: Vec<f32>,
+    average_at: usize,
+    sum: f64,
 }
 
 impl Limiter {
     fn new(params: LimiterParams, sr: f32) -> Self {
-        let lookahead = ((0.0015 * sr) as usize).max(1);
-        Self { params, delay: [vec![0.0; lookahead], vec![0.0; lookahead]], position: 0, gain: 1.0 }
+        let lookahead = ((0.002 * sr) as usize).max(4);
+        let hold_len = lookahead + 2;
+        let mut fx = Self {
+            params,
+            delay: [vec![0.0; lookahead + TP_DELAY], vec![0.0; lookahead + TP_DELAY]],
+            position: 0,
+            history: [[0.0; 2 * TP_TAPS]; 2],
+            at: 0,
+            taps: true_peak_taps(),
+            hold: vec![(0, 1.0); hold_len + 1],
+            hold_front: 0,
+            hold_count: 0,
+            hold_len,
+            count: 0,
+            envelope: 1.0,
+            average: vec![1.0; lookahead],
+            average_at: 0,
+            sum: lookahead as f64,
+        };
+        fx.reset();
+        fx
+    }
+
+    fn reset(&mut self) {
+        self.delay.iter_mut().for_each(|line| line.fill(0.0));
+        self.position = 0;
+        self.history = [[0.0; 2 * TP_TAPS]; 2];
+        self.at = 0;
+        self.hold_front = 0;
+        self.hold_count = 0;
+        self.count = 0;
+        self.envelope = 1.0;
+        self.average.fill(1.0);
+        self.average_at = 0;
+        self.sum = self.average.len() as f64;
+    }
+
+    /// How late its sound comes out (samples).
+    fn latency(&self) -> usize {
+        self.delay[0].len()
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
@@ -1151,21 +1212,74 @@ impl Limiter {
         let input = db_to_gain(p.gain_db);
         let ceiling = db_to_gain(p.ceiling_db).max(1e-4);
         let release = (-1.0 / (p.release_ms.max(1.0) * 0.001 * sr)).exp();
+        let lookahead = self.average.len();
+        let capacity = self.hold.len();
         for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let (x, y) = (*a * input, *b * input);
+            // The true peak around the sample TP_DELAY back: it and the
+            // points between it and the one before.
+            self.at = (self.at + 1) % TP_TAPS;
+            let mut peak = 0f32;
+            for (channel, v) in [x, y].into_iter().enumerate() {
+                let h = &mut self.history[channel];
+                h[self.at] = v;
+                h[self.at + TP_TAPS] = v;
+                let recent = &h[self.at + 1..=self.at + TP_TAPS];
+                peak = peak.max(recent[TP_TAPS - 1 - TP_DELAY].abs());
+                for c in &self.taps {
+                    let mut s = 0f32;
+                    for k in 0..TP_TAPS {
+                        s += c[k] * recent[TP_TAPS - 1 - k];
+                    }
+                    peak = peak.max(s.abs());
+                }
+            }
+            let needed = if peak > ceiling { ceiling / peak } else { 1.0 };
+            // The least of the last `hold_len` (a rising queue).
+            while self.hold_count > 0 && self.hold[(self.hold_front + self.hold_count - 1) % capacity].1 >= needed {
+                self.hold_count -= 1;
+            }
+            self.hold[(self.hold_front + self.hold_count) % capacity] = (self.count, needed);
+            self.hold_count += 1;
+            while self.hold[self.hold_front].0 + self.hold_len as u64 <= self.count {
+                self.hold_front = (self.hold_front + 1) % capacity;
+                self.hold_count -= 1;
+            }
+            self.count += 1;
+            let held = self.hold[self.hold_front].1;
+            // Down at once, back up with the release; then averaged over the
+            // lookahead, so it is all the way down when the peak goes out.
+            self.envelope = if held < self.envelope { held } else { held + (self.envelope - held) * release };
+            self.sum += (self.envelope - self.average[self.average_at]) as f64;
+            self.average[self.average_at] = self.envelope;
+            self.average_at = (self.average_at + 1) % lookahead;
+            let gain = (self.sum / lookahead as f64) as f32;
             let (out_l, out_r) = (self.delay[0][self.position], self.delay[1][self.position]);
-            self.delay[0][self.position] = *a * input;
-            self.delay[1][self.position] = *b * input;
+            self.delay[0][self.position] = x;
+            self.delay[1][self.position] = y;
             self.position = (self.position + 1) % self.delay[0].len();
-            // The loudest sample still to come (or going out now) sets the gain.
-            let peak = self.delay[0]
-                .iter()
-                .chain(&self.delay[1])
-                .fold(out_l.abs().max(out_r.abs()), |m, s| m.max(s.abs()));
-            let target = if peak > ceiling { ceiling / peak } else { 1.0 };
-            self.gain = if target < self.gain { target } else { target + (self.gain - target) * release };
-            *a = (out_l * self.gain).clamp(-ceiling, ceiling);
-            *b = (out_r * self.gain).clamp(-ceiling, ceiling);
+            *a = (out_l * gain).clamp(-ceiling, ceiling);
+            *b = (out_r * gain).clamp(-ceiling, ceiling);
         }
+    }
+}
+
+/// The limiter, to run on a recording outside the engine (the mix assistant
+/// tries gains with it before setting one).
+pub struct OfflineLimiter(Limiter);
+
+impl OfflineLimiter {
+    pub fn new(params: LimiterParams, sample_rate: f32) -> Self {
+        Self(Limiter::new(params, sample_rate))
+    }
+
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32], sample_rate: f32) {
+        self.0.process(left, right, sample_rate);
+    }
+
+    /// How late its sound comes out (samples).
+    pub fn latency(&self) -> usize {
+        self.0.latency()
     }
 }
 
@@ -1461,7 +1575,7 @@ impl EffectProcessor {
     pub fn latency(&self) -> usize {
         match self {
             Self::Saturator(fx) if fx.params.oversample => Oversampler::LATENCY,
-            Self::Limiter(fx) => fx.delay[0].len(),
+            Self::Limiter(fx) => fx.latency(),
             Self::Tuner(fx) => fx.latency(),
             Self::Plugin(_, Some(plugin)) => plugin.latency(),
             _ => 0,
@@ -1611,11 +1725,7 @@ impl EffectProcessor {
                 fx.counter = 0.0;
                 fx.held = [0.0; 2];
             }
-            Self::Limiter(fx) => {
-                fx.delay.iter_mut().for_each(|line| line.fill(0.0));
-                fx.position = 0;
-                fx.gain = 1.0;
-            }
+            Self::Limiter(fx) => fx.reset(),
             Self::Ducker(fx) => fx.hits = Hits::IDLE,
             Self::Saturator(fx) => {
                 fx.over = [Oversampler::new(), Oversampler::new()];
@@ -1994,6 +2104,91 @@ mod tests {
         let peak = l.iter().chain(&r).fold(0f32, |m, s| m.max(s.abs()));
         assert!(peak <= ceiling + 1e-6, "peak {peak} over ceiling {ceiling}");
         assert!(peak > ceiling * 0.9, "the +12 dB input should reach the ceiling");
+    }
+
+    /// The true peak (dBFS) of `x`, 16× oversampled with a long windowed sinc
+    /// (finer than the limiter's own detector, so it checks it).
+    fn true_peak_db(x: &[f32]) -> f32 {
+        const UP: usize = 16;
+        const HALF: isize = 32;
+        let mut peak = 0f32;
+        for i in HALF as usize..x.len() - HALF as usize {
+            for p in 0..UP {
+                let frac = p as f64 / UP as f64;
+                let mut v = 0f64;
+                for k in -HALF + 1..=HALF {
+                    let t = k as f64 - frac;
+                    let sinc = if t.abs() < 1e-12 { 1.0 } else { (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t) };
+                    let w = 0.5 + 0.5 * (std::f64::consts::PI * t / HALF as f64).cos();
+                    v += x[(i as isize + k) as usize] as f64 * sinc * w;
+                }
+                peak = peak.max(v.abs() as f32);
+            }
+        }
+        20.0 * peak.max(1e-9).log10()
+    }
+
+    /// Peaks between samples: a sine at a quarter of the rate, 45° off the
+    /// samples, peaks 3 dB over them. The limiter hears that, and its true peak
+    /// stays at the ceiling (the old one, by samples, let +2 dB through).
+    #[test]
+    fn the_limiter_holds_true_peaks_under_its_ceiling() {
+        let sr = 48_000.0;
+        let params = crate::model::LimiterParams { gain_db: 6.0, ceiling_db: -1.0, release_ms: 100.0 };
+        let mut fx = EffectProcessor::new(&Effect::Limiter(params), sr);
+        // Bursts of the quarter-rate sine over a low tone, as a hi-hat over a bass.
+        let input: Vec<f32> = (0..24_000)
+            .map(|i| {
+                let t = i as f32 / sr;
+                let burst = if (i / 3000) % 2 == 1 { 0.6 * (std::f32::consts::FRAC_PI_2 * i as f32 + std::f32::consts::FRAC_PI_4).sin() } else { 0.0 };
+                burst + 0.3 * (std::f32::consts::TAU * 60.0 * t).sin()
+            })
+            .collect();
+        let (mut l, mut r) = (input.clone(), input.clone());
+        fx.process(&mut l, &mut r, &ctx());
+        let out = true_peak_db(&l);
+        println!("limiter: true peak {out:.2} dBTP (ceiling -1), samples {:.2} dBFS", 20.0 * l.iter().fold(0f32, |m, s| m.max(s.abs())).log10());
+        assert!(out <= -1.0 + 0.15, "true peak {out}");
+        // It still gets there: the input is 6 dB over.
+        assert!(out > -1.6, "true peak {out}");
+    }
+
+    /// The gain glides: on a kick-like hit 10 dB over the ceiling, no sample
+    /// jumps (a step in the gain is a click); it's the same whatever the buffer;
+    /// its latency is what it says.
+    #[test]
+    fn the_limiter_glides_and_reports_its_latency() {
+        let sr = 48_000.0;
+        let params = crate::model::LimiterParams { gain_db: 10.0, ceiling_db: -1.0, release_ms: 80.0 };
+        let hit = |i: usize| {
+            let t = (i % 24_000) as f32 / sr;
+            (std::f32::consts::TAU * 55.0 * t).sin() * (-t * 8.0).exp() * 0.5
+        };
+        let input: Vec<f32> = (0..96_000).map(hit).collect();
+        let run = |block: usize| {
+            let mut fx = EffectProcessor::new(&Effect::Limiter(params), sr);
+            let (mut l, mut r) = (input.clone(), input.clone());
+            for (a, b) in l.chunks_mut(block).zip(r.chunks_mut(block)) {
+                fx.process(a, b, &ctx());
+            }
+            (l, fx.latency())
+        };
+        let started = std::time::Instant::now();
+        let (whole, latency) = run(96_000);
+        // What it costs: 2 s of stereo, in µs a second of sound.
+        println!("limiter: {:.0} µs por segundo de audio", started.elapsed().as_secs_f64() * 1e6 / 2.0);
+        let (small, _) = run(37);
+        assert_eq!(whole, small, "the buffer size changes the sound");
+        assert_eq!(latency, 96 + 5);
+        // The gain applied, sample by sample, where the signal is loud enough to tell.
+        let gains: Vec<f32> = (latency..whole.len()).filter(|&i| input[i - latency].abs() > 0.05).map(|i| whole[i] / (input[i - latency] * 10f32.powf(0.5))).collect();
+        let jump = gains.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+        println!("limiter: largest gain step {jump:.4}");
+        // Down 10 dB over the 2 ms lookahead: about 0.007 a sample (the old one
+        // stepped by 0.68 in one).
+        assert!(jump < 0.02, "gain steps by {jump}");
+        let peak = whole.iter().fold(0f32, |m, s| m.max(s.abs()));
+        assert!(peak <= 10f32.powf(-0.05) + 1e-6);
     }
 
     #[test]

@@ -585,6 +585,9 @@ pub struct SharedState {
     pub tracks: [TrackStatus; MAX_TRACKS],
     pub returns: [Peak; MAX_RETURNS],
     pub master: Peak,
+    /// The song's short-term loudness on the master (LUFS, f32 bits; see
+    /// [`SharedState::master_loudness`]).
+    master_loudness: AtomicU32,
     /// Beats of count-in left before the transport starts (0: not counting in).
     count_in: AtomicF64,
     /// Seconds from rendering a sample to hearing it (the output device's latency).
@@ -646,6 +649,7 @@ impl SharedState {
             }),
             returns: Default::default(),
             master: Peak::default(),
+            master_loudness: AtomicU32::new(f32::NEG_INFINITY.to_bits()),
             count_in: AtomicF64::default(),
             output_latency: AtomicF64::default(),
             compensation: AtomicF64::default(),
@@ -684,6 +688,12 @@ impl SharedState {
 
     pub fn set_output_latency(&self, seconds: f64) {
         self.output_latency.store(seconds);
+    }
+
+    /// The song's loudness on the master over the last 3 s (short-term,
+    /// LUFS), or `None` in silence (under -70).
+    pub fn master_loudness(&self) -> Option<f32> {
+        Some(f32::from_bits(self.master_loudness.load(Ordering::Relaxed))).filter(|l| *l > -70.0)
     }
 
     /// Transport position in beats.
@@ -1742,6 +1752,8 @@ pub struct Engine {
     input_track: Option<usize>,
     arrangement_record: bool,
     limit_output: bool,
+    /// The song's short-term loudness, as it comes out of the master.
+    loudness: crate::dsp::LoudnessMeter,
     /// Frames rendered since the engine started, or the transport did (see [`SUB_BLOCK`]).
     rendered: u64,
     /// The transport started or jumped: automation applies at the next block.
@@ -1990,6 +2002,7 @@ impl Engine {
             input_track: None,
             arrangement_record: false,
             limit_output: true,
+            loudness: crate::dsp::LoudnessMeter::new(sample_rate),
             rendered: 0,
             automate_now: true,
             swing: (0.25, 0.0),
@@ -3002,8 +3015,13 @@ impl Engine {
         let mut peak = 0f32;
         for i in 0..n {
             let t = (i + 1) as f32 / n as f32;
-            let l = master.left[i] * (l0 + (gl - l0) * t) + click[i] + preview[2 * i];
-            let r = master.right[i] * (r0 + (gr - r0) * t) + click[i] + preview[2 * i + 1];
+            let (song_l, song_r) = (master.left[i] * (l0 + (gl - l0) * t), master.right[i] * (r0 + (gr - r0) * t));
+            // The song's loudness, without the click or the browser's preview.
+            if let Some(lufs) = self.loudness.push(song_l, song_r) {
+                self.shared.master_loudness.store(lufs.to_bits(), Ordering::Relaxed);
+            }
+            let l = song_l + click[i] + preview[2 * i];
+            let r = song_r + click[i] + preview[2 * i + 1];
             peak = peak.max(l.abs()).max(r.abs());
             // Safety limit only; the meter shows the real level.
             let (l, r) = if self.limit_output { (l.clamp(-1.0, 1.0), r.clamp(-1.0, 1.0)) } else { (l, r) };
@@ -3824,6 +3842,31 @@ mod tests {
 
     fn left_channel(audio: &[f32]) -> Vec<f32> {
         audio.chunks(2).map(|f| f[0]).collect()
+    }
+
+    /// The master's short-term loudness, as the meter shows it: what a
+    /// loudness meter reads of the last 3 s that came out, and nothing once
+    /// it falls silent.
+    #[test]
+    fn the_master_publishes_its_loudness() {
+        let mut h = Harness::new();
+        assert_eq!(h.shared.master_loudness(), None);
+        h.send(Command::SetInputTrack(Some(2)));
+        h.play_note(48, 0.9);
+        let out = h.run_beats(8.0);
+        let mut meter = crate::dsp::LoudnessMeter::new(SR);
+        let mut expected = None;
+        for frame in out.chunks_exact(2) {
+            if let Some(l) = meter.push(frame[0], frame[1]) {
+                expected = Some(l);
+            }
+        }
+        let (shown, expected) = (h.shared.master_loudness().unwrap(), expected.unwrap());
+        println!("master: {shown:.2} LUFS (meter on the output: {expected:.2})");
+        assert!((shown - expected).abs() < 0.2, "{shown} {expected}");
+        h.play_note(48, 0.0);
+        h.run_beats(10.0);
+        assert_eq!(h.shared.master_loudness(), None, "silence");
     }
 
     #[test]
@@ -5248,7 +5291,10 @@ mod tests {
         h.send(Command::SetArrangement { track, clips: Box::new(vec![PlacedClip::new(0.0, 2.0, PlayClip::Audio(clip, click_sample(sign)))]) });
     }
 
-    /// A limiter that never limits these clicks: only its lookahead (1.5 ms).
+    /// The limiter's lookahead: 2 ms and its true-peak detector's 5 samples.
+    const LOOKAHEAD: usize = 96 + 5;
+
+    /// A limiter that never limits these clicks: only its lookahead.
     fn lookahead() -> Device {
         Device::new(Effect::Limiter(crate::model::LimiterParams { ceiling_db: 0.0, ..Default::default() }))
     }
@@ -5266,9 +5312,9 @@ mod tests {
         h.run_beats(1.0).iter().fold(0f32, |m, s| m.max(s.abs()))
     }
 
-    /// A track through a limiter (1.5 ms late) and one without, playing the
+    /// A track through a limiter (2 ms late) and one without, playing the
     /// same click upside down: in time, they cancel. Without compensation,
-    /// both clicks are heard, 1.5 ms apart.
+    /// both clicks are heard, 2 ms apart.
     #[test]
     fn a_late_effect_keeps_its_track_in_time_with_the_rest() {
         for compensating in [true, false] {
@@ -5280,8 +5326,8 @@ mod tests {
             println!("{compensating}: {loudest}");
             if compensating {
                 assert!(loudest < 1e-4, "{loudest}");
-                assert_eq!(h.engine.latency(), 72, "the song comes out 1.5 ms later");
-                assert!((h.shared.compensation() - 0.0015).abs() < 1e-9);
+                assert_eq!(h.engine.latency(), LOOKAHEAD, "the song comes out that much later");
+                assert!((h.shared.compensation() - LOOKAHEAD as f64 / SR as f64).abs() < 1e-9);
             } else {
                 assert!((loudest - 0.2).abs() < 1e-3, "{loudest}");
                 assert_eq!(h.engine.latency(), 0);
@@ -5306,7 +5352,7 @@ mod tests {
         click_track(&mut h, 3, -1.0, 20.0 * 2f32.log10());
         let loudest = loudest(&mut h, true);
         assert!(loudest < 1e-3, "{loudest}");
-        assert_eq!(h.engine.latency(), 3 * 72);
+        assert_eq!(h.engine.latency(), 3 * LOOKAHEAD);
     }
 
     /// Sends: a late track's and an on-time track's reach a return together,
@@ -5330,7 +5376,7 @@ mod tests {
         let loudest = loudest(&mut h, true);
         println!("{loudest}");
         assert!(loudest < 1e-3, "{loudest}");
-        assert_eq!(h.engine.latency(), 2 * 72);
+        assert_eq!(h.engine.latency(), 2 * LOOKAHEAD);
     }
 
     /// The metronome comes out with the song, as late as it (the master's
@@ -5344,7 +5390,7 @@ mod tests {
         h.send(Command::Play);
         let audio = h.run_beats(0.5);
         let first = audio.chunks(2).position(|f| f[0].abs() > 1e-6).unwrap();
-        assert_eq!(first, 72, "the first click on the song's first beat, as it comes out");
-        assert_eq!(h.engine.latency(), 72);
+        assert_eq!(first, LOOKAHEAD, "the first click on the song's first beat, as it comes out");
+        assert_eq!(h.engine.latency(), LOOKAHEAD);
     }
 }

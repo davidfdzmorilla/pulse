@@ -37,6 +37,8 @@ pub struct Studio {
     status: Option<String>,
     shots: usize,
     last: Option<egui::FullOutput>,
+    /// When the last status came (to time each step).
+    since: Instant,
     /// The screen, in points.
     pub size: egui::Vec2,
 }
@@ -60,6 +62,7 @@ impl Studio {
             status: None,
             shots: 0,
             last: None,
+            since: Instant::now(),
             size: SIZE,
         };
         s.frames(4);
@@ -114,7 +117,8 @@ impl Studio {
         self.last = Some(output);
         if self.app.status != self.status {
             if let Some(status) = &self.app.status {
-                let line = format!("  estado: {status}");
+                let line = format!("  estado (+{:.1} s): {status}", self.since.elapsed().as_secs_f64());
+                self.since = Instant::now();
                 eprintln!("[tema] {line}");
                 self.log.push(line);
             }
@@ -151,6 +155,19 @@ impl Studio {
         let output = self.last.take().unwrap();
         let image = self.canvas.draw(&self.ctx, output, self.size, SCALE);
         image.save_png(&path).unwrap();
+        self.note(format!("  captura {}", path.display()));
+        path
+    }
+
+    /// Only `rect` (points) of the screen, to PNG.
+    pub fn shot_of(&mut self, name: &str, rect: Rect) -> PathBuf {
+        self.frames(20);
+        self.shots += 1;
+        let path = self.out.join(format!("{:02}-{name}.png", self.shots));
+        let output = self.last.take().unwrap();
+        let image = self.canvas.draw(&self.ctx, output, SIZE, SCALE);
+        let px = |v: f32| (v * SCALE).max(0.0) as usize;
+        image.crop(px(rect.left()), px(rect.top()), px(rect.width()), px(rect.height())).save_png(&path).unwrap();
         self.note(format!("  captura {}", path.display()));
         path
     }

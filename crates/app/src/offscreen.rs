@@ -119,6 +119,14 @@ impl Image {
         }
     }
 
+    /// The part from `x`, `y` (pixels), `width` × `height` (within it).
+    pub fn crop(&self, x: usize, y: usize, width: usize, height: usize) -> Image {
+        let (x, y) = (x.min(self.width), y.min(self.height));
+        let (width, height) = (width.min(self.width - x), height.min(self.height - y));
+        let pixels = (y..y + height).flat_map(|row| self.pixels[row * self.width + x..row * self.width + x + width].iter().copied()).collect();
+        Image { width, height, pixels }
+    }
+
     pub fn save_png(&self, path: &std::path::Path) -> std::io::Result<()> {
         let mut raw = Vec::with_capacity((self.width * 3 + 1) * self.height);
         for row in self.pixels.chunks_exact(self.width) {

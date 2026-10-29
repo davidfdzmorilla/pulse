@@ -334,14 +334,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
         // The view switch and meter at the right edge, if they fit after the rest
         // of the row; otherwise they follow on the next one.
-        let right = 300.0 + if app.has_menu_bar() { 0.0 } else { 320.0 };
+        let right = 420.0 + if app.has_menu_bar() { 0.0 } else { 320.0 };
         // (In a wrapping row, what is left is up to the row's right edge.)
         if ui.max_rect().right() - ui.cursor().min.x < right {
             ui.end_row();
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
-            widgets::horizontal_meter(ui, vec2(70.0, 8.0), app.meters.master);
+            master_meter(ui, &mut app.meters);
             ui.add_space(8.0);
             let arrangement = app.view == View::Arrangement;
             if widgets::flat_button(ui, "Arrangement", arrangement, vec2(92.0, 22.0)).on_hover_text("Tab").clicked() {
@@ -363,6 +363,48 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         });
     });
+}
+
+/// The master's meter: its level with the highest peak held (red, and held,
+/// once it goes over 0 dBFS: the song clips), the peak in dB, and the song's
+/// short-term loudness. A click clears the peak.
+pub fn master_meter(ui: &mut egui::Ui, meters: &mut crate::app::Meters) {
+    let hold = meters.master_hold;
+    let over = hold > 1.0;
+    let hold_db = 20.0 * hold.max(1e-6).log10();
+    let lufs = match meters.master_lufs {
+        Some(l) => format!("{} LUFS", format!("{l:.1}").replace('.', ",")),
+        None => "— LUFS".to_string(),
+    };
+    // Right to left: the loudness, the peak, the meter.
+    ui.label(RichText::new(lufs.clone()).size(10.5).color(TEXT)).on_hover_text("Sonoridad a corto plazo: los últimos 3 s del master, en LUFS (como la mide el Asistente de mezcla y master)");
+    let peak_text = if hold <= 1e-6 { "—".to_string() } else { format!("{hold_db:+.1}").replace('.', ",") };
+    let peak = ui.add(egui::Label::new(RichText::new(peak_text.clone()).size(10.5).strong().color(if over { theme::METER_RED } else { TEXT_DIM })).sense(Sense::click()));
+    let (rect, meter) = ui.allocate_exact_size(vec2(70.0, 8.0), Sense::click());
+    widgets::paint_horizontal_meter(ui.painter(), rect, meters.master);
+    // The held peak: a tick, red over 0 dBFS (and the end of the meter lit).
+    if hold > 1e-6 {
+        let x = rect.left() + rect.width() * widgets::meter_position(hold);
+        let color = if over { theme::METER_RED } else { TEXT };
+        ui.painter().line_segment([egui::pos2(x - 1.0, rect.top()), egui::pos2(x - 1.0, rect.bottom())], egui::Stroke::new(2.0, color));
+        if over {
+            let clip = egui::Rect::from_min_max(egui::pos2(rect.right() - 4.0, rect.top() - 2.0), egui::pos2(rect.right(), rect.bottom() + 2.0));
+            ui.painter().rect_filled(clip, 1.0, theme::METER_RED);
+        }
+    }
+    let hint = if over {
+        format!("Pico del master: {peak_text} dBFS. ¡Ha pasado de 0 dB: la mezcla satura! Baja los faders o pon un limitador en el master. Clic para limpiarlo")
+    } else if hold > 1e-6 {
+        format!("Pico del master: {peak_text} dBFS (el más alto desde que lo limpiaste). Clic para limpiarlo")
+    } else {
+        "Pico del master: se queda marcado el más alto, en rojo si pasa de 0 dBFS".to_string()
+    };
+    let label = format!("Medidor del master · pico {peak_text} dBFS · {lufs}");
+    meter.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, label.clone()));
+    let clicked = meter.on_hover_text(hint.clone()).clicked() | peak.on_hover_text(hint).clicked();
+    if clicked {
+        meters.master_hold = 0.0;
+    }
 }
 
 /// Record quantization and playback swing.
@@ -547,6 +589,40 @@ mod tests {
         assert_eq!(bars_label(bars_between(&meter, 0.0, 10.0)), "3 c.");
         assert_eq!(bars_label(bars_between(&meter, 0.0, 1.5)), "0,5 c.");
         assert_eq!(format_position(&Meter::COMMON, 5.5), "2. 2. 3");
+    }
+
+    /// The master's meter, with a mix that clips: its peak held in red with
+    /// its dB, and the song's loudness next to it, until a click clears it.
+    /// Pictures (`PULSE_SHOTS=dir`) of it clipping and after.
+    #[test]
+    fn the_master_meter_holds_what_clips_until_clicked() {
+        let out = std::env::var_os("PULSE_SHOTS").map(std::path::PathBuf::from).unwrap_or_else(|| std::env::temp_dir().join("pulse-medidor"));
+        std::fs::create_dir_all(&out).unwrap();
+        let mut app = PulseApp::headless(crate::project::Project::empty());
+        // The drop of the audit: +2.7 dBFS, -8.3 LUFS.
+        app.meters.master = 10f32.powf(1.5 / 20.0);
+        app.meters.master_hold = 10f32.powf(2.7 / 20.0);
+        app.meters.master_lufs = Some(-8.3);
+        let mut s = crate::produccion::Studio::new(app, out.clone());
+        let meter = s.find("Medidor del master").expect("the master's meter");
+        let label = s.seen.iter().find(|w| w.rect == meter).map(|w| w.text.clone()).unwrap();
+        assert!(label.contains("pico +2,7 dBFS") && label.contains("-8,3 LUFS"), "{label}");
+        assert!(s.has("+2,7") && s.has("-8,3 LUFS"));
+        let around = egui::Rect::from_min_max(egui::pos2(meter.left() - 70.0, meter.top() - 10.0), egui::pos2(meter.right() + 90.0, meter.bottom() + 10.0));
+        s.shot_of("medidor-satura", around);
+        // The level falls; the peak stays.
+        s.app.meters.master = 0.1;
+        s.frames(30);
+        assert!(s.app.meters.master_hold > 1.0);
+        s.click_at(meter.center());
+        assert_eq!(s.app.meters.master_hold, 0.0, "a click clears it");
+        // A mix with headroom: -4.2 dBFS held, -10.1 LUFS.
+        s.app.meters.master = 10f32.powf(-6.0 / 20.0);
+        s.app.meters.master_hold = 10f32.powf(-4.2 / 20.0);
+        s.app.meters.master_lufs = Some(-10.1);
+        s.frames(3);
+        assert!(s.has("-4,2") && s.has("-10,1 LUFS"));
+        s.shot_of("medidor-con-margen", around);
     }
 
     /// The transport and an Arrangement with a waltz that turns 7/8, to PNG:

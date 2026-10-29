@@ -72,7 +72,21 @@ El transporte es la barra de arriba: desde ahí reproduces, paras, grabas y cont
 | **Voz** | Tocar cantando, tarareando o silbando al micrófono, o una batería haciendo beatbox. Ver [[Tocar con la voz]]. |
 | **MIDI** | Encendido si hay teclados MIDI conectados. Clic para volver a buscarlos. |
 | **Asignar** | Asignar knobs y botones de un controlador MIDI. Ver [[Controladores MIDI]]. |
-| **☰**, **Session** / **Arrangement** | A la derecha: el navegador, la vista y el medidor del master. |
+| **☰**, **Session** / **Arrangement** | A la derecha: el navegador, la vista y el [[#El medidor del master]]. |
+
+### El medidor del master
+
+A la derecha del todo, el medidor del master te dice cuánto suena la canción mientras la tocas:
+
+- La **barra** es su nivel. La rayita que se queda es el **pico más alto**, y a su lado tienes su valor en dB.
+- Si la mezcla pasa de **0 dBFS**, la barra acaba en rojo y el pico se queda en **rojo** aunque ya no suene tan fuerte: la mezcla satura. Baja los faders o pon un limitador en el master (el [[Asistente de mezcla y master]] lo hace por ti).
+- Haz **clic** en el medidor o en el pico para limpiarlo y volver a vigilar.
+- Al lado ves la **sonoridad** a corto plazo, en LUFS: la de los últimos 3 segundos, medida como la mide el asistente. Compárala con el destino de tu canción (−14 LUFS para Spotify, −9 para un club); el drop suele sonar 1 o 2 LU por encima de la media de la canción.
+
++++ Detalles
+- El pico es el de lo que sale del master, antes del recorte de seguridad de la salida: si marca +2,7, la mezcla de verdad pasa 2,7 dB de 0.
+- La sonoridad no cuenta el metrónomo ni lo que escuchas en el navegador.
++++
 
 ### Cambiar el compás
 
@@ -340,7 +354,7 @@ Con una **Drum Machine**, puedes llevar uno de sus sonidos (por ejemplo el bombo
 En la Drum Machine, un sonido sacado lleva una flecha (**Bombo →**); al pasar por encima dice en qué pista suena. Si borras la pista nueva (o deshaces), el sonido vuelve a la batería.
 
 +++ Cómo funciona
-- La pista nueva no tiene clips: toca ese sonido tal como sale de la Drum Machine, antes de los efectos de la batería, y la batería deja de tocarlo. El patrón sigue siendo un solo clip en la pista de la batería.
+- La pista nueva no tiene clips: toca ese sonido tal como sale de la Drum Machine, antes de los efectos de la batería, y la batería deja de tocarlo. Entra con el fader y el panorama de la batería, así que suena igual de fuerte que antes. El patrón sigue siendo un solo clip en la pista de la batería.
 - Si silencias la batería, se silencian también sus sonidos sacados.
 - Al exportar por pistas, cada sonido sale en la stem de su pista.
 - Mientras tenga sonidos sacados, la batería no se puede congelar.
@@ -1117,6 +1131,8 @@ Pulse toca contigo: a partir de un clip con acordes escribe un bajo, un arpegio,
 
 El clip se llama como lo que toca («Bajo: contratiempo»). Una pista nueva llega con un instrumento que le va: Acid para los bajos, FM para los arpegios y SuperSaw para el pad. Cámbialo como cualquier otro.
 
+Entra con el fader de la pista de los acordes (el arpegio y el pad, 1,5 dB por debajo), para que al sumar un bajo, un pad y un arpegio la mezcla no pase de 0 dB.
+
 ### Las partes
 
 | Parte | Qué toca |
@@ -1202,6 +1218,8 @@ Con un clip de audio, Pulse primero escucha la melodía unos segundos. La barra 
 - **Batería**: un ritmo del estilo en una Drum Machine con su sonido, con un redoble al final de cada frase de ocho compases (o del clip, si es más corto).
 
 Cada parte es una pista normal: cámbiale el instrumento, edita las notas o escribe otro bajo o pad sobre sus acordes con [[Acompañamiento|Acompañar]] (y luego **Otra variación** en su editor).
+
+Las pistas entran con el fader bajo (la batería a −8 dB, el resto a −10,5 dB), para que la canción deje margen en el master y no sature.
 
 +++ Cómo elige los acordes
 - Las notas de la melodía en los tiempos fuertes cuentan más.
@@ -1949,6 +1967,9 @@ En **Pistas** ves el pico, la sonoridad y el estéreo de cada una.
 +++ Cómo lo mide
 - Mide la mezcla entera y cada pista sola a la vez, una por núcleo del procesador.
 - Las pistas se miden en seco, sin lo que mandan a los retornos: la cola de la reverb o del delay no cuenta como parte suave de la voz.
+- Las pistas se miden antes del master, sin su limitador ni su fader: un limitador sobre cada pista sola subiría las flojas y descolocaría el balance.
+- La mezcla sí se mide tras el master, y cada parte de la canción también.
+- Al volver a analizar, solo vuelve a tocar las pistas que han cambiado. Si de una solo ha cambiado el fader, ni eso: sus medidas se mueven esos dB.
 +++
 
 ### Elegir el destino
@@ -1978,11 +1999,14 @@ Varios consejos dependen del **papel** de cada pista (voz, bajo, bombo, pad…).
 
 #### Sonoridad
 
-La canción suena más floja o más fuerte de lo que pide el destino. **Aplicar** pone un **Limiter** en el master y lo ajusta hasta llegar. Si la mezcla no da más sin aplastarla, se para y te lo dice: para más volumen, comprime o satura las pistas.
+La canción suena más floja o más fuerte de lo que pide el destino. **Aplicar** pone un **Limiter** en el master y le busca la ganancia. Sube hasta la sonoridad del destino, pero sin aplastar la canción: si tuviera que apretarla demasiado, se para antes y te dice qué hacer (subir la mezcla antes del master, comprimir el bus o saturar la batería y el bajo). Entonces el consejo ya no trae botón: más limitador no es la solución.
 
 +++ Cómo lo calcula
-- Ajusta el Limiter midiendo cada vez, hasta llegar a la sonoridad del destino con el pico real por debajo de −1 dBTP.
-- Para destinos de −8,5 LUFS o más fuertes (hard techno), pone además un **Saturator Hard 4×** justo antes del Limiter, que recorta 3 dB de los picos (los del bombo), y le acorta el release a 40 ms. Es como se masteriza el género: el limitador solo, con un bombo cada 400 ms, bombea en vez de subir el volumen y deja pasar picos reales.
+- Toca la mezcla una vez hasta el limitador y prueba varias ganancias a la vez sobre esa grabación, midiendo en cada una la sonoridad, el pico real y cada parte de la canción.
+- Como mucho, el limitador le quita **6 dB a los picos**. Si la mezcla llega con margen (sus picos por debajo del techo), ese margen se sube además, porque no aprieta nada.
+- Las **partes** siguen como estaban: el drop o el estribillo por encima del break, de la intro y de la subida. Cada parte puede acercarse al drop un tercio de lo que estaba por debajo (de 0,5 a 2,5 LU), y la subida se queda al menos 1,15 LU por debajo. Sin marcadores, mira el rango de sonoridad: puede perder un tercio.
+- El Limiter mira el **pico real**, también entre muestras, y baja la ganancia de forma suave durante 2 ms antes de cada pico, sin escalones. El techo queda en −1,3 dB y el pico real de la mezcla, por debajo de −1 dBTP.
+- Para destinos de −9 LUFS o más fuertes (club, hard techno), pone además un **Saturator Hard 4×** justo antes del Limiter, que recorta 3 dB de los picos (los del bombo), y le acorta el release a 40 ms. Es como se masteriza el género: el limitador solo, con un bombo cada 400 ms, bombea en vez de subir el volumen y deja pasar picos reales.
 - Si la mezcla está por encima del destino: en uno de streaming te avisa de que la plataforma la bajará; en uno de club, de que más apretada solo pierde pegada.
 +++
 
@@ -1991,7 +2015,7 @@ La canción suena más floja o más fuerte de lo que pide el destino. **Aplicar*
 Pone cada pista donde suele empezar una mezcla (volumen, panorama y graves), para que sigas a oído desde ahí. El consejo dice qué cambiaría en cada pista y **Aplicar** lo hace todo de una vez.
 
 +++ Cómo lo calcula
-- **Volumen**: cada papel, a su nivel habitual junto al bombo (o la batería, o la voz si no hay): la voz igual de fuerte, el bajo y la batería 2 dB por debajo, la solista 3, los acordes 5, los coros 7, pads y percusión 8, efectos 10. Si hay varias pistas del mismo papel, se reparten ese nivel. No sube ninguna por encima de −1 dBFS ni más allá del tope de su fader. Solo cambia lo que se aleje más de 1,5 dB.
+- **Volumen**: cada papel, a su nivel habitual junto al bombo (o la batería, o la voz si no hay): la voz igual de fuerte, el bajo y la batería 2 dB por debajo, la solista 3, los acordes 5, los coros 7, pads y percusión 8, efectos 10. Una batería sin bombo (lo has sacado a su pista: quedan charles, palmas…) va 6 dB por debajo de él. Si hay varias pistas del mismo papel, se reparten ese nivel. No sube ninguna por encima de −1 dBFS ni más allá del tope de su fader. Solo cambia lo que se aleje más de 1,5 dB.
 - **Panorama**: el bombo, el bajo y la voz, al centro. Si hay dos o más pistas de acordes, pads, coros, percusión o solistas en el centro, las abre a izquierda y derecha. Lo que ya has panoramizado tú no lo toca.
 - **Graves**: a lo que no los necesita (voz, coros, acordes, pads, solistas, percusión, efectos) y aun así tiene algo por debajo de unos 60 Hz, le pone un **EQ Eight** con corte de graves: 90 Hz en la voz, 250 Hz en la percusión, 150 Hz en el resto.
 +++
@@ -2086,7 +2110,7 @@ El truco de los «delay throws»: la última palabra de una frase se repite en e
 Si la canción tiene marcadores, mide cada parte. El estribillo o el drop deben sonar más grandes que lo que lleva a ellos; si no, la canción no llega a ningún sitio. **Aplicar** escribe una automatización de volumen en el master que baja lo justo las partes que llevan al estribillo.
 
 +++ Cómo lo calcula
-- El estribillo o el drop deben sonar al menos 1,5 LU por encima de las estrofas, subidas y preestribillos. Las baja como mucho 6 dB.
+- El estribillo o el drop deben sonar por encima de las estrofas, subidas y preestribillos. Si están a menos de 1 LU, baja esas partes hasta dejarlos 1,5 LU por encima, como mucho 6 dB.
 - Se fija en el nombre del marcador: «Estribillo», «Coro», «Chorus», «Drop» o «Hook» son lo que debe crecer; «Estrofa», «Verse», «Subida», «Build», «Pre…» o «Groove» son lo que lleva a ello. «Pre-estribillo» y «Subida al drop» cuentan como lo que lleva.
 - La intro, el break, el puente y el final no se tocan, porque pueden ser más suaves a propósito.
 - Baja esas partes en vez de subir el estribillo: el master va detrás del limitador, y subirlo saturaría.
@@ -2114,7 +2138,7 @@ Avisa si la mezcla está muy apretada o tiene partes muy lejos en volumen. No tr
 1. Pistas por encima de 0 dB.
 2. Mezcla de partida.
 3. Graves.
-4. Huecos en los medios: uno por cada pareja de pistas, donde más se tapan.
+4. Huecos en los medios: todos a la vez, uno por cada pareja de pistas, donde más se tapan.
 5. Compresión.
 6. Eses.
 7. Nivelar la voz.
@@ -2124,7 +2148,9 @@ Avisa si la mezcla está muy apretada o tiene partes muy lejos en volumen. No tr
 11. Secciones que crecen.
 12. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
 
-Al terminar dice lo que ha hecho. Cada paso se deshace con {⌘Z}. Lo que queda en la lista son sugerencias para aplicar a mano, si quieres.
+Al terminar dice lo que ha hecho, y no vuelve a pedirte lo que acaba de hacer: lo que queda en la lista son sugerencias para aplicar a mano, si quieres. Cada paso se deshace con {⌘Z}.
+
+Mientras cambia pistas, solo vuelve a tocar las que ha cambiado, y la mezcla entera solo cuando la necesita (para las secciones y la sonoridad). En una canción de 3 minutos tarda unos 30 segundos.
 
 ### Escuchar antes y después
 

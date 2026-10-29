@@ -66,6 +66,8 @@ impl PulseApp {
         let drums = &self.project.tracks[t];
         let mut track = Track::new_audio(format!("{} {}", drums.name, voice_name(voice)), drums.color);
         (track.depth, track.monitor, track.audio_from, track.sounds_from) = (drums.depth, Monitor::Off, Some(drums.id), 1 << voice);
+        // As loud as it was in the kit: the drums' fader, not a new track's.
+        (track.mixer.gain, track.mixer.pan) = (drums.mixer.gain, drums.mixer.pan);
         let at = self.takers(t).max().map_or(t, |last| last.max(t)) + 1;
         let ids = self.track_ids();
         self.project.tracks.insert(at, track);
@@ -138,6 +140,16 @@ mod tests {
         let split = render(&app.project, 8.0);
         let differ = split.iter().zip(&whole).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(differ < 1e-4, "the same song: {differ}");
+        // With the drums' fader down (the Beat template's): the same still,
+        // the kick's track at their fader.
+        let mut low = kit();
+        low.tracks[0].mixer.gain = 0.45;
+        let mut other = PulseApp::headless(low);
+        let whole = render(&other.project, 8.0);
+        other.sound_apart(0, 0);
+        let split = render(&other.project, 8.0);
+        let differ = split.iter().zip(&whole).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+        assert!(differ < 1e-4, "the same song at the drums' fader: {differ}");
 
         // Its fader down: the kick's beats go quiet, the rest stays.
         let mut quiet = app.project.clone();

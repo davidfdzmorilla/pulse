@@ -203,11 +203,16 @@ pub struct Meters {
     pub tracks: [f32; MAX_TRACKS],
     pub returns: [f32; MAX_RETURNS],
     pub master: f32,
+    /// The master's highest peak since it was last cleared (linear): over 1
+    /// (0 dBFS) the song clips, and the meter says so until it is clicked.
+    pub master_hold: f32,
+    /// The song's short-term loudness on the master (LUFS, the last 3 s).
+    pub master_lufs: Option<f32>,
 }
 
 impl Default for Meters {
     fn default() -> Self {
-        Self { tracks: [0.0; MAX_TRACKS], returns: [0.0; MAX_RETURNS], master: 0.0 }
+        Self { tracks: [0.0; MAX_TRACKS], returns: [0.0; MAX_RETURNS], master: 0.0, master_hold: 0.0, master_lufs: None }
     }
 }
 
@@ -223,7 +228,10 @@ impl Meters {
         for (meter, peak) in self.returns.iter_mut().zip(&state.returns) {
             fall(meter, peak.take());
         }
-        fall(&mut self.master, state.master.take());
+        let master = state.master.take();
+        fall(&mut self.master, master);
+        self.master_hold = self.master_hold.max(master);
+        self.master_lufs = state.master_loudness();
     }
 
     /// Whether any meter still shows something.

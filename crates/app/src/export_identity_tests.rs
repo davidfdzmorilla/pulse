@@ -26,7 +26,11 @@ fn wav(name: &str, seconds: f64, f: impl Fn(usize) -> f32) -> String {
     if !path.exists() {
         let n = (seconds * SR as f64) as usize;
         let l: Vec<f32> = (0..n).map(&f).collect();
-        crate::export::write(&path, &l, &l, SR as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        // Written aside and moved in whole: tests running at once never
+        // read it half written.
+        let part = media().join(format!("{name}-{}-{:?}.part", std::process::id(), std::thread::current().id()));
+        crate::export::write(&part, &l, &l, SR as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+        std::fs::rename(&part, &path).unwrap();
     }
     path.to_string_lossy().into_owned()
 }

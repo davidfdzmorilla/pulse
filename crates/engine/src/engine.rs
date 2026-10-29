@@ -46,7 +46,7 @@ pub const QUEUED_STOP: i32 = -2;
 /// tails of reverbs and filters decay into them, and on x86 every operation on
 /// one is many times slower (ARM handles them at full speed).
 #[inline]
-fn flush_denormals() {
+pub(crate) fn flush_denormals() {
     #[cfg(target_arch = "x86_64")]
     unsafe {
         // MXCSR: flush to zero (bit 15) and denormals are zero (bit 6).
@@ -1591,7 +1591,45 @@ struct Track {
     audio_from: u32,
     /// Which of that track's drum sounds it takes instead (see [`Command::SetSoundsFrom`]).
     sounds_from: u16,
+    /// This block's sound on its way into its group (panned, at its fader),
+    /// for the group to add up; first, the drum sounds it takes.
+    out_left: Vec<f32>,
+    out_right: Vec<f32>,
+    /// What its sends take this block (after its fader, before panning, late
+    /// as the returns need it), and the fader's gain on it.
+    send_left: Vec<f32>,
+    send_right: Vec<f32>,
+    gain_now: f32,
+    /// What the sequencer and automation asked of it this block, done (in
+    /// that order) as it is processed, on whichever thread: see [`Step`].
+    steps: [Step; MAX_STEPS],
+    steps_len: usize,
+    params: [(usize, f32); MAX_PARAMS],
+    params_len: usize,
 }
+
+/// What plays on a track: a session clip (its slot, from when) or the arrangement.
+#[derive(Clone, Copy)]
+struct Playing {
+    slot: Option<usize>,
+    launch_beat: f64,
+    arrangement: bool,
+}
+
+/// One thing the sequencer asks of a track in a block: its notes or its audio
+/// clips over a stretch of it (as they play then), or stopping its notes.
+#[derive(Clone, Copy)]
+enum Step {
+    Notes { from: f64, to: f64, timing: Timing, play: Playing },
+    Audio { frames: (usize, usize), beat: f64, beats_per_sample: f64, tempo: f64, play: Playing },
+    AllNotesOff { frame: usize },
+}
+
+/// Steps a track keeps for a block (more are done at once); a block has a few
+/// per loop jump and launch.
+const MAX_STEPS: usize = 16;
+/// Instrument parameters automation sets in a block, kept likewise.
+const MAX_PARAMS: usize = 32;
 
 fn is_permutation(order: &[usize]) -> bool {
     let mut seen = [false; MAX_TRACKS];
@@ -1646,16 +1684,68 @@ impl Track {
             sustained: [false; 128],
             audio_from: 0,
             sounds_from: 0,
+            out_left: vec![0.0; MAX_BLOCK],
+            out_right: vec![0.0; MAX_BLOCK],
+            send_left: vec![0.0; MAX_BLOCK],
+            send_right: vec![0.0; MAX_BLOCK],
+            gain_now: 0.0,
+            steps: [Step::AllNotesOff { frame: 0 }; MAX_STEPS],
+            steps_len: 0,
+            params: [(0, 0.0); MAX_PARAMS],
+            params_len: 0,
         }
     }
 
-    /// Queues the note-ons that start in the beat range `[from, to)`.
-    fn collect_notes(&mut self, from: f64, to: f64, timing: &Timing) {
-        if let Some(slot) = self.playing {
-            if let Some(PlayClip::Midi(clip)) = self.slots[slot].as_deref() {
-                schedule_notes(clip, self.launch_beat, 0, from, to, f64::INFINITY, timing, &mut self.events);
+    /// What plays on it now.
+    fn now(&self) -> Playing {
+        Playing { slot: self.playing, launch_beat: self.launch_beat, arrangement: self.follows_arrangement }
+    }
+
+    /// Keeps `step` for when the track is processed.
+    fn step(&mut self, step: Step, tempo_lane: Option<&AutomationLane>) {
+        if self.steps_len == MAX_STEPS {
+            self.run_steps(tempo_lane);
+        }
+        self.steps[self.steps_len] = step;
+        self.steps_len += 1;
+    }
+
+    /// Does the steps kept, in order.
+    fn run_steps(&mut self, tempo_lane: Option<&AutomationLane>) {
+        for k in 0..self.steps_len {
+            match self.steps[k] {
+                Step::Notes { from, to, timing, play } => self.collect_notes(play, from, to, &timing),
+                Step::Audio { frames, beat, beats_per_sample, tempo, play } => self.render_audio(play, frames, beat, beats_per_sample, tempo, tempo_lane),
+                Step::AllNotesOff { frame } => push_event(&mut self.events, frame, Event::AllNotesOff),
             }
-        } else if self.follows_arrangement {
+        }
+        self.steps_len = 0;
+    }
+
+    /// Sets an instrument parameter when the track is processed (setting one
+    /// can take a while: the instrument works out what follows from it).
+    fn set_param(params: &mut [(usize, f32); MAX_PARAMS], len: &mut usize, instrument: &mut Instrument, index: usize, value: f32) {
+        if *len == MAX_PARAMS {
+            Self::apply_params(params, len, instrument);
+        }
+        params[*len] = (index, value);
+        *len += 1;
+    }
+
+    fn apply_params(params: &[(usize, f32); MAX_PARAMS], len: &mut usize, instrument: &mut Instrument) {
+        for &(index, value) in &params[..*len] {
+            instrument.set_param(index, value);
+        }
+        *len = 0;
+    }
+
+    /// Queues the note-ons that start in the beat range `[from, to)`.
+    fn collect_notes(&mut self, play: Playing, from: f64, to: f64, timing: &Timing) {
+        if let Some(slot) = play.slot {
+            if let Some(PlayClip::Midi(clip)) = self.slots[slot].as_deref() {
+                schedule_notes(clip, play.launch_beat, 0, from, to, f64::INFINITY, timing, &mut self.events);
+            }
+        } else if play.arrangement {
             for placed in self.arrangement.iter() {
                 let PlayClip::Midi(clip) = &placed.clip else { continue };
                 let (start, end) = (from.max(placed.start), to.min(placed.end()));
@@ -1670,17 +1760,17 @@ impl Track {
 
     /// Renders the audio clips sounding during frames `[from, to)`, where `beat`
     /// is the transport position at `from`.
-    fn render_audio(&mut self, (from, to): (usize, usize), beat: f64, beats_per_sample: f64, tempo: f64, tempo_lane: Option<&AutomationLane>) {
+    fn render_audio(&mut self, play: Playing, (from, to): (usize, usize), beat: f64, beats_per_sample: f64, tempo: f64, tempo_lane: Option<&AutomationLane>) {
         if to <= from {
             return;
         }
         let (left, right) = (&mut self.audio_left, &mut self.audio_right);
-        if let Some(slot) = self.playing {
+        if let Some(slot) = play.slot {
             if let Some(PlayClip::Audio(clip, sample)) = self.slots[slot].as_deref() {
                 let frames = (from, to);
-                render_audio_clip(clip, sample, self.launch_beat, f64::INFINITY, (false, false), frames, beat, beats_per_sample, tempo, tempo_lane, left, right);
+                render_audio_clip(clip, sample, play.launch_beat, f64::INFINITY, (false, false), frames, beat, beats_per_sample, tempo, tempo_lane, left, right);
             }
-        } else if self.follows_arrangement {
+        } else if play.arrangement {
             let end = beat + (to - from) as f64 * beats_per_sample;
             // Half a cross-fade either side, for clips playing on past their edges.
             let margin = CROSSFADE * tempo / 60.0;
@@ -1783,15 +1873,10 @@ pub struct Engine {
     /// tracks before it runs its own chain.
     parents: [Option<u8>; MAX_TRACKS],
     order: [usize; MAX_TRACKS],
-    /// A track's output on its way into its group.
-    bus_left: Vec<f32>,
-    bus_right: Vec<f32>,
     /// Each track's id, and its sound after its effects (before its fader) in
     /// the last block it was processed: what sidechains listen to.
     ids: [u32; MAX_TRACKS],
     key_left: Vec<Vec<f32>>,
-    /// The drum sounds the track being mixed takes (see [`Command::SetSoundsFrom`]).
-    taken: Vec<f32>,
     key_right: Vec<Vec<f32>>,
     /// Each track muted this block, itself or by a group (what `audio_from` follows).
     mutes: [bool; MAX_TRACKS],
@@ -1803,12 +1888,24 @@ pub struct Engine {
     send_delays: Vec<Compensator>,
     return_delays: Vec<Compensator>,
     click_delay: Compensator,
-    /// A track's sends, late as the returns need them.
-    send_left: Vec<f32>,
-    send_right: Vec<f32>,
     /// The song's delay now (samples).
     latency: usize,
+    /// The threads that share each block's tracks with this one, if any (see
+    /// [`Engine::set_threads`]).
+    workers: Option<crate::workers::Workers>,
+    /// Whether the next block is shared among them: only when blocks take long
+    /// enough to be worth waking them (alone or shared, the same sound).
+    sharing: bool,
+    /// How long a block on one thread takes before the next is shared.
+    share_above: std::time::Duration,
+    /// What waits for what in a shared block (see [`Engine::plan_block`]).
+    plan: Box<crate::workers::Plan>,
 }
+
+/// How long the tracks of a block take on one thread before blocks are
+/// shared among the workers (see [`Engine::set_threads`]): a song this light
+/// doesn't need them, and they sleep.
+const SHARE_ABOVE: std::time::Duration = std::time::Duration::from_micros(100);
 
 /// The most a track waits for another (samples): a third of a second at 48 kHz.
 pub const MAX_COMPENSATION: usize = 1 << 14;
@@ -1865,14 +1962,264 @@ impl Compensator {
     }
 }
 
-/// Gives the sidechained effects of a chain their sources' sound.
-fn feed_keys(chain: &mut [ChainSlot], ids: &[u32; MAX_TRACKS], left: &[Vec<f32>], right: &[Vec<f32>], n: usize) {
+/// Gives the sidechained effects of a chain their sources' sound (`key`: a
+/// track's, by index).
+fn feed_keys<'a>(chain: &mut [ChainSlot], ids: &[u32; MAX_TRACKS], n: usize, key: impl Fn(usize) -> (&'a [f32], &'a [f32])) {
     for slot in chain.iter_mut() {
         let Some(id) = slot.processor.sidechain() else { continue };
         if let Some(source) = ids.iter().position(|&x| x == id && id != 0) {
-            slot.processor.feed_key(&left[source][..n], &right[source][..n]);
+            let (left, right) = key(source);
+            slot.processor.feed_key(&left[..n], &right[..n]);
         }
     }
+}
+
+/// Whether a chain holds a loaded plugin (VST3 or CLAP).
+fn hosts_plugin(chain: &[ChainSlot]) -> bool {
+    chain.iter().any(|slot| matches!(*slot.processor, EffectProcessor::Plugin(_, Some(_))))
+}
+
+// ----- One block, on several threads ---------------------------------------------------
+//
+// What each part of a block reads, and so what has to wait for what:
+//
+// - Before the tracks, on the audio thread: commands, automation, the
+//   transport, launches and the monitored input; then this block's order,
+//   solos and mutes. What the sequencer and automation ask of each track (its
+//   notes, its audio clips, its instrument's settings) is kept as its steps.
+// - Track t (`process_track`): its steps, its instrument, its effects, then
+//   its fader. It also reads
+//   - a group: its tracks' sound (`out_*`), so after all of them;
+//   - a sidechain or `audio_from` source s (its sound after its effects,
+//     `key_*`), and a drum split its source's drum sounds: after s if s comes
+//     first in the order (this block's sound), else the last block's, and then
+//     s waits for t, so that it doesn't change while t reads it;
+//   - its own delay lines (compensation) and its own sidechain sound of the
+//     last block: its own.
+//   Frozen tracks are tracks playing an audio clip: nothing apart.
+// - Return r (`process_return`): the sends of the tracks sending to it, in
+//   the order they were processed, and its sidechains' sources: after those.
+// - After all of them, on the audio thread: the tracks outside groups and
+//   then the returns into the master, in order; the previews, the master's
+//   chain and the metronome.
+//
+// Every edge goes from earlier to later in `order` (returns last), so the
+// order alone runs it right on one thread. Sums are always made by one task in
+// that order (a group adds its tracks, a return its sends, the audio thread
+// the master): the same samples however many threads share the work.
+
+/// What a block's tasks share, read only.
+struct Mix {
+    n: usize,
+    ctx: ProcessContext,
+    any_solo: bool,
+    soloed: [bool; MAX_TRACKS],
+    silenced: [bool; MAX_TRACKS],
+    mutes: [bool; MAX_TRACKS],
+    ids: [u32; MAX_TRACKS],
+    parents: [Option<u8>; MAX_TRACKS],
+    order: [usize; MAX_TRACKS],
+    apart: [u16; MAX_TRACKS],
+    children: [u64; MAX_TRACKS],
+    senders: [u64; MAX_RETURNS],
+}
+
+/// A block's tasks: what they share, and where what they process is (each
+/// touched only as the graph above allows).
+struct Job {
+    mix: Mix,
+    tracks: *mut Track,
+    returns: *mut Channel,
+    key_left: *mut Vec<f32>,
+    key_right: *mut Vec<f32>,
+    track_delays: *mut Compensator,
+    send_delays: *mut Compensator,
+    return_delays: *mut Compensator,
+    shared: *const SharedState,
+    /// The master's tempo lane, if it has one.
+    tempo_lane: *const AutomationLane,
+}
+
+/// Tasks of a block: each track, then each return.
+const TASKS: usize = crate::workers::TASKS;
+
+/// # Safety
+/// `job` is a live [`Job`], and `task` runs as the graph above allows.
+unsafe fn run_task(job: *const (), task: usize) {
+    let job = unsafe { &*(job as *const Job) };
+    if task < MAX_TRACKS {
+        unsafe { process_track(job, task) }
+    } else {
+        unsafe { process_return(job, task - MAX_TRACKS) }
+    }
+}
+
+/// The track whose id is `id`, if any.
+fn track_with(ids: &[u32; MAX_TRACKS], id: u32) -> Option<usize> {
+    ids.iter().position(|&x| x == id && id != 0)
+}
+
+/// Track `index`'s part of the block: its instrument, effects and fader, into
+/// its group's input (the audio thread adds the others into the master).
+///
+/// # Safety
+/// Nothing else touches track `index` meanwhile, and the tracks it reads are
+/// not being processed (see the graph above).
+unsafe fn process_track(job: &Job, index: usize) {
+    let mix = &job.mix;
+    let (n, ctx) = (mix.n, &mix.ctx);
+    let sr = ctx.sample_rate;
+    let shared = unsafe { &*job.shared };
+    // Another track, done or not started (never `index`).
+    let other = |t: usize| unsafe { &*job.tracks.add(t) };
+    let key = |t: usize| unsafe { ((*job.key_left.add(t)).as_slice(), (*job.key_right.add(t)).as_slice()) };
+    let track = unsafe { &mut *job.tracks.add(index) };
+    // What automation and the sequencer asked of it.
+    Track::apply_params(&track.params, &mut track.params_len, &mut track.instrument);
+    track.run_steps(unsafe { job.tempo_lane.as_ref() });
+    // A group: its tracks' sound, in the order they were processed.
+    if mix.children[index] != 0 {
+        for &child in mix.order.iter().filter(|&&c| mix.children[index] >> c & 1 == 1) {
+            let child = other(child);
+            for i in 0..n {
+                track.audio_left[i] += child.out_left[i];
+                track.audio_right[i] += child.out_right[i];
+            }
+        }
+    }
+    // The drum sounds it takes (its source came earlier in the order).
+    let takes = track.sounds_from;
+    if takes != 0 {
+        let taken = &mut track.out_left[..n];
+        taken.fill(0.0);
+        let source = track_with(&mix.ids, track.audio_from).filter(|&s| s != index && !mix.mutes[s]);
+        if let Some(Instrument::Drums(drums)) = source.map(|s| &other(s).instrument) {
+            for voice in (0..crate::model::DRUM_SOUNDS).filter(|&v| takes >> v & 1 == 1) {
+                for (out, x) in taken.iter_mut().zip(drums.sound(voice)) {
+                    *out += x;
+                }
+            }
+        }
+    }
+    if let Instrument::Drums(drums) = &mut track.instrument {
+        drums.begin(mix.apart[index]);
+    }
+    let (left, right) = (&mut track.buffer[..n], &mut track.buffer_right[..n]);
+    left.fill(0.0);
+    right.fill(0.0);
+    track.events.sort_unstable_by_key(|&(frame, rank, _)| (frame, rank));
+    if !track.midi_fx.is_empty() {
+        let timing = crate::midi_fx::Timing { sample_rate: sr, tempo: ctx.tempo, beat: ctx.beat, beats_per_sample: ctx.beats_per_sample };
+        track.midi_fx.process(&mut track.events, n, timing);
+    }
+    track.instrument.set_tempo(ctx.tempo);
+    if let Instrument::Plugin(_, Some(plugin)) = &mut track.instrument {
+        plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &ctx.meter);
+    }
+    let mut cursor = 0;
+    for &(frame, _, event) in &track.events {
+        let frame = frame.min(n - 1);
+        if frame > cursor {
+            track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..frame], &mut right[cursor..frame]);
+            cursor = frame;
+        }
+        match event {
+            Event::AllNotesOff => track.instrument.all_notes_off(),
+            Event::NoteOff { pitch } => track.instrument.note_off(pitch),
+            Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(&track.samples, pitch, velocity, gate),
+            Event::Control { controller, pitch, value } => {
+                track.expression.control(controller, value);
+                track.instrument.control(controller, pitch, value);
+            }
+        }
+    }
+    track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
+    track.events.clear();
+
+    let channel = &mut track.channel;
+    for i in 0..n {
+        channel.left[i] = left[i] + track.audio_left[i];
+        channel.right[i] = right[i] + track.audio_right[i];
+    }
+    // The sound of the track it follows, unless that one is muted: the
+    // drum sounds it takes, or all of it after its effects.
+    let from = track.audio_from;
+    if takes != 0 {
+        for i in 0..n {
+            channel.left[i] += track.out_left[i];
+            channel.right[i] += track.out_left[i];
+        }
+    } else if let Some(source) = track_with(&mix.ids, from).filter(|&s| s != index) {
+        if !mix.mutes[source] {
+            let (key_left, key_right) = key(source);
+            for i in 0..n {
+                channel.left[i] += key_left[i];
+                channel.right[i] += key_right[i];
+            }
+        }
+    }
+    feed_keys(&mut channel.chain, &mix.ids, n, key);
+    let analyzer = &shared.analyzer;
+    if !channel.run_chain(n, ctx, analyzer.device(Target::Track(index)).map(|d| (d, analyzer))) {
+        shared.fault(Fault::Track(index));
+    }
+    // What sidechains listening to it hear: after its effects, before its fader.
+    unsafe {
+        (&mut *job.key_left.add(index))[..n].copy_from_slice(&channel.left[..n]);
+        (&mut *job.key_right.add(index))[..n].copy_from_slice(&channel.right[..n]);
+    }
+
+    let audible = !channel.mute && !mix.silenced[index] && (!mix.any_solo || mix.soloed[index]);
+    let gain = if audible { channel.gain } else { 0.0 };
+    track.gain_now = gain;
+    // Post-fader sends, taken before panning, late as the returns need.
+    let sends = unsafe { &mut *job.send_delays.add(index) };
+    if sends.delay > 0 || track.sends.iter().any(|&amount| amount > 0.0) {
+        track.send_left[..n].copy_from_slice(&channel.left[..n]);
+        track.send_right[..n].copy_from_slice(&channel.right[..n]);
+        sends.process(&mut track.send_left[..n], Some(&mut track.send_right[..n]));
+    }
+    // Late as the slowest it meets.
+    unsafe { &mut *job.track_delays.add(index) }.process(&mut channel.left[..n], Some(&mut channel.right[..n]));
+    // Into its group (which comes later in the order).
+    if let Some(group) = mix.parents[index] {
+        // A group left out by a solo isn't heard, but sidechains
+        // listening to it still hear its tracks (as they hear a
+        // track's own sound, whatever the solo).
+        let unheard_group = mix.any_solo && !mix.soloed[group as usize];
+        let into_bus = if !audible && unheard_group && !channel.mute && !mix.silenced[index] { channel.gain } else { gain };
+        track.out_left[..n].fill(0.0);
+        track.out_right[..n].fill(0.0);
+        let peak = channel.mix_into(n, into_bus, &mut track.out_left, &mut track.out_right);
+        shared.tracks[index].peak.publish(if audible { peak } else { 0.0 });
+    }
+}
+
+/// Return `index`'s part of the block: its sends in, and its effects.
+///
+/// # Safety
+/// As [`process_track`]: after every track it reads.
+unsafe fn process_return(job: &Job, index: usize) {
+    let mix = &job.mix;
+    let n = mix.n;
+    let shared = unsafe { &*job.shared };
+    let ret = unsafe { &mut *job.returns.add(index) };
+    let senders = mix.senders[index];
+    for &t in mix.order.iter().filter(|&&t| senders >> t & 1 == 1) {
+        let track = unsafe { &*job.tracks.add(t) };
+        let (amount, gain) = (track.sends[index], track.gain_now);
+        for i in 0..n {
+            ret.left[i] += track.send_left[i] * gain * amount;
+            ret.right[i] += track.send_right[i] * gain * amount;
+        }
+    }
+    let key = |t: usize| unsafe { ((*job.key_left.add(t)).as_slice(), (*job.key_right.add(t)).as_slice()) };
+    feed_keys(&mut ret.chain, &mix.ids, n, key);
+    let analyzer = &shared.analyzer;
+    if !ret.run_chain(n, &mix.ctx, analyzer.device(Target::Return(index)).map(|d| (d, analyzer))) {
+        shared.fault(Fault::Return(index));
+    }
+    unsafe { &mut *job.return_delays.add(index) }.process(&mut ret.left[..n], Some(&mut ret.right[..n]));
 }
 
 /// The order to process tracks in: every track before the group it plays
@@ -2009,11 +2356,8 @@ impl Engine {
             scale: 0,
             parents: [None; MAX_TRACKS],
             order: std::array::from_fn(|i| i),
-            bus_left: vec![0.0; MAX_BLOCK],
-            bus_right: vec![0.0; MAX_BLOCK],
             ids: [0; MAX_TRACKS],
             key_left: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
-            taken: vec![0.0; MAX_BLOCK],
             key_right: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
             mutes: [false; MAX_TRACKS],
             compensating: true,
@@ -2021,9 +2365,11 @@ impl Engine {
             send_delays: (0..MAX_TRACKS).map(|_| Compensator::new()).collect(),
             return_delays: (0..MAX_RETURNS).map(|_| Compensator::new()).collect(),
             click_delay: Compensator::new(),
-            send_left: vec![0.0; MAX_BLOCK],
-            send_right: vec![0.0; MAX_BLOCK],
             latency: 0,
+            workers: None,
+            sharing: false,
+            share_above: SHARE_ABOVE,
+            plan: Box::new(crate::workers::Plan::new()),
         };
         (engine, shared)
     }
@@ -2091,7 +2437,10 @@ impl Engine {
         let used = (advanced.floor() as usize).min(input.pending.len());
         input.pending.drain(..used);
         input.position = if used < advanced.floor() as usize { 0.0 } else { advanced - used as f64 };
+        let tempo_lane = self.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty());
         for track in self.tracks.iter_mut().filter(|t| t.monitor) {
+            // What its clips play is done first (and replaced).
+            track.run_steps(tempo_lane);
             track.audio_left[..n].copy_from_slice(left);
             track.audio_right[..n].copy_from_slice(right);
         }
@@ -2691,6 +3040,79 @@ impl Engine {
         self.shared.compensation.store(self.latency as f64 / self.sample_rate as f64);
     }
 
+    /// Shares each block's tracks and returns among `threads` threads: the one
+    /// calling [`Engine::process`] and `threads - 1` workers started now (1:
+    /// all on that one, as an export does), whenever blocks take long enough
+    /// to need them. The sound is the same, sample for sample. Call it off the
+    /// audio thread, before the engine goes there.
+    pub fn set_threads(&mut self, threads: usize) {
+        self.set_threads_with(threads, None);
+    }
+
+    /// [`Engine::set_threads`], with something each worker runs as it starts.
+    pub fn set_threads_with(&mut self, threads: usize, init: Option<crate::workers::WorkerInit>) {
+        self.workers = (threads > 1).then(|| crate::workers::Workers::new(threads, init)).filter(|w| w.threads() > 1);
+    }
+
+    /// Threads each block is shared among.
+    pub fn threads(&self) -> usize {
+        self.workers.as_ref().map_or(1, |w| w.threads())
+    }
+
+    /// Tracks and returns the other threads have processed so far.
+    pub fn helped(&self) -> u64 {
+        self.workers.as_ref().map_or(0, |w| w.helped())
+    }
+
+    /// What this block's tasks wait for (see the graph above `Mix`): a track
+    /// for its group's tracks and for what it listens to, or what listens to
+    /// it for it (it hears its last block); a return for its senders and its
+    /// sidechains' sources. Tracks and returns with plugins stay on the audio
+    /// thread: a plugin may expect every call from one thread.
+    fn plan_block(&mut self, wants: &[u64; MAX_TRACKS], children: &[u64; MAX_TRACKS], senders: &[u64; MAX_RETURNS]) {
+        use crate::workers::Mask;
+        let plan = &mut *self.plan;
+        let mut at = [0usize; MAX_TRACKS];
+        for (k, &t) in self.order.iter().enumerate() {
+            at[t] = k;
+            plan.queue[k] = t as u8;
+        }
+        for r in 0..MAX_RETURNS {
+            plan.queue[MAX_TRACKS + r] = (MAX_TRACKS + r) as u8;
+        }
+        plan.deps = [0; TASKS];
+        plan.pinned = 0;
+        for i in 0..MAX_TRACKS {
+            plan.deps[i] |= children[i] as Mask;
+            let mut bits = wants[i] & !(1 << i);
+            while bits != 0 {
+                let j = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if at[j] < at[i] {
+                    plan.deps[i] |= 1 << j;
+                } else {
+                    plan.deps[j] |= 1 << i;
+                }
+            }
+            let track = &self.tracks[i];
+            if matches!(track.instrument, Instrument::Plugin(_, Some(_))) || hosts_plugin(&track.channel.chain) {
+                plan.pinned |= 1 << i;
+            }
+        }
+        for (r, ret) in self.returns.iter().enumerate() {
+            let mut deps = senders[r] as Mask;
+            for id in ret.chain.iter().filter_map(|slot| slot.processor.sidechain()) {
+                if let Some(source) = track_with(&self.ids, id) {
+                    deps |= 1 << source;
+                }
+            }
+            plan.deps[MAX_TRACKS + r] = deps;
+            if hosts_plugin(&ret.chain) {
+                plan.pinned |= 1 << (MAX_TRACKS + r);
+            }
+        }
+    }
+
     /// How late the song comes out of the effects (samples): see [`Engine::compensate`].
     pub fn latency(&self) -> usize {
         self.latency
@@ -2781,142 +3203,60 @@ impl Engine {
                 apart[source] |= track.sounds_from;
             }
         }
-        let sr = self.sample_rate;
-        for k in 0..MAX_TRACKS {
-            let index = self.order[k];
-            // The drum sounds it takes (its source came earlier in the order).
-            let takes = self.tracks[index].sounds_from;
-            if takes != 0 {
-                self.taken[..n].fill(0.0);
-                let source = self.source_of(&self.tracks[index]).filter(|&s| s != index && !self.mutes[s]);
-                if let Some(Instrument::Drums(drums)) = source.map(|s| &self.tracks[s].instrument) {
-                    for voice in (0..crate::model::DRUM_SOUNDS).filter(|&v| takes >> v & 1 == 1) {
-                        for (out, x) in self.taken[..n].iter_mut().zip(drums.sound(voice)) {
-                            *out += x;
-                        }
-                    }
-                }
+        // Each group's tracks, and the tracks sending to each return.
+        let mut children = [0u64; MAX_TRACKS];
+        for (i, p) in self.parents.iter().enumerate() {
+            if let Some(p) = p {
+                children[*p as usize] |= 1 << i;
             }
-            let track = &mut self.tracks[index];
-            if let Instrument::Drums(drums) = &mut track.instrument {
-                drums.begin(apart[index]);
-            }
-            let (left, right) = (&mut track.buffer[..n], &mut track.buffer_right[..n]);
-            left.fill(0.0);
-            right.fill(0.0);
-            track.events.sort_unstable_by_key(|&(frame, rank, _)| (frame, rank));
-            if !track.midi_fx.is_empty() {
-                let timing = crate::midi_fx::Timing { sample_rate: sr, tempo: self.tempo, beat: ctx.beat, beats_per_sample: ctx.beats_per_sample };
-                track.midi_fx.process(&mut track.events, n, timing);
-            }
-            track.instrument.set_tempo(self.tempo);
-            if let Instrument::Plugin(_, Some(plugin)) = &mut track.instrument {
-                plugin.set_transport(self.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &self.meter);
-            }
-            let mut cursor = 0;
-            for &(frame, _, event) in &track.events {
-                let frame = frame.min(n - 1);
-                if frame > cursor {
-                    track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..frame], &mut right[cursor..frame]);
-                    cursor = frame;
-                }
-                match event {
-                    Event::AllNotesOff => track.instrument.all_notes_off(),
-                    Event::NoteOff { pitch } => track.instrument.note_off(pitch),
-                    Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(&track.samples, pitch, velocity, gate),
-                    Event::Control { controller, pitch, value } => {
-                        track.expression.control(controller, value);
-                        track.instrument.control(controller, pitch, value);
-                    }
-                }
-            }
-            track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
-            track.events.clear();
-
-            let channel = &mut track.channel;
-            for i in 0..n {
-                channel.left[i] = left[i] + track.audio_left[i];
-                channel.right[i] = right[i] + track.audio_right[i];
-            }
-            // The sound of the track it follows, unless that one is muted: the
-            // drum sounds it takes, or all of it after its effects.
-            let from = track.audio_from;
-            if takes != 0 {
-                for i in 0..n {
-                    channel.left[i] += self.taken[i];
-                    channel.right[i] += self.taken[i];
-                }
-            } else if let Some(source) = self.ids.iter().position(|&x| x == from && from != 0).filter(|&s| s != index) {
-                if !self.mutes[source] {
-                    for i in 0..n {
-                        channel.left[i] += self.key_left[source][i];
-                        channel.right[i] += self.key_right[source][i];
-                    }
-                }
-            }
-            feed_keys(&mut channel.chain, &self.ids, &self.key_left, &self.key_right, n);
-            let analyzer = &self.shared.analyzer;
-            if !channel.run_chain(n, &ctx, analyzer.device(Target::Track(index)).map(|d| (d, analyzer))) {
-                self.shared.fault(Fault::Track(index));
-            }
-            // What sidechains listening to it hear: after its effects, before its fader.
-            self.key_left[index][..n].copy_from_slice(&channel.left[..n]);
-            self.key_right[index][..n].copy_from_slice(&channel.right[..n]);
-
-            let audible = !channel.mute && !silenced[index] && (!any_solo || soloed[index]);
-            let gain = if audible { channel.gain } else { 0.0 };
-            // Post-fader sends, taken before panning, late as the returns need.
-            let sends = &mut self.send_delays[index];
-            let (send_left, send_right) = if sends.delay > 0 {
-                self.send_left[..n].copy_from_slice(&channel.left[..n]);
-                self.send_right[..n].copy_from_slice(&channel.right[..n]);
-                sends.process(&mut self.send_left[..n], Some(&mut self.send_right[..n]));
-                (&self.send_left[..n], &self.send_right[..n])
-            } else {
-                (&channel.left[..n], &channel.right[..n])
-            };
-            for (ret, &amount) in self.returns.iter_mut().zip(&track.sends) {
-                if amount > 0.0 {
-                    for i in 0..n {
-                        ret.left[i] += send_left[i] * gain * amount;
-                        ret.right[i] += send_right[i] * gain * amount;
-                    }
-                }
-            }
-            // Late as the slowest it meets.
-            self.track_delays[index].process(&mut channel.left[..n], Some(&mut channel.right[..n]));
-            // Into its group (which comes later in the order), or the master.
-            match self.parents[index] {
-                Some(group) => {
-                    // A group left out by a solo isn't heard, but sidechains
-                    // listening to it still hear its tracks (as they hear a
-                    // track's own sound, whatever the solo).
-                    let unheard_group = any_solo && !soloed[group as usize];
-                    let into_bus = if !audible && unheard_group && !channel.mute && !silenced[index] { channel.gain } else { gain };
-                    self.bus_left[..n].fill(0.0);
-                    self.bus_right[..n].fill(0.0);
-                    let peak = channel.mix_into(n, into_bus, &mut self.bus_left, &mut self.bus_right);
-                    self.shared.tracks[index].peak.publish(if audible { peak } else { 0.0 });
-                    let into = &mut self.tracks[group as usize];
-                    for i in 0..n {
-                        into.audio_left[i] += self.bus_left[i];
-                        into.audio_right[i] += self.bus_right[i];
-                    }
-                }
-                None => {
-                    let peak = channel.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
-                    self.shared.tracks[index].peak.publish(peak);
+        }
+        let senders: [u64; MAX_RETURNS] = std::array::from_fn(|r| {
+            self.tracks.iter().enumerate().filter(|(_, t)| t.sends[r] > 0.0).fold(0, |bits, (i, _)| bits | 1 << i)
+        });
+        let sharing = self.workers.is_some() && self.sharing;
+        if sharing {
+            self.plan_block(&wants, &children, &senders);
+        }
+        let job = Job {
+            mix: Mix { n, ctx, any_solo, soloed, silenced, mutes: self.mutes, ids: self.ids, parents: self.parents, order: self.order, apart, children, senders },
+            tracks: self.tracks.as_mut_ptr(),
+            returns: self.returns.as_mut_ptr(),
+            key_left: self.key_left.as_mut_ptr(),
+            key_right: self.key_right.as_mut_ptr(),
+            track_delays: self.track_delays.as_mut_ptr(),
+            send_delays: self.send_delays.as_mut_ptr(),
+            return_delays: self.return_delays.as_mut_ptr(),
+            shared: &*self.shared,
+            tempo_lane: self.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty()).map_or(std::ptr::null(), |l| l as *const _),
+        };
+        let at = &job as *const Job as *const ();
+        let started = self.workers.as_ref().map(|_| std::time::Instant::now());
+        match self.workers.as_ref().filter(|_| sharing) {
+            // SAFETY: the plan orders every task with those it reads or that read it.
+            Some(workers) => unsafe { workers.run(&self.plan, at, run_task) },
+            // One after the other, in a valid order: exactly what the workers do.
+            None => {
+                for task in job.mix.order.into_iter().chain(MAX_TRACKS..TASKS) {
+                    unsafe { run_task(at, task) };
                 }
             }
         }
+        // Shared from when a block alone takes long, until one shared would
+        // have taken under half that alone (as if all threads had worked all along).
+        if let (Some(started), Some(workers)) = (started, &self.workers) {
+            let took = started.elapsed();
+            self.sharing = if sharing { took * workers.threads() as u32 > self.share_above / 2 } else { took > self.share_above };
+        }
 
-        for (index, ret) in self.returns.iter_mut().enumerate() {
-            feed_keys(&mut ret.chain, &self.ids, &self.key_left, &self.key_right, n);
-            let analyzer = &self.shared.analyzer;
-            if !ret.run_chain(n, &ctx, analyzer.device(Target::Return(index)).map(|d| (d, analyzer))) {
-                self.shared.fault(Fault::Return(index));
+        // Into the master, in the order they were processed.
+        for &index in &self.order {
+            if self.parents[index].is_none() {
+                let track = &mut self.tracks[index];
+                let peak = track.channel.mix_into(n, track.gain_now, &mut self.master.left, &mut self.master.right);
+                self.shared.tracks[index].peak.publish(peak);
             }
-            self.return_delays[index].process(&mut ret.left[..n], Some(&mut ret.right[..n]));
+        }
+        for (index, ret) in self.returns.iter_mut().enumerate() {
             let gain = if ret.mute { 0.0 } else { ret.gain };
             let peak = ret.mix_into(n, gain, &mut self.master.left, &mut self.master.right);
             self.shared.returns[index].publish(peak);
@@ -2998,7 +3338,8 @@ impl Engine {
         }
 
         let master = &mut self.master;
-        feed_keys(&mut master.chain, &self.ids, &self.key_left, &self.key_right, n);
+        let keys = (&self.key_left, &self.key_right);
+        feed_keys(&mut master.chain, &self.ids, n, |t| (keys.0[t].as_slice(), keys.1[t].as_slice()));
         let analyzer = &self.shared.analyzer;
         if !master.run_chain(n, &ctx, analyzer.device(Target::Master).map(|d| (d, analyzer))) {
             self.shared.fault(Fault::Master);
@@ -3035,7 +3376,7 @@ impl Engine {
     fn apply_automation(&mut self) {
         let beat = self.position;
         for track in &mut self.tracks {
-            let Track { channel, sends, base_sends, envelope_held: held, instrument, slots, playing, launch_beat, follows_arrangement, arrangement, .. } = track;
+            let Track { channel, sends, base_sends, envelope_held: held, instrument, slots, playing, launch_beat, follows_arrangement, arrangement, params, params_len, .. } = track;
             // The sounding clip's envelopes, in its own time (looping with it), win
             // over the track's automation.
             let clip = if *follows_arrangement {
@@ -3072,7 +3413,7 @@ impl Engine {
                         *send = value.clamp(0.0, 1.0);
                     }
                 }
-                Param::Instrument(i) => instrument.set_param(i, value),
+                Param::Instrument(i) => Track::set_param(params, params_len, instrument, i, value),
                 _ => {}
             };
             channel.automate(beat, &mut other);
@@ -3160,15 +3501,20 @@ impl Engine {
         let bps = timing.beats_per_sample;
         let tempo = self.tempo;
         let tempo_lane = self.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty());
+        // Done as each track is processed (see `Track::run_steps`), as it plays now.
+        let notes = |from: f64, to: f64, play: Playing| Step::Notes { from, to, timing: *timing, play };
+        let audio = |frames: (usize, usize), beat: f64, play: Playing| Step::Audio { frames, beat, beats_per_sample: bps, tempo, play };
         for (index, track) in self.tracks.iter_mut().enumerate() {
             if track.queued == Queued::Nothing || boundary >= end {
-                track.collect_notes(start, end, timing);
-                track.render_audio(segment, start, bps, tempo, tempo_lane);
+                let play = track.now();
+                track.step(notes(start, end, play), tempo_lane);
+                track.step(audio(segment, start, play), tempo_lane);
                 continue;
             }
-            track.collect_notes(start, boundary, timing);
+            let play = track.now();
+            track.step(notes(start, boundary, play), tempo_lane);
             let switch = (segment.0 + ((boundary - start) / bps).ceil() as usize).clamp(segment.0, segment.1);
-            track.render_audio((segment.0, switch), start, bps, tempo, tempo_lane);
+            track.step(audio((segment.0, switch), start, play), tempo_lane);
             // Any switch on a track ends the take it was recording.
             if track.recording.take().is_some() {
                 flush_held(track, index, boundary, &mut self.recorded);
@@ -3190,10 +3536,11 @@ impl Engine {
             // Session activity on a track overrides its arrangement until "Back to Arrangement".
             track.follows_arrangement = false;
             track.queued = Queued::Nothing;
-            push_event(&mut track.events, timing.frame(boundary), Event::AllNotesOff);
-            track.collect_notes(boundary, end, timing);
+            track.step(Step::AllNotesOff { frame: timing.frame(boundary) }, tempo_lane);
+            let play = track.now();
+            track.step(notes(boundary, end, play), tempo_lane);
             let switch_beat = start + (switch - segment.0) as f64 * bps;
-            track.render_audio((switch, segment.1), switch_beat, bps, tempo, tempo_lane);
+            track.step(audio((switch, segment.1), switch_beat, play), tempo_lane);
         }
 
         if self.metronome {
@@ -5110,6 +5457,112 @@ mod tests {
         let missing = sidechained(Some(99));
         assert!(ducked < free * 0.3, "ducked by the source: {ducked} vs {free}");
         assert!(missing > free * 0.9, "{missing} vs {free}");
+    }
+
+    /// Shared among threads, a track still hears its sidechain source's sound of
+    /// this block, also when that source takes long (it waits for it): the
+    /// same samples as on one thread.
+    #[test]
+    fn with_threads_a_sidechain_waits_for_its_source() {
+        let run = |threads: usize| {
+            let mut h = Harness::new();
+            h.engine.set_threads(threads);
+            // Shared however light.
+            h.engine.share_above = std::time::Duration::ZERO;
+            let mut ids = [0u32; MAX_TRACKS];
+            ids[0] = 7;
+            ids[1] = 8;
+            h.send(Command::SetTrackIds(ids));
+            let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
+            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
+            h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
+            let mut hits = MidiClip::new("hits", 4.0, [0, 0, 0]);
+            for k in 0..8 {
+                hits.notes.push(Note { start: k as f64 * 0.5, length: 0.1, pitch: 60, velocity: 1.0, chance: 1.0 });
+            }
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(hits))) });
+            h.send(Command::SetMute { target: Target::Track(0), mute: true });
+            // A slow source: whoever processes it takes a while.
+            for _ in 0..6 {
+                let reverb = Device::new(Effect::Reverb(Default::default()));
+                h.send(Command::InsertDevice { target: Target::Track(0), index: 0, slot: ChainSlot::new(&reverb, SR) });
+            }
+            let params = crate::model::DuckerParams { depth: 1.0, release: 0.2, sidechain: Some(7), ..Default::default() };
+            h.send(Command::InsertDevice { target: Target::Track(1), index: 0, slot: ChainSlot::new(&Device::new(Effect::Ducker(params)), SR) });
+            h.send(Command::LaunchScene(0));
+            let out = h.run_beats(4.0);
+            (out, h.engine.helped())
+        };
+        let (one, _) = run(1);
+        let (four, helped) = run(4);
+        assert!(helped > 0, "the other threads did nothing");
+        assert!(energy(&one) > 0.1);
+        assert!(one.iter().zip(&four).all(|(a, b)| a.to_bits() == b.to_bits()), "the sidechain heard something else");
+    }
+
+    /// Every instrument (but the Polychrome, see above, and the Acid) with
+    /// effects, a group, a send and a sidechain, shared among threads in
+    /// callbacks of any size, sounds as on one thread in callbacks of 1024: the
+    /// same samples.
+    #[test]
+    fn neither_threads_nor_the_buffer_size_change_the_sound() {
+        use crate::model::{AutoFilterParams, DuckerParams, ReverbParams};
+        // Known: this low line on the Acid moves by a few samples with the
+        // buffer size on one thread too.
+        let kinds: Vec<InstrumentKind> = InstrumentKind::catalog().into_iter().filter(|k| !matches!(k, InstrumentKind::Polychrome(_) | InstrumentKind::Acid(_))).collect();
+        let render = |threads: usize, sizes: &[usize]| {
+            let (mut engine, mut handle) = crate::audio::detached(SR);
+            engine.set_threads(threads);
+            engine.share_above = std::time::Duration::ZERO;
+            assert!(handle.send(Command::SetTrackIds(std::array::from_fn(|t| t as u32 + 1))));
+            let mut parents = [None; MAX_TRACKS];
+            for (t, kind) in kinds.iter().enumerate() {
+                assert!(handle.send(Command::set_instrument(t, *kind, SR)));
+                assert!(handle.send(Command::SetSamples { track: t, samples: Box::new(vec![sine_sample(); 16]) }));
+                assert!(handle.send(Command::SetWavetables { track: t, tables: Box::new(vec![Arc::new(crate::wavetable::builtin(0)), Arc::new(crate::wavetable::builtin(3))]) }));
+                let mut clip = MidiClip::new("busy", 4.0, [0, 0, 0]);
+                for (i, pitch) in [36u8, 48, 55, 38, 60, 42, 67, 72].iter().enumerate() {
+                    clip.notes.push(Note { start: i as f64 * 0.5, length: 0.3 + 0.1 * (i % 3) as f64, pitch: *pitch, velocity: 0.7, chance: 1.0 });
+                }
+                assert!(handle.send(Command::SetArrangement { track: t, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(clip))]) }));
+                let filter = Device::new(Effect::AutoFilter(AutoFilterParams { lfo_amount: 2.0, lfo_beats: 0.5, ..Default::default() }));
+                let mut chain = vec![filter, Device::new(Effect::Delay(Default::default()))];
+                // Listening to a track outside its group (its own group it would
+                // hear a block late, however long the blocks are).
+                if t == 3 {
+                    chain.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.8, sidechain: Some(6), ..Default::default() })));
+                }
+                assert!(handle.send(Command::ReplaceChain { target: Target::Track(t), chain: build_chain(&chain, SR) }));
+                assert!(handle.send(Command::SetSend { track: t, send: 0, amount: 0.3 }));
+                if (1..4).contains(&t) {
+                    parents[t] = Some(0);
+                }
+            }
+            assert!(handle.send(Command::SetGroups(parents)));
+            let reverb = Device::new(Effect::Reverb(ReverbParams { mix: 1.0, ..Default::default() }));
+            assert!(handle.send(Command::ReplaceChain { target: Target::Return(0), chain: build_chain(&[reverb], SR) }));
+            assert!(handle.send(Command::SetOutputLimit(false)));
+            assert!(handle.send(Command::Play));
+            let total = 3 * 48_000;
+            let mut out = Vec::with_capacity(2 * total);
+            let mut k = 0;
+            while out.len() < 2 * total {
+                let n = sizes[k % sizes.len()];
+                k += 1;
+                let mut block = vec![0f32; 2 * n];
+                engine.process(&mut block, 2);
+                handle.collect_garbage();
+                out.extend(block);
+            }
+            out.truncate(2 * total);
+            (out, engine.helped())
+        };
+        let (one, _) = render(1, &[1024]);
+        let (shared, helped) = render(4, &[1, 63, 64, 500, 1024, 4096, 37]);
+        assert!(helped > 0, "the other threads did nothing");
+        assert!(energy(&one) > 1.0);
+        let first = one.iter().zip(&shared).position(|(a, b)| a.to_bits() != b.to_bits());
+        assert_eq!(first, None, "differ from frame {:?}", first.map(|i| i / 2));
     }
 
     #[test]

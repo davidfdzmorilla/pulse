@@ -4,6 +4,7 @@
 //! Quick ones run with `cargo test --release -p engine --test stress`; the long
 //! ones are ignored:
 //!   cargo test --release -p engine --test stress -- --ignored --nocapture bench_big_project
+//!   cargo test --release -p engine --test stress -- --ignored --nocapture bench_tracks
 //!   PULSE_SOAK_MINUTES=60 cargo test --release -p engine --test stress -- --ignored --nocapture soak_long_session
 
 use engine::model::{
@@ -25,14 +26,23 @@ struct Counting;
 /// Bytes live on the heap (whole process), to see memory growth in the soak.
 static LIVE: AtomicUsize = AtomicUsize::new(0);
 
+/// What the engine's worker threads allocate or free (they are marked as they
+/// start), and how many were marked.
+static WORKER_ALLOCS: AtomicUsize = AtomicUsize::new(0);
+static MARKED: AtomicUsize = AtomicUsize::new(0);
+
 thread_local! {
     // Per thread, so tests running in parallel do not count each other's.
     static ARMED: Cell<bool> = const { Cell::new(false) };
+    static WORKER: Cell<bool> = const { Cell::new(false) };
     static ALLOCS: Cell<usize> = const { Cell::new(0) };
     static FREES: Cell<usize> = const { Cell::new(0) };
 }
 
 fn armed() -> bool {
+    if WORKER.try_with(Cell::get).unwrap_or(false) {
+        WORKER_ALLOCS.fetch_add(1, Ordering::Relaxed);
+    }
     ARMED.try_with(Cell::get).unwrap_or(false)
 }
 
@@ -278,6 +288,70 @@ fn load_big_project(engine: &mut Engine, handle: &mut EngineHandle, tracks: usiz
     send(engine, handle, Command::Play);
 }
 
+/// The big project with every kind of routing the threads have to respect:
+/// nested groups, sidechains (one listening to a track processed after it, two
+/// listening to each other, one on a return), a track playing another's sound
+/// (one processed after it), a drum split and a muted track. Compensation is on
+/// (the limiters look ahead).
+fn load_routed_project(engine: &mut Engine, handle: &mut EngineHandle) {
+    use engine::model::*;
+    load_big_project(engine, handle, 48);
+    let mut parents = [None; MAX_TRACKS];
+    for t in 1..16 {
+        parents[t] = Some(if t < 8 || t == 8 { 0 } else { 8 });
+    }
+    send(engine, handle, Command::SetGroups(parents));
+    // Ids are the track's number plus one.
+    send(engine, handle, Command::SetTrackIds(std::array::from_fn(|t| t as u32 + 1)));
+    let ducker = |source: usize| Device::new(Effect::Ducker(DuckerParams { depth: 0.8, release: 0.3, sidechain: Some(source as u32 + 1), ..Default::default() }));
+    for (track, source) in [(21, 20), (5, 30), (22, 23), (23, 22)] {
+        send(engine, handle, Command::InsertDevice { target: Target::Track(track), index: 0, slot: ChainSlot::new(&ducker(source), SR) });
+    }
+    let keyed = Device::new(Effect::Compressor(CompressorParams { threshold_db: -30.0, ratio: 8.0, sidechain: Some(3), ..Default::default() }));
+    send(engine, handle, Command::InsertDevice { target: Target::Return(0), index: 0, slot: ChainSlot::new(&keyed, SR) });
+    let drums = InstrumentKind::DrumMachine(Default::default());
+    send(engine, handle, Command::set_instrument(34, drums, SR));
+    send(engine, handle, Command::SetArrangement { track: 34, clips: Box::new(vec![PlacedClip::new(0.0, 64.0, PlayClip::Midi(busy_clip(36, true)))]) });
+    // 33 plays 32's sound, 2 plays 40's, 35 takes two drum sounds of 34.
+    let mut from = [0u32; MAX_TRACKS];
+    from[33] = 33;
+    from[2] = 41;
+    from[35] = 35;
+    let mut sounds = [0u16; MAX_TRACKS];
+    sounds[35] = 0b101;
+    send(engine, handle, Command::SetAudioFrom(from));
+    send(engine, handle, Command::SetSoundsFrom(sounds));
+    send(engine, handle, Command::SetMute { target: Target::Track(12), mute: true });
+}
+
+/// `seconds` of the routed project on `threads` threads, in callbacks of `sizes` in turn.
+fn render_routed(threads: usize, sizes: &[usize], seconds: f64) -> Vec<f32> {
+    render_routed_helped(threads, sizes, seconds).0
+}
+
+/// [`render_routed`], and how many tasks the other threads ran.
+fn render_routed_helped(threads: usize, sizes: &[usize], seconds: f64) -> (Vec<f32>, u64) {
+    let (mut engine, mut handle) = detached(SR);
+    engine.set_threads(threads);
+    assert_eq!(engine.threads(), threads);
+    load_routed_project(&mut engine, &mut handle);
+    let total = (seconds * SR as f64) as usize;
+    let mut out = vec![0f32; total * 2];
+    let (mut at, mut k) = (0, 0);
+    while at < total {
+        let n = sizes[k % sizes.len()].min(total - at);
+        k += 1;
+        engine.process(&mut out[at * 2..(at + n) * 2], 2);
+        handle.collect_garbage();
+        at += n;
+    }
+    (out, engine.helped())
+}
+
+fn same_samples(a: &[f32], b: &[f32]) -> bool {
+    a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits())
+}
+
 fn percentile(sorted: &[f64], p: f64) -> f64 {
     sorted[((sorted.len() - 1) as f64 * p).round() as usize]
 }
@@ -325,6 +399,49 @@ fn bench_big_project() {
             times[times.len() - 1],
             percentile(&times, 0.5) / budget * 100.0
         );
+    }
+}
+
+/// Time per 128-frame callback with 8, 32 and 64 loaded tracks (instruments,
+/// 4–8 effects each, sends to two returns, automation, a master chain), on 1
+/// to 8 threads (PULSE_BENCH_THREADS=1,4 for others). PULSE_BENCH_PACED=1 waits
+/// out each callback's period, as a sound card does (workers then sleep
+/// between callbacks and have to wake up).
+#[test]
+#[ignore = "benchmark: run with --ignored --nocapture bench_tracks"]
+fn bench_tracks() {
+    let frames = 128;
+    let seconds: f64 = std::env::var("PULSE_BENCH_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(10.0);
+    let threads: Vec<usize> = std::env::var("PULSE_BENCH_THREADS").ok().map_or(vec![1, 2, 4, 8], |v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect());
+    let paced = std::env::var_os("PULSE_BENCH_PACED").is_some();
+    let budget = frames as f64 / SR as f64 * 1e6;
+    println!("búfer {frames} ({budget:.0} µs), {seconds} s de audio, 48 kHz{}", if paced { ", a ritmo real" } else { "" });
+    println!("{:>6} {:>6} {:>9} {:>9} {:>9} {:>8}", "pistas", "hilos", "media", "p50", "p99", "carga");
+    for tracks in [8usize, 32, 64] {
+        for &threads in &threads {
+            let (mut engine, mut handle) = detached(SR);
+            engine.set_threads(threads);
+            load_big_project(&mut engine, &mut handle, tracks);
+            let mut out = vec![0f32; frames * 2];
+            for _ in 0..(2.0 * SR as f64 / frames as f64) as usize {
+                engine.process(&mut out, 2);
+            }
+            handle.collect_garbage();
+            let calls = (seconds * SR as f64 / frames as f64) as usize;
+            let mut times = Vec::with_capacity(calls);
+            for _ in 0..calls {
+                let start = Instant::now();
+                engine.process(&mut out, 2);
+                times.push(start.elapsed().as_secs_f64() * 1e6);
+                while paced && start.elapsed().as_secs_f64() * 1e6 < budget {
+                    std::hint::spin_loop();
+                }
+            }
+            assert!(finite(&out));
+            let mean = times.iter().sum::<f64>() / times.len() as f64;
+            times.sort_by(f64::total_cmp);
+            println!("{tracks:>6} {threads:>6} {mean:>8.0}µ {:>8.0}µ {:>8.0}µ {:>7.0}%", percentile(&times, 0.5), percentile(&times, 0.99), mean / budget * 100.0);
+        }
     }
 }
 
@@ -434,6 +551,69 @@ fn the_audio_thread_does_not_allocate() {
     assert_eq!((allocs, frees), (0, 0), "playing allocates");
     assert_eq!(change_allocs, (0, 0), "changes while playing allocate");
     assert_eq!((after_allocs, after_frees), (0, 0), "playing after the changes allocates");
+}
+
+/// The same with the tracks shared among threads: neither the audio thread nor
+/// the workers allocate or free.
+#[test]
+fn the_audio_threads_do_not_allocate_with_workers() {
+    let (mut engine, mut handle) = detached(SR);
+    engine.set_threads_with(4, Some(Arc::new(|| {
+        WORKER.with(|w| w.set(true));
+        MARKED.fetch_add(1, Ordering::Relaxed);
+    })));
+    load_routed_project(&mut engine, &mut handle);
+    let mut out = vec![0f32; 256 * 2];
+    let (_, load_allocs, load_frees) = counting(|| engine.process(&mut out, 2));
+    handle.collect_garbage();
+    let before = WORKER_ALLOCS.load(Ordering::Relaxed);
+    let (_, allocs, frees) = counting(|| {
+        for _ in 0..(20.0 * SR / 256.0) as usize {
+            engine.process(&mut out, 2);
+        }
+    });
+    let mut change_allocs = (0, 0);
+    for t in 0..48 {
+        let mut kind = instrument_for(t);
+        kind.set(0, 0.9);
+        for command in [
+            Command::update_instrument(t, kind),
+            Command::set_instrument(t, instrument_for(t + 1), SR),
+            Command::InsertDevice { target: Target::Track(t), index: 1, slot: ChainSlot::new(&Device::new(Effect::Reverb(Default::default())), SR) },
+            Command::RemoveDevice { target: Target::Track(t), index: 2 },
+        ] {
+            assert!(handle.send(command));
+            let (_, a, f) = counting(|| engine.process(&mut out, 2));
+            change_allocs.0 += a;
+            change_allocs.1 += f;
+            handle.collect_garbage();
+        }
+    }
+    let workers = WORKER_ALLOCS.load(Ordering::Relaxed) - before;
+    println!("carga: {load_allocs}/{load_frees} · reproducción: {allocs}/{frees} · cambios: {change_allocs:?} · hilos de ayuda: {workers}");
+    assert_eq!(engine.threads(), 4);
+    assert_eq!(MARKED.load(Ordering::Relaxed), 3, "every worker is watched");
+    assert!(engine.helped() > 1000, "the workers did little: {}", engine.helped());
+    assert_eq!((load_allocs, load_frees), (0, 0), "taking a project load allocates");
+    assert_eq!((allocs, frees), (0, 0), "playing allocates");
+    assert_eq!(change_allocs, (0, 0), "changes while playing allocate");
+    assert_eq!(workers, 0, "the workers allocate");
+}
+
+/// Shared among 2, 4 or 8 threads, the routed project sounds exactly as on one,
+/// with callbacks of any size: every dependency (groups, sidechains, a track
+/// playing another, drum splits, returns, compensation) held.
+#[test]
+fn threads_play_the_same_samples() {
+    let one = render_routed(1, &[256], 6.0);
+    assert!(finite(&one) && one.iter().any(|s| s.abs() > 0.01), "the project plays");
+    for threads in [2, 4, 8] {
+        let (out, helped) = render_routed_helped(threads, &[256], 6.0);
+        assert!(helped > 0, "the other threads did nothing");
+        assert!(same_samples(&out, &one), "{threads} threads sound otherwise");
+    }
+    let odd = [1usize, 63, 64, 500, 1024, 4096, 37, 128];
+    assert!(same_samples(&render_routed(4, &odd, 4.0), &render_routed(1, &odd, 4.0)), "with callbacks of other sizes");
 }
 
 /// A non-finite sample (a corrupt float WAV, a plugin blowing up) gets into a reverb

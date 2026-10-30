@@ -51,6 +51,8 @@ pub(crate) enum Action {
     ClearSampler,
     SelectPad(usize),
     BasicKit,
+    /// A kit of «Sonidos de Pulse», by its place in `factory_sounds::kits`.
+    FactoryKit(usize),
     SliceFile,
     OpenKickWindow,
     OpenWaveWindow,
@@ -302,6 +304,11 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             Action::BasicKit => {
                 if let Target::Track(t) = target {
                     app.load_basic_kit(t);
+                }
+            }
+            Action::FactoryKit(kit) => {
+                if let Target::Track(t) = target {
+                    app.load_factory_kit(t, kit);
                 }
             }
             Action::SliceFile => {
@@ -944,9 +951,20 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             let pad = app.selected_pad.min(RACK_PADS - 1);
             let header = |ui: &mut egui::Ui| {
                 preset_menu(app, ui, t, &mut head);
-                if ui.small_button("Kit básico").on_hover_text("Carga sonidos de la Drum Machine en los pads").clicked() {
-                    head.push(Action::BasicKit);
-                }
+                widgets::field_menu_button(ui, "Kits", |ui| {
+                    ui.set_min_width(150.0);
+                    if ui.button("Kit básico").on_hover_text("Los sonidos de la Drum Machine en los pads").clicked() {
+                        head.push(Action::BasicKit);
+                        ui.close();
+                    }
+                    ui.label(egui::RichText::new("SONIDOS DE PULSE").color(TEXT_DIM).size(10.0));
+                    for (i, kit) in crate::factory_sounds::kits().iter().enumerate() {
+                        if ui.button(kit.name).on_hover_text(kit.about).clicked() {
+                            head.push(Action::FactoryKit(i));
+                            ui.close();
+                        }
+                    }
+                });
                 if ui.small_button("Trocear archivo…").on_hover_text("Corta un loop en golpes, uno por pad, y crea el clip que lo toca").clicked() {
                     head.push(Action::SliceFile);
                 }

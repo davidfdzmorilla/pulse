@@ -324,6 +324,8 @@ pub struct PulseApp {
     pub sample_drop_zones: Vec<(egui::Rect, usize, usize)>,
     /// The library browser's state, and where what it drags can land.
     pub browser: crate::browser::State,
+    /// «Sonidos de Pulse» being made, and a kit waiting for its sounds.
+    pub factory: crate::factory_sounds::State,
     pub drop_targets: crate::browser::DropTargets,
     /// Input track last sent to the engine.
     pub(crate) input_track: Option<Option<usize>>,
@@ -536,6 +538,7 @@ impl PulseApp {
             touched_control: Default::default(),
             sample_drop_zones: Vec::new(),
             browser: Default::default(),
+            factory: Default::default(),
             drop_targets: Default::default(),
             export: Default::default(),
             input_track: None,
@@ -3031,6 +3034,7 @@ impl eframe::App for PulseApp {
         crate::plugins::window(self, &ctx);
         self.poll_editors();
         self.poll_plugin_edits();
+        self.poll_factory_sounds(&ctx);
         self.show_plugin_automation();
         self.poll_midi_map();
         if self.learn.gliding() {

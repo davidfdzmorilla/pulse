@@ -1415,7 +1415,7 @@ Para instrumentos grabados nota a nota (un piano, unas cuerdas):
 - Haz clic en un pad para escucharlo y seleccionarlo.
 - Arrastra uno o varios audios sobre los pads.
 - Por pad: **Tune**, **Length**, **Level**, **Pan** y grupo de **choke**: los pads del mismo grupo se cortan entre sí, como el hi-hat abierto y el cerrado.
-- **Kit básico** carga los sonidos de la Drum Machine.
+- **Kits ▾** carga un kit entero: el **Kit básico** (los sonidos de la Drum Machine) o uno de los diez kits por género de [[Sonidos de Pulse]].
 - **Trocear archivo…** corta un loop en los pads (ver [[Trocear y separar stems]]).
 
 ## Pulse Keys
@@ -2306,7 +2306,7 @@ Arriba pone el **destino**: la pista seleccionada, que es donde va lo que elijas
 
 - **INSTRUMENTOS**, **EFECTOS DE AUDIO** y **PLUGINS**: haz clic en uno para ponerlo en la pista. Ver [[Instrumentos]], [[Dispositivos y efectos]] y [[Plugins VST3 y CLAP]].
 - **MUESTRAS**: **Añadir muestra…**.
-- **BIBLIOTECA**: busca muestras, proyectos y presets por nombre, y explora las carpetas Samples, Proyectos, Exportaciones, Presets y las tuyas.
+- **BIBLIOTECA**: busca muestras, proyectos y presets por nombre, y explora las carpetas Samples, [[Sonidos de Pulse]], Proyectos, Exportaciones, Presets y las tuyas.
 - **PISTAS**: nueva pista MIDI o de audio.
 
 Para añadir una carpeta tuya, pulsa **Añadir carpeta…**. Para quitarla, clic derecho › **Quitar del navegador**.
@@ -2318,7 +2318,7 @@ Para añadir una carpeta tuya, pulsa **Añadir carpeta…**. Para quitarla, clic
 | Audio | Lo escucha (otro clic lo para) | Lo añade a la pista de audio seleccionada | A un slot, una pista, un pad o el Sampler |
 | MIDI (.mid) | — | Trae sus partes en pistas nuevas | A una pista MIDI: todas sus notas en un clip ahí |
 | Proyecto | — | Lo abre | — |
-| Preset | — | Lo aplica | — |
+| Preset (o kit) | — | Lo aplica a la pista seleccionada | A una pista MIDI: se lo aplica |
 
 - {↑} {↓}: tras hacer clic en un archivo, pasan al anterior o al siguiente y lo escuchan. Un clic fuera del navegador devuelve las flechas al resto de Pulse.
 - Sobre los .mid, ver [[Archivos MIDI]].
@@ -2352,6 +2352,65 @@ Vale para loops de hasta 32 s. Los de batería se estiran en modo Beats, como en
 - La barra de estado dice cuántos se añadieron y cuáles no se pudieron leer.
 - Antes de abrir un `.pulse` o importar un `.als`, Pulse pregunta si hay cambios sin guardar.
 - También funciona abrir con doble clic en el Finder o soltar en el icono del Dock.
+
+## Sonidos de Pulse
+
+Una biblioteca de muestras que viene con Pulse: kits de batería por género, bombos, cajas, charles, percusión, 808, bajos, acordes y efectos. Todo lo ha sintetizado Pulse con sus propios instrumentos y efectos: no hay grabaciones de nadie, y puedes usarlo en tus canciones sin límites.
+
+### Abrirla
+
+1. En el navegador, abre **BIBLIOTECA › Sonidos de Pulse**.
+2. La primera vez, Pulse crea los sonidos: una barra dice cuántos lleva. Tarda unos segundos y no para nada; puedes seguir trabajando.
+3. Ya están: escúchalos con un clic y arrástralos a una pista, un pad o el Sampler, como cualquier muestra (ver [[Navegador y biblioteca#Escuchar y usar archivos]]).
+
+La búsqueda de la biblioteca también los encuentra: prueba «bombo techno», «808» o «subida».
+
+### Qué hay
+
+| Carpeta | Qué tiene |
+|---|---|
+| Bombos | Uno por estilo: house, techno saturado y con rumble, trap, drum and bass, lo-fi, garage, afro, ochentero, minimal, boom bap y electro |
+| Cajas y palmas | Cajas, palmadas, aros, un chasquido y la caja ochentera con reverb puerta |
+| Charles y platos | Charles cerrados y abiertos de cada estilo, crash y ride |
+| Percusión | Congas, bongó, cencerros, clave, bloque de madera, shakers, pandereta, toms, una percusión metálica, un blip y una gota |
+| 808 y subs | 808 largo, saturado, corto y con golpe, y dos subs, todos en Do |
+| Bajos | Golpes de bajo en Do: acid, reese, FM, de órgano, techno, sierra, slap y rebotado |
+| Stabs y acordes | Acordes con la nota en el nombre: stab de house y de órgano, acorde dub, rave, quintas, piano eléctrico, lo-fi, metales y ochentero |
+| FX | Subidas de 4 y 8 compases (a 120 BPM), subida de ruido, bajada, impacto, crash al revés, barrido de ruido, caída de sub, láser, zap, viento y ruido de vinilo |
+| Bucles | El ritmo de cada kit, de dos compases, con el tempo en el nombre |
+| Kits | Los diez kits, para cargarlos en los Drum Pads |
+
+- Los sonidos de cada carpeta están a un volumen parecido, con el pico por debajo de −0,3 dB: puedes cambiar uno por otro sin reajustar la mezcla.
+- Los que tienen nota la llevan en el nombre, afinados a menos de 10 cents: «808 largo (Do)» es un Do. Los 808 y los bajos están en C1, y los acordes en C3: en el [[Instrumentos#Sampler|Sampler]], pon **Root** en esa nota y cada tecla sonará en la suya.
+- Los bucles se escuchan a tempo con **A tempo** (ver [[Navegador y biblioteca#Escuchar loops a tempo]]): su tempo viene en el nombre, como «House 124».
+
+### Cargar un kit en los Drum Pads
+
+Cada kit llena los 16 pads con el orden de siempre: bombo en C1, aro, caja, palmada, una segunda caja, toms, charles cerrado y abierto (el cerrado corta al abierto), shaker, percusiones, crash, un efecto o acorde y ride.
+
+- En los **Drum Pads**, abre **Kits ▾** y elige uno. Pasa el ratón por encima para leer cómo suena.
+- O en el navegador, en **Sonidos de Pulse › Kits**: doble clic carga el kit en la pista seleccionada, y arrastrarlo a una pista MIDI se lo pone a esa pista.
+
+| Kit | Cómo suena |
+|---|---|
+| House | Bombo redondo con pegada, palmada larga con sala, charles abierto a contratiempo, shaker, congas y un stab de órgano |
+| Techno | Bombo saturado con rumble, charles metálicos, palmada en placa, aro y cencerro distorsionados |
+| Trap | Bombo corto y 808 largo en Do, caja y palmada secas, chasquido y charles nítidos para redobles |
+| Drum & Bass | Bombo seco, caja tensa que restalla, caja suave para los golpes fantasma, charles cortos y ride |
+| Lo-Fi | Todo apagado, saturado y con menos resolución, y un acorde de piano gastado y ruido de vinilo |
+| UK Garage | Bombo corto que rebota, aro y caja nítidos, charles rápidos, shaker y pandereta |
+| Afro House | Bombo cálido, congas, bongó, shaker, clave, cencerro y toms |
+| Synthwave | Caja y palmada con reverb puerta de los 80, toms grandes y un acorde ochentero |
+| Minimal | Bombo con clic, aros y charles diminutos, bloque de madera, blips y gotas |
+| Hip Hop | Boom bap: bombo que golpea, caja gorda con sala, charles apagados y un acorde de piano eléctrico |
+
+> Consejo: el bucle de cada kit, en **Bucles**, es el mismo kit tocando su ritmo. Escúchalo para elegir kit antes de cargarlo.
+
++++ Dónde están
+Pulse los crea en su carpeta de datos (`~/Library/Application Support/Pulse/Sonidos de Pulse` en macOS, `%LOCALAPPDATA%\Pulse\Sonidos de Pulse` en Windows), en WAV de 24 bits a 48 kHz: unos 47 MB. Cuando una canción usa uno y la guardas, se copia a la carpeta del proyecto, como cualquier audio.
+
+Si una versión nueva de Pulse trae sonidos cambiados, los crea en otra carpeta, al lado: tus canciones siguen sonando con los de antes.
++++
 
 ## Proyectos y carpeta de Pulse
 

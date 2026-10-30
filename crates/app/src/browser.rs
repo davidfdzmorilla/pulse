@@ -326,6 +326,7 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.ctx().request_repaint_after(Duration::from_millis(50));
     }
     let root = crate::library::root();
+    let factory = crate::factory_sounds::root();
     let mut places: Vec<(String, PathBuf)> = [
         ("Samples", crate::library::SAMPLES),
         ("Proyectos", crate::library::PROJECTS),
@@ -335,6 +336,9 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
     .into_iter()
     .map(|(name, folder)| (name.to_string(), root.join(folder)))
     .collect();
+    // Pulse's own sounds, made the first time they are opened.
+    places.insert(1, (crate::factory_sounds::NAME.to_string(), factory.clone()));
+    let builtin = places.len();
     places.extend(app.settings.browser_folders.iter().map(|f| (f.file_name().map_or(f.display().to_string(), |n| n.to_string_lossy().into_owned()), f.clone())));
 
     let query = app.browser.search.trim().to_string();
@@ -351,16 +355,21 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
     let mut remove = None;
     for (i, (name, dir)) in places.iter().enumerate() {
-        let own = i >= 4;
+        let own = i >= builtin;
         let response = egui::CollapsingHeader::new(RichText::new(name).color(TEXT))
             .id_salt(("browser_place", dir))
-            .show(ui, |ui| folder(app, ui, dir, 0))
+            .show(ui, |ui| {
+                if *dir == factory {
+                    factory_status(app, ui);
+                }
+                folder(app, ui, dir, 0)
+            })
             .header_response;
         let response = response.on_hover_text(dir.display().to_string());
         if own {
             response.context_menu(|ui| {
                 if ui.button("Quitar del navegador").clicked() {
-                    remove = Some(i - 4);
+                    remove = Some(i - builtin);
                     ui.close();
                 }
             });
@@ -379,6 +388,18 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
             app.set_settings(next);
         }
+    }
+}
+
+/// «Sonidos de Pulse» opened: made if it isn't, with how far that has got.
+fn factory_status(app: &mut PulseApp, ui: &mut egui::Ui) {
+    app.make_factory_sounds();
+    if let Some((done, of)) = app.factory.progress() {
+        ui.add(egui::ProgressBar::new(done as f32 / of.max(1) as f32).text(RichText::new(format!("Pulse está creando sus sonidos… {done} de {of}")).size(10.5)));
+        ui.ctx().request_repaint_after(Duration::from_millis(250));
+    }
+    if let Some(error) = &app.factory.error {
+        ui.label(RichText::new(format!("No se pudieron crear todos los sonidos: {error}")).color(TEXT_DIM).size(10.5));
     }
 }
 
@@ -404,7 +425,7 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
     let Some(kind) = kind(path) else { return };
     let name = path.file_stem().map_or(String::new(), |n| n.to_string_lossy().into_owned());
     let width = ui.available_width();
-    let sense = if matches!(kind, Kind::Audio | Kind::Midi) { Sense::click_and_drag() } else { Sense::click() };
+    let sense = if matches!(kind, Kind::Audio | Kind::Midi | Kind::Preset) { Sense::click_and_drag() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), sense);
     crate::widgets::name(&response, egui::WidgetType::Button, &name);
     app.browser.shown.push(path.to_path_buf());
@@ -432,11 +453,11 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
         Kind::Audio => "Clic: escuchar (otra vez: parar) · ↑ ↓: el anterior o el siguiente · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
         Kind::Midi => "Doble clic: sus partes en pistas nuevas · arrastrar: a una pista MIDI (todo en un clip) o a un hueco vacío (pistas nuevas)",
         Kind::Project => "Doble clic: abrir el proyecto",
-        Kind::Preset => "Doble clic: aplicar el preset a la pista seleccionada",
+        Kind::Preset => "Doble clic: aplicar el preset (o el kit) a la pista seleccionada · arrastrar: a una pista MIDI",
     };
     let response = response.on_hover_text(format!("{}\n{hint}", path.display()));
 
-    if response.drag_started() && matches!(kind, Kind::Audio | Kind::Midi) {
+    if response.drag_started() && matches!(kind, Kind::Audio | Kind::Midi | Kind::Preset) {
         egui::DragAndDrop::set_payload(ui.ctx(), Dragged(path.to_path_buf()));
     }
     if response.double_clicked() {
@@ -559,7 +580,30 @@ impl PulseApp {
     /// audio track).
     pub fn drop_from_browser(&mut self, Dragged(path): Dragged, pos: egui::Pos2) {
         self.preview(None);
+        if kind(&path) == Some(Kind::Preset) {
+            self.drop_preset(&path, pos);
+            return;
+        }
         self.drop_files(vec![path], pos);
+    }
+
+    /// A preset (a kit of «Sonidos de Pulse», say) let go on a MIDI track's
+    /// slot or lane: applied to that track.
+    fn drop_preset(&mut self, path: &Path, pos: egui::Pos2) {
+        let targets = &self.drop_targets;
+        let track = targets.slots.iter().find(|(.., r)| r.contains(pos)).map(|&(t, ..)| t).or_else(|| targets.lanes.iter().find(|(_, r, ..)| r.contains(pos)).map(|&(t, ..)| t));
+        let Some(t) = track else { return };
+        if self.project.tracks[t].is_audio() || self.project.tracks[t].is_group() {
+            self.status = Some("Suelta el preset en una pista MIDI".into());
+            return;
+        }
+        match std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<crate::presets::Preset>(&t).ok()) {
+            Some(preset) => {
+                self.apply_preset(t, preset);
+                self.detail = crate::app::Detail::Devices;
+            }
+            None => self.status = Some(format!("No se pudo leer el preset {}", path.display())),
+        }
     }
 
     /// Audio files dropped at `pos` (from the browser or Finder): on a pad or the

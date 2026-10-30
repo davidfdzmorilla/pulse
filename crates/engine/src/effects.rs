@@ -1285,6 +1285,31 @@ impl OfflineLimiter {
     }
 }
 
+/// Runs a sound through `effects` outside the engine, as a track's chain would
+/// with the transport playing from beat 0 at `tempo` (Pulse's own sample
+/// library is made with it): `tail` seconds of silence after the sound for
+/// reverbs and echoes to ring into, and what the effects delay it by taken off
+/// the start. Plugins pass the sound through.
+pub fn render_effects(effects: &[Effect], left: &[f32], right: &[f32], sample_rate: f32, tempo: f64, tail: f32) -> (Vec<f32>, Vec<f32>) {
+    const BLOCK: usize = 256;
+    let mut chain: Vec<EffectProcessor> = effects.iter().map(|e| EffectProcessor::new(e, sample_rate)).collect();
+    let latency: usize = chain.iter().map(|fx| fx.latency()).sum();
+    let frames = left.len().max(right.len()) + (tail.max(0.0) * sample_rate) as usize + latency;
+    let (mut l, mut r) = (left.to_vec(), right.to_vec());
+    l.resize(frames, 0.0);
+    r.resize(frames, 0.0);
+    let per_sample = tempo / 60.0 / sample_rate as f64;
+    for (block, (a, b)) in l.chunks_mut(BLOCK).zip(r.chunks_mut(BLOCK)).enumerate() {
+        let ctx = ProcessContext { sample_rate, tempo, beat: (block * BLOCK) as f64 * per_sample, beats_per_sample: per_sample, scale: 0, meter: Default::default() };
+        for fx in &mut chain {
+            fx.process(a, b, &ctx);
+        }
+    }
+    l.drain(..latency);
+    r.drain(..latency);
+    (l, r)
+}
+
 /// One-pole smoothing coefficient for `ms` milliseconds at `sr`.
 fn smoothing(ms: f32, sr: f32) -> f32 {
     (-1.0 / (ms.max(0.001) * 0.001 * sr)).exp()

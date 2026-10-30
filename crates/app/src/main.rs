@@ -25,6 +25,10 @@ mod drum_split;
 mod editor;
 mod eq_ui;
 mod export;
+mod factory_recipes;
+mod factory_sounds;
+#[cfg(test)]
+mod factory_sounds_tests;
 mod files;
 #[cfg(test)]
 mod cut_tests;

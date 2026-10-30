@@ -81,6 +81,7 @@ OTHERS = [
     ("Beat This! (modelos de tempo y compás)", "crates/beats/models/LICENSE"),
     ("Basic Pitch (Convertir a MIDI)", "crates/stems/models/BASIC_PITCH_NOTICE"),
     ("Modelo de batería de Pulse (datos de entrenamiento)", "crates/stems/models/DRUMS_NOTICE"),
+    ("Whisper small (Transcribir letra; se descarga al usarlo)", "crates/stems/models/WHISPER_NOTICE"),
     ("HTDemucs (Separar en stems; se descarga la primera vez)", "packaging/notices/HTDEMUCS_LICENSE"),
 ]
 

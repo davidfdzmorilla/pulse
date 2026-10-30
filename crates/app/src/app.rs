@@ -386,6 +386,8 @@ pub struct PulseApp {
     pub stems: Option<crate::stems_ui::StemJob>,
     /// An audio clip being turned into MIDI.
     pub to_midi: Option<crate::to_midi::MidiJob>,
+    /// Lyrics being read, asked about or corrected (see `lyrics_ui`).
+    pub lyrics_ui: crate::lyrics_ui::LyricsUi,
     /// Something the user must see (title, text), in a window until dismissed.
     pub notice: Option<(String, String)>,
     /// Imported audio's tempo, found in the background (see `tempo_ui`).
@@ -571,6 +573,7 @@ impl PulseApp {
             updates: Default::default(),
             stems: None,
             to_midi: None,
+            lyrics_ui: Default::default(),
             notice: None,
             tempo: Default::default(),
             devices: Default::default(),
@@ -3062,6 +3065,7 @@ impl eframe::App for PulseApp {
         self.follow_updates();
         self.follow_stems(&ctx);
         self.follow_to_midi(&ctx);
+        self.follow_lyrics(&ctx);
         self.follow_mix(&ctx);
         self.follow_tempo(&ctx);
         self.show_notice(&ctx);

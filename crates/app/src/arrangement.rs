@@ -504,7 +504,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         Clip::Audio(audio) => app.loaded_sample(&audio.sample).map(|s| s.as_ref()),
                         Clip::Midi(_) => None,
                     };
-                    paint_clip(&painter, clip_rect, placed, sample, selected, ppb, app.project.tempo);
+                    let lyrics = match &placed.clip {
+                        Clip::Audio(audio) => app.lyrics_of(&audio.sample),
+                        Clip::Midi(_) => None,
+                    };
+                    paint_clip(&painter, clip_rect, placed, sample, lyrics, selected, ppb, app.project.tempo);
                 }
             }
 
@@ -614,6 +618,7 @@ fn paint_clip(
     rect: Rect,
     placed: &ArrangementClip,
     sample: Option<&Sample>,
+    lyrics: Option<&crate::lyrics::Lyrics>,
     selected: bool,
     ppb: f32,
     tempo: f64,
@@ -662,6 +667,9 @@ fn paint_clip(
                 return;
             };
             paint_wave(&clipped, rect, body, audio, sample, ppb, tempo, theme::shade(color, 1.25));
+            if let Some(lyrics) = lyrics {
+                crate::lyrics_ui::paint_on_clip(&clipped, rect, body, audio, lyrics, placed.length, ppb, tempo);
+            }
             paint_fades(&clipped, rect, body, audio.fades.fitted(placed.length), selected, ppb);
             // Warp markers, where they fall in each lap of the clip.
             if audio.warp != engine::model::WarpMode::Off {
@@ -1318,6 +1326,12 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems…")).on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
         app.separate_stems(clip);
         ui.close();
+    }
+    if audio && count == 1 {
+        let has = app.clip_lyrics(clip).is_some();
+        if let Some(command) = crate::lyrics_ui::menu(ui, has, app.lyrics_ui.job.is_some()) {
+            app.lyrics_command(clip, command, ui.ctx());
+        }
     }
     if audio && count == 1 {
         if ui.button("Detectar tempo").on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {

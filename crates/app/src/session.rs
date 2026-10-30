@@ -71,6 +71,7 @@ pub(crate) enum Action {
     DeleteTrack(usize),
     DuplicateTrack(usize),
     SeparateStems(usize, usize),
+    Lyrics(usize, usize, crate::lyrics_ui::Command),
     DetectTempo(usize, usize),
     UseClipTempo(usize, usize),
 }
@@ -547,6 +548,12 @@ fn clip_slot(
     // Drums have no chords to accompany.
     let app_drums = app.project.tracks[t].is_drums();
     let hearing = app.hum_song.is_some();
+    // The clip's lyrics, to copy from its menu (it has no app to ask then).
+    let lyrics_text = match clip {
+        Some(Clip::Audio(a)) if app.lyrics_of(&a.sample).is_some() => Some(app.clip_lyrics_text(ClipRef::Session { track: t, slot })),
+        _ => None,
+    };
+    let lyrics_busy = app.lyrics_ui.job.is_some();
     if let Some(clip) = clip {
         let mut color = clip.color();
         response.context_menu(|ui| {
@@ -561,6 +568,14 @@ fn clip_slot(
             if matches!(clip, Clip::Audio(_)) && ui.button("Separar en stems…").on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
                 actions.push(Action::SeparateStems(t, slot));
                 ui.close();
+            }
+            if matches!(clip, Clip::Audio(_)) {
+                if let Some(command) = crate::lyrics_ui::menu(ui, lyrics_text.is_some(), lyrics_busy) {
+                    if command == crate::lyrics_ui::Command::Copy {
+                        ui.ctx().copy_text(lyrics_text.clone().unwrap_or_default());
+                    }
+                    actions.push(Action::Lyrics(t, slot, command));
+                }
             }
             if matches!(clip, Clip::Midi(_)) && ui.button("Exportar MIDI…").on_hover_text("Sus notas a un archivo .mid, para llevarlas a otro programa").clicked() {
                 actions.push(Action::ExportMidi(t, slot));
@@ -895,6 +910,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::DuplicateTrack(t) if app.is_track_selected(t) => app.duplicate_selected_tracks(),
         Action::DuplicateTrack(t) => app.duplicate_track(t),
         Action::SeparateStems(t, slot) => app.separate_stems(ClipRef::Session { track: t, slot }),
+        Action::Lyrics(t, slot, command) => app.lyrics_action(ClipRef::Session { track: t, slot }, command),
         Action::DetectTempo(t, slot) => app.detect_tempo(vec![ClipRef::Session { track: t, slot }], true),
         Action::UseClipTempo(t, slot) => app.use_clip_tempo(ClipRef::Session { track: t, slot }),
     }

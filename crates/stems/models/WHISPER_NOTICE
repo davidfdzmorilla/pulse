@@ -1,0 +1,33 @@
+Whisper small: the speech recognition model behind «Transcribir letra»
+(crates/stems/src/whisper.rs, crates/app/src/lyrics_ui.rs), by OpenAI, under
+the MIT License. It is not in this repository nor built into the app: Pulse
+downloads it the first time it is used, after asking, from
+https://huggingface.co/onnx-community/whisper-small (revision
+36050c46d777d46dc4b5f43f6d90574fc38f8732): onnx/encoder_model_quantized.onnx,
+onnx/decoder_model_merged_quantized.onnx and tokenizer.json, the ONNX export of
+https://huggingface.co/openai/whisper-small by Hugging Face's Optimum, run
+unchanged. Pulse's log-mel spectrogram and decoding follow
+https://github.com/openai/whisper (MIT).
+
+----- LICENSE -----
+MIT License
+
+Copyright (c) 2022 OpenAI
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

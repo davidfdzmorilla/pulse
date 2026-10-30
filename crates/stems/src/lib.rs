@@ -15,6 +15,7 @@ pub mod loudness;
 pub mod pitch;
 pub mod transcribe;
 pub mod tune;
+pub mod whisper;
 #[cfg(test)]
 mod reference;
 

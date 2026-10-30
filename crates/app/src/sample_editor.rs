@@ -52,6 +52,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let mut separate = false;
     let (mut detect, mut use_tempo) = (false, false);
     let (mut detect_key, mut follow_to) = (false, None);
+    let mut lyrics_command = None;
     let project_key = app.project.key;
     // Where it will be sliced, while the cuts are shown to edit them.
     let mut cuts = if app.show_cuts { app.cuts_for(clip_ref) } else { None };
@@ -201,6 +202,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     .on_hover_text("Batería, bajo, resto y voz, cada uno en una pista de audio nueva bajo esta; esta queda desactivada")
                     .clicked();
             });
+            ui.horizontal(|ui| {
+                label(ui, "Letra");
+                let has = app.lyrics_of(&clip.sample).is_some();
+                let transcribe = if has { "Transcribir otra vez…" } else { "Transcribir…" };
+                if ui.add_enabled(app.lyrics_ui.job.is_none(), egui::Button::new(transcribe)).on_hover_text("Saca el texto que se canta en el clip, con el tiempo de cada frase; sale bajo la forma de onda").clicked() {
+                    lyrics_command = Some(crate::lyrics_ui::Command::Transcribe);
+                }
+                if has && ui.button("Editar…").on_hover_text("La letra frase a frase, para corregirla, copiarla o exportarla (.txt, .lrc)").clicked() {
+                    lyrics_command = Some(crate::lyrics_ui::Command::Edit);
+                }
+            });
             ui.label(
                 egui::RichText::new(match clip.warp {
                     WarpMode::Off => "Off: suena a su velocidad original, sin seguir el tempo.",
@@ -239,12 +251,15 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         // Room below for the clip's envelopes.
         let height = (ui.available_height() - ENVELOPE_H - 30.0).clamp(80.0, 200.0);
         let strips = if cuts.is_some() { 2.0 } else { 1.0 };
-        let (rect, response) = ui.allocate_exact_size(vec2(width, height - MARKER_H * strips), Sense::click_and_drag());
+        // The lyrics' strip at the bottom, when the file has lyrics.
+        let lyrics_h = if app.lyrics_of(&clip.sample).is_some() { crate::lyrics_ui::STRIP_H } else { 0.0 };
+        let (rect, response) = ui.allocate_exact_size(vec2(width, height - MARKER_H * strips - lyrics_h), Sense::click_and_drag());
         // Below it, the warp markers' strip, and the cuts' one when they are shown.
         let strip = Rect::from_min_size(rect.left_bottom(), vec2(width, MARKER_H));
         let strip_response = ui.interact(strip, response.id.with("markers"), Sense::click_and_drag());
         let cut_strip = Rect::from_min_size(strip.left_bottom(), vec2(width, MARKER_H));
         let cut_response = cuts.is_some().then(|| ui.interact(cut_strip, response.id.with("cuts"), Sense::click_and_drag()));
+        let lyrics_strip = Rect::from_min_size(if cuts.is_some() { cut_strip.left_bottom() } else { strip.left_bottom() }, vec2(width, lyrics_h));
         let painter = ui.painter_at(rect.union(strip).union(if cuts.is_some() { cut_strip } else { strip }));
         painter.rect_filled(strip, 0.0, theme::SURFACE);
         if cuts.is_some() {
@@ -427,6 +442,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
         }
+        if lyrics_h > 0.0 {
+            crate::lyrics_ui::strip(app, ui, lyrics_strip, &clip.sample, &x_of);
+        }
         if warped {
             strip_response.on_hover_text("Marcadores de warp · doble clic: añadir uno o quitarlo · arrastrar: que ese punto del audio caiga en su tiempo");
         }
@@ -483,6 +501,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     }
     if use_tempo {
         app.use_clip_tempo(clip_ref);
+    }
+    if let Some(command) = lyrics_command {
+        app.lyrics_command(clip_ref, command, ui.ctx());
     }
 }
 

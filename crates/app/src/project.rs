@@ -311,7 +311,9 @@ pub struct MasterTrack {
 /// 15: MIDI clips with controller lanes (pitch bend, the wheel…): a Pulse
 /// that reads 14 would play them without and lose them. Only projects that
 /// have one.
-pub const FORMAT: u32 = 15;
+/// 16: lyrics (see `lyrics`): a Pulse that reads 15 would lose them, words
+/// corrected by hand included. Only projects that have some.
+pub const FORMAT: u32 = 16;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -429,6 +431,9 @@ pub struct Project {
     /// Grooves taken from audio clips (see `groove_audio`), to give MIDI clips.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub grooves: Vec<SavedGroove>,
+    /// The words sung in audio files, with their times (see `lyrics`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lyrics: Vec<crate::lyrics::Lyrics>,
 }
 
 /// A groove taken from a recording, with the name of where it came from.
@@ -562,6 +567,7 @@ impl Project {
             next_id: 0,
             tunings: Vec::new(),
             grooves: Vec::new(),
+            lyrics: Vec::new(),
             tracks: (0..2)
                 .map(|i| {
                     Track::new(
@@ -645,8 +651,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_controls() {
+            let format = if !self.lyrics.is_empty() {
                 FORMAT
+            } else if self.has_controls() {
+                15
             } else if self.has_effect(|e| matches!(e, Effect::Glue(_) | Effect::Multiband(_) | Effect::Convolution(_))) {
                 14
             } else if self.has_effect(|e| matches!(e, Effect::Utility(u) if u.flip_right || u.bass_mono_hz > 0.0)) {

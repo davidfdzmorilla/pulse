@@ -9,6 +9,8 @@ license = "GPL-3.0-or-later"
 ort = { version = "=2.0.0-rc.14", default-features = false, features = ["std", "download-binaries", "tls-native", "api-31"] }
 rustfft = "6.4"
 serde = { version = "1.0.229", features = ["derive"] }
+# Whisper's tokenizer.json (see `whisper`).
+serde_json = "1.0.154"
 
 [dev-dependencies]
 hound = "3.5.1"

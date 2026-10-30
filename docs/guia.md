@@ -165,7 +165,7 @@ Clic derecho en un clip:
 - **Eliminar** ({Supr} o {⌫}).
 - **Desactivar clip**: se queda en su sitio pero no suena. Ver [[Arrangement]].
 - Colores.
-- Solo en clips de audio: **Separar en stems…**, **Consolidar**, **Invertir**, **Detectar tempo** y **Usar el tempo de este clip en el proyecto**. Ver [[Trocear y separar stems]] y [[Tempo de los audios]].
+- Solo en clips de audio: **Separar en stems…**, **Letra ▸**, **Consolidar**, **Invertir**, **Detectar tempo** y **Usar el tempo de este clip en el proyecto**. Ver [[Trocear y separar stems]], [[Letras]] y [[Tempo de los audios]].
 - Solo en clips MIDI: **Exportar MIDI…**. Ver [[Archivos MIDI]].
 
 ### Lanzar escenas
@@ -251,7 +251,7 @@ Clic derecho en un clip:
 - **Desactivar clip** ({0}): ver abajo.
 - **Copiar**, **Cortar**, **Duplicar** ({⌘D}) y **Eliminar** ({⌫}).
 - Con un solo clip: **Nombre** y **Color**.
-- Solo en clips de audio: **Separar en stems…**, **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar** e **Invertir**.
+- Solo en clips de audio: **Separar en stems…**, **Letra ▸** (ver [[Letras]]), **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar** e **Invertir**.
 - Solo en clips MIDI: **Exportar MIDI…**. Ver [[Archivos MIDI]].
 
 ### Desactivar un clip sin borrarlo
@@ -1389,6 +1389,53 @@ Cada pista nueva es una copia de la original, con sus efectos, volumen, panorama
 - Se hace en este Mac, sin enviar nada a internet.
 - La primera vez descarga el modelo (174 MB) de GitHub, sin cuenta. Si la conexión se corta o cancelas, la próxima vez sigue desde donde se quedó.
 - Se hace una separación a la vez, y hacen falta 4 pistas libres (máximo 64 pistas).
+
+## Letras
+
+Pulse escucha un clip de voz y escribe lo que se canta, en español o en inglés, con el momento de cada frase. La letra sale bajo la forma de onda y a lo largo del clip, y puedes corregirla, copiarla o exportarla.
+
+### Transcribir la letra de un clip
+
+1. Haz clic derecho en un clip de audio → **Letra ▸ Transcribir letra…**. También está el botón **Transcribir…** en la fila **Letra** del [[Editor de audio]].
+2. Elige el **idioma**: **Automático** lo reconoce al escuchar el principio; si lo sabes, elige **Español** o **Inglés**.
+3. Si ya separaste alguna canción en stems, marca **Aislar la voz antes**: lee solo la voz y acierta mucho más cuando hay música de fondo.
+4. Pulsa **Transcribir**. Puedes seguir trabajando mientras tanto; **Cancelar** la detiene.
+
+Se transcribe el trozo del archivo que suena en el clip. Si vuelves a transcribir, se sustituyen las frases de ese trozo y se conservan las demás.
+
+- Se hace en este equipo, sin enviar el audio a internet.
+- La primera vez pregunta antes de descargar el modelo de voz (251 MB) de Hugging Face. Si la conexión se corta o cancelas, la próxima vez sigue desde donde se quedó.
+- Sin la opción de aislar, la música de fondo confunde al modelo: separa antes en stems ([[Trocear y separar stems#Separar en stems]]) y transcribe la pista **Voz**.
+
+### Ver la letra
+
+- En el [[Editor de audio]], una franja bajo la forma de onda muestra cada palabra donde se canta, con una marca naranja al principio de cada frase.
+- En el Arrangement, las palabras salen en la parte de abajo del clip. Las que no caben se ocultan: acerca el zoom para verlas todas.
+
+La letra va con el archivo de audio: los clips que lo usan la muestran en su sitio aunque los cortes, muevas, repitas o estires.
+
+### Corregir palabras
+
+- **Clic en una palabra** de la franja del editor: escribe la buena y pulsa {Intro}. Vacía, la palabra se quita; con espacios, se convierte en varias. {Esc} la deja como estaba.
+- **Letra ▸ Editar letra…**, o **Editar…** en el editor, abre la letra frase a frase con su tiempo: corrige cualquier frase. Deja una vacía para quitarla.
+
+Todo se deshace con {⌘Z}.
+
+### Copiar y exportar
+
+En **Letra ▸** o en la ventana de la letra:
+
+- **Copiar letra**: toda la letra del clip al portapapeles, una frase por línea.
+- **Exportar .txt…**: la letra en texto.
+- **Exportar .lrc…**: la letra con el tiempo de cada frase, para karaoke y reproductores. En un clip del Arrangement, los tiempos son los de la canción; en uno de la Session, desde el principio del clip.
+
++++ Cómo funciona
+- El modelo es Whisper small de OpenAI (licencia MIT), en la versión de onnx-community cuantizada a 8 bits. Se guarda en la carpeta de datos de Pulse, en `Models/whisper-small`, y cada archivo se comprueba con su huella SHA-256 antes de usarlo.
+- El audio se pasa a 16 kHz y se lee en ventanas de 30 segundos. Cada ventana empieza donde acabó la última frase entera de la anterior.
+- El modelo da el tiempo de cada frase. El de cada palabra se reparte dentro de su frase según su longitud, así que es aproximado.
+- Las partes en silencio se saltan, y una ventana en la que el modelo no oye voz se descarta.
+- Un proyecto con letras se guarda en el formato 16: una versión anterior de Pulse no lo abre, en vez de abrirlo y perder la letra.
++++
 
 ## Arreglo automático
 

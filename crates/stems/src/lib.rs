@@ -15,6 +15,8 @@ pub mod loudness;
 pub mod pitch;
 pub mod transcribe;
 pub mod tune;
+#[cfg(test)]
+mod reference;
 
 use rustfft::num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};
@@ -174,6 +176,10 @@ impl Separator {
 /// `x` sampled at `from` Hz, at `to` Hz instead: windowed-sinc interpolation
 /// (Blackman, 32 zero crossings on each side), low-passed below the lower
 /// Nyquist frequency when going down.
+///
+/// Between whole rates (all of them in practice) the output samples fall on a
+/// few positions between input samples, over and over: the filter for each
+/// is worked out once, and the output is shared out among the cores.
 pub fn resample(x: &[f32], from: f32, to: f32) -> Vec<f32> {
     if (from - to).abs() < 0.5 || x.is_empty() {
         return x.to_vec();
@@ -183,25 +189,119 @@ pub fn resample(x: &[f32], from: f32, to: f32) -> Vec<f32> {
     let cutoff = (1.0 / ratio).min(1.0) * 0.97;
     let length = ((x.len() as f64) / ratio).round() as usize;
     let reach = (HALF as f64 / cutoff).ceil() as isize;
-    (0..length)
-        .map(|i| {
-            let center = i as f64 * ratio;
-            let base = center.floor() as isize;
-            let mut sum = 0.0f64;
-            for k in base - reach + 1..=base + reach {
-                let Some(&sample) = usize::try_from(k).ok().and_then(|k| x.get(k)) else { continue };
-                let t = (k as f64 - center) * cutoff;
-                let w = t / HALF as f64;
-                if w.abs() >= 1.0 {
-                    continue;
+    // The filter's weight `d` input samples from the output's position.
+    let weight = |d: f64| -> f64 {
+        let t = d * cutoff;
+        let w = t / HALF as f64;
+        if w.abs() >= 1.0 {
+            return 0.0;
+        }
+        let sinc = if t.abs() < 1e-9 { 1.0 } else { (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t) };
+        let blackman = 0.42 + 0.5 * (std::f64::consts::PI * w).cos() + 0.08 * (2.0 * std::f64::consts::PI * w).cos();
+        sinc * blackman * cutoff
+    };
+    let taps = (2 * reach) as usize;
+    // from / to as p / q: output i is at input (i·p) / q, phase (i·p) mod q.
+    let fraction = (from.fract() == 0.0 && to.fract() == 0.0 && from > 0.0 && to > 0.0).then(|| {
+        let (a, b) = (from as u64, to as u64);
+        let g = gcd(a, b);
+        (a / g, b / g)
+    });
+    let mut out = vec![0f32; length];
+    match fraction.filter(|&(_, q)| q <= 4096) {
+        Some((p, q)) => {
+            // Each phase's taps, from base - reach + 1 to base + reach.
+            let table: Vec<f64> = (0..q).flat_map(|r| (0..taps).map(move |j| (j as isize - reach + 1) as f64 - r as f64 / q as f64)).map(weight).collect();
+            parallel(&mut out, 1 << 14, |first, chunk| {
+                for (n, y) in chunk.iter_mut().enumerate() {
+                    let i = (first + n) as u64;
+                    let (base, r) = ((i * p / q) as isize, (i * p % q) as usize);
+                    let coefficients = &table[r * taps..(r + 1) * taps];
+                    let low = base - reach + 1;
+                    let mut sum = 0.0f64;
+                    if low >= 0 && (base + reach) < x.len() as isize {
+                        for (s, c) in x[low as usize..low as usize + taps].iter().zip(coefficients) {
+                            sum += *s as f64 * c;
+                        }
+                    } else {
+                        for (j, c) in coefficients.iter().enumerate() {
+                            if let Some(&s) = usize::try_from(low + j as isize).ok().and_then(|k| x.get(k)) {
+                                sum += s as f64 * c;
+                            }
+                        }
+                    }
+                    *y = sum as f32;
                 }
-                let sinc = if t.abs() < 1e-9 { 1.0 } else { (std::f64::consts::PI * t).sin() / (std::f64::consts::PI * t) };
-                let blackman = 0.42 + 0.5 * (std::f64::consts::PI * w).cos() + 0.08 * (2.0 * std::f64::consts::PI * w).cos();
-                sum += sample as f64 * sinc * blackman * cutoff;
+            });
+        }
+        None => parallel(&mut out, 1 << 12, |first, chunk| {
+            for (n, y) in chunk.iter_mut().enumerate() {
+                let center = (first + n) as f64 * ratio;
+                let base = center.floor() as isize;
+                let mut sum = 0.0f64;
+                for k in base - reach + 1..=base + reach {
+                    let Some(&sample) = usize::try_from(k).ok().and_then(|k| x.get(k)) else { continue };
+                    sum += sample as f64 * weight(k as f64 - center);
+                }
+                *y = sum as f32;
             }
-            sum as f32
-        })
-        .collect()
+        }),
+    }
+    out
+}
+
+/// What tells one piece of audio from another, to find an analysis already
+/// made: a hash of its samples, their number and the rate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Fingerprint {
+    hash: u64,
+    len: usize,
+    rate: u32,
+}
+
+/// The [`Fingerprint`] of `mono` at `rate`: its samples two at a time, in
+/// four lanes, each mixed by a multiply and a shift, then the lanes together.
+pub(crate) fn fingerprint(mono: &[f32], rate: f32) -> Fingerprint {
+    const K: u64 = 0x9e37_79b9_7f4a_7c15;
+    let mix = |h: u64, x: u64| {
+        let h = (h ^ x).wrapping_mul(K);
+        h ^ (h >> 29)
+    };
+    let mut lanes = [1u64, 2, 3, 4];
+    let chunks = mono.chunks_exact(8);
+    let rest = chunks.remainder();
+    for c in chunks {
+        for (l, pair) in lanes.iter_mut().zip(c.chunks_exact(2)) {
+            *l = mix(*l, (pair[0].to_bits() as u64) << 32 | pair[1].to_bits() as u64);
+        }
+    }
+    let mut hash = lanes.iter().fold(0u64, |h, &l| mix(h, l));
+    for x in rest {
+        hash = mix(hash, x.to_bits() as u64);
+    }
+    Fingerprint { hash: mix(hash, 0xff51_afd7_ed55_8ccd), len: mono.len(), rate: rate.to_bits() }
+}
+
+fn gcd(a: u64, b: u64) -> u64 {
+    if b == 0 { a } else { gcd(b, a % b) }
+}
+
+/// Runs `work` on pieces of `out` (each at least `least` long) on the cores at
+/// once: it gets the index of the piece's first item and the piece.
+pub(crate) fn parallel<T: Send>(out: &mut [T], least: usize, work: impl Fn(usize, &mut [T]) + Sync) {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    let pieces = (out.len() / least.max(1)).clamp(1, cores);
+    if pieces == 1 {
+        work(0, out);
+        return;
+    }
+    let size = out.len().div_ceil(pieces);
+    std::thread::scope(|scope| {
+        let work = &work;
+        for (n, chunk) in out.chunks_mut(size).enumerate() {
+            scope.spawn(move || work(n * size, chunk));
+        }
+    });
 }
 
 /// ONNX Runtime's environment: one per process, made the first time.
@@ -371,6 +471,26 @@ mod tests {
         let error = (200..47_800).map(|i| (back[i] - from[i]).abs()).fold(0.0, f32::max);
         assert!(error < 2e-3, "{error}");
         assert_eq!(resample(&from, 44_100.0, 44_100.0), from);
+    }
+
+    /// The filter table and the threads give what the direct sums gave: the
+    /// same length, each sample within a few f32 roundings (the weights now
+    /// come from the phase as a fraction, not from i·ratio in floating point).
+    #[test]
+    fn fast_resampling_matches_the_direct_one() {
+        let mut seed = 9u32;
+        let signal: Vec<f32> = (0..100_000)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+                0.5 * (i as f32 * 0.031).sin() + 0.3 * ((seed >> 9) as f32 / (1u32 << 23) as f32 - 1.0)
+            })
+            .collect();
+        for (from, to) in [(44_100.0, 22_050.0), (48_000.0, 22_050.0), (48_000.0, 44_100.0), (22_050.0, 48_000.0), (96_000.0, 44_100.0), (44_100.0, 44_000.5), (8_000.0, 22_050.0)] {
+            let (fast, slow) = (resample(&signal, from, to), crate::reference::resample(&signal, from, to));
+            assert_eq!(fast.len(), slow.len(), "{from} → {to}");
+            let error = fast.iter().zip(&slow).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
+            assert!(error < 1e-6, "{from} → {to}: {error}");
+        }
     }
 
     #[test]

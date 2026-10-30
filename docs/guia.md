@@ -1321,7 +1321,7 @@ Saca las notas de cualquier audio (una voz, un piano, una batería, tu beatbox) 
 2. Elige qué quieres sacar (ver la tabla).
 3. Las notas aparecen en una pista MIDI nueva justo debajo, en el mismo sitio: el mismo slot en Session, el mismo tramo en el Arrangement.
 
-Tarda unos segundos y se hace en este Mac, sin internet; la barra de estado muestra el progreso. Las notas siguen el tempo del clip (su warp) y la fuerza de cada una pasa a su velocidad.
+Tarda unos segundos y se hace en este Mac, sin internet; la barra de estado muestra el progreso. Puedes seguir trabajando mientras tanto. Si vuelves a convertir el mismo clip, por ejemplo con otra opción de melodía, sale al momento: Pulse recuerda lo que acaba de escuchar. Las notas siguen el tempo del clip (su warp) y la fuerza de cada una pasa a su velocidad.
 
 | Opción | Para qué |
 |---|---|

@@ -205,6 +205,17 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
         return Err("El clip es demasiado corto para sacar notas".into());
     }
     let mono: Vec<f32> = sample.left[a..b].iter().zip(&sample.right[a..b]).map(|(l, r)| (l + r) * 0.5).collect();
+    let report = |f: f32| {
+        if let Ok(mut p) = progress.lock() {
+            *p = f;
+        }
+        true
+    };
+    if matches!(mode, ToMidi::Melody | ToMidi::MelodyFree) {
+        // The voice's pitch first, telling the progress: the melody then
+        // finds it already worked out.
+        stems::pitch::track_with(&mono, rate, &report);
+    }
     let (mut events, key) = match mode {
         ToMidi::Drums => (drum_hits(&mono, rate), None),
         ToMidi::Beatbox => (beatbox_hits(&mono, rate, &context.examples), None),
@@ -217,14 +228,8 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
         ToMidi::MelodyFree => stems::pitch::melody(&mono, rate, context.weights(), false),
         ToMidi::Chords => chord_events(&mono, rate, audio, tempo, from, context.key),
         ToMidi::Harmony => {
-            let mut transcriber = stems::transcribe::Transcriber::load()?;
-            let notes = transcriber.notes(&mono, rate, |f| {
-                if let Ok(mut p) = progress.lock() {
-                    *p = f;
-                }
-                true
-            })?;
-            (notes, None)
+            // The model stays loaded for the next time.
+            (stems::transcribe::transcribe(&mono, rate, report)?, None)
         }
     };
     for e in &mut events {

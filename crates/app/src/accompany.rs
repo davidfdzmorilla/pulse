@@ -1,12 +1,15 @@
 //! Accompaniment: from the chords a clip plays (MIDI, or heard in audio), a
 //! bass line, an arpeggio, a pad or rhythmic chords that fit them, on a new
-//! track under it. «Otra variación» writes another take of the same part.
+//! track under it, or a melody (see `melody`). «Otra variación» writes
+//! another take of the same part.
 
 use crate::app::{ClipRef, PulseApp};
 use engine::meter::TimeSig;
 use engine::model::{AcidParams, Clip, FmParams, InstrumentKind, MidiClip, Note, SuperSawParams, SynthParams};
 use engine::{Target, MAX_TRACKS};
+use crate::melody::Style;
 use stems::chord::{self, Chord};
+use stems::key::Key;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Part {
@@ -26,6 +29,8 @@ pub enum Part {
     Pad,
     /// Short chords in a rhythm.
     Stabs,
+    /// A lead over the chords (see `melody`).
+    Melody(crate::melody::Melody),
 }
 
 impl Part {
@@ -41,6 +46,25 @@ impl Part {
             Part::ArpUpDown => "Arpegio arriba y abajo",
             Part::Pad => "Pad",
             Part::Stabs => "Acordes rítmicos",
+            Part::Melody(m) => match m.style {
+                Style::Hook => "Melodía: gancho",
+                Style::Topline => "Melodía: cantable",
+                Style::Trance => "Melodía: lead de trance",
+                Style::CallResponse => "Melodía: pregunta y respuesta",
+            },
+        }
+    }
+
+    /// The melodies the menus offer, one per style (normal density, middle register).
+    pub fn melodies() -> [Part; 4] {
+        Style::ALL.map(|s| Part::Melody(crate::melody::Melody::new(s)))
+    }
+
+    /// A number for the part's kind, to tell seeds apart.
+    fn id(self) -> u64 {
+        match self {
+            Part::Melody(m) => 8 + m.style as u64,
+            _ => Part::ALL.iter().position(|&p| p == self).unwrap_or(0) as u64,
         }
     }
 
@@ -54,6 +78,7 @@ impl Part {
             Part::ArpUpDown => "Las notas de cada acorde subiendo y bajando, en semicorcheas",
             Part::Pad => "Los acordes sostenidos, con las voces enlazadas",
             Part::Stabs => "Acordes cortos con un ritmo sincopado",
+            Part::Melody(m) => m.style.hint(),
         }
     }
 
@@ -64,6 +89,16 @@ impl Part {
             Part::ArpUp | Part::ArpUpDown => InstrumentKind::Fm(FmParams::default()),
             Part::Pad => InstrumentKind::SuperSaw(SuperSawParams { cutoff: 2500.0, attack: 0.3, release: 0.8, gain: 0.3, ..Default::default() }),
             Part::Stabs => InstrumentKind::Synth(SynthParams::default()),
+            // A factory lead that suits the style.
+            Part::Melody(m) => {
+                let (kind, name) = match m.style {
+                    Style::Hook => (InstrumentKind::Synth(SynthParams::default()), "Pluck · Corto"),
+                    Style::Topline => (InstrumentKind::Fm(FmParams::default()), "Lead · Flauta FM"),
+                    Style::Trance => (InstrumentKind::SuperSaw(SuperSawParams::default()), "Lead · Trance clásico"),
+                    Style::CallResponse => (InstrumentKind::Synth(SynthParams::default()), "Lead · Sierra brillante"),
+                };
+                kind.factory_presets().into_iter().find(|(n, _)| *n == name).map_or(kind, |(_, k)| k)
+            }
         }
     }
 
@@ -75,6 +110,8 @@ impl Part {
         match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking | Part::Stabs => 0.0,
             Part::ArpUp | Part::ArpUpDown | Part::Pad => -1.5,
+            // On top of everything, a little under the chords.
+            Part::Melody(_) => -3.0,
         }
     }
 
@@ -85,6 +122,7 @@ impl Part {
             Part::ArpUp | Part::ArpUpDown => &["arpegio", "arp", "arpeggio", "arpegiador"],
             Part::Pad => &["pad", "pads"],
             Part::Stabs => &["acordes", "chords", "stabs"],
+            Part::Melody(_) => &["melodía", "melodia", "melody", "lead", "leads", "topline", "hook", "gancho"],
         }
     }
 
@@ -95,31 +133,32 @@ impl Part {
             Part::ArpUp | Part::ArpUpDown => "Arpegio",
             Part::Pad => "Pad",
             Part::Stabs => "Acordes",
+            Part::Melody(_) => "Melodía",
         }
     }
 }
 
 /// A small, repeatable random sequence (xorshift), so a seed gives the same take.
-struct Dice(u64);
+pub(crate) struct Dice(u64);
 
 impl Dice {
-    fn new(seed: u64) -> Self {
+    pub(crate) fn new(seed: u64) -> Self {
         Self(seed.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1)
     }
 
     /// 0..1.
-    fn roll(&mut self) -> f64 {
+    pub(crate) fn roll(&mut self) -> f64 {
         self.0 ^= self.0 << 13;
         self.0 ^= self.0 >> 7;
         self.0 ^= self.0 << 17;
         (self.0 >> 11) as f64 / (1u64 << 53) as f64
     }
 
-    fn chance(&mut self, p: f64) -> bool {
+    pub(crate) fn chance(&mut self, p: f64) -> bool {
         self.roll() < p
     }
 
-    fn pick<'a, T>(&mut self, options: &'a [T]) -> &'a T {
+    pub(crate) fn pick<'a, T>(&mut self, options: &'a [T]) -> &'a T {
         &options[((self.roll() * options.len() as f64) as usize).min(options.len() - 1)]
     }
 }
@@ -155,6 +194,14 @@ fn pulses(sig: TimeSig, from: f64, to: f64) -> Vec<(f64, f64, bool)> {
 /// The notes of `part` over `chords` (start and end beats, and the chord), for
 /// a clip `length` beats long in bars of `sig`; `seed` picks among the variations.
 pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64, sig: TimeSig) -> Vec<Note> {
+    write(part, chords, length, seed, sig, None)
+}
+
+/// [`generate`], a melody in `key` (the chords' own if None).
+fn write(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64, sig: TimeSig, key: Option<Key>) -> Vec<Note> {
+    if let Part::Melody(m) = part {
+        return crate::melody::generate(m, chords, length, seed, sig, key);
+    }
     let stab_steps = crate::drum_gen::steps_from_four(sig);
     let mut dice = Dice::new(seed);
     let mut notes = Vec::new();
@@ -270,6 +317,7 @@ pub fn generate(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64
                 // The bass too, an octave up, softer: a fuller pad.
                 notes.push(note(from, to - from, voiced[0] + 12, 0.45));
             }
+            Part::Melody(_) => {}
             Part::Stabs => {
                 let voiced = chord::voice(&chord, &previous);
                 previous = voiced[1..].to_vec();
@@ -303,8 +351,28 @@ pub struct Generated {
     part: Part,
     seed: u64,
     chords: Vec<(f64, f64, Chord)>,
+    /// The key a melody is in.
+    key: Option<Key>,
     /// What it wrote, to know it has not been edited since.
     notes: Vec<Note>,
+}
+
+impl Generated {
+    /// The melody it is, if it is one.
+    pub fn melody(&self) -> Option<crate::melody::Melody> {
+        match self.part {
+            Part::Melody(m) => Some(m),
+            _ => None,
+        }
+    }
+}
+
+/// What the bar over the editor of the part written last shows and asks:
+/// «Otra variación», and a melody's style, density and register.
+pub struct Retake {
+    pub melody: Option<crate::melody::Melody>,
+    /// «Otra variación» was clicked.
+    pub again: bool,
 }
 
 impl PulseApp {
@@ -326,6 +394,79 @@ impl PulseApp {
         }
     }
 
+    /// The chords the other tracks play with an empty MIDI clip (the same
+    /// scene's clips, or what the Arrangement plays under it), in its beats.
+    fn song_chords(&self, clip: ClipRef) -> Vec<(f64, f64, Chord)> {
+        let Some(length) = self.clip(clip).map(|c| c.length()) else { return Vec::new() };
+        let mut notes = Vec::new();
+        // A clip's notes over `from..to` of the song, looping, moved by `shift`.
+        let mut add = |m: &MidiClip, from: f64, to: f64, shift: f64| {
+            if m.length <= 0.0 || m.muted {
+                return;
+            }
+            let mut at = from;
+            while at < to - 1e-9 {
+                for n in &m.notes {
+                    let start = at + n.start;
+                    if start < to - 1e-9 && n.start < m.length {
+                        notes.push(Note { start: start - shift, length: n.length.min(to - start), ..*n });
+                    }
+                }
+                at += m.length;
+            }
+        };
+        for (i, t) in self.project.tracks.iter().enumerate() {
+            if i == clip.track() || t.is_drums() || t.is_audio() || t.is_group() {
+                continue;
+            }
+            match clip {
+                ClipRef::Session { slot, .. } => {
+                    if let Some(Clip::Midi(m)) = &t.clips[slot] {
+                        add(m, 0.0, length, 0.0);
+                    }
+                }
+                ClipRef::Arrangement { track, index } => {
+                    let Some(p) = self.project.tracks[track].arrangement.get(index) else { return Vec::new() };
+                    for a in &t.arrangement {
+                        if let Clip::Midi(m) = &a.clip {
+                            if a.start < p.end() && a.end() > p.start {
+                                add(m, a.start, a.end().min(p.end()), p.start);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        // Only what sounds inside the clip.
+        notes.retain(|n| n.start + n.length > 0.0 && n.start < length);
+        for n in &mut notes {
+            if n.start < 0.0 {
+                n.length += n.start;
+                n.start = 0.0;
+            }
+        }
+        crate::harmony::chords(&notes, length, self.project.key, self.clip_sig(clip)).into_iter().filter_map(|(a, b, c)| c.map(|c| (a, b, c))).collect()
+    }
+
+    /// A melody in the empty MIDI clip itself, over what the song plays with it.
+    fn melody_here(&mut self, clip: ClipRef, part: Part) {
+        let chords = self.song_chords(clip);
+        if chords.is_empty() {
+            self.status = Some("No suenan acordes con este clip vacío: ponlo en la escena o el tramo de una pista de acordes".into());
+            return;
+        }
+        let key = crate::melody::key_for(&chords, self.project.key);
+        let seed = crate::versions::now() ^ part.id() << 32;
+        let sig = self.clip_sig(clip);
+        let Some(Clip::Midi(m)) = self.clip_mut(clip) else { return };
+        let notes = write(part, &chords, m.length, seed, sig, Some(key));
+        m.notes = notes.clone();
+        self.sync_clip_ref(clip);
+        self.select_clip(clip);
+        self.accompaniment = Some(Generated { clip, part, seed, chords, key: Some(key), notes });
+        self.status = Some(format!("{} sobre los acordes de la canción: «Otra variación» en el editor escribe otra", part.label()));
+    }
+
     /// An empty MIDI track for `part`'s role, other than `source`: a template's
     /// «Bajo» waiting for its bass line (named «Bajo», «Bajo 2», «Bass»…).
     fn track_for(&self, part: Part, source: usize) -> Option<usize> {
@@ -340,13 +481,18 @@ impl PulseApp {
     /// Writes `part` for the clip's chords: on the empty track of its role if
     /// there is one, else on a new track under the clip's.
     pub fn accompany(&mut self, clip: ClipRef, part: Part) {
+        // An empty clip gets a melody of its own, over the song's chords.
+        if matches!((part, self.clip(clip)), (Part::Melody(_), Some(Clip::Midi(m))) if m.notes.is_empty()) {
+            return self.melody_here(clip, part);
+        }
         let (chords, length) = self.clip_chords(clip);
         if chords.is_empty() {
             self.status = Some("No se encuentran acordes en este clip para acompañarlos".into());
             return;
         }
-        let seed = crate::versions::now() ^ (part as u64) << 32;
-        let notes = generate(part, &chords, length, seed, self.clip_sig(clip));
+        let seed = crate::versions::now() ^ part.id() << 32;
+        let key = matches!(part, Part::Melody(_)).then(|| crate::melody::key_for(&chords, self.project.key));
+        let notes = write(part, &chords, length, seed, self.clip_sig(clip), key);
         let source = clip.track();
         let existing = self.track_for(part, source);
         if existing.is_none() && self.project.tracks.len() >= MAX_TRACKS {
@@ -394,8 +540,9 @@ impl PulseApp {
         self.selected_target = Target::Track(index);
         self.sync_all();
         self.select_clip(new);
-        self.accompaniment = Some(Generated { clip: new, part, seed, chords, notes });
-        self.status = Some(format!("{} para {} acordes: «Otra variación» en el editor escribe otra", part.label(), self.accompaniment.as_ref().map_or(0, |g| g.chords.len())));
+        self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes });
+        let more = if matches!(part, Part::Melody(_)) { ", y ahí cambias densidad y registro" } else { "" };
+        self.status = Some(format!("{} para {} acordes: «Otra variación» en el editor escribe otra{more}", part.label(), self.accompaniment.as_ref().map_or(0, |g| g.chords.len())));
     }
 
     /// `name`, or «name 2», «name 3»… if a track already has it.
@@ -412,28 +559,51 @@ impl PulseApp {
         self.accompaniment.as_ref().is_some_and(|g| g.clip == clip && matches!(self.clip(clip), Some(Clip::Midi(m)) if m.notes == g.notes))
     }
 
+    /// What the editor's bar offers for `clip`: None unless it is the part
+    /// written last, unedited.
+    pub fn retake(&self, clip: ClipRef) -> Option<Retake> {
+        self.can_vary(clip).then(|| Retake { melody: self.accompaniment.as_ref().and_then(|g| g.melody()), again: false })
+    }
+
     /// Writes another take of the last accompaniment in its clip.
     pub fn vary_accompaniment(&mut self) {
-        let Some(mut generated) = self.accompaniment.take() else { return };
+        let Some(generated) = self.accompaniment.as_mut() else { return };
         generated.seed = generated.seed.wrapping_add(0x5851_F42D_4C95_7F2D);
+        self.rewrite_accompaniment();
+        self.status = Some("Otra variación".into());
+    }
+
+    /// The last melody again, the same take in another style, density or
+    /// register; a clip still named after its style takes the new one's name.
+    pub fn set_melody(&mut self, melody: crate::melody::Melody) {
+        let Some(generated) = self.accompaniment.as_mut() else { return };
+        let old = generated.part;
+        generated.part = Part::Melody(melody);
+        let clip = generated.clip;
+        if let Some(Clip::Midi(m)) = self.clip_mut(clip) {
+            if m.name == old.label() {
+                m.name = Part::Melody(melody).label().to_string();
+            }
+        }
+        self.rewrite_accompaniment();
+    }
+
+    /// Writes the last accompaniment over again from its part and seed.
+    fn rewrite_accompaniment(&mut self) {
+        let Some(mut generated) = self.accompaniment.take() else { return };
         let length = match self.clip(generated.clip) {
             Some(Clip::Midi(m)) => m.length,
             _ => return,
         };
-        let notes = generate(generated.part, &generated.chords, length, generated.seed, self.clip_sig(generated.clip));
+        let notes = write(generated.part, &generated.chords, length, generated.seed, self.clip_sig(generated.clip), generated.key);
         let clip = generated.clip;
-        let target = match clip {
-            ClipRef::Session { track, slot } => self.project.tracks[track].clips[slot].as_mut(),
-            ClipRef::Arrangement { track, index } => self.project.tracks[track].arrangement.get_mut(index).map(|a| &mut a.clip),
-        };
-        if let Some(Clip::Midi(m)) = target {
+        if let Some(Clip::Midi(m)) = self.clip_mut(clip) {
             m.notes = notes.clone();
         }
         generated.notes = notes;
         self.accompaniment = Some(generated);
         self.piano_roll.recenter();
         self.sync_clip_ref(clip);
-        self.status = Some("Otra variación".into());
     }
 }
 
@@ -623,5 +793,120 @@ mod tests {
             m.notes.pop();
         }
         assert!(!app.can_vary(new));
+    }
+
+    /// A trance lead from the demo's «Am F C G»: a new «Melodía» track with
+    /// a SuperSaw lead; the same take higher, then another take.
+    #[test]
+    fn a_melody_gets_its_track_and_its_controls() {
+        use crate::melody::{Melody, Register, Style};
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let t = app.project.tracks.iter().position(|t| t.clips[0].as_ref().is_some_and(|c| c.name() == "Am F C G")).unwrap();
+        app.accompany(ClipRef::Session { track: t, slot: 0 }, Part::Melody(Melody::new(Style::Trance)));
+        let new = ClipRef::Session { track: t + 1, slot: 0 };
+        assert_eq!(app.project.tracks[t + 1].name, "Melodía");
+        assert!(matches!(app.project.tracks[t + 1].instrument, InstrumentKind::SuperSaw(p) if p.cutoff == 5000.0), "Lead · Trance clásico");
+        let Some(Clip::Midi(lead)) = app.clip(new).cloned() else { panic!("{:?}", app.status) };
+        assert_eq!(lead.name, "Melodía: lead de trance");
+        assert!(app.retake(new).and_then(|r| r.melody).is_some());
+        app.set_melody(Melody { register: Register::High, ..Melody::new(Style::Trance) });
+        let Some(Clip::Midi(high)) = app.clip(new).cloned() else { panic!() };
+        assert_eq!(high.notes.iter().map(|n| n.start).collect::<Vec<_>>(), lead.notes.iter().map(|n| n.start).collect::<Vec<_>>());
+        assert!(high.notes.iter().zip(&lead.notes).all(|(h, l)| h.pitch >= l.pitch) && high.notes != lead.notes);
+        app.vary_accompaniment();
+        let Some(Clip::Midi(other)) = app.clip(new).cloned() else { panic!() };
+        assert_ne!(other.notes, high.notes);
+        assert!(other.notes.iter().all(|n| (67..=86).contains(&n.pitch)), "another take, still high");
+    }
+
+    /// An empty clip on the Arrangement (and in the Session) gets a melody of
+    /// its own over what the other tracks play with it.
+    #[test]
+    fn an_empty_clip_gets_a_melody_over_the_song() {
+        use crate::melody::{Melody, Style};
+        use engine::model::ArrangementClip;
+        let template = crate::templates::all().into_iter().find(|t| t.name == "Beat").unwrap();
+        let mut app = PulseApp::headless(crate::templates::project(&template).unwrap());
+        let chords_track = app.project.tracks.iter().position(|t| t.name == "Acordes").unwrap();
+        let lead = app.project.tracks.iter().position(|t| t.name == "Melodía").unwrap();
+        // Am F C G, a bar each, from bar 3 on; the empty clip over its last two bars and one more.
+        let notes: Vec<Note> = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]].iter().enumerate().flat_map(|(i, c)| c.iter().map(move |&p| note(i as f64 * 4.0, 4.0, p, 0.8))).collect();
+        app.project.tracks[chords_track].arrangement.push(ArrangementClip { start: 8.0, length: 16.0, clip: Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new("Acordes", 16.0, [0; 3]) }) });
+        app.project.tracks[lead].arrangement.push(ArrangementClip { start: 16.0, length: 12.0, clip: Clip::Midi(MidiClip::new("Melodía", 12.0, [0; 3])) });
+        let tracks = app.project.tracks.len();
+        let clip = ClipRef::Arrangement { track: lead, index: 0 };
+        app.accompany(clip, Part::Melody(Melody::new(Style::Topline)));
+        assert_eq!(app.project.tracks.len(), tracks, "in the clip itself");
+        let Some(Clip::Midi(m)) = app.clip(clip).cloned() else { panic!() };
+        assert!(!m.notes.is_empty(), "{:?}", app.status);
+        // C then G under its first two bars, nothing under the third.
+        for n in &m.notes {
+            assert!(n.start < 8.0, "{n:?}");
+            if n.start % 1.0 == 0.0 {
+                let chord: &[u8] = if n.start < 4.0 { &[0, 4, 7] } else { &[7, 11, 2] };
+                assert!(chord.contains(&(n.pitch % 12)), "{n:?}");
+            }
+        }
+        assert!(app.can_vary(clip));
+        // In the Session, the same scene's chords.
+        app.project.tracks[chords_track].clips[1] = Some(Clip::Midi(MidiClip { notes, ..MidiClip::new("Acordes", 16.0, [0; 3]) }));
+        app.project.tracks[lead].clips[1] = Some(Clip::Midi(MidiClip::new("Melodía", 16.0, [0; 3])));
+        app.accompany(ClipRef::Session { track: lead, slot: 1 }, Part::Melody(Melody::new(Style::Hook)));
+        let Some(Clip::Midi(m)) = app.clip(ClipRef::Session { track: lead, slot: 1 }).cloned() else { panic!() };
+        assert!(m.notes.len() >= 8 && m.notes.iter().any(|n| n.start >= 12.0), "{:?}", app.status);
+        // Nothing playing with it: it says so.
+        app.project.tracks[lead].clips[2] = Some(Clip::Midi(MidiClip::new("Melodía", 16.0, [0; 3])));
+        app.accompany(ClipRef::Session { track: lead, slot: 2 }, Part::Melody(Melody::new(Style::Hook)));
+        assert!(app.status.as_deref().is_some_and(|s| s.contains("No suenan acordes")));
+    }
+
+    /// The Beat template (without its «Melodía» track) with a beat, Am F C G,
+    /// a bass and a melody of `style` in its own sound, rendered.
+    fn song_with_melody(style: crate::melody::Style) -> (Vec<f32>, Vec<f32>) {
+        use engine::model::ArrangementClip;
+        let template = crate::templates::all().into_iter().find(|t| t.name == "Beat").unwrap();
+        let mut project = crate::templates::project(&template).unwrap();
+        project.tracks.retain(|t| t.name != "Melodía");
+        let mut app = PulseApp::headless(project);
+        let kit = crate::drum_gen::Kit::from_rows(&engine::model::DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
+        let settings = crate::drum_gen::Settings { style: crate::drum_gen::Style::House, bars: 8, sounds: crate::drum_gen::Style::House.sounds(), ..Default::default() };
+        let (beat, groove) = crate::drum_gen::generate(&kit, &settings, 32.0, &[], 0, TimeSig::COMMON);
+        let drums = app.project.tracks.iter().position(|t| t.is_drums()).unwrap();
+        app.project.tracks[drums].arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(MidiClip { notes: beat, groove, ..MidiClip::new("Ritmo", 32.0, [0; 3]) }) });
+        let chords = app.project.tracks.iter().position(|t| t.name == "Acordes").unwrap();
+        let notes: Vec<Note> = (0..8).flat_map(|bar| [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]][bar % 4].iter().map(move |&p| note(bar as f64 * 4.0, 4.0, p, 0.8))).collect();
+        app.project.tracks[chords].arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(MidiClip { notes, ..MidiClip::new("Acordes", 32.0, [0; 3]) }) });
+        app.accompany(ClipRef::Arrangement { track: chords, index: 0 }, Part::BassOffbeat);
+        app.accompany(ClipRef::Arrangement { track: chords, index: 0 }, Part::Melody(crate::melody::Melody::new(style)));
+        let project = app.project.clone();
+        let mut samples = crate::sync::SampleCache::default();
+        let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+        crate::export::render(commands, (0.0, 32.0), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap()
+    }
+
+    /// The loudest lead on top of a beat, chords and a bass still leaves headroom.
+    #[test]
+    fn a_melody_leaves_headroom() {
+        let (l, r) = song_with_melody(crate::melody::Style::Trance);
+        let peak = stems::loudness::sample_peak(&l, &r);
+        assert!(peak <= -1.0, "{peak:+.1} dBFS");
+    }
+
+    /// With `PULSE_SHOTS=dir`, each style over the same song, as WAV.
+    #[test]
+    #[ignore]
+    fn melody_renders() {
+        let Some(dir) = std::env::var_os("PULSE_SHOTS").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        for style in crate::melody::Style::ALL {
+            let (l, r) = song_with_melody(style);
+            let peak = stems::loudness::sample_peak(&l, &r);
+            let lufs = stems::loudness::integrated(&l, &r, 48_000.0).unwrap();
+            let name = Part::Melody(crate::melody::Melody::new(style)).label().replace(": ", "-").replace(' ', "-").replace('í', "i").to_lowercase();
+            let path = dir.join(format!("{name}.wav"));
+            crate::export::write(&path, &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
+            println!("{}: {lufs:.1} LUFS, pico {peak:+.1} dBFS", path.display());
+            assert!(peak <= -1.0);
+        }
     }
 }

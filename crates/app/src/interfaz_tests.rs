@@ -224,3 +224,95 @@ fn narrow_window_shots() {
     s.frames(3);
     shot(&mut s, "ajustes");
 }
+
+/// The Épica progression in the «Acordes» slot of the Beat template.
+fn epic_chords(s: &mut Studio) {
+    let chords = track(s, "Acordes");
+    let key = s.app.project.key.unwrap();
+    let progression: Vec<_> = stems::chord::progressions(key)[0].degrees.iter().map(|&d| stems::chord::on_degree(key, d, false, false)).collect();
+    let mut clip = engine::model::MidiClip::new("Acordes", 16.0, s.app.project.tracks[chords].color);
+    crate::harmony::write(&mut clip, &mut 0.0, 4.0, &progression, Some(key), 4.0);
+    s.app.set_clip(chords, 0, Some(Clip::Midi(clip)));
+    s.frames(3);
+}
+
+/// The editor's drop-down showing `text` (under the clips, not a track's).
+fn editor_combo(s: &Studio, text: &str) -> Rect {
+    s.seen.iter().filter(|w| w.text == text && w.rect.top() > 250.0).map(|w| w.rect).last().unwrap_or_else(|| panic!("el desplegable «{text}» del editor"))
+}
+
+/// «Acompañar ⏵ Melodía: gancho» on the chords: the melody goes on the
+/// template's empty «Melodía» track; in its editor, «Agudo» writes the same
+/// take higher, «Cantable» the same take as a topline, «Otra variación»
+/// another one, and ⌘Z goes back.
+#[test]
+fn a_melody_from_the_menu() {
+    let mut s = beat("melodia");
+    let slot = s.find("Slot 3:1").unwrap();
+    epic_chords(&mut s);
+    let lead = track(&s, "Melodía");
+    s.rclick_at(slot.center());
+    s.click("Acompañar ⏵");
+    s.frames(5);
+    s.move_to(s.find("Melodía: gancho").unwrap().center(), Modifiers::NONE);
+    shot(&mut s, "menu-melodia");
+    s.submenu("Melodía: gancho");
+    shot(&mut s, "melodia-gancho");
+    let first = midi(&s, lead, 0);
+    assert_eq!(first.name, "Melodía: gancho");
+    assert!(first.notes.len() >= 8, "{first:?}");
+    assert!(first.notes.iter().all(|n| (57..=76).contains(&n.pitch)), "the middle register");
+    assert!(centred(&s, &first.notes), "{:?}", s.app.piano_roll.in_view());
+    assert!(s.has("Otra variación") && s.has("Gancho"), "the bar over the editor");
+    // Higher: the same take, in the upper register.
+    let register = editor_combo(&s, "Medio");
+    s.click_at(register.center());
+    s.click("Agudo");
+    shot(&mut s, "melodia-aguda");
+    let high = midi(&s, lead, 0);
+    assert!(high.notes.iter().all(|n| (67..=86).contains(&n.pitch)), "{:?}", high.notes);
+    assert_eq!(high.notes.iter().map(|n| n.start).collect::<Vec<_>>(), first.notes.iter().map(|n| n.start).collect::<Vec<_>>(), "the same rhythm");
+    // A singable topline instead: the clip takes its name.
+    let style = editor_combo(&s, "Gancho");
+    s.click_at(style.center());
+    s.click("Cantable");
+    shot(&mut s, "melodia-cantable");
+    let topline = midi(&s, lead, 0);
+    assert_eq!(topline.name, "Melodía: cantable");
+    s.click("Otra variación");
+    let other = midi(&s, lead, 0);
+    assert_ne!(other.notes, topline.notes);
+    s.key(Key::Z, Modifiers::COMMAND);
+    assert_eq!(midi(&s, lead, 0).notes, topline.notes, "⌘Z brings the take back");
+}
+
+/// With `PULSE_SHOTS=dir`, the menu and the editor with a melody, as PNG.
+#[test]
+#[ignore]
+fn melody_shots() {
+    let Some(dir) = std::env::var_os("PULSE_SHOTS").map(PathBuf::from) else { return };
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = beat("melodia");
+    s.out = dir;
+    let slot = s.find("Slot 3:1").unwrap();
+    epic_chords(&mut s);
+    s.rclick_at(slot.center());
+    s.click("Acompañar ⏵");
+    s.frames(5);
+    s.move_to(s.find("Melodía: gancho").unwrap().center(), Modifiers::NONE);
+    s.shot("menu-melodia");
+    s.submenu("Melodía: gancho");
+    s.shot("editor-gancho");
+    let register = editor_combo(&s, "Medio");
+    s.click_at(register.center());
+    s.shot("registro");
+    s.click("Agudo");
+    let style = editor_combo(&s, "Gancho");
+    s.click_at(style.center());
+    s.click("Cantable");
+    s.shot("editor-cantable");
+    // In the narrow window too.
+    s.size = vec2(1000.0, 720.0);
+    s.frames(5);
+    s.shot("editor-estrecha");
+}

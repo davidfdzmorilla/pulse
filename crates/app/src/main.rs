@@ -58,6 +58,7 @@ mod library;
 mod logs;
 mod macros;
 mod loop_key;
+mod melody;
 mod midi_file;
 mod midi_fx_ui;
 mod midi_map;

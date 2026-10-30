@@ -605,7 +605,7 @@ pub struct Space {
 
 impl Space {
     pub fn of(returns: &[crate::project::ReturnTrack]) -> Self {
-        let has = |r: &crate::project::ReturnTrack, delay: bool| r.devices.iter().any(|d| d.enabled && if delay { matches!(d.effect, Effect::Delay(_)) } else { matches!(d.effect, Effect::Reverb(_)) });
+        let has = |r: &crate::project::ReturnTrack, delay: bool| r.devices.iter().any(|d| d.enabled && if delay { matches!(d.effect, Effect::Delay(_)) } else { matches!(d.effect, Effect::Reverb(_) | Effect::Convolution(_)) });
         let reverb = returns.iter().position(|r| has(r, false));
         let delay = returns.iter().enumerate().position(|(i, r)| Some(i) != reverb && has(r, true));
         Self { reverb, delay, returns: returns.len() }

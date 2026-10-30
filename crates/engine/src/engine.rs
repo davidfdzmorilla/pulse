@@ -238,6 +238,8 @@ pub enum Garbage {
     Wavetables(Box<Vec<Arc<Wavetable>>>),
     Instrument(Box<PreparedInstrument>),
     Monitor(Box<MonitorInput>),
+    /// A Convolution Reverb's response it no longer plays.
+    Kernel(Arc<crate::convolution::ConvKernel>),
 }
 
 /// An instrument built off the audio thread, ready to replace a track's one.
@@ -1842,6 +1844,10 @@ impl Track {
 
 pub struct Engine {
     commands: Consumer<Command>,
+    /// New responses for Convolution Reverbs, from the handle's builder thread.
+    kernels: Option<Consumer<crate::convolution::KernelDelivery>>,
+    /// Convolution Reverbs with a response to start or to hand back (0: none, no need to look).
+    kernels_busy: usize,
     live: Consumer<LiveNote>,
     recorded: Producer<RecordedNote>,
     garbage: Producer<Garbage>,
@@ -2341,6 +2347,8 @@ impl Engine {
         let shared = Arc::new(SharedState::new());
         let engine = Self {
             commands,
+            kernels: None,
+            kernels_busy: 0,
             live,
             recorded,
             garbage,
@@ -2401,6 +2409,50 @@ impl Engine {
             plan: Box::new(crate::workers::Plan::new()),
         };
         (engine, shared)
+    }
+
+    /// Where the new responses of its Convolution Reverbs come from.
+    pub(crate) fn set_kernel_queue(&mut self, queue: Consumer<crate::convolution::KernelDelivery>) {
+        self.kernels = Some(queue);
+    }
+
+    /// Gives the Convolution Reverbs the responses built for them, and hands
+    /// back to the UI thread those they are done with.
+    fn take_kernels(&mut self) {
+        // Only once the commands before them are in (a response follows its settings).
+        if self.commands.is_empty() {
+            while self.garbage.slots() >= GARBAGE_PER_COMMAND {
+                let Some(delivery) = self.kernels.as_mut().and_then(|q| q.pop().ok()) else { break };
+                let crate::convolution::KernelDelivery { target, index, kernel } = delivery;
+                let slot = self.channel(target).and_then(|c| c.chain.get_mut(index));
+                let unused = match slot.map(|s| &mut *s.processor) {
+                    Some(EffectProcessor::Convolution(fx)) => fx.offer(kernel),
+                    _ => Some(kernel),
+                };
+                if let Some(unused) = unused {
+                    self.discard(Garbage::Kernel(unused));
+                }
+                self.kernels_busy += 1;
+            }
+        }
+        if self.kernels_busy == 0 {
+            return;
+        }
+        let mut busy = 0;
+        let channels = self.tracks.iter_mut().map(|t| &mut t.channel).chain(self.returns.iter_mut()).chain(std::iter::once(&mut self.master));
+        for channel in channels {
+            for slot in channel.chain.iter_mut() {
+                if let EffectProcessor::Convolution(fx) = &mut *slot.processor {
+                    if self.garbage.slots() > 0 {
+                        if let Some(done) = fx.collect() {
+                            let _ = self.garbage.push(Garbage::Kernel(done));
+                        }
+                    }
+                    busy += fx.busy() as usize;
+                }
+            }
+        }
+        self.kernels_busy = busy;
     }
 
     /// Monitored tracks play this block of the audio input instead of their clips,
@@ -2995,6 +3047,7 @@ impl Engine {
                 }
             }
         }
+        self.take_kernels();
         while let Ok(note) = self.live.pop() {
             self.handle_live(note);
         }
@@ -5903,5 +5956,53 @@ mod tests {
         let first = audio.chunks(2).position(|f| f[0].abs() > 1e-6).unwrap();
         assert_eq!(first, LOOKAHEAD, "the first click on the song's first beat, as it comes out");
         assert_eq!(h.engine.latency(), LOOKAHEAD);
+    }
+
+    /// A Convolution Reverb's new space, sent as any device update, is built on
+    /// another thread and reaches the device; its old response goes back to be
+    /// freed. A stale one (for a device that changed again, or left) doesn't play.
+    #[test]
+    fn a_convolution_reverb_gets_the_response_its_new_settings_need() {
+        use crate::model::{ConvolutionParams, ReverbSpace};
+        let (mut engine, mut handle) = crate::detached(SR);
+        let hall = ConvolutionParams { mix: 1.0, ..Default::default() };
+        assert!(handle.send(Command::ReplaceChain { target: Target::Return(1), chain: build_chain(&[Device::new(Effect::Convolution(hall))], SR) }));
+        let playing = |engine: &Engine| match &*engine.returns[1].chain[0].processor {
+            EffectProcessor::Convolution(fx) => fx.playing(),
+            _ => panic!("not a convolution"),
+        };
+        let mut out = vec![0.0; 256 * 2];
+        engine.process(&mut out, 2);
+        assert_eq!(playing(&engine).space, ReverbSpace::Hall);
+        // Two quick changes: only the last one counts.
+        for space in [ReverbSpace::Plate, ReverbSpace::Spring] {
+            let device = Device::new(Effect::Convolution(ConvolutionParams { space, ..hall }));
+            assert!(handle.send(Command::UpdateDevice { target: Target::Return(1), index: 0, device }));
+        }
+        let started = std::time::Instant::now();
+        let mut freed = 0;
+        while playing(&engine).space != ReverbSpace::Spring || freed == 0 {
+            assert!(started.elapsed().as_secs() < 20, "the new response never came");
+            engine.process(&mut out, 2);
+            freed += handle.collect_garbage();
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
+        assert_eq!(handle.building_reverbs(), 0);
+        // Nothing more to do: the engine stops looking.
+        for _ in 0..40 {
+            engine.process(&mut out, 2);
+        }
+        assert_eq!(engine.kernels_busy, 0);
+        // A response for a device that is gone is handed back.
+        assert!(handle.send(Command::UpdateDevice { target: Target::Return(1), index: 0, device: Device::new(Effect::Convolution(ConvolutionParams { space: ReverbSpace::Room, ..hall })) }));
+        assert!(handle.send(Command::ReplaceChain { target: Target::Return(1), chain: Box::default() }));
+        let started = std::time::Instant::now();
+        let mut back = 0;
+        while back < 2 {
+            assert!(started.elapsed().as_secs() < 20, "the stale response never came back");
+            engine.process(&mut out, 2);
+            back += handle.collect_garbage();
+            std::thread::sleep(std::time::Duration::from_micros(200));
+        }
     }
 }

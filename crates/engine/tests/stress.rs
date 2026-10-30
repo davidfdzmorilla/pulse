@@ -8,7 +8,7 @@
 //!   PULSE_SOAK_MINUTES=60 cargo test --release -p engine --test stress -- --ignored --nocapture soak_long_session
 
 use engine::model::{
-    AudioClip, AutomationLane, AutomationPoint, Device, Effect, InstrumentKind, MidiClip, Note, Param, PluginId, WarpMode,
+    AudioClip, AutomationLane, AutomationPoint, ConvolutionParams, Device, Effect, InstrumentKind, MidiClip, Note, Param, PluginId, WarpMode,
 
 };
 use engine::wavetable::{builtin, Wavetable};
@@ -225,7 +225,8 @@ fn is_drums(kind: &InstrumentKind) -> bool {
 }
 
 /// Puts a big project on the engine: `tracks` tracks, each with an instrument, a busy
-/// arrangement clip, 4–8 effects and automation; 2 returns with reverb and delay; a
+/// arrangement clip, 4–8 effects and automation; 3 returns with reverb, delay and a
+/// convolution reverb; a
 /// master chain; audio clips on every eighth track; a 16-bar loop; and plays it.
 fn load_big_project(engine: &mut Engine, handle: &mut EngineHandle, tracks: usize) {
     use engine::model::*;
@@ -271,6 +272,9 @@ fn load_big_project(engine: &mut Engine, handle: &mut EngineHandle, tracks: usiz
         send(engine, handle, Command::SetAutomation { target: Target::Track(t), lanes: Box::new(lanes) });
         send(engine, handle, Command::SetSend { track: t, send: 0, amount: 0.3 });
         send(engine, handle, Command::SetSend { track: t, send: 1, amount: 0.2 });
+        if t % 2 == 0 {
+            send(engine, handle, Command::SetSend { track: t, send: 2, amount: 0.15 });
+        }
         send(engine, handle, Command::SetGain { target: Target::Track(t), gain: 0.25 });
         // An arpeggiator on every sixth track.
         if t % 6 == 5 {
@@ -281,6 +285,7 @@ fn load_big_project(engine: &mut Engine, handle: &mut EngineHandle, tracks: usiz
     }
     send(engine, handle, Command::ReplaceChain { target: Target::Return(0), chain: build_chain(&[Device::new(Effect::Reverb(ReverbParams { size: 0.9, mix: 1.0, ..Default::default() }))], SR) });
     send(engine, handle, Command::ReplaceChain { target: Target::Return(1), chain: build_chain(&[Device::new(Effect::Delay(DelayParams { mix: 1.0, ..Default::default() }))], SR) });
+    send(engine, handle, Command::ReplaceChain { target: Target::Return(2), chain: build_chain(&[Device::new(Effect::Convolution(ConvolutionParams { mix: 1.0, ..Default::default() }))], SR) });
     let master = [
         Device::new(Effect::Eq3(Eq3Params::default())),
         Device::new(Effect::Compressor(CompressorParams::default())),
@@ -545,12 +550,31 @@ fn the_audio_thread_does_not_allocate() {
         change_allocs.1 += f;
         handle.collect_garbage();
     }
+    // A Convolution Reverb's new space and decay: its response is built on
+    // another thread, crossfaded in, and the old one handed back.
+    let plate = ConvolutionParams { space: engine::model::ReverbSpace::Plate, decay: 1.3, mix: 1.0, ..Default::default() };
+    assert!(handle.send(Command::UpdateDevice { target: Target::Return(2), index: 0, device: Device::new(Effect::Convolution(plate)) }));
+    let started = Instant::now();
+    let (mut reverb_allocs, mut handed_back, mut after_built) = ((0, 0), 0, 0);
+    while handed_back == 0 || after_built < 40 {
+        assert!(started.elapsed().as_secs() < 30, "the new response never came");
+        let (_, a, f) = counting(|| engine.process(&mut out, 2));
+        reverb_allocs.0 += a;
+        reverb_allocs.1 += f;
+        handed_back += handle.collect_garbage();
+        if handle.building_reverbs() == 0 {
+            after_built += 1;
+        } else {
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
     let (_, after_allocs, after_frees) = counting(|| {
         for _ in 0..(10.0 * SR / 256.0) as usize {
             engine.process(&mut out, 2);
         }
     });
-    println!("carga: {load_allocs}/{load_frees} · reproducción: {allocs}/{frees} · cambios: {change_allocs:?} · después: {after_allocs}/{after_frees}");
+    println!("carga: {load_allocs}/{load_frees} · reproducción: {allocs}/{frees} · cambios: {change_allocs:?} · reverb nueva: {reverb_allocs:?} · después: {after_allocs}/{after_frees}");
+    assert_eq!(reverb_allocs, (0, 0), "a convolution reverb's new response allocates");
     assert_eq!((load_allocs, load_frees), (0, 0), "taking a project load allocates");
     assert_eq!((allocs, frees), (0, 0), "playing allocates");
     assert_eq!(change_allocs, (0, 0), "changes while playing allocate");

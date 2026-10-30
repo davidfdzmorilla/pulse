@@ -2257,6 +2257,125 @@ impl Default for ReverbParams {
     }
 }
 
+/// The spaces a Convolution Reverb («Espacio») sounds like: Pulse synthesizes
+/// their impulse responses (see `engine::convolution`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ReverbSpace {
+    /// Short early reflections: a little air around a sound.
+    Ambience,
+    Room,
+    Studio,
+    Hall,
+    BigHall,
+    Cathedral,
+    Plate,
+    Spring,
+    /// A very long, slow-blooming wash, for pads.
+    Infinite,
+}
+
+impl ReverbSpace {
+    pub const ALL: [ReverbSpace; 9] = [
+        ReverbSpace::Ambience,
+        ReverbSpace::Room,
+        ReverbSpace::Studio,
+        ReverbSpace::Hall,
+        ReverbSpace::BigHall,
+        ReverbSpace::Cathedral,
+        ReverbSpace::Plate,
+        ReverbSpace::Spring,
+        ReverbSpace::Infinite,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            ReverbSpace::Ambience => "Ambiente",
+            ReverbSpace::Room => "Habitación",
+            ReverbSpace::Studio => "Estudio",
+            ReverbSpace::Hall => "Sala",
+            ReverbSpace::BigHall => "Sala grande",
+            ReverbSpace::Cathedral => "Catedral",
+            ReverbSpace::Plate => "Placa",
+            ReverbSpace::Spring => "Muelle",
+            ReverbSpace::Infinite => "Infinito",
+        }
+    }
+
+    pub fn hint(self) -> &'static str {
+        match self {
+            ReverbSpace::Ambience => "Solo las primeras reflexiones de un cuarto: aire y cuerpo sin cola. Para batería, voces secas o bajo",
+            ReverbSpace::Room => "Un cuarto pequeño: cerca y natural, para batería y guitarras",
+            ReverbSpace::Studio => "La sala de grabación de un estudio: algo más grande y muy controlada",
+            ReverbSpace::Hall => "Una sala de conciertos: la reverb larga y redonda de toda la vida",
+            ReverbSpace::BigHall => "Una sala enorme: colas largas para pads, cuerdas y voces épicas",
+            ReverbSpace::Cathedral => "Piedra y techos altos: muy larga, y los graves duran más",
+            ReverbSpace::Plate => "Una placa de metal, como las de los estudios de los 60: densa desde el primer instante y brillante. La de las voces y la caja",
+            ReverbSpace::Spring => "Un tanque de muelles de amplificador: el «boing» del dub y el surf",
+            ReverbSpace::Infinite => "Una cola de muchos segundos que entra despacio: un colchón para pads y ambient",
+        }
+    }
+}
+
+/// A convolution reverb: a synthesized space plus what shapes its sound.
+/// `space`, `decay` and `size` make its impulse response (changing them builds
+/// a new one off the audio thread); the rest act at once and can be automated.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ConvolutionParams {
+    pub space: ReverbSpace,
+    /// The space's decay times, scaled (see [`ConvolutionParams::DECAY`]).
+    pub decay: f32,
+    /// The space's dimensions, scaled (see [`ConvolutionParams::SIZE`]):
+    /// later, sparser reflections.
+    pub size: f32,
+    pub predelay_ms: f32,
+    /// High-pass on the reverb, Hz.
+    pub low_cut_hz: f32,
+    /// Low-pass on the reverb, Hz.
+    pub high_cut_hz: f32,
+    pub width: f32,
+    pub mix: f32,
+}
+
+impl Default for ConvolutionParams {
+    fn default() -> Self {
+        Self { space: ReverbSpace::Hall, decay: 1.0, size: 1.0, predelay_ms: 10.0, low_cut_hz: 100.0, high_cut_hz: 16_000.0, width: 1.0, mix: 0.3 }
+    }
+}
+
+impl ConvolutionParams {
+    pub const DECAY: std::ops::RangeInclusive<f32> = 0.25..=2.0;
+    pub const SIZE: std::ops::RangeInclusive<f32> = 0.5..=1.5;
+
+    pub fn with_space(self, space: ReverbSpace) -> Self {
+        Self { space, ..self }
+    }
+
+    /// Factory settings, «Category · Name».
+    pub fn presets() -> Vec<(&'static str, ConvolutionParams)> {
+        #[allow(clippy::too_many_arguments)]
+        fn p(space: ReverbSpace, decay: f32, size: f32, predelay_ms: f32, low_cut_hz: f32, high_cut_hz: f32, width: f32, mix: f32) -> ConvolutionParams {
+            ConvolutionParams { space, decay, size, predelay_ms, low_cut_hz, high_cut_hz, width, mix }
+        }
+        use ReverbSpace::*;
+        vec![
+            ("Voces · Placa brillante", p(Plate, 0.9, 1.0, 35.0, 250.0, 18_000.0, 1.0, 0.25)),
+            ("Voces · Sala cálida", p(Hall, 0.8, 0.9, 25.0, 200.0, 7_000.0, 1.0, 0.25)),
+            ("Voces · Muelle vintage", p(Spring, 1.0, 1.0, 0.0, 150.0, 6_000.0, 0.7, 0.25)),
+            ("Batería · Habitación", p(Room, 1.0, 1.0, 0.0, 150.0, 14_000.0, 1.0, 0.2)),
+            ("Batería · Estudio", p(Studio, 1.0, 1.0, 5.0, 120.0, 12_000.0, 1.0, 0.2)),
+            ("Batería · Ambiente", p(Ambience, 1.0, 1.0, 0.0, 200.0, 16_000.0, 1.0, 0.3)),
+            ("Batería · Placa de caja", p(Plate, 0.6, 0.8, 10.0, 300.0, 12_000.0, 1.0, 0.25)),
+            ("Pads · Catedral", p(Cathedral, 1.0, 1.0, 40.0, 150.0, 10_000.0, 1.0, 0.4)),
+            ("Pads · Sala grande", p(BigHall, 1.2, 1.2, 30.0, 150.0, 12_000.0, 1.0, 0.35)),
+            ("Ambiente · Infinito", p(Infinite, 1.5, 1.0, 60.0, 150.0, 9_000.0, 1.0, 0.5)),
+            ("Ambiente · Catedral oscura", p(Cathedral, 1.8, 1.3, 80.0, 120.0, 4_500.0, 1.0, 0.45)),
+            ("Retorno · Sala", p(Hall, 1.0, 1.0, 20.0, 200.0, 12_000.0, 1.0, 1.0)),
+            ("Retorno · Placa", p(Plate, 1.0, 1.0, 25.0, 250.0, 16_000.0, 1.0, 1.0)),
+            ("Retorno · Habitación", p(Room, 1.0, 1.0, 5.0, 200.0, 14_000.0, 1.0, 1.0)),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SaturatorParams {
     pub drive_db: f32,
@@ -2752,6 +2871,8 @@ pub enum Effect {
     DeEsser(DeEsserParams),
     Delay(DelayParams),
     Reverb(ReverbParams),
+    /// A convolution reverb with spaces synthesized by Pulse.
+    Convolution(ConvolutionParams),
     Saturator(SaturatorParams),
     AutoFilter(AutoFilterParams),
     Chorus(ChorusParams),
@@ -2770,7 +2891,7 @@ pub enum Effect {
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 19] {
+    pub fn catalog() -> [Effect; 20] {
         [
             Effect::Eq3(Default::default()),
             Effect::EqEight(Default::default()),
@@ -2790,6 +2911,7 @@ impl Effect {
             Effect::Phaser(Default::default()),
             Effect::Delay(Default::default()),
             Effect::Reverb(Default::default()),
+            Effect::Convolution(Default::default()),
             Effect::Utility(Default::default()),
         ]
     }
@@ -2799,6 +2921,7 @@ impl Effect {
         match self {
             Effect::Glue(_) => GlueParams::presets().into_iter().map(|(n, p)| (n, Effect::Glue(p))).collect(),
             Effect::Multiband(_) => MultibandParams::presets().into_iter().map(|(n, p)| (n, Effect::Multiband(p))).collect(),
+            Effect::Convolution(_) => ConvolutionParams::presets().into_iter().map(|(n, p)| (n, Effect::Convolution(p))).collect(),
             _ => Vec::new(),
         }
     }
@@ -2830,7 +2953,9 @@ impl Effect {
     /// effect at most.
     pub fn fits_in_synths(&self) -> bool {
         // A Tuner tunes a voice coming in, not a synth (which plays in tune).
-        self.params().len() <= MOD_FX_SLOTS && !matches!(self, Effect::Tuner(_))
+        // A Convolution Reverb's impulse responses are rebuilt off the audio
+        // thread through the engine's handle, which a synth's effects never see.
+        self.params().len() <= MOD_FX_SLOTS && !matches!(self, Effect::Tuner(_) | Effect::Convolution(_))
     }
 
     pub fn label(&self) -> &'static str {
@@ -2844,6 +2969,7 @@ impl Effect {
             Effect::DeEsser(_) => "De-esser",
             Effect::Delay(_) => "Delay",
             Effect::Reverb(_) => "Reverb",
+            Effect::Convolution(_) => "Espacio",
             Effect::Saturator(_) => "Saturator",
             Effect::AutoFilter(_) => "Auto Filter",
             Effect::Chorus(_) => "Chorus",
@@ -3019,6 +3145,13 @@ const DELAY_PARAMS: [ParamInfo; 3] = [
 const REVERB_PARAMS: [ParamInfo; 4] = [
     ParamInfo::linear("Size", 0.0, 1.0, 0.75, Percent),
     ParamInfo::linear("Damping", 0.0, 1.0, 0.5, Percent),
+    ParamInfo::linear("Width", 0.0, 1.0, 1.0, Percent),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 0.3, Percent),
+];
+const CONVOLUTION_PARAMS: [ParamInfo; 5] = [
+    ParamInfo::linear("Pre-delay", 0.0, 250.0, 10.0, Milliseconds),
+    ParamInfo::log("Low Cut", 20.0, 2000.0, 100.0, Hertz),
+    ParamInfo::log("High Cut", 1000.0, 20000.0, 16000.0, Hertz),
     ParamInfo::linear("Width", 0.0, 1.0, 1.0, Percent),
     ParamInfo::linear("Dry/Wet", 0.0, 1.0, 0.3, Percent),
 ];
@@ -3537,6 +3670,7 @@ impl Effect {
             Effect::DeEsser(_) => &DE_ESSER_PARAMS,
             Effect::Delay(_) => &DELAY_PARAMS,
             Effect::Reverb(_) => &REVERB_PARAMS,
+            Effect::Convolution(_) => &CONVOLUTION_PARAMS,
             Effect::Saturator(_) => &SATURATOR_PARAMS,
             Effect::AutoFilter(_) => &AUTO_FILTER_PARAMS,
             Effect::Chorus(_) => &CHORUS_PARAMS,
@@ -3586,6 +3720,11 @@ impl Effect {
             (Effect::Reverb(p), 1) => &mut p.damping,
             (Effect::Reverb(p), 2) => &mut p.width,
             (Effect::Reverb(p), 3) => &mut p.mix,
+            (Effect::Convolution(p), 0) => &mut p.predelay_ms,
+            (Effect::Convolution(p), 1) => &mut p.low_cut_hz,
+            (Effect::Convolution(p), 2) => &mut p.high_cut_hz,
+            (Effect::Convolution(p), 3) => &mut p.width,
+            (Effect::Convolution(p), 4) => &mut p.mix,
             (Effect::Saturator(p), 0) => &mut p.drive_db,
             (Effect::Saturator(p), 1) => &mut p.output_db,
             (Effect::Saturator(p), 2) => &mut p.mix,

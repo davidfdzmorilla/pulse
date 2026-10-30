@@ -7,7 +7,7 @@
 //! handed back to the UI thread as [`Garbage`] to be freed there.
 
 use crate::effects::{EffectProcessor, ProcessContext};
-use crate::model::{db_to_gain, AudioClip, AutomationLane, Fades, Device, Effect, Groove, InstrumentKind, MidiClip, Param, PluginId, WarpMode};
+use crate::model::{db_to_gain, AudioClip, AutomationLane, Fades, Device, Effect, Groove, InstrumentKind, MidiClip, MidiControl, Param, PluginId, WarpMode, MIDI_CONTROLS};
 use crate::plugin::PluginProcessor;
 use crate::sample::Sample;
 use crate::instruments::{AcidBass, DrumMachine, FmSynth, SuperSaw};
@@ -200,6 +200,39 @@ pub enum Controller {
     Pressure,
     /// Polyphonic pressure on one key, 0..1.
     PolyPressure,
+}
+
+impl From<MidiControl> for Controller {
+    fn from(control: MidiControl) -> Self {
+        match control {
+            MidiControl::PitchBend => Controller::PitchBend,
+            MidiControl::Pressure => Controller::Pressure,
+            MidiControl::Cc(n) => Controller::Cc(n & 127),
+        }
+    }
+}
+
+impl Controller {
+    /// The clip lane it records into, if it can be one (see [`MidiControl::recordable`]).
+    pub fn lane(self) -> Option<MidiControl> {
+        let control = match self {
+            Controller::PitchBend => MidiControl::PitchBend,
+            Controller::Pressure => MidiControl::Pressure,
+            Controller::Cc(n) => MidiControl::Cc(n & 127),
+            Controller::PolyPressure => return None,
+        };
+        control.recordable().then_some(control)
+    }
+}
+
+/// A controller moved live while recording, in transport beats. Sent to the UI
+/// as it comes, for the take's lanes.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RecordedControl {
+    pub track: usize,
+    pub control: MidiControl,
+    pub value: f32,
+    pub beat: f64,
 }
 
 /// A note captured while recording, in transport beats. Sent to the UI on note-off.
@@ -919,6 +952,17 @@ impl Instrument {
         true
     }
 
+    /// Opens or closes the filter of the subtractive synths by `ratio`.
+    fn set_brightness(&mut self, ratio: f32) {
+        match self {
+            Self::Synth(s) => s.set_brightness(ratio),
+            Self::SuperSaw(s) => s.set_brightness(ratio),
+            Self::Acid(a) => a.set_brightness(ratio),
+            Self::Wavetable(w, _) => w.set_brightness(ratio),
+            _ => {}
+        }
+    }
+
     /// The modular synth and plugins follow controllers.
     fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
         match self {
@@ -1001,53 +1045,111 @@ fn capture_end(held: &mut [Option<(f64, f32)>; 128], recorded: &mut rtrb::Produc
 /// Pitch bend range of the built-in instruments, in semitones.
 const BEND_SEMITONES: f32 = 2.0;
 /// The modulation wheel's vibrato: its rate, its depth at full wheel (semitones) and how
-/// often its pitch is updated (frames).
-const VIBRATO_HZ: f32 = 5.5;
+/// often its pitch is updated (frames, on the [`SUB_BLOCK`] grid).
+const VIBRATO_HZ: f64 = 5.5;
 const VIBRATO_SEMITONES: f32 = 0.5;
-const VIBRATO_STEP: usize = 64;
+const VIBRATO_STEP: u64 = SUB_BLOCK;
+/// Octaves the brightness controller (CC 74) moves the cutoff either way, and
+/// that full pressure opens it.
+const BRIGHT_OCTAVES: f32 = 3.0;
+const PRESSURE_OCTAVES: f32 = 2.0;
+/// How fast the expression controller (CC 11) moves the level: about 5 ms.
+const EXPRESSION_GLIDE: f32 = 0.005;
 
-/// What the pitch bend and the modulation wheel do to a track's built-in instrument:
-/// bend it up to two semitones either way, and add vibrato. (The modular synth and
-/// plugins take the controllers themselves.)
-#[derive(Clone, Copy, Debug, Default)]
+/// What the controllers do to a track's built-in instrument: the pitch bend
+/// bends it up to two semitones either way, the modulation wheel adds vibrato,
+/// brightness (CC 74) and pressure open the filter of the subtractive synths,
+/// and expression (CC 11) sets its level. (The modular synth and plugins take
+/// the controllers themselves.) At rest, none changes the sound.
+#[derive(Clone, Copy, Debug)]
 struct Expression {
     /// -1..1.
     bend: f32,
     /// 0..1.
     wheel: f32,
-    /// The vibrato's phase, 0..1.
-    phase: f32,
+    /// 0..1, at rest 0.5.
+    brightness: f32,
+    /// 0..1.
+    pressure: f32,
+    /// The level expression asks for, and the level now (gliding to it).
+    level: f32,
+    gain: f32,
+    /// The pitch ratio set last, and whether a controller changed it since.
+    ratio: f32,
+    changed: bool,
+}
+
+impl Default for Expression {
+    fn default() -> Self {
+        Self { bend: 0.0, wheel: 0.0, brightness: 0.5, pressure: 0.0, level: 1.0, gain: 1.0, ratio: 1.0, changed: false }
+    }
 }
 
 impl Expression {
-    fn control(&mut self, controller: Controller, value: f32) {
+    fn control(&mut self, instrument: &mut Instrument, controller: Controller, value: f32) {
+        let (brightness, pressure) = (self.brightness, self.pressure);
         match controller {
             Controller::PitchBend => self.bend = value.clamp(-1.0, 1.0),
             Controller::Cc(1) => self.wheel = value.clamp(0.0, 1.0),
+            Controller::Cc(11) => self.level = value.clamp(0.0, 1.0),
+            Controller::Cc(74) => self.brightness = value.clamp(0.0, 1.0),
+            Controller::Pressure => self.pressure = value.clamp(0.0, 1.0),
             // All notes off and reset controllers bring the wheels back.
-            Controller::Cc(121) => *self = Expression { phase: self.phase, ..Default::default() },
-            _ => {}
+            Controller::Cc(121) => *self = Expression { gain: self.gain, ratio: self.ratio, ..Default::default() },
+            _ => return,
+        }
+        self.changed = true;
+        if (self.brightness, self.pressure) != (brightness, pressure) {
+            let octaves = (self.brightness - 0.5) * 2.0 * BRIGHT_OCTAVES + self.pressure * PRESSURE_OCTAVES;
+            instrument.set_brightness(2f32.powf(octaves));
         }
     }
 
-    /// The frequency ratio now.
-    fn ratio(&self) -> f32 {
-        let vibrato = (self.phase * std::f32::consts::TAU).sin() * self.wheel * VIBRATO_SEMITONES;
+    /// The frequency ratio at frame `at` (counted as `Engine::rendered` is).
+    fn ratio_at(&self, at: u64, sr: f32) -> f32 {
+        let vibrato = if self.wheel > 0.0 {
+            let phase = (at as f64 * VIBRATO_HZ / sr as f64).fract() as f32;
+            (phase * std::f32::consts::TAU).sin() * self.wheel * VIBRATO_SEMITONES
+        } else {
+            0.0
+        };
         2f32.powf((self.bend * BEND_SEMITONES + vibrato) / 12.0)
     }
 
-    /// Renders `instrument`, bent and with vibrato, updating the pitch every few frames.
-    fn render(&mut self, instrument: &mut Instrument, sr: f32, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
+    /// Renders `instrument` from frame `at`, bent and with vibrato, its pitch
+    /// updated on the grid's frames (and when a controller moved), then at its level.
+    #[allow(clippy::too_many_arguments)]
+    fn render(&mut self, instrument: &mut Instrument, sr: f32, at: u64, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
         if !instrument.set_pitch(1.0) {
             instrument.render(samples, tables, left, right);
-            self.phase = (self.phase + left.len() as f32 * VIBRATO_HZ / sr).fract();
             return;
         }
-        let step = if self.wheel > 0.0 { VIBRATO_STEP } else { left.len().max(1) };
-        for (l, r) in left.chunks_mut(step).zip(right.chunks_mut(step)) {
-            instrument.set_pitch(self.ratio());
-            instrument.render(samples, tables, l, r);
-            self.phase = (self.phase + l.len() as f32 * VIBRATO_HZ / sr).fract();
+        let mut done = 0;
+        while done < left.len() {
+            let frame = at + done as u64;
+            // With vibrato, a new pitch at each step of the grid; without, only when bent.
+            let to_step = if self.wheel > 0.0 { (VIBRATO_STEP - frame % VIBRATO_STEP) as usize } else { left.len() - done };
+            let n = to_step.min(left.len() - done);
+            if self.changed || (self.wheel > 0.0 && frame % VIBRATO_STEP == 0) {
+                self.ratio = self.ratio_at(frame, sr);
+                self.changed = false;
+            }
+            instrument.set_pitch(self.ratio);
+            instrument.render(samples, tables, &mut left[done..done + n], &mut right[done..done + n]);
+            done += n;
+        }
+        if self.gain != 1.0 || self.level != 1.0 {
+            let k = 1.0 - (-1.0 / (EXPRESSION_GLIDE * sr)).exp();
+            // Level as heard: squared, as General MIDI's expression.
+            let target = self.level * self.level;
+            for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+                self.gain += (target - self.gain) * k;
+                if (self.gain - target).abs() < 1e-6 {
+                    self.gain = target;
+                }
+                *l *= self.gain;
+                *r *= self.gain;
+            }
         }
     }
 }
@@ -1088,6 +1190,9 @@ struct Timing {
     /// Where the transport jumps back (the loop's end), if it does from here:
     /// arrangement notes end there.
     loop_end: f64,
+    /// The segment starts on a frame of the [`SUB_BLOCK`] grid: clips' controller
+    /// lanes are read there (the same frames whatever the buffer size).
+    grid: bool,
 }
 
 impl Timing {
@@ -1606,6 +1711,9 @@ struct Track {
     midi_fx: crate::midi_fx::MidiChain,
     /// Pitch bend and modulation wheel for the built-in instruments.
     expression: Expression,
+    /// The value each controller was last given by a clip's lanes (NaN: none
+    /// did since it was last at rest), by [`MidiControl::index`].
+    controls_sent: [f32; MIDI_CONTROLS],
     armed: bool,
     /// Plays the audio input instead of its clips.
     monitor: bool,
@@ -1706,6 +1814,7 @@ impl Track {
             events: Vec::with_capacity(MAX_EVENTS),
             midi_fx: crate::midi_fx::MidiChain::new(MAX_EVENTS),
             expression: Expression::default(),
+            controls_sent: [f32::NAN; MIDI_CONTROLS],
             armed: false,
             monitor: false,
             recording: None,
@@ -1770,11 +1879,15 @@ impl Track {
         *len = 0;
     }
 
-    /// Queues the note-ons that start in the beat range `[from, to)`.
+    /// Queues the note-ons that start in the beat range `[from, to)`, and the
+    /// controllers the clips' lanes move.
     fn collect_notes(&mut self, play: Playing, from: f64, to: f64, timing: &Timing) {
+        let mut present = [false; MIDI_CONTROLS];
+        let sent = &mut self.controls_sent;
         if let Some(slot) = play.slot {
             if let Some(PlayClip::Midi(clip)) = self.slots[slot].as_deref() {
                 schedule_notes(clip, play.launch_beat, 0, from, to, f64::INFINITY, timing, &mut self.events);
+                schedule_controls(clip, play.launch_beat, f64::INFINITY, from, to, timing, &mut present, sent, &mut self.events);
             }
         } else if play.arrangement {
             for placed in self.arrangement.iter() {
@@ -1784,6 +1897,19 @@ impl Track {
                     // Cut at the loop's end, where the transport jumps back: they end by
                     // themselves, and notes played live go on sounding across it.
                     schedule_notes(clip, placed.start, copy_salt(placed.start), start, end, placed.end().min(timing.loop_end), timing, &mut self.events);
+                    schedule_controls(clip, placed.start, placed.end(), from, to, timing, &mut present, sent, &mut self.events);
+                }
+            }
+        }
+        // On the grid: what no clip holds any more goes back to rest.
+        if timing.grid && from == timing.segment_beat && to > from {
+            for (index, sent) in self.controls_sent.iter_mut().enumerate() {
+                if sent.is_nan() || present[index] {
+                    continue;
+                }
+                *sent = f32::NAN;
+                if let Some(value) = MidiControl::from_index(index).and_then(|c| c.rest().map(|v| (c, v))) {
+                    push_event(&mut self.events, timing.frame(from), Event::Control { controller: value.0.into(), pitch: 0, value: value.1 });
                 }
             }
         }
@@ -1839,7 +1965,76 @@ impl Track {
         self.playing = None;
         self.queued = Queued::Nothing;
         self.instrument.all_notes_off();
+        self.release_controls(0);
     }
+
+    /// The controllers its clips moved go back to rest at `frame` (no bend
+    /// left stuck when they stop).
+    fn release_controls(&mut self, frame: usize) {
+        for (index, sent) in self.controls_sent.iter_mut().enumerate() {
+            if sent.is_nan() {
+                continue;
+            }
+            *sent = f32::NAN;
+            let Some(control) = MidiControl::from_index(index) else { continue };
+            if let Some(value) = control.rest() {
+                push_event(&mut self.events, frame, Event::Control { controller: control.into(), pitch: 0, value });
+            }
+        }
+    }
+}
+
+/// Plays clip `clip`'s controller lanes over `[from, to)` (`origin`: its beat
+/// 0, looping; `end`: where it stops), as events, keeping in `sent` what each
+/// controller was given: on each lap's start, and on the grid frame (see
+/// [`Timing::grid`]), where it marks in `present` the controllers it holds.
+#[allow(clippy::too_many_arguments)]
+fn schedule_controls(clip: &MidiClip, origin: f64, end: f64, from: f64, to: f64, timing: &Timing, present: &mut [bool; MIDI_CONTROLS], sent: &mut [f32; MIDI_CONTROLS], events: &mut EventQueue) {
+    if clip.controls.is_empty() || clip.muted || clip.length < 1e-3 || to <= from {
+        return;
+    }
+    let grid = timing.grid && from == timing.segment_beat;
+    let (from, to) = (from.max(origin), to.min(end));
+    if to <= from {
+        return;
+    }
+    let grid = grid && from == timing.segment_beat;
+    for lane in clip.controls.iter().filter(|l| !l.points.is_empty()) {
+        present[lane.control.index()] = true;
+    }
+    let at = |beat: f64, local: f64, sent: &mut [f32; MIDI_CONTROLS], events: &mut EventQueue| {
+        for lane in &clip.controls {
+            let Some(value) = lane.value_at(local) else { continue };
+            let value = value.clamp(lane.control.min(), 1.0);
+            let index = lane.control.index();
+            if sent[index].to_bits() != value.to_bits() {
+                sent[index] = value;
+                push_event(events, timing.frame(beat), Event::Control { controller: lane.control.into(), pitch: 0, value });
+            }
+        }
+    };
+    if grid {
+        at(from, quantized(from - origin).rem_euclid(clip.length), sent, events);
+    }
+    // Each lap starts where its lanes do.
+    let mut lap = (((from - origin) / clip.length).ceil() as i64).max(0);
+    loop {
+        let beat = origin + lap as f64 * clip.length;
+        if beat >= to {
+            break;
+        }
+        if !(grid && beat == from) {
+            at(beat, 0.0, sent, events);
+        }
+        lap += 1;
+    }
+}
+
+/// A beat rounded to a 2^-24th: the same lane values whatever blocks the
+/// position was added up in.
+fn quantized(beat: f64) -> f64 {
+    const STEPS: f64 = (1u64 << 24) as f64;
+    (beat * STEPS).round() / STEPS
 }
 
 pub struct Engine {
@@ -1850,6 +2045,8 @@ pub struct Engine {
     kernels_busy: usize,
     live: Consumer<LiveNote>,
     recorded: Producer<RecordedNote>,
+    /// Controllers moved while recording, for the takes' lanes (none: not kept).
+    recorded_controls: Option<Producer<RecordedControl>>,
     garbage: Producer<Garbage>,
     shared: Arc<SharedState>,
     sample_rate: f32,
@@ -2057,6 +2254,8 @@ struct Mix {
     apart: [u16; MAX_TRACKS],
     children: [u64; MAX_TRACKS],
     senders: [u64; MAX_RETURNS],
+    /// Frames rendered before this block (see `Engine::rendered`).
+    rendered: u64,
 }
 
 /// A block's tasks: what they share, and where what they process is (each
@@ -2155,7 +2354,7 @@ unsafe fn process_track(job: &Job, index: usize) {
     for &(frame, _, event) in &track.events {
         let frame = frame.min(n - 1);
         if frame > cursor {
-            track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..frame], &mut right[cursor..frame]);
+            track.expression.render(&mut track.instrument, sr, mix.rendered + cursor as u64, &track.samples, &track.tables, &mut left[cursor..frame], &mut right[cursor..frame]);
             cursor = frame;
         }
         match event {
@@ -2163,12 +2362,12 @@ unsafe fn process_track(job: &Job, index: usize) {
             Event::NoteOff { pitch } => track.instrument.note_off(pitch),
             Event::NoteOn { pitch, velocity, gate } => track.instrument.note_on(&track.samples, pitch, velocity, gate),
             Event::Control { controller, pitch, value } => {
-                track.expression.control(controller, value);
+                track.expression.control(&mut track.instrument, controller, value);
                 track.instrument.control(controller, pitch, value);
             }
         }
     }
-    track.expression.render(&mut track.instrument, sr, &track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
+    track.expression.render(&mut track.instrument, sr, mix.rendered + cursor as u64, &track.samples, &track.tables, &mut left[cursor..], &mut right[cursor..]);
     track.events.clear();
 
     let channel = &mut track.channel;
@@ -2351,6 +2550,7 @@ impl Engine {
             kernels_busy: 0,
             live,
             recorded,
+            recorded_controls: None,
             garbage,
             shared: shared.clone(),
             sample_rate,
@@ -2414,6 +2614,17 @@ impl Engine {
     /// Where the new responses of its Convolution Reverbs come from.
     pub(crate) fn set_kernel_queue(&mut self, queue: Consumer<crate::convolution::KernelDelivery>) {
         self.kernels = Some(queue);
+    }
+
+    /// Shares every block among the threads, however light (tests).
+    #[cfg(test)]
+    pub(crate) fn share_always(&mut self) {
+        self.share_above = std::time::Duration::ZERO;
+    }
+
+    /// Where the controllers moved while recording go (see [`RecordedControl`]).
+    pub fn set_control_queue(&mut self, queue: Producer<RecordedControl>) {
+        self.recorded_controls = Some(queue);
     }
 
     /// Gives the Convolution Reverbs the responses built for them, and hands
@@ -3000,6 +3211,11 @@ impl Engine {
                     track.pedal = down;
                 }
                 push_event(&mut track.events, 0, Event::Control { controller, pitch, value: note.velocity });
+                // Into the take's lanes, as notes are.
+                let capturing = self.playing && (track.recording.is_some() || (arrangement_record && track.armed));
+                if let (true, Some(control), Some(queue)) = (capturing, controller.lane(), self.recorded_controls.as_mut()) {
+                    let _ = queue.push(RecordedControl { track: index, control, value: note.velocity.clamp(control.min(), 1.0), beat });
+                }
                 continue;
             }
             if note.velocity > 0.0 {
@@ -3300,7 +3516,7 @@ impl Engine {
             self.plan_block(&wants, &children, &senders);
         }
         let job = Job {
-            mix: Mix { n, ctx, any_solo, soloed, silenced, mutes: self.mutes, ids: self.ids, parents: self.parents, order: self.order, apart, children, senders },
+            mix: Mix { n, ctx, any_solo, soloed, silenced, mutes: self.mutes, ids: self.ids, parents: self.parents, order: self.order, apart, children, senders, rendered: self.rendered },
             tracks: self.tracks.as_mut_ptr(),
             returns: self.returns.as_mut_ptr(),
             key_left: self.key_left.as_mut_ptr(),
@@ -3557,6 +3773,7 @@ impl Engine {
                 frames: n,
                 swing: self.swing,
                 loop_end: if self.loop_enabled && start < self.loop_end { self.loop_end } else { f64::INFINITY },
+                grid: frame == 0 && self.rendered % SUB_BLOCK == 0,
             };
             self.sequence_segment(start, end, &timing);
             frame += frames;

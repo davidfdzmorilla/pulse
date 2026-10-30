@@ -232,6 +232,12 @@ mod tests {
             glued.master.devices.push(engine::model::Device::new(effect));
             assert_eq!(format(&glued), 14);
         }
+        // A MIDI clip with a controller lane (a recorded bend): 15, and it reads back.
+        let mut bent = Project::demo();
+        let Some(Clip::Midi(clip)) = bent.tracks[0].clips[0].as_mut() else { panic!("the demo starts with a MIDI clip") };
+        clip.controls.push(engine::model::ControlLane { control: engine::model::MidiControl::PitchBend, points: vec![engine::model::AutomationPoint { beat: 1.0, value: -0.5, curve: 0.0 }] });
+        assert_eq!(format(&bent), 15);
+        assert_eq!(Project::from_json(&bent.to_json().unwrap()).unwrap().tracks[0].clips[0], bent.tracks[0].clips[0]);
         // A clip split in the middle of a fade: each part a piece of its curve, 9.
         let mut cut = Project::demo();
         let clip = engine::model::AudioClip { hard_start: false, fades: engine::model::Fades::new(4.0, 0.0), name: "a".into(), color: [0; 3], sample: "a.wav".into(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };

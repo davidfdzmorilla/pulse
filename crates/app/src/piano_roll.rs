@@ -29,6 +29,8 @@ const RULER_H: f32 = 16.0;
 /// The strip of chord names under the ruler.
 const CHORD_H: f32 = 15.0;
 const VELOCITY_H: f32 = 60.0;
+/// A controller's lane (pitch bend, the wheel…) is taller: it is drawn on.
+const EXPRESSION_H: f32 = 120.0;
 const LANE_HEADER_H: f32 = 22.0;
 const EDGE_GRAB: f32 = 5.0;
 
@@ -317,7 +319,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let grid_w = clip.length as f32 * beat_w;
     let base = theme::rgb(clip.color);
 
-    let lane_height = (ui.available_height() - VELOCITY_H - LANE_HEADER_H - 8.0).max(60.0);
+    let bottom_h = if state.lane.control.is_some() { EXPRESSION_H } else { VELOCITY_H };
+    let lane_height = (ui.available_height() - bottom_h - LANE_HEADER_H - 8.0).max(60.0);
     let mut scroll = egui::ScrollArea::both()
         .id_salt(("piano_roll", format!("{clip_ref:?}")))
         .auto_shrink(false)
@@ -597,9 +600,19 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let last = ((output.state.offset.y + output.inner_rect.height() - header) / row_h).ceil().max(0.0) as usize;
     state.in_view = pitches.get(first.min(pitches.len())..last.min(pitches.len())).map_or(Vec::new(), |p| p.to_vec());
 
-    // ----- The lane under the notes: a clip envelope or the velocities ----------------
-    crate::clip_envelope::header(ui, &mut state.lane, &mut clip.envelopes);
-    if let Some((param, info, value)) = envelope {
+    // ----- The lane under the notes: a controller, a clip envelope or the velocities ---
+    crate::clip_envelope::header(ui, &mut state.lane, &mut clip.envelopes, Some(&mut clip.controls));
+    if let Some(control) = state.lane.control {
+        let (lane, _) = ui.allocate_exact_size(vec2(ui.available_width(), EXPRESSION_H), Sense::hover());
+        let origin_x = lane.left() + KEY_W - state.scroll_x;
+        let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
+        let beat_of = |x: f32| ((x - origin_x) / beat_w) as f64;
+        let tip = match state.lane.expression.tool {
+            crate::expression_ui::Tool::Pencil => "Arrastra: dibujar · arrastrar un punto: moverlo · doble clic: borrarlo · ⌥ arrastrar entre puntos: curvar",
+            crate::expression_ui::Tool::Line => "Arrastra: una rampa recta · arrastrar un punto: moverlo · doble clic: borrarlo · ⌥ arrastrar entre puntos: curvar",
+        };
+        crate::expression_ui::lane(ui, &mut state.lane.expression, &mut clip.controls, control, clip.length, lane, &x_of, &beat_of, state.grid, theme::ACCENT).on_hover_text(tip);
+    } else if let Some((param, info, value)) = envelope {
         let (lane, _) = ui.allocate_exact_size(vec2(ui.available_width(), VELOCITY_H), Sense::hover());
         let origin_x = lane.left() + KEY_W - state.scroll_x;
         let x_of = |beat: f64| origin_x + beat as f32 * beat_w;

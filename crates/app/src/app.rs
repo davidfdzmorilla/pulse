@@ -96,6 +96,10 @@ impl Audio {
         self.handle.as_mut().map_or_else(Vec::new, |h| h.take_recorded())
     }
 
+    fn take_recorded_controls(&mut self) -> Vec<engine::RecordedControl> {
+        self.handle.as_mut().map_or_else(Vec::new, |h| h.take_recorded_controls())
+    }
+
     pub(crate) fn collect_garbage(&mut self) {
         if let Some(handle) = &mut self.handle {
             handle.collect_garbage();
@@ -2259,6 +2263,8 @@ impl PulseApp {
         // Notes were played while hearing what the engine rendered a moment before.
         let lag = state.output_latency() * self.project.tempo / 60.0;
         let notes: Vec<_> = self.audio.take_recorded().into_iter().map(|n| engine::RecordedNote { start: (n.start - lag).max(0.0), ..n }).collect();
+        let controls: Vec<_> = self.audio.take_recorded_controls().into_iter().map(|c| engine::RecordedControl { beat: (c.beat - lag).max(0.0), ..c }).collect();
+        self.recorder.add_controls(controls);
         let armed: Vec<bool> = self.project.tracks.iter().map(|t| t.armed && !t.is_audio()).collect();
         let looped = self.project.loop_enabled.then_some((self.project.loop_start, self.project.loop_end));
         if state.arrangement_recording.load(Ordering::Relaxed) {
@@ -2276,7 +2282,7 @@ impl PulseApp {
         self.record_clip_automation(state.position(), &recording);
         for take in finished {
             match take {
-                Finished::Session { track, slot, start, length, notes } => {
+                Finished::Session { track, slot, start, length, notes, controls } => {
                     let Some(t) = self.project.tracks.get(track) else { continue };
                     if t.clips[slot].is_some() {
                         continue;
@@ -2295,8 +2301,10 @@ impl PulseApp {
                     }
                     let count = notes.len();
                     let notes = self.quantize_take(notes, start, length);
+                    let expression = crate::expression::expression_note(&controls);
+                    self.show_recorded_expression(&controls);
                     let t = &self.project.tracks[track];
-                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes, groove: None, muted: false };
+                    let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes, groove: None, muted: false, controls };
                     self.set_clip(track, slot, Some(Clip::Midi(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
                     let automation = match moved {
@@ -2304,18 +2312,20 @@ impl PulseApp {
                         1 => " y la automatización de 1 control".into(),
                         n => format!(" y la automatización de {n} controles"),
                     };
-                    self.status = Some(format!("Grabadas {count} notas{automation} en {}", self.project.tracks[track].name));
+                    self.status = Some(format!("Grabadas {count} notas{expression}{automation} en {}", self.project.tracks[track].name));
                 }
-                Finished::Arrangement { track, start, length, notes } => {
+                Finished::Arrangement { track, start, length, notes, controls } => {
                     let notes = self.quantize_take(notes, start, length);
+                    let expression = crate::expression::expression_note(&controls);
+                    self.show_recorded_expression(&controls);
                     let Some(t) = self.project.tracks.get_mut(track) else { continue };
                     let count = notes.len();
-                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color, envelopes: Vec::new(), groove: None, muted: false };
+                    let clip = MidiClip { name: "Toma".into(), length, notes, color: t.color, envelopes: Vec::new(), groove: None, muted: false, controls };
                     t.arrangement.push(ArrangementClip { start, length, clip: Clip::Midi(clip) });
                     let index = t.arrangement.len() - 1;
                     self.sync_arrangement(track);
                     self.select_clip(ClipRef::Arrangement { track, index });
-                    self.status = Some(format!("Grabadas {count} notas en el Arrangement"));
+                    self.status = Some(format!("Grabadas {count} notas{expression} en el Arrangement"));
                 }
                 Finished::ArrangementEnded { passes } => {
                     let clips = self.finish_session_capture();

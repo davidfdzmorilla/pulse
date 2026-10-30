@@ -484,6 +484,8 @@ pub struct WaveSynth {
     last_voice: usize,
     /// Pitch bend and vibrato, as a frequency ratio.
     pitch: f32,
+    /// What the controllers do to the filters' cutoffs, as a ratio.
+    bright: f32,
 }
 
 /// Step sequencer state.
@@ -544,6 +546,7 @@ impl WaveSynth {
             sine: (0..HARMONIC_TABLE).map(|i| (i as f32 / HARMONIC_TABLE as f32 * TAU).sin()).collect(),
             last_voice: 0,
             pitch: 1.0,
+            bright: 1.0,
         }
     }
 
@@ -869,6 +872,11 @@ impl WaveSynth {
         self.pitch = ratio;
     }
 
+    /// Opens (above 1) or closes the filter by `ratio` (brightness, CC 74, and pressure).
+    pub fn set_brightness(&mut self, ratio: f32) {
+        self.bright = ratio;
+    }
+
     pub fn render(&mut self, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], left: &mut [f32], right: &mut [f32]) {
         let mut base = [0f32; PARAMS];
         let mut params = self.params;
@@ -1069,10 +1077,10 @@ impl WaveSynth {
             });
         }
 
-        let cutoff = m[FILTER] * 2f32.powf((voice.note - 60.0) / 12.0 * m[FILTER + 4]);
+        let cutoff = m[FILTER] * self.bright * 2f32.powf((voice.note - 60.0) / 12.0 * m[FILTER + 4]);
         let coefs = p.filter.on.then(|| FilterCoefs::new(p.filter.mode, cutoff, m[FILTER + 1], m[FILTER + 2], m[FILTER + 3], sr));
         let routes = p.filter.routes;
-        let cutoff2 = m[WAVE_FILTER2] * 2f32.powf((voice.note - 60.0) / 12.0 * m[WAVE_FILTER2 + 4]);
+        let cutoff2 = m[WAVE_FILTER2] * self.bright * 2f32.powf((voice.note - 60.0) / 12.0 * m[WAVE_FILTER2 + 4]);
         let coefs2 = p.filter2.on.then(|| FilterCoefs::new(p.filter2.mode, cutoff2, m[WAVE_FILTER2 + 1], m[WAVE_FILTER2 + 2], m[WAVE_FILTER2 + 3], sr));
         let balance = m[WAVE_BALANCE].clamp(0.0, 1.0);
         let parallel = p.filter_parallel && coefs.is_some() && coefs2.is_some();

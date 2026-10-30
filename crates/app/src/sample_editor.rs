@@ -436,7 +436,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     // The clip's envelopes, across the clip's length.
     ui.add_space(4.0);
     let choice = &mut app.piano_roll.lane;
-    crate::clip_envelope::header(ui, choice, &mut clip.envelopes);
+    crate::clip_envelope::header(ui, choice, &mut clip.envelopes, None);
     let (lane, _) = ui.allocate_exact_size(vec2(ui.available_width(), ENVELOPE_H), Sense::hover());
     match envelope {
         Some((param, info, value)) => {

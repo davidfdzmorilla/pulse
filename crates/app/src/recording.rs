@@ -3,9 +3,11 @@
 //! The engine decides when a take starts (quantized) and reports each note on
 //! note-off. The UI collects them per take and builds the clip when the engine
 //! reports the take has ended, so notes flushed at the very end are included.
+//! The controllers moved meanwhile (pitch bend, the wheel…) become the clip's
+//! lanes (see `expression`).
 
-use engine::model::Note;
-use engine::{RecordedNote, SharedState};
+use engine::model::{ControlLane, Note};
+use engine::{RecordedControl, RecordedNote, SharedState};
 use std::sync::atomic::Ordering;
 
 pub struct SessionTake {
@@ -20,6 +22,7 @@ pub struct SessionTake {
     /// Transport position when the user stopped the take.
     pub stop_at: Option<f64>,
     notes: Vec<RecordedNote>,
+    controls: Vec<(usize, RecordedControl)>,
 }
 
 pub struct ArrangementTake {
@@ -28,6 +31,8 @@ pub struct ArrangementTake {
     pub last_position: f64,
     seen: bool,
     notes: Vec<RecordedNote>,
+    /// Controllers moved, with the pass over the loop each came in.
+    controls: Vec<(usize, RecordedControl)>,
     /// The passes over the loop finished so far (beats from, to), and where the
     /// current one began.
     passes: Vec<(f64, f64)>,
@@ -38,8 +43,8 @@ pub struct ArrangementTake {
 
 /// A finished take, ready to become a clip.
 pub enum Finished {
-    Session { track: usize, slot: usize, start: f64, length: f64, notes: Vec<Note> },
-    Arrangement { track: usize, start: f64, length: f64, notes: Vec<Note> },
+    Session { track: usize, slot: usize, start: f64, length: f64, notes: Vec<Note>, controls: Vec<ControlLane> },
+    Arrangement { track: usize, start: f64, length: f64, notes: Vec<Note>, controls: Vec<ControlLane> },
     /// An arrangement take ended; audio tracks record exactly these spans, one per
     /// pass over the loop (one alone without a loop), in the order they were played.
     ArrangementEnded { passes: Vec<(f64, f64)> },
@@ -86,7 +91,7 @@ fn local_notes(notes: &[RecordedNote], start: f64, length: f64) -> Vec<Note> {
 impl Recorder {
     pub fn start_session(&mut self, track: usize, slot: usize) {
         self.session.retain(|t| t.track != track);
-        self.session.push(SessionTake { track, slot, start: None, seen: false, waited: 0, stop_at: None, notes: Vec::new() });
+        self.session.push(SessionTake { track, slot, start: None, seen: false, waited: 0, stop_at: None, notes: Vec::new(), controls: Vec::new() });
     }
 
     pub fn stop_session(&mut self, track: usize, position: f64) {
@@ -96,7 +101,26 @@ impl Recorder {
     }
 
     pub fn start_arrangement(&mut self, start: f64) {
-        self.arrangement = Some(ArrangementTake { start, last_position: start, seen: false, notes: Vec::new(), passes: Vec::new(), pass_start: start, punched_out: false });
+        self.arrangement = Some(ArrangementTake { start, last_position: start, seen: false, notes: Vec::new(), controls: Vec::new(), passes: Vec::new(), pass_start: start, punched_out: false });
+    }
+
+    /// Distributes controllers moved while recording among the takes. Over the
+    /// Arrangement each goes with the pass over the loop it came in.
+    pub fn add_controls(&mut self, controls: Vec<RecordedControl>) {
+        for control in controls {
+            if let Some(take) = self.session.iter_mut().find(|t| t.track == control.track) {
+                take.controls.push((0, control));
+            } else if let Some(take) = &mut self.arrangement {
+                // Back before the last one of its track: the loop came round.
+                let last = take.controls.iter().rev().find(|(_, c)| c.track == control.track).map(|&(pass, c)| (pass, c.beat));
+                let pass = match last {
+                    Some((pass, beat)) if control.beat + 1e-6 < beat => (pass + 1).max(take.passes.len()),
+                    Some((pass, _)) => pass.max(take.passes.len()),
+                    None => take.passes.len(),
+                };
+                take.controls.push((pass, control));
+            }
+        }
     }
 
     /// Distributes captured notes and returns the takes that ended this frame.
@@ -139,6 +163,7 @@ impl Recorder {
                         start,
                         length,
                         notes: local_notes(&take.notes, start, length),
+                        controls: crate::expression::take_lanes(&take.controls, start, length),
                     });
                     false
                 }
@@ -180,7 +205,8 @@ impl Recorder {
                 let start = if start < punch_in { punch_in } else { start };
                 for (track, &is_armed) in armed.iter().enumerate() {
                     let notes: Vec<RecordedNote> = take.notes.iter().filter(|n| n.track == track).copied().collect();
-                    if !is_armed || notes.is_empty() {
+                    let controls: Vec<(usize, RecordedControl)> = take.controls.iter().filter(|(_, c)| c.track == track && c.beat >= punch_in - 1e-9 && c.beat < punch_out).copied().collect();
+                    if !is_armed || (notes.is_empty() && controls.is_empty()) {
                         continue;
                     }
                     let length = match looped {
@@ -191,12 +217,12 @@ impl Recorder {
                     if length <= 0.0 {
                         continue;
                     }
-                    finished.push(Finished::Arrangement {
-                        track,
-                        start,
-                        length,
-                        notes: local_notes(&notes, start, length),
-                    });
+                    let controls = crate::expression::take_lanes(&controls, start, length);
+                    let notes = local_notes(&notes, start, length);
+                    if notes.is_empty() && controls.is_empty() {
+                        continue;
+                    }
+                    finished.push(Finished::Arrangement { track, start, length, notes, controls });
                 }
             }
         }
@@ -708,5 +734,196 @@ mod tests {
             let Clip::Audio(take) = &lane[0].clip else { panic!() };
             assert!(std::path::Path::new(&take.sample).exists(), "{}", take.sample);
         }
+    }
+
+    /// Pitch bend and the wheel played while recording a session clip, on a real
+    /// engine run by hand: they become the clip's lanes, in clip time, thinned,
+    /// and the clip plays them back.
+    #[test]
+    fn the_bend_and_the_wheel_played_while_recording_become_the_clips_lanes() {
+        use engine::model::MidiControl;
+        use engine::Controller;
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+            track.clips = Default::default();
+        }
+        app.project.tempo = 120.0;
+        app.sync_all();
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).ceil() as usize {
+                engine.process(&mut buffer, 2);
+                app.update_recording();
+            }
+        };
+        app.toggle_arm(1);
+        app.record_slot(1, 0);
+        run(&mut app, 0.5);
+        let start = app.recorder.session.first().and_then(|t| t.start).expect("the take started");
+        let live = app.audio.live().unwrap();
+        live.send(engine::LiveNote::note(60, 0.8));
+        run(&mut app, 1.0);
+        // The bend up over a beat, a value every 1/32 of a beat (as a wheel sends them).
+        for step in 0..=32 {
+            live.send(engine::LiveNote::control(Controller::PitchBend, 0, step as f32 / 32.0));
+            run(&mut app, 1.0 / 32.0);
+        }
+        // The wheel all the way up at once; the pedal (a note length, not a lane).
+        live.send(engine::LiveNote::control(Controller::Cc(1), 0, 1.0));
+        live.send(engine::LiveNote::control(Controller::Cc(64), 0, 1.0));
+        run(&mut app, 0.5);
+        live.send(engine::LiveNote::control(Controller::PitchBend, 0, 0.0));
+        live.send(engine::LiveNote::note(60, 0.0));
+        live.send(engine::LiveNote::control(Controller::Cc(64), 0, 0.0));
+        run(&mut app, 0.5);
+        app.stop_session_recording(1);
+        run(&mut app, 4.5);
+        let Some(engine::model::Clip::Midi(clip)) = &app.project.tracks[1].clips[0] else { panic!("a recorded clip") };
+        let controls: Vec<MidiControl> = clip.controls.iter().map(|l| l.control).collect();
+        assert_eq!(controls, vec![MidiControl::PitchBend, MidiControl::Cc(1)], "no pedal lane");
+        let bend = &clip.controls[0];
+        assert!(bend.points.len() < 12, "a straight sweep needs few points: {:?}", bend.points);
+        // In clip time (the take started at `start`): up from beat 1.5 of the song
+        // to 1 by about 2.9 (the steps come every two blocks of 512 frames).
+        let local = |beat: f64| bend.value_at(beat - start).unwrap();
+        assert!(local(1.45) < 0.05, "{}", local(1.45));
+        assert!((local(2.2) - 0.5).abs() < 0.1, "{} (take at {start})", local(2.2));
+        assert!(local(2.95) > 0.95);
+        assert!(local(3.5).abs() < 1e-6, "back at rest");
+        let wheel = &clip.controls[1];
+        assert_eq!(wheel.value_at(clip.length - 0.1), Some(1.0));
+        assert!(app.status.as_deref().unwrap_or("").contains("pitch bend"), "{:?}", app.status);
+        assert_eq!(app.piano_roll.lane.control, Some(MidiControl::PitchBend), "the editor shows the lane");
+    }
+
+    /// Over the loop on the Arrangement, a later pass replaces the bend only
+    /// where it moved it; what the first pass did elsewhere stays.
+    #[test]
+    fn a_later_pass_over_the_loop_rewrites_only_where_it_bends() {
+        use engine::model::{Clip, MidiControl};
+        use engine::Controller;
+        use crate::midi_map::Transport;
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+            track.arrangement.clear();
+        }
+        app.project.tempo = 120.0;
+        (app.project.loop_enabled, app.project.loop_start, app.project.loop_end) = (true, 0.0, 4.0);
+        app.sync_all();
+        app.sync_loop();
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).round() as usize {
+                engine.process(&mut buffer, 2);
+                app.update_recording();
+            }
+        };
+        app.selected_target = engine::Target::Track(1);
+        app.transport(Transport::Record);
+        let live = app.audio.live().unwrap();
+        // Pass 1: bent down all through.
+        live.send(engine::LiveNote::control(Controller::PitchBend, 0, -0.5));
+        run(&mut app, 4.0);
+        // Pass 2: up only from beat 2 to 3.
+        run(&mut app, 2.0);
+        for step in 0..8 {
+            live.send(engine::LiveNote::control(Controller::PitchBend, 0, 0.5 + step as f32 * 0.01));
+            run(&mut app, 0.125);
+        }
+        run(&mut app, 0.5);
+        app.transport(Transport::Record);
+        run(&mut app, 0.5);
+        let lane = &app.project.tracks[1].arrangement;
+        assert_eq!(lane.len(), 1, "{:?}", app.status);
+        let Clip::Midi(clip) = &lane[0].clip else { panic!() };
+        let bend = clip.controls.iter().find(|l| l.control == MidiControl::PitchBend).expect("a bend lane");
+        let at = |beat: f64| bend.value_at(beat).unwrap();
+        assert!((at(1.0) + 0.5).abs() < 0.01, "the first pass stays before: {:?}", bend.points);
+        assert!(at(2.5) > 0.5, "the second pass where it moved: {:?}", bend.points);
+        assert!((at(3.7) + 0.5).abs() < 0.01, "and the first after: {:?}", bend.points);
+    }
+
+    /// A lead played with bends and the wheel, recorded into a session clip on a
+    /// real engine and heard back from the clip alone (two laps), as a WAV:
+    /// `PULSE_WAV=dir cargo test --release -p app expression_wav -- --ignored`.
+    #[test]
+    #[ignore]
+    fn expression_wav() {
+        use engine::Controller;
+        let Some(dir) = std::env::var_os("PULSE_WAV").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+            track.clips = Default::default();
+            track.arrangement.clear();
+        }
+        app.project.tempo = 120.0;
+        app.sync_all();
+        let lead = engine::model::SuperSawParams::presets().into_iter().next().unwrap().1;
+        app.set_instrument(1, engine::model::InstrumentKind::SuperSaw(lead));
+        let (mut left, mut right) = (Vec::new(), Vec::new());
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64, keep: bool| {
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).round() as usize {
+                engine.process(&mut buffer, 2);
+                app.update_recording();
+                if keep {
+                    left.extend(buffer.iter().step_by(2));
+                    right.extend(buffer.iter().skip(1).step_by(2));
+                }
+            }
+        };
+        app.toggle_arm(1);
+        app.record_slot(1, 0);
+        run(&mut app, 0.25, false);
+        let live = app.audio.live().unwrap();
+        let send = |c: Controller, v: f32| live.send(engine::LiveNote::control(c, 0, v));
+        // A phrase: a note bent up into pitch, the wheel brought in on a held
+        // note, and a dive at the end.
+        live.send(engine::LiveNote::note(57, 0.9));
+        send(Controller::PitchBend, -1.0);
+        for i in 1..=16 {
+            run(&mut app, 1.0 / 32.0, false);
+            send(Controller::PitchBend, -1.0 + i as f32 / 16.0);
+        }
+        run(&mut app, 1.25, false);
+        live.send(engine::LiveNote::note(57, 0.0));
+        live.send(engine::LiveNote::note(64, 0.9));
+        run(&mut app, 0.5, false);
+        for i in 0..=40 {
+            send(Controller::Cc(1), i as f32 / 40.0);
+            run(&mut app, 1.0 / 32.0, false);
+        }
+        run(&mut app, 0.5, false);
+        live.send(engine::LiveNote::note(64, 0.0));
+        live.send(engine::LiveNote::note(69, 0.9));
+        send(Controller::Cc(1), 0.0);
+        run(&mut app, 0.75, false);
+        for i in 0..=24 {
+            send(Controller::PitchBend, -(i as f32) / 24.0);
+            run(&mut app, 1.0 / 48.0, false);
+        }
+        live.send(engine::LiveNote::note(69, 0.0));
+        send(Controller::PitchBend, 0.0);
+        app.stop_session_recording(1);
+        // Until the clip arrives and loops back to its start.
+        let state = app.audio.state().unwrap();
+        while state.position() % 4.0 > 0.05 || !matches!(&app.project.tracks[1].clips[0], Some(engine::model::Clip::Midi(_))) {
+            run(&mut app, 1.0 / 64.0, false);
+        }
+        let Some(engine::model::Clip::Midi(clip)) = &app.project.tracks[1].clips[0] else { panic!() };
+        assert!(clip.controls.len() == 2, "{:?}", clip.controls);
+        let length = clip.length;
+        run(&mut app, 2.0 * length, true);
+        crate::capture::write_wav(&dir.join("expresion-bend-rueda.wav"), &left, &right, 48_000.0).unwrap();
     }
 }

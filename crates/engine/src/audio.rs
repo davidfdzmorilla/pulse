@@ -1,6 +1,6 @@
 //! Connects the [`Engine`] to the system audio output through cpal.
 
-use crate::engine::{Command, Engine, Garbage, LiveNote, RecordedNote, SharedState};
+use crate::engine::{Command, Engine, Garbage, LiveNote, RecordedControl, RecordedNote, SharedState};
 use std::sync::Mutex;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, StreamConfig};
@@ -24,6 +24,7 @@ impl LiveInput {
 pub struct EngineHandle {
     commands: Producer<Command>,
     recorded: Consumer<RecordedNote>,
+    recorded_controls: Consumer<RecordedControl>,
     pub live: LiveInput,
     garbage: Consumer<Garbage>,
     pub state: Arc<SharedState>,
@@ -62,6 +63,11 @@ impl EngineHandle {
     /// Notes captured by recording since the last call.
     pub fn take_recorded(&mut self) -> Vec<RecordedNote> {
         std::iter::from_fn(|| self.recorded.pop().ok()).collect()
+    }
+
+    /// Controllers moved while recording since the last call.
+    pub fn take_recorded_controls(&mut self) -> Vec<RecordedControl> {
+        std::iter::from_fn(|| self.recorded_controls.pop().ok()).collect()
     }
 
     /// Frees whatever the audio thread has replaced (clips, devices, chains),
@@ -213,10 +219,14 @@ pub fn detached(sample_rate: f32) -> (Engine, EngineHandle) {
     let (mut engine, state) = Engine::new(sample_rate, command_rx, live_rx, recorded_tx, garbage_tx);
     let (kernel_tx, kernel_rx) = RingBuffer::new(crate::convolution::DELIVERIES);
     engine.set_kernel_queue(kernel_rx);
+    // Room for a few seconds of a controller sending all it can.
+    let (controls_tx, controls_rx) = RingBuffer::new(16_384);
+    engine.set_control_queue(controls_tx);
     let handle = EngineHandle {
         reverbs: crate::convolution::KernelBuilder::new(kernel_tx),
         commands: command_tx,
         recorded: recorded_rx,
+        recorded_controls: controls_rx,
         live: LiveInput(Arc::new(Mutex::new(live_tx))),
         garbage: garbage_rx,
         state,

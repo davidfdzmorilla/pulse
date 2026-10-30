@@ -1285,6 +1285,13 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
                     ui.close();
                 }
             }
+            ui.separator();
+            for part in crate::accompany::Part::melodies() {
+                if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
+                    app.accompany(clip, part);
+                    ui.close();
+                }
+            }
         });
     }
     if count == 1 && !app.project.tracks[track].is_drums() {

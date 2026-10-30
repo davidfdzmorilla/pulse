@@ -160,7 +160,7 @@ Clic derecho en un clip:
 
 - **Lanzar**.
 - **Copiar al Arrangement**: lo pone al final del Arrangement de su pista, en un compás.
-- **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes. Ver [[Acompañamiento]].
+- **Acompañar**: un bajo, un arpegio, un pad, acordes rítmicos o una melodía para sus acordes. Ver [[Acompañamiento]].
 - **Duplicar** ({⌘D}): lo copia al siguiente slot libre de abajo.
 - **Eliminar** ({Supr} o {⌫}).
 - **Desactivar clip**: se queda en su sitio pero no suena. Ver [[Arrangement]].
@@ -246,7 +246,7 @@ Van libres; con {⇧}, por la rejilla.
 Clic derecho en un clip:
 
 - **Tomas** (en grabaciones en bucle): elegir la toma que suena y **Mostrar las tomas en filas…**. Ver [[Tomas y comping]].
-- **Acompañar**: un bajo, un arpegio, un pad o acordes rítmicos para sus acordes. Ver [[Acompañamiento]].
+- **Acompañar**: un bajo, un arpegio, un pad, acordes rítmicos o una melodía para sus acordes. Ver [[Acompañamiento]].
 - **Dividir aquí** ({⌘E} corta donde hiciste clic), **Trocear ▸** (en trozos iguales) y **Unir N clips** ({⌘J}).
 - **Desactivar clip** ({0}): ver abajo.
 - **Copiar**, **Cortar**, **Duplicar** ({⌘D}) y **Eliminar** ({⌫}).
@@ -1167,7 +1167,7 @@ Cada acorde lleva el bajo abajo y las demás notas juntas, en la inversión más
 
 ## Acompañamiento
 
-Pulse toca contigo: a partir de un clip con acordes escribe un bajo, un arpegio, un pad o acordes rítmicos que los siguen compás a compás.
+Pulse toca contigo: a partir de un clip con acordes escribe un bajo, un arpegio, un pad, acordes rítmicos o una melodía que los siguen compás a compás.
 
 ### Añadir una parte
 
@@ -1195,6 +1195,38 @@ Entra con el fader de la pista de los acordes (el arpegio y el pad, 1,5 dB por d
 | **Arpegio ascendente** y **Arpegio arriba y abajo** | Las notas del acorde una tras otra. |
 | **Pad** | Los acordes sostenidos, con las voces enlazadas. |
 | **Acordes rítmicos** | Acordes cortos con un ritmo sincopado. |
+
+### Melodía
+
+Las cuatro últimas partes de **Acompañar** escriben la melodía principal: el lead, el gancho o el topline. Van a la pista vacía **Melodía** (o **Lead**) si la hay; si no, a una pista nueva **Melodía** con un lead de fábrica que le va al estilo, 3 dB por debajo de los acordes.
+
+| Estilo | Qué toca | Sonido de serie |
+|---|---|---|
+| **Melodía: gancho** | Un riff corto y sincopado de un compás que se repite (house, techno). | Pulse Synth «Pluck · Corto» |
+| **Melodía: cantable** | Una frase de dos compases con notas largas, que se puede cantar (pop). | FM «Lead · Flauta FM» |
+| **Melodía: lead de trance** | Corcheas y semicorcheas que saltan entre las notas del acorde. | Super Saw «Lead · Trance clásico» |
+| **Melodía: pregunta y respuesta** | Un compás pregunta y el siguiente responde con el mismo ritmo. | Pulse Synth «Lead · Sierra brillante» |
+
+Suena a canción, no a notas al azar:
+
+- En cada tiempo fuerte toca una nota del acorde que suena; entre medias, notas de la escala que van por grados. Nunca choca un semitono con el acorde en un tiempo fuerte.
+- Un motivo de uno o dos compases se repite por todo el clip y se adapta a cada acorde.
+- Las frases van en parejas: la primera queda abierta y la segunda cierra en la tónica o la fundamental del acorde, igual que el final del clip.
+- Sigue el compás del clip (4/4, 3/4, 6/8…) y su largo.
+
+En el [[Editor MIDI]] de la melodía, junto a **Otra variación**, tienes tres desplegables:
+
+- **Estilo**: la misma toma en otro estilo. El clip cambia de nombre si aún se llama como el estilo.
+- **Densidad**: **Pocas notas**, **Normal** o **Muchas notas**.
+- **Registro**: **Grave** (Do3–Sol4), **Medio** (La3–Mi5) o **Agudo** (Sol4–Re6).
+
+Cambiarlos reescribe la misma toma; **Otra variación** escribe otra.
+
+> Consejo: ¿quieres la melodía en un clip concreto? Crea un clip MIDI vacío en la pista del lead, en la misma escena (Session) o encima del tramo de los acordes (Arrangement), y elige en él **Acompañar** y una melodía. Pulse escribe la melodía en ese clip sobre los acordes que suenan con él en las demás pistas.
+
++++ Cómo elige las notas
+La tonalidad es la **Escala** del proyecto si los acordes encajan en ella; si no, la que mejor encaja con los acordes. Sobre un acorde que se sale de la escala (Mi mayor en La menor), la melodía usa sus notas (Sol#) en vez de las de la escala que rozarían con ellas (Sol). Una nota a contratiempo que se alarga hasta el acorde siguiente lo anticipa, si no roza con el acorde de debajo; una en un tiempo fuerte solo se alarga si el acorde siguiente también la tiene.
++++
 
 ### Probar otra versión
 

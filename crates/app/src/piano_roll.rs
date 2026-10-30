@@ -216,6 +216,20 @@ fn label(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).color(TEXT_DIM).size(10.5));
 }
 
+/// A drop-down of `options`, each by its `label`.
+fn choice<T: Copy + PartialEq>(ui: &mut egui::Ui, id: &str, value: &mut T, options: &[T], label: fn(T) -> &'static str, hint: &str) {
+    egui::ComboBox::from_id_salt(id)
+        .selected_text(label(*value))
+        .width(96.0)
+        .show_ui(ui, |ui| {
+            for &option in options {
+                ui.selectable_value(value, option, label(option));
+            }
+        })
+        .response
+        .on_hover_text(hint);
+}
+
 fn combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[(f64, &str)]) {
     let current = options.iter().find(|(v, _)| v == value).map_or("?", |(_, l)| *l);
     egui::ComboBox::from_id_salt(id).selected_text(current).width(70.0).show_ui(ui, |ui| {
@@ -271,7 +285,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         (kit, crate::drum_gen::bass_onsets(&app.project.tracks, slot, span, length))
     });
     // The accompaniment just written can be written again, another way.
-    let mut vary = app.can_vary(clip_ref).then_some(false);
+    let mut retake = app.retake(clip_ref);
+    let melody = retake.as_ref().and_then(|r| r.melody);
     let grooves = app.project.grooves.clone();
     let keys_enabled = !ui.ctx().egui_wants_keyboard_input();
     // On the Arrangement, the signature where the clip starts; in the Session, the song's first.
@@ -299,7 +314,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let before = clip.clone();
     let mut previews: Vec<u8> = Vec::new();
 
-    previews.extend(toolbar(ui, state, clip, key, is_drums, &mut vary, &grooves));
+    previews.extend(toolbar(ui, state, clip, key, is_drums, &mut retake, &grooves));
     let (tempo, machine) = drums.as_ref().map_or((None, None), |(kit, bass)| drum_menu(ui, state, clip, clip_ref, kit, bass, drum_machine.is_some()));
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
@@ -700,9 +715,15 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             app.set_instrument(t, engine::model::InstrumentKind::DrumMachine(engine::model::DrumParams { model: sound.model, ..params }));
         }
     }
-    if vary == Some(true) {
-        app.vary_accompaniment();
-        return;
+    if let Some(retake) = retake {
+        if retake.again {
+            app.vary_accompaniment();
+            return;
+        }
+        if let Some(m) = retake.melody.filter(|&m| Some(m) != melody) {
+            app.set_melody(m);
+            return;
+        }
     }
     for pitch in previews {
         app.audio.send(Command::PreviewNote { track: t, pitch, velocity: 0.8 });
@@ -783,12 +804,19 @@ fn length_label(length: f64, sig: TimeSig) -> String {
     }
 }
 
-fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool, vary: &mut Option<bool>, grooves: &[crate::project::SavedGroove]) -> Vec<u8> {
+fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool, retake: &mut Option<crate::accompany::Retake>, grooves: &[crate::project::SavedGroove]) -> Vec<u8> {
     let mut previews = Vec::new();
     ui.horizontal_wrapped(|ui| {
-        if let Some(asked) = vary.as_mut() {
-            if widgets::flat_button(ui, "Otra variación", true, vec2(104.0, 20.0)).on_hover_text("Escribe este acompañamiento de otra manera, sobre los mismos acordes").clicked() {
-                *asked = true;
+        if let Some(retake) = retake.as_mut() {
+            if widgets::flat_button(ui, "Otra variación", true, vec2(104.0, 20.0)).on_hover_text("Escribe esta parte de otra manera, sobre los mismos acordes").clicked() {
+                retake.again = true;
+            }
+            // A melody: the same take in another style, density or register.
+            if let Some(m) = retake.melody.as_mut() {
+                use crate::melody::{Density, Register, Style};
+                choice(ui, "melody_style", &mut m.style, &Style::ALL, Style::label, "Estilo de la melodía: la misma toma, de otra manera");
+                choice(ui, "melody_density", &mut m.density, &Density::ALL, Density::label, "Cuántas notas toca la melodía");
+                choice(ui, "melody_register", &mut m.register, &Register::ALL, Register::label, "Lo alta que va la melodía: grave (Do3–Sol4), media (La3–Mi5) o aguda (Sol4–Re6)");
             }
         }
         let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());

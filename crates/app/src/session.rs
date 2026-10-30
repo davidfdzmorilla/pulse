@@ -588,6 +588,13 @@ fn clip_slot(
                             ui.close();
                         }
                     }
+                    ui.separator();
+                    for part in crate::accompany::Part::melodies() {
+                        if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
+                            actions.push(Action::Accompany(t, slot, part));
+                            ui.close();
+                        }
+                    }
                 });
                 crate::widgets::menu_button(ui, "De tarareo a canción", |ui| {
                     ui.label(egui::RichText::new("La melodía, sus acordes, un bajo y una batería, en pistas nuevas").color(crate::theme::TEXT_DIM).size(10.5));

@@ -342,29 +342,32 @@ impl Chromagram {
         let all = class_in(100.0, 2000.0);
         let bin_hz = rate as f64 / SIZE as f64;
         let (low_bin, high_bin) = ((38.0 / bin_hz) as usize, (220.0 / bin_hz) as usize);
-        let mut frames = Vec::new();
-        let mut start = 0;
-        let mut buffer = vec![Complex32::new(0.0, 0.0); SIZE];
-        while start < mono.len() {
-            for (i, b) in buffer.iter_mut().enumerate() {
-                *b = Complex32::new(mono.get(start + i).copied().unwrap_or(0.0) * window[i], 0.0);
-            }
-            fft.process(&mut buffer);
-            let mut a = [0f64; 12];
-            for b in 0..SIZE / 2 {
-                if let Some(c) = all[b] {
-                    a[c] += buffer[b].norm() as f64;
+        // Each frame on its own, the frames shared out among the cores.
+        let mut frames: Vec<([f64; 12], Option<(u8, f64)>)> = vec![([0.0; 12], None); mono.len().div_ceil(HOP)];
+        crate::parallel(&mut frames, 64, |first, chunk| {
+            let mut buffer = vec![Complex32::new(0.0, 0.0); SIZE];
+            let mut scratch = vec![Complex32::new(0.0, 0.0); fft.get_inplace_scratch_len()];
+            for (n, frame) in chunk.iter_mut().enumerate() {
+                let start = (first + n) * HOP;
+                for (i, b) in buffer.iter_mut().enumerate() {
+                    *b = Complex32::new(mono.get(start + i).copied().unwrap_or(0.0) * window[i], 0.0);
                 }
+                fft.process_with_scratch(&mut buffer, &mut scratch);
+                let mut a = [0f64; 12];
+                for b in 0..SIZE / 2 {
+                    if let Some(c) = all[b] {
+                        a[c] += buffer[b].norm() as f64;
+                    }
+                }
+                let m = |b: usize| buffer[b].norm() as f64;
+                let loudest = (low_bin..=high_bin).map(m).fold(0.0, f64::max);
+                let bass = (low_bin.max(1)..high_bin).find(|&b| m(b) >= 0.5 * loudest && m(b) >= m(b - 1) && m(b) >= m(b + 1)).filter(|_| loudest > 0.0).map(|b| {
+                    let f = b as f64 * bin_hz;
+                    ((((69.0 + 12.0 * (f / 440.0).log2()).round() as i64).rem_euclid(12)) as u8, m(b))
+                });
+                *frame = (a, bass);
             }
-            let m = |b: usize| buffer[b].norm() as f64;
-            let loudest = (low_bin..=high_bin).map(m).fold(0.0, f64::max);
-            let bass = (low_bin.max(1)..high_bin).find(|&b| m(b) >= 0.5 * loudest && m(b) >= m(b - 1) && m(b) >= m(b + 1)).filter(|_| loudest > 0.0).map(|b| {
-                let f = b as f64 * bin_hz;
-                ((((69.0 + 12.0 * (f / 440.0).log2()).round() as i64).rem_euclid(12)) as u8, m(b))
-            });
-            frames.push((a, bass));
-            start += HOP;
-        }
+        });
         // Each class's median over about 0.4 s: what holds (a chord) stays, what
         // only hits (a kick, a snare) goes.
         const SPAN: usize = 4;
@@ -555,5 +558,13 @@ mod tests {
         let found: Vec<(f64, Option<String>)> = gram.chords(&stretches, None).iter().map(|(a, _, c)| (*a, c.map(|c| c.name()))).collect();
         let expected = [(0.0, "Lam"), (2.0, "Fa"), (4.0, "Do"), (6.0, "Sol")].map(|(t, n)| (t, Some(n.to_string())));
         assert_eq!(found, expected);
+        // The frames on every core are the frames one after another, as before.
+        let mut noisy = audio.repeat(8);
+        let mut seed = 5u32;
+        for x in &mut noisy {
+            seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12_345);
+            *x += 0.05 * ((seed >> 9) as f32 / (1u32 << 23) as f32 - 1.0);
+        }
+        assert!(Chromagram::new(&noisy, rate).frames == crate::reference::chroma_frames(&noisy, rate));
     }
 }

@@ -28,6 +28,7 @@ const SHORT: usize = 512;
 
 /// The pitch track: per frame (every [`HOP`] samples at 22050 Hz, centred), the
 /// frequency in Hz if voiced.
+#[derive(Clone, Debug, Default)]
 pub struct Track {
     pub f0: Vec<Option<f64>>,
     /// Loudness per frame (RMS of the frame).
@@ -47,96 +48,234 @@ fn beta_cdf(x: f64) -> f64 {
     1.0 - (1.0 - x).powi(19) - 19.0 * x * (1.0 - x).powi(18)
 }
 
-/// Cumulative mean normalized difference of a frame, for periods min..=max.
-fn yin_frame(frame: &[f32], acf: &[f64], min_period: usize, max_period: usize) -> Vec<f64> {
+/// Cumulative mean normalized difference of a frame, for periods min..=max,
+/// into `out` (`cumulative` and `raw` are room for the sums, `max + 1` long).
+fn yin_frame(frame: &[f32], acf: &[f64], min_period: usize, max_period: usize, cumulative: &mut [f64], raw: &mut [f64], out: &mut Vec<f64>) {
     // Running energy of the frame's start, as librosa subtracts it.
-    let mut cumulative = vec![0f64; max_period + 1];
     let mut sum = 0.0;
     for k in 0..=max_period {
         sum += (frame[k] as f64).powi(2);
         cumulative[k] = sum;
     }
-    let mut raw = vec![0f64; max_period + 1];
+    raw[0] = 0.0;
     for k in 1..=max_period {
         raw[k] = 2.0 * (acf[0] - acf[k]) - cumulative[k - 1];
     }
     let mut mean = 0.0;
-    let mut out = Vec::with_capacity(max_period - min_period + 1);
+    out.clear();
     for k in 1..=max_period {
         mean += raw[k];
         if k >= min_period {
             out.push(raw[k] / (mean / k as f64 + f64::MIN_POSITIVE));
         }
     }
-    out
 }
 
-/// The pitch track of `mono` at `rate` Hz.
+/// What a frame tells the Viterbi search: the voiced bins with some
+/// probability (the rest have none) and each unvoiced bin's.
+struct Observation {
+    voiced: Vec<(u16, f64)>,
+    unvoiced: f64,
+}
+
+/// What [`observe`] needs worked out once: the thresholds, the Beta(2, 18)
+/// weight of each, and the parts of the Boltzmann prior.
+struct Priors {
+    thresholds: Vec<f64>,
+    beta: Vec<f64>,
+    /// exp(-B·position), and 1 - exp(-B·count).
+    decay: Vec<f64>,
+    norm: Vec<f64>,
+}
+
+impl Priors {
+    fn new(lags: usize) -> Self {
+        let thresholds: Vec<f64> = (0..=THRESHOLDS).map(|i| i as f64 / THRESHOLDS as f64).collect();
+        let beta = thresholds.windows(2).map(|w| beta_cdf(w[1]) - beta_cdf(w[0])).collect();
+        let decay = (0..=lags).map(|p| (-BOLTZMANN * p as f64).exp()).collect();
+        let norm = (0..=lags).map(|c| 1.0 - (-BOLTZMANN * c as f64).exp()).collect();
+        Self { thresholds, beta, decay, norm }
+    }
+}
+
+/// Room one thread reuses frame after frame.
+struct Scratch {
+    spectrum: Vec<Complex32>,
+    fft: Vec<Complex32>,
+    acf: Vec<f64>,
+    cumulative: Vec<f64>,
+    raw: Vec<f64>,
+    yin: Vec<f64>,
+    obs: Vec<f64>,
+    troughs: Vec<usize>,
+    probs: Vec<f64>,
+}
+
+/// One frame's loudness and observation.
+struct Frame {
+    rms: f32,
+    short: f32,
+    observation: Observation,
+}
+
+/// The pitch track of `mono` at `rate` Hz. The same audio again (one of the
+/// last few analysed) comes from memory.
 pub fn track(mono: &[f32], rate: f32) -> Track {
-    let audio = resample(mono, rate, RATE);
+    track_with(mono, rate, &|_| true).expect("never stopped")
+}
+
+/// [`track`], telling `progress` the fraction done now and then (from any
+/// thread); it returns false to stop, and then this gives None.
+pub fn track_with(mono: &[f32], rate: f32, progress: &(dyn Fn(f32) -> bool + Sync)) -> Option<Track> {
+    let key = crate::fingerprint(mono, rate);
+    if let Some(found) = recall(key) {
+        return Some(found);
+    }
+    let track = compute(&resample(mono, rate, RATE), progress)?;
+    remember(key, &track);
+    Some(track)
+}
+
+/// How many tracks are kept, and up to how many frames each (20 minutes).
+const KEPT: usize = 6;
+const KEPT_FRAMES: usize = 86 * 60 * 20;
+
+static MEMORY: std::sync::Mutex<Vec<(crate::Fingerprint, std::sync::Arc<Track>)>> = std::sync::Mutex::new(Vec::new());
+
+fn recall(key: crate::Fingerprint) -> Option<Track> {
+    let mut kept = MEMORY.lock().unwrap_or_else(|e| e.into_inner());
+    let at = kept.iter().position(|(k, _)| *k == key)?;
+    // The one used last goes last: the oldest is forgotten first.
+    let entry = kept.remove(at);
+    let track = (*entry.1).clone();
+    kept.push(entry);
+    Some(track)
+}
+
+fn remember(key: crate::Fingerprint, track: &Track) {
+    if track.f0.len() > KEPT_FRAMES {
+        return;
+    }
+    let mut kept = MEMORY.lock().unwrap_or_else(|e| e.into_inner());
+    kept.retain(|(k, _)| *k != key);
+    if kept.len() >= KEPT {
+        kept.remove(0);
+    }
+    kept.push((key, std::sync::Arc::new(track.clone())));
+}
+
+/// pYIN on `audio` (at [`RATE`]): the frames observed on every core, then the
+/// likeliest path through them.
+fn compute(audio: &[f32], progress: &(dyn Fn(f32) -> bool + Sync)) -> Option<Track> {
+    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
     let sr = RATE as f64;
     // Centred frames: half a frame of silence each side.
     let mut padded = vec![0f32; FRAME / 2];
-    padded.extend_from_slice(&audio);
+    padded.extend_from_slice(audio);
     padded.extend(std::iter::repeat_n(0.0, FRAME / 2));
     let frames = if padded.len() >= FRAME { 1 + (padded.len() - FRAME) / HOP } else { 0 };
     let min_period = (sr / FMAX).floor() as usize;
     let max_period = ((sr / FMIN).ceil() as usize).min(FRAME - 1);
     let bins = (12.0 * BINS_PER_SEMITONE as f64 * (FMAX / FMIN).log2()).floor() as usize + 1;
-
-    let thresholds: Vec<f64> = (0..=THRESHOLDS).map(|i| i as f64 / THRESHOLDS as f64).collect();
-    let beta: Vec<f64> = thresholds.windows(2).map(|w| beta_cdf(w[1]) - beta_cdf(w[0])).collect();
+    let priors = Priors::new(max_period - min_period + 1);
 
     // Autocorrelation by FFT (twice the frame, so it doesn't wrap).
     let size = FRAME * 2;
     let mut planner = FftPlanner::<f32>::new();
     let (forward, inverse) = (planner.plan_fft_forward(size), planner.plan_fft_inverse(size));
+    let scratch_len = forward.get_inplace_scratch_len().max(inverse.get_inplace_scratch_len());
 
-    let mut observations: Vec<Vec<f64>> = Vec::with_capacity(frames);
-    let mut rms = Vec::with_capacity(frames);
-    let mut short = Vec::with_capacity(frames);
-    for f in 0..frames {
-        let frame = &padded[f * HOP..f * HOP + FRAME];
-        rms.push((frame.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt());
-        let middle = &frame[FRAME / 2 - SHORT / 2..FRAME / 2 + SHORT / 2];
-        short.push((middle.iter().map(|x| x * x).sum::<f32>() / SHORT as f32).sqrt());
-        let mut spectrum: Vec<Complex32> = frame.iter().map(|&x| Complex32::new(x, 0.0)).chain(std::iter::repeat_n(Complex32::new(0.0, 0.0), size - FRAME)).collect();
-        forward.process(&mut spectrum);
-        for c in &mut spectrum {
-            *c = Complex32::new(c.norm_sqr(), 0.0);
+    // Each frame on its own: the frames are shared out among the cores, which
+    // tell the progress (the first 90 %) and listen for a stop as they go.
+    const EVERY: usize = 128;
+    let (stopped, done) = (AtomicBool::new(false), AtomicUsize::new(0));
+    let mut slots: Vec<Option<Frame>> = (0..frames).map(|_| None).collect();
+    crate::parallel(&mut slots, 256, |first, chunk| {
+        let mut s = Scratch {
+            spectrum: vec![Complex32::new(0.0, 0.0); size],
+            fft: vec![Complex32::new(0.0, 0.0); scratch_len],
+            acf: vec![0.0; max_period + 1],
+            cumulative: vec![0.0; max_period + 1],
+            raw: vec![0.0; max_period + 1],
+            yin: Vec::with_capacity(max_period),
+            obs: vec![0.0; 2 * bins],
+            troughs: Vec::new(),
+            probs: Vec::new(),
+        };
+        for (n, slot) in chunk.iter_mut().enumerate() {
+            if n % EVERY == 0 && n > 0 {
+                let so_far = done.fetch_add(EVERY, Ordering::Relaxed) + EVERY;
+                if stopped.load(Ordering::Relaxed) || !progress(0.9 * so_far as f32 / frames as f32) {
+                    stopped.store(true, Ordering::Relaxed);
+                    return;
+                }
+            }
+            let f = first + n;
+            let frame = &padded[f * HOP..f * HOP + FRAME];
+            let rms = (frame.iter().map(|x| x * x).sum::<f32>() / FRAME as f32).sqrt();
+            let middle = &frame[FRAME / 2 - SHORT / 2..FRAME / 2 + SHORT / 2];
+            let short = (middle.iter().map(|x| x * x).sum::<f32>() / SHORT as f32).sqrt();
+            let (head, tail) = s.spectrum.split_at_mut(FRAME);
+            for (c, &x) in head.iter_mut().zip(frame) {
+                *c = Complex32::new(x, 0.0);
+            }
+            tail.fill(Complex32::new(0.0, 0.0));
+            forward.process_with_scratch(&mut s.spectrum, &mut s.fft);
+            for c in &mut s.spectrum {
+                *c = Complex32::new(c.norm_sqr(), 0.0);
+            }
+            inverse.process_with_scratch(&mut s.spectrum, &mut s.fft);
+            for (a, c) in s.acf.iter_mut().zip(&s.spectrum) {
+                *a = c.re as f64 / size as f64;
+            }
+            yin_frame(frame, &s.acf, min_period, max_period, &mut s.cumulative, &mut s.raw, &mut s.yin);
+            let observation = observe(&s.yin, &priors, min_period, bins, &mut s.obs, &mut s.troughs, &mut s.probs);
+            *slot = Some(Frame { rms, short, observation });
         }
-        inverse.process(&mut spectrum);
-        let acf: Vec<f64> = spectrum[..=max_period].iter().map(|c| c.re as f64 / size as f64).collect();
-        let yin = yin_frame(frame, &acf, min_period, max_period);
-        observations.push(observe(&yin, &thresholds, &beta, min_period, bins));
+    });
+    if stopped.into_inner() {
+        return None;
     }
-    let states = viterbi(&observations, bins);
+    let (mut rms, mut short, mut observations) = (Vec::with_capacity(frames), Vec::with_capacity(frames), Vec::with_capacity(frames));
+    for frame in slots.into_iter().flatten() {
+        rms.push(frame.rms);
+        short.push(frame.short);
+        observations.push(frame.observation);
+    }
+    let states = viterbi(&observations, bins, &|fraction| progress(0.9 + 0.1 * fraction))?;
     let f0 = states.into_iter().map(|s| (s < bins).then(|| FMIN * 2f64.powf(s as f64 / (12 * BINS_PER_SEMITONE) as f64))).collect();
-    Track { f0, rms, short }
+    Some(Track { f0, rms, short })
 }
 
 /// The probability of each pitch bin (voiced) and of no pitch (unvoiced, spread
-/// over the second half) for one frame (`__pyin_helper`).
-fn observe(yin: &[f64], thresholds: &[f64], beta: &[f64], min_period: usize, bins: usize) -> Vec<f64> {
+/// over the second half) for one frame (`__pyin_helper`). `obs`, `troughs`
+/// and `probs` are room to work in.
+fn observe(yin: &[f64], priors: &Priors, min_period: usize, bins: usize, obs: &mut [f64], troughs: &mut Vec<usize>, probs: &mut Vec<f64>) -> Observation {
+    let (thresholds, beta) = (&priors.thresholds, &priors.beta);
     let n = yin.len();
-    let mut obs = vec![0f64; 2 * bins];
-    let troughs: Vec<usize> = (0..n)
-        .filter(|&t| match t {
-            0 => n > 1 && yin[0] < yin[1],
-            t if t == n - 1 => yin[t] < yin[t - 1],
-            t => yin[t] < yin[t - 1] && yin[t] <= yin[t + 1],
-        })
-        .collect();
+    obs.fill(0.0);
+    troughs.clear();
+    troughs.extend((0..n).filter(|&t| match t {
+        0 => n > 1 && yin[0] < yin[1],
+        t if t == n - 1 => yin[t] < yin[t - 1],
+        t => yin[t] < yin[t - 1] && yin[t] <= yin[t + 1],
+    }));
+    let mut voiced = Vec::new();
     if !troughs.is_empty() {
-        let mut probs = vec![0f64; troughs.len()];
+        probs.clear();
+        probs.resize(troughs.len(), 0.0);
+        let scale = 1.0 - (-BOLTZMANN).exp();
         for (k, &b) in beta.iter().enumerate() {
             let threshold = thresholds[k + 1];
-            let below: Vec<usize> = (0..troughs.len()).filter(|&i| yin[troughs[i]] < threshold).collect();
-            let count = below.len() as f64;
-            for (position, &i) in below.iter().enumerate() {
-                // Boltzmann prior: earlier troughs (shorter periods) first.
-                let prior = (1.0 - (-BOLTZMANN).exp()) * (-BOLTZMANN * position as f64).exp() / (1.0 - (-BOLTZMANN * count).exp());
-                probs[i] += prior * b;
+            let count = troughs.iter().filter(|&&t| yin[t] < threshold).count();
+            let mut position = 0;
+            for (i, &t) in troughs.iter().enumerate() {
+                if yin[t] < threshold {
+                    // Boltzmann prior: earlier troughs (shorter periods) first.
+                    let prior = scale * priors.decay[position] / priors.norm[count];
+                    probs[i] += prior * b;
+                    position += 1;
+                }
             }
         }
         let global = (0..troughs.len()).min_by(|&a, &b| yin[troughs[a]].total_cmp(&yin[troughs[b]])).unwrap_or(0);
@@ -158,20 +297,19 @@ fn observe(yin: &[f64], thresholds: &[f64], beta: &[f64], min_period: usize, bin
             let bin = (12.0 * BINS_PER_SEMITONE as f64 * (f0 / FMIN).log2()).round().clamp(0.0, bins as f64) as usize;
             obs[bin] = probs[i];
         }
+        voiced.extend(obs[..bins].iter().enumerate().filter(|(_, p)| **p != 0.0).map(|(b, &p)| (b as u16, p)));
     }
-    let voiced = obs[..bins].iter().sum::<f64>().clamp(0.0, 1.0);
-    for o in &mut obs[bins..] {
-        *o = (1.0 - voiced) / bins as f64;
-    }
-    obs
+    let total = obs[..bins].iter().sum::<f64>().clamp(0.0, 1.0);
+    Observation { voiced, unvoiced: (1.0 - total) / bins as f64 }
 }
 
 /// The likeliest path through the states (voiced bins, then unvoiced bins): the
 /// pitch moves at most a few semitones a frame, voicing switches rarely.
-fn viterbi(observations: &[Vec<f64>], bins: usize) -> Vec<usize> {
+/// `progress` as in [`track_with`].
+fn viterbi(observations: &[Observation], bins: usize, progress: &dyn Fn(f32) -> bool) -> Option<Vec<usize>> {
     let states = 2 * bins;
     if observations.is_empty() {
-        return Vec::new();
+        return Some(Vec::new());
     }
     let semitones = (MAX_TRANSITION_RATE * 12.0 * HOP as f64 / RATE as f64).round() as usize;
     let width = semitones * BINS_PER_SEMITONE + 1;
@@ -181,42 +319,92 @@ fn viterbi(observations: &[Vec<f64>], bins: usize) -> Vec<usize> {
     let row_sum: Vec<f64> = (0..bins as isize).map(|i| (-half..=half).filter(|d| (0..bins as isize).contains(&(i + d))).map(weight).sum()).collect();
     let tiny = f64::MIN_POSITIVE;
     let ln = |x: f64| (x + tiny).ln();
-    let mut score: Vec<f64> = observations[0].iter().map(|&o| ln(1.0 / states as f64) + ln(o)).collect();
-    let mut back: Vec<Vec<u32>> = Vec::with_capacity(observations.len());
-    for obs in &observations[1..] {
-        let mut next = vec![f64::NEG_INFINITY; states];
-        let mut from = vec![0u32; states];
+    // The ln of each move into a bin from `d` bins away, staying in the block
+    // or switching, worked out once: `moves[(switched · bins + bin) · width + d + half]`.
+    let mut moves = vec![f64::NAN; 2 * bins * width];
+    for switched in 0..2 {
+        let switch = if switched == 0 { 1.0 - SWITCH_PROB } else { SWITCH_PROB };
+        for bin in 0..bins as isize {
+            for d in -half..=half {
+                let i = bin + d;
+                if (0..bins as isize).contains(&i) {
+                    // From bin i to this bin: row i's weight at distance -d.
+                    moves[(switched * bins + bin as usize) * width + (d + half) as usize] = ln(switch * weight(d) / row_sum[i as usize]);
+                }
+            }
+        }
+    }
+    let unheard = ln(0.0);
+    let fill = |ln_obs: &mut [f64], o: &Observation| {
+        ln_obs[..bins].fill(unheard);
+        for &(b, p) in &o.voiced {
+            ln_obs[b as usize] = ln(p);
+        }
+        ln_obs[bins..].fill(ln(o.unvoiced));
+    };
+    let mut ln_obs = vec![0f64; states];
+    fill(&mut ln_obs, &observations[0]);
+    let mut score: Vec<f64> = ln_obs.iter().map(|&o| ln(1.0 / states as f64) + o).collect();
+    let mut next = vec![0f64; states];
+    // Where each state's best path came from, frame after frame.
+    let mut back = vec![0u16; (observations.len() - 1) * states];
+    for (t, obs) in observations[1..].iter().enumerate() {
+        if t % 1024 == 1023 && !progress(t as f32 / observations.len() as f32) {
+            return None;
+        }
+        fill(&mut ln_obs, obs);
+        let from = &mut back[t * states..(t + 1) * states];
         for to in 0..states {
             let (block, bin) = (to / bins, (to % bins) as isize);
-            for source_block in 0..2 {
-                let switch = if source_block == block { 1.0 - SWITCH_PROB } else { SWITCH_PROB };
-                for d in -half..=half {
-                    let i = bin + d;
-                    if !(0..bins as isize).contains(&i) {
-                        continue;
+            // The bins in reach, the edges cut off.
+            let (low, high) = ((-half).max(-bin), half.min(bins as isize - 1 - bin));
+            // Each source block's reachable scores and the moves from them.
+            let (span, reach) = ((high - low + 1) as usize, (low + half) as usize);
+            let pairs = [0, 1].map(|source_block| {
+                let switched = (source_block != block) as usize;
+                let row = &moves[(switched * bins + bin as usize) * width + reach..][..span];
+                let first = (source_block as isize * bins as isize + bin + low) as usize;
+                (&score[first..first + span], row, first)
+            });
+            // The search in order keeps the first of the best: four searches at
+            // once, each over every fourth source (each keeping its first of
+            // the best), then the best of the four, the first of them in the
+            // order the sources come in.
+            let mut lanes = [(f64::NEG_INFINITY, usize::MAX); 4];
+            for (source, (scores, row, _)) in pairs.iter().enumerate() {
+                let (a, b) = (scores.chunks_exact(4), row.chunks_exact(4));
+                let (ra, rb) = (a.remainder(), b.remainder());
+                for (c, (x, y)) in a.zip(b).enumerate() {
+                    for j in 0..4 {
+                        let candidate = x[j] + y[j];
+                        if candidate > lanes[j].0 {
+                            lanes[j] = (candidate, source * width + 4 * c + j);
+                        }
                     }
-                    // From bin i to this bin: row i's weight at distance -d.
-                    let p = switch * weight(d) / row_sum[i as usize];
-                    let s = source_block * bins + i as usize;
-                    let candidate = score[s] + ln(p);
-                    if candidate > next[to] {
-                        next[to] = candidate;
-                        from[to] = s as u32;
+                }
+                let at = scores.len() - ra.len();
+                for (j, (x, y)) in ra.iter().zip(rb).enumerate() {
+                    let candidate = x + y;
+                    if candidate > lanes[j].0 {
+                        lanes[j] = (candidate, source * width + at + j);
                     }
                 }
             }
-            next[to] += ln(obs[to]);
+            let (best, order) = lanes.into_iter().fold((f64::NEG_INFINITY, usize::MAX), |a, b| if b.0 > a.0 || (b.0 == a.0 && b.1 < a.1) { b } else { a });
+            let best_from = pairs[order / width].2 + order % width;
+            next[to] = best + ln_obs[to];
+            from[to] = best_from as u16;
         }
-        score = next;
-        back.push(from);
+        std::mem::swap(&mut score, &mut next);
     }
     let mut state = (0..states).max_by(|&a, &b| score[a].total_cmp(&score[b])).unwrap_or(0);
     let mut path = vec![state; observations.len()];
-    for (t, from) in back.iter().enumerate().rev() {
-        state = from[state] as usize;
+    for t in (0..observations.len() - 1).rev() {
+        state = back[t * states + state] as usize;
         path[t] = state;
     }
-    path
+    progress(1.0);
+    Some(path)
 }
 
 /// Elsewhere for this many frames (93 ms) starts another note.
@@ -584,6 +772,141 @@ mod tests {
         assert!((hz / 329.63 - 1.0).abs() < 0.01, "30 ms into E4 it hears {hz:.1} Hz");
     }
 
+    /// A voice singing random notes of a minor scale, with vibrato, breaths
+    /// and a little noise.
+    fn singing(seconds: f64, rate: f32, seed: u64) -> Vec<f32> {
+        let mut state = seed;
+        let mut random = || {
+            state = state.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1_442_695_040_888_963_407);
+            (state >> 11) as f64 / (1u64 << 53) as f64
+        };
+        let mut out = vec![0f32; (seconds * rate as f64) as usize];
+        let (mut t, mut phase) = (0.1, 0.0f64);
+        while t < seconds - 0.8 {
+            let length = 0.18 + 0.5 * random();
+            let pitch = 45.0 + [0.0, 2.0, 3.0, 5.0, 7.0, 8.0, 10.0][(random() * 7.0) as usize] + 12.0 * (random() * 2.0).floor();
+            let start = (t * rate as f64) as usize;
+            for i in 0..(length * rate as f64) as usize {
+                let s = i as f64 / rate as f64;
+                let f = 440.0 * 2f64.powf((pitch + 0.3 * (2.0 * std::f64::consts::PI * 5.5 * s).sin() - 69.0) / 12.0);
+                phase += 2.0 * std::f64::consts::PI * f / rate as f64;
+                let env = (s / 0.03).min(1.0) * ((length - s) / 0.04).min(1.0);
+                let v: f64 = [1.0, 0.7, 0.5, 0.35, 0.2].iter().enumerate().map(|(h, a)| a * ((h + 1) as f64 * phase).sin()).sum();
+                out[start + i] += (0.12 * env * v + 0.004 * (random() - 0.5)) as f32;
+            }
+            t += length + if random() < 0.3 { 0.25 } else { 0.03 };
+        }
+        out
+    }
+
+    /// Each step of pYIN on every core, with its sums worked out once, is the
+    /// step as it was: from the same frames, the same differences, the same
+    /// probabilities, and the same path through them, bit for bit.
+    #[test]
+    fn each_step_is_the_same_as_before() {
+        for seed in [1, 2] {
+            let audio = singing(20.0, RATE, seed);
+            let mut padded = vec![0f32; FRAME / 2];
+            padded.extend_from_slice(&audio);
+            padded.extend(std::iter::repeat_n(0.0, FRAME / 2));
+            let frames = 1 + (padded.len() - FRAME) / HOP;
+            let (min_period, max_period) = ((RATE as f64 / FMAX).floor() as usize, (RATE as f64 / FMIN).ceil() as usize);
+            let bins = (12.0 * BINS_PER_SEMITONE as f64 * (FMAX / FMIN).log2()).floor() as usize + 1;
+            let priors = Priors::new(max_period - min_period + 1);
+            let size = FRAME * 2;
+            let mut planner = FftPlanner::<f32>::new();
+            let (forward, inverse) = (planner.plan_fft_forward(size), planner.plan_fft_inverse(size));
+            let (mut obs, mut troughs, mut probs) = (vec![0.0; 2 * bins], Vec::new(), Vec::new());
+            let (mut cumulative, mut raw, mut yin) = (vec![0.0; max_period + 1], vec![0.0; max_period + 1], Vec::new());
+            let (mut dense, mut sparse) = (Vec::new(), Vec::new());
+            for f in 0..frames {
+                let frame = &padded[f * HOP..f * HOP + FRAME];
+                let mut spectrum: Vec<Complex32> = frame.iter().map(|&x| Complex32::new(x, 0.0)).chain(std::iter::repeat_n(Complex32::new(0.0, 0.0), size - FRAME)).collect();
+                forward.process(&mut spectrum);
+                for c in &mut spectrum {
+                    *c = Complex32::new(c.norm_sqr(), 0.0);
+                }
+                inverse.process(&mut spectrum);
+                let acf: Vec<f64> = spectrum[..=max_period].iter().map(|c| c.re as f64 / size as f64).collect();
+                let before = crate::reference::yin_frame(frame, &acf, min_period, max_period);
+                yin_frame(frame, &acf, min_period, max_period, &mut cumulative, &mut raw, &mut yin);
+                assert_eq!(yin, before);
+                let old = crate::reference::observe(&yin, &priors.thresholds, &priors.beta, min_period, bins);
+                let new = observe(&yin, &priors, min_period, bins, &mut obs, &mut troughs, &mut probs);
+                let mut unpacked = vec![0.0; 2 * bins];
+                for &(b, p) in &new.voiced {
+                    unpacked[b as usize] = p;
+                }
+                unpacked[bins..].fill(new.unvoiced);
+                assert_eq!(unpacked, old, "frame {f}");
+                dense.push(old);
+                sparse.push(new);
+            }
+            assert_eq!(viterbi(&sparse, bins, &|_| true).unwrap(), crate::reference::viterbi(&dense, bins), "seed {seed}");
+        }
+    }
+
+    /// The whole track, against the one before, from 22.05 (nothing
+    /// resampled), 44.1 and 48 kHz: the same notes, and the same pitch but in a
+    /// handful of frames, there a tenth of a semitone (pYIN's step) away. The
+    /// resampling's filter now comes from a table (its samples within 1e-6 of
+    /// before), and the compiler may round a Beta weight differently by a
+    /// last bit: that is enough to tip a frame on the edge of two steps.
+    #[test]
+    fn the_fast_track_hears_the_same_notes_from_any_rate() {
+        for (rate, seed) in [(RATE, 1), (44_100.0, 4), (48_000.0, 5)] {
+            let audio = singing(30.0, rate, seed);
+            let (fast, slow) = (track(&audio, rate), crate::reference::track(&audio, rate));
+            assert_eq!(fast.f0.len(), slow.f0.len());
+            let mut moved = 0;
+            for (a, b) in fast.f0.iter().zip(&slow.f0) {
+                match (a, b) {
+                    (Some(a), Some(b)) => {
+                        let cents = 1200.0 * (a / b).log2().abs();
+                        assert!(cents < 10.5, "{a} vs {b}");
+                        moved += (cents > 1e-6) as usize;
+                    }
+                    (None, None) => {}
+                    _ => moved += 1,
+                }
+            }
+            assert!(moved * 200 <= fast.f0.len(), "{moved} of {} frames differ", fast.f0.len());
+            let pitches = |t: &Track| notes(t, None).iter().map(|n| n.pitch).collect::<Vec<_>>();
+            assert_eq!(pitches(&fast), pitches(&slow), "at {rate}");
+            for (a, b) in notes(&fast, None).iter().zip(&notes(&slow, None)) {
+                assert!((a.start - b.start).abs() < 0.03 && (a.end - b.end).abs() < 0.03, "{a:?} vs {b:?}");
+            }
+        }
+    }
+
+    /// The same audio again comes from memory; a stop asked for stops it.
+    #[test]
+    fn tracks_are_remembered_and_can_be_stopped() {
+        let audio = singing(6.0, 44_100.0, 8);
+        let calls = std::sync::atomic::AtomicUsize::new(0);
+        let stop = track_with(&audio, 44_100.0, &|_| {
+            calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            false
+        });
+        assert!(stop.is_none());
+        assert!(calls.into_inner() >= 1);
+        let seen = std::sync::Mutex::new(Vec::new());
+        let first = track_with(&audio, 44_100.0, &|f| {
+            seen.lock().unwrap().push(f);
+            true
+        })
+        .unwrap();
+        let seen = seen.into_inner().unwrap();
+        assert!(seen.iter().all(|f| (0.0..=1.0).contains(f)) && seen.last() == Some(&1.0), "{seen:?}");
+        let started = std::time::Instant::now();
+        let again = track(&audio, 44_100.0);
+        assert!(started.elapsed().as_millis() < 50);
+        assert_eq!(again.f0, first.f0);
+        // Another rate is other audio.
+        assert_ne!(crate::fingerprint(&audio, 44_100.0), crate::fingerprint(&audio, 48_000.0));
+        assert_ne!(crate::fingerprint(&audio, 44_100.0), crate::fingerprint(&audio[1..], 44_100.0));
+    }
+
     #[test]
     fn silence_has_no_notes() {
         assert!(melody(&vec![0.0; 44_100], 44_100.0, [0.0; 12], true).0.is_empty());
@@ -620,3 +943,5 @@ mod tests {
         eprintln!("free: {:?}", notes(&track, None).iter().map(|n| (format!("{:.2}", n.start), n.pitch)).collect::<Vec<_>>());
     }
 }
+
+

@@ -153,6 +153,7 @@ fn files_mut(project: &mut Project) -> Vec<&mut String> {
         files.push(&mut tuning.source);
         files.push(&mut tuning.output);
     }
+    files.extend(project.lyrics.iter_mut().map(|l| &mut l.sample));
     files.retain(|f| !f.is_empty());
     files
 }

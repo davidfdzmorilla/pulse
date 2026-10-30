@@ -15,6 +15,7 @@ pub mod loudness;
 pub mod pitch;
 pub mod transcribe;
 pub mod tune;
+pub mod whisper;
 
 use rustfft::num_complex::Complex32;
 use rustfft::{Fft, FftPlanner};

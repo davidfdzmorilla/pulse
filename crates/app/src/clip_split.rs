@@ -42,7 +42,9 @@ fn from(clip: &Clip, d: f64, tempo: f64) -> Clip {
             // nothing can sound from before a clip starts).
             notes.extend(midi.notes.iter().filter(|n| n.start < d && n.start + n.length.min(length - n.start) > d + 1e-9).map(|n| Note { start: 0.0, length: n.start + n.length.min(length - n.start) - d, ..n.clone() }));
             notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
-            Clip::Midi(MidiClip { notes, envelopes: rotate_lanes(&midi.envelopes, d, length), ..midi.clone() })
+            // Controller lanes too: from `d`, round the loop.
+            let controls = crate::expression::slice(&midi.controls, length, d, d + length);
+            Clip::Midi(MidiClip { notes, envelopes: rotate_lanes(&midi.envelopes, d, length), controls, ..midi.clone() })
         }
         Clip::Audio(audio) => {
             let length = audio.length.max(MIN_PART);
@@ -98,6 +100,8 @@ pub fn split(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(Arrange
 fn trim(clip: &mut Clip, length: f64) {
     match clip {
         Clip::Midi(midi) => {
+            // The controllers keep their value at the cut.
+            midi.controls = crate::expression::slice(&midi.controls, midi.length.max(MIN_PART), 0.0, length);
             midi.length = length;
             midi.notes.retain(|n| n.start < length);
             for lane in &mut midi.envelopes {
@@ -179,8 +183,39 @@ pub fn join(parts: &[ArrangementClip], base: &dyn Fn(Param) -> f32) -> Option<Ar
     notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
     let length = end - start;
     let envelopes = join_envelopes(&heard, start, base);
+    let controls = join_controls(&heard, start);
     let groove = if shared { first_midi.groove } else { None };
-    Some(ArrangementClip { start, length, clip: Clip::Midi(MidiClip { notes, length, envelopes, groove, muted: all_off, ..first_midi.clone() }) })
+    Some(ArrangementClip { start, length, clip: Clip::Midi(MidiClip { notes, length, envelopes, groove, muted: all_off, controls, ..first_midi.clone() }) })
+}
+
+/// The controller lanes of MIDI `parts` laid out along one clip starting at
+/// `start`, each part's looping with it; after a part, where no other takes
+/// over, a controller goes back to rest as the engine sends it then.
+pub(crate) fn join_controls(parts: &[ArrangementClip], start: f64) -> Vec<engine::model::ControlLane> {
+    use engine::model::{ControlLane, MidiControl};
+    let mut sorted: Vec<&ArrangementClip> = parts.iter().collect();
+    sorted.sort_by(|a, b| a.start.total_cmp(&b.start));
+    let mut lanes: std::collections::BTreeMap<MidiControl, Vec<AutomationPoint>> = Default::default();
+    for (i, part) in sorted.iter().enumerate() {
+        let Clip::Midi(midi) = &part.clip else { continue };
+        let at = part.start - start;
+        for lane in crate::expression::slice(&midi.controls, midi.length.max(MIN_PART), 0.0, part.length) {
+            let points = lanes.entry(lane.control).or_default();
+            points.extend(lane.points.iter().map(|p| AutomationPoint { beat: p.beat + at, ..*p }));
+            // Nothing follows right after with this controller: it rests.
+            let next_holds = sorted.get(i + 1).is_some_and(|n| (n.start - part.end()).abs() < 1e-6 && matches!(&n.clip, Clip::Midi(m) if m.controls.iter().any(|l| l.control == lane.control)));
+            if let (Some(rest), false) = (lane.control.rest(), next_holds || i + 1 == sorted.len()) {
+                points.push(AutomationPoint { beat: at + part.length + 1e-4, value: rest, curve: 0.0 });
+            }
+        }
+    }
+    lanes
+        .into_iter()
+        .map(|(control, mut points)| {
+            points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+            ControlLane { control, points }
+        })
+        .collect()
 }
 
 /// The envelopes of `parts` laid out along one clip starting at `start`: each

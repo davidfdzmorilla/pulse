@@ -102,6 +102,8 @@ pub struct PolySynth {
     note_counter: u64,
     /// Pitch bend and vibrato, as a frequency ratio.
     pitch: f32,
+    /// What the controllers do to the cutoff, as a ratio (see [`Self::set_brightness`]).
+    bright: f32,
 }
 
 impl PolySynth {
@@ -112,12 +114,18 @@ impl PolySynth {
             sample_rate,
             note_counter: 0,
             pitch: 1.0,
+            bright: 1.0,
         }
     }
 
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
     pub fn set_pitch(&mut self, ratio: f32) {
         self.pitch = ratio;
+    }
+
+    /// Opens (above 1) or closes the filter by `ratio` (brightness, CC 74, and pressure).
+    pub fn set_brightness(&mut self, ratio: f32) {
+        self.bright = ratio;
     }
 
     pub fn params(&self) -> SynthParams {
@@ -193,7 +201,7 @@ impl PolySynth {
         let sr = self.sample_rate;
         let attack_step = 1.0 / (p.attack.max(0.0005) * sr);
         let decay_step = (1.0 - p.sustain) / (p.decay.max(0.001) * sr);
-        let cutoff = p.cutoff.clamp(20.0, sr * 0.45);
+        let cutoff = (p.cutoff * self.bright).clamp(20.0, sr * 0.45);
         let g = (PI * cutoff / sr).tan();
         let k = 2.0 - 1.98 * p.resonance.clamp(0.0, 1.0);
         let pitch = self.pitch;

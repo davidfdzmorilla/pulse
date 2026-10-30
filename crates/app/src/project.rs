@@ -308,7 +308,10 @@ pub struct MasterTrack {
 /// reads 12 would drop them. Only projects that have one.
 /// 14: a bus compressor or a multiband (OTT): a Pulse that reads 13 doesn't
 /// know them. Only projects that have one.
-pub const FORMAT: u32 = 14;
+/// 15: MIDI clips with controller lanes (pitch bend, the wheel…): a Pulse
+/// that reads 14 would play them without and lose them. Only projects that
+/// have one.
+pub const FORMAT: u32 = 15;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -501,6 +504,12 @@ impl Project {
         !self.grooves.is_empty() || self.tracks.iter().any(|t| t.clips.iter().flatten().any(templated) || t.arrangement.iter().any(|p| templated(&p.clip)))
     }
 
+    /// Whether any MIDI clip holds controller lanes (see `expression`).
+    pub fn has_controls(&self) -> bool {
+        let controls = |clip: &Clip| matches!(clip, Clip::Midi(m) if !m.controls.is_empty());
+        self.tracks.iter().any(|t| t.clips.iter().flatten().any(controls) || t.arrangement.iter().any(|p| controls(&p.clip)))
+    }
+
     /// Whether any audio clip fades in or out.
     pub fn has_fades(&self) -> bool {
         let fades = |clip: &Clip| matches!(clip, Clip::Audio(a) if a.fades != engine::model::Fades::NONE);
@@ -636,8 +645,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Glue(_) | Effect::Multiband(_) | Effect::Convolution(_))) {
+            let format = if self.has_controls() {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::Glue(_) | Effect::Multiband(_) | Effect::Convolution(_))) {
+                14
             } else if self.has_effect(|e| matches!(e, Effect::Utility(u) if u.flip_right || u.bass_mono_hz > 0.0)) {
                 13
             } else if self.has_effect(|e| matches!(e, Effect::DeEsser(_))) {
@@ -886,6 +897,7 @@ fn clip(name: &str, length: f64, color: [u8; 3], notes: Vec<Note>) -> Option<Cli
         length,
         notes,
         color, muted: false,
+        controls: Vec::new(),
     }))
 }
 

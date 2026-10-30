@@ -58,6 +58,164 @@ pub struct MidiClip {
     /// Switched off: it stays where it is, silent (see [`Clip::muted`]).
     #[serde(default, skip_serializing_if = "is_default")]
     pub muted: bool,
+    /// Recorded expression: pitch bend, the mod wheel, pressure and other MIDI
+    /// controllers, a lane each, in clip time (looping with the clip).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub controls: Vec<ControlLane>,
+}
+
+/// A MIDI controller a clip can hold a lane of. (The sustain pedal is not one:
+/// recorded, it makes the notes as long as they sounded.)
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum MidiControl {
+    /// -1..1, 0 at rest.
+    PitchBend,
+    /// Channel pressure (aftertouch), 0..1.
+    Pressure,
+    /// A continuous controller by number, 0..1.
+    Cc(u8),
+}
+
+/// How many [`MidiControl`]s there are (see [`MidiControl::index`]).
+pub const MIDI_CONTROLS: usize = 130;
+
+impl MidiControl {
+    pub const MOD_WHEEL: MidiControl = MidiControl::Cc(1);
+    /// The controllers offered first, as in most keyboards.
+    pub const COMMON: [MidiControl; 6] = [Self::PitchBend, Self::MOD_WHEEL, Self::Pressure, Self::Cc(74), Self::Cc(11), Self::Cc(2)];
+
+    /// A number for each, 0..[`MIDI_CONTROLS`].
+    pub fn index(self) -> usize {
+        match self {
+            Self::Cc(n) => (n & 127) as usize,
+            Self::PitchBend => 128,
+            Self::Pressure => 129,
+        }
+    }
+
+    pub fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0..=127 => Some(Self::Cc(index as u8)),
+            128 => Some(Self::PitchBend),
+            129 => Some(Self::Pressure),
+            _ => None,
+        }
+    }
+
+    /// Whether it can be a lane: not the sustain pedal (notes keep its length)
+    /// nor the channel mode messages (all notes off and the like).
+    pub fn recordable(self) -> bool {
+        !matches!(self, Self::Cc(64) | Self::Cc(120..))
+    }
+
+    /// Its lowest value (the highest is 1).
+    pub fn min(self) -> f32 {
+        if self == Self::PitchBend { -1.0 } else { 0.0 }
+    }
+
+    /// Where it goes back to when its clip stops, if it has a place to rest: the
+    /// bend centred, the wheel and pressure down, expression and volume up,
+    /// brightness and pan in the middle. Others stay where they were.
+    pub fn rest(self) -> Option<f32> {
+        match self {
+            Self::PitchBend | Self::Pressure | Self::Cc(1 | 2 | 4) => Some(0.0),
+            Self::Cc(11) => Some(1.0),
+            Self::Cc(7) => Some(100.0 / 127.0),
+            Self::Cc(10 | 71..=74) => Some(64.0 / 127.0),
+            _ => None,
+        }
+    }
+
+    /// Its name, as the editor shows it.
+    pub fn label(self) -> String {
+        match self {
+            Self::PitchBend => "Pitch bend".into(),
+            Self::Pressure => "Aftertouch".into(),
+            Self::Cc(1) => "Rueda de modulación (CC 1)".into(),
+            Self::Cc(2) => "Soplo (CC 2)".into(),
+            Self::Cc(4) => "Pedal de expresión (CC 4)".into(),
+            Self::Cc(7) => "Volumen (CC 7)".into(),
+            Self::Cc(10) => "Panorama (CC 10)".into(),
+            Self::Cc(11) => "Expresión (CC 11)".into(),
+            Self::Cc(71) => "Resonancia (CC 71)".into(),
+            Self::Cc(74) => "Brillo (CC 74)".into(),
+            Self::Cc(n) => format!("CC {n}"),
+        }
+    }
+
+    /// Its name, short.
+    pub fn short(self) -> String {
+        match self {
+            Self::PitchBend => "Bend".into(),
+            Self::Pressure => "Aftertouch".into(),
+            Self::Cc(1) => "Rueda".into(),
+            Self::Cc(n) => format!("CC {n}"),
+        }
+    }
+}
+
+/// A controller's moves in a clip: breakpoints in clip beats, the value in
+/// its range (see [`MidiControl::min`]), straight or bent between them, and
+/// held before the first and after the last.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ControlLane {
+    pub control: MidiControl,
+    pub points: Vec<AutomationPoint>,
+}
+
+impl ControlLane {
+    pub fn new(control: MidiControl) -> Self {
+        Self { control, points: Vec::new() }
+    }
+
+    /// Its value at clip beat `beat`.
+    pub fn value_at(&self, beat: f64) -> Option<f32> {
+        let first = self.points.first()?;
+        if beat <= first.beat {
+            return Some(first.value);
+        }
+        let next = self.points.partition_point(|p| p.beat <= beat);
+        let Some(b) = self.points.get(next) else {
+            return self.points.last().map(|p| p.value);
+        };
+        let a = self.points[next - 1];
+        let t = ((beat - a.beat) / (b.beat - a.beat).max(1e-9)) as f32;
+        Some(a.value + (b.value - a.value) * bend(t, a.curve))
+    }
+}
+
+/// Thins dense controller data (`points` in time order) keeping its shape: a
+/// point goes when the line through its neighbours kept passes within
+/// `tolerance` of it (Douglas–Peucker on the values). Jumps stay sharp.
+pub fn thin_points(points: &[AutomationPoint], tolerance: f32) -> Vec<AutomationPoint> {
+    if points.len() <= 2 {
+        return points.to_vec();
+    }
+    let mut keep = vec![false; points.len()];
+    keep[0] = true;
+    keep[points.len() - 1] = true;
+    let mut stack = vec![(0, points.len() - 1)];
+    while let Some((a, b)) = stack.pop() {
+        if b <= a + 1 {
+            continue;
+        }
+        let (pa, pb) = (points[a], points[b]);
+        let span = (pb.beat - pa.beat).max(1e-12);
+        let (mut worst, mut at) = (0.0f32, a);
+        for (i, p) in points.iter().enumerate().take(b).skip(a + 1) {
+            let line = pa.value + (pb.value - pa.value) * ((p.beat - pa.beat) / span) as f32;
+            let off = (p.value - line).abs();
+            if off > worst {
+                (worst, at) = (off, i);
+            }
+        }
+        if worst > tolerance {
+            keep[at] = true;
+            stack.push((a, at));
+            stack.push((at, b));
+        }
+    }
+    points.iter().zip(&keep).filter(|(_, k)| **k).map(|(p, _)| *p).collect()
 }
 
 /// How a clip's notes are played off the grid, as Live's grooves: swing on the
@@ -164,6 +322,7 @@ impl MidiClip {
             length,
             notes: Vec::new(),
             color, muted: false,
+            controls: Vec::new(),
         }
     }
 }

@@ -1,11 +1,13 @@
 //! Standard MIDI files (.mid): reading one into tracks of its own, or into a
 //! track that is there, and writing a clip or the whole song to one, for other
-//! programs. Beats are quarter notes, as in the file.
+//! programs. Beats are quarter notes, as in the file. Pitch bend, channel
+//! pressure and controllers come in as the clip's lanes (see `expression`)
+//! and go out again; the sustain pedal comes in as the notes' lengths.
 
 use crate::app::{ClipRef, PulseApp};
 use crate::project::{Track, PALETTE};
 use engine::meter::{Meter, TimeSig};
-use engine::model::{ArrangementClip, Clip, InstrumentKind, KeysParams, MidiClip, Note, SynthParams};
+use engine::model::{ArrangementClip, Clip, ControlLane, InstrumentKind, KeysParams, MidiClip, MidiControl, Note, SynthParams};
 use std::path::Path;
 
 /// The drums' channel in General MIDI (10, counting from 1).
@@ -21,6 +23,8 @@ pub struct Part {
     /// Its first program change, if it has one (the General MIDI sound).
     pub program: Option<u8>,
     pub notes: Vec<Note>,
+    /// Its pitch bend, pressure and controllers, in its time.
+    pub controls: Vec<ControlLane>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -128,6 +132,8 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
         let mut sounding: Vec<(u8, u8, u64, u8, bool)> = Vec::new();
         let mut programs: [Option<u8>; 16] = [None; 16];
         let mut pedal = [false; 16];
+        // Per channel: its controllers as they moved (beat, which, value).
+        let mut moves: [Vec<(f64, MidiControl, f32)>; 16] = Default::default();
         let beats = |t: u64| t as f64 / ppq;
         // The earliest of that note still sounding (or, with `pedalled`, the earliest
         // let go under the pedal) ends.
@@ -209,6 +215,8 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
                                     }
                                 }
                                 pedal[channel as usize] = down;
+                            } else if MidiControl::Cc(controller).recordable() {
+                                moves[channel as usize].push((beats(tick), MidiControl::Cc(controller), value as f32 / 127.0));
                             }
                         }
                         0xC0 => {
@@ -216,9 +224,15 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
                             programs[channel as usize].get_or_insert(program);
                         }
                         0xD0 => {
-                            r.byte()?;
+                            let pressure = r.byte()? & 0x7F;
+                            moves[channel as usize].push((beats(tick), MidiControl::Pressure, pressure as f32 / 127.0));
                         }
-                        0xA0 | 0xE0 => {
+                        0xE0 => {
+                            let (lsb, msb) = (r.byte()? & 0x7F, r.byte()? & 0x7F);
+                            let bend = (((msb as i32) << 7 | lsb as i32) - 8192) as f32 / 8192.0;
+                            moves[channel as usize].push((beats(tick), MidiControl::PitchBend, bend.clamp(-1.0, 1.0)));
+                        }
+                        0xA0 => {
                             r.take(2)?;
                         }
                         _ => return Err("El archivo MIDI tiene un mensaje que no se entiende".into()),
@@ -246,10 +260,59 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
                 format!("MIDI {}", index + 1)
             };
             let name = if used.len() > 1 { format!("{base} (canal {})", c + 1) } else { base };
-            parts.push(Part { name, channel: c as u8, program, notes: list });
+            let controls = lanes_of(&moves[c]);
+            parts.push(Part { name, channel: c as u8, program, notes: list, controls });
         }
     }
     Ok(finish(tempos, sigs, parts))
+}
+
+/// A channel's controller moves (beats from the file's start) as lanes,
+/// thinned as a recording's are.
+fn lanes_of(moves: &[(f64, MidiControl, f32)]) -> Vec<ControlLane> {
+    let recorded: Vec<(usize, engine::RecordedControl)> = moves.iter().map(|&(beat, control, value)| (0, engine::RecordedControl { track: 0, control, value, beat })).collect();
+    crate::expression::take_lanes(&recorded, 0.0, f64::MAX)
+}
+
+/// The messages that play `lanes` on `channel`, as (tick, message): one at
+/// each point, and along a ramp each step the value moves (a 32nd at most).
+fn control_messages(lanes: &[ControlLane], channel: u8, tick: &dyn Fn(f64) -> u64) -> Vec<(u64, Vec<u8>)> {
+    let c = channel & 0x0F;
+    let mut out = Vec::new();
+    for lane in lanes {
+        let (Some(first), Some(last)) = (lane.points.first(), lane.points.last()) else { continue };
+        let message = |value: f32| -> Vec<u8> {
+            match lane.control {
+                MidiControl::PitchBend => {
+                    let v = ((value.clamp(-1.0, 1.0) * 8192.0).round() as i32 + 8192).clamp(0, 16383);
+                    vec![0xE0 | c, (v & 0x7F) as u8, (v >> 7) as u8]
+                }
+                MidiControl::Pressure => vec![0xD0 | c, (value.clamp(0.0, 1.0) * 127.0).round() as u8],
+                MidiControl::Cc(n) => vec![0xB0 | c, n & 0x7F, (value.clamp(0.0, 1.0) * 127.0).round() as u8],
+            }
+        };
+        let mut last_sent: Option<Vec<u8>> = None;
+        let mut beat = first.beat;
+        let step = 1.0 / 32.0;
+        // Each point exactly, and the ramps between them.
+        let mut stops: Vec<f64> = lane.points.iter().map(|p| p.beat).collect();
+        while beat < last.beat {
+            stops.push(beat);
+            beat += step;
+        }
+        stops.sort_by(|a, b| a.total_cmp(b));
+        stops.dedup_by(|b, a| (*b - *a).abs() < 1e-9);
+        for at in stops {
+            // At a point that jumps, its own value (not the one held up to it).
+            let value = lane.points.iter().rev().find(|p| (p.beat - at).abs() < 1e-9).map_or_else(|| lane.value_at(at).unwrap_or(0.0), |p| p.value);
+            let m = message(value);
+            if last_sent.as_ref() != Some(&m) {
+                out.push((tick(at), m.clone()));
+                last_sent = Some(m);
+            }
+        }
+    }
+    out
 }
 
 /// What a part plays in Pulse, from its General MIDI program: pianos, electric pianos
@@ -349,6 +412,9 @@ pub fn write(parts: &[Part], tempo: f64, meter: &Meter) -> Vec<u8> {
         if let Some(p) = part.program {
             events.push((0, 1, vec![0xC0 | c, p & 0x7F]));
         }
+        for (at, message) in control_messages(&part.controls, c, &tick) {
+            events.push((at, 1, message));
+        }
         for n in &part.notes {
             let velocity = ((n.velocity * 127.0).round() as u8).clamp(1, 127);
             let (on, off) = (tick(n.start), tick(n.start + n.length).max(tick(n.start) + 1));
@@ -365,7 +431,8 @@ pub fn write(parts: &[Part], tempo: f64, meter: &Meter) -> Vec<u8> {
 /// What a clip's notes are as a part: within its length, from its start.
 fn part_of(name: &str, clip: &MidiClip, drums: bool) -> Part {
     let notes = clip.notes.iter().filter(|n| n.start < clip.length).map(|n| Note { length: n.length.min(clip.length - n.start), ..*n }).collect();
-    Part { name: name.to_string(), channel: if drums { DRUM_CHANNEL } else { 0 }, program: None, notes }
+    let controls = crate::expression::slice(&clip.controls, clip.length, 0.0, clip.length);
+    Part { name: name.to_string(), channel: if drums { DRUM_CHANNEL } else { 0 }, program: None, notes, controls }
 }
 
 /// How long a clip for `notes` starting at `start` is: up to the song's bar the
@@ -437,7 +504,15 @@ impl PulseApp {
                     crate::app::Placement::Arrangement { start, .. } => start,
                     _ => 0.0,
                 };
-                let clip = MidiClip { notes: notes.clone(), ..MidiClip::new(&file, length_of(&notes, &self.project.meter, at), PALETTE[(self.project.tracks.len() * 3) % PALETTE.len()]) };
+                // One lane a controller: the first part's that has it.
+                let mut controls: Vec<ControlLane> = Vec::new();
+                for lane in song.parts.iter().flat_map(|p| &p.controls) {
+                    if !controls.iter().any(|l| l.control == lane.control) {
+                        controls.push(lane.clone());
+                    }
+                }
+                controls.sort_by_key(|l| l.control);
+                let clip = MidiClip { notes: notes.clone(), controls, ..MidiClip::new(&file, length_of(&notes, &self.project.meter, at), PALETTE[(self.project.tracks.len() * 3) % PALETTE.len()]) };
                 match placement {
                     crate::app::Placement::Session { track, slot } => self.project.tracks[track].clips[slot] = Some(Clip::Midi(clip)),
                     crate::app::Placement::Arrangement { track, start } => {
@@ -461,7 +536,7 @@ impl PulseApp {
                     let drums = part.channel == DRUM_CHANNEL;
                     let instrument = if drums { InstrumentKind::DrumMachine(Default::default()) } else { instrument_for(part.program) };
                     let mut track = Track::new(part.name.clone(), color, instrument);
-                    let clip = MidiClip { notes: part.notes.clone(), ..MidiClip::new(&part.name, length_of(&part.notes, &self.project.meter, 0.0), color) };
+                    let clip = MidiClip { notes: part.notes.clone(), controls: part.controls.clone(), ..MidiClip::new(&part.name, length_of(&part.notes, &self.project.meter, 0.0), color) };
                     if session {
                         track.clips[0] = Some(Clip::Midi(clip));
                     } else {
@@ -512,7 +587,10 @@ impl PulseApp {
             }
             if !notes.is_empty() {
                 notes.sort_by(|a, b| a.start.total_cmp(&b.start));
-                parts.push(Part { name: track.name.clone(), channel: if track.is_drums() { DRUM_CHANNEL } else { (parts.len() % 15) as u8 + if parts.len() % 15 >= DRUM_CHANNEL as usize { 1 } else { 0 } }, program: None, notes });
+                // The clips' lanes along the song, as the engine plays them.
+                let heard: Vec<ArrangementClip> = track.arrangement.iter().filter(|p| matches!(&p.clip, Clip::Midi(m) if !m.muted)).cloned().collect();
+                let controls = crate::clip_split::join_controls(&heard, 0.0);
+                parts.push(Part { name: track.name.clone(), channel: if track.is_drums() { DRUM_CHANNEL } else { (parts.len() % 15) as u8 + if parts.len() % 15 >= DRUM_CHANNEL as usize { 1 } else { 0 } }, program: None, notes, controls });
             }
         }
         parts
@@ -566,9 +644,9 @@ mod tests {
     /// tempo, and every note (velocity to the nearest of 127 steps).
     #[test]
     fn a_written_file_reads_back() {
-        let melody = Part { name: "Melodía".into(), channel: 0, program: Some(80), notes: vec![note(0.0, 1.0, 60, 0.8), note(1.0, 0.5, 64, 0.5), note(1.0, 0.5, 67, 0.5), note(2.5, 1.5, 60, 1.0)] };
+        let melody = Part { name: "Melodía".into(), channel: 0, program: Some(80), notes: vec![note(0.0, 1.0, 60, 0.8), note(1.0, 0.5, 64, 0.5), note(1.0, 0.5, 67, 0.5), note(2.5, 1.5, 60, 1.0)], controls: Vec::new() };
         // The same note again right where it ends: not cut.
-        let drums = Part { name: "Batería".into(), channel: DRUM_CHANNEL, program: None, notes: vec![note(0.0, 0.25, 36, 1.0), note(0.25, 0.25, 36, 0.7), note(1.0, 0.25, 38, 0.9)] };
+        let drums = Part { name: "Batería".into(), channel: DRUM_CHANNEL, program: None, notes: vec![note(0.0, 0.25, 36, 1.0), note(0.25, 0.25, 36, 0.7), note(1.0, 0.25, 38, 0.9)], controls: Vec::new() };
         let bytes = write(&[melody.clone(), drums.clone()], 128.0, &Meter::COMMON);
         let song = read(&bytes).unwrap();
         assert!((song.tempo.unwrap() - 128.0).abs() < 0.01);
@@ -580,6 +658,37 @@ mod tests {
                 assert!((a.start - b.start).abs() < 1e-9 && (a.length - b.length).abs() < 1e-9 && a.pitch == b.pitch && (a.velocity - b.velocity).abs() < 0.005, "{a:?} / {b:?}");
             }
         }
+    }
+
+    /// Pitch bend, pressure and controllers go out and come back as lanes:
+    /// a ramp as a ramp, a jump as a jump, each value to the nearest step.
+    #[test]
+    fn controller_lanes_go_out_and_come_back() {
+        use engine::model::AutomationPoint;
+        let point = |beat: f64, value: f32| AutomationPoint { beat, value, curve: 0.0 };
+        let lanes = vec![
+            ControlLane { control: MidiControl::PitchBend, points: vec![point(0.0, 0.0), point(1.0, 0.0), point(2.0, 1.0), point(3.0, -0.5)] },
+            ControlLane { control: MidiControl::Pressure, points: vec![point(0.5, 0.2), point(1.5, 0.9)] },
+            ControlLane { control: MidiControl::MOD_WHEEL, points: vec![point(0.0, 0.0), point(1.99, 0.0), point(2.0, 1.0)] },
+            ControlLane { control: MidiControl::Cc(74), points: vec![AutomationPoint { beat: 0.0, value: 0.2, curve: 0.7 }, point(4.0, 0.9)] },
+        ];
+        let part = Part { name: "Lead".into(), channel: 3, program: None, notes: vec![note(0.0, 4.0, 60, 0.8)], controls: lanes.clone() };
+        let song = read(&write(&[part], 120.0, &Meter::COMMON)).unwrap();
+        let got = &song.parts[0].controls;
+        assert_eq!(got.iter().map(|l| l.control).collect::<Vec<_>>(), [MidiControl::PitchBend, MidiControl::Pressure, MidiControl::Cc(1), MidiControl::Cc(74)]);
+        for (a, b) in got.iter().zip(&lanes) {
+            assert!(a.points.len() < 40, "{:?}: {} points", a.control, a.points.len());
+            for i in 0..=64 {
+                let beat = i as f64 / 16.0;
+                let (x, y) = (a.value_at(beat).unwrap(), b.value_at(beat).unwrap());
+                // Within a step and a 32nd of a beat of the ramp's slope.
+                let slack = 1.5 / 127.0 + (b.value_at(beat + 1.0 / 32.0).unwrap() - y).abs();
+                assert!((x - y).abs() <= slack, "{:?} at {beat}: {x} vs {y}", a.control);
+            }
+        }
+        // The jump stays a jump.
+        let wheel = &got[2];
+        assert!(wheel.value_at(1.95).unwrap() < 0.01 && wheel.value_at(2.0).unwrap() > 0.99, "{:?}", wheel.points);
     }
 
     /// A file as other programs write them: format 0, every channel in one
@@ -619,7 +728,7 @@ mod tests {
     #[test]
     fn time_signatures_go_out_and_come_back() {
         let meter = Meter::new(TimeSig::new(3, 4)).with_change(2, TimeSig::new(7, 8));
-        let part = Part { name: "Vals".into(), channel: 0, program: None, notes: vec![note(0.0, 1.0, 60, 0.8), note(6.0, 0.5, 62, 0.8)] };
+        let part = Part { name: "Vals".into(), channel: 0, program: None, notes: vec![note(0.0, 1.0, 60, 0.8), note(6.0, 0.5, 62, 0.8)], controls: Vec::new() };
         let song = read(&write(&[part.clone()], 90.0, &meter)).unwrap();
         assert_eq!(song.meter, Some(meter));
         assert_eq!(read(&write(&[part.clone()], 90.0, &Meter::COMMON)).unwrap().meter, Some(Meter::COMMON));
@@ -679,8 +788,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("pulse-midi-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("Tema.mid");
-        let keys = Part { name: "Piano".into(), channel: 0, program: None, notes: vec![note(0.0, 2.0, 60, 0.8), note(4.0, 2.0, 62, 0.8), note(8.0, 2.0, 64, 0.8)] };
-        let drums = Part { name: "Batería".into(), channel: DRUM_CHANNEL, program: None, notes: (0..8).map(|b| note(b as f64, 0.25, 36, 1.0)).collect() };
+        let keys = Part { name: "Piano".into(), channel: 0, program: None, notes: vec![note(0.0, 2.0, 60, 0.8), note(4.0, 2.0, 62, 0.8), note(8.0, 2.0, 64, 0.8)], controls: Vec::new() };
+        let drums = Part { name: "Batería".into(), channel: DRUM_CHANNEL, program: None, notes: (0..8).map(|b| note(b as f64, 0.25, 36, 1.0)).collect(), controls: Vec::new() };
         std::fs::write(&path, write(&[keys, drums], 92.0, &Meter::COMMON)).unwrap();
         let mut project = Project::empty();
         project.tracks.clear();

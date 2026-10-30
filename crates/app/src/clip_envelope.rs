@@ -1,12 +1,13 @@
-//! The lane under the note editor shows either the notes' velocities or one of the
-//! clip's envelopes (its own automation, in clip time, looping with it). Here:
+//! The lane under the note editor shows the notes' velocities, one of the
+//! clip's envelopes (its own automation, in clip time, looping with it) or one
+//! of its MIDI controllers (pitch bend, the wheel…: see `expression_ui`). Here:
 //! choosing what it shows, and drawing and editing an envelope: a clic adds a
 //! point, dragging moves it, a double clic deletes it; ⌥ + drag on a stretch
 //! bends it (see `curves`).
 
 use crate::theme::{self, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
-use engine::model::{AutomationLane, AutomationPoint, Param, ParamInfo};
+use engine::model::{AutomationLane, AutomationPoint, ControlLane, MidiControl, Param, ParamInfo};
 
 const POINT_GRAB: f32 = 6.0;
 
@@ -23,6 +24,10 @@ pub struct LaneChoice {
     /// The stretch being bent: the point it starts at, its bend and the
     /// pointer's height when the drag began.
     bending: Option<(usize, f32, f32)>,
+    /// A MIDI controller lane of the clip instead (MIDI clips only).
+    pub control: Option<MidiControl>,
+    /// Drawing on it (see `expression_ui`).
+    pub(crate) expression: crate::expression_ui::Editing,
 }
 
 impl LaneChoice {
@@ -42,13 +47,26 @@ impl LaneChoice {
         }
     }
 
+    /// Shows controller `control`'s lane.
+    pub fn show_control(&mut self, control: MidiControl) {
+        self.control = Some(control);
+    }
+
     fn name(&self, param: Param) -> &str {
         self.names.iter().find(|(p, _)| *p == param).map_or("?", |(_, n)| n.as_str())
     }
 }
 
+/// What the lane shows, as its menu picks it.
+#[derive(Clone, Copy, PartialEq)]
+enum Shown {
+    Envelope(Option<Param>),
+    Control(MidiControl),
+}
+
 /// The row above the lane: what it shows, and deleting the envelope shown.
-pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<AutomationLane>) {
+/// With a MIDI clip's `controls`, its controller lanes can be shown too.
+pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<AutomationLane>, controls: Option<&mut Vec<ControlLane>>) {
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Carril").color(TEXT_DIM).size(10.5));
         let has = |p: Param| envelopes.iter().any(|l| l.param == p && !l.points.is_empty());
@@ -56,19 +74,63 @@ pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<Au
             None => "Velocidad".to_string(),
             Some(p) => format!("{}{}", if has(p) { "● " } else { "" }, choice.name(p)),
         };
-        let mut shown = choice.shown;
-        egui::ComboBox::from_id_salt("clip_lane").selected_text(label(shown)).width(220.0).height(360.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut shown, None, "Velocidad");
+        let present: Vec<MidiControl> = controls.as_deref().map_or(Vec::new(), |c| c.iter().filter(|l| !l.points.is_empty()).map(|l| l.control).collect());
+        let control_label = |c: MidiControl| format!("{}{}", if present.contains(&c) { "◆ " } else { "" }, c.label());
+        let mut shown = match choice.control.filter(|_| controls.is_some()) {
+            Some(c) => Shown::Control(c),
+            None => Shown::Envelope(choice.shown),
+        };
+        let selected = match shown {
+            Shown::Control(c) => control_label(c),
+            Shown::Envelope(p) => label(p),
+        };
+        let mut cc = choice.expression.cc;
+        egui::ComboBox::from_id_salt("clip_lane").selected_text(selected).width(220.0).height(420.0).show_ui(ui, |ui| {
+            ui.selectable_value(&mut shown, Shown::Envelope(None), "Velocidad");
+            if controls.is_some() {
+                ui.separator();
+                ui.label(egui::RichText::new("Expresión MIDI del clip").color(TEXT_DIM).size(10.5));
+                for &c in &present {
+                    ui.selectable_value(&mut shown, Shown::Control(c), control_label(c)).on_hover_text("Un controlador grabado o dibujado en el clip");
+                }
+                ui.label(egui::RichText::new("Añadir").color(TEXT_DIM).size(10.5));
+                for c in MidiControl::COMMON.into_iter().filter(|c| !present.contains(c)) {
+                    ui.selectable_value(&mut shown, Shown::Control(c), format!("+ {}", c.label())).on_hover_text("Un carril nuevo para dibujar este controlador");
+                }
+                ui.horizontal(|ui| {
+                    ui.label("+ CC");
+                    ui.add(egui::DragValue::new(&mut cc).range(0..=119)).on_hover_text("El número del controlador (el 64, el pedal, se graba en la duración de las notas)");
+                    if ui.button("Añadir").clicked() && MidiControl::Cc(cc).recordable() {
+                        shown = Shown::Control(MidiControl::Cc(cc));
+                        ui.close();
+                    }
+                });
+            }
             ui.separator();
             ui.label(egui::RichText::new("Envolventes del clip").color(TEXT_DIM).size(10.5));
             // Those with points first.
             let mut params: Vec<Param> = choice.names.iter().map(|(p, _)| *p).collect();
             params.sort_by_key(|&p| !has(p));
             for p in params {
-                ui.selectable_value(&mut shown, Some(p), label(Some(p)));
+                ui.selectable_value(&mut shown, Shown::Envelope(Some(p)), label(Some(p)));
             }
         });
-        choice.shown = shown;
+        choice.expression.cc = cc;
+        match shown {
+            Shown::Control(c) => choice.control = Some(c),
+            Shown::Envelope(p) => {
+                // Choosing an envelope (or the velocities) leaves the controllers.
+                if controls.is_some() {
+                    choice.control = None;
+                }
+                choice.shown = p;
+            }
+        }
+        if let (Some(control), Some(controls)) = (choice.control, controls) {
+            crate::expression_ui::tools(ui, choice, controls, control);
+            return;
+        }
+        let shown = choice.shown;
         if let Some(param) = shown.filter(|&p| has(p)) {
             if ui.small_button("Borrar envolvente").clicked() {
                 envelopes.retain(|l| l.param != param);

@@ -186,12 +186,14 @@ pub struct SuperSaw {
     seed: u32,
     /// Pitch bend and vibrato, as a frequency ratio.
     pitch: f32,
+    /// What the controllers do to the cutoff, as a ratio.
+    bright: f32,
 }
 
 impl SuperSaw {
     pub fn new(params: SuperSawParams, sample_rate: f32) -> Self {
         let voice = SawVoice { gate: Gate::OFF, env: Adsr::IDLE, phases: [0.0; UNISON], filters: [Svf::default(); 2] };
-        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0 }
+        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0, bright: 1.0 }
     }
 
     /// Starts its luck over (the transport starts): the song's notes start
@@ -204,6 +206,11 @@ impl SuperSaw {
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
     pub fn set_pitch(&mut self, ratio: f32) {
         self.pitch = ratio;
+    }
+
+    /// Opens (above 1) or closes the filter by `ratio` (brightness, CC 74, and pressure).
+    pub fn set_brightness(&mut self, ratio: f32) {
+        self.bright = ratio;
     }
 
     pub fn params(&self) -> SuperSawParams {
@@ -275,7 +282,7 @@ impl SuperSaw {
                 gains[u] = (angle.cos() * norm, angle.sin() * norm);
             }
             for (block_l, block_r) in left.chunks_mut(CONTROL).zip(right.chunks_mut(CONTROL)) {
-                let cutoff = p.cutoff * 2f32.powf(p.env_amount * voice.env.level);
+                let cutoff = p.cutoff * self.bright * 2f32.powf(p.env_amount * voice.env.level);
                 let g = svf_g(cutoff, sr);
                 for (out_l, out_r) in block_l.iter_mut().zip(block_r.iter_mut()) {
                     if voice.gate.tick() {
@@ -320,6 +327,8 @@ pub struct AcidBass {
     ladder: [f32; 4],
     /// Pitch bend and vibrato, as a frequency ratio.
     pitch: f32,
+    /// What the controllers do to the cutoff, as a ratio.
+    bright: f32,
 }
 
 impl AcidBass {
@@ -337,12 +346,18 @@ impl AcidBass {
             accent: 0.0,
             ladder: [0.0; 4],
             pitch: 1.0,
+            bright: 1.0,
         }
     }
 
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
     pub fn set_pitch(&mut self, ratio: f32) {
         self.pitch = ratio;
+    }
+
+    /// Opens (above 1) or closes the filter by `ratio` (brightness, CC 74, and pressure).
+    pub fn set_brightness(&mut self, ratio: f32) {
+        self.bright = ratio;
     }
 
     pub fn params(&self) -> AcidParams {
@@ -403,7 +418,7 @@ impl AcidBass {
 
             self.filter_env *= env_decay;
             let sweep = 4.0 * p.env_mod * (1.0 + self.accent) * self.filter_env;
-            let cutoff = (p.cutoff * 2f32.powf(sweep)).clamp(20.0, sr * 0.4);
+            let cutoff = (p.cutoff * self.bright * 2f32.powf(sweep)).clamp(20.0, sr * 0.4);
             let g = 1.0 - (-TAU * cutoff / sr).exp();
             // Four one-pole stages with resonant feedback and a saturating input.
             let input = (osc * drive - feedback * self.ladder[3]).tanh();

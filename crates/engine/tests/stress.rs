@@ -173,6 +173,13 @@ fn busy_clip(root: u8, drums: bool) -> MidiClip {
         for step in 0..64 {
             clip.notes.push(Note { start: step as f64 * 0.25, length: 0.2, pitch: root + 12 + (step % 7) as u8, velocity: 0.6, chance: 1.0 });
         }
+        // Expression as played: bend, wheel, pressure, brightness and expression
+        // moving all through (and a controller no instrument here follows).
+        use engine::model::{ControlLane, MidiControl};
+        for (k, control) in [MidiControl::PitchBend, MidiControl::MOD_WHEEL, MidiControl::Pressure, MidiControl::Cc(74), MidiControl::Cc(11), MidiControl::Cc(20)].into_iter().enumerate() {
+            let points = (0..128).map(|i| AutomationPoint { beat: i as f64 * 0.125, value: (((i + k * 7) as f32 * 0.3).sin() * 0.5 + 0.5).max(control.min()), curve: 0.0 }).collect();
+            clip.controls.push(ControlLane { control, points });
+        }
     }
     clip
 }

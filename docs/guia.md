@@ -406,7 +406,7 @@ Graban las pistas **armadas**, las que tienen encendido el botón ● de su cabe
 
 Lo que queda grabado:
 
-- **MIDI**: un clip «Toma» que empieza donde empezaste y se redondea a compases enteros. Se le aplica **Rec Q**, la cuantización de grabación del transporte.
+- **MIDI**: un clip «Toma» que empieza donde empezaste y se redondea a compases enteros. Se le aplica **Rec Q**, la cuantización de grabación del transporte. El pitch bend, la rueda, el aftertouch y los demás controles que muevas quedan en el clip, bajo las notas. Ver [[Expresión: pitch bend, rueda y controles en el clip]].
 - **Audio**: un clip por cada pista de audio armada.
 - **Automatización**: con **A** (Armar automatización) encendido en el transporte, también se graban los controles que muevas. Ver [[Automatización]].
 
@@ -418,7 +418,7 @@ En una pista armada, los slots vacíos muestran un punto rojo.
 
 1. Haz clic en el punto. La toma empieza en el siguiente punto de cuantización, después de la cuenta atrás si la hay y el transporte estaba parado.
 2. El slot se pone rojo con «Grabando · compás N».
-3. Vuelve a hacer clic para terminar. La toma se redondea a compases enteros y sigue sonando en bucle.
+3. Vuelve a hacer clic para terminar. La toma se redondea a compases enteros y sigue sonando en bucle, con el bend y los controles que tocaste (ver [[Expresión: pitch bend, rueda y controles en el clip]]).
 
 Solo se graba en slots vacíos. Más sobre slots y clips en [[Session]].
 
@@ -517,7 +517,7 @@ Al parar:
 - Lo que grabaste antes del inicio del loop queda en un clip aparte.
 - Una vuelta a medias cuenta si dura al menos medio tiempo. Lo que no llegaste a grabar queda en silencio.
 
-> Nota: en MIDI no hay tomas. Las notas de todas las vueltas se juntan en un mismo clip (es lo que se llama overdub).
+> Nota: en MIDI no hay tomas. Las notas de todas las vueltas se juntan en un mismo clip (es lo que se llama overdub). Con los controles, una vuelta solo sustituye lo de las vueltas anteriores en el tramo donde moviste ese control.
 
 ### Elegir una toma entera
 
@@ -551,6 +551,9 @@ Conéctalo y toca: Pulse escucha **todos** los teclados MIDI conectados, en todo
 - Las notas van a las pistas armadas o, si no hay ninguna, a la seleccionada.
 - **Pitch bend**: ±2 semitonos en los instrumentos de Pulse (el Modular tiene su propio rango).
 - **Rueda de modulación** (CC 1): vibrato.
+- **Brillo** (CC 74) y **aftertouch**: abren el filtro de Pulse Synth, Super Saw, Acid Bass y Wavetable.
+- **Expresión** (CC 11): el volumen del instrumento, como un pedal de expresión.
+- Al grabar, todo esto queda en el clip. Ver [[Expresión: pitch bend, rueda y controles en el clip]].
 - **Pedal de sustain** (CC 64): las teclas que sueltas con el pedal pisado siguen sonando hasta que lo levantas, en cualquier instrumento. Al grabar, cada nota queda tan larga como sonó, así que se reproduce igual sin pedal. Volver a tocar una tecla sostenida termina la nota anterior.
 - El Kick Designer y las baterías no usan bend ni rueda. Los plugins lo reciben todo.
 
@@ -625,13 +628,13 @@ Usa tu voz como teclado MIDI: canta, tararea o silba al micrófono y suena el in
 
 ### Grabar lo que cantas
 
-Graba como con un teclado MIDI: arma una pista MIDI y graba ({F9} o en un slot) mientras cantas.
+Graba como con un teclado MIDI: arma una pista MIDI y graba ({F9} o en un slot) mientras cantas. Con **Seguir el tono**, el bend se graba también en el clip.
 
 ### Opciones (clic derecho en Voz)
 
 - **Octava**: −1 o −2 para tocar un bajo con una voz aguda; +1 o +2 para un lead con una voz grave.
 - **Acordes**: **Tríadas** o **Con séptima**. Cada nota que cantas suena con su acorde: es la raíz, y encima van la tercera y la quinta (y la séptima) de la **Escala** del proyecto. En Do mayor, un Re da Re menor y un Sol con séptima da Sol7. Sin escala, o con una nota que no es de ella, el acorde es mayor (con séptima mayor). Los acordes se graban nota a nota, como si los tocaras. Para acordes graves, baja la octava.
-- **Seguir el tono**: el vibrato de la voz y los deslizamientos hacia otra nota doblan la nota que suena (pitch bend, hasta ±2 semitonos). Si cantas un poco desafinado, se oye desafinado como tu voz; si la **Escala** ha corregido la nota, suena afinada y se mueve desde ahí. Un deslizamiento lento pasa por las notas de en medio. Se oye en vivo; al grabar se guardan las notas, sin el bend.
+- **Seguir el tono**: el vibrato de la voz y los deslizamientos hacia otra nota doblan la nota que suena (pitch bend, hasta ±2 semitonos). Si cantas un poco desafinado, se oye desafinado como tu voz; si la **Escala** ha corregido la nota, suena afinada y se mueve desde ahí. Un deslizamiento lento pasa por las notas de en medio. Se oye en vivo y, al grabar, el bend queda en el clip con las notas.
 
 +++ Cómo funciona
 - Una nota empieza a sonar unos 25–35 ms después de que empieces a cantarla. Las más graves tardan un poco más: la voz tiene que dar un par de vueltas.
@@ -921,6 +924,54 @@ Copia el pulso de un loop de batería, un break o tu beatbox y aplícalo a cualq
 - Analiza los golpes paso a paso a lo largo de un compás.
 - Si la grabación entera va un poco tarde o pronto (el clip empieza unos milisegundos antes del golpe), no cuenta: lo que guarda es cómo se separan sus golpes de los tiempos.
 - Sigue el warp del clip: si el loop está ajustado al tempo, el groove sale de cómo suena así.
++++
+
+## Expresión: pitch bend, rueda y controles en el clip
+
+Lo que haces con las ruedas y los controles del teclado al grabar queda en el clip, como las notas: el pitch bend, la rueda de modulación, el aftertouch y cualquier CC. También puedes dibujarlo a mano bajo las notas.
+
+### Grabarlo
+
+1. Graba MIDI como siempre, en el Arrangement o en un slot (ver [[Grabar]]).
+2. Mueve el bend, la rueda o lo que quieras mientras tocas.
+3. Al terminar, el editor abre el clip con el primer control grabado bajo las notas.
+
+- Se guarda tal como sonó, con menos puntos: los que no cambian la forma se quitan.
+- Grabando en loop, cada vuelta sustituye un control solo donde lo moviste. Lo demás se queda.
+- El **pedal de sustain** no se graba como control: alarga las notas, que suenan igual sin pedal.
+
+### Verlo y dibujarlo
+
+1. Abre el clip en el editor.
+2. En **Carril**, bajo **Expresión MIDI del clip**, elige un control que tenga el clip (◆) o añade uno: **Pitch bend**, **Rueda de modulación**, **Aftertouch**, **Brillo**, **Expresión**, **Soplo** o **+ CC** con su número.
+3. Dibuja en el carril:
+
+| Herramienta | Qué hace |
+|---|---|
+| **Lápiz** | Arrastra para dibujar a mano alzada |
+| **Línea** | Arrastra de un punto a otro: una rampa recta |
+| Arrastrar un punto | Lo mueve |
+| Doble clic en un punto | Lo borra |
+| {⌥ + arrastrar} entre dos puntos | Curva ese tramo ({⌥ + doble clic}: recto otra vez) |
+
+- **Rejilla**: lo que dibujas cae en la rejilla del editor.
+- **Borrar carril** quita ese control del clip.
+- El pitch bend se queda en el centro al acercarte a él, como la rueda de verdad.
+
+### Cómo suena
+
+- Los controles se repiten con el clip en cada vuelta, también en el Arrangement y en los clips lanzados.
+- Al parar o al acabar el clip, el bend vuelve al centro, y la rueda y el aftertouch, a cero: nunca se queda una nota desafinada.
+- En los instrumentos de Pulse: el **bend** dobla ±2 semitonos, la **rueda** da vibrato, el **brillo** (CC 74) y el **aftertouch** abren el filtro de los sintes con filtro, y la **expresión** (CC 11) baja el volumen.
+- El **Modular Synth** y los **plugins** reciben todos los controles y hacen lo que tengan asignado.
+- Al **exportar MIDI** se escriben; al **importar** un archivo MIDI, su bend, aftertouch y controles llegan como carriles.
+
+> Atención: un proyecto con controles en sus clips no se abre en versiones de Pulse anteriores a esta función (formato 15), para que no se pierdan.
+
++++ Detalles
+- Los controles se leen cada 64 muestras, en las mismas muestras siempre: suena igual con cualquier tamaño de búfer y al exportar.
+- Mientras suena un clip con un control, ese control manda; el teclado puede moverlo, pero el clip lo vuelve a fijar en cuanto su curva cambia.
+- Entre dos valores grabados con una pausa larga, el valor se mantiene hasta justo antes del siguiente: un salto queda como salto.
 +++
 
 ## Editor de audio

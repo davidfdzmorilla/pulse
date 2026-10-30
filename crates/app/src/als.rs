@@ -493,6 +493,7 @@ fn session_clip(clip: Node, track_color: [u8; 3]) -> MidiClip {
         length,
         notes: notes(clip, start, length),
         color: clip_color(clip, track_color), muted: false,
+        controls: Vec::new(),
     }
 }
 

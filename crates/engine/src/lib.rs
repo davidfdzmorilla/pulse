@@ -6,6 +6,8 @@ pub mod dsp;
 mod dynamics;
 mod effects;
 mod engine;
+#[cfg(test)]
+mod expression_tests;
 mod input;
 mod instruments;
 mod drumkit;
@@ -39,6 +41,6 @@ pub use input::{detached_input, detached_input_with_voice, start_input, start_in
 pub use offline::OfflineRenderer;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};
 pub use engine::{
-    build_chain, copy_salt, render_audio_handles, HANDLE_SECONDS, Analyzer, ANALYZER_SAMPLES, link_neighbours, render_audio, render_placed, swing_offset, ChainSlot, Command, Engine, PreparedInstrument, LiveNote, Controller, PlacedClip, PlayClip, RecordedNote, SharedState, Fault, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
+    build_chain, copy_salt, render_audio_handles, HANDLE_SECONDS, Analyzer, ANALYZER_SAMPLES, link_neighbours, render_audio, render_placed, swing_offset, ChainSlot, Command, Engine, PreparedInstrument, LiveNote, Controller, PlacedClip, PlayClip, RecordedControl, RecordedNote, SharedState, Fault, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,
     MAX_RETURNS, METER_VALUES, NUM_SCENES, QUEUED_STOP,
 };

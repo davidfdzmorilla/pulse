@@ -12,6 +12,8 @@ mod automation_rec;
 mod browser;
 mod capture;
 mod clip_envelope;
+mod expression;
+mod expression_ui;
 mod clip_select;
 mod clip_split;
 mod comping;

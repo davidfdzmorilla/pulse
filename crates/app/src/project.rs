@@ -306,7 +306,9 @@ pub struct MasterTrack {
 /// that have one.
 /// 13: a Utility with its lows in mono or a channel flipped: a Pulse that
 /// reads 12 would drop them. Only projects that have one.
-pub const FORMAT: u32 = 13;
+/// 14: a bus compressor or a multiband (OTT): a Pulse that reads 13 doesn't
+/// know them. Only projects that have one.
+pub const FORMAT: u32 = 14;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -634,8 +636,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Utility(u) if u.flip_right || u.bass_mono_hz > 0.0)) {
+            let format = if self.has_effect(|e| matches!(e, Effect::Glue(_) | Effect::Multiband(_))) {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::Utility(u) if u.flip_right || u.bass_mono_hz > 0.0)) {
+                13
             } else if self.has_effect(|e| matches!(e, Effect::DeEsser(_))) {
                 12
             } else if self.has_groove_templates() {

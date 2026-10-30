@@ -172,6 +172,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 };
                 let title = plugin_title.as_deref().unwrap_or(device.effect.label());
                 let width = effect_width(&device.effect);
+                let presets = device.effect.factory_presets();
+                // What its meter shows (a compressor's gain reduction), if it has one.
+                let meter = meters(&before.effect).then(|| app.audio.state().map(|s| s.analyzer.meter(target, index)).unwrap_or_default());
+                if meter.is_some_and(|m| m.iter().any(|v| v.abs() > 0.05)) {
+                    ui.ctx().request_repaint_after(std::time::Duration::from_millis(33));
+                }
                 let Device { effect, enabled } = &mut device;
                 let mut header_actions = Vec::new();
                 device_frame(
@@ -188,6 +194,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         }
                         if index > 0 && ui.small_button("◄").on_hover_text("Mover a la izquierda").clicked() {
                             header_actions.push(Action::Move(index, index - 1));
+                        }
+                        if !presets.is_empty() {
+                            effect_presets(ui, index, before, presets, &mut header_actions);
                         }
                     },
                     |ui| {
@@ -207,14 +216,16 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                             crate::eq_ui::body(ui, target, index, p, &shown, &automation, spectrum, app.audio.sample_rate(), &mut actions);
                             return;
                         }
+                        if let Effect::Multiband(_) = effect {
+                            multiband_body(app, ui, target, index, meter, &mut actions);
+                            return;
+                        }
                         discrete_controls(ui, effect, index, &sources);
-                        for (param, info) in effect.params().iter().enumerate() {
-                            let id = Param::Device { device: index, param };
-                            let value = app.display_value(target, id);
-                            let state = app.automation_state(target, id);
-                            if let Some(v) = widgets::param_knob(ui, info, value, info.name, 30.0, state) {
-                                actions.push(Action::Param(id, v));
-                            }
+                        for param in 0..effect.params().len() {
+                            effect_knob(app, ui, target, index, effect, param, &mut actions);
+                        }
+                        if let Some(meter) = meter {
+                            reduction_meter(ui, meter[0]);
                         }
                     },
                 );
@@ -395,9 +406,121 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Ducker(_) => (3, 1),
         Effect::Limiter(_) => (3, 0),
         Effect::Utility(_) => (3, 1),
+        Effect::Glue(_) => (7, 1),
+        // Two rows: the widest has eight knobs; then the bands' meters.
+        Effect::Multiband(_) => return 8.0 * 52.0 + BAND_METERS_WIDTH + 28.0,
         Effect::Plugin(_) => (PLUGIN_KNOBS, 1),
     };
-    knobs as f32 * 52.0 + columns as f32 * 100.0 + 24.0
+    let meter = if meters(effect) { METER_WIDTH + 4.0 } else { 0.0 };
+    knobs as f32 * 52.0 + columns as f32 * 100.0 + 24.0 + meter
+}
+
+/// Whether its device shows a meter (a compressor's or limiter's gain
+/// reduction, a multiband's bands).
+fn meters(effect: &Effect) -> bool {
+    matches!(effect, Effect::Compressor(_) | Effect::Limiter(_) | Effect::Glue(_) | Effect::Multiband(_))
+}
+
+const METER_WIDTH: f32 = 30.0;
+const BAND_METERS_WIDTH: f32 = 66.0;
+/// The most a meter shows, dB.
+const METER_RANGE_DB: f32 = 24.0;
+
+/// A gain reduction meter: a bar that grows down from the top, and its value.
+fn reduction_meter(ui: &mut egui::Ui, reduction_db: f32) {
+    let (rect, response) = ui.allocate_exact_size(vec2(METER_WIDTH, DEVICE_HEIGHT - 32.0), Sense::hover());
+    response.on_hover_text("Reducción de ganancia: cuánto baja el volumen ahora mismo");
+    let painter = ui.painter();
+    painter.text(pos2(rect.center().x, rect.top()), Align2::CENTER_TOP, "GR", theme::small(), TEXT_DIM);
+    let bar = Rect::from_min_max(pos2(rect.center().x - 5.0, rect.top() + 14.0), pos2(rect.center().x + 5.0, rect.bottom() - 16.0));
+    painter.rect_filled(bar, 2.0, theme::BG);
+    let fraction = (reduction_db / METER_RANGE_DB).clamp(0.0, 1.0);
+    if fraction > 0.0 {
+        painter.rect_filled(Rect::from_min_max(bar.min, pos2(bar.max.x, bar.top() + bar.height() * fraction)), 2.0, ACCENT);
+    }
+    for db in [6.0, 12.0, 18.0] {
+        let y = bar.top() + bar.height() * db / METER_RANGE_DB;
+        painter.line_segment([pos2(bar.left() - 3.0, y), pos2(bar.left(), y)], Stroke::new(1.0, TEXT_DIM));
+    }
+    let value = if reduction_db >= 0.05 { format!("-{reduction_db:.1}") } else { "0".to_string() };
+    painter.text(pos2(rect.center().x, rect.bottom()), Align2::CENTER_BOTTOM, value, theme::small(), theme::TEXT);
+}
+
+/// A multiband's three bands: each a bar from the middle, up when it pulls
+/// the band up, down when it pushes it down.
+fn band_meters(ui: &mut egui::Ui, bands: [f32; 3]) {
+    let (rect, response) = ui.allocate_exact_size(vec2(BAND_METERS_WIDTH, DEVICE_HEIGHT - 32.0), Sense::hover());
+    response.on_hover_text("Lo que hace cada banda ahora mismo: hacia arriba, sube lo flojo; hacia abajo, baja lo fuerte");
+    let painter = ui.painter();
+    let column = rect.width() / 3.0;
+    let (top, bottom) = (rect.top() + 14.0, rect.bottom() - 16.0);
+    let middle = (top + bottom) / 2.0;
+    for (band, (name, db)) in ["L", "M", "H"].into_iter().zip(bands).enumerate() {
+        let x = rect.left() + column * (band as f32 + 0.5);
+        painter.text(pos2(x, rect.top()), Align2::CENTER_TOP, name, theme::small(), TEXT_DIM);
+        let bar = Rect::from_min_max(pos2(x - 5.0, top), pos2(x + 5.0, bottom));
+        painter.rect_filled(bar, 2.0, theme::BG);
+        let reach = (db / METER_RANGE_DB).clamp(-1.0, 1.0) * (bottom - top) / 2.0;
+        if reach.abs() > 0.5 {
+            let color = if db > 0.0 { theme::METER_GREEN } else { ACCENT };
+            painter.rect_filled(Rect::from_two_pos(pos2(bar.left(), middle), pos2(bar.right(), middle - reach)), 1.0, color);
+        }
+        painter.line_segment([pos2(bar.left() - 2.0, middle), pos2(bar.right() + 2.0, middle)], Stroke::new(1.0, TEXT_DIM));
+        painter.text(pos2(x, rect.bottom()), Align2::CENTER_BOTTOM, format!("{db:+.0}"), theme::small(), theme::TEXT);
+    }
+}
+
+/// The knob of continuous parameter `param` of device `index`, showing and
+/// overriding automation like every other.
+fn effect_knob(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize, effect: &Effect, param: usize, actions: &mut Vec<Action>) {
+    let Some(info) = effect.params().get(param) else { return };
+    let id = Param::Device { device: index, param };
+    let value = app.display_value(target, id);
+    if let Some(v) = widgets::param_knob(ui, info, value, info.name, 30.0, app.automation_state(target, id)) {
+        actions.push(Action::Param(id, v));
+    }
+}
+
+/// The multiband's two rows: what it does (depth, time, amounts, gains) and
+/// its bands (each one's gains, the crossovers between them).
+fn multiband_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize, meter: Option<[f32; 3]>, actions: &mut Vec<Action>) {
+    let effect = app.devices(target)[index].effect;
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.horizontal(|ui| {
+            for param in 0..7 {
+                effect_knob(app, ui, target, index, &effect, param, actions);
+            }
+        });
+        ui.horizontal(|ui| {
+            for param in [9, 10, 7, 11, 12, 8, 13, 14] {
+                effect_knob(app, ui, target, index, &effect, param, actions);
+            }
+        });
+    });
+    band_meters(ui, meter.unwrap_or_default());
+}
+
+/// The factory settings of an effect that has them (keeping its sidechain).
+fn effect_presets(ui: &mut egui::Ui, index: usize, device: Device, presets: Vec<(&'static str, Effect)>, actions: &mut Vec<Action>) {
+    widgets::field_menu_button(ui, "Presets", |ui| {
+        ui.set_min_width(170.0);
+        let mut group = "";
+        for (name, mut effect) in presets {
+            let (category, short) = name.split_once(" · ").unwrap_or(("", name));
+            if category != group {
+                group = category;
+                ui.label(egui::RichText::new(category.to_uppercase()).color(TEXT_DIM).size(10.0));
+            }
+            if ui.button(short).clicked() {
+                if let (Some(slot), Some(source)) = (effect.sidechain_mut(), device.effect.sidechain()) {
+                    *slot = Some(source);
+                }
+                actions.push(Action::Replace(index, Device { effect, ..device }));
+                ui.close();
+            }
+        }
+    });
 }
 
 fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) -> egui::Response {
@@ -518,8 +641,31 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 }
             });
         }
+        Effect::Glue(p) => {
+            use engine::model::GlueRatio;
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Ratio").color(TEXT_DIM).size(10.5));
+                ui.horizontal(|ui| {
+                    ui.spacing_mut().item_spacing.x = 2.0;
+                    for ratio in GlueRatio::ALL {
+                        let hint = match ratio {
+                            GlueRatio::Two => "Suave: pega sin que se note. Para el master y los grupos",
+                            GlueRatio::Four => "El de siempre en el bus de batería",
+                            GlueRatio::Ten => "Casi un limitador: para aplastar en paralelo",
+                        };
+                        ui.selectable_value(&mut p.ratio, ratio, ratio.label()).on_hover_text(hint);
+                    }
+                });
+                ui.checkbox(&mut p.auto_release, "Auto").on_hover_text("Release automático: rápido tras un golpe suelto, lento cuando comprime mucho rato. Con él, el knob «Release» no hace nada");
+                ui.checkbox(&mut p.soft_clip, "Clip").on_hover_text("Recorta suave los picos a la salida, por debajo de 0 dBFS: más volumen sin que pase de rojo");
+                if !sources.is_empty() {
+                    sidechain_combo(ui, &format!("glue_sc{index}"), &mut p.sidechain, sources, DUCKS);
+                }
+            });
+        }
         Effect::Eq3(_)
         | Effect::EqEight(_)
+        | Effect::Multiband(_)
         | Effect::Compressor(_)
         | Effect::Gate(_)
         | Effect::Transient(_)
@@ -1178,4 +1324,84 @@ pub(crate) fn click_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &
             actions.push(Action::ClearSample(0));
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::project::{Project, Track};
+
+    /// The devices of `app`'s selected chain drawn a few frames without a window.
+    /// Also the picture of the last frame (each frame's textures go to the canvas).
+    fn draw(app: &mut PulseApp, size: egui::Vec2) -> (egui::FullOutput, crate::offscreen::Image) {
+        let ctx = egui::Context::default();
+        theme::apply(&ctx);
+        let input = || egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+        let mut canvas = crate::offscreen::Canvas::default();
+        let mut last = None;
+        for _ in 0..4 {
+            ctx.set_pixels_per_point(2.0);
+            let output = ctx.run_ui(input(), |ui| {
+                egui::CentralPanel::default().show(ui, |ui| show(app, ui));
+            });
+            let shapes = output.shapes.clone();
+            let image = canvas.draw(&ctx, output, size, 2.0);
+            last = Some((shapes, image));
+        }
+        let (shapes, image) = last.unwrap();
+        (egui::FullOutput { shapes, ..Default::default() }, image)
+    }
+
+    /// A drum track with the bus compressor and the multiband.
+    fn dynamics_app() -> PulseApp {
+        let mut project = Project::empty();
+        project.tracks.clear();
+        let mut track = Track::new_audio("Batería", [200, 120, 60]);
+        track.devices.push(Device::new(Effect::Glue(Default::default())));
+        track.devices.push(Device::new(Effect::Multiband(Default::default())));
+        project.tracks.push(track);
+        let mut app = PulseApp::headless(project);
+        app.selected_target = Target::Track(0);
+        app
+    }
+
+    /// Every control of both is drawn, with their meters and presets.
+    #[test]
+    fn dynamics_devices_show_every_control() {
+        let mut app = dynamics_app();
+        let (output, _) = draw(&mut app, vec2(2400.0, 220.0));
+        let texts: Vec<String> = output
+            .shapes
+            .iter()
+            .filter_map(|s| match &s.shape {
+                egui::epaint::Shape::Text(t) => Some(t.galley.job.text.clone()),
+                _ => None,
+            })
+            .collect();
+        for effect in [Effect::Glue(Default::default()), Effect::Multiband(Default::default())] {
+            for info in effect.params() {
+                assert!(texts.iter().any(|t| t == info.name), "{}: {} not drawn", effect.label(), info.name);
+            }
+            assert!(texts.iter().any(|t| t == effect.label()));
+            assert!(!effect.factory_presets().is_empty());
+        }
+        for label in ["Ratio", "4:1", "Auto", "Clip", "GR", "L", "M", "H", "Presets"] {
+            assert!(texts.iter().any(|t| t == label), "{label} not drawn: {texts:?}");
+        }
+    }
+
+    /// Their devices as a PNG file, to look at:
+    /// `PULSE_SHOTS=dir cargo test --release -p app dynamics_shots -- --ignored`.
+    #[test]
+    #[ignore]
+    fn dynamics_shots() {
+        let Some(dir) = std::env::var_os("PULSE_SHOTS").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = dynamics_app();
+        let size = vec2(1250.0, 190.0);
+        let (_, image) = draw(&mut app, size);
+        let temp = dir.join(".dinamica.png.tmp");
+        image.save_png(&temp).unwrap();
+        std::fs::rename(temp, dir.join("dinamica.png")).unwrap();
+    }
 }

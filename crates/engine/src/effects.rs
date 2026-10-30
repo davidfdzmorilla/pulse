@@ -5,6 +5,7 @@ use crate::model::{
     db_to_gain, AutoFilterParams, BitcrusherParams, ChorusParams, CompressorParams, DelayParams, DuckerParams, Effect,
     DeEsserParams, EqBand, EqEightParams, EqShape, Eq3Params, FilterMode, GateParams, TransientParams, EQ_BANDS, KickDrive, LimiterParams, PhaserParams, PluginId, ReverbParams, SaturatorParams, UtilityParams,
 };
+use crate::dynamics::{Glue, Multiband};
 use crate::plugin::PluginProcessor;
 use crate::tuner::Tuner;
 use std::f32::consts::{PI, TAU};
@@ -325,14 +326,14 @@ pub struct Compressor {
 /// The sound of a sidechain's source for this block (the louder channel, and
 /// the mono sum), when the engine has fed it.
 pub struct Key {
-    level: Vec<f32>,
-    mono: Vec<f32>,
+    pub(crate) level: Vec<f32>,
+    pub(crate) mono: Vec<f32>,
     fed: bool,
 }
 
 impl Key {
     /// Room for a block; call off the audio thread.
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self { level: vec![0.0; 4096], mono: vec![0.0; 4096], fed: false }
     }
 
@@ -347,7 +348,7 @@ impl Key {
 
     /// Whether it was fed for this block of `n` (once: the next block needs
     /// feeding again).
-    fn take(&mut self, n: usize) -> bool {
+    pub(crate) fn take(&mut self, n: usize) -> bool {
         std::mem::replace(&mut self.fed, false) && n <= self.level.len()
     }
 }
@@ -1520,6 +1521,8 @@ pub enum EffectProcessor {
     Ducker(Ducker),
     Limiter(Limiter),
     Utility(Utility),
+    Glue(Box<Glue>),
+    Multiband(Box<Multiband>),
     /// A VST3 effect; None until the app loads it (it then passes the signal through).
     Plugin(PluginId, Option<Box<PluginProcessor>>),
 }
@@ -1566,6 +1569,8 @@ impl EffectProcessor {
             Effect::Ducker(params) => Self::Ducker(Ducker { params, key: Key::new(), hits: Hits::IDLE }),
             Effect::Limiter(params) => Self::Limiter(Limiter::new(params, sample_rate)),
             Effect::Utility(params) => Self::Utility(Utility::new(params)),
+            Effect::Glue(params) => Self::Glue(Box::new(Glue::new(params, sample_rate))),
+            Effect::Multiband(params) => Self::Multiband(Box::new(Multiband::new(params, sample_rate))),
             Effect::Plugin(id) => Self::Plugin(id, None),
         }
     }
@@ -1586,8 +1591,22 @@ impl EffectProcessor {
     pub fn sidechain(&self) -> Option<u32> {
         match self {
             Self::Compressor(fx) => fx.params.sidechain,
+            Self::Glue(fx) => fx.params.sidechain,
             Self::Gate(fx) => fx.params.sidechain,
             Self::Ducker(fx) => fx.params.sidechain,
+            _ => None,
+        }
+    }
+
+    /// What its meter shows after the last block, dB: the gain reduction of
+    /// a compressor or limiter (positive), each band's compression of a
+    /// multiband (up positive, down negative). None: it has no meter.
+    pub fn meter(&self) -> Option<[f32; 3]> {
+        match self {
+            Self::Compressor(fx) => Some([-fx.envelope_db, 0.0, 0.0]),
+            Self::Limiter(fx) => Some([-20.0 * ((fx.sum / fx.average.len() as f64) as f32).max(1e-6).log10(), 0.0, 0.0]),
+            Self::Glue(fx) => Some([fx.reduction(), 0.0, 0.0]),
+            Self::Multiband(fx) => Some(fx.reduction()),
             _ => None,
         }
     }
@@ -1596,6 +1615,7 @@ impl EffectProcessor {
     pub fn feed_key(&mut self, left: &[f32], right: &[f32]) {
         match self {
             Self::Compressor(fx) => fx.key.feed(left, right),
+            Self::Glue(fx) => fx.key.feed(left, right),
             Self::Gate(fx) => fx.key.feed(left, right),
             Self::Ducker(fx) => fx.key.feed(left, right),
             _ => {}
@@ -1622,6 +1642,8 @@ impl EffectProcessor {
             (Self::Ducker(fx), Effect::Ducker(p)) => fx.params = p,
             (Self::Limiter(fx), Effect::Limiter(p)) => fx.params = p,
             (Self::Utility(fx), Effect::Utility(p)) => fx.params = p,
+            (Self::Glue(fx), Effect::Glue(p)) => fx.params = p,
+            (Self::Multiband(fx), Effect::Multiband(p)) => fx.params = p,
             (Self::Plugin(id, _), Effect::Plugin(other)) => return *id == other,
             _ => return false,
         }
@@ -1648,6 +1670,8 @@ impl EffectProcessor {
             Self::Ducker(fx) => Effect::Ducker(fx.params),
             Self::Limiter(fx) => Effect::Limiter(fx.params),
             Self::Utility(fx) => Effect::Utility(fx.params),
+            Self::Glue(fx) => Effect::Glue(fx.params),
+            Self::Multiband(fx) => Effect::Multiband(fx.params),
             Self::Plugin(id, _) => Effect::Plugin(*id),
         }
     }
@@ -1732,6 +1756,8 @@ impl EffectProcessor {
                 fx.dry = [[0.0; Oversampler::LATENCY]; 2];
             }
             Self::Utility(fx) => fx.states = Default::default(),
+            Self::Glue(fx) => fx.reset(),
+            Self::Multiband(fx) => fx.reset(),
             Self::Plugin(..) => {}
         }
     }
@@ -1755,6 +1781,8 @@ impl EffectProcessor {
             Self::Ducker(fx) => fx.process(l, r, ctx),
             Self::Limiter(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Utility(fx) => fx.process(l, r, ctx.sample_rate),
+            Self::Glue(fx) => fx.process(l, r),
+            Self::Multiband(fx) => fx.process(l, r),
             Self::Plugin(_, Some(plugin)) => {
                 plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &ctx.meter);
                 plugin.process(l, r);

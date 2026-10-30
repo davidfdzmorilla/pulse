@@ -123,6 +123,8 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         Effect::DeEsser(engine::model::DeEsserParams { freq_hz: 7200.0, threshold_db: -27.0, range_db: 6.0 }),
         Effect::Tuner(engine::model::TunerParams { speed_ms: 40.0, humanize: 0.3, amount: 0.8, scale: engine::model::TunerScale::Key { tonic: 4, minor: true } }),
         Effect::Compressor(Default::default()),
+        Effect::Glue(engine::model::GlueParams { threshold_db: -20.0, ratio: engine::model::GlueRatio::Ten, auto_release: false, soft_clip: true, sidechain_hpf_hz: 120.0, ..Default::default() }),
+        Effect::Multiband(engine::model::MultibandParams { depth: 0.4, band_in_db: [1.0, -2.0, 3.0], band_out_db: [-1.0, 0.5, 2.0], ..Default::default() }),
         Effect::Delay(Default::default()),
         Effect::Reverb(Default::default()),
         Effect::Saturator(Default::default()),

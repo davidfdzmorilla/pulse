@@ -500,12 +500,36 @@ pub struct Analyzer {
     samples: [Box<[AtomicU32]>; 2],
     /// Samples written in all.
     written: AtomicU64,
+    /// What each device's meter shows (see `EffectProcessor::meter`), f32
+    /// bits, [`METER_VALUES`] a device, every device of every channel.
+    meters: Box<[AtomicU32]>,
 }
+
+/// Values a device's meter has (a multiband's bands).
+pub const METER_VALUES: usize = 3;
 
 impl Analyzer {
     fn new() -> Self {
         let ring = || (0..ANALYZER_SAMPLES).map(|_| AtomicU32::new(0)).collect();
-        Self { watch: AtomicI64::new(-1), samples: [ring(), ring()], written: AtomicU64::new(0) }
+        let meters = (0..(MAX_TRACKS + MAX_RETURNS + 1) * MAX_CHAIN * METER_VALUES).map(|_| AtomicU32::new(0)).collect();
+        Self { watch: AtomicI64::new(-1), samples: [ring(), ring()], written: AtomicU64::new(0), meters }
+    }
+
+    /// What the meter of device `device` of `target` showed after the last
+    /// block, dB (a compressor's gain reduction, a multiband's bands).
+    pub fn meter(&self, target: Target, device: usize) -> [f32; METER_VALUES] {
+        if device >= MAX_CHAIN {
+            return [0.0; METER_VALUES];
+        }
+        let at = Self::code(target, device) as usize * METER_VALUES;
+        std::array::from_fn(|i| f32::from_bits(self.meters[at + i].load(Ordering::Relaxed)))
+    }
+
+    fn set_meter(&self, target: Target, device: usize, values: [f32; METER_VALUES]) {
+        let at = Self::code(target, device) as usize * METER_VALUES;
+        for (i, v) in values.into_iter().enumerate() {
+            self.meters[at + i].store(v.to_bits(), Ordering::Relaxed);
+        }
     }
 
     fn code(target: Target, device: usize) -> i64 {
@@ -1503,14 +1527,19 @@ impl Channel {
     /// them for good, and so would a level no sound has (a filter running away
     /// to 1e12 stays finite): then the block is silenced and the effects' memory
     /// cleared. False if that happened.
-    /// `tap`: the device after which the analyzer listens, if it listens here.
-    fn run_chain(&mut self, n: usize, ctx: &ProcessContext, tap: Option<(usize, &Analyzer)>) -> bool {
+    /// The analyzer listens after one of its devices if it listens to
+    /// `target`, and takes what the devices' meters show.
+    fn run_chain(&mut self, n: usize, ctx: &ProcessContext, target: Target, analyzer: &Analyzer) -> bool {
+        let tap = analyzer.device(target);
         let (left, right) = (&mut self.left[..n], &mut self.right[..n]);
         for (i, slot) in self.chain.iter_mut().enumerate() {
             if slot.enabled {
                 slot.processor.process(left, right, ctx);
             }
-            if let Some((_, analyzer)) = tap.filter(|&(at, _)| at == i) {
+            if let Some(meter) = slot.processor.meter() {
+                analyzer.set_meter(target, i, if slot.enabled { meter } else { [0.0; METER_VALUES] });
+            }
+            if tap == Some(i) {
                 analyzer.push(left, right);
             }
         }
@@ -2160,7 +2189,7 @@ unsafe fn process_track(job: &Job, index: usize) {
     }
     feed_keys(&mut channel.chain, &mix.ids, n, key);
     let analyzer = &shared.analyzer;
-    if !channel.run_chain(n, ctx, analyzer.device(Target::Track(index)).map(|d| (d, analyzer))) {
+    if !channel.run_chain(n, ctx, Target::Track(index), analyzer) {
         shared.fault(Fault::Track(index));
     }
     // What sidechains listening to it hear: after its effects, before its fader.
@@ -2216,7 +2245,7 @@ unsafe fn process_return(job: &Job, index: usize) {
     let key = |t: usize| unsafe { ((*job.key_left.add(t)).as_slice(), (*job.key_right.add(t)).as_slice()) };
     feed_keys(&mut ret.chain, &mix.ids, n, key);
     let analyzer = &shared.analyzer;
-    if !ret.run_chain(n, &mix.ctx, analyzer.device(Target::Return(index)).map(|d| (d, analyzer))) {
+    if !ret.run_chain(n, &mix.ctx, Target::Return(index), analyzer) {
         shared.fault(Fault::Return(index));
     }
     unsafe { &mut *job.return_delays.add(index) }.process(&mut ret.left[..n], Some(&mut ret.right[..n]));
@@ -3341,7 +3370,7 @@ impl Engine {
         let keys = (&self.key_left, &self.key_right);
         feed_keys(&mut master.chain, &self.ids, n, |t| (keys.0[t].as_slice(), keys.1[t].as_slice()));
         let analyzer = &self.shared.analyzer;
-        if !master.run_chain(n, &ctx, analyzer.device(Target::Master).map(|d| (d, analyzer))) {
+        if !master.run_chain(n, &ctx, Target::Master, analyzer) {
             self.shared.fault(Fault::Master);
         }
         let (gl, gr) = master.pan_gains(master.gain);
@@ -4670,6 +4699,35 @@ mod tests {
             h.shared.analyzer.watch(what);
             assert_eq!(h.shared.analyzer.watching(), what);
         }
+    }
+
+    /// A compressor's meter reaches the UI: how much it reduces, after each
+    /// block; a multiband's, each band; nothing once it's turned off.
+    #[test]
+    fn compressor_meters_reach_the_ui() {
+        use crate::model::{GlueParams, MultibandParams, UtilityParams};
+        let mut h = Harness::new();
+        let devices = [
+            Device::new(Effect::Utility(UtilityParams { gain_db: 12.0, ..Default::default() })),
+            Device::new(Effect::Glue(GlueParams { threshold_db: -30.0, ..Default::default() })),
+            Device::new(Effect::Multiband(MultibandParams::default())),
+        ];
+        for (index, device) in devices.iter().enumerate() {
+            h.send(Command::InsertDevice { target: Target::Track(0), index, slot: ChainSlot::new(device, SR) });
+        }
+        let mut clip = MidiClip::new("drone", 4.0, [0, 0, 0]);
+        clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(clip))) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(1.0);
+        let analyzer = &h.shared.analyzer;
+        assert!(analyzer.meter(Target::Track(0), 1)[0] > 3.0, "{:?}", analyzer.meter(Target::Track(0), 1));
+        assert!(analyzer.meter(Target::Track(0), 2).iter().any(|&b| b != 0.0));
+        assert_eq!(analyzer.meter(Target::Track(0), 0), [0.0; METER_VALUES], "a Utility has no meter");
+        assert_eq!(analyzer.meter(Target::Track(1), 1), [0.0; METER_VALUES], "another track's");
+        h.send(Command::UpdateDevice { target: Target::Track(0), index: 1, device: Device { enabled: false, ..devices[1] } });
+        h.run_beats(0.25);
+        assert_eq!(h.shared.analyzer.meter(Target::Track(0), 1), [0.0; METER_VALUES], "off: nothing");
     }
 
     #[test]

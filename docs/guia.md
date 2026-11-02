@@ -1005,10 +1005,10 @@ Lo que haces con las ruedas y los controles del teclado al grabar queda en el cl
 |---|---|---|
 | Pulse Synth, Super Saw, Acid Bass, Wavetable, Polychrome | Abre o cierra el filtro | Abre el filtro |
 | Sampler | Abre o cierra el filtro; hacia abajo oscurece aunque el filtro esté abierto | Abre el filtro |
-| FM Synth | Sube o baja el índice de modulación: más o menos armónicos | Más índice: brilla también en las notas largas |
-| Pulse Keys (pianos eléctricos) | Más o menos «bark» y un tono más brillante u oscuro | Trémolo |
+| FM Synth | Sube o baja el índice de modulación: más o menos armónicos, en la misma medida en todos los presets | Más índice: brilla también en las notas largas |
+| Pulse Keys (pianos eléctricos) | Más o menos «bark» y un tono más brillante u oscuro, sin saltar de volumen | Trémolo |
 | Pulse Keys (piano) | Realza o apaga los agudos | Trémolo |
-| Pulse Keys (órgano) | Abre o cierra el filtro de tono | Drive, como si apretaras el pedal de volumen |
+| Pulse Keys (órgano) | Saca o mete los registros agudos (de 4' para arriba) y abre o cierra el filtro de tono | Drive, como si apretaras el pedal de volumen |
 - El **Modular Synth** y los **plugins** reciben todos los controles y hacen lo que tengan asignado.
 - Al **exportar MIDI** se escriben; al **importar** un archivo MIDI, su bend, aftertouch y controles llegan como carriles.
 

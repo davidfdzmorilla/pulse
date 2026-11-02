@@ -36,16 +36,28 @@ const ORGAN_RELEASE: f32 = 0.05;
 const SIXTY_DB: f32 = 6.9078;
 /// How hard the strike drives the strings (sets the piano's loudness).
 const PIANO_LEVEL: f32 = 11.0;
-/// The controllers. Brightness (CC 74): on the electric pianos, the pickup's
-/// drive (bark) and the tone filter move this many octaves either way; on the
-/// organ its tone filter; on the piano, the highs above [`TILT_HZ`] get up to
-/// [`TILT_OCTAVES`] of gain either way (+-12 dB). Pressure adds a tremolo this
-/// deep at [`PRESSURE_TREMOLO_HZ`] (the organ, a drive this strong instead).
-/// Both glide in about [`EXPRESSION_GLIDE`] seconds.
+/// The controllers. Brightness (CC 74): on the electric pianos, the tone
+/// filter moves [`EP_TONE_OCTAVES`] either way; up, the pickup's drive (bark)
+/// gets [`BRIGHT_BARK`] more (tines, reeds) and the level comes down
+/// [`BRIGHT_LEVEL`] octaves of gain, so it brightens without jumping out
+/// (measured: centroid +40-80 %, level within +-4.5 dB); down, the drive
+/// falls [`BARK_OCTAVES`]. On the organ its tone filter moves [`TONE_OCTAVES`],
+/// and up it pulls the upper drawbars (4' and above) out to
+/// [`ORGAN_BRIGHT_DRAWBAR`], down pushes them in (as an organist registers
+/// brighter or darker). On the piano, the highs above [`TILT_HZ`] get up to
+/// [`TILT_OCTAVES`] of gain either way (+-21 dB), [`TILT_LEVEL`] octaves less
+/// overall going up. Pressure adds a tremolo this deep at
+/// [`PRESSURE_TREMOLO_HZ`] (the organ, a drive this strong instead). Both
+/// glide in about [`EXPRESSION_GLIDE`] seconds.
 const BARK_OCTAVES: f32 = 1.5;
+const BRIGHT_BARK: [f32; 2] = [6.0, 3.0];
+const BRIGHT_LEVEL: [f32; 2] = [1.6, 1.4];
+const EP_TONE_OCTAVES: f32 = 3.0;
 const TONE_OCTAVES: f32 = 2.0;
-const TILT_OCTAVES: f32 = 2.0;
-const TILT_HZ: f32 = 1000.0;
+const ORGAN_BRIGHT_DRAWBAR: f32 = 4.0;
+const TILT_OCTAVES: f32 = 3.5;
+const TILT_HZ: f32 = 1500.0;
+const TILT_LEVEL: f32 = 1.2;
 const PRESSURE_TREMOLO: f32 = 0.6;
 const PRESSURE_TREMOLO_HZ: f32 = 5.5;
 const PRESSURE_DRIVE: f32 = 6.0;
@@ -556,7 +568,12 @@ impl Keys {
         let tone = self.chunk_tone;
         let mut out_l = [0.0f32; CHUNK];
         let mut out_r = [0.0f32; CHUNK];
-        let bars = p.drawbars.map(|d| drawbar(d) / 3.2);
+        let mut bars = p.drawbars.map(|d| drawbar(d) / 3.2);
+        if p.model == KeysModel::Organ && tone != 0.0 {
+            for bar in bars.iter_mut().skip(3) {
+                *bar = if tone > 0.0 { bar.max(drawbar(ORGAN_BRIGHT_DRAWBAR * tone) / 3.2) } else { *bar * (1.0 + 0.8 * tone) };
+            }
+        }
         let size = self.voice_lines;
         for (index, v) in self.voices.iter_mut().enumerate().filter(|(_, v)| v.active) {
             if (v.bend - bend).abs() > 1e-6 {
@@ -660,10 +677,11 @@ impl Keys {
                 let (tone, pressure) = (*tone, *pressure);
                 if p.model == KeysModel::Piano && tone != 0.0 {
                     let gain = 2f32.powf(tone * TILT_OCTAVES);
+                    let trim = 2f32.powf(-tone.max(0.0) * TILT_LEVEL);
                     for (ch, x) in [&mut l, &mut r].into_iter().enumerate() {
                         self.tilt[ch] += (*x - self.tilt[ch]) * tilt_k;
                         let low = self.tilt[ch];
-                        *x = low + (*x - low) * gain;
+                        *x = (low + (*x - low) * gain) * trim;
                     }
                 }
                 if pressure > 0.0 {
@@ -778,10 +796,14 @@ fn shape(v: &mut Voice, mono: &mut [f32], sr: f32, tone: f32) {
         // The strings and the strike are the whole sound.
         KeysModel::Piano => {}
         KeysModel::Tines | KeysModel::Reed => {
-            let (k, tone_g) = if tone == 0.0 {
-                (v.drive, v.tone_g)
+            let which = (v.model == KeysModel::Reed) as usize;
+            let (k, tone_g, trim) = if tone == 0.0 {
+                (v.drive, v.tone_g, 1.0)
             } else {
-                (v.drive * 2f32.powf(tone * BARK_OCTAVES), svf_g((v.tone_cut * 2f32.powf(tone * TONE_OCTAVES)).min(sr * 0.45), sr))
+                // More bark added (not multiplied): a clean preset gets some, a
+                // barking one isn't pushed over the edge.
+                let k = if tone > 0.0 { v.drive + tone * BRIGHT_BARK[which] } else { v.drive * 2f32.powf(tone * BARK_OCTAVES) };
+                (k, svf_g((v.tone_cut * 2f32.powf(tone * EP_TONE_OCTAVES)).min(sr * 0.45), sr), 2f32.powf(-tone.max(0.0) * BRIGHT_LEVEL[which]))
             };
             let o = v.offset;
             let rest = (k * o).tanh();
@@ -801,7 +823,7 @@ fn shape(v: &mut Voice, mono: &mut [f32], sr: f32, tone: f32) {
                     y = high;
                 }
                 let (lp, _, _) = v.tone.tick(y, tone_g, 1.2);
-                *x = lp + thump;
+                *x = lp * trim + thump;
             }
         }
         KeysModel::Organ => {

@@ -456,12 +456,16 @@ const FM_VOICES: usize = 8;
 /// How much of the modulation index velocity takes away: a full hit plays the
 /// index as set, the softest about half of it (darker, as on a DX7).
 const FM_VELOCITY_INDEX: f32 = 0.5;
-/// Octaves of modulation index the brightness controller (CC 74) moves either way;
-/// the index it adds at the top and full pressure adds, on top of the envelope
-/// (so held notes and soft patches brighten too).
+/// Octaves of modulation index the brightness controller (CC 74) moves either way
+/// and full pressure moves up; the index CC 74 at the top and full pressure add,
+/// on top of the envelope (so held notes and soft patches brighten too), over
+/// the ratio (a high ratio's sidebands are far apart: the same index there is
+/// a much brighter sound). Measured on the factory presets, CC 74 at the top
+/// lifts the spectral centroid some 80-130 %, and full pressure 60-90 %.
 const FM_BRIGHT_OCTAVES: f32 = 1.0;
+const FM_PRESSURE_OCTAVES: f32 = 0.7;
 const FM_BRIGHT_INDEX: f32 = 1.5;
-const FM_PRESSURE_INDEX: f32 = 2.0;
+const FM_PRESSURE_INDEX: f32 = 1.0;
 /// How fast the controllers move the index: about 5 ms, so it never clicks.
 const FM_GLIDE: f32 = 0.005;
 
@@ -498,8 +502,8 @@ impl FmSynth {
     /// (and above rest adds to it), and `pressure` (0..1) adds to it: both
     /// brighten the sound.
     pub fn set_expression(&mut self, tone: f32, pressure: f32) {
-        let tone = tone.clamp(-1.0, 1.0);
-        self.target = (2f32.powf(tone * FM_BRIGHT_OCTAVES), tone.max(0.0) * FM_BRIGHT_INDEX + pressure.clamp(0.0, 1.0) * FM_PRESSURE_INDEX);
+        let (tone, pressure) = (tone.clamp(-1.0, 1.0), pressure.clamp(0.0, 1.0));
+        self.target = (2f32.powf(tone * FM_BRIGHT_OCTAVES + pressure * FM_PRESSURE_OCTAVES), tone.max(0.0) * FM_BRIGHT_INDEX + pressure * FM_PRESSURE_INDEX);
     }
 
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
@@ -547,6 +551,7 @@ impl FmSynth {
         let (start, target) = (self.depth, self.target);
         // At rest the index is the preset's, untouched.
         let still = start == target && target == (1.0, 0.0);
+        let spread = 1.0 / p.ratio.max(1.0);
         let glide = 1.0 - (-1.0 / (FM_GLIDE * sr)).exp();
         let step = |(scale, add): (f32, f32)| -> (f32, f32) {
             let next = (scale + (target.0 - scale) * glide, add + (target.1 - add) * glide);
@@ -573,7 +578,7 @@ impl FmSynth {
                     index * voice.mod_env
                 } else {
                     depth = step(depth);
-                    index * voice.mod_env * depth.0 + depth.1
+                    index * voice.mod_env * depth.0 + depth.1 * spread
                 };
                 let out = (TAU * voice.carrier + amount * modulator).sin();
                 voice.carrier = (voice.carrier + carrier_inc) % 1.0;

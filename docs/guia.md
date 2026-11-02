@@ -1463,7 +1463,8 @@ Las estructuras:
 
 - Cada parte toma una escena (ver «Cómo elige» abajo).
 - Cada parte lleva solo las pistas que le tocan según su **papel**: sin bajo en la intro, sin batería en el break… En el estribillo o el drop suena todo: si una pista no tiene clip en esa escena, trae el suyo de otra.
-- **Subidas**: el último compás de la batería es un **redoble** de caja que acelera y crece, y el resto de la batería calla debajo.
+- La batería suena en todas las partes que la piden aunque su escena no tenga batería: trae la de la escena más ligera que la tenga. En **Electrónica**, la intro y la outro llevan bombo y percusión para que el DJ pueda mezclar, y la subida tiene batería para su redoble.
+- **Subidas**: con **Redoble al final**, el último compás de la batería es un **redoble** de caja que acelera y crece, y el resto de la batería calla debajo. Si quitas la batería de esa parte, no hay redoble.
 - **Cortes**: el último tiempo antes del drop va en silencio, para que el drop entre con fuerza.
 
 +++ Cómo elige

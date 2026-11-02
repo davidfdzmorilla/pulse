@@ -241,10 +241,22 @@ pub fn plan(tracks: &[Track], scene_names: &[String], template: Template) -> Vec
                         return None;
                     }
                     // A full section has every track that has something: from its
-                    // own scene, or the fullest of its others.
+                    // own scene, or the fullest of its others. Drums play wherever
+                    // the structure asks for them (a club intro and outro keep the
+                    // kick for the DJ, a build rolls): from the lightest scene
+                    // that has them, if the section's has not.
                     let full = shape.base == Base::Main;
                     let own = t.clips[scene].is_some().then_some(scene);
-                    own.or_else(|| full.then(|| scenes.iter().copied().find(|&s| t.clips[s].is_some())).flatten())
+                    let has = |s: &usize| t.clips[*s].is_some();
+                    own.or_else(|| {
+                        if full {
+                            scenes.iter().copied().find(has)
+                        } else if *r == Role::Drums {
+                            scenes.iter().rev().copied().find(has)
+                        } else {
+                            None
+                        }
+                    })
                 })
                 .collect();
             Section { name: shape.name.to_string(), bars: shape.bars, scene, tracks, roll: shape.roll, cut: shape.cut }
@@ -559,6 +571,48 @@ mod tests {
             let lane = &app.project.tracks[t].arrangement;
             assert!(lane.iter().all(|c| c.start >= build_end || c.end() <= last_bar + 1e-9), "{}: {:?}", app.project.tracks[t].name, lane.iter().map(|c| (c.start, c.end())).collect::<Vec<_>>());
         }
+    }
+
+    /// The 2026-11 audit's song: the drums only in the «Drop» scene, chords,
+    /// pad and lead also in a «Break» one. The intro, the outro and the builds
+    /// take the drums from the drop (a club intro keeps the kick for the DJ),
+    /// and the builds roll, as «Redoble al final» says; the break has none.
+    #[test]
+    fn club_intros_keep_the_drums_and_builds_roll() {
+        use engine::model::RackParams;
+        let mut project = Project::empty();
+        let beat = |pitches: &[u8]| -> Clip {
+            let notes = (0..16).flat_map(|b| pitches.iter().map(move |&p| Note { start: b as f64, length: 0.25, pitch: p, velocity: 1.0, chance: 1.0 })).collect();
+            Clip::Midi(MidiClip { notes, ..MidiClip::new("Beat", 16.0, [0; 3]) })
+        };
+        let mut kick = Track::new("Kit Techno", [0; 3], InstrumentKind::DrumRack(RackParams::default()));
+        kick.clips[0] = Some(beat(&[36, 38]));
+        let mut perc = Track::new("Kit Minimal", [0; 3], InstrumentKind::DrumRack(RackParams::default()));
+        perc.clips[0] = Some(beat(&[42]));
+        let chord: Vec<Note> = [62u8, 65, 69].iter().map(|&p| Note { start: 0.0, length: 16.0, pitch: p, velocity: 0.8, chance: 1.0 }).collect();
+        let mut chords = Track::new("Acordes", [0; 3], InstrumentKind::Synth(Default::default()));
+        chords.clips[0] = Some(Clip::Midi(MidiClip { notes: chord, ..MidiClip::new("Dm", 16.0, [0; 3]) }));
+        chords.clips[1] = chords.clips[0].clone();
+        let mut bass = Track::new("Bajo", [0; 3], InstrumentKind::Acid(Default::default()));
+        bass.clips[0] = Some(beat(&[38 - 12]));
+        project.tracks = vec![kick, perc, chords, bass];
+        project.scene_names[0] = "Drop".into();
+        project.scene_names[1] = "Break".into();
+        let sections = plan(&project.tracks, &project.scene_names, Template::Electronic);
+        let names: Vec<&str> = sections.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["Intro", "Subida", "Drop", "Break", "Subida", "Drop", "Outro"]);
+        for s in &sections {
+            let drums = s.name != "Break";
+            assert_eq!(s.tracks[0].is_some() && s.tracks[1].is_some(), drums, "{}: {:?}", s.name, s.tracks);
+            assert_eq!(s.tracks[3].is_some(), s.name == "Drop", "{}: the bass only in the drops", s.name);
+        }
+        let mut app = PulseApp::headless(project);
+        app.lay_out(&sections);
+        let rolls: Vec<f64> = app.project.tracks[0].arrangement.iter().filter(|c| c.clip.name() == "Redoble").map(|c| c.start).collect();
+        // Builds of 8 bars from bar 17 and from bar 57: each one's last bar.
+        assert_eq!(rolls, [23.0 * 4.0, 63.0 * 4.0]);
+        // The intro starts with the kick.
+        assert_eq!(app.project.tracks[0].arrangement[0].start, 0.0);
     }
 
     /// In 3/4 the sections are bars of three and the roll fills the last one.

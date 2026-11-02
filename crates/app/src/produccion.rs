@@ -619,7 +619,7 @@ fn produccion() {
 
 /// A factory preset on the track whose header shows `track`: the category whose
 /// name starts with `category` (else the first), the preset `name` (else the first).
-fn preset(s: &mut Studio, track: &str, category: &str, name: &str) {
+pub(crate) fn preset(s: &mut Studio, track: &str, category: &str, name: &str) {
     let header = s.find(track).unwrap();
     s.click_at(header.center());
     if !s.has("Presets") {
@@ -646,7 +646,7 @@ fn preset(s: &mut Studio, track: &str, category: &str, name: &str) {
 }
 
 /// Each track: instrument, effects (sidechained ones marked), level, sends.
-fn summary(s: &mut Studio) {
+pub(crate) fn summary(s: &mut Studio) {
     let lines: Vec<String> = s
         .app
         .project
@@ -668,7 +668,7 @@ fn summary(s: &mut Studio) {
 
 /// The Arrangement rendered offline, written to `name`.wav, and measured: the
 /// whole song, each section (by markers), and the octave balance.
-fn listen(s: &mut Studio, name: &str) -> crate::mix_assist::Measures {
+pub(crate) fn listen(s: &mut Studio, name: &str) -> crate::mix_assist::Measures {
     let project = s.app.project.clone();
     let end = project.tracks.iter().map(|t| t.arrangement_end()).fold(0.0, f64::max);
     let mut samples = crate::sync::SampleCache::default();
@@ -705,7 +705,7 @@ fn listen(s: &mut Studio, name: &str) -> crate::mix_assist::Measures {
 }
 
 /// Notes in the session clip of `track` at `slot`.
-fn notes(app: &PulseApp, track: usize, slot: usize) -> usize {
+pub(crate) fn notes(app: &PulseApp, track: usize, slot: usize) -> usize {
     match &app.project.tracks[track].clips[slot] {
         Some(engine::model::Clip::Midi(c)) => c.notes.len(),
         _ => 0,

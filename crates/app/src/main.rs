@@ -89,6 +89,8 @@ mod presets;
 #[cfg(test)]
 mod produccion;
 #[cfg(test)]
+mod produccion2;
+#[cfg(test)]
 mod interfaz_tests;
 mod project;
 mod recording;

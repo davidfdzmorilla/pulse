@@ -24,6 +24,24 @@ fn sends_h(returns: usize) -> f32 {
 const PAN_H: f32 = 58.0;
 const FADER_H: f32 = 120.0;
 const MONITOR_H: f32 = 16.0;
+/// The «+» columns' width (new track, new return).
+const PLUS_W: f32 = 26.0;
+
+/// How the Session's four parts are scrolled (they go together), and how tall
+/// its mixer strips were last frame.
+#[derive(Clone, Copy)]
+struct Scroll {
+    x: f32,
+    top: f32,
+    bottom: f32,
+    mixer_h: f32,
+}
+
+impl Default for Scroll {
+    fn default() -> Self {
+        Self { x: 0.0, top: 0.0, bottom: 0.0, mixer_h: 330.0 }
+    }
+}
 
 pub(crate) enum Action {
     Launch(usize, usize),
@@ -94,14 +112,40 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut slots = Vec::new();
 
     let rows = shown_scenes(&app.project);
-    egui::ScrollArea::both().auto_shrink(false).show(ui, |ui| {
+    let shown: Vec<usize> = (0..app.project.tracks.len()).filter(|&t| !crate::groups::hidden(&app.project.tracks, t)).collect();
+    // Four parts, as in Live: the tracks' clips (they scroll both ways), the
+    // returns and the master on the right (always in sight, their rows going
+    // up and down with the clips'), and the mixer at the bottom (always in
+    // sight, going sideways with the clips).
+    let id = ui.id().with("session_scroll");
+    let mut sync: Scroll = ui.data(|d| d.get_temp(id)).unwrap_or_default();
+    let full = ui.available_rect_before_wrap();
+    let returns = app.project.returns.len();
+    let more_returns = returns < MAX_RETURNS;
+    let right_w = 10.0 + returns as f32 * (COL_W + 1.0) + if more_returns { PLUS_W + 1.0 } else { 0.0 } + 10.0 + COL_W + 1.0;
+    let left_w = (full.width() - right_w).max((COL_W + 1.0).min(full.width()));
+    // The mixer whole if it can be (its arm buttons at the bottom), leaving the
+    // clips a header and a few scenes; they scroll.
+    let bottom_h = sync.mixer_h.min((full.height() - (HEADER_H + 3.0 * (SLOT_H + 1.0))).max(full.height() * 0.4)).max(0.0);
+    let top_h = full.height() - bottom_h;
+    let split = full.left() + left_w;
+    let clips_rect = Rect::from_min_max(full.min, pos2(split, full.top() + top_h));
+    let scenes_rect = Rect::from_min_max(pos2(split, full.top()), pos2(full.right(), full.top() + top_h));
+    let mixer_rect = Rect::from_min_max(pos2(full.left(), full.top() + top_h), pos2(split, full.bottom()));
+    let masters_rect = Rect::from_min_max(pos2(split, full.top() + top_h), full.max);
+    let part = |ui: &mut egui::Ui, rect: Rect| {
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect).layout(egui::Layout::top_down(egui::Align::Min)));
+        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        child
+    };
+    let hidden = egui::scroll_area::ScrollBarVisibility::AlwaysHidden;
+
+    // The tracks' clips.
+    let mut child = part(ui, clips_rect);
+    let output = egui::ScrollArea::both().id_salt("session_clips").auto_shrink(false).scroll_bar_visibility(hidden).scroll_offset(vec2(sync.x, sync.top)).show(&mut child, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
-            for t in 0..app.project.tracks.len() {
-                // Inside a folded group: not shown.
-                if crate::groups::hidden(&app.project.tracks, t) {
-                    continue;
-                }
+            for &t in &shown {
                 let is_group = app.project.tracks[t].is_group();
                 let play = state.as_ref().map_or(
                     TrackPlayState {
@@ -134,20 +178,19 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         if is_group {
                             group_slot(app, ui, t, slot, state.as_deref(), &mut actions);
                         } else {
-                            slots.push((t, slot, clip_slot(app, ui, t, slot, &play, blink, &mut actions)));
+                            let rect = clip_slot(app, ui, t, slot, &play, blink, &mut actions);
+                            slots.push((t, slot, rect.intersect(ui.clip_rect())));
                         }
                     }
                     let stop_queued = play.queued == QUEUED_STOP && blink;
                     if stop_cell(ui, stop_queued, if is_group { "Parar las pistas del grupo" } else { "Parar pista" }).clicked() {
                         actions.push(if is_group { Action::StopGroup(t) } else { Action::StopTrack(t) });
                     }
-                    ui.add_space(6.0);
-                    mixer_strip(app, ui, Target::Track(t));
                 });
             }
 
             ui.vertical(|ui| {
-                let (rect, response) = ui.allocate_exact_size(vec2(26.0, HEADER_H), Sense::click());
+                let (rect, response) = ui.allocate_exact_size(vec2(PLUS_W, HEADER_H), Sense::click());
                 widgets::name(&response, egui::WidgetType::Button, "Nueva pista MIDI");
                 let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
                 ui.painter().rect_filled(rect, 2.0, fill);
@@ -156,9 +199,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     actions.push(Action::AddTrack);
                 }
             });
-            ui.add_space(10.0);
+        });
+    });
+    sync.x = output.state.offset.x;
+    sync.top = output.state.offset.y;
 
-            for r in 0..app.project.returns.len() {
+    // The returns' and the master's rows: the scenes' launchers are the master's.
+    let mut child = part(ui, scenes_rect);
+    let output = egui::ScrollArea::vertical().id_salt("session_scenes").auto_shrink(false).scroll_offset(vec2(0.0, sync.top)).show(&mut child, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+            ui.add_space(10.0);
+            for r in 0..returns {
                 ui.vertical(|ui| {
                     ui.set_width(COL_W);
                     let target = Target::Return(r);
@@ -176,13 +228,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     });
                     let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (rows as f32 + 1.0) - 1.0), Sense::hover());
                     ui.painter().rect_filled(rect, 2.0, theme::shade(SLOT, 0.8));
-                    ui.add_space(6.0);
-                    mixer_strip(app, ui, target);
                 });
             }
-            if app.project.returns.len() < MAX_RETURNS {
+            if more_returns {
                 ui.vertical(|ui| {
-                    let (rect, response) = ui.allocate_exact_size(vec2(26.0, HEADER_H), Sense::click());
+                    let (rect, response) = ui.allocate_exact_size(vec2(PLUS_W, HEADER_H), Sense::click());
                     widgets::name(&response, egui::WidgetType::Button, "Nuevo retorno");
                     let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
                     ui.painter().rect_filled(rect, 2.0, fill);
@@ -206,11 +256,74 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 if stop_cell(ui, false, "Parar todos los clips").clicked() {
                     actions.push(Action::StopAll);
                 }
-                ui.add_space(6.0);
-                mixer_strip(app, ui, target);
             });
         });
     });
+    if (output.state.offset.y - sync.top).abs() > 0.5 {
+        sync.top = output.state.offset.y;
+        ui.ctx().request_repaint();
+    }
+
+    // The mixer: the tracks' strips…
+    let mut tallest: f32 = 0.0;
+    let mut child = part(ui, mixer_rect);
+    let output = egui::ScrollArea::both().id_salt("session_mixer").auto_shrink(false).scroll_offset(vec2(sync.x, sync.bottom)).show(&mut child, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+            for &t in &shown {
+                let strip = ui.vertical(|ui| {
+                    ui.set_width(COL_W);
+                    ui.add_space(6.0);
+                    mixer_strip(app, ui, Target::Track(t));
+                });
+                tallest = tallest.max(strip.response.rect.height());
+            }
+            ui.allocate_exact_size(vec2(PLUS_W, 1.0), Sense::hover());
+        });
+    });
+    if (output.state.offset.x - sync.x).abs() > 0.5 {
+        sync.x = output.state.offset.x;
+        ui.ctx().request_repaint();
+    }
+    sync.bottom = output.state.offset.y;
+    // …and the returns' and the master's.
+    let mut child = part(ui, masters_rect);
+    let output = egui::ScrollArea::vertical().id_salt("session_masters").auto_shrink(false).scroll_bar_visibility(hidden).scroll_offset(vec2(0.0, sync.bottom)).show(&mut child, |ui| {
+        ui.horizontal_top(|ui| {
+            ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
+            ui.add_space(10.0);
+            for r in 0..returns {
+                let strip = ui.vertical(|ui| {
+                    ui.set_width(COL_W);
+                    ui.add_space(6.0);
+                    mixer_strip(app, ui, Target::Return(r));
+                });
+                tallest = tallest.max(strip.response.rect.height());
+            }
+            if more_returns {
+                ui.allocate_exact_size(vec2(PLUS_W, 1.0), Sense::hover());
+            }
+            ui.add_space(10.0);
+            let strip = ui.vertical(|ui| {
+                ui.set_width(COL_W);
+                ui.add_space(6.0);
+                mixer_strip(app, ui, Target::Master);
+            });
+            tallest = tallest.max(strip.response.rect.height());
+        });
+    });
+    if (output.state.offset.y - sync.bottom).abs() > 0.5 {
+        sync.bottom = output.state.offset.y;
+        ui.ctx().request_repaint();
+    }
+    // The strips' own height (and the horizontal bar's), for the next frame.
+    let mixer_h = tallest + ui.spacing().scroll.allocated_width() + 4.0;
+    if (mixer_h - sync.mixer_h).abs() > 0.5 {
+        sync.mixer_h = mixer_h;
+        ui.ctx().request_repaint();
+    }
+    ui.data_mut(|d| d.insert_temp(id, sync));
+    ui.allocate_rect(full, Sense::hover());
 
     for action in actions {
         apply(app, action);
@@ -218,7 +331,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     app.finish_track_drag(ui, &headers, false);
     let clips: Vec<(ClipRef, Rect)> = slots
         .iter()
-        .filter(|&&(t, slot, _)| app.project.tracks.get(t).is_some_and(|track| track.clips[slot].is_some()))
+        .filter(|&&(t, slot, rect)| rect.is_positive() && app.project.tracks.get(t).is_some_and(|track| track.clips[slot].is_some()))
         .map(|&(track, slot, rect)| (ClipRef::Session { track, slot }, rect))
         .collect();
     let mut lanes: Vec<(usize, Rect)> = Vec::new();
@@ -228,7 +341,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             _ => lanes.push((t, rect)),
         }
     }
-    app.drop_targets.slots = slots.iter().map(|&(t, s, r)| (t, s, r.intersect(ui.clip_rect()))).collect();
+    app.drop_targets.slots = slots.iter().filter(|s| s.2.is_positive()).copied().collect();
     app.update_clip_gesture(ui, &clips, &lanes, &slots);
 }
 

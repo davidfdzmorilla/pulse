@@ -90,6 +90,8 @@ mod presets;
 mod produccion;
 #[cfg(test)]
 mod interfaz_tests;
+#[cfg(test)]
+mod scroll_tests;
 mod project;
 mod recording;
 mod recovery;

@@ -24,7 +24,17 @@ const LOOP_H: f32 = 12.0;
 /// The markers' strip, between the loop's and the ruler.
 const MARKER_H: f32 = 15.0;
 const RULER_H: f32 = 20.0;
-const LANE_H: f32 = 52.0;
+/// The loop's, markers' and ruler's strips, on top: they don't scroll.
+const TOP_H: f32 = LOOP_H + MARKER_H + RULER_H;
+/// A track lane's height, unless changed (and the master's always).
+pub(crate) const LANE_H: f32 = 52.0;
+/// How low and how tall a track's lane can be made.
+pub(crate) const LANE_MIN: f32 = 40.0;
+pub(crate) const LANE_MAX: f32 = 200.0;
+/// The grip at the bottom of a track's header that changes its height.
+const HEIGHT_GRAB: f32 = 4.0;
+/// How close to an edge of the view a dragged clip scrolls it.
+const AUTOSCROLL_EDGE: f32 = 24.0;
 const EDGE_GRAB: f32 = 6.0;
 const AUTO_H: f32 = 64.0;
 const POINT_GRAB: f32 = 6.0;
@@ -69,12 +79,13 @@ fn fade_handles(rect: Rect, fades: engine::model::Fades, ppb: f32) -> [Rect; 2] 
 
 /// The fade handle of a selected audio clip of track `t` under `pos`: (clip, out).
 fn fade_at(app: &PulseApp, t: usize, pos: egui::Pos2, clip_top: f32, ppb: f32, origin_x: f32) -> Option<(usize, bool)> {
+    let lane_h = app.arrangement.lane(t);
     app.project.tracks[t].arrangement.iter().enumerate().rev().find_map(|(index, placed)| {
         let Clip::Audio(audio) = &placed.clip else { return None };
         if !app.is_clip_selected(ClipRef::Arrangement { track: t, index }) {
             return None;
         }
-        let rect = Rect::from_min_max(pos2(origin_x + placed.start as f32 * ppb, clip_top), pos2(origin_x + placed.end() as f32 * ppb, clip_top + LANE_H - 2.0));
+        let rect = Rect::from_min_max(pos2(origin_x + placed.start as f32 * ppb, clip_top), pos2(origin_x + placed.end() as f32 * ppb, clip_top + lane_h - 2.0));
         let [fade_in, fade_out] = fade_handles(rect, audio.fades, ppb);
         if fade_in.expand(3.0).contains(pos) {
             Some((index, false))
@@ -106,6 +117,18 @@ pub struct State {
     left: Option<Box<crate::project::Project>>,
     /// A track to duplicate or delete once the view is drawn (true: the selected ones).
     track_action: Option<(TrackAction, usize, bool)>,
+    /// How far down the tracks are scrolled (points; the ruler and the master stay).
+    pub(crate) scroll_y: f32,
+    /// How far right the timeline is scrolled, and what of it was seen, as the
+    /// view left them last frame.
+    pub(crate) scroll_x: f32,
+    view: Rect,
+    /// The lanes' height (⌥ + wheel), and the tracks given one of their own by
+    /// dragging the bottom of their header.
+    pub(crate) lane_h: f32,
+    pub(crate) heights: HashMap<usize, f32>,
+    /// The tracks and the selected one last frame: a new one is scrolled into view.
+    seen: (usize, Option<usize>),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -145,6 +168,13 @@ impl State {
         self.automation.clear();
         self.master_automation = None;
         self.takes.clear();
+        self.heights.clear();
+        self.scroll_y = 0.0;
+    }
+
+    /// The height of track `t`'s lane.
+    pub(crate) fn lane(&self, t: usize) -> f32 {
+        self.heights.get(&t).copied().unwrap_or(self.lane_h)
     }
 }
 
@@ -162,6 +192,12 @@ impl Default for State {
             cut: None,
             left: None,
             track_action: None,
+            scroll_y: 0.0,
+            scroll_x: 0.0,
+            view: Rect::NOTHING,
+            lane_h: LANE_H,
+            heights: HashMap::new(),
+            seen: (0, None),
         }
     }
 }
@@ -238,20 +274,30 @@ fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64) {
     }
 }
 
-/// Vertical position of each track row (relative to the first lane), its
-/// automation lane, if shown, and how many take lanes it shows.
+/// Vertical position of each track row (relative to the top of the lanes, under
+/// the ruler, scrolled), its automation lane, if shown, and how many take lanes
+/// it shows. The master's row is the last one: right under the tracks, or at
+/// the bottom of the view when they don't fit, always in sight.
 struct Layout {
     rows: Vec<(f32, Option<Param>, usize)>,
+    /// Each row's lane height (clips; the automation and takes go below it).
+    lanes: Vec<f32>,
     /// Inside a folded group (no height, not drawn).
     hidden: Vec<bool>,
     /// Groups: their lane shows their tracks' clips, and takes none.
     groups: Vec<bool>,
-    height: f32,
+    /// Down to the master's row: what the tracks can be seen in.
+    band: f32,
+    /// All the tracks' rows, one under the other, and how far they are scrolled.
+    tracks_height: f32,
+    scroll: f32,
 }
 
 impl Layout {
-    fn new(app: &PulseApp) -> Self {
+    /// `view` is the height under the ruler there is room for.
+    fn new(app: &PulseApp, view: f32) -> Self {
         let mut rows = Vec::new();
+        let mut lanes = Vec::new();
         let mut y = 0.0;
         let tracks = &app.project.tracks;
         let hidden: Vec<bool> = (0..tracks.len()).map(|t| crate::groups::hidden(tracks, t)).collect();
@@ -259,29 +305,43 @@ impl Layout {
         for t in 0..tracks.len() {
             let shown = app.arrangement.automation.get(&t).copied();
             let takes = if app.arrangement.takes.contains(&t) && !groups[t] { crate::comping::take_count(app, t) } else { 0 };
+            let lane = app.arrangement.lane(t);
             rows.push((y, shown, takes));
+            lanes.push(lane);
             if !hidden[t] {
-                y += row_height(shown.is_some(), takes);
+                y += row_height(lane, shown.is_some(), takes);
             }
         }
+        let master = app.arrangement.master_automation;
+        let master_h = row_height(LANE_H, master.is_some(), 0);
+        let room = (view - master_h).max(0.0);
+        let scroll = app.arrangement.scroll_y.clamp(0.0, (y - room).max(0.0));
+        for row in &mut rows {
+            row.0 -= scroll;
+        }
+        let band = (y - scroll).min(room);
         // The master's row, last: no clips, its automation.
         let (mut hidden, mut groups) = (hidden, groups);
-        let master = app.arrangement.master_automation;
-        rows.push((y, master, 0));
+        rows.push((band, master, 0));
+        lanes.push(LANE_H);
         hidden.push(false);
         groups.push(true);
-        y += row_height(master.is_some(), 0);
-        Self { rows, hidden, groups, height: y }
+        Self { rows, lanes, hidden, groups, band, tracks_height: y, scroll }
     }
 
     fn shown(&self, t: usize) -> bool {
         !self.hidden.get(t).copied().unwrap_or(true)
     }
 
-    /// Track under `y` (relative to the first lane) and whether it is in its automation lane.
+    /// Whether `y` is where row `t` can be seen: the tracks only above the master.
+    fn visible(&self, t: usize, y: f32) -> bool {
+        t + 1 == self.rows.len() || (0.0..self.band).contains(&y)
+    }
+
+    /// Track under `y` (relative to the top of the lanes) and whether it is in its automation lane.
     fn hit(&self, y: f32) -> Option<(usize, bool)> {
-        self.rows.iter().enumerate().filter(|&(t, _)| self.shown(t)).find_map(|(t, &(top, shown, takes))| {
-            let clips_end = top + LANE_H + 1.0;
+        self.rows.iter().enumerate().filter(|&(t, _)| self.shown(t) && self.visible(t, y)).find_map(|(t, &(top, shown, takes))| {
+            let clips_end = top + self.lanes[t] + 1.0;
             let auto_top = clips_end + takes_height(takes);
             // A group's lane holds no clips of its own.
             if y >= top && y < clips_end && self.groups[t] {
@@ -298,8 +358,8 @@ impl Layout {
 
     /// The track and take of the take lane under `y`.
     fn take_hit(&self, y: f32) -> Option<(usize, usize)> {
-        self.rows.iter().enumerate().filter(|&(t, _)| self.shown(t)).find_map(|(t, &(top, _, takes))| {
-            let below = y - (top + LANE_H + 1.0);
+        self.rows.iter().enumerate().filter(|&(t, _)| self.shown(t) && self.visible(t, y)).find_map(|(t, &(top, _, takes))| {
+            let below = y - (top + self.lanes[t] + 1.0);
             (below >= 0.0 && below < takes_height(takes)).then(|| (t, (below / (TAKE_H + 1.0)) as usize))
         })
     }
@@ -309,8 +369,8 @@ fn takes_height(takes: usize) -> f32 {
     takes as f32 * (TAKE_H + 1.0)
 }
 
-fn row_height(automation: bool, takes: usize) -> f32 {
-    LANE_H + 1.0 + takes_height(takes) + if automation { AUTO_H + 1.0 } else { 0.0 }
+fn row_height(lane: f32, automation: bool, takes: usize) -> f32 {
+    lane + 1.0 + takes_height(takes) + if automation { AUTO_H + 1.0 } else { 0.0 }
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
@@ -364,62 +424,106 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             app.sample(&path);
         }
     }
-    let layout = Layout::new(app);
-    let lanes_height = LOOP_H + MARKER_H + RULER_H + layout.height;
+    app.arrangement.heights.retain(|&t, _| t < tracks);
     let mut headers = Vec::new();
     let mut clip_rects = Vec::new();
     let mut lane_rects = Vec::new();
 
+    // The wheel scrolls the tracks up and down (⇧ or the trackpad sideways, as
+    // the timeline below does); with ⌥ it makes the lanes taller or lower.
+    let region = ui.available_rect_before_wrap();
+    if ui.rect_contains_pointer(region) {
+        let (dy, alt) = ui.input(|i| (i.smooth_scroll_delta.y, i.modifiers.alt));
+        if dy != 0.0 {
+            let state = &mut app.arrangement;
+            if alt {
+                state.lane_h = (state.lane_h + dy * 0.25).clamp(LANE_MIN, LANE_MAX);
+            } else {
+                state.scroll_y = (state.scroll_y - dy).max(0.0);
+            }
+            ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
+        }
+    }
+    // A new track, or one selected out of sight (by name in a menu, from the
+    // Session…): the view goes to it.
+    let selected = match app.selected_target {
+        Target::Track(t) if t < tracks => Some(t),
+        _ => None,
+    };
+    // Not while the button is down: a clic on a clip half out of sight selects
+    // its track, and the view must not move under the drag that follows.
+    let changed = selected != app.arrangement.seen.1 || tracks != app.arrangement.seen.0;
+    let reveal = (changed && !ui.input(|i| i.pointer.any_down())).then_some(selected).flatten();
+    app.arrangement.seen = (tracks, selected);
+
     ui.horizontal_top(|ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 0.0);
 
-        // Track headers.
-        ui.vertical(|ui| {
-            ui.set_width(HEADER_W);
-            ui.add_space(LOOP_H + MARKER_H + RULER_H);
-            for t in (0..tracks).filter(|&t| layout.shown(t)) {
-                headers.push((t, track_header(app, ui, t, layout.rows[t].1, layout.rows[t].2)));
-            }
-            master_header(app, ui, tracks, layout.rows[tracks].1);
-        });
+        // The track headers' column: drawn once the timeline has laid the rows out.
+        let (column, _) = ui.allocate_exact_size(vec2(HEADER_W, ui.available_height()), Sense::hover());
 
         let mut scroll = egui::ScrollArea::horizontal().id_salt("arrangement").auto_shrink(false);
         if app.arrangement.follow && playing {
             let view = ui.available_width();
             let x = position as f32 * ppb;
             scroll = scroll.horizontal_scroll_offset((x - view * 0.3).max(0.0));
+        } else if let Some(x) = autoscroll_x(app, ui) {
+            scroll = scroll.horizontal_scroll_offset(x);
         }
-        scroll.show(ui, |ui| {
+        let output = scroll.show(ui, |ui| {
             // At least as wide as the view: zoomed out, the timeline still fills it.
             let total_beats = total_beats.max((ui.available_width() / ppb / 16.0).ceil() as f64 * 16.0);
-            let size = vec2(total_beats as f32 * ppb, lanes_height.max(ui.available_height()));
+            let size = vec2(total_beats as f32 * ppb, ui.available_height().max(TOP_H + LANE_H));
             let (rect, response) = ui.allocate_exact_size(size, Sense::click_and_drag());
             crate::widgets::name(&response, egui::WidgetType::Other, "Línea de tiempo");
+            let mut layout = Layout::new(app, rect.height() - TOP_H);
+            if let Some(t) = reveal.filter(|&t| layout.shown(t)) {
+                let (top, shown, takes) = layout.rows[t];
+                let bottom = top + row_height(layout.lanes[t], shown.is_some(), takes);
+                let by = if top < 0.0 { top } else if bottom > layout.band { (bottom - layout.band).min(top) } else { 0.0 };
+                if by != 0.0 {
+                    app.arrangement.scroll_y = layout.scroll + by;
+                    layout = Layout::new(app, rect.height() - TOP_H);
+                }
+            }
+            app.arrangement.scroll_y = layout.scroll;
+            app.arrangement.view = ui.clip_rect();
             let painter = ui.painter_at(rect);
             let x_at = |beat: f64| rect.left() + beat as f32 * ppb;
-            let lanes_top = rect.top() + LOOP_H + MARKER_H + RULER_H;
+            let lanes_top = rect.top() + TOP_H;
+            // Where the tracks are seen: between the ruler and the master's row.
+            let band = Rect::from_min_max(pos2(rect.left(), lanes_top), pos2(rect.right(), lanes_top + layout.band));
+            let tracks_painter = painter.with_clip_rect(band.intersect(painter.clip_rect()));
             let lane_rect = |t: usize| {
-                Rect::from_min_size(pos2(rect.left(), lanes_top + layout.rows[t].0), vec2(rect.width(), LANE_H))
+                Rect::from_min_size(pos2(rect.left(), lanes_top + layout.rows[t].0), vec2(rect.width(), layout.lanes[t]))
             };
             let auto_rect = |t: usize| {
                 let (top, _, takes) = layout.rows[t];
-                Rect::from_min_size(pos2(rect.left(), lanes_top + top + LANE_H + 1.0 + takes_height(takes)), vec2(rect.width(), AUTO_H))
+                Rect::from_min_size(pos2(rect.left(), lanes_top + top + layout.lanes[t] + 1.0 + takes_height(takes)), vec2(rect.width(), AUTO_H))
             };
             let take_rect = |t: usize, k: usize| {
-                let top = lanes_top + layout.rows[t].0 + LANE_H + 1.0 + k as f32 * (TAKE_H + 1.0);
+                let top = lanes_top + layout.rows[t].0 + layout.lanes[t] + 1.0 + k as f32 * (TAKE_H + 1.0);
                 Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), TAKE_H))
+            };
+            // Only the tracks' rows that can be seen.
+            let in_sight = |t: usize| layout.shown(t) && lane_rect(t).top() < band.bottom() && {
+                let (top, shown, takes) = layout.rows[t];
+                lanes_top + top + row_height(layout.lanes[t], shown.is_some(), takes) > band.top()
             };
 
             // Background, lanes and grid.
             painter.rect_filled(rect, 0.0, theme::BG);
-            for t in (0..tracks).filter(|&t| layout.shown(t)) {
+            for t in (0..tracks).filter(|&t| in_sight(t)) {
                 if layout.groups[t] {
-                    painter.rect_filled(lane_rect(t), 0.0, theme::shade(theme::SLOT, 0.8));
+                    tracks_painter.rect_filled(lane_rect(t), 0.0, theme::shade(theme::SLOT, 0.8));
                     continue;
                 }
-                painter.rect_filled(lane_rect(t), 0.0, theme::SLOT);
-                lane_rects.push((t, lane_rect(t)));
-                app.drop_targets.lanes.push((t, lane_rect(t).intersect(ui.clip_rect()), rect.left(), ppb));
+                tracks_painter.rect_filled(lane_rect(t), 0.0, theme::SLOT);
+                let seen = lane_rect(t).intersect(band);
+                if seen.height() > 0.0 {
+                    lane_rects.push((t, seen));
+                    app.drop_targets.lanes.push((t, seen.intersect(ui.clip_rect()), rect.left(), ppb));
+                }
             }
             // The song's counts and bar lines, in its time signatures.
             let meter = app.project.meter;
@@ -477,21 +581,21 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
 
             // A group's lane: its tracks' clips, one thin strip each.
-            for g in (0..tracks).filter(|&t| layout.shown(t) && layout.groups[t]) {
+            for g in (0..tracks).filter(|&t| in_sight(t) && layout.groups[t]) {
                 let lane = lane_rect(g);
                 let inside: Vec<usize> = crate::groups::children(&app.project.tracks, g).filter(|&c| !layout.groups[c]).collect();
-                let strip = (LANE_H - 6.0) / inside.len().max(1) as f32;
+                let strip = (lane.height() - 6.0) / inside.len().max(1) as f32;
                 for (k, &c) in inside.iter().enumerate() {
                     for placed in &app.project.tracks[c].arrangement {
                         let top = lane.top() + 3.0 + k as f32 * strip;
                         let piece = Rect::from_min_max(pos2(x_at(placed.start), top), pos2(x_at(placed.end()), top + (strip - 1.0).max(1.0)));
-                        painter.rect_filled(piece, 1.0, theme::shade(theme::rgb(placed.clip.color()), 0.8));
+                        tracks_painter.rect_filled(piece, 1.0, theme::shade(theme::rgb(placed.clip.color()), 0.8));
                     }
                 }
             }
 
             // Clips.
-            for t in (0..tracks).filter(|&t| layout.shown(t) && !layout.groups[t]) {
+            for t in (0..tracks).filter(|&t| in_sight(t) && !layout.groups[t]) {
                 let lane = lane_rect(t);
                 for (index, placed) in app.project.tracks[t].arrangement.iter().enumerate() {
                     let clip_rect = Rect::from_min_max(
@@ -499,7 +603,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         pos2(x_at(placed.end()), lane.bottom() - 1.0),
                     );
                     let selected = app.is_clip_selected(ClipRef::Arrangement { track: t, index });
-                    clip_rects.push((ClipRef::Arrangement { track: t, index }, clip_rect));
+                    // What can be seen of it (a rectangle selects only that).
+                    let seen = clip_rect.intersect(band);
+                    if seen.height() > 0.0 {
+                        clip_rects.push((ClipRef::Arrangement { track: t, index }, seen));
+                    }
                     let sample = match &placed.clip {
                         Clip::Audio(audio) => app.loaded_sample(&audio.sample).map(|s| s.as_ref()),
                         Clip::Midi(_) => None,
@@ -508,29 +616,29 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         Clip::Audio(audio) => app.lyrics_of(&audio.sample),
                         Clip::Midi(_) => None,
                     };
-                    paint_clip(&painter, clip_rect, placed, sample, lyrics, selected, ppb, app.project.tempo);
+                    paint_clip(&tracks_painter, clip_rect, placed, sample, lyrics, selected, ppb, app.project.tempo);
                 }
             }
 
             // Take lanes: each take of the loop recordings, bright where it plays.
-            for t in (0..tracks).filter(|&t| layout.shown(t)) {
+            for t in (0..tracks).filter(|&t| in_sight(t)) {
                 for k in 0..layout.rows[t].2 {
                     let lane = take_rect(t, k);
-                    painter.rect_filled(lane, 0.0, theme::shade(theme::SLOT, 0.8));
+                    tracks_painter.rect_filled(lane, 0.0, theme::shade(theme::SLOT, 0.8));
                     for placed in &app.project.tracks[t].arrangement {
                         let Clip::Audio(audio) = &placed.clip else { continue };
                         let Some(path) = audio.takes.get(k) else { continue };
                         let piece = Rect::from_min_max(pos2(x_at(placed.start), lane.top() + 1.0), pos2(x_at(placed.end()), lane.bottom() - 1.0));
                         let playing = audio.sample == *path;
                         let color = theme::rgb(audio.color);
-                        painter.rect_filled(piece, 2.0, theme::shade(color, if playing { 0.45 } else { 0.18 }));
+                        tracks_painter.rect_filled(piece, 2.0, theme::shade(color, if playing { 0.45 } else { 0.18 }));
                         if let Some(sample) = app.loaded_sample(path).filter(|s| s.frames() > 0) {
-                            let clipped = painter.with_clip_rect(piece.intersect(painter.clip_rect()));
+                            let clipped = tracks_painter.with_clip_rect(piece.intersect(tracks_painter.clip_rect()));
                             let take = engine::model::AudioClip { sample: path.clone(), ..audio.clone() };
                             paint_wave(&clipped, piece, piece.shrink2(vec2(0.0, 2.0)), &take, sample, ppb, app.project.tempo, theme::shade(color, if playing { 1.25 } else { 0.6 }));
                         }
                         if playing {
-                            widgets::outline(&painter, piece, theme::shade(color, 1.1));
+                            widgets::outline(&tracks_painter, piece, theme::shade(color, 1.1));
                         }
                     }
                 }
@@ -540,16 +648,25 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     let lane = take_rect(track, take);
                     let (a, b) = (anchor.min(to), anchor.max(to));
                     let stretch = Rect::from_min_max(pos2(x_at(a), lane.top()), pos2(x_at(b).max(x_at(a) + 1.0), lane.bottom()));
-                    painter.rect_filled(stretch, 2.0, Color32::from_white_alpha(40));
+                    tracks_painter.rect_filled(stretch, 2.0, Color32::from_white_alpha(40));
                 }
             }
 
-            painter.rect_filled(lane_rect(tracks), 0.0, theme::shade(theme::SLOT, 0.7));
-            // Automation lanes (the master's too).
-            for t in (0..=tracks).filter(|&t| layout.shown(t)) {
+            // Automation lanes (the master's below, over whatever is under it).
+            for t in (0..tracks).filter(|&t| in_sight(t)) {
                 if let Some(param) = layout.rows[t].1 {
-                    paint_automation(app, &painter, auto_rect(t), t, param, &x_at);
+                    paint_automation(app, &tracks_painter, auto_rect(t), t, param, &x_at);
                 }
+            }
+            let master = Rect::from_min_max(pos2(rect.left(), lanes_top + layout.band), rect.max);
+            painter.rect_filled(master, 0.0, theme::BG);
+            painter.rect_filled(lane_rect(tracks), 0.0, theme::shade(theme::SLOT, 0.7));
+            if layout.tracks_height > layout.band + 0.5 {
+                // Tracks go on under it: a line says so.
+                painter.line_segment([master.left_top(), master.right_top()], Stroke::new(1.0, Color32::from_gray(70)));
+            }
+            if let Some(param) = layout.rows[tracks].1 {
+                paint_automation(app, &painter, auto_rect(tracks), tracks, param, &x_at);
             }
 
             // Playhead and start marker.
@@ -566,10 +683,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     ClipRef::Arrangement { track, index } => app.project.tracks.get(track)?.arrangement.get(index).filter(|p| p.start < cut && cut < p.end()).map(|_| track),
                     ClipRef::Session { .. } => None,
                 }) {
-                    if layout.shown(t) {
+                    if in_sight(t) {
                         let lane = lane_rect(t);
-                        painter.line_segment([pos2(x, lane.top()), pos2(x, lane.bottom())], Stroke::new(1.5, theme::ACCENT));
-                        painter.add(egui::Shape::convex_polygon(vec![pos2(x - 4.0, lane.top()), pos2(x + 4.0, lane.top()), pos2(x, lane.top() + 5.0)], theme::ACCENT, Stroke::NONE));
+                        tracks_painter.line_segment([pos2(x, lane.top()), pos2(x, lane.bottom())], Stroke::new(1.5, theme::ACCENT));
+                        tracks_painter.add(egui::Shape::convex_polygon(vec![pos2(x - 4.0, lane.top()), pos2(x + 4.0, lane.top()), pos2(x, lane.top() + 5.0)], theme::ACCENT, Stroke::NONE));
                     }
                 }
             }
@@ -581,17 +698,36 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     // From the punch-in, if it is later.
                     let from = app.project.punch().0.map_or(take.start, |p| take.start.max(p));
                     let region = Rect::from_min_max(pos2(x_at(from), lane.top()), pos2(x.max(x_at(from)), lane.bottom()));
-                    painter.rect_filled(region, 2.0, Color32::from_rgba_unmultiplied(240, 82, 70, 60));
+                    tracks_painter.rect_filled(region, 2.0, Color32::from_rgba_unmultiplied(240, 82, 70, 60));
                 }
             }
-            for t in (0..tracks).filter(|&t| layout.shown(t) && !layout.groups[t] && !following(t)) {
+            for t in (0..tracks).filter(|&t| in_sight(t) && !layout.groups[t] && !following(t)) {
                 // Tracks playing session clips are dimmed, as their arrangement is overridden.
-                painter.rect_filled(lane_rect(t), 0.0, Color32::from_black_alpha(110));
+                tracks_painter.rect_filled(lane_rect(t), 0.0, Color32::from_black_alpha(110));
             }
 
             handle_pointer(app, ui, &response, rect, lanes_top, unit, x_at(0.0), &layout);
             context_menu(app, &response);
+            autoscroll_y(app, ui, band);
+            layout
         });
+        app.arrangement.scroll_x = output.state.offset.x;
+        let layout = output.inner;
+
+        // The headers, scrolled with the lanes, and the master's under them.
+        let top = column.top() + TOP_H;
+        let band = Rect::from_min_max(pos2(column.left(), top), pos2(column.right(), top + layout.band));
+        let rows = Rect::from_min_size(pos2(column.left(), top - layout.scroll), vec2(HEADER_W, layout.tracks_height.max(1.0)));
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rows).layout(egui::Layout::top_down(egui::Align::Min)));
+        child.set_clip_rect(band.intersect(ui.clip_rect()));
+        child.spacing_mut().item_spacing = vec2(0.0, 0.0);
+        for t in (0..tracks).filter(|&t| layout.shown(t)) {
+            headers.push((t, track_header(app, &mut child, t, layout.rows[t].1, layout.rows[t].2)));
+        }
+        let master = Rect::from_min_max(pos2(column.left(), band.bottom()), column.max);
+        let mut child = ui.new_child(egui::UiBuilder::new().max_rect(master).layout(egui::Layout::top_down(egui::Align::Min)));
+        child.set_clip_rect(master.intersect(ui.clip_rect()));
+        master_header(app, &mut child, tracks, layout.rows[tracks].1);
     });
     // How the drag leaves the project, to notice next frame if something else changed it.
     app.arrangement.left = app.arrangement.drag.as_ref().filter(|d| !matches!(d, Drag::Scrub)).map(|_| Box::new(app.project.clone()));
@@ -610,6 +746,47 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         None => {}
     }
     app.update_clip_gesture(ui, &clip_rects, &lane_rects, &[]);
+}
+
+/// How fast (points a frame) a drag at `p` scrolls the view between `lo` and
+/// `hi`: faster the further past its edge, none away from them.
+fn edge_speed(p: f32, lo: f32, hi: f32) -> f32 {
+    let step = |past: f32| (past / AUTOSCROLL_EDGE).min(3.0) * 8.0;
+    if p < lo + AUTOSCROLL_EDGE {
+        -step(lo + AUTOSCROLL_EDGE - p)
+    } else if p > hi - AUTOSCROLL_EDGE {
+        step(p - (hi - AUTOSCROLL_EDGE))
+    } else {
+        0.0
+    }
+}
+
+/// While a clip, its edge or fade, the loop, a point or a take is dragged near
+/// the left or right of the view: where the timeline scrolls to.
+fn autoscroll_x(app: &PulseApp, ui: &egui::Ui) -> Option<f32> {
+    let along = matches!(
+        app.arrangement.drag,
+        Some(Drag::Move { .. } | Drag::Resize { .. } | Drag::Fade { .. } | Drag::Loop { .. } | Drag::Point { .. } | Drag::Comp { .. })
+    );
+    let view = app.arrangement.view;
+    let pos = ui.ctx().pointer_latest_pos().filter(|_| along && view.is_positive())?;
+    let speed = edge_speed(pos.x, view.left(), view.right());
+    (speed != 0.0).then(|| {
+        ui.ctx().request_repaint();
+        (app.arrangement.scroll_x + speed).max(0.0)
+    })
+}
+
+/// While clips or tracks are dragged near the top or the bottom of the tracks
+/// (`band`), they scroll up or down.
+fn autoscroll_y(app: &mut PulseApp, ui: &egui::Ui, band: Rect) {
+    let moving = matches!(app.arrangement.drag, Some(Drag::Move { .. })) || app.track_drag.is_some();
+    let Some(pos) = ui.ctx().pointer_latest_pos().filter(|_| moving && band.height() > 2.0 * AUTOSCROLL_EDGE) else { return };
+    let speed = edge_speed(pos.y, band.top(), band.bottom());
+    if speed != 0.0 {
+        app.arrangement.scroll_y = (app.arrangement.scroll_y + speed).max(0.0);
+        ui.ctx().request_repaint();
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -768,12 +945,13 @@ fn paint_wave(clipped: &egui::Painter, rect: Rect, body: Rect, audio: &engine::m
 
 /// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
 fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>, takes: usize) -> Rect {
-    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some(), takes)), Sense::click_and_drag());
+    let lane_h = app.arrangement.lane(t);
+    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(lane_h, shown.is_some(), takes)), Sense::click_and_drag());
     let group = app.project.tracks[t].is_group();
     let hint = if group {
         "Grupo: sus pistas suenan por su fader y sus efectos · clic en ▾: plegar o desplegar · arrastrar: mover con sus pistas"
     } else {
-        "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
+        "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover · borde de abajo: altura"
     };
     let hint = match app.follows_hint(t) {
         Some(follows) => format!("{follows} · {hint}"),
@@ -788,14 +966,29 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     }
     app.track_header_input(t, &response);
     track_menu(app, &response, t, shown.is_some());
+    // The bottom edge of its lane: dragged, the track's height; double clic, as the others.
+    let edge = Rect::from_min_max(pos2(rect.left(), rect.top() + lane_h - HEIGHT_GRAB + 1.0), pos2(rect.right() - 4.0, rect.top() + lane_h + 1.0));
+    let grip = ui.interact(edge, ui.id().with(("height", t)), Sense::click_and_drag());
+    if grip.hovered() || grip.dragged() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
+    }
+    if grip.dragged() {
+        if let Some(pos) = ui.ctx().pointer_latest_pos() {
+            app.arrangement.heights.insert(t, (pos.y - rect.top()).clamp(LANE_MIN, LANE_MAX).round());
+        }
+    }
+    if grip.double_clicked() {
+        app.arrangement.heights.remove(&t);
+    }
+    grip.on_hover_text(crate::theme::keys("Arrastra: altura de la pista · doble clic: la de las demás · ⌥ + rueda: la de todas"));
     let selected = app.is_track_selected(t);
     let track = &app.project.tracks[t];
     let color = theme::rgb(track.color);
     let painter = ui.painter();
-    let body = Rect::from_min_size(rect.min, vec2(HEADER_W - 4.0, LANE_H));
+    let body = Rect::from_min_size(rect.min, vec2(HEADER_W - 4.0, lane_h));
     painter.rect_filled(body, 2.0, if selected { theme::CONTROL_HOVER } else { theme::SURFACE });
     crate::session::group_marks(app, painter, t, body);
-    painter.rect_filled(Rect::from_min_size(body.min + vec2(indent, 0.0), vec2(5.0, LANE_H)), 2.0, color);
+    painter.rect_filled(Rect::from_min_size(body.min + vec2(indent, 0.0), vec2(5.0, lane_h)), 2.0, color);
     let name = if group { format!("{} {}", if track.folded { "▸" } else { "▾" }, track.name) } else { track.name.clone() };
     painter.text(body.left_top() + vec2(10.0 + indent, 6.0), Align2::LEFT_TOP, name, theme::body(), TEXT);
     if track.frozen.is_some() {
@@ -851,7 +1044,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
 
     // The take lanes' names, the one playing somewhere ticked.
     for k in 0..takes {
-        let lane = Rect::from_min_size(rect.left_top() + vec2(0.0, LANE_H + 1.0 + k as f32 * (TAKE_H + 1.0)), vec2(HEADER_W - 4.0, TAKE_H));
+        let lane = Rect::from_min_size(rect.left_top() + vec2(0.0, lane_h + 1.0 + k as f32 * (TAKE_H + 1.0)), vec2(HEADER_W - 4.0, TAKE_H));
         let playing = app.project.tracks[t].arrangement.iter().any(|c| match &c.clip {
             Clip::Audio(a) => a.takes.get(k) == Some(&a.sample),
             Clip::Midi(_) => false,
@@ -864,7 +1057,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     }
 
     if let Some(param) = shown {
-        automation_picker(app, ui, rect, t, param, takes);
+        automation_picker(app, ui, rect, t, param, takes, lane_h);
     }
     rect
 }
@@ -886,7 +1079,7 @@ fn set_row_param(app: &mut PulseApp, t: usize, param: Param) {
 
 /// The master's row: its name, and its automation (the tempo among it).
 fn master_header(app: &mut PulseApp, ui: &mut egui::Ui, row: usize, shown: Option<Param>) {
-    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(shown.is_some(), 0)), Sense::click());
+    let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(LANE_H, shown.is_some(), 0)), Sense::click());
     if response.clicked() {
         app.selected_target = Target::Master;
     }
@@ -908,14 +1101,14 @@ fn master_header(app: &mut PulseApp, ui: &mut egui::Ui, row: usize, shown: Optio
         };
     }
     if let Some(param) = shown {
-        automation_picker(app, ui, rect, row, param, 0);
+        automation_picker(app, ui, rect, row, param, 0, LANE_H);
     }
 }
 
 /// The parameter list of a row's automation lane, and «Borrar automatización».
-fn automation_picker(app: &mut PulseApp, ui: &mut egui::Ui, rect: Rect, t: usize, param: Param, takes: usize) {
+fn automation_picker(app: &mut PulseApp, ui: &mut egui::Ui, rect: Rect, t: usize, param: Param, takes: usize, lane_h: f32) {
     let target = row_target(app, t);
-    let area = Rect::from_min_size(rect.left_top() + vec2(10.0, LANE_H + 1.0 + takes_height(takes) + 5.0), vec2(HEADER_W - 18.0, AUTO_H - 8.0));
+    let area = Rect::from_min_size(rect.left_top() + vec2(10.0, lane_h + 1.0 + takes_height(takes) + 5.0), vec2(HEADER_W - 18.0, AUTO_H - 8.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(area).layout(egui::Layout::top_down(egui::Align::Min)));
     let mut chosen = param;
     egui::ComboBox::from_id_salt(("automation", t))
@@ -1443,7 +1636,7 @@ fn handle_pointer(
     let automation = hit.filter(|&(_, automation)| automation).and_then(|(t, _)| {
         let (top, param, takes) = layout.rows[t];
         let param = param?;
-        let top = lanes_top + top + LANE_H + 1.0 + takes_height(takes);
+        let top = lanes_top + top + layout.lanes[t] + 1.0 + takes_height(takes);
         Some((t, param, Rect::from_min_size(pos2(rect.left(), top), vec2(rect.width(), AUTO_H))))
     });
     // The markers' strip: its own clicks and drags.

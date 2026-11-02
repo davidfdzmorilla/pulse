@@ -22,7 +22,7 @@ Alrededor de la vista están siempre las mismas piezas:
 
 - Arriba, el **transporte**: tempo, metrónomo, reproducir, parar, grabar, loop y más. Ver [[Transporte]].
 - A la izquierda, el **navegador**: instrumentos, efectos, plugins, muestras y tu biblioteca. **☰** lo muestra u oculta. Ver [[Navegador y biblioteca]].
-- Abajo, el **panel de detalle**: el editor del clip seleccionado o los dispositivos de la pista. {⇧Tab} cambia entre los dos.
+- Abajo, el **panel de detalle**: el editor del clip seleccionado o los dispositivos de la pista. {⇧Tab} cambia entre los dos. Arrastra su borde de arriba para darle más o menos sitio; lo que no cabe se desplaza dentro con la rueda.
 - Abajo del todo, la **barra de estado**: cuenta lo que acaba de pasar y por qué algo no se ha podido hacer. Si no hay mensaje, recuerda los atajos principales.
 
 ### Hacer sonar algo en un minuto
@@ -141,6 +141,8 @@ La vista Session es una cuadrícula de clips que suenan en bucle y lanzas cuando
 
 Cada pista es una columna de slots, y cada fila es una **escena**. Se ven las escenas que usas y una vacía más (8 como mínimo, hasta 16); al poner un clip en la última, aparece otra. A la derecha están el botón **+** (nueva pista MIDI), los retornos (**A Reverb** y **B Delay** en un proyecto nuevo) con su propio **+** (nuevo retorno) y la columna **Master** con las escenas.
 
+Con muchas pistas, los retornos y el Master se quedan fijos a la derecha, y el mezclador, abajo, con los botones **●** de armar a la vista. La rueda desplaza los clips arriba y abajo, y {⇧ + rueda} o el trackpad, a los lados; el mezclador va con ellos.
+
 ### Lanzar y parar clips
 
 1. Pulsa el **►** de un clip. Arranca en el siguiente punto de cuantización (y arranca el transporte si estaba parado). Mientras espera, el ► parpadea, y una barra abajo muestra por dónde va.
@@ -194,6 +196,8 @@ Arriba está la **franja del loop**, debajo la de **marcadores** y después la *
 - **Clic en la regla**: mueve el cursor y el marcador de inicio.
 - **Arrastrar en la regla**: recorre la canción.
 - **Clic en un marcador**: el cursor salta a él.
+- **Rueda**: desplaza las pistas arriba y abajo. {⇧ + rueda}, o el trackpad, va a los lados. La regla y la fila del **Master** se quedan fijas, y al crear o elegir una pista fuera de la vista, la vista va a ella.
+- Al arrastrar clips cerca del borde de la vista, se desplaza sola: a los lados y, moviendo clips, también arriba y abajo.
 
 ### Repetir una parte con el loop
 
@@ -284,6 +288,16 @@ Los botones de la cabecera, de izquierda a derecha:
 - **A**: muestra el carril de automatización. Ver [[Automatización]].
 
 Clic derecho en la cabecera: **Nombre**, **Color**, **Mostrar/Ocultar automatización**, **Mostrar/Ocultar tomas**, **Duplicar**, **Eliminar** y **Congelar**. Ver [[Pistas]].
+
+#### Altura de las pistas
+
+- Arrastra el borde de abajo de una cabecera para hacer más alta o más baja esa pista. Con doble clic en el borde vuelve a la altura de las demás.
+- {⌥ + rueda} sobre el Arrangement cambia la altura de todas.
+
++++ Detalles
+- La altura va de 40 a 200 puntos; la de la fila del Master no cambia.
+- La altura es de la vista: no se guarda en el proyecto ni se deshace con {⌘Z}.
++++
 
 > Nota: las pistas que están tocando clips de Session se ven oscurecidas en el Arrangement. **► Arrangement**, en el transporte, las devuelve.
 

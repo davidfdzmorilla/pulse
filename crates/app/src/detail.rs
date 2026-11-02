@@ -35,10 +35,19 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(4)).corner_radius(2);
     frame.show(ui, |ui| {
         ui.set_min_size(ui.available_size());
-        let frozen = matches!(app.selected_target, engine::Target::Track(t) if app.is_frozen(t));
-        ui.add_enabled_ui(!frozen, |ui| match app.detail {
-            Detail::Clip => piano_roll::show(app, ui),
-            Detail::Devices => devices::show(app, ui),
+        // What doesn't fit scrolls inside: the panel never grows to hold it, so
+        // the divider above can always bring it down.
+        egui::ScrollArea::vertical().id_salt("detail").auto_shrink(false).show(ui, |ui| {
+            // A whole number of points: what fills the view doesn't overflow it
+            // by a fraction (and show a scroll bar for nothing).
+            let size = vec2(ui.available_width(), ui.available_height().floor() - 1.0);
+            ui.allocate_ui_with_layout(size, egui::Layout::top_down(egui::Align::Min), |ui| {
+                let frozen = matches!(app.selected_target, engine::Target::Track(t) if app.is_frozen(t));
+                ui.add_enabled_ui(!frozen, |ui| match app.detail {
+                    Detail::Clip => piano_roll::show(app, ui),
+                    Detail::Devices => devices::show(app, ui),
+                });
+            });
         });
     });
 }

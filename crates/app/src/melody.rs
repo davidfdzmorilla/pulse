@@ -92,7 +92,7 @@ impl Register {
     /// The lowest and highest notes: about an octave and a half, as a voice sings.
     pub fn range(self) -> (u8, u8) {
         match self {
-            // C3..G4, A3..E5, G4..D6.
+            // As the editor names them (C3 is 60): C2..G3, A2..E4, G3..D5.
             Register::Low => (48, 67),
             Register::Mid => (57, 76),
             Register::High => (67, 86),
@@ -209,6 +209,50 @@ fn nearest(classes: &[u8], target: i32, previous: Option<i32>, (low, high): (u8,
         .unwrap_or(target.clamp(low as i32, high as i32))
 }
 
+/// Where the melody has been: the last notes and which way the motif goes now.
+#[derive(Clone, Copy)]
+struct Line<'a> {
+    previous: Option<i32>,
+    /// The last few pitches, latest last.
+    recent: &'a [i32],
+    /// The motif's step from its last note: up (+), down (−) or the same (0).
+    direction: i32,
+}
+
+/// The note of `classes` inside the register for a strong beat: near
+/// `target`, in the motif's direction from the last note (it rises when the
+/// motif rises, even if the nearest chord note is the one it is on), and not
+/// the same note over and over (once again costs a little, a riff repeats; a
+/// third time in a row costs more than a leap to the next chord note).
+fn contour(classes: &[u8], target: i32, line: Line, (low, high): (u8, u8)) -> i32 {
+    (low as i32..=high as i32)
+        .filter(|p| classes.contains(&(p.rem_euclid(12) as u8)))
+        .min_by(|a, b| {
+            let cost = |p: i32| {
+                let mut cost = (p - target).abs() as f64;
+                if let Some(q) = line.previous {
+                    cost += 0.1 * (p - q).abs() as f64;
+                    let wrong = match line.direction.signum() {
+                        1 => p <= q,
+                        -1 => p >= q,
+                        _ => false,
+                    };
+                    if wrong {
+                        cost += 3.0;
+                    }
+                    // Leaps beyond a sixth sound like another voice.
+                    if (p - q).abs() > 9 {
+                        cost += 2.0;
+                    }
+                }
+                let again = line.recent.iter().rev().take(3).filter(|&&r| r == p).count();
+                cost + [0.0, 2.2, 4.5, 7.0][again]
+            };
+            cost(*a).total_cmp(&cost(*b))
+        })
+        .unwrap_or(target.clamp(low as i32, high as i32))
+}
+
 /// The motif's onsets: `count` of the sixteenths in `window` (from the
 /// phrase's start), one in each `count`th of it (so they spread over the
 /// phrase), picked by how much each is felt in the style (beats, off-beat
@@ -243,6 +287,17 @@ fn onsets(dice: &mut Dice, window: usize, bar: usize, beats: &[usize], weights: 
     chosen
 }
 
+/// Gives a phrase a high point: if its notes span less than `span` scale
+/// steps, the one two thirds of the way in goes up to that over the lowest.
+fn peak(steps: &mut [Step], span: i32) {
+    let low = steps.iter().map(|s| s.height).min().unwrap_or(0);
+    let high = steps.iter().map(|s| s.height).max().unwrap_or(0);
+    if steps.len() >= 3 && high - low < span {
+        let i = steps.len() * 2 / 3;
+        steps[i].height = low + span;
+    }
+}
+
 /// The motif of `melody` for a bar of `bar` sixteenths whose pulses start at
 /// `beats`, and the answer's (the same rhythm, its tail lower, ending closed).
 fn motif(melody: Melody, dice: &mut Dice, bar: usize, beats: &[usize]) -> (Vec<Step>, Vec<Step>) {
@@ -265,8 +320,14 @@ fn motif(melody: Melody, dice: &mut Dice, bar: usize, beats: &[usize]) -> (Vec<S
                 let gap = at.get(i + 1).map_or(phrase - s, |n| n - s);
                 let length = gap.min(*dice.pick(&[1, 2, 2, 3]));
                 steps.push(note(s, length, height));
-                height = (height + *dice.pick(&[0, 0, 1, -1, 2, -2, 3, -3])).clamp(-3, 6);
+                // A note repeats once at most, then it moves; with few notes,
+                // each one moves.
+                let repeated = melody.density == Density::Sparse || (steps.len() >= 2 && steps[steps.len() - 2].height == height);
+                let moves: &[i32] = if repeated { &[1, -1, 2, -2, 3, -3] } else { &[0, 0, 1, -1, 2, -2, 3, -3] };
+                let next = (height + *dice.pick(moves)).clamp(-3, 6);
+                height = if repeated && next == height { height - 2 } else { next };
             }
+            peak(&mut steps, 3);
         }
         Style::Topline => {
             // Room to breathe at the end of the phrase.
@@ -321,6 +382,7 @@ fn motif(melody: Melody, dice: &mut Dice, bar: usize, beats: &[usize]) -> (Vec<S
                 // The call rises; the answer comes back down.
                 height = (height + *dice.pick(&[1, 1, 2, 0, -1])).clamp(-2, 6);
             }
+            peak(&mut call, 2);
             let first = call[0].height;
             let answer: Vec<Step> = call.iter().map(|c| Step { at: c.at + bar, height: first - (c.height - first) / 2, ..*c }).collect();
             if let Some(last) = call.last_mut() {
@@ -328,6 +390,16 @@ fn motif(melody: Melody, dice: &mut Dice, bar: usize, beats: &[usize]) -> (Vec<S
             }
             steps = call;
             steps.extend(answer);
+        }
+    }
+    // With few notes, each one somewhere new: rising in the first half,
+    // falling in the second.
+    if melody.density == Density::Sparse {
+        let n = steps.len();
+        for i in 1..n {
+            if steps[i].height == steps[i - 1].height {
+                steps[i].height += if i * 2 < n { 1 } else { -1 };
+            }
         }
     }
     let mut question = steps.clone();
@@ -393,6 +465,8 @@ pub fn generate(melody: Melody, chords: &[(f64, f64, Chord)], length: f64, seed:
     };
     let mut notes: Vec<Note> = Vec::new();
     let mut previous: Option<i32> = None;
+    let mut recent: Vec<i32> = Vec::new();
+    let mut last_height: Option<i32> = None;
     for k in 0..phrases {
         // Questions and answers in turn; the clip ends on an answer.
         let answering = k % 2 == 1 || (k + 1 == phrases && (k + 1) as f64 * phrase <= length + 1e-9);
@@ -407,6 +481,7 @@ pub fn generate(melody: Melody, chords: &[(f64, f64, Chord)], length: f64, seed:
             let mut end = (start + step.length as f64 * 0.25).min(length);
             let strong_start = on_beat(start);
             let target = walk(&scale, centre, step.height);
+            let line = Line { previous, recent: &recent, direction: last_height.map_or(0, |h| step.height - h) };
             // The note over `harmony`, on a strong beat or not.
             let choose = |harmony: Chord, strong: bool| -> i32 {
                 let tones = harmony.classes();
@@ -423,7 +498,7 @@ pub fn generate(melody: Melody, chords: &[(f64, f64, Chord)], length: f64, seed:
                         Some(Cadence::Open) if tones.len() > 1 => tones[1..].to_vec(),
                         _ => tones.clone(),
                     };
-                    return nearest(&choices, target, previous, range);
+                    return contour(&choices, target, line, range);
                 }
                 // Off the beat: the scale's note, if it moves by step (a
                 // passing or neighbour note); else a chord note.
@@ -433,6 +508,13 @@ pub fn generate(melody: Melody, chords: &[(f64, f64, Chord)], length: f64, seed:
                 }
                 while p < range.0 as i32 {
                     p += 12;
+                }
+                // Not a third time the same note in a row: a step on, the
+                // way the motif goes.
+                if recent.len() >= 2 && recent[recent.len() - 2..].iter().all(|&r| r == p) {
+                    let way = if line.direction < 0 { -1 } else { 1 };
+                    let moved = walk(&local, p, way);
+                    p = if (range.0 as i32..=range.1 as i32).contains(&moved) { moved } else { walk(&local, p, -way) };
                 }
                 let in_chord = tones.contains(&(p.rem_euclid(12) as u8));
                 let stepwise = previous.is_none_or(|q| (p - q).abs() <= 2);
@@ -457,6 +539,8 @@ pub fn generate(melody: Melody, chords: &[(f64, f64, Chord)], length: f64, seed:
                 }
             };
             previous = Some(pitch);
+            last_height = Some(step.height);
+            recent.push(pitch);
             let velocity = match (on_beat(start), (start * 4.0).round() as usize % bar == 0) {
                 (true, true) => 0.9,
                 (true, false) => 0.82,
@@ -615,6 +699,33 @@ mod tests {
                 let question = notes.iter().filter(|n| n.start < phrase).last().unwrap();
                 let chord = chord_at(&chords, question.start);
                 assert!(chord.classes().contains(&(question.pitch % 12)), "{style:?}: the question ends on {} over {}", question.pitch, chord.name());
+            }
+        }
+    }
+
+    /// The melody has a contour, not a pedal (from the 2026-11 audit: a sparse
+    /// high hook over i–VI–VII–i played the same F 9 times out of 12): for
+    /// every style, density and register, over chords a bar each and two bars
+    /// each, no note is more than half the melody, it plays at least four
+    /// notes and spans at least a fourth.
+    #[test]
+    fn melodies_move_between_notes() {
+        let dramatic = [(2, Quality::Minor), (10, Quality::Major), (0, Quality::Major), (2, Quality::Minor)];
+        let songs = [pop(), progression(&[dramatic, dramatic].concat(), 4.0), progression(&dramatic, 8.0)];
+        for chords in &songs {
+            for melody in every() {
+                for seed in 0..8 {
+                    let notes = generate(melody, chords, 32.0, seed, TimeSig::COMMON, None);
+                    let mut counts = std::collections::HashMap::new();
+                    for n in &notes {
+                        *counts.entry(n.pitch).or_insert(0usize) += 1;
+                    }
+                    let most = *counts.values().max().unwrap() as f64 / notes.len() as f64;
+                    let span = notes.iter().map(|n| n.pitch).max().unwrap() - notes.iter().map(|n| n.pitch).min().unwrap();
+                    let pitches: Vec<(f64, u8)> = notes.iter().map(|n| (n.start, n.pitch)).collect();
+                    assert!(most <= 0.5, "{melody:?} seed {seed}: {:.0} % the same note {pitches:?}", most * 100.0);
+                    assert!(counts.len() >= 4 && span >= 5, "{melody:?} seed {seed}: {} notes over {span} semitones {pitches:?}", counts.len());
+                }
             }
         }
     }

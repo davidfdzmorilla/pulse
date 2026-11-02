@@ -1211,6 +1211,7 @@ Suena a canción, no a notas al azar:
 
 - En cada tiempo fuerte toca una nota del acorde que suena; entre medias, notas de la escala que van por grados. Nunca choca un semitono con el acorde en un tiempo fuerte.
 - Un motivo de uno o dos compases se repite por todo el clip y se adapta a cada acorde.
+- La melodía tiene contorno: sube cuando el motivo sube y baja cuando baja, con un punto alto en cada frase. En los tiempos fuertes elige, entre las notas del acorde, la que va en esa dirección, no siempre la más cercana. Ninguna nota pasa de la mitad de la melodía, ni con **Pocas notas**.
 - Las frases van en parejas: la primera queda abierta y la segunda cierra en la tónica o la fundamental del acorde, igual que el final del clip.
 - Sigue el compás del clip (4/4, 3/4, 6/8…) y su largo.
 
@@ -1218,7 +1219,7 @@ En el [[Editor MIDI]] de la melodía, junto a **Otra variación**, tienes tres d
 
 - **Estilo**: la misma toma en otro estilo. El clip cambia de nombre si aún se llama como el estilo.
 - **Densidad**: **Pocas notas**, **Normal** o **Muchas notas**.
-- **Registro**: **Grave** (Do3–Sol4), **Medio** (La3–Mi5) o **Agudo** (Sol4–Re6).
+- **Registro**: **Grave** (C2–G3), **Medio** (A2–E4) o **Agudo** (G3–D5), con los nombres de notas del editor (C3 es el do central).
 
 Cambiarlos reescribe la misma toma; **Otra variación** escribe otra.
 

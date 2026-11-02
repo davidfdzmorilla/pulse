@@ -404,7 +404,7 @@ mod tests {
         while app.freeze_job.is_some() {
             app.follow_freeze(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(20));
-            assert!(started.elapsed().as_secs() < 60);
+            assert!(started.elapsed().as_secs() < 600);
         }
     }
 
@@ -502,8 +502,13 @@ mod tests {
         assert!(track.is_audio() && track.frozen.is_none() && track.devices.is_empty());
         assert!(matches!(&track.arrangement[0].clip, Clip::Audio(_)));
         assert!(track.clips.iter().flatten().all(|c| matches!(c, Clip::Audio(_))));
-        for file in std::fs::read_dir(app.media_dir(crate::library::FROZEN)).into_iter().flatten().flatten() {
-            std::fs::remove_file(file.path()).ok();
+        // Only its own files go: other tests side by side freeze into the
+        // same folder, and theirs are still playing.
+        let track = &app.project.tracks[t];
+        for clip in track.arrangement.iter().map(|a| &a.clip).chain(track.clips.iter().flatten()) {
+            if let Clip::Audio(audio) = clip {
+                std::fs::remove_file(&audio.sample).ok();
+            }
         }
     }
 

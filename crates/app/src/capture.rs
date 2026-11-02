@@ -118,7 +118,9 @@ impl InputCapture {
     pub fn start_safety(&mut self, dir: &Path) -> Result<(), String> {
         std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
         let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs());
-        let path = crate::library::unique(&dir.join(format!("{UNFINISHED} {stamp}.wav")));
+        // Claimed: two takes started in the same second (two inputs, tests side
+        // by side) never write the same file.
+        let path = crate::library::claim(&dir.join(format!("{UNFINISHED} {stamp}.wav")));
         let spec = hound::WavSpec { channels: self.handle.channels.max(1) as u16, sample_rate: self.handle.sample_rate as u32, bits_per_sample: 32, sample_format: hound::SampleFormat::Float };
         let writer = hound::WavWriter::create(&path, spec).map_err(|e| format!("No se pudo crear {}: {e}", path.display()))?;
         self.safety = Some(Safety { writer, path, flushed: Instant::now() });
@@ -149,6 +151,15 @@ impl InputCapture {
     /// The safety copy being written, if recording.
     pub fn safety_path(&self) -> Option<&Path> {
         self.safety.as_ref().map(|s| s.path.as_path())
+    }
+
+    /// The safety copy is brought up to date with the next input, as when
+    /// [`SAFETY_FLUSH`] has gone by (tests don't wait it out).
+    #[cfg(test)]
+    pub fn flush_safety_soon(&mut self) {
+        if let Some(safety) = &mut self.safety {
+            safety.flushed = Instant::now().checked_sub(SAFETY_FLUSH).unwrap_or(safety.flushed);
+        }
     }
 
     /// Adds input to the safety copy, if recording (see [`Safety`]).

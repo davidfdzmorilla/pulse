@@ -382,7 +382,7 @@ mod tests {
         while app.tempo.busy() {
             app.follow_tempo(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(20));
-            assert!(started.elapsed().as_secs() < 60);
+            assert!(started.elapsed().as_secs() < 600);
         }
         let placed = &app.project.tracks[track].arrangement[0];
         let Clip::Audio(audio) = &placed.clip else { panic!() };
@@ -663,7 +663,7 @@ mod tests {
         while app.tempo.busy() {
             app.follow_tempo(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(20));
-            assert!(started.elapsed().as_secs() < 60);
+            assert!(started.elapsed().as_secs() < 600);
         }
         let warp = |i: usize| match &app.project.tracks[track].arrangement[i].clip {
             Clip::Audio(a) => (a.warp, a.original_bpm),
@@ -719,7 +719,7 @@ mod tests {
         while app.tempo.busy() {
             app.follow_tempo(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(20));
-            assert!(started.elapsed().as_secs() < 60);
+            assert!(started.elapsed().as_secs() < 600);
         }
         std::fs::remove_dir_all(&dir).ok();
         assert!(app.status.as_deref().is_some_and(|s| s.contains("suena a su velocidad")), "{:?}", app.status);

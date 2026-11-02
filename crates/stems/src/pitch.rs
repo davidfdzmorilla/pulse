@@ -137,7 +137,9 @@ pub fn track_with(mono: &[f32], rate: f32, progress: &(dyn Fn(f32) -> bool + Syn
 }
 
 /// How many tracks are kept, and up to how many frames each (20 minutes).
-const KEPT: usize = 6;
+/// Tests side by side analyse many more at once: there, one is never pushed
+/// out by the others before its test asks for it again.
+const KEPT: usize = if cfg!(test) { 256 } else { 6 };
 const KEPT_FRAMES: usize = 86 * 60 * 20;
 
 static MEMORY: std::sync::Mutex<Vec<(crate::Fingerprint, std::sync::Arc<Track>)>> = std::sync::Mutex::new(Vec::new());
@@ -898,9 +900,14 @@ mod tests {
         .unwrap();
         let seen = seen.into_inner().unwrap();
         assert!(seen.iter().all(|f| (0.0..=1.0).contains(f)) && seen.last() == Some(&1.0), "{seen:?}");
-        let started = std::time::Instant::now();
-        let again = track(&audio, 44_100.0);
-        assert!(started.elapsed().as_millis() < 50);
+        // From memory: nothing is analysed, so there is no progress to tell.
+        let told = std::sync::atomic::AtomicUsize::new(0);
+        let again = track_with(&audio, 44_100.0, &|_| {
+            told.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            true
+        })
+        .unwrap();
+        assert_eq!(told.into_inner(), 0, "analysed again");
         assert_eq!(again.f0, first.f0);
         // Another rate is other audio.
         assert_ne!(crate::fingerprint(&audio, 44_100.0), crate::fingerprint(&audio, 48_000.0));

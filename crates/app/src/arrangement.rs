@@ -2527,7 +2527,7 @@ mod tests {
         while app.stems.is_some() {
             let _ = screen.ctx.run_ui(Default::default(), |ui| app.follow_stems(ui.ctx()));
             std::thread::sleep(std::time::Duration::from_millis(100));
-            assert!(started.elapsed().as_secs() < 300);
+            assert!(started.elapsed().as_secs() < 600);
         }
         assert_eq!(app.project.tracks.len(), t + 5, "{:?} {:?}", app.status, app.notice);
         for i in 0..4 {

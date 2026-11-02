@@ -1223,7 +1223,10 @@ mod preview_tests {
     }
 
     fn wait(app: &mut PulseApp) {
-        for _ in 0..500 {
+        // Until it is done; the deadline, generous for a busy machine, only
+        // keeps a broken analysis from hanging the tests.
+        let started = std::time::Instant::now();
+        while started.elapsed() < Duration::from_secs(120) {
             app.hear_analysed();
             if app.browser.analysing.is_none() {
                 return;

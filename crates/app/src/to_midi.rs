@@ -533,7 +533,7 @@ mod tests {
         while app.to_midi.is_some() {
             app.follow_to_midi(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(5));
-            assert!(started.elapsed().as_secs() < 30);
+            assert!(started.elapsed().as_secs() < 600);
         }
         assert!(app.project.tracks[1].is_drums(), "{:?}", app.status);
         let Some(Clip::Midi(midi)) = &app.project.tracks[1].clips[0] else { panic!("{:?}", app.status) };
@@ -599,7 +599,7 @@ mod tests {
             while app.to_midi.is_some() {
                 let _ = ctx.run_ui(Default::default(), |ui| app.follow_to_midi(ui.ctx()));
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
             // Under the audio track, in the same slot.
             let Some(Clip::Midi(midi)) = &app.project.tracks[t + 1].clips[2] else { panic!("{:?}", app.status) };

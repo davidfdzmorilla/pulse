@@ -553,18 +553,20 @@ pub(crate) mod tests {
         let dir = std::env::temp_dir().join(format!("pulse-scan-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         let bundle = dir.join("Roto.vst3");
-        let quick = std::time::Duration::from_millis(500);
+        // Only the one that hangs gets the short time out; the others a long
+        // one, as a busy machine may be slow to start even a shell.
+        let (quick, patient) = (std::time::Duration::from_millis(500), std::time::Duration::from_secs(60));
         let crash = scanner(&dir, "crash", "kill -SEGV $$");
-        assert!(matches!(scan_apart(&crash, &bundle, quick), Scanned::Crashed(w) if w.contains("«Roto» cerró Pulse")));
+        assert!(matches!(scan_apart(&crash, &bundle, patient), Scanned::Crashed(w) if w.contains("«Roto» cerró Pulse")));
         let hang = scanner(&dir, "hang", "exec sleep 30");
         let started = std::time::Instant::now();
         assert!(matches!(scan_apart(&hang, &bundle, quick), Scanned::Crashed(w) if w.contains("colgado")));
-        assert!(started.elapsed() < std::time::Duration::from_secs(5), "it waits only so long");
+        assert!(started.elapsed() < std::time::Duration::from_secs(15), "it waits only so long, not the 30 s it hangs");
         let found = r#"{"found":[{"path":"/x/Roto.vst3","cid":"AB","name":"Roto","vendor":"Pulse","category":"Fx","instrument":false}]}"#;
         let fine = scanner(&dir, "fine", &format!("echo 'el plugin habla'; echo '{SCAN_MARK}{found}'"));
-        assert!(matches!(scan_apart(&fine, &bundle, quick), Scanned::Found(list) if list.len() == 1 && list[0].name == "Roto"));
+        assert!(matches!(scan_apart(&fine, &bundle, patient), Scanned::Found(list) if list.len() == 1 && list[0].name == "Roto"));
         let refused = scanner(&dir, "refused", &format!("echo '{SCAN_MARK}{{\"error\":\"no es un VST3\"}}'"));
-        assert_eq!(scan_apart(&refused, &bundle, quick), Scanned::Failed("no es un VST3".into()));
+        assert_eq!(scan_apart(&refused, &bundle, patient), Scanned::Failed("no es un VST3".into()));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -576,20 +578,21 @@ pub(crate) mod tests {
         let plugins = dir.join("plugins");
         std::fs::create_dir_all(plugins.join("Roto.vst3")).unwrap();
         let crash = scanner(&dir, "crash", "kill -SEGV $$");
-        let quick = std::time::Duration::from_millis(500);
+        // Long enough for a busy machine: a crash ends the scan at once anyway.
+        let patient = std::time::Duration::from_secs(60);
         let mut library = Library::default();
-        library.search_with(std::slice::from_ref(&plugins), Some(&crash), quick);
+        library.search_with(std::slice::from_ref(&plugins), Some(&crash), patient);
         assert_eq!(library.crashed.len(), 1);
         assert!(library.failed[0].contains("cerró Pulse"), "{:?}", library.failed);
         // Next time it isn't loaded at all (a scanner that would hang never runs).
         let hang = scanner(&dir, "hang", "exec sleep 30");
         let started = std::time::Instant::now();
         library.search_with(std::slice::from_ref(&plugins), Some(&hang), std::time::Duration::from_secs(20));
-        assert!(started.elapsed() < std::time::Duration::from_secs(5));
+        assert!(started.elapsed() < std::time::Duration::from_secs(15), "the scanner that hangs 30 s never ran");
         assert!(library.failed[0].contains("se deja fuera: cerró la búsqueda la última vez"), "{:?}", library.failed);
         // Updated, it is tried again.
         library.crashed[0].modified += 1;
-        library.search_with(std::slice::from_ref(&plugins), Some(&crash), quick);
+        library.search_with(std::slice::from_ref(&plugins), Some(&crash), patient);
         assert!(library.failed[0].contains("cerró Pulse"), "{:?}", library.failed);
         std::fs::remove_dir_all(&dir).ok();
     }

@@ -555,7 +555,7 @@ impl PulseApp {
             return;
         }
         let key = crate::melody::key_for(&chords, self.project.key);
-        let seed = crate::versions::now() ^ part.id() << 32;
+        let seed = crate::versions::seed() ^ part.id() << 32;
         let sig = self.clip_sig(clip);
         let Some(Clip::Midi(m)) = self.clip_mut(clip) else { return };
         let notes = write(part, &chords, m.length, seed, sig, Some(key));
@@ -589,7 +589,7 @@ impl PulseApp {
             self.status = Some("No se encuentran acordes en este clip para acompañarlos".into());
             return;
         }
-        let seed = crate::versions::now() ^ part.id() << 32;
+        let seed = crate::versions::seed() ^ part.id() << 32;
         let key = matches!(part, Part::Melody(_)).then(|| crate::melody::key_for(&chords, self.project.key));
         let notes = write(part, &chords, length, seed, self.clip_sig(clip), key);
         let source = clip.track();

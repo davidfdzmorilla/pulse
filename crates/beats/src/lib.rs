@@ -111,7 +111,9 @@ fn models() -> Result<(PathBuf, PathBuf), String> {
     let write = |name: &str, bytes: &[u8]| -> Result<PathBuf, String> {
         let path = dir.join(name);
         if std::fs::metadata(&path).map(|m| m.len()).ok() != Some(bytes.len() as u64) {
-            let partial = path.with_extension("part");
+            // A partial file of its own: two writing at once (analyses side by
+            // side, tests) never rename the other's half-written one in.
+            let partial = path.with_extension(format!("{}-{:?}.part", std::process::id(), std::thread::current().id()));
             std::fs::write(&partial, bytes).and_then(|_| std::fs::rename(&partial, &path)).map_err(|e| format!("No se pudo escribir {}: {e}", path.display()))?;
         }
         Ok(path)

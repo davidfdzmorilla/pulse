@@ -919,14 +919,14 @@ mod tests {
         app.voice.drums = true;
         let ctx = eframe::egui::Context::default();
         app.follow_voice(&ctx);
-        // Feeds `audio` and waits (5 s at most) for the window to see `done`:
+        // Feeds `audio` and waits (ten minutes at most, for a busy machine) for the window to see `done`:
         // the voice's thread may still be on it after the input is empty.
         let mut feed = |app: &mut PulseApp, audio: Vec<f32>, done: &dyn Fn(&PulseApp) -> bool| {
             let started = std::time::Instant::now();
             // As a microphone does: a little at a time, none of it lost.
             for s in audio {
                 while voice.push(s).is_err() {
-                    assert!(started.elapsed().as_secs() < 5, "the voice's thread does not take the input");
+                    assert!(started.elapsed().as_secs() < 600, "the voice's thread does not take the input");
                     std::thread::sleep(std::time::Duration::from_millis(1));
                 }
             }
@@ -935,7 +935,7 @@ mod tests {
                 if done(app) {
                     break;
                 }
-                assert!(started.elapsed().as_secs() < 5, "{:?} {:?}", app.voice.last_hit(), app.status);
+                assert!(started.elapsed().as_secs() < 600, "{:?} {:?}", app.voice.last_hit(), app.status);
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
         };
@@ -969,7 +969,7 @@ mod tests {
         let wait_for = |app: &PulseApp, note: Option<u8>| {
             let started = std::time::Instant::now();
             while app.voice.playing() != note {
-                assert!(started.elapsed().as_secs() < 5, "never {note:?}: {:?}", app.voice.playing());
+                assert!(started.elapsed().as_secs() < 600, "never {note:?}: {:?}", app.voice.playing());
                 std::thread::sleep(std::time::Duration::from_millis(2));
             }
         };

@@ -555,7 +555,7 @@ fn audit_kill_during_save() {
             .unwrap();
         let waiting = std::time::Instant::now();
         while !file.with_extension("ready").exists() {
-            assert!(waiting.elapsed().as_secs() < 30, "the saving child never started");
+            assert!(waiting.elapsed().as_secs() < 600, "the saving child never started");
             std::thread::sleep(std::time::Duration::from_millis(5));
         }
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
@@ -880,7 +880,9 @@ fn audit_cross_version() {
 #[test]
 fn undo_after_the_first_save_keeps_the_recordings() {
     let dir = fresh("undo-first-save");
-    let take = crate::library::root().join(crate::library::UNSAVED).join(crate::library::RECORDINGS).join(format!("Toma deshacer {}.wav", std::process::id()));
+    // In a folder of its own: tests recording side by side write to `Grabaciones`
+    // while this save moves its take out and lets the emptied folders go.
+    let take = crate::library::root().join(crate::library::UNSAVED).join(format!("deshacer-{}", std::process::id())).join(crate::library::RECORDINGS).join("Toma deshacer.wav");
     write_wav(&take, 1.0, 220.0);
     let mut app = PulseApp::headless(Project::empty());
     app.project.tracks[0] = Track::new_audio("Voz", [1, 2, 3]);

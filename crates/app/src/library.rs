@@ -404,8 +404,11 @@ mod tests {
         let (song, kick) = (outside.join("song.wav"), outside.join("kick.wav"));
         std::fs::write(&song, b"song").unwrap();
         std::fs::write(&kick, b"kick").unwrap();
-        // A recording made before the project was saved.
-        let recording = root().join(UNSAVED).join(RECORDINGS).join(format!("toma-{}.wav", std::process::id()));
+        // A recording made before the project was saved. In a folder of its
+        // own: the tests that record side by side leave their takes in
+        // `Grabaciones`, and this one checks that its folder empties.
+        let own = format!("biblioteca-{}", std::process::id());
+        let recording = root().join(UNSAVED).join(&own).join(RECORDINGS).join("toma.wav");
         std::fs::create_dir_all(recording.parent().unwrap()).unwrap();
         std::fs::write(&recording, b"take").unwrap();
 
@@ -425,9 +428,9 @@ mod tests {
         let same = |file: String, path: PathBuf| assert_eq!(Path::new(&file), path);
         same(sample(0, 0), dir.join("Samples").join("Importados").join("song.wav"));
         assert_eq!(sample(0, 1), sample(0, 0), "one copy of a file used twice");
-        same(sample(0, 2), dir.join("Samples").join("Grabaciones").join(recording.file_name().unwrap()));
+        same(sample(0, 2), dir.join("Samples").join(&own).join("Grabaciones").join(recording.file_name().unwrap()));
         assert!(!recording.exists(), "the unsaved take moved in");
-        assert!(!recording.parent().unwrap().exists(), "its folder, empty, went too");
+        assert!(!recording.parent().unwrap().exists() && !root().join(UNSAVED).join(&own).exists(), "its folders, empty, went too");
         assert!(song.exists(), "imported files are copied, not moved");
         same(project.tracks[1].samples[1].clone(), dir.join("Samples").join("Importados").join("kick.wav"));
         assert_eq!(project.tracks[1].samples[2], "/no/such.wav", "missing files are left as they were");

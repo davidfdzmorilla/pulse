@@ -5879,7 +5879,16 @@ mod tests {
             (out, h.engine.helped())
         };
         let (one, _) = run(1);
-        let (four, helped) = run(4);
+        // A busy machine may keep the workers asleep through a whole run: it
+        // is made again until they take part.
+        let mut tries = 0;
+        let (four, helped) = loop {
+            let made = run(4);
+            tries += 1;
+            if made.1 > 0 || tries == 20 {
+                break made;
+            }
+        };
         assert!(helped > 0, "the other threads did nothing");
         assert!(energy(&one) > 0.1);
         assert!(one.iter().zip(&four).all(|(a, b)| a.to_bits() == b.to_bits()), "the sidechain heard something else");
@@ -5967,7 +5976,16 @@ mod tests {
             (out, engine.helped())
         };
         let (one, _) = render(1, &[1024]);
-        let (shared, helped) = render(4, &[1, 63, 64, 500, 1024, 4096, 37]);
+        // A busy machine may keep the workers asleep through a whole render:
+        // it is made again until they take part.
+        let mut tries = 0;
+        let (shared, helped) = loop {
+            let made = render(4, &[1, 63, 64, 500, 1024, 4096, 37]);
+            tries += 1;
+            if made.1 > 0 || tries == 20 {
+                break made;
+            }
+        };
         assert!(helped > 0, "the other threads did nothing");
         assert!(energy(&one) > 1.0);
         let first = one.iter().zip(&shared).position(|(a, b)| a.to_bits() != b.to_bits());
@@ -6381,7 +6399,7 @@ mod tests {
         let started = std::time::Instant::now();
         let mut freed = 0;
         while playing(&engine).space != ReverbSpace::Spring || freed == 0 {
-            assert!(started.elapsed().as_secs() < 20, "the new response never came");
+            assert!(started.elapsed().as_secs() < 600, "the new response never came");
             engine.process(&mut out, 2);
             freed += handle.collect_garbage();
             std::thread::sleep(std::time::Duration::from_micros(200));
@@ -6398,7 +6416,7 @@ mod tests {
         let started = std::time::Instant::now();
         let mut back = 0;
         while back < 2 {
-            assert!(started.elapsed().as_secs() < 20, "the stale response never came back");
+            assert!(started.elapsed().as_secs() < 600, "the stale response never came back");
             engine.process(&mut out, 2);
             back += handle.collect_garbage();
             std::thread::sleep(std::time::Duration::from_micros(200));

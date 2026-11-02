@@ -2065,14 +2065,13 @@ impl PulseApp {
         let stamp = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .map_or(0, |d| d.as_secs());
-        // Takes of one loop recording are written in the same second.
+        // Takes of one loop recording are written in the same second: each
+        // claims its name (`base 2`, `base 3`…), so two at once never share one.
         let base = format!("{} {stamp}", crate::files::safe_name(&self.project.tracks[track].name));
-        let (name, path) = (1..)
-            .map(|n| if n == 1 { base.clone() } else { format!("{base} {n}") })
-            .map(|name| (name.clone(), dir.join(format!("{name}.wav"))))
-            .find(|(_, path)| !path.exists())
-            .expect("a free name");
+        let path = crate::library::claim(&dir.join(format!("{base}.wav")));
+        let name = path.file_stem().map_or(base, |s| s.to_string_lossy().into_owned());
         if let Err(error) = write_wav(&path, &left, &right, rate) {
+            let _ = std::fs::remove_file(&path);
             self.status = Some(error);
             self.take_failed = true;
             return None;

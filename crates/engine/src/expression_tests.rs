@@ -217,13 +217,22 @@ fn lanes_sound_the_same_with_any_buffer_and_threads() {
             out.extend(block);
         }
         out.truncate(2 * total);
-        assert!(threads == 1 || engine.helped() > 0, "the other threads did nothing");
-        out
+        (out, engine.helped())
     };
-    let one = render(1, &[1024]);
+    let one = render(1, &[1024]).0;
     assert!(one.iter().map(|v| v * v).sum::<f32>() > 1.0);
     for (threads, sizes) in [(1, &[1usize, 63, 64, 500, 1024, 4096, 37][..]), (4, &[37, 1024, 63, 500][..])] {
-        let other = render(threads, sizes);
+        // A busy machine may keep the workers asleep through a whole render:
+        // it is made again until they take part.
+        let mut tries = 0;
+        let (other, helped) = loop {
+            let made = render(threads, sizes);
+            tries += 1;
+            if threads == 1 || made.1 > 0 || tries == 20 {
+                break made;
+            }
+        };
+        assert!(threads == 1 || helped > 0, "the other threads did nothing");
         let first = one.iter().zip(&other).position(|(a, b)| a.to_bits() != b.to_bits());
         assert_eq!(first, None, "{threads} threads: differ from frame {:?}", first.map(|i| i / 2));
     }

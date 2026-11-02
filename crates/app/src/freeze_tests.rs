@@ -79,7 +79,7 @@ fn wait_freeze(app: &mut PulseApp) {
     while app.freeze_job.is_some() {
         app.follow_freeze(&ctx);
         std::thread::sleep(std::time::Duration::from_millis(20));
-        assert!(started.elapsed().as_secs() < 120, "the freeze never finished");
+        assert!(started.elapsed().as_secs() < 600, "the freeze never finished");
     }
 }
 

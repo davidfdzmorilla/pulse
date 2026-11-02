@@ -488,7 +488,11 @@ impl PulseApp {
 
     /// Once a frame: moves the gliding controls on towards their controllers.
     fn glide(&mut self) {
-        let now = Instant::now();
+        self.glide_at(Instant::now());
+    }
+
+    /// [`Self::glide`] at `now` (tests move the clock on by hand).
+    fn glide_at(&mut self, now: Instant) {
         let dt = self.learn.glided.map_or(0.0, |t| now.duration_since(t).as_secs_f32());
         self.learn.glided = (!self.learn.glides.is_empty()).then_some(now);
         let mut glides = std::mem::take(&mut self.learn.glides);
@@ -770,15 +774,23 @@ mod tests {
         let mut app = app();
         app.assign(30, Control::Param { target: Target::Track(0), param: Param::Pan });
         app.project.midi_map[0].smooth = 0.2;
-        cc(&mut app, 30, 0);
+        // Frames 10 ms apart on a clock moved by hand: a busy machine pausing
+        // the test between two lines doesn't make the knob jump.
+        app.apply_cc(30, 0);
+        let mut frame = app.learn.glided.expect("gliding");
+        let mut next = |app: &mut PulseApp| {
+            frame += Duration::from_millis(10);
+            app.glide_at(frame);
+        };
+        next(&mut app);
         let pan = |app: &PulseApp| app.project.tracks[0].mixer.pan;
         let start = pan(&app);
         assert!(start > -0.5, "it doesn't jump: {start}");
         assert!(app.learn.gliding());
         let mut steps = vec![start];
-        for _ in 0..40 {
-            std::thread::sleep(Duration::from_millis(10));
-            app.poll_midi_map();
+        // 0.6 s: three times the smoothing, past where it snaps there.
+        for _ in 0..60 {
+            next(&mut app);
             steps.push(pan(&app));
         }
         assert!(steps.windows(2).all(|w| w[1] <= w[0]), "always towards it: {steps:?}");

@@ -720,8 +720,9 @@ mod tests {
             let safety = app.capture.as_ref().unwrap().safety_path().expect("copied to the disk while recording").to_path_buf();
             assert!(safety.file_name().unwrap().to_string_lossy().starts_with(crate::capture::UNFINISHED));
             assert!(safety.starts_with(app.recordings_dir()));
-            // What a crash would leave: readable, with the seconds recorded so far.
-            std::thread::sleep(std::time::Duration::from_millis(1100));
+            // What a crash would leave: readable, with the seconds recorded so far
+            // (as when a second has gone by since the last time it was brought up to date).
+            app.capture.as_mut().unwrap().flush_safety_soon();
             run(&mut app, 0.25);
             let left = engine::Sample::load(&safety).expect("a WAV that reads").frames();
             assert!(left > 48_000, "{left} frames");

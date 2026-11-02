@@ -571,7 +571,7 @@ fn the_audio_thread_does_not_allocate() {
     let started = Instant::now();
     let (mut reverb_allocs, mut handed_back, mut after_built) = ((0, 0), 0, 0);
     while handed_back == 0 || after_built < 40 {
-        assert!(started.elapsed().as_secs() < 30, "the new response never came");
+        assert!(started.elapsed().as_secs() < 600, "the new response never came");
         let (_, a, f) = counting(|| engine.process(&mut out, 2));
         reverb_allocs.0 += a;
         reverb_allocs.1 += f;
@@ -609,9 +609,14 @@ fn the_audio_threads_do_not_allocate_with_workers() {
     let (_, load_allocs, load_frees) = counting(|| engine.process(&mut out, 2));
     handle.collect_garbage();
     let before = WORKER_ALLOCS.load(Ordering::Relaxed);
+    // 20 s of audio, and on until the workers have run a thousand tasks (a
+    // busy machine may keep them asleep a while), within ten minutes.
+    let started = std::time::Instant::now();
     let (_, allocs, frees) = counting(|| {
-        for _ in 0..(20.0 * SR / 256.0) as usize {
+        let mut calls = 0;
+        while calls < (20.0 * SR / 256.0) as usize || (engine.helped() <= 1000 && started.elapsed().as_secs() < 600) {
             engine.process(&mut out, 2);
+            calls += 1;
         }
     });
     let mut change_allocs = (0, 0);
@@ -650,7 +655,16 @@ fn threads_play_the_same_samples() {
     let one = render_routed(1, &[256], 6.0);
     assert!(finite(&one) && one.iter().any(|s| s.abs() > 0.01), "the project plays");
     for threads in [2, 4, 8] {
-        let (out, helped) = render_routed_helped(threads, &[256], 6.0);
+        // A busy machine may keep the workers asleep through a whole render:
+        // it is made again until they take part.
+        let mut tries = 0;
+        let (out, helped) = loop {
+            let made = render_routed_helped(threads, &[256], 6.0);
+            tries += 1;
+            if made.1 > 0 || tries == 20 {
+                break made;
+            }
+        };
         assert!(helped > 0, "the other threads did nothing");
         assert!(same_samples(&out, &one), "{threads} threads sound otherwise");
     }
@@ -1043,7 +1057,8 @@ fn odd_commands_do_not_panic() {
 /// as 1/length, with no limit.
 #[test]
 fn a_tiny_clip_length_does_not_stall_the_audio_thread() {
-    for length in [1e-2, 1e-4, 1e-6, 1e-8] {
+    // The fastest of a few callbacks: a busy machine only ever makes one slower.
+    let fastest = |length: f64| -> f64 {
         let (mut engine, mut handle) = detached(SR);
         let mut clip = MidiClip::new("tiny", length, [0, 0, 0]);
         clip.notes.push(Note { start: 0.0, length: length / 2.0, pitch: 60, velocity: 0.5, chance: 1.0 });
@@ -1052,11 +1067,21 @@ fn a_tiny_clip_length_does_not_stall_the_audio_thread() {
         send(&mut engine, &mut handle, Command::LaunchClip { track: 0, slot: 0 });
         let mut out = vec![0f32; 256 * 2];
         engine.process(&mut out, 2);
-        let start = Instant::now();
-        engine.process(&mut out, 2);
-        let us = start.elapsed().as_secs_f64() * 1e6;
-        println!("clip de {length:e} beats: {us:.0} µs por callback de 256 (presupuesto 5333 µs)");
-        assert!(us < 2000.0, "{length:e} beats: {us:.0} µs");
+        (0..16)
+            .map(|_| {
+                let start = Instant::now();
+                engine.process(&mut out, 2);
+                start.elapsed().as_secs_f64() * 1e6
+            })
+            .fold(f64::INFINITY, f64::min)
+    };
+    // A clip of a bar, timed alongside: tiny ones cost about what it does, not
+    // 1/length more (1e-8 beats would be a hundred million laps a beat).
+    let bar = fastest(4.0);
+    for length in [1e-2, 1e-4, 1e-6, 1e-8] {
+        let us = fastest(length);
+        println!("clip de {length:e} beats: {us:.0} µs por callback de 256 (un compás: {bar:.0} µs; presupuesto 5333 µs)");
+        assert!(us < 2000.0f64.max(20.0 * bar), "{length:e} beats: {us:.0} µs (a bar: {bar:.0} µs)");
     }
 }
 

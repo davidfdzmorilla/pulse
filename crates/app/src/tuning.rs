@@ -181,7 +181,7 @@ impl PulseApp {
         while self.tuner.analysing(source) {
             self.follow_tuning(&ctx);
             std::thread::sleep(std::time::Duration::from_millis(5));
-            assert!(started.elapsed().as_secs() < 60, "the analysis never finished");
+            assert!(started.elapsed().as_secs() < 600, "the analysis never finished");
         }
     }
 

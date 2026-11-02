@@ -64,7 +64,9 @@ pub fn transcribe(mono: &[f32], rate: f32, progress: impl FnMut(f32) -> bool) ->
     let notes = shared.as_mut().expect("loaded above").notes(mono, rate, progress)?;
     drop(shared);
     let mut kept = MEMORY.lock().unwrap_or_else(|e| e.into_inner());
-    if kept.len() >= 4 {
+    // (Many more in tests side by side: one is never pushed out by the others
+    // before its test asks for it again.)
+    if kept.len() >= if cfg!(test) { 256 } else { 4 } {
         kept.remove(0);
     }
     kept.push((key, notes.clone()));
@@ -328,9 +330,10 @@ mod tests {
             let notes = now.notes(&audio, rate, |_| true).unwrap();
             assert!(!notes.is_empty());
             assert_eq!(transcribe(&audio, rate, |_| true).unwrap(), notes);
-            let started = std::time::Instant::now();
-            assert_eq!(transcribe(&audio, rate, |_| true).unwrap(), notes);
-            assert!(started.elapsed().as_millis() < 20);
+            // From memory: nothing is analysed, so there is no progress to tell.
+            let mut told = 0;
+            assert_eq!(transcribe(&audio, rate, |_| { told += 1; true }).unwrap(), notes);
+            assert_eq!(told, 0, "transcribed again");
         }
     }
 

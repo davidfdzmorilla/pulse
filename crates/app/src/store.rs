@@ -14,7 +14,11 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
     std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
     let name = path.file_name().map_or_else(|| "archivo".to_string(), |n| n.to_string_lossy().into_owned());
-    let temporary = dir.join(format!(".{name}.{}.tmp", std::process::id()));
+    // One of its own for each write: two at once of the same file (threads,
+    // tests side by side) never rename the other's half-written one in.
+    static WRITES: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let write = WRITES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let temporary = dir.join(format!(".{name}.{}-{write}.tmp", std::process::id()));
     let written = (|| {
         let mut file = std::fs::File::create(&temporary)?;
         file.write_all(bytes)?;

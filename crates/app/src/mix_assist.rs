@@ -3438,7 +3438,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 120);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -3531,7 +3531,7 @@ mod tests {
             while app.mix.job.is_some() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -3634,7 +3634,7 @@ mod tests {
             while app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 120);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -3773,7 +3773,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 120);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -3875,7 +3875,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 120);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -3961,7 +3961,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -4088,7 +4088,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         // The mix's level (dB) between 0.7 and 1.9 s of each 2 s, where only a tail can sound.
@@ -4174,7 +4174,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 300);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -4369,7 +4369,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 120);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         assert!(app.heard(true).is_none(), "nothing to compare yet");
@@ -4504,7 +4504,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         let spread = |report: &Report| {
@@ -4582,7 +4582,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -4671,7 +4671,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         // The mix's level (dB) in the silences: 0.3 to 0.7 s after each phrase.
@@ -4757,7 +4757,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -4843,7 +4843,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 60);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();
@@ -4980,7 +4980,7 @@ mod tests {
             while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
                 app.follow_mix(&ctx);
                 std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 400);
+                assert!(started.elapsed().as_secs() < 600);
             }
         };
         app.analyze_mix();

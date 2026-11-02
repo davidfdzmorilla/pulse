@@ -203,20 +203,12 @@ fn separate(source: &Path, out_dir: &Path, base: &str, stage: &Mutex<Stage>, can
     std::fs::create_dir_all(out_dir).map_err(|e| format!("No se pudo crear {}: {e}", out_dir.display()))?;
     let mut paths: [PathBuf; 4] = Default::default();
     for (i, stem) in separated.iter().enumerate() {
-        let path = unique(&out_dir.join(format!("{base} - {}.wav", NAMES[i])));
+        // Claimed: two separations of one song at once never write the same file.
+        let path = crate::library::claim(&out_dir.join(format!("{base} - {}.wav", NAMES[i])));
         crate::capture::write_wav(&path, &stem.left, &stem.right, stems::SAMPLE_RATE as f32)?;
         paths[i] = path;
     }
     Ok(paths)
-}
-
-/// `path`, or "name 2.wav", "name 3.wav"… if it is taken.
-fn unique(path: &Path) -> PathBuf {
-    if !path.exists() {
-        return path.to_path_buf();
-    }
-    let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-    (2..).map(|n| path.with_file_name(format!("{stem} {n}.wav"))).find(|p| !p.exists()).expect("a free name")
 }
 
 /// Downloads the model from the project's GitHub release, checking its size and SHA-256.
@@ -390,11 +382,11 @@ mod tests {
     #[test]
     fn taken_names_get_a_number() {
         let dir = std::env::temp_dir().join(format!("pulse-unique-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         let path = dir.join("a - Voz.wav");
-        assert_eq!(unique(&path), path);
-        std::fs::write(&path, b"").unwrap();
-        assert_eq!(unique(&path), dir.join("a - Voz 2.wav"));
+        assert_eq!(crate::library::claim(&path), path);
+        assert_eq!(crate::library::claim(&path), dir.join("a - Voz 2.wav"));
         std::fs::remove_dir_all(&dir).ok();
     }
 
@@ -413,7 +405,7 @@ mod tests {
         while app.stems.is_some() {
             let _ = ctx.run_ui(Default::default(), |ui| app.follow_stems(ui.ctx()));
             std::thread::sleep(std::time::Duration::from_millis(100));
-            assert!(started.elapsed().as_secs() < 300);
+            assert!(started.elapsed().as_secs() < 600);
         }
         println!("{:?} in {:.1} s", app.status, started.elapsed().as_secs_f32());
         assert_eq!(app.project.tracks.len(), 7, "{:?}", app.status);

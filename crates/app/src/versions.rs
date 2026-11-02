@@ -62,6 +62,13 @@ pub fn now() -> u64 {
     std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// A seed for a new take of a generator (a melody, a bass, a song from a hum):
+/// the clock in the app, so each take is new; always the same in tests, so
+/// they never pass or fail with the time of day.
+pub fn seed() -> u64 {
+    if cfg!(test) { 1_761_000_000 } else { now() }
+}
+
 /// The project as a version file: its paths relative to the project's folder
 /// (the parent of `dir`).
 fn text(project: &Project, dir: &Path) -> Result<String, String> {

@@ -462,15 +462,29 @@ mod tests {
         let files = walk(&[dir.clone()], 50_000, |p| crate::app::is_audio_file(p));
         let walked = started.elapsed();
         assert_eq!(files.len(), 5000);
-        let started = std::time::Instant::now();
-        let mut items = index();
-        items.extend(files.iter().map(|p| file_item(p, Path::new("/fabrica"))));
-        let built = started.elapsed();
+        // Each timed a few times, the fastest kept: a busy machine (other tests,
+        // other builds) only ever makes one slower.
+        let fastest = |f: &mut dyn FnMut()| {
+            (0..5)
+                .map(|_| {
+                    let started = std::time::Instant::now();
+                    f();
+                    started.elapsed()
+                })
+                .min()
+                .unwrap()
+        };
+        let build = || {
+            let mut items = index();
+            items.extend(files.iter().map(|p| file_item(p, Path::new("/fabrica"))));
+            items
+        };
+        let built = fastest(&mut || drop(build()));
+        let items = build();
         let mut slowest = std::time::Duration::ZERO;
         for query in ["k", "kick", "kick sec", "humedo pad 12", "comp bus", "reverb", "zzz"] {
-            let started = std::time::Instant::now();
+            slowest = slowest.max(fastest(&mut || drop(find(&[&items], query, 50))));
             let found = find(&[&items], query, 50);
-            slowest = slowest.max(started.elapsed());
             if query == "kick sec" {
                 let files = &found.iter().find(|g| g.0 == Group::Files).unwrap().1;
                 assert!(files.iter().all(|f| fold(&f.name).contains("kick") && fold(&f.name).contains("seco")));

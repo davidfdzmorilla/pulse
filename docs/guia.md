@@ -1209,6 +1209,8 @@ Entra con el fader de la pista de los acordes (el arpegio y el pad, 1,5 dB por d
 | **Bajo: octavas** | Fundamental y octava en corcheas (disco). |
 | **Bajo: contratiempo** | En los contratiempos (house). |
 | **Bajo: caminante** | Una nota por tiempo recorriendo el acorde; llega al siguiente por un semitono. |
+| **Bajo: rodante** | Semicorcheas en las tres partes de cada tiempo que no son del bombo (en una toma de cada cuatro, tresillos), con el contratiempo acentuado y octavas y quintas que cambian con cada toma. El bajo del techno y el melodic techno. Llega con el Acid «Bajo · Techno rodante». |
+| **Bajo: galope** | Corchea con puntillo y semicorchea en cada tiempo, la primera del compás acentuada: el galope del rock, el EBM y el tech house. Llega con el Acid «Bajo · Gordo saturado». |
 | **Arpegio ascendente** y **Arpegio arriba y abajo** | Las notas del acorde una tras otra. |
 | **Pad** | Los acordes sostenidos, con las voces enlazadas. |
 | **Acordes rítmicos** | Acordes cortos con un ritmo sincopado. |

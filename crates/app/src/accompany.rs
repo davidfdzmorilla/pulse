@@ -21,6 +21,10 @@ pub enum Part {
     BassOffbeat,
     /// A note a beat walking through the chord to the next root.
     BassWalking,
+    /// Sixteenths off the kick (or triplets), rolling (techno, melodic techno).
+    BassRolling,
+    /// A dotted eighth and a sixteenth a beat (rock, EBM, tech house).
+    BassGallop,
     /// The chord's notes one after another, rising.
     ArpUp,
     /// Rising and falling.
@@ -34,7 +38,7 @@ pub enum Part {
 }
 
 impl Part {
-    pub const ALL: [Part; 8] = [Part::BassRoot, Part::BassOctaves, Part::BassOffbeat, Part::BassWalking, Part::ArpUp, Part::ArpUpDown, Part::Pad, Part::Stabs];
+    pub const ALL: [Part; 10] = [Part::BassRoot, Part::BassOctaves, Part::BassOffbeat, Part::BassWalking, Part::BassRolling, Part::BassGallop, Part::ArpUp, Part::ArpUpDown, Part::Pad, Part::Stabs];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -42,6 +46,8 @@ impl Part {
             Part::BassOctaves => "Bajo: octavas",
             Part::BassOffbeat => "Bajo: contratiempo",
             Part::BassWalking => "Bajo: caminante",
+            Part::BassRolling => "Bajo: rodante",
+            Part::BassGallop => "Bajo: galope",
             Part::ArpUp => "Arpegio ascendente",
             Part::ArpUpDown => "Arpegio arriba y abajo",
             Part::Pad => "Pad",
@@ -60,11 +66,14 @@ impl Part {
         Style::ALL.map(|s| Part::Melody(crate::melody::Melody::new(s)))
     }
 
-    /// A number for the part's kind, to tell seeds apart.
+    /// A number for the part's kind, to tell seeds apart (the same as before
+    /// the rolling and galloping basses, so old takes come out the same).
     fn id(self) -> u64 {
         match self {
             Part::Melody(m) => 8 + m.style as u64,
-            _ => Part::ALL.iter().position(|&p| p == self).unwrap_or(0) as u64,
+            Part::BassRolling => 12,
+            Part::BassGallop => 13,
+            _ => Part::ALL.iter().filter(|p| !matches!(p, Part::BassRolling | Part::BassGallop)).position(|&p| p == self).unwrap_or(0) as u64,
         }
     }
 
@@ -74,6 +83,8 @@ impl Part {
             Part::BassOctaves => "Fundamental y su octava en corcheas, como en la música disco",
             Part::BassOffbeat => "En los contratiempos, como el bajo del house",
             Part::BassWalking => "Una nota por tiempo que recorre el acorde y llega al siguiente por un semitono",
+            Part::BassRolling => "Semicorcheas que dejan el tiempo al bombo (o tresillos), con acentos, octavas y quintas: el bajo del techno y el melodic techno",
+            Part::BassGallop => "Corchea con puntillo y semicorchea en cada tiempo, como el galope del rock, el EBM y el tech house",
             Part::ArpUp => "Las notas de cada acorde una tras otra, subiendo, en semicorcheas",
             Part::ArpUpDown => "Las notas de cada acorde subiendo y bajando, en semicorcheas",
             Part::Pad => "Los acordes sostenidos, con las voces enlazadas",
@@ -86,6 +97,12 @@ impl Part {
     pub(crate) fn instrument(self) -> InstrumentKind {
         match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => InstrumentKind::Acid(AcidParams::default()),
+            // Short and dark, so the sixteenths roll; full and driven, for the gallop.
+            Part::BassRolling | Part::BassGallop => {
+                let name = if self == Part::BassRolling { "Bajo · Techno rodante" } else { "Bajo · Gordo saturado" };
+                let kind = InstrumentKind::Acid(AcidParams::default());
+                kind.factory_presets().into_iter().find(|(n, _)| *n == name).map_or(kind, |(_, k)| k)
+            }
             Part::ArpUp | Part::ArpUpDown => InstrumentKind::Fm(FmParams::default()),
             Part::Pad => InstrumentKind::SuperSaw(SuperSawParams { cutoff: 2500.0, attack: 0.3, release: 0.8, gain: 0.3, ..Default::default() }),
             Part::Stabs => InstrumentKind::Synth(SynthParams::default()),
@@ -109,6 +126,7 @@ impl Part {
     fn fader_db(self) -> f32 {
         match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking | Part::Stabs => 0.0,
+            Part::BassRolling | Part::BassGallop => 0.0,
             Part::ArpUp | Part::ArpUpDown | Part::Pad => -1.5,
             // On top of everything, a little under the chords.
             Part::Melody(_) => -3.0,
@@ -119,6 +137,7 @@ impl Part {
     fn roles(self) -> &'static [&'static str] {
         match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => &["bajo", "bass", "sub", "subbass", "sub bass"],
+            Part::BassRolling | Part::BassGallop => &["bajo", "bass", "sub", "subbass", "sub bass"],
             Part::ArpUp | Part::ArpUpDown => &["arpegio", "arp", "arpeggio", "arpegiador"],
             Part::Pad => &["pad", "pads"],
             Part::Stabs => &["acordes", "chords", "stabs"],
@@ -133,6 +152,7 @@ impl Part {
         use crate::project::PALETTE;
         let index = match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => 9,
+            Part::BassRolling | Part::BassGallop => 9,
             Part::ArpUp | Part::ArpUpDown => 7,
             Part::Pad => 11,
             Part::Stabs => 10,
@@ -145,6 +165,7 @@ impl Part {
     pub(crate) fn short(self) -> &'static str {
         match self {
             Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => "Bajo",
+            Part::BassRolling | Part::BassGallop => "Bajo",
             Part::ArpUp | Part::ArpUpDown => "Arpegio",
             Part::Pad => "Pad",
             Part::Stabs => "Acordes",
@@ -225,6 +246,16 @@ fn write(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64, sig: 
     const STABS: [&[f64]; 4] = [&[2.0, 6.0, 10.0, 14.0], &[0.0, 3.0, 6.0, 10.0, 12.0], &[2.0, 5.0, 8.0, 10.0, 13.0], &[0.0, 6.0, 8.0, 14.0]];
     let stabs = *dice.pick(&STABS);
     let arp_step = *dice.pick(&[0.25, 0.25, 0.5]);
+    // The rolling bass's take: triplets or sixteenths, which steps go up an
+    // octave (1) or to the fifth (2), and whether it climbs into each chord.
+    // Drawn only for its parts, so the others' takes stay as they were.
+    let rolling = part == Part::BassRolling;
+    let roll_triplets = rolling && dice.chance(0.25);
+    const ROLL_SHAPES: [&[u8]; 5] = [&[0, 0, 0], &[0, 1, 0], &[0, 0, 1], &[0, 2, 0], &[0, 1, 2]];
+    let roll_shape = if rolling { *dice.pick(&ROLL_SHAPES) } else { ROLL_SHAPES[0] };
+    let roll_climbs = rolling && dice.chance(0.5);
+    // The gallop's short note: the root, its octave or (off the bar's first) the fifth.
+    let gallop_lift = if part == Part::BassGallop { *dice.pick(&[0u8, 0, 1, 2]) } else { 0 };
     for (i, &(from, to, chord)) in chords.iter().enumerate() {
         let to = to.min(length);
         if to <= from {
@@ -301,6 +332,56 @@ fn write(part: Part, chords: &[(f64, f64, Chord)], length: f64, seed: u64, sig: 
                         }
                     };
                     notes.push(note(beat, (to - beat).min(pulse * 0.95), pitch, if i % 2 == 0 { 0.85 } else { 0.7 }));
+                }
+            }
+            Part::BassRolling => {
+                // Each pulse's first step is the kick's: the line takes the
+                // rest, in sixteenths or (a take in four) in triplets.
+                for (beat, pulse, downbeat) in pulses(sig, from, to) {
+                    let steps = if roll_triplets { 3 } else { (pulse / 0.25).round().max(1.0) as usize };
+                    let step = pulse / steps as f64;
+                    for k in 1..steps {
+                        let at = beat + k as f64 * step;
+                        if at >= to - 1e-9 {
+                            break;
+                        }
+                        let last = beat + pulse >= to - 1e-9;
+                        // The take's shape (octave, fifth), a climb into the next chord
+                        // on its last pulse, and now and then an octave of its own.
+                        let shape = roll_shape[(k - 1) % roll_shape.len()];
+                        let lift = if last && next.is_some() && roll_climbs { [0, 2, 1][(k - 1) % 3] } else { shape };
+                        let pitch = match lift {
+                            1 => root + 12,
+                            2 => tone(2),
+                            _ if dice.chance(0.06) => root + 12,
+                            _ => root,
+                        };
+                        // The off-beat (halfway through the pulse; in triplets, the
+                        // last) accented, harder on the bar's first.
+                        let offbeat = if steps % 2 == 1 { k == steps - 1 } else { k * 2 == steps };
+                        let velocity = match (offbeat, downbeat) {
+                            (true, true) => 0.95,
+                            (true, false) => 0.88,
+                            _ => 0.7,
+                        };
+                        notes.push(note(at, (to - at).min(step * 0.8), pitch, velocity));
+                    }
+                }
+            }
+            Part::BassGallop => {
+                // In each pulse: three quarters of it long, the last quarter short.
+                for (beat, pulse, downbeat) in pulses(sig, from, to) {
+                    let short = beat + pulse * 0.75;
+                    notes.push(note(beat, (to - beat).min(pulse * 0.7), root, if downbeat { 0.9 } else { 0.78 }));
+                    if short < to - 1e-9 {
+                        let pitch = match gallop_lift {
+                            1 => root + 12,
+                            2 if !downbeat => tone(2),
+                            _ => root,
+                        };
+                        // Pushing into the next beat, and done before it.
+                        notes.push(note(short, (to - short).min(pulse * 0.2), pitch, 0.72));
+                    }
                 }
             }
             Part::ArpUp | Part::ArpUpDown => {
@@ -741,6 +822,61 @@ mod tests {
         let octaves = generate(Part::BassOctaves, &chords, 16.0, 1, TimeSig::COMMON);
         assert_eq!(octaves.len(), 32);
         assert_eq!(octaves[1].pitch, octaves[0].pitch + 12);
+    }
+
+    /// The rolling bass leaves each beat to the kick and plays the other three
+    /// sixteenths (or two triplets), the off-beat accented; the gallop plays a
+    /// long and a short note a beat, done before the next. Both in the
+    /// chords, low, in any meter, and the same take for the same seed.
+    #[test]
+    fn rolling_and_galloping_basses_leave_the_kick_its_beat() {
+        let chords = progression();
+        let mut triplets = 0;
+        let mut shapes = std::collections::HashSet::new();
+        for seed in 0..16 {
+            let notes = generate(Part::BassRolling, &chords, 16.0, seed, TimeSig::COMMON);
+            assert_eq!(notes, generate(Part::BassRolling, &chords, 16.0, seed, TimeSig::COMMON), "the same take");
+            shapes.insert(format!("{:?}", notes.iter().map(|n| n.pitch).collect::<Vec<_>>()));
+            assert!(notes.iter().all(|n| (40..=64).contains(&n.pitch)), "low: {notes:?}");
+            // Nothing on the beat, nothing over the next one.
+            for n in &notes {
+                assert!(n.start.fract() > 0.2, "seed {seed}: {n:?} on the kick");
+                assert!(n.start + n.length <= n.start.floor() + 1.0 + 1e-9, "seed {seed}: {n:?} over the kick");
+            }
+            let per_beat = notes.len() / 16;
+            assert!(notes.len() % 16 == 0 && (per_beat == 3 || per_beat == 2), "seed {seed}: {}", notes.len());
+            if per_beat == 2 {
+                triplets += 1;
+            }
+            // Accents (the Acid's, over 80 %): the off-beat of each beat.
+            let accented: Vec<f64> = notes.iter().filter(|n| n.velocity > 0.8).map(|n| n.start.fract()).collect();
+            assert_eq!(accented.len(), 16, "seed {seed}");
+            let off = if per_beat == 3 { 0.5 } else { 2.0 / 3.0 };
+            assert!(accented.iter().all(|f| (f - off).abs() < 1e-9), "seed {seed}: {accented:?}");
+        }
+        assert!(triplets > 0 && triplets < 16, "{triplets} takes in triplets");
+        assert!(shapes.len() > 3, "octaves and fifths vary the takes");
+        // In 6/8, the dotted beats are the kick's.
+        let am = progression()[0].2;
+        let six = generate(Part::BassRolling, &[(0.0, 6.0, am)], 6.0, 2, TimeSig::new(6, 8));
+        assert!(!six.is_empty() && six.iter().all(|n| ![0.0, 1.5, 3.0, 4.5].contains(&n.start) && n.start < 6.0));
+
+        for seed in 0..6 {
+            let gallop = generate(Part::BassGallop, &chords, 16.0, seed, TimeSig::COMMON);
+            assert_eq!(gallop.len(), 32);
+            for pair in gallop.chunks(2) {
+                assert_eq!(pair[1].start - pair[0].start, 0.75, "{pair:?}");
+                assert!(pair[0].length > pair[1].length && pair[1].start + pair[1].length < pair[0].start + 1.0, "{pair:?}");
+            }
+            assert!(gallop.iter().step_by(8).all(|n| n.velocity > 0.8), "the bar's first accented");
+        }
+        // Their sounds: the factory basses that suit them.
+        let preset = |name: &str| InstrumentKind::Acid(AcidParams::default()).factory_presets().into_iter().find(|(n, _)| *n == name).unwrap().1;
+        assert_eq!(Part::BassRolling.instrument(), preset("Bajo · Techno rodante"));
+        assert_eq!(Part::BassGallop.instrument(), preset("Bajo · Gordo saturado"));
+        // The other parts' takes are as they were (their seeds didn't move).
+        assert_eq!(Part::Pad.id(), 6);
+        assert_eq!(Part::Stabs.id(), 7);
     }
 
     #[test]

@@ -8,7 +8,12 @@
 //! usually starts: each takes a role (kick, bass, voice, pads…), from its
 //! name, its instrument or its sound, and gets that role's usual level next
 //! to the kick or the drums, its place in the stereo and, if it doesn't need
-//! its lows, a low cut.
+//! its lows, a low cut. A track with the notes or the voice comes down only
+//! so far, and the mix keeps its low end over its mids about where a club
+//! mix's is (see [`tilt`]): the kick and the bass on top, the mids not buried.
+//!
+//! «Compresor de bus» glues a drum group and, for a loud target, the master
+//! before its limiter (see [`glue`]), where there is none yet.
 //!
 //! «Espacio de partida» gives the dry tracks their room: each role sends
 //! what it usually does to a reverb and a delay (made as returns if the
@@ -54,7 +59,7 @@ use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{UtilityParams, CompressorParams, DeEsserParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, ReverbParams, SaturatorParams};
+use engine::model::{UtilityParams, CompressorParams, ConvolutionParams, GlueParams, DeEsserParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, SaturatorParams};
 use engine::MAX_RETURNS;
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -72,7 +77,7 @@ const MAX_LIMITER_GAIN: f32 = 6.0;
 /// limiter's release. The kick's peaks stand 15 dB or more over the rest of a
 /// techno mix: a limiter alone gets there squashing everything with them.
 const LOUD: f64 = -9.0;
-const CLIP_DB: f32 = 3.0;
+const CLIP_DB: f32 = 5.0;
 const LOUD_RELEASE_MS: f32 = 40.0;
 
 /// Where the song is going, and the loudness and true peak it should have.
@@ -169,8 +174,10 @@ pub struct TrackMeasures {
     pub pan: f32,
     pub cut: bool,
     pub bands: [f64; 10],
-    /// Its fader (linear gain).
+    /// Its fader (linear gain), and where it was before the assistant's first
+    /// change (see [`balance_tracks`], which only takes so much off a track).
     pub gain: f32,
+    pub start_gain: f32,
     /// Its level in each of [`MID_HZ`] every 0.1 s (dB), and where its EQ
     /// Eight already makes room (Hz of its cuts).
     pub mids: Vec<[f32; MID_BANDS]>,
@@ -703,19 +710,14 @@ pub fn space_changes(tracks: &[TrackMeasures], space: Space) -> Vec<SpaceChange>
     out
 }
 
-/// A reverb return to start from: all wet, its lows and its top cut so it
-/// doesn't muddy the low end or hiss.
+/// A reverb return to start from: Espacio (the convolution reverb) in a hall,
+/// all wet, its lows and its top cut so it doesn't muddy the low end or hiss
+/// (its «Retorno · Sala», spelled out: its defaults are for an insert).
 fn reverb_return(index: usize) -> crate::project::ReturnTrack {
-    let mut eq = EqEightParams::default();
-    eq.bands[0].on = true;
-    eq.bands[0].shape = EqShape::LowCut12;
-    eq.bands[0].freq = 250.0;
-    eq.bands[7].on = true;
-    eq.bands[7].shape = EqShape::HighCut12;
-    eq.bands[7].freq = 9000.0;
+    let hall = ConvolutionParams { space: engine::model::ReverbSpace::Hall, decay: 1.0, size: 1.0, predelay_ms: 20.0, low_cut_hz: 250.0, high_cut_hz: 9000.0, width: 1.0, mix: 1.0 };
     crate::project::ReturnTrack {
-        name: format!("{} Reverb", crate::project::return_letter(index)),
-        devices: vec![Device::new(Effect::Reverb(ReverbParams { size: 0.7, damping: 0.55, width: 1.0, mix: 1.0 })), Device::new(Effect::EqEight(eq))],
+        name: format!("{} Espacio", crate::project::return_letter(index)),
+        devices: vec![Device::new(Effect::Convolution(hall))],
         ..crate::returns::new_return(index)
     }
 }
@@ -788,6 +790,27 @@ pub fn compression(t: &TrackMeasures, tempo: f64) -> Option<CompressorParams> {
     let round = |x: f32| (x * 2.0).round() / 2.0;
     Some(CompressorParams { threshold_db: round(threshold), ratio, attack_ms, release_ms: release.round(), makeup_db: round(reduce * 0.5), sidechain: None })
 }
+
+/// A bus compressor to start from (a Glue): on a drum group, «Bus de
+/// batería» (4:1, its detector deaf under 90 Hz); on the master, «Pegar la
+/// mezcla» (2:1, slow attack), its threshold where it takes 2 or 3 dB off the
+/// hits: 12 dB under the group's peaks, 8 under the mix's (`peak_db`, as it
+/// hears it, before its fader). Without that peak, the preset's.
+pub fn glue(peak_db: Option<f64>, drums: bool) -> GlueParams {
+    let name = if drums { "Batería · Bus de batería" } else { "Mezcla · Pegar la mezcla" };
+    let preset = GlueParams::presets().into_iter().find(|(n, _)| *n == name).map(|(_, p)| p).unwrap_or_default();
+    match peak_db {
+        Some(peak) => {
+            let under = if drums { 12.0 } else { 8.0 };
+            GlueParams { threshold_db: (((peak - under) * 2.0).round() / 2.0).clamp(-36.0, -4.0) as f32, ..preset }
+        }
+        None => preset,
+    }
+}
+
+/// From this loudness (LUFS) on, a master gets a bus compressor before its
+/// limiter: a club's or louder, where the limiter alone would do it all.
+const GLUE_FROM: f64 = -11.0;
 
 // ----- Tracks covering each other in the mids ------------------------------------------
 
@@ -991,6 +1014,12 @@ impl Role {
         }
     }
 
+    /// What carries the notes and the voice in the mids: what a starting
+    /// balance doesn't bury under the kick and the bass (see [`balance_tracks`]).
+    fn tonal(self) -> bool {
+        matches!(self, Role::Vocal | Role::Backing | Role::Lead | Role::Chords | Role::Pad)
+    }
+
     /// In the middle: the low end (a club is mono down there) and the voice.
     fn centred(self) -> bool {
         matches!(self, Role::Kick | Role::Bass | Role::Vocal)
@@ -1038,6 +1067,19 @@ pub fn role_hint(name: &str, instrument: &InstrumentKind, drums: bool) -> Option
     }
 }
 
+/// The role a track's name, kind and instrument say (see [`role_hint`]): a
+/// voice by name that plays notes on a synth is a lead (the melody «Audio a
+/// MIDI» takes out of a voice, «Voz · Melodía»), and backing vocals, a pad.
+/// Only an audio track, or a Sampler playing a recording, sings.
+pub fn track_role(track: &crate::project::Track) -> Option<Role> {
+    let synth = !track.is_audio() && !track.is_group() && !matches!(track.instrument, InstrumentKind::Sampler(_));
+    match role_hint(&track.name, &track.instrument, is_drums(track)) {
+        Some(Role::Vocal) if synth => Some(Role::Lead),
+        Some(Role::Backing) if synth => Some(Role::Pad),
+        other => other,
+    }
+}
+
 /// The role a track's sound says, when its name and instrument don't: low
 /// end mostly, a bass; highs mostly, percussion.
 pub fn role_by_sound(bands: &[f64; 10]) -> Role {
@@ -1063,6 +1105,9 @@ pub struct Change {
     pub gain_db: f32,
     pub pan: Option<f32>,
     pub low_cut: Option<f32>,
+    /// Brought down less than its role asks (see [`TONAL_CUT_MAX`] and [`tilt`]):
+    /// more would bury the mids under the kick and the bass.
+    pub held: bool,
 }
 
 impl Change {
@@ -1070,6 +1115,9 @@ impl Change {
         let mut parts = Vec::new();
         if self.gain_db != 0.0 {
             parts.push(format!("volumen {} dB", db(self.gain_db as f64)));
+        }
+        if self.held {
+            parts.push("no más bajo: enterraría los medios bajo el bombo y el bajo".into());
         }
         if let Some(pan) = self.pan {
             parts.push(match pan {
@@ -1114,29 +1162,97 @@ fn tops(t: &TrackMeasures, tracks: &[TrackMeasures]) -> bool {
     t.role == Role::Drums && power[..3].iter().sum::<f64>() / total < 0.2 && tracks.iter().any(|o| o.index != t.index && o.role == Role::Kick && o.lufs.is_some())
 }
 
+/// The most (dB) a starting balance brings a tonal track down (the voice,
+/// the lead, chords, pads) from where it was before the assistant: unless it
+/// stood over the kick by more, further than that buries the mids.
+pub const TONAL_CUT_MAX: f64 = 6.0;
+/// How far (dB) the mix's low end over its mids may stray from a club's
+/// (see [`tilt`]) before a starting balance holds it.
+pub const TILT_TOLERANCE: f64 = 3.0;
+
+/// How much the low end (the 63 Hz octave: the kick and the bass) of `bands`
+/// stands over its mids (500 Hz to 2 kHz: the voice, the lead, the chords),
+/// next to a club mix's ([`CLUB_CURVE`]): over 0, heavier in the lows.
+pub fn tilt(bands: &[f64; 10]) -> f64 {
+    let lean = |b: &[f64; 10]| b[1] - (b[4] + b[5] + b[6]) / 3.0;
+    lean(bands) - lean(&CLUB_CURVE)
+}
+
 /// A starting balance: what each track needs to sit where its role
-/// usually does, next to the anchor (see [`anchor`]).
+/// usually does, next to the anchor (see [`anchor`]). Groups aren't moved
+/// (their tracks are), a tonal track comes down only so far (see
+/// [`TONAL_CUT_MAX`]), and the mix keeps its low end over its mids about where
+/// a club mix's is (see [`tilt`]).
 pub fn balance_tracks(tracks: &[TrackMeasures]) -> (Option<&TrackMeasures>, Vec<Change>) {
     let Some(anchor) = anchor(tracks) else { return (None, Vec::new()) };
     let reference = anchor.lufs.unwrap_or(0.0) - anchor.role.level().unwrap_or(0.0);
     let sounding: Vec<&TrackMeasures> = tracks.iter().filter(|t| t.lufs.is_some()).collect();
     let count = |role: Role| sounding.iter().filter(|t| t.role == role).count();
-    let mut changes = Vec::new();
-    for t in &sounding {
-        let mut change = Change { track: t.index, name: t.name.clone(), role: t.role, gain_db: 0.0, pan: None, low_cut: None };
-        // Its level: the role's, shared among the tracks of it.
-        let level = if tops(t, tracks) { Some(TOPS_LEVEL) } else { t.role.level() };
-        if let (Some(level), Some(lufs)) = (level, t.lufs) {
-            if t.index != anchor.index {
-                let goal = reference + level - 10.0 * (count(t.role) as f64).log10();
-                // Up no further than a dB under full scale, nor past the
-                // fader's top.
-                let room = 20.0 * (FADER_TOP / t.gain.max(1e-6)).log10() as f64;
-                let gain = (goal - lufs).clamp(-24.0, 24.0).min(-1.0 - t.peak).min(room);
-                if gain.abs() >= BALANCE_STEP {
-                    change.gain_db = (gain * 2.0).round() as f32 / 2.0;
+    // Each track's volume: its role's level, shared among the tracks of it.
+    // Up no further than a dB under full scale, nor past the fader's top.
+    let room = |t: &TrackMeasures| (20.0 * (FADER_TOP / t.gain.max(1e-6)).log10() as f64).min(-1.0 - t.peak);
+    let mut gains: Vec<(f64, bool)> = sounding
+        .iter()
+        .map(|t| {
+            let level = if tops(t, tracks) { Some(TOPS_LEVEL) } else { t.role.level() };
+            let (Some(level), Some(lufs)) = (level, t.lufs) else { return (0.0, false) };
+            if t.index == anchor.index || t.group {
+                return (0.0, false);
+            }
+            let goal = reference + level - 10.0 * (count(t.role) as f64).log10();
+            let gain = (goal - lufs).clamp(-24.0, 24.0).min(room(t));
+            if !t.role.tonal() {
+                return (gain, false);
+            }
+            // A track with the notes or the voice comes down at most
+            // TONAL_CUT_MAX from where it was before the assistant, or as far
+            // as the kick's level if it was over it by more.
+            let moved = 20.0 * (t.gain.max(1e-6) / t.start_gain.max(1e-6)).log10() as f64;
+            let floor = (-TONAL_CUT_MAX - moved).min(0.0).min(reference - lufs);
+            (gain.max(floor), gain < floor - 0.25)
+        })
+        .collect();
+    // The mix as these would leave it: its low end (kick and bass) over the
+    // mids no further from a club's than TILT_TOLERANCE. Too heavy, the cuts
+    // to the tonal tracks are undone (this one's, and the assistant's before),
+    // half a dB at a time, until it is a dB inside it (or they are back where
+    // they were). A mix light in the lows is left to the ear: raising the bass
+    // over its role would only move the problem.
+    let predicted = |gains: &[(f64, bool)]| -> [f64; 10] {
+        let mut power = [0f64; 10];
+        for (t, (g, _)) in sounding.iter().zip(gains) {
+            if t.group {
+                continue;
+            }
+            for k in 0..10 {
+                power[k] += 10f64.powf((t.bands[k] + g) / 10.0);
+            }
+        }
+        power.map(|p| 10.0 * p.max(1e-30).log10())
+    };
+    if tilt(&predicted(&gains)) > TILT_TOLERANCE {
+        while tilt(&predicted(&gains)) > TILT_TOLERANCE - 1.0 {
+            let mut moved = false;
+            for (t, (g, held)) in sounding.iter().zip(gains.iter_mut()) {
+                // Back up as far as where it was before the assistant.
+                let up = (20.0 * (t.start_gain.max(1e-6) / t.gain.max(1e-6)).log10() as f64).max(0.0).min(room(t));
+                if t.role.tonal() && *g < up {
+                    *g = (*g + 0.5).min(up);
+                    *held = true;
+                    moved = true;
                 }
             }
+            if !moved {
+                break;
+            }
+        }
+    }
+    let mut changes = Vec::new();
+    for (t, &(gain, held)) in sounding.iter().zip(&gains) {
+        let mut change = Change { track: t.index, name: t.name.clone(), role: t.role, gain_db: 0.0, pan: None, low_cut: None, held: false };
+        if gain.abs() >= BALANCE_STEP {
+            change.gain_db = (gain * 2.0).round() as f32 / 2.0;
+            change.held = held;
         }
         // In the stereo: the low end and the voice in the middle; several of
         // a kind, spread across (only those not placed by hand).
@@ -1202,6 +1318,25 @@ pub struct Report {
     /// for) the assistant carved room in the mids for, still carved: once is
     /// enough, even where the clash moved to another band.
     pub carved: Vec<(u32, u32)>,
+    /// Whether the master has a bus compressor (a Glue or a Compressor)
+    /// already, and whether it has no effects at all (what the mix measures is
+    /// then what a bus compressor first on it would hear).
+    pub master_glued: bool,
+    pub master_clean: bool,
+    /// The project's groups (they aren't rendered on their own: their tracks
+    /// are, each through them).
+    pub groups: Vec<Bus>,
+}
+
+/// A group, as the assistant sees it: its fader, whether it has a bus
+/// compressor (or a compressor) already, and the tracks in it (indices).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Bus {
+    pub index: usize,
+    pub name: String,
+    pub gain: f32,
+    pub compressed: bool,
+    pub tracks: Vec<usize>,
 }
 
 /// A change the assistant can make.
@@ -1224,6 +1359,9 @@ pub enum Fix {
     Carve { track: usize, name: String, hz: f32, for_name: String },
     /// A compressor to start from on a track (see [`compression`]).
     Compress { track: usize, name: String, params: CompressorParams },
+    /// A bus compressor (Glue) on a drum group (`track`) or, without one,
+    /// first on the master (see [`glue`]).
+    Glue { track: Option<usize>, name: String, params: GlueParams },
     /// Sends to a reverb and a delay (see [`space_changes`]); the returns
     /// they go to, as they were when measured (`None`: made).
     Space { reverb: Option<usize>, delay: Option<usize>, changes: Vec<SpaceChange> },
@@ -1251,14 +1389,15 @@ fn stage(fix: &Fix) -> u8 {
         Fix::Balance(_) => 1,
         Fix::Duck { .. } | Fix::CutLows { .. } => 2,
         Fix::Carve { .. } => 3,
-        Fix::Compress { .. } => 4,
+        Fix::Compress { .. } | Fix::Glue { track: Some(_), .. } => 4,
         Fix::DeEss { .. } => 5,
         Fix::Ride { .. } => 6,
         Fix::Space { .. } => 7,
         Fix::Throws { .. } => 8,
-        Fix::Grow { .. } => 9,
-        Fix::MasterEq { .. } => 10,
-        Fix::MasterLimiter { .. } => 11,
+        Fix::Glue { track: None, .. } => 9,
+        Fix::Grow { .. } => 10,
+        Fix::MasterEq { .. } => 11,
+        Fix::MasterLimiter { .. } => 12,
     }
 }
 
@@ -1301,6 +1440,8 @@ fn fix_label(fix: &Fix) -> String {
         Fix::Balance(_) => "volúmenes y panoramas".into(),
         Fix::Carve { name, for_name, .. } => format!("hueco en «{name}» para «{for_name}»"),
         Fix::Compress { name, .. } => format!("compresor en «{name}»"),
+        Fix::Glue { track: Some(_), name, .. } => format!("compresor de bus en «{name}»"),
+        Fix::Glue { track: None, .. } => "compresor de bus en el master".into(),
         Fix::Space { .. } => "reverb y delay".into(),
         Fix::Ride { name, .. } => format!("«{name}» nivelada"),
         Fix::DeEss { name, .. } => format!("de-esser en «{name}»"),
@@ -1543,6 +1684,38 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             ));
         }
     }
+    // A drum group, held together: a bus compressor (not one already).
+    for g in &report.groups {
+        let members: Vec<&TrackMeasures> = report.tracks.iter().filter(|t| g.tracks.contains(&t.index) && t.lufs.is_some()).collect();
+        if members.len() < 2 || !members.iter().all(|t| matches!(t.role, Role::Kick | Role::Drums | Role::Percussion)) {
+            continue;
+        }
+        if g.compressed {
+            out.push(advice(Level::Good, format!("«{}» ya tiene compresor de bus: la batería suena junta", g.name), None));
+            continue;
+        }
+        // Its peak about its tracks' together (their powers added: they don't
+        // all hit at once), as it hears them, before its fader.
+        let peak = 10.0 * members.iter().map(|t| 10f64.powf(t.peak / 10.0)).sum::<f64>().log10();
+        let before = peak - 20.0 * (g.gain.max(1e-6) as f64).log10();
+        out.push(advice(
+            Level::Note,
+            format!("Bus de batería: «{}» junta {} pistas de batería sin compresor de bus. Uno suave las pega: suenan como un kit y no como pistas sueltas", g.name, members.len()),
+            Some(Fix::Glue { track: Some(g.index), name: g.name.clone(), params: glue(Some(before), true) }),
+        ));
+    }
+    // A loud master: a bus compressor before its limiter.
+    if target.levels(reference).is_some_and(|(goal, _)| goal >= GLUE_FROM) {
+        if report.master_glued {
+            out.push(advice(Level::Good, "El master ya tiene compresor de bus antes del limitador".into(), None));
+        } else {
+            out.push(advice(
+                Level::Note,
+                format!("Compresor de bus en el master: para {} pega la mezcla y le quita 2 o 3 dB a los golpes antes del limitador, que así llega a la sonoridad sin aplastarla", target.label()),
+                Some(Fix::Glue { track: None, name: "Master".into(), params: glue(report.master_clean.then_some(mix.peak), false) }),
+            ));
+        }
+    }
     // Esses that jump out of a voice.
     for t in report.tracks.iter().filter(|t| matches!(t.role, Role::Vocal | Role::Backing) && !t.group) {
         let Some(e) = t.esses else { continue };
@@ -1733,6 +1906,12 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     }
     out
 }
+
+/// A club mix's octave bands (31 Hz to 16 kHz, dB next to its 1 kHz), as a
+/// typical techno or house master's spectrum leans: the kick and the bass on
+/// top, a few dB over the mids, and the highs falling off. What the starting
+/// balance holds the mix's tilt to (see [`tilt`]).
+pub const CLUB_CURVE: [f64; 10] = [-1.0, 3.0, 2.5, 1.5, 0.5, 0.0, -1.5, -4.0, -7.0, -11.0];
 
 /// How the mix's bands differ from the reference's (both levelled to the same
 /// average), over lows (63–250 Hz), mids (500 Hz–2 kHz) and highs (4–16 kHz).
@@ -2191,11 +2370,25 @@ impl PulseApp {
             t.devices.iter().any(|d| d.enabled && match d.effect {
                 Effect::Compressor(c) => c.sidechain.is_none(),
                 Effect::Glue(c) => c.sidechain.is_none(),
-                Effect::Multiband(_) => true,
+                // An OTT is a sound (its upward half lifts what is soft), not
+                // what holds a track's level: it doesn't count.
                 _ => false,
             })
         };
-        let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (role_hint(&t.name, &t.instrument, is_drums(t)), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
+        let mixing: Vec<(Option<Role>, f32, bool, f32, Vec<f32>, bool)> = self.project.tracks.iter().map(|t| (track_role(t), t.mixer.pan, cuts_lows(t), t.mixer.gain, carves(t), compressed(t))).collect();
+        let master_glued = self.project.master.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::Glue(_) | Effect::Compressor(_)));
+        let master_clean = self.project.master.devices.iter().all(|d| !d.enabled);
+        // Where each fader was before the assistant's first change (the same
+        // track there), and what each group holds.
+        let before = self.mix.before.as_ref().map(|(p, _)| p);
+        let start_gains: Vec<f32> = self.project.tracks.iter().enumerate().map(|(i, t)| before.and_then(|b| b.tracks.get(i)).filter(|b| b.id == t.id && b.name == t.name).map_or(t.mixer.gain, |b| b.mixer.gain)).collect();
+        let groups: Vec<Bus> = (0..self.project.tracks.len())
+            .filter(|&g| self.project.tracks[g].is_group())
+            .map(|g| {
+                let t = &self.project.tracks[g];
+                Bus { index: g, name: t.name.clone(), gain: t.mixer.gain, compressed: compressed(t), tracks: crate::groups::children(&self.project.tracks, g).filter(|&c| !self.project.tracks[c].is_group()).collect() }
+            })
+            .collect();
         let tempo = self.project.tempo;
         let space = Space::of(&self.project.returns);
         // The parts, in seconds of the render (from the song's start).
@@ -2228,8 +2421,9 @@ impl PulseApp {
             (m.group, m.sends, m.automated, m.deessed) = (group, sends, automated, deessed);
             m.thrown = thrown.get(index).copied().unwrap_or(false);
             m.utility = utilities.get(index).copied().flatten();
+            m.start_gain = start_gains.get(index).copied().unwrap_or(m.gain);
         };
-        let voices: Vec<bool> = self.project.tracks.iter().map(|t| matches!(role_hint(&t.name, &t.instrument, is_drums(t)), Some(Role::Vocal | Role::Backing))).collect();
+        let voices: Vec<bool> = self.project.tracks.iter().map(|t| matches!(track_role(t), Some(Role::Vocal | Role::Backing))).collect();
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         std::thread::spawn(move || {
@@ -2259,6 +2453,7 @@ impl PulseApp {
                             cut: false,
                             bands: loudness::bands(&left, &right, RATE),
                             gain: 1.0,
+                            start_gain: 1.0,
                             mids: mids(&left, &right, RATE),
                             carves: Vec::new(),
                             dynamics: dynamics(&left, &right, RATE),
@@ -2297,7 +2492,7 @@ impl PulseApp {
                 for t in &mut tracks {
                     meta(t);
                 }
-                Ok(Done::Report(Report { mix, tracks, tempo, space, start, echo, sections, master_automated, limited, carved }, keys))
+                Ok(Done::Report(Report { mix, tracks, tempo, space, start, echo, sections, master_automated, limited, carved, master_glued, master_clean, groups }, keys))
             });
             if let Ok(mut slot) = r.lock() {
                 *slot = Some(outcome);
@@ -2524,7 +2719,11 @@ impl PulseApp {
         self.keep_before();
         let ceiling_db = (max_peak - PEAK_MARGIN) as f32;
         if goal >= LOUD {
-            self.loud_master(ceiling_db);
+            // The mix's peaks as the clipper will hear them, if nothing on the
+            // master limits them yet: before its fader.
+            let fresh = !self.mix.stale && !self.mix.mix_stale && !self.project.master.devices.iter().any(|d| matches!(d.effect, Effect::Limiter(_)));
+            let peak = self.mix.report.as_ref().filter(|_| fresh).map(|r| r.mix.peak - 20.0 * (self.project.master.mixer.gain.max(1e-6) as f64).log10());
+            self.loud_master(ceiling_db, peak);
         }
         let devices = &mut self.project.master.devices;
         let at = match devices.iter().rposition(|d| matches!(d.effect, Effect::Limiter(_))) {
@@ -2625,7 +2824,13 @@ impl PulseApp {
     /// A master as loud as hard techno's: a clipper takes the peaks (the
     /// kick's) before the limiter, which then lets go quicker. A limiter alone
     /// pumps with every kick, louder no more, and lets true peaks through.
-    fn loud_master(&mut self, ceiling_db: f32) {
+    ///
+    /// The clipper takes [`CLIP_DB`] off the mix's loudest peaks (`peak`, dBFS
+    /// into it; unknown, off full scale): a mix that comes in quieter is driven
+    /// that much harder, and brought back down after, or it would clip nothing
+    /// and leave it all to the limiter, which then squashes the drops (their
+    /// kick) against the breaks.
+    fn loud_master(&mut self, ceiling_db: f32, peak: Option<f64>) {
         let devices = &mut self.project.master.devices;
         let limiter = match devices.iter().rposition(|d| matches!(d.effect, Effect::Limiter(_))) {
             Some(i) => i,
@@ -2639,9 +2844,26 @@ impl PulseApp {
         }
         let clipped = limiter > 0 && matches!(devices[limiter - 1].effect, Effect::Saturator(SaturatorParams { kind: KickDrive::Hard, .. }));
         if !clipped {
-            let clipper = SaturatorParams { drive_db: CLIP_DB, output_db: -CLIP_DB, mix: 1.0, kind: KickDrive::Hard, oversample: true };
+            let drive = (CLIP_DB - peak.unwrap_or(0.0).min(0.0) as f32).clamp(CLIP_DB, 24.0);
+            let drive = (drive * 10.0).round() / 10.0;
+            let clipper = SaturatorParams { drive_db: drive, output_db: -drive, mix: 1.0, kind: KickDrive::Hard, oversample: true };
             devices.insert(limiter, Device::new(Effect::Saturator(clipper)));
         }
+    }
+
+    /// Puts `device` on the master at `at`; what pointed at the devices after
+    /// it (automation, MIDI mappings) moves one along.
+    fn insert_master(&mut self, at: usize, device: Device) {
+        let at = at.min(self.project.master.devices.len());
+        self.project.master.devices.insert(at, device);
+        let shift = |param: Param| match param {
+            Param::Device { device, param } if device >= at => Param::Device { device: device + 1, param },
+            other => other,
+        };
+        for lane in &mut self.project.master.automation {
+            lane.param = shift(lane.param);
+        }
+        self.retarget(|t, param| Some((t, if t == engine::Target::Master { shift(param) } else { param })));
     }
 
     /// The gain of the master's last limiter (0 without one).
@@ -2658,7 +2880,7 @@ impl PulseApp {
         self.mix.stale = true;
         // While applying everything, a track's change is measured on the
         // tracks alone: the mix, when something hears it (see `next_auto`).
-        let master = matches!(fix, Fix::MasterEq { .. } | Fix::MasterLimiter { .. });
+        let master = matches!(fix, Fix::MasterEq { .. } | Fix::MasterLimiter { .. } | Fix::Glue { track: None, .. });
         self.analyze(self.mix.auto.is_none() || master);
     }
 
@@ -2702,20 +2924,18 @@ impl PulseApp {
                         e.mid_db = (e.mid_db + mid).clamp(-15.0, 15.0);
                         e.high_db = (e.high_db + high).clamp(-15.0, 15.0);
                     }
-                    None => {
-                        devices.insert(at, Device::new(Effect::Eq3(Eq3Params { low_db: *low, mid_db: *mid, high_db: *high, ..Default::default() })));
-                        // What pointed at the devices after it moves one along.
-                        let shift = |param: Param| match param {
-                            Param::Device { device, param } if device >= at => Param::Device { device: device + 1, param },
-                            other => other,
-                        };
-                        for lane in &mut self.project.master.automation {
-                            lane.param = shift(lane.param);
-                        }
-                        self.retarget(|t, param| Some((t, if t == engine::Target::Master { shift(param) } else { param })));
-                    }
+                    None => self.insert_master(at, Device::new(Effect::Eq3(Eq3Params { low_db: *low, mid_db: *mid, high_db: *high, ..Default::default() }))),
                 }
                 self.status = Some("EQ Three del master ajustado a la referencia".into());
+            }
+            Fix::Glue { track: Some(t), name, params } if track_ok(self, *t, name) && self.project.tracks[*t].is_group() => {
+                self.project.tracks[*t].devices.push(Device::new(Effect::Glue(*params)));
+                self.status = Some(format!("Compresor de bus en «{name}»: umbral {} dB, {}", num(params.threshold_db as f64), params.ratio.label()));
+            }
+            Fix::Glue { track: None, params, .. } if !self.project.master.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::Glue(_) | Effect::Compressor(_))) => {
+                // First on the master: before its EQ, its clipper and its limiter.
+                self.insert_master(0, Device::new(Effect::Glue(*params)));
+                self.status = Some(format!("Compresor de bus en el master: umbral {} dB, {}", num(params.threshold_db as f64), params.ratio.label()));
             }
             Fix::Balance(changes) if changes.iter().all(|c| track_ok(self, c.track, &c.name)) => {
                 for c in changes {
@@ -2995,7 +3215,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let any = next_fix(&list, &[]).is_some();
                 all = ui
                     .add_enabled(!busy && any, egui::Button::new("Aplicar todo").small())
-                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, ecos, secciones, y el master. Vuelve a medir después de cada uno")
+                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, ecos, compresor de bus, secciones, y el master. Vuelve a medir después de cada uno")
                     .clicked();
             }
         }
@@ -3136,6 +3356,14 @@ fn fix_hint(fix: &Fix) -> String {
             "Añade un Compressor a «{name}»: umbral {:.1} dB, ratio {}:1, ataque {:.0} ms, release {:.0} ms (una semicorchea al tempo; el bajo, una corchea) y {:+.1} dB de ganancia para que siga igual de fuerte",
             params.threshold_db, params.ratio, params.attack_ms, params.release_ms, params.makeup_db
         ),
+        Fix::Glue { track, name, params } => format!(
+            "Añade un Compresor de bus a {}: umbral {:.1} dB, ratio {}, ataque {:.0} ms, release automático, y el detector sin graves por debajo de {:.0} Hz (el bombo no lo hace bombear)",
+            if track.is_some() { format!("«{name}»") } else { "el master, antes del limitador".into() },
+            params.threshold_db,
+            params.ratio.label(),
+            params.attack_ms,
+            params.sidechain_hpf_hz
+        ),
         Fix::Space { .. } => "Pone los envíos de cada pista a la reverb y al delay según su papel (y crea esos retornos si faltan): un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
         Fix::Balance(_) => "Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
     }
@@ -3175,11 +3403,11 @@ mod tests {
     use super::*;
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
-        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false, thrown: false, stereo: Stereo::default(), utility: None }
+        TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, start_gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false, thrown: false, stereo: Stereo::default(), utility: None }
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new() }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new(), master_glued: false, master_clean: true, groups: Vec::new() }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -3232,7 +3460,7 @@ mod tests {
         assert!(matches!(app.project.master.devices[1].effect, Effect::Limiter(l) if l.release_ms == LOUD_RELEASE_MS));
         assert!(advise(app.mix.report.as_ref().unwrap(), Target::HardTechno, None).iter().any(|a| a.level == Level::Good && a.text.contains("Hard techno, rave")));
         // Over it: no platform turns a club track down, so it isn't said.
-        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new() };
+        let loud = Report { mix: Measures { lufs: Some(-5.0), true_peak: -1.2, ..mix }, tracks: Vec::new(), tempo: 150.0, space: Space::default(), start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new(), master_glued: false, master_clean: true, groups: Vec::new() };
         let told = advise(&loud, Target::HardTechno, None);
         assert!(told.iter().any(|a| a.text.contains("pierde pegada")) && !told.iter().any(|a| a.text.contains("plataforma")), "{told:?}");
     }
@@ -3364,7 +3592,8 @@ mod tests {
         assert!(list.iter().any(|a| a.fix == Some(Fix::CutLows { track: 1, name: "Drums".into() })), "{list:?}");
         let rumble = TrackMeasures { listens: vec![kick.id], ..track(2, "Kick Rumble", true, -10.0, on.clone()) };
         let list = advise(&report(-9.0, -1.5, vec![kick.clone(), rumble]), Target::Club, None);
-        assert!(list.iter().all(|a| a.fix.is_none()), "{list:?}");
+        // (Only the master's bus compressor, which a club target asks for.)
+        assert!(list.iter().all(|a| a.fix.is_none() || matches!(a.fix, Some(Fix::Glue { track: None, .. }))), "{list:?}");
         assert!(list.iter().any(|a| a.text == "«Kick Rumble» se aparta cuando suena «Kick»: sus graves no se tapan"));
         // A bass against the kick and against its rumble: it ducks to the kick, once.
         let rumble = TrackMeasures { listens: vec![kick.id], ..track(2, "Kick Rumble", true, -10.0, on.clone()) };
@@ -3376,7 +3605,7 @@ mod tests {
         let rumble = TrackMeasures { listens: vec![kick.id], ..track(2, "Kick Rumble", true, -10.0, vec![-10.0; 100]) };
         let bass = TrackMeasures { listens: vec![kick.id], ..track(3, "Bass", false, -6.0, vec![-10.0; 100]) };
         let list = advise(&report(-9.0, -1.5, vec![kick.clone(), rumble, bass]), Target::Club, None);
-        assert!(list.iter().all(|a| a.fix.is_none()), "{list:?}");
+        assert!(list.iter().all(|a| a.fix.is_none() || matches!(a.fix, Some(Fix::Glue { track: None, .. }))), "{list:?}");
     }
 
     /// A hard techno kick on its own track (the Kick Designer) and a bass: the
@@ -3500,8 +3729,8 @@ mod tests {
             println!("{}", c.describe());
         }
         let of = |name: &str| changes.iter().find(|c| c.name == name).cloned();
-        assert_eq!(of("Bajo"), Some(Change { track: 1, name: "Bajo".into(), role: Role::Bass, gain_db: 6.0, pan: Some(0.0), low_cut: None }));
-        assert_eq!(of("Pad"), Some(Change { track: 2, name: "Pad".into(), role: Role::Pad, gain_db: -10.0, pan: None, low_cut: Some(150.0) }));
+        assert_eq!(of("Bajo"), Some(Change { track: 1, name: "Bajo".into(), role: Role::Bass, gain_db: 6.0, pan: Some(0.0), low_cut: None, held: false }));
+        assert_eq!(of("Pad"), Some(Change { track: 2, name: "Pad".into(), role: Role::Pad, gain_db: -6.0, pan: None, low_cut: Some(150.0), held: true }));
         // Two of them: 3 dB under the chords' level each, one each side.
         assert_eq!(of("Acordes A").map(|c| (c.gain_db, c.pan)), Some((-3.0, Some(-0.35))));
         assert_eq!(of("Acordes B").map(|c| (c.gain_db, c.pan)), Some((-3.0, Some(0.35))));
@@ -3561,7 +3790,8 @@ mod tests {
         for c in changes {
             println!("{}", c.describe());
         }
-        assert!(changes.iter().any(|c| c.name == "Acordes" && c.gain_db < -6.0));
+        // Down as far as a tonal track comes in one go (and said so).
+        assert!(changes.iter().any(|c| c.name == "Acordes" && c.gain_db <= -TONAL_CUT_MAX as f32 && c.held));
         assert!(changes.iter().any(|c| c.name == "Bajo" && c.gain_db > 6.0));
         app.mix.report = None;
         app.apply_fix(&fix);
@@ -3881,7 +4111,8 @@ mod tests {
         app.apply_fix(&fix);
         wait(&mut app);
         let names: Vec<&str> = app.project.returns.iter().map(|r| r.name.as_str()).collect();
-        assert_eq!(names, ["A Reverb", "B Delay"]);
+        assert_eq!(names, ["A Espacio", "B Delay"]);
+        assert!(matches!(app.project.returns[0].devices[0].effect, Effect::Convolution(c) if c.mix == 1.0), "Espacio, all wet");
         assert_eq!(&app.project.tracks[0].sends[..2], &[0.22, 0.14]);
         assert!(app.project.tracks[1].sends.iter().all(|&s| s == 0.0), "the bass stays dry");
         let after = gaps(&mut app);
@@ -3901,7 +4132,7 @@ mod tests {
         let list = vec![fix(limiter.clone()), fix(space.clone()), fix(Fix::Balance(Vec::new())), fix(gain.clone()), advice(Level::Good, String::new(), None)];
         assert_eq!(next_fix(&list, &[]), Some(gain.clone()));
         assert_eq!(next_fix(&list, &[gain.clone()]), Some(Fix::Balance(Vec::new())));
-        let other_balance = Fix::Balance(vec![Change { track: 0, name: "Voz".into(), role: Role::Vocal, gain_db: 1.0, pan: None, low_cut: None }]);
+        let other_balance = Fix::Balance(vec![Change { track: 0, name: "Voz".into(), role: Role::Vocal, gain_db: 1.0, pan: None, low_cut: None, held: false }]);
         let again = vec![fix(other_balance), fix(space.clone())];
         // Balanced again after the space, before the master; not a third time.
         assert_eq!(next_fix(&again, &[Fix::Balance(Vec::new())]), Some(space.clone()));
@@ -4632,5 +4863,238 @@ mod tests {
         assert!(bass.stereo.low_side < 0.01 * bass.stereo.low_mid, "the lows in mono");
         assert!(after.mix.correlation > 0.5);
         assert!(advise(&after, Target::Streaming, None).iter().all(|a| !matches!(a.fix, Some(Fix::Stereo { .. }))));
+    }
+
+    /// The song (its arrangement) rendered as the export does it, written to
+    /// `wav` if asked, measured and said: its loudness, true peak, octaves,
+    /// tilt against a club's and each part's loudness.
+    fn heard(project: &crate::project::Project, wav: Option<&std::path::Path>, name: &str) -> Measures {
+        let end = project.tracks.iter().map(|t| t.arrangement_end()).fold(0.0, f64::max);
+        let mut samples = crate::sync::SampleCache::default();
+        let commands = crate::sync::project_commands(project, &mut samples, 48_000.0, &Default::default());
+        let (l, r) = export::render(commands, (0.0, end), export::Song::of(project), 48_000.0, &Default::default(), &|_| {}).unwrap();
+        if let Some(path) = wav {
+            export::write(path, &l, &r, 48_000, export::BitDepth::Int24, 1.0).unwrap();
+        }
+        let m = Measures::of(&l, &r, 48_000.0);
+        println!("{name}: {:.2} LUFS · pico real {:.2} dBTP · rango {:.1} LU · correlación {:.2}", m.lufs.unwrap_or(-99.0), m.true_peak, m.range.unwrap_or(0.0), m.correlation);
+        println!("  octavas: {:?}", m.bands.iter().map(|b| (b * 10.0).round() / 10.0).collect::<Vec<_>>());
+        println!("  63 Hz − 1 kHz: {:+.1} dB · inclinación frente a la de club {:+.1} dB · frente a la curva de club (graves, medios, agudos): {:?}", m.bands[1] - m.bands[5], tilt(&m.bands), balance(&m.bands, &CLUB_CURVE).map(|x| (x * 10.0).round() / 10.0));
+        let seconds = |beat: f64| beat * 60.0 / project.tempo;
+        let mut marks: Vec<(String, f64)> = project.markers.iter().map(|m| (m.name.clone(), m.beat)).collect();
+        marks.push(("fin".into(), end));
+        for w in marks.windows(2) {
+            let (a, b) = ((seconds(w[0].1) * 48_000.0) as usize, ((seconds(w[1].1) * 48_000.0) as usize).min(l.len()));
+            if b > a {
+                println!("    {:<8} {:.1} LUFS", w[0].0, loudness::integrated(&l[a..b], &r[a..b], 48_000.0).unwrap_or(-99.0));
+            }
+        }
+        m
+    }
+
+    /// A melodic techno song made from scratch, mixed for a club in one
+    /// click: a drum group (kick and hats), a rolling bass, a pad, a lead with
+    /// an OTT, a sung voice and the melody «Audio a MIDI» takes out of it
+    /// («Voz · Melodía», on a synth). Its pad, lead and melody stand over the
+    /// kick, as a first rough mix often has them, and it has no returns and
+    /// nothing on the master. It ends at the club's loudness, under −1 dBTP,
+    /// its low end over its mids about as a club mix's, no tonal track buried,
+    /// the OTT not taken for a compressor, the melody mixed as a lead (not a
+    /// voice), and a bus compressor on the drums and the master and Espacio
+    /// on a return.
+    #[test]
+    fn a_club_song_is_mixed_for_the_club() {
+        use crate::project::{Project, SongMarker, Track};
+        use engine::model::{AcidParams, ArrangementClip, AudioClip, Clip, KickParams, MidiClip, MultibandParams, Note, WarpMode};
+        let (tempo, beats) = (126.0, 128.0);
+        let note = |start: f64, length: f64, pitch: u8, velocity: f32| Note { start, length, pitch, velocity, chance: 1.0 };
+        let midi = |name: &str, notes: Vec<Note>| ArrangementClip { start: 0.0, length: beats, clip: Clip::Midi(MidiClip { notes, ..MidiClip::new(name, beats, [0; 3]) }) };
+        // Intro (the drums), Drop (the bass comes in), Break (no drums: the pad, softer, the
+        // voice and its melody), Drop; the voice sings from the break on.
+        let drums_at = |b: f64| !(64.0..96.0).contains(&b);
+        let mut project = Project::empty();
+        project.tempo = tempo;
+        project.returns.clear();
+        project.markers = ["Intro", "Drop", "Break", "Drop"].iter().enumerate().map(|(i, n)| SongMarker { beat: i as f64 * 32.0, name: n.to_string() }).collect();
+        let mut group = Track::new_group("Batería", [0; 3]);
+        group.id = 1;
+        let mut kick = Track::new("Kick", [0; 3], InstrumentKind::Kick(KickParams::default()));
+        kick.arrangement.push(midi("Kick", (0..128).map(|b| b as f64).filter(|&b| drums_at(b)).map(|b| note(b, 0.25, 36, 1.0)).collect()));
+        let mut hats = Track::new("Charles", [0; 3], InstrumentKind::DrumMachine(crate::drum_gen::Style::Techno.sound()));
+        hats.arrangement.push(midi("Charles", (0..128).map(|b| b as f64 + 0.5).filter(|&b| drums_at(b)).map(|b| note(b, 0.1, 42, 0.8)).collect()));
+        let mut bass = Track::new("Bajo", [0; 3], InstrumentKind::Acid(AcidParams { cutoff: 400.0, ..Default::default() }));
+        bass.arrangement.push(midi("Bajo", (0..512).map(|s| s as f64 * 0.25).filter(|&b| drums_at(b) && b >= 32.0 && b % 1.0 != 0.0).map(|b| note(b, 0.2, 33, 0.9)).collect()));
+        let chords = [[57u8, 60, 64], [53, 57, 60], [55, 59, 62], [52, 55, 59]];
+        let mut pad = Track::new("Pad", [0; 3], InstrumentKind::SuperSaw(Default::default()));
+        pad.arrangement.push(midi("Pad", (0..32).flat_map(|bar| chords[bar % 4].iter().map(move |&p| (bar, p))).filter(|&(bar, _)| bar >= 8).map(|(bar, p)| note(bar as f64 * 4.0, 4.0, p, if drums_at(bar as f64 * 4.0) { 0.8 } else { 0.45 })).collect()));
+        let tune = [69u8, 72, 76, 74, 72, 69, 67, 64];
+        let mut lead = Track::new("Lead", [0; 3], InstrumentKind::Synth(Default::default()));
+        lead.arrangement.push(midi("Lead", (0..256).map(|e| e as f64 * 0.5).filter(|&b| (32.0..64.0).contains(&b) || b >= 96.0).map(|b| note(b, 0.4, tune[(b * 2.0) as usize % 8], 0.9)).collect()));
+        lead.devices.push(Device::new(Effect::Multiband(MultibandParams::default())));
+        // The voice: phrases of three beats and a rest, a vowel on 220 to 262 Hz.
+        let rate = 48_000.0f32;
+        let spb = 60.0 / tempo as f32;
+        let pitches = [57u8, 59, 60, 59];
+        let hz = |p: u8| 440.0 * 2f32.powf((p as f32 - 69.0) / 12.0);
+        let voice: Vec<f32> = (0..(beats as f32 * spb * rate) as usize)
+            .map(|i| {
+                let t = i as f32 / rate;
+                let beat = t / spb;
+                if beat < 64.0 || beat % 4.0 >= 3.0 {
+                    return 0.0;
+                }
+                let phrase = (beat / 4.0) as usize;
+                let f0 = hz(pitches[phrase % 4]);
+                let loud = if phrase % 3 == 0 { 0.5 } else { 1.0 };
+                let swell = (std::f32::consts::PI * (beat % 4.0) / 3.0).sin();
+                let formant = |f: f32| (-((f - 800.0) / 250.0).powi(2)).exp() + 0.5 * (-((f - 1200.0) / 300.0).powi(2)).exp() + 0.08 / (f / f0);
+                0.25 * loud * swell * (1..=20).map(|h| formant(h as f32 * f0) * (std::f32::consts::TAU * h as f32 * f0 * t).sin()).sum::<f32>()
+            })
+            .collect();
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join(format!("club-voz-{}.wav", std::process::id()));
+        export::write(&path, &voice, &voice, rate as u32, export::BitDepth::Float32, 1.0).unwrap();
+        let mut sung = Track::new_audio("Voz", [0; 3]);
+        sung.arrangement.push(ArrangementClip { start: 0.0, length: beats, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: beats, offset: 0.0, warp: WarpMode::Off, original_bpm: tempo, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        let mut melody = Track::new("Voz · Melodía", [0; 3], InstrumentKind::Synth(Default::default()));
+        melody.arrangement.push(midi("Voz · Melodía", (16..32).map(|p| note(p as f64 * 4.0, 3.0, pitches[p % 4], 0.8)).collect()));
+        // A rough first mix: the kick down, the tonal tracks up.
+        kick.mixer.gain = 0.4;
+        hats.mixer.gain = 0.4;
+        bass.mixer.gain = 0.25;
+        for t in [&mut pad, &mut lead, &mut melody] {
+            t.mixer.gain = 0.6;
+        }
+        kick.depth = 1;
+        hats.depth = 1;
+        project.tracks = vec![group, kick, hats, bass, pad, lead, sung, melody];
+        let before = heard(&project, None, "antes");
+        let mut app = PulseApp::headless(project);
+        app.mix.target = Target::Club;
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 400);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let report = app.mix.report.clone().unwrap();
+        let of = |name: &str| report.tracks.iter().find(|t| t.name == name).unwrap().clone();
+        assert_eq!(of("Voz").role, Role::Vocal);
+        assert_eq!(of("Voz · Melodía").role, Role::Lead, "a synth playing the voice's notes is a lead");
+        assert!(!of("Lead").compressed, "an OTT is no compressor");
+        let advice = advise(&report, Target::Club, None);
+        for a in &advice {
+            println!("· {}", a.text);
+            for d in &a.details {
+                println!("    {d}");
+            }
+        }
+        assert!(advice.iter().any(|a| matches!(&a.fix, Some(Fix::Glue { track: Some(0), .. }))), "the drum bus is glued");
+        assert!(advice.iter().any(|a| matches!(&a.fix, Some(Fix::Glue { track: None, .. }))), "the master is glued");
+        let gains: Vec<f32> = app.project.tracks.iter().map(|t| t.mixer.gain).collect();
+        app.apply_all();
+        wait(&mut app);
+        println!("{}", app.mix.note.clone().unwrap_or_default());
+        for t in &app.project.tracks {
+            println!("  {:<14} {:+5.1} dB envíos {:?} fx {:?}", t.name, 20.0 * t.mixer.gain.max(1e-6).log10(), &t.sends[..app.project.returns.len()], t.devices.iter().map(|d| d.effect.label()).collect::<Vec<_>>());
+        }
+        println!("  master {:?} · retornos {:?}", app.project.master.devices.iter().map(|d| format!("{:?}", d.effect)).collect::<Vec<_>>(), app.project.returns.iter().map(|r| r.name.clone()).collect::<Vec<_>>());
+        let after = heard(&app.project, None, "después");
+        let p = &app.project;
+        // The bus compressors: on the drum group, and first on the master;
+        // Espacio on the reverb return it made, all wet.
+        assert!(matches!(p.tracks[0].devices.last().map(|d| &d.effect), Some(Effect::Glue(_))));
+        assert!(matches!(p.master.devices[0].effect, Effect::Glue(_)) && matches!(p.master.devices.last().unwrap().effect, Effect::Limiter(_)));
+        assert_eq!(p.master.devices.iter().filter(|d| matches!(d.effect, Effect::Glue(_))).count(), 1, "one, not two");
+        assert!(p.returns.iter().any(|r| r.devices.iter().any(|d| matches!(d.effect, Effect::Convolution(c) if c.mix == 1.0))));
+        // The melody is mixed as a lead: no de-esser, no echoes thrown on its
+        // last words, a lead's sends; the voice, as a voice.
+        let melody = &p.tracks[7];
+        assert!(!melody.devices.iter().any(|d| matches!(d.effect, Effect::DeEsser(_))));
+        assert!(!melody.automation.iter().any(|l| matches!(l.param, Param::Send(_))), "no delay throws");
+        let lead_sends = room(Role::Lead).unwrap();
+        assert!((melody.sends[0] - lead_sends.0).abs() < 1e-6 || (melody.sends[1] - lead_sends.0).abs() < 1e-6, "{:?}", melody.sends);
+        assert!(p.tracks[6].devices.iter().any(|d| matches!(d.effect, Effect::Compressor(_))), "the voice is compressed");
+        // The lead (only an OTT) gets a compressor of its own if it needs one;
+        // no tonal track comes down more than TONAL_CUT_MAX.
+        for t in 4..8 {
+            let fell = 20.0 * (gains[t] / p.tracks[t].mixer.gain).log10();
+            assert!(fell as f64 <= TONAL_CUT_MAX + 0.01, "{} came down {fell:.1} dB", p.tracks[t].name);
+        }
+        // Loud as a club, under −1 dBTP, and balanced as a club mix.
+        let lufs = after.lufs.unwrap();
+        assert!((lufs + 9.0).abs() <= 1.0, "{lufs} LUFS");
+        assert!(after.true_peak <= -1.0, "{} dBTP", after.true_peak);
+        assert!(tilt(&after.bands).abs() <= TILT_TOLERANCE, "low end over the mids {:+.1} dB from a club's", tilt(&after.bands));
+        for (k, d) in balance(&after.bands, &CLUB_CURVE).into_iter().enumerate() {
+            assert!(d.abs() <= 4.0, "band {k}: {d:+.1} dB from a club mix");
+        }
+        println!("inclinación: {:+.1} → {:+.1} dB · {:.1} → {lufs:.1} LUFS", tilt(&before.bands), tilt(&after.bands), before.lufs.unwrap());
+    }
+
+    /// The audit's «Noche en la ciudad» (a copy, `PULSE_G5_PROJECT`), put back
+    /// as it was before the assistant (the diary's hand mix), mixed for a club
+    /// in one click, rendered to `PULSE_G5_OUT` and measured.
+    #[test]
+    #[ignore]
+    fn noche_en_la_ciudad_for_a_club() {
+        let path = std::path::PathBuf::from(std::env::var("PULSE_G5_PROJECT").expect("PULSE_G5_PROJECT"));
+        let out = std::path::PathBuf::from(std::env::var("PULSE_G5_OUT").expect("PULSE_G5_OUT"));
+        let mut project = crate::project::Project::load(&path).unwrap();
+        // The hand mix: faders, pans, sends, effects and the master as they were.
+        let sends: [(&str, f32); 4] = [("Melodía", 0.16666667), ("Pad", 0.30555558), ("Lead", 0.24444439), ("Voz", 0.36666667)];
+        for t in &mut project.tracks {
+            t.mixer.gain = match t.name.as_str() {
+                "Melodía" => 10f32.powf(-6.1 / 20.0),
+                "Pad" => 10f32.powf(-4.6 / 20.0),
+                _ => 0.7,
+            };
+            t.mixer.pan = 0.0;
+            t.sends = [0.0; MAX_RETURNS];
+            t.sends[2] = sends.iter().find(|s| s.0 == t.name).map_or(0.0, |s| s.1);
+            t.devices.retain(|d| !matches!(d.effect, Effect::EqEight(_) | Effect::Utility(_) | Effect::Compressor(_) | Effect::DeEsser(_)));
+            t.automation.retain(|l| !matches!(l.param, Param::Send(_)));
+        }
+        project.master.devices.retain(|d| matches!(d.effect, Effect::Glue(_)));
+        project.master.automation.retain(|l| l.param == Param::Tempo);
+        let render = |project: &crate::project::Project, name: &str| heard(project, (!name.is_empty()).then(|| out.join(name)).as_deref(), name);
+        render(&project, "");
+        let mut app = PulseApp::headless(project);
+        app.mix.target = Target::Club;
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 900);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        for t in &app.mix.report.as_ref().unwrap().tracks {
+            println!("  {:<22} {:<10} {:>6.1} LUFS", t.name, t.role.label(), t.lufs.unwrap_or(-99.0));
+        }
+        for a in advise(app.mix.report.as_ref().unwrap(), Target::Club, None) {
+            println!("· {}", a.text);
+            for d in &a.details {
+                println!("    {d}");
+            }
+        }
+        let started = std::time::Instant::now();
+        app.apply_all();
+        wait(&mut app);
+        println!("aplicar todo: {:.0} s · {}", started.elapsed().as_secs_f64(), app.mix.note.clone().unwrap_or_default());
+        for t in &app.project.tracks {
+            println!("  {:<22} {:+5.1} dB pan {:+.2} envíos {:?} fx {:?}", t.name, 20.0 * t.mixer.gain.max(1e-6).log10(), t.mixer.pan, &t.sends[..app.project.returns.len()], t.devices.iter().map(|d| d.effect.label()).collect::<Vec<_>>());
+        }
+        println!("  master {:?} · retornos {:?}", app.project.master.devices.iter().map(|d| format!("{:?}", d.effect)).collect::<Vec<_>>(), app.project.returns.iter().map(|r| (r.name.clone(), r.devices.iter().map(|d| d.effect.label()).collect::<Vec<_>>())).collect::<Vec<_>>());
+        render(&app.project, "asistente-nuevo.wav");
     }
 }

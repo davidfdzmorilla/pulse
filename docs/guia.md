@@ -2255,6 +2255,8 @@ Cada consejo dice qué pasa y, si se puede arreglar, trae un botón **Aplicar**.
 
 Varios consejos dependen del **papel** de cada pista (voz, bajo, bombo, pad…). Pulse lo saca de su nombre («Kick», «Bajo», «Voz», «Coros», «Pad», «Hats»…, en español o en inglés), de su instrumento (el Kick Designer es el bombo, el Acid el bajo, una Drum Machine la batería) o, si no, de cómo suena (casi todo graves: un bajo; casi todo agudos: percusión). Las pistas sin papel claro («otra») no se tocan.
 
+Solo canta una pista de audio (o un Sampler que toca una grabación). Una pista MIDI con un sintetizador es una **solista** aunque se llame «Voz…», como la melodía que saca **Audio a MIDI** de una voz («Voz · Melodía»): no le pone ni compresor de voz, ni de-esser, ni ecos al final de frase. Unos «Coros» en un sintetizador son un pad.
+
 > Consejo: ponles a las pistas nombres claros («Voz», «Bajo», «Kick») y el asistente acertará más.
 
 #### Sonoridad
@@ -2266,7 +2268,8 @@ La canción suena más floja o más fuerte de lo que pide el destino. **Aplicar*
 - Como mucho, el limitador le quita **6 dB a los picos**. Si la mezcla llega con margen (sus picos por debajo del techo), ese margen se sube además, porque no aprieta nada.
 - Las **partes** siguen como estaban: el drop o el estribillo por encima del break, de la intro y de la subida. Cada parte puede acercarse al drop un tercio de lo que estaba por debajo (de 0,5 a 2,5 LU), y la subida se queda al menos 1,15 LU por debajo. Sin marcadores, mira el rango de sonoridad: puede perder un tercio.
 - El Limiter mira el **pico real**, también entre muestras, y baja la ganancia de forma suave durante 2 ms antes de cada pico, sin escalones. El techo queda en −1,3 dB y el pico real de la mezcla, por debajo de −1 dBTP.
-- Para destinos de −9 LUFS o más fuertes (club, hard techno), pone además un **Saturator Hard 4×** justo antes del Limiter, que recorta 3 dB de los picos (los del bombo), y le acorta el release a 40 ms. Es como se masteriza el género: el limitador solo, con un bombo cada 400 ms, bombea en vez de subir el volumen y deja pasar picos reales.
+- Para destinos de −9 LUFS o más fuertes (club, hard techno), pone además un **Saturator Hard 4×** justo antes del Limiter, que recorta 5 dB de los picos (los del bombo), y le acorta el release a 40 ms. Es como se masteriza el género: el limitador solo, con un bombo cada 400 ms, bombea en vez de subir el volumen, aplasta el drop contra el break y deja pasar picos reales.
+- El recorte se ajusta al nivel de la mezcla: si llega al master con los picos por debajo de 0 dBFS, el Saturator la empuja esos dB de más (y la vuelve a bajar a la salida), para que recorte de verdad esos 5 dB.
 - Si la mezcla está por encima del destino: en uno de streaming te avisa de que la plataforma la bajará; en uno de club, de que más apretada solo pierde pegada.
 +++
 
@@ -2275,7 +2278,9 @@ La canción suena más floja o más fuerte de lo que pide el destino. **Aplicar*
 Pone cada pista donde suele empezar una mezcla (volumen, panorama y graves), para que sigas a oído desde ahí. El consejo dice qué cambiaría en cada pista y **Aplicar** lo hace todo de una vez.
 
 +++ Cómo lo calcula
-- **Volumen**: cada papel, a su nivel habitual junto al bombo (o la batería, o la voz si no hay): la voz igual de fuerte, el bajo y la batería 2 dB por debajo, la solista 3, los acordes 5, los coros 7, pads y percusión 8, efectos 10. Una batería sin bombo (lo has sacado a su pista: quedan charles, palmas…) va 6 dB por debajo de él. Si hay varias pistas del mismo papel, se reparten ese nivel. No sube ninguna por encima de −1 dBFS ni más allá del tope de su fader. Solo cambia lo que se aleje más de 1,5 dB.
+- **Volumen**: cada papel, a su nivel habitual junto al bombo (o la batería, o la voz si no hay): la voz igual de fuerte, el bajo y la batería 2 dB por debajo, la solista 3, los acordes 5, los coros 7, pads y percusión 8, efectos 10. Una batería sin bombo (lo has sacado a su pista: quedan charles, palmas…) va 6 dB por debajo de él. Si hay varias pistas del mismo papel, se reparten ese nivel. No sube ninguna por encima de −1 dBFS ni más allá del tope de su fader. Solo cambia lo que se aleje más de 1,5 dB. Los grupos no se mueven: se mueven sus pistas.
+- **Sin enterrar los medios**: a una pista con notas o voz (voz, coros, solista, acordes, pad) la baja como mucho **6 dB** desde donde estaba antes del asistente, salvo que sonara por encima del bombo: entonces puede bajar hasta su nivel. Lo que se queda sin bajar lo dice («no más bajo»).
+- **Graves frente a medios**: antes de aplicar, calcula cómo sonaría la mezcla y compara la octava de 63 Hz (bombo y bajo) con los medios (de 500 Hz a 2 kHz) frente a una mezcla de club típica, donde los graves van unos 3 dB por encima. Si se pasa en más de 3 dB, deshace parte de las bajadas de esas pistas hasta quedar dentro.
 - **Panorama**: el bombo, el bajo y la voz, al centro. Si hay dos o más pistas de acordes, pads, coros, percusión o solistas en el centro, las abre a izquierda y derecha. Lo que ya has panoramizado tú no lo toca.
 - **Graves**: a lo que no los necesita (voz, coros, acordes, pads, solistas, percusión, efectos) y aun así tiene algo por debajo de unos 60 Hz, le pone un **EQ Eight** con corte de graves: 90 Hz en la voz, 250 Hz en la percusión, 150 Hz en el resto.
 +++
@@ -2316,8 +2321,15 @@ La voz, los coros, la solista, el bajo o la batería van de muy suave a muy fuer
 - Le quita a lo fuerte 5 dB en la voz, 4 en los coros y el bajo, 3 en la solista y la batería. El umbral se calcula con su nivel antes del fader y el panorama, que es lo que oye el compresor.
 - Ratio 3:1 en la voz y los coros, 2,5:1 en la solista y 4:1 en el bajo y la batería. Ataque rápido en las voces (5 ms) y lento en la batería (25 ms), para que pase el golpe.
 - Release de una semicorchea al tempo de la canción (una corchea en el bajo) y ganancia para recuperar la mitad de lo que quita.
-- Si la pista ya tiene un compresor (sin sidechain), sale en verde. Una pista que se aparta de otra con un sidechain (un rumble o un bajo que bombean con el bombo) no se comprime: su nivel se mueve a propósito.
+- Si la pista ya tiene un compresor o un Compresor de bus (sin sidechain), sale en verde. El **Multibanda (OTT)** no cuenta: es un sonido, no lo que sujeta el nivel de una pista. Una pista que se aparta de otra con un sidechain (un rumble o un bajo que bombean con el bombo) no se comprime: su nivel se mueve a propósito.
 +++
+
+#### Compresor de bus
+
+Un **Compresor de bus** suave pega lo que pasa por él. El asistente lo propone en dos sitios, y solo si no hay ya uno (o un Compressor):
+
+- **En el bus de batería**: un grupo con dos o más pistas, todas de batería o percusión. Usa el preset «Bus de batería» (4:1, el detector sin graves por debajo de 90 Hz) con el umbral unos 12 dB por debajo de los picos del grupo.
+- **En el master**, para destinos de −11 LUFS o más fuertes (club, hard techno): el preset «Pegar la mezcla» (2:1, ataque lento) al principio de la cadena, antes del limitador, con el umbral unos 8 dB por debajo de los picos de la mezcla. Le quita 2 o 3 dB a los golpes y el limitador llega a la sonoridad sin aplastarla.
 
 #### Eses que saltan
 
@@ -2351,7 +2363,7 @@ Las pistas que suenan secas, sin mandar nada a ningún retorno, se quedan todas 
 - Pads: reverb 28 %. Acordes: 18 %. Percusión: 12 %. Batería: 8 %.
 - El bombo y el bajo, secos: si mandan más de un 15 % a la reverb, avisa de que embarra los graves y la quita.
 - Las pistas que ya mandan a algún retorno se quedan como están, y los grupos también (mandan sus pistas).
-- Usa el retorno que tenga una Reverb y el que tenga un Delay. Si falta alguno y queda sitio, lo crea: una **Reverb** con un EQ Eight que le quita los graves (bajo 250 Hz) y lo más agudo, y un **Delay** de corchea con puntillo a tempo, que se oscurece en cada repetición y tampoco lleva graves.
+- Usa el retorno que tenga una Reverb o un **Espacio**, y el que tenga un Delay. Si falta alguno y queda sitio, lo crea: un **Espacio** en una sala, todo húmedo y sin graves (por debajo de 250 Hz) ni lo más agudo (por encima de 9 kHz), y un **Delay** de corchea con puntillo a tempo, que se oscurece en cada repetición y tampoco lleva graves. Si ya hay una reverb, no crea otra.
 +++
 
 #### Ecos al final de frase
@@ -2399,14 +2411,15 @@ Avisa si la mezcla está muy apretada o tiene partes muy lejos en volumen. No tr
 2. Mezcla de partida.
 3. Graves.
 4. Huecos en los medios: todos a la vez, uno por cada pareja de pistas, donde más se tapan.
-5. Compresión.
+5. Compresión, y el compresor de bus de la batería.
 6. Eses.
 7. Nivelar la voz.
 8. Espacio.
 9. Un reajuste de volúmenes, porque recortar, apartar y comprimir los mueven.
 10. Ecos al final de frase.
-11. Secciones que crecen.
-12. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
+11. El compresor de bus del master.
+12. Secciones que crecen.
+13. El master: el EQ si hay referencia, y la sonoridad del destino con el limitador.
 
 Al terminar dice lo que ha hecho, y no vuelve a pedirte lo que acaba de hacer: lo que queda en la lista son sugerencias para aplicar a mano, si quieres. Cada paso se deshace con {⌘Z}.
 

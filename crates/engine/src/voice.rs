@@ -122,8 +122,8 @@ const CARRIER_REF: f32 = 0.03;
 const CARRIER_MS: f32 = 10.0;
 /// The voice's highs mixed in for its esses, above this (Hz).
 const SIBILANCE_HZ: f32 = 5000.0;
-/// Its level against the voice's bands.
-const MAKEUP: f32 = 0.7;
+/// The vocoder's level against the voice's (makes up for the narrow bands).
+const MAKEUP: f32 = 1.0;
 /// Each super saw note's saws, and how far apart they go (cents at full
 /// detune, the outer ones).
 const SAWS: usize = 7;
@@ -384,10 +384,12 @@ impl Vocoder {
         }
         self.made = made;
         self.bands = n;
-        // Neighbouring bands cross about 3 dB down: each section a band and
-        // a half wide (two in cascade narrow it).
+        // Each section a band wide: neighbouring bands cross about 6 dB down
+        // (two in cascade narrow it). Narrow bands ring a little, which
+        // spreads a saw's pulse: a low saw comes out a buzz, not a click train
+        // (3 dB less crest than a band and a half wide, as clear).
         let spacing = (high / low).log2() / (n - 1) as f32;
-        let width = 1.5 * spacing;
+        let width = spacing;
         let q = 1.0 / (2.0 * (std::f32::consts::LN_2 / 2.0 * width).sinh());
         let shift = 2f32.powf(p.formant.clamp(-24.0, 24.0) / 12.0);
         for b in 0..n {

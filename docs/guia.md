@@ -2409,7 +2409,7 @@ Cambia el tono de una voz y, por separado, sus formantes: el tamaño de la garga
 | **Niño** | Tono y formantes 5 semitonos arriba. |
 | **Coro de octava** | La octava de abajo mezclada con la voz. |
 | **Quinta arriba** | Una segunda voz una quinta por encima. |
-| **Doblado** | La voz 12 centésimas más aguda junto a la original: más gruesa. |
+| **Doblado** | La voz 10 centésimas más aguda, por debajo de la original: más gruesa. |
 
 +++ Detalles
 - Oye el periodo de la voz cada 5 ms (como el Tuner) y la parte en granos de dos periodos, centrados en cada pulso de la voz. Para cambiar el tono, los vuelve a poner más juntos o más separados; para cambiar los formantes, lee cada grano más rápido o más despacio.

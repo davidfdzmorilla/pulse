@@ -2989,18 +2989,18 @@ impl VocoderParams {
         use VocoderChord::*;
         let d = VocoderParams::default();
         vec![
-            ("Robot · Robot clásico", VocoderParams { bands: 16.0, attack_ms: 2.0, release_ms: 30.0, note: 43.0, sibilance: 0.25, output_db: -4.0, ..d }),
-            ("Robot · French house", VocoderParams { bands: 24.0, low_hz: 120.0, high_hz: 9000.0, attack_ms: 1.5, release_ms: 45.0, note: 45.0, carrier: SuperSaw, detune: 0.12, chord: Octaves, sibilance: 0.35, ..d }),
-            ("Robot · Monstruo", VocoderParams { bands: 20.0, formant: -7.0, note: 31.0, release_ms: 50.0, sibilance: 0.1, output_db: -6.0, ..d }),
-            ("Robot · Duende", VocoderParams { bands: 20.0, formant: 6.0, note: 60.0, low_hz: 180.0, high_hz: 10000.0, sibilance: 0.3, ..d }),
-            ("Coros · Coro de cuerdas", VocoderParams { bands: 28.0, attack_ms: 12.0, release_ms: 160.0, note: 45.0, carrier: SuperSaw, detune: 0.5, chord: Minor, sibilance: 0.2, ..d }),
-            ("Coros · Acorde mayor", VocoderParams { bands: 24.0, attack_ms: 8.0, release_ms: 120.0, note: 48.0, carrier: SuperSaw, detune: 0.3, chord: Major, sibilance: 0.25, ..d }),
-            ("Coros · Menor con séptima", VocoderParams { bands: 24.0, attack_ms: 6.0, release_ms: 100.0, note: 45.0, carrier: Saw, chord: Minor7, sibilance: 0.25, ..d }),
-            ("Textura · Susurro", VocoderParams { bands: 32.0, low_hz: 150.0, high_hz: 12000.0, attack_ms: 3.0, release_ms: 80.0, carrier: Noise, sibilance: 0.5, ..d }),
-            ("Clásico · Vocoder de 8 bandas", VocoderParams { bands: 8.0, low_hz: 150.0, high_hz: 6000.0, attack_ms: 5.0, release_ms: 50.0, note: 41.0, sibilance: 0.15, output_db: -4.0, ..d }),
-            ("Clásico · 40 bandas nítido", VocoderParams { bands: 40.0, low_hz: 80.0, high_hz: 12000.0, attack_ms: 1.0, release_ms: 25.0, sibilance: 0.4, ..d }),
-            ("Sidechain · Synth de otra pista", VocoderParams { bands: 24.0, attack_ms: 3.0, release_ms: 60.0, sibilance: 0.35, ..d }),
-            ("Notas MIDI · Acordes que tocas", VocoderParams { bands: 24.0, attack_ms: 3.0, release_ms: 70.0, carrier: SuperSaw, detune: 0.25, sibilance: 0.3, midi: true, ..d }),
+            ("Robot · Robot clásico", VocoderParams { bands: 16.0, attack_ms: 2.0, release_ms: 30.0, note: 43.0, sibilance: 0.31, ..d }),
+            ("Robot · French house", VocoderParams { bands: 24.0, low_hz: 120.0, high_hz: 9000.0, attack_ms: 1.5, release_ms: 45.0, note: 45.0, carrier: SuperSaw, detune: 0.12, chord: Octaves, sibilance: 0.44, output_db: -3.0, ..d }),
+            ("Robot · Monstruo", VocoderParams { bands: 28.0, formant: -7.0, note: 31.0, release_ms: 50.0, sibilance: 0.12, output_db: -1.0, ..d }),
+            ("Robot · Duende", VocoderParams { bands: 20.0, formant: 6.0, note: 60.0, low_hz: 180.0, high_hz: 10000.0, sibilance: 0.38, output_db: -1.0, ..d }),
+            ("Coros · Coro de cuerdas", VocoderParams { bands: 28.0, attack_ms: 10.0, release_ms: 120.0, note: 45.0, carrier: SuperSaw, detune: 0.5, chord: Minor, sibilance: 0.25, output_db: -1.5, ..d }),
+            ("Coros · Acorde mayor", VocoderParams { bands: 24.0, attack_ms: 5.0, release_ms: 80.0, note: 48.0, carrier: SuperSaw, detune: 0.3, chord: Major, sibilance: 0.31, output_db: -2.0, ..d }),
+            ("Coros · Menor con séptima", VocoderParams { bands: 24.0, attack_ms: 4.0, release_ms: 70.0, note: 45.0, carrier: Saw, chord: Minor7, sibilance: 0.31, output_db: -1.0, ..d }),
+            ("Textura · Susurro", VocoderParams { bands: 32.0, low_hz: 150.0, high_hz: 12000.0, attack_ms: 3.0, release_ms: 80.0, carrier: Noise, sibilance: 0.62, output_db: -2.0, ..d }),
+            ("Clásico · Vocoder de 8 bandas", VocoderParams { bands: 8.0, low_hz: 150.0, high_hz: 6000.0, attack_ms: 5.0, release_ms: 50.0, note: 41.0, sibilance: 0.19, ..d }),
+            ("Clásico · 40 bandas nítido", VocoderParams { bands: 40.0, low_hz: 80.0, high_hz: 12000.0, attack_ms: 1.0, release_ms: 25.0, sibilance: 0.5, output_db: -4.0, ..d }),
+            ("Sidechain · Synth de otra pista", VocoderParams { bands: 24.0, attack_ms: 3.0, release_ms: 60.0, sibilance: 0.44, output_db: -2.0, ..d }),
+            ("Notas MIDI · Acordes que tocas", VocoderParams { bands: 24.0, attack_ms: 3.0, release_ms: 70.0, carrier: SuperSaw, detune: 0.25, sibilance: 0.38, output_db: -2.0, midi: true, ..d }),
         ]
     }
 }
@@ -3040,9 +3040,9 @@ impl VoiceShiftParams {
             ("Formantes · Formante femenino", VoiceShiftParams { formant: 3.0, ..d }),
             ("Formantes · Formante masculino", VoiceShiftParams { formant: -3.0, ..d }),
             ("Formantes · Niño", VoiceShiftParams { pitch: 5.0, formant: 5.0, ..d }),
-            ("Coros · Coro de octava", VoiceShiftParams { pitch: -12.0, mix: 0.5, ..d }),
-            ("Coros · Quinta arriba", VoiceShiftParams { pitch: 7.0, mix: 0.45, ..d }),
-            ("Coros · Doblado", VoiceShiftParams { fine: 12.0, mix: 0.5, ..d }),
+            ("Coros · Coro de octava", VoiceShiftParams { pitch: -12.0, mix: 0.4, output_db: 3.5, ..d }),
+            ("Coros · Quinta arriba", VoiceShiftParams { pitch: 7.0, mix: 0.45, output_db: 3.5, ..d }),
+            ("Coros · Doblado", VoiceShiftParams { fine: 10.0, mix: 0.35, output_db: 2.5, ..d }),
         ]
     }
 }

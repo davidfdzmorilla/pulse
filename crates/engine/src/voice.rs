@@ -336,8 +336,10 @@ impl Vocoder {
             }
             sum += saws_sum * voice.level;
         }
+        // Noise doesn't depend on the notes: it keeps running between them, so
+        // the bands that even it out are settled when a note starts (no burst).
         if power == 0.0 {
-            return (0.0, 0.0);
+            return (if noise { self.white() } else { 0.0 }, 0.0);
         }
         let level = power.sqrt();
         let carrier = if noise { self.white() } else { sum * NOTE_LEVEL / ((saws as f32).sqrt() * level) };

@@ -2088,6 +2088,45 @@ Volumen (**Gain**) y anchura estéreo (**Width**: 0 % es mono, 200 % muy abierto
 
 > Nota: un proyecto que use Bass Mono o Invertir R no se abre en un Pulse anterior: pide actualizar.
 
+### Guardar y cargar cadenas de efectos
+
+Una cadena es la fila de efectos de una pista con sus ajustes, en orden, para usarla en otra pista o en otro proyecto: tu cadena de voz, la del bus de batería, la del master.
+
+Para guardarla:
+
+1. Selecciona la pista, el retorno o el Master y abre **Dispositivos**.
+2. Arriba a la derecha del panel, pulsa **Guardar cadena…**.
+3. Escribe un nombre, por ejemplo «Mi cadena de voz». En una pista MIDI, marca **Con el instrumento** si quieres guardar también el instrumento y sus efectos MIDI.
+4. Pulsa **Guardar** o {Enter}.
+
+Para cargarla:
+
+- En el navegador, sección **CADENAS**: clic en una añade sus efectos **al final** de la cadena del destino. Con {⌥} pulsado, **sustituye** los efectos que había.
+- O búscala: escribe parte de su nombre y pulsa {Enter} (o {⌥}{Enter} para sustituir). Ver [[Navegador y biblioteca#Buscar]].
+- Si la cadena lleva instrumento, solo se pone en una pista MIDI. En otro destino se cargan los efectos y la barra de estado lo dice.
+- Todo es un paso de {⌘Z}.
+
+Pulse trae seis de fábrica, hechas con sus presets:
+
+| Cadena | Para qué |
+|---|---|
+| **Voz · Pop** | Voz limpia y delante: EQ, compresión, de-esser, un poco de OTT, delay corto y placa. |
+| **Voz · Radio** | Voz de teléfono o de radio vieja: solo los medios, saturada y en mono. |
+| **Bus de batería · Pegada** | Más ataque y una batería que suena junta. |
+| **Bajo · Sidechain y saturación** | Bajo caliente que bombea con el pulso y graves en mono. |
+| **Máster · Club** | Pegamento, brillo, graves en mono y un limitador que sube el volumen sin pasar de -0,3 dB. |
+| **Pad · Ancho y lejano** | Pad abierto y al fondo: chorus, delay y sala grande. |
+
+Para borrar una cadena tuya: clic derecho en ella › **Borrar la cadena**.
+
++++ Detalles
+- Las tuyas se guardan como archivos `.json` en la carpeta de Pulse, en `Presets/Cadenas`. Puedes copiarlas a otro ordenador.
+- El **Ducker** de «Bajo · Sidechain y saturación» bombea al tempo, en negras. Si quieres que siga a tu bombo, elige la pista del bombo en su **Sidechain**.
+- Los sidechain no se guardan: apuntan a pistas de un proyecto. Al guardar, la barra de estado lo avisa.
+- Los plugins se guardan con su estado. Si al cargar la cadena el plugin no está instalado, se salta y la barra de estado lo dice.
+- Un efecto que tu versión de Pulse no conoce (una cadena hecha con una versión más nueva) o un archivo dañado no rompen nada: se carga lo demás.
++++
+
 ### Efectos MIDI
 
 Cambian las notas antes de que lleguen al instrumento, en pistas MIDI.
@@ -2469,12 +2508,50 @@ Arriba pone el **destino**: la pista seleccionada, que es donde va lo que elijas
 
 ### Qué hay en el navegador
 
+- Arriba, la **búsqueda** (ver [[#Buscar]]).
+- **FAVORITOS**: lo que has marcado con la estrella (ver [[#Favoritos]]).
 - **INSTRUMENTOS**, **EFECTOS DE AUDIO** y **PLUGINS**: haz clic en uno para ponerlo en la pista. Ver [[Instrumentos]], [[Dispositivos y efectos]] y [[Plugins VST3 y CLAP]].
+- **CADENAS**: cadenas de efectos guardadas, las de Pulse y las tuyas. Ver [[Dispositivos y efectos#Guardar y cargar cadenas de efectos]].
 - **MUESTRAS**: **Añadir muestra…**.
-- **BIBLIOTECA**: busca muestras, proyectos y presets por nombre, y explora las carpetas Samples, [[Sonidos de Pulse]], Proyectos, Exportaciones, Presets y las tuyas.
+- **BIBLIOTECA**: las carpetas Samples, [[Sonidos de Pulse]], Proyectos, Exportaciones, Presets y las tuyas.
 - **PISTAS**: nueva pista MIDI o de audio.
 
 Para añadir una carpeta tuya, pulsa **Añadir carpeta…**. Para quitarla, clic derecho › **Quitar del navegador**.
+
+### Buscar
+
+Pulsa {⌘F} (o haz clic en el campo de arriba) y escribe: los resultados salen mientras escribes, sin pulsar {Enter}.
+
+- Busca en todo: instrumentos, efectos MIDI y de audio, presets de instrumentos y de efectos, cadenas, Sonidos de Pulse, tus muestras y carpetas, y plugins.
+- No importan las tildes ni las mayúsculas, y basta con el principio de cada palabra: «comp bus» encuentra **Compresor de bus**, y «espa», **Espacio**.
+- También entiende palabras de otros programas: «reverb», «ott», «glue», «eco», «sidechain».
+- Los resultados van por tipo (**EFECTOS DE AUDIO**, **PRESETS**, **ARCHIVOS**…), con lo que más se parece primero. Al lado del nombre pone de dónde es: el instrumento de un preset, la carpeta de una muestra.
+
+Con el teclado:
+
+| Tecla | Qué hace |
+|---|---|
+| {↑} {↓} | Eligen un resultado. Si es una muestra, la escuchas. |
+| {Enter} | Pone el resultado en el destino, como un doble clic. |
+| {⌥}{Enter} | Con una cadena, sustituye los efectos que había. |
+| {Esc} | Borra la búsqueda. Otro {Esc} devuelve el teclado a Pulse. |
+
+Con el ratón: clic elige (y escucha una muestra), doble clic lo pone en el destino y arrastrar lleva una muestra, un MIDI o un preset donde la sueltes, igual que desde sus carpetas.
+
++++ Detalles
+- Un efecto va al final de la cadena del destino; un instrumento, un preset o un kit, a la pista MIDI seleccionada.
+- Las muestras nuevas aparecen en la búsqueda en unos segundos.
+- Para no frenar Pulse, mira hasta 50.000 archivos de tus carpetas, y enseña hasta 40 resultados de cada tipo.
++++
+
+### Favoritos
+
+Marca con una estrella lo que usas siempre y lo tendrás arriba del navegador, en **FAVORITOS**.
+
+- Pasa el ratón por una fila y haz clic en la **☆** de la derecha, o haz clic derecho › **Añadir a favoritos**. Vale para efectos, instrumentos, presets, cadenas, kits, plugins y archivos, también en los resultados de la búsqueda.
+- Para quitarlo: clic en la **★** o clic derecho › **Quitar de favoritos**.
+- En **FAVORITOS**, un clic lo pone en el destino. Las muestras, como en sus carpetas: clic para escuchar y doble clic para usarlas.
+- Se guardan con tus ajustes de Pulse, no en el proyecto: los tienes en todos tus proyectos.
 
 ### Escuchar y usar archivos
 
@@ -2484,6 +2561,7 @@ Para añadir una carpeta tuya, pulsa **Añadir carpeta…**. Para quitarla, clic
 | MIDI (.mid) | — | Trae sus partes en pistas nuevas | A una pista MIDI: todas sus notas en un clip ahí |
 | Proyecto | — | Lo abre | — |
 | Preset (o kit) | — | Lo aplica a la pista seleccionada | A una pista MIDI: se lo aplica |
+| Cadena (en Presets › Cadenas) | — | Añade sus efectos al destino | A una pista: se los añade |
 
 - {↑} {↓}: tras hacer clic en un archivo, pasan al anterior o al siguiente y lo escuchan. Un clic fuera del navegador devuelve las flechas al resto de Pulse.
 - Sobre los .mid, ver [[Archivos MIDI]].

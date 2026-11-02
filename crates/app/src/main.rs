@@ -10,6 +10,7 @@ mod arrangement;
 mod beatbox;
 mod automation_rec;
 mod browser;
+mod chains;
 mod capture;
 mod clip_envelope;
 mod expression;
@@ -93,6 +94,8 @@ mod produccion2;
 #[cfg(test)]
 mod interfaz_tests;
 #[cfg(test)]
+mod browser_tests;
+#[cfg(test)]
 mod scroll_tests;
 mod project;
 mod recording;
@@ -103,6 +106,7 @@ mod sample_editor;
 mod session;
 mod session_rec;
 mod scene;
+mod search;
 mod script;
 mod settings;
 mod stems_ui;

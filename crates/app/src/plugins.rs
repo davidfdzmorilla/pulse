@@ -488,7 +488,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 }
 
 /// The browser section: the plugins found, and a button to look for them.
-pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::Ui, &str, &str, &str) -> bool) {
+pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::Ui, &str, &str, &str, &str) -> bool) {
     let target = app.selected_target;
     let track = match target {
         Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
@@ -497,7 +497,7 @@ pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::U
     let folders = app.plugin_folders();
     let hint = format!("Busca plugins VST3 en {}", folders.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", "));
     let search = if app.plugin_library.searched { "Volver a buscar plugins" } else { "Buscar plugins VST3" };
-    if item(ui, "⟳", search, &hint) {
+    if item(ui, "plugins:buscar", "⟳", search, &hint) {
         app.plugin_library.search(&folders);
         app.plugin_library.remember();
         let (found, failed) = (app.plugin_library.found.len(), app.plugin_library.failed.len());
@@ -515,12 +515,12 @@ pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::U
         }
         if info.instrument {
             let hint = if track.is_some() { "Clic: será el instrumento de la pista seleccionada" } else { "Selecciona una pista MIDI" };
-            if item(ui, "♫", &label, hint) {
+            if item(ui, &format!("plugin:{}", info.cid), "♫", &label, hint) {
                 if let Some(t) = track {
                     app.set_plugin_instrument(t, info);
                 }
             }
-        } else if item(ui, "≈", &label, "Clic: añade el efecto al final de la cadena seleccionada") {
+        } else if item(ui, &format!("plugin:{}", info.cid), "≈", &label, "Clic: añade el efecto al final de la cadena seleccionada") {
             app.add_plugin_effect(target, info);
         }
     }
@@ -794,6 +794,30 @@ pub(crate) mod tests {
         app.undo();
         assert_eq!(app.samples.plugins[&id].value(0), 0.25);
         assert_eq!(app.project.tracks[3].devices.last().unwrap().effect, Effect::Plugin(id));
+    }
+
+    /// A plugin effect goes into a saved chain with its state, and comes back
+    /// from it as a new instance with that state; ⌘Z takes it away.
+    #[test]
+    fn a_chain_keeps_its_plugins_state() {
+        let mut app = app();
+        let gain = app.plugin_library.found[1].clone();
+        app.add_plugin_effect(Target::Track(3), &gain);
+        let Effect::Plugin(id) = app.project.tracks[3].devices.last().unwrap().effect else { panic!() };
+        app.samples.plugins[&id].set(0, 0.25);
+        let (chain, left_out) = app.chain_of(Target::Track(3), "Con plugin", false);
+        assert!(left_out.is_empty(), "{left_out:?}");
+        let text = serde_json::to_string(&chain).unwrap();
+        let chain: crate::chains::Chain = serde_json::from_str(&text).unwrap();
+        app.commit_history();
+        app.load_chain(Target::Track(1), &chain, true);
+        let Some(&Device { effect: Effect::Plugin(copy), .. }) = app.project.tracks[1].devices.last() else { panic!("{:?}", app.status) };
+        assert_ne!(copy, id, "an instance of its own");
+        assert_eq!(app.samples.plugins[&copy].value(0), 0.25);
+        app.commit_history();
+        app.undo();
+        assert!(app.project.tracks[1].devices.iter().all(|d| d.effect != Effect::Plugin(copy)));
+        assert!(app.project.plugin(copy).is_none());
     }
 
     /// The first instrument installed on this computer, through the whole app: found,

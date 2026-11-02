@@ -1,12 +1,16 @@
-//! Left-hand browser: instruments and audio effects to add to the selected track,
-//! and Pulse's folder (see `library`) with the user's own places: samples to hear
-//! and drag where they go, projects to open, presets to apply.
+//! Left-hand browser: a search over everything below (see `search`), the
+//! user's favourites, instruments and effects to add to the selected track,
+//! effect chains (see `chains`), and Pulse's folder (see `library`) with the
+//! user's own places: samples to hear and drag where they go, projects to
+//! open, presets to apply.
 
 use crate::app::{Placement, PulseApp};
+use crate::search::{Favorites, Item, What};
 use crate::theme::{self, ACCENT, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, RichText, Sense};
 use engine::model::{Device, Effect, InstrumentKind};
 use engine::Target;
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
@@ -15,7 +19,10 @@ use std::time::{Duration, Instant};
 /// What the browser keeps between frames.
 #[derive(Default)]
 pub struct State {
+    /// What is searched for, in the field at the top.
     pub search: String,
+    /// ⌘F: the field takes the keys on the next frame.
+    pub focus_search: bool,
     /// The file being heard, since when, and for how long (for ever: a loop).
     previewing: Option<(PathBuf, Instant, f64)>,
     /// The tempo it is heard at, a loop in time with the project's.
@@ -25,15 +32,25 @@ pub struct State {
     /// The files shown this frame, in order (for ↑ and ↓).
     shown: Vec<PathBuf>,
     /// The last click was in the browser: ↑ and ↓ move through its files.
-    keys: bool,
+    pub(crate) keys: bool,
     /// The selection moved with the keys: shown in the list.
     scroll: bool,
     /// The row clicked last.
     selected: Option<PathBuf>,
     /// Folder listings, refreshed every couple of seconds while shown.
     listings: HashMap<PathBuf, (Instant, Vec<Entry>)>,
-    /// The last search and what it found.
-    found: Option<(String, Instant, Vec<PathBuf>)>,
+    /// Starred entries, read the first time they are needed.
+    favorites: Option<Favorites>,
+    /// The search's index: what isn't a file, and the files, each with when it was made.
+    catalog: Option<(Instant, Arc<Vec<Item>>)>,
+    files: Option<(Instant, Arc<Vec<Item>>)>,
+    /// Bumped when either changes (the results are found again).
+    generation: u64,
+    /// The results shown, in order, and the search and index they are for.
+    pub(crate) results: Vec<Item>,
+    results_for: Option<(String, u64)>,
+    /// The result chosen (↑ ↓, a click), among `results`.
+    pub result: usize,
 }
 
 #[derive(Clone)]
@@ -45,6 +62,9 @@ struct Entry {
 
 /// Files up to this long are heard as loops at the project's tempo.
 const LOOP_SECONDS: f64 = 32.0;
+
+/// Results shown a group at most.
+const PER_GROUP: usize = 40;
 
 /// What can be dragged out of the browser.
 #[derive(Clone, Debug)]
@@ -110,39 +130,65 @@ impl State {
         self.listings.get(dir).map(|(_, e)| e.clone()).unwrap_or_default()
     }
 
-    /// Files under `roots` whose name has every word of `query` (up to a few
-    /// hundred, from a bounded walk so a huge folder doesn't stall the app).
-    fn search(&mut self, query: &str, roots: &[PathBuf]) -> Vec<PathBuf> {
-        let stale = match &self.found {
-            Some((q, at, _)) => q != query || at.elapsed() > Duration::from_secs(5),
-            None => true,
-        };
-        if stale {
-            let words: Vec<String> = query.to_lowercase().split_whitespace().map(String::from).collect();
-            let mut found = Vec::new();
-            let mut pending: Vec<PathBuf> = roots.to_vec();
-            let mut visited = 0;
-            while let Some(dir) = pending.pop() {
-                for entry in read(&dir) {
-                    visited += 1;
-                    if entry.dir {
-                        pending.push(entry.path);
-                    } else if words.iter().all(|w| entry.name.to_lowercase().contains(w.as_str())) {
-                        found.push(entry.path);
-                    }
-                }
-                if found.len() >= 300 || visited > 20_000 {
-                    break;
-                }
-            }
-            found.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
-            self.found = Some((query.to_string(), Instant::now(), found));
-        }
-        self.found.as_ref().map(|(_, _, f)| f.clone()).unwrap_or_default()
-    }
-
     pub fn previewing(&self) -> Option<&Path> {
         self.previewing.as_ref().map(|(p, ..)| p.as_path())
+    }
+
+    /// The search's index is made again on its next use (a chain or preset saved).
+    pub fn forget_index(&mut self) {
+        self.catalog = None;
+    }
+
+    pub fn favorites(&mut self) -> &mut Favorites {
+        self.favorites.get_or_insert_with(|| Favorites::load_from(&crate::search::favorites_path()))
+    }
+
+    /// Stars or unstars an entry, and keeps it for the next time.
+    pub fn toggle_favorite(&mut self, key: &str) -> bool {
+        let on = self.favorites().toggle(key);
+        self.favorites().save_to(&crate::search::favorites_path());
+        on
+    }
+}
+
+/// The favourites as they are this frame, and the stars clicked in it.
+struct Favs {
+    keys: Vec<String>,
+    toggled: RefCell<Vec<String>>,
+}
+
+impl Favs {
+    fn has(&self, key: &str) -> bool {
+        self.keys.iter().any(|k| k == key)
+    }
+
+    /// The row's right-click menu: star or unstar it, and `more`.
+    fn menu(&self, response: &egui::Response, key: &str, more: impl FnOnce(&mut egui::Ui)) {
+        response.context_menu(|ui| {
+            let label = if self.has(key) { "Quitar de favoritos" } else { "Añadir a favoritos" };
+            if ui.button(label).clicked() {
+                self.toggled.borrow_mut().push(key.to_string());
+                ui.close();
+            }
+            more(ui);
+        });
+    }
+
+    /// The star at the row's right: full if starred, hollow under the pointer;
+    /// a click on it stars or unstars. Returns the width it takes.
+    fn star(&self, ui: &mut egui::Ui, row: &egui::Response, key: &str) -> f32 {
+        let rect = egui::Rect::from_center_size(pos2(row.rect.right() - 9.0, row.rect.center().y), vec2(16.0, row.rect.height()));
+        let star = ui.interact(rect, row.id.with("star"), Sense::click());
+        let on = self.has(key);
+        if on || row.contains_pointer() {
+            let color = if on { ACCENT } else if star.hovered() { TEXT } else { TEXT_DIM };
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, if on { "★" } else { "☆" }, theme::small(), color);
+        }
+        let tip = if on { "Quitar de favoritos" } else { "Añadir a favoritos" };
+        if star.on_hover_text(tip).clicked() {
+            self.toggled.borrow_mut().push(key.to_string());
+        }
+        18.0
     }
 }
 
@@ -152,29 +198,111 @@ fn section(ui: &mut egui::Ui, title: &str, contents: impl FnOnce(&mut egui::Ui))
     egui::CollapsingHeader::new(RichText::new(title).color(TEXT_DIM).size(10.5).strong()).id_salt(("browser_section", title)).default_open(true).show_unindented(ui, contents);
 }
 
-/// A full-width list row; returns true when clicked.
-fn item(ui: &mut egui::Ui, icon: &str, label: &str, hint: &str) -> bool {
+/// A row's icon and name (cut with "…" at `right`; the tooltip has the whole
+/// name), and `detail` after it, dimmer. Whether the name was cut.
+fn paint_row(ui: &egui::Ui, rect: egui::Rect, icon: &str, label: &str, detail: &str, right: f32) -> bool {
+    ui.painter().text(rect.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, icon, theme::small(), ACCENT);
+    let mut job = egui::text::LayoutJob::default();
+    job.append(label, 0.0, egui::TextFormat::simple(theme::body(), TEXT));
+    if !detail.is_empty() {
+        job.append(detail, 6.0, egui::TextFormat::simple(theme::small(), TEXT_DIM));
+    }
+    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 26.0 - right);
+    let galley = ui.painter().layout_job(job);
+    let cut = galley.elided;
+    ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, TEXT);
+    cut
+}
+
+/// A full-width list row with its star; returns true when clicked.
+fn item(ui: &mut egui::Ui, favs: &Favs, key: &str, icon: &str, label: &str, hint: &str) -> bool {
+    item_with(ui, favs, key, icon, label, hint, |_| {}).clicked()
+}
+
+/// [`item`], with `more` in its right-click menu.
+fn item_with(ui: &mut egui::Ui, favs: &Favs, key: &str, icon: &str, label: &str, hint: &str, more: impl FnOnce(&mut egui::Ui)) -> egui::Response {
     let width = ui.available_width();
     let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), Sense::click());
     crate::widgets::name(&response, egui::WidgetType::Button, label);
     if response.hovered() {
         ui.painter().rect_filled(rect, 2.0, theme::CONTROL);
     }
-    ui.painter().text(
-        rect.left_center() + vec2(6.0, 0.0),
-        Align2::LEFT_CENTER,
-        icon,
-        theme::small(),
-        ACCENT,
-    );
-    // Cut with "…" at the panel's edge (the tooltip has the whole name).
-    let mut job = egui::text::LayoutJob::simple_singleline(label.to_string(), theme::body(), TEXT);
-    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 26.0);
-    let galley = ui.painter().layout_job(job);
-    let cut = galley.elided;
-    ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, TEXT);
+    let star = favs.star(ui, &response, key);
+    let cut = paint_row(ui, rect, icon, label, "", star);
     let hint = if cut { format!("{label}\n{hint}") } else { hint.to_string() };
-    response.on_hover_text(hint).clicked()
+    favs.menu(&response, key, more);
+    response.on_hover_text(hint)
+}
+
+/// The field keeps the keys on Esc (it clears the search first) and the arrows.
+const KEEPS_ESCAPE: egui::EventFilter = egui::EventFilter { tab: false, horizontal_arrows: true, vertical_arrows: true, escape: true };
+
+/// The search field at the top. With a search, ↑ ↓ choose among the results,
+/// Enter puts the one chosen where it goes (⌥Enter: a chain instead of the
+/// effects there) and Esc clears it.
+fn search_field(app: &mut PulseApp, ui: &mut egui::Ui) {
+    let id = egui::Id::new("browser_search");
+    let focused = ui.memory(|m| m.has_focus(id));
+    let searching = !app.browser.search.trim().is_empty();
+    let mut step = 0isize;
+    let mut go = None;
+    let mut clear = false;
+    if focused || (searching && app.browser.keys) {
+        ui.input_mut(|i| {
+            if searching {
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown) {
+                    step = 1;
+                }
+                if i.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp) {
+                    step = -1;
+                }
+                if i.consume_key(egui::Modifiers::ALT, egui::Key::Enter) {
+                    go = Some(true);
+                } else if i.consume_key(egui::Modifiers::NONE, egui::Key::Enter) {
+                    go = Some(false);
+                }
+            }
+            clear = i.consume_key(egui::Modifiers::NONE, egui::Key::Escape);
+        });
+    }
+    if clear {
+        if searching {
+            app.browser.search.clear();
+            app.browser.result = 0;
+        } else {
+            ui.memory_mut(|m| m.surrender_focus(id));
+        }
+    }
+    let hint = format!("Buscar  {}", theme::keys("⌘F"));
+    let response = ui.add(egui::TextEdit::singleline(&mut app.browser.search).id(id).hint_text(hint).desired_width(f32::INFINITY).event_filter(KEEPS_ESCAPE));
+    crate::widgets::name(&response, egui::WidgetType::TextEdit, "Buscar en el navegador");
+    let response = response.on_hover_text("Instrumentos, efectos, presets, cadenas, sonidos, muestras y plugins. ↑ ↓ eligen, Enter lo pone en el destino, Esc borra");
+    if std::mem::take(&mut app.browser.focus_search) {
+        response.request_focus();
+    }
+    if response.changed() {
+        app.browser.result = 0;
+        app.browser.scroll = true;
+    }
+    if step != 0 && !app.browser.results.is_empty() {
+        let last = app.browser.results.len() as isize - 1;
+        app.browser.result = (app.browser.result as isize + step).clamp(0, last) as usize;
+        app.browser.scroll = true;
+        if let Some(Item { what: What::File(path), .. }) = app.browser.results.get(app.browser.result).cloned() {
+            if kind(&path) == Some(Kind::Audio) {
+                app.preview(Some(&path));
+            }
+        }
+    }
+    if let Some(alt) = go {
+        if let Some(item) = app.browser.results.get(app.browser.result).cloned() {
+            activate(app, &item.what, alt);
+            // ⌘Z undoes it (in the field it would undo the typing); the arrows
+            // and Enter still go through the results.
+            ui.memory_mut(|m| m.surrender_focus(id));
+            app.browser.keys = true;
+        }
+    }
 }
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
@@ -187,9 +315,19 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             .color(TEXT_DIM)
             .size(10.5),
     );
+    search_field(app, ui);
     ui.separator();
+    let favs = Favs { keys: app.browser.favorites().keys.clone(), toggled: RefCell::new(Vec::new()) };
+    let searching = !app.browser.search.trim().is_empty();
 
     egui::ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
+        if searching {
+            results(app, ui, &favs);
+            return;
+        }
+        if !favs.keys.is_empty() {
+            section(ui, "FAVORITOS", |ui| favorites(app, ui, &favs));
+        }
         section(ui, "INSTRUMENTOS", |ui| {
             let track = match target {
                 Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
@@ -202,16 +340,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             };
             for kind in InstrumentKind::catalog() {
                 let icon = if kind.is_drums() { "◉" } else { "♫" };
-                if item(ui, icon, kind.label(), hint) {
-                    if let Some(t) = track {
-                        // An empty rack would be silent: start it with the basic kit.
-                        if matches!(kind, InstrumentKind::DrumRack(_)) && app.project.tracks[t].samples.is_empty() {
-                            app.load_basic_kit(t);
-                        } else {
-                            app.set_instrument(t, kind);
-                        }
-                        app.detail = crate::app::Detail::Devices;
-                    }
+                if item(ui, &favs, &format!("instrumento:{}", kind.label()), icon, kind.label(), hint) {
+                    activate(app, &What::Instrument(kind), false);
                 }
             }
         });
@@ -223,45 +353,278 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             };
             let hint = if track.is_some() { "Clic: lo pone antes del instrumento de la pista seleccionada" } else { "Selecciona una pista MIDI" };
             for effect in engine::model::MidiEffect::catalog() {
-                if item(ui, "♪", effect.label(), hint) {
-                    if let Some(t) = track {
-                        app.add_midi_effect(t, effect);
-                        app.detail = crate::app::Detail::Devices;
-                    }
+                if item(ui, &favs, &format!("efecto-midi:{}", effect.label()), "♪", effect.label(), hint) && track.is_some() {
+                    activate(app, &What::MidiEffect(effect), false);
                 }
             }
         });
 
         section(ui, "EFECTOS DE AUDIO", |ui| {
             for effect in Effect::catalog() {
-                if item(ui, "≈", effect.label(), "Clic: añade el efecto al final de la cadena seleccionada") {
-                    app.add_device(target, Device::new(crate::returns::for_target(effect, target)));
+                if item(ui, &favs, &format!("efecto:{}", effect.label()), "≈", effect.label(), "Clic: añade el efecto al final de la cadena seleccionada") {
+                    activate(app, &What::Effect(effect), false);
                 }
             }
         });
 
+        section(ui, "CADENAS", |ui| chains(app, ui, &favs));
+
         section(ui, "PLUGINS (VST3 · CLAP)", |ui| {
-            crate::plugins::browser(app, ui, |ui, icon, label, hint| item(ui, icon, label, hint));
+            crate::plugins::browser(app, ui, |ui, key, icon, label, hint| item(ui, &favs, key, icon, label, hint));
         });
 
         section(ui, "MUESTRAS", |ui| {
-            if item(ui, "♪", "Añadir muestra…", "Elige archivos de audio (WAV, AIFF, FLAC, MP3…). También puedes arrastrarlos a la ventana") {
+            if item(ui, &favs, "muestras:añadir", "♪", "Añadir muestra…", "Elige archivos de audio (WAV, AIFF, FLAC, MP3…). También puedes arrastrarlos a la ventana") {
                 app.choose_samples(crate::app::Placement::Auto);
             }
         });
 
-        section(ui, "BIBLIOTECA", |ui| library(app, ui));
+        section(ui, "BIBLIOTECA", |ui| library(app, ui, &favs));
 
         section(ui, "PISTAS", |ui| {
-            if item(ui, "+", "Nueva pista MIDI", &crate::theme::keys("⌘T")) {
+            if item(ui, &favs, "pistas:midi", "+", "Nueva pista MIDI", &crate::theme::keys("⌘T")) {
                 app.add_track();
             }
-            if item(ui, "+", "Nueva pista de audio", &crate::theme::keys("⇧⌘T")) {
+            if item(ui, &favs, "pistas:audio", "+", "Nueva pista de audio", &crate::theme::keys("⇧⌘T")) {
                 app.add_audio_track();
             }
         });
     });
-    keys(app, ui, panel);
+    for key in favs.toggled.take() {
+        let on = app.browser.toggle_favorite(&key);
+        app.status = Some(if on { "Añadido a favoritos".into() } else { "Quitado de favoritos".into() });
+    }
+    if searching {
+        if ui.ctx().input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !panel.contains(p))) {
+            app.browser.keys = false;
+        }
+    } else {
+        keys(app, ui, panel);
+    }
+}
+
+/// The chains: Pulse's and the user's. A click adds one's effects after the
+/// target's; with ⌥ they replace them.
+fn chains(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
+    // From the search's index: the folder isn't read every frame.
+    let (catalog, _) = app.search_index(false);
+    let mut delete = None;
+    for found in catalog.iter() {
+        let What::Chain(chain) = &found.what else { continue };
+        let key = &found.key;
+        let hint = format!("{}\nClic: añade sus efectos al final de la cadena del destino · ⌥ clic: sustituye los que hay", chain.summary());
+        let response = item_with(ui, favs, key, "⛓", &chain.name, &hint, |ui| {
+            if !chain.factory && ui.button("Borrar la cadena").clicked() {
+                delete = Some(chain.name.clone());
+                ui.close();
+            }
+        });
+        if response.clicked() {
+            let alt = ui.input(|i| i.modifiers.alt);
+            app.load_chain(app.selected_target, chain, alt);
+        }
+    }
+    if let Some(name) = delete {
+        app.delete_chain(&name);
+    }
+    ui.label(RichText::new("Guarda las tuyas en Dispositivos › Guardar cadena…").color(TEXT_DIM).size(10.0));
+}
+
+/// The starred entries, in the order they were starred. They load with a click
+/// (files: heard with a click, used with a double click, as in their folder).
+fn favorites(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
+    let (catalog, _) = app.search_index(false);
+    for key in &favs.keys {
+        if let Some(path) = key.strip_prefix("archivo:") {
+            let path = PathBuf::from(path);
+            if path.exists() {
+                file_row(app, ui, &path, favs);
+            }
+            continue;
+        }
+        let Some(found) = catalog.iter().find(|i| &i.key == key) else { continue };
+        let found = found.clone();
+        if result_row(app, ui, &found, false, favs).0 {
+            let alt = ui.input(|i| i.modifiers.alt);
+            activate(app, &found.what, alt);
+        }
+    }
+}
+
+/// The results of the search, by group, the best first.
+fn results(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
+    let (catalog, files) = app.search_index(true);
+    let query = app.browser.search.trim().to_string();
+    let wanted = (query.clone(), app.browser.generation);
+    if app.browser.results_for.as_ref() != Some(&wanted) {
+        let groups = crate::search::find(&[&catalog, &files], &query, PER_GROUP);
+        app.browser.results = groups.into_iter().flat_map(|(_, g)| g.into_iter().cloned()).collect();
+        app.browser.results_for = Some(wanted);
+        app.browser.result = app.browser.result.min(app.browser.results.len().saturating_sub(1));
+    }
+    if app.browser.results.is_empty() {
+        ui.label(RichText::new("Nada con ese nombre").color(TEXT_DIM).size(10.5));
+        return;
+    }
+    let shown = app.browser.results.clone();
+    let mut group = None;
+    let mut activated = None;
+    for (i, found) in shown.iter().enumerate() {
+        if group != Some(found.group) {
+            group = Some(found.group);
+            let count = shown.iter().filter(|r| r.group == found.group).count();
+            ui.add_space(if i == 0 { 2.0 } else { 6.0 });
+            ui.label(RichText::new(format!("{}  ({count})", found.group.label())).color(TEXT_DIM).size(10.0).strong());
+        }
+        let selected = app.browser.result == i;
+        let (clicked, double) = result_row(app, ui, found, selected, favs);
+        if clicked {
+            app.browser.result = i;
+            app.browser.keys = true;
+        }
+        if double {
+            activated = Some((found.what.clone(), ui.input(|i| i.modifiers.alt)));
+        }
+    }
+    if let Some((what, alt)) = activated {
+        activate(app, &what, alt);
+    }
+}
+
+/// A result: chosen with a click (a sample is heard), put where it goes with
+/// a double click, dragged like a file of the list. Whether it was clicked,
+/// and whether double clicked.
+fn result_row(app: &mut PulseApp, ui: &mut egui::Ui, found: &Item, selected: bool, favs: &Favs) -> (bool, bool) {
+    let file = match &found.what {
+        What::File(path) => kind(path).map(|k| (path.clone(), k)),
+        _ => None,
+    };
+    let width = ui.available_width();
+    let sense = if file.as_ref().is_some_and(|(_, k)| matches!(k, Kind::Audio | Kind::Midi | Kind::Preset)) { Sense::click_and_drag() } else { Sense::click() };
+    let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), sense);
+    crate::widgets::name(&response, egui::WidgetType::Button, &found.name);
+    if selected && std::mem::take(&mut app.browser.scroll) {
+        response.scroll_to_me(None);
+    }
+    if selected || response.hovered() {
+        ui.painter().rect_filled(rect, 2.0, if selected { theme::CONTROL_HOVER } else { theme::CONTROL });
+    }
+    let playing = file.as_ref().is_some_and(|(p, _)| app.browser.previewing() == Some(p.as_path()));
+    let icon = match (&found.what, &file) {
+        (_, Some((_, Kind::Audio))) if playing => "►",
+        (_, Some((_, Kind::Audio))) => "♪",
+        (_, Some((_, Kind::Midi))) => "♫",
+        (_, Some((_, Kind::Project))) => "◆",
+        (_, Some((_, Kind::Preset))) => "☰",
+        (What::Instrument(k), _) if k.is_drums() => "◉",
+        (What::Instrument(_), _) | (What::Plugin(_), _) => "♫",
+        (What::MidiEffect(_), _) => "♪",
+        (What::Effect(_), _) => "≈",
+        (What::Chain(_), _) => "⛓",
+        (What::Kit(_), _) => "◉",
+        _ => "☰",
+    };
+    let star = favs.star(ui, &response, &found.key);
+    paint_row(ui, rect, icon, &found.name, &found.detail, star);
+    let what = match &found.what {
+        What::File(path) => path.display().to_string(),
+        What::Chain(chain) => chain.summary(),
+        _ => found.detail.clone(),
+    };
+    let hint = match &found.what {
+        What::File(_) => "Clic: escuchar · doble clic o Enter: a la pista seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
+        What::Chain(_) => "Doble clic o Enter: añade sus efectos al destino · con ⌥: sustituye los que hay",
+        What::Instrument(_) | What::Preset(_) | What::Kit(_) => "Doble clic o Enter: en la pista MIDI seleccionada",
+        _ => "Doble clic o Enter: al final de la cadena del destino",
+    };
+    favs.menu(&response, &found.key, |_| {});
+    let response = response.on_hover_text(format!("{}\n{what}\n{hint}", found.name));
+    if let Some((path, k)) = &file {
+        if response.drag_started() && matches!(k, Kind::Audio | Kind::Midi | Kind::Preset) {
+            egui::DragAndDrop::set_payload(ui.ctx(), Dragged(path.clone()));
+        }
+        if response.clicked() && *k == Kind::Audio && !response.double_clicked() {
+            app.preview((!playing).then_some(path.as_path()));
+        }
+    }
+    let double = response.double_clicked();
+    (response.clicked() || double, double)
+}
+
+/// Puts what an entry is where it goes: on the selected track or chain (an
+/// instrument or a preset on a MIDI track). With `alt`, a chain replaces the
+/// effects there.
+pub fn activate(app: &mut PulseApp, what: &What, alt: bool) {
+    let target = app.selected_target;
+    let midi = match target {
+        Target::Track(t) if !app.project.tracks[t].is_audio() && !app.project.tracks[t].is_group() => Some(t),
+        _ => None,
+    };
+    let instrument_track = match target {
+        Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
+        _ => None,
+    };
+    let need_midi = |app: &mut PulseApp| app.status = Some("Selecciona una pista MIDI".into());
+    match what {
+        What::Instrument(kind) => match instrument_track {
+            Some(t) => {
+                // An empty rack would be silent: start it with the basic kit.
+                if matches!(kind, InstrumentKind::DrumRack(_)) && app.project.tracks[t].samples.is_empty() {
+                    app.load_basic_kit(t);
+                } else {
+                    app.set_instrument(t, *kind);
+                }
+                app.detail = crate::app::Detail::Devices;
+            }
+            None => need_midi(app),
+        },
+        What::MidiEffect(effect) => match midi {
+            Some(t) => {
+                app.add_midi_effect(t, *effect);
+                app.detail = crate::app::Detail::Devices;
+            }
+            None => need_midi(app),
+        },
+        What::Effect(effect) => app.add_device(target, Device::new(crate::returns::for_target(*effect, target))),
+        What::EffectPreset(effect) => app.add_device(target, Device::new(*effect)),
+        What::Preset(preset) => match midi {
+            Some(t) => {
+                app.apply_preset(t, (**preset).clone());
+                app.detail = crate::app::Detail::Devices;
+            }
+            None => need_midi(app),
+        },
+        What::Chain(chain) => app.load_chain(target, chain, alt),
+        What::Kit(kit) => match midi {
+            Some(t) => {
+                app.load_factory_kit(t, *kit);
+                app.detail = crate::app::Detail::Devices;
+            }
+            None => need_midi(app),
+        },
+        What::File(path) => match kind(path) {
+            Some(Kind::Audio) => {
+                app.preview(None);
+                app.add_samples(vec![path.clone()], Placement::Auto);
+            }
+            Some(Kind::Midi) => {
+                app.import_midi(path, None);
+            }
+            Some(Kind::Project) => app.open_documents(vec![path.clone()]),
+            Some(Kind::Preset) => app.apply_preset_file(path),
+            None => {}
+        },
+        What::Plugin(info) => {
+            if info.instrument {
+                match midi {
+                    Some(t) => app.set_plugin_instrument(t, info),
+                    None => need_midi(app),
+                }
+            } else {
+                app.add_plugin_effect(target, info);
+            }
+        }
+    }
 }
 
 /// ↑ and ↓ after a click in the browser: the file before or after the one
@@ -299,8 +662,58 @@ impl State {
     }
 }
 
-/// Pulse's folder and the user's places: a search over all of them, or their folders.
-fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
+/// Pulse's folder, «Sonidos de Pulse» and the user's places, by name.
+fn places(app: &PulseApp) -> Vec<(String, PathBuf)> {
+    let root = crate::library::root();
+    let mut places: Vec<(String, PathBuf)> = [
+        ("Samples", crate::library::SAMPLES),
+        ("Proyectos", crate::library::PROJECTS),
+        ("Exportaciones", crate::library::EXPORTS),
+        ("Presets", crate::library::PRESETS),
+    ]
+    .into_iter()
+    .map(|(name, folder)| (name.to_string(), root.join(folder)))
+    .collect();
+    // Pulse's own sounds, made the first time they are opened.
+    places.insert(1, (crate::factory_sounds::NAME.to_string(), crate::factory_sounds::root()));
+    places.extend(app.settings.browser_folders.iter().map(|f| (f.file_name().map_or(f.display().to_string(), |n| n.to_string_lossy().into_owned()), f.clone())));
+    places
+}
+
+/// How many of the places are Pulse's own (the rest are the user's).
+const BUILTIN_PLACES: usize = 5;
+
+impl PulseApp {
+    /// The search's index (made again every few seconds: presets saved, files
+    /// added). Without `with_files`, the files are left as they are.
+    fn search_index(&mut self, with_files: bool) -> (Arc<Vec<Item>>, Arc<Vec<Item>>) {
+        let fresh = |made: &Option<(Instant, Arc<Vec<Item>>)>, seconds: u64| made.as_ref().is_some_and(|(at, _)| at.elapsed() < Duration::from_secs(seconds));
+        let factory = crate::factory_sounds::root();
+        if !fresh(&self.browser.catalog, 3) {
+            let mut chains = crate::chains::factory();
+            chains.extend(crate::chains::list(&crate::chains::user_root()));
+            let presets = crate::presets::user_root();
+            let sources = crate::search::Sources { presets: &presets, chains, plugins: &self.plugin_library.found, factory: &factory };
+            self.browser.catalog = Some((Instant::now(), Arc::new(crate::search::catalog(&sources))));
+            self.browser.generation += 1;
+        }
+        if with_files && !fresh(&self.browser.files, 10) {
+            let roots: Vec<PathBuf> = places(self).into_iter().map(|(_, p)| p).collect();
+            // The user's presets and chains are in the index already.
+            let presets = crate::library::root().join(crate::library::PRESETS);
+            let paths = crate::search::walk(&roots, 50_000, |p| kind(p).is_some() && !(p.starts_with(&presets) && kind(p) == Some(Kind::Preset)));
+            let items = paths.iter().map(|p| crate::search::file_item(p, &factory)).collect();
+            self.browser.files = Some((Instant::now(), Arc::new(items)));
+            self.browser.generation += 1;
+        }
+        let catalog = self.browser.catalog.as_ref().map(|(_, c)| c.clone()).unwrap_or_default();
+        let files = self.browser.files.as_ref().map(|(_, f)| f.clone()).unwrap_or_default();
+        (catalog, files)
+    }
+}
+
+/// Pulse's folder and the user's places, as folders.
+fn library(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
     ui.horizontal(|ui| {
         let mut on = app.settings.preview_in_tempo;
         let response = ui.checkbox(&mut on, RichText::new("A tempo").size(10.5)).on_hover_text("Los loops se escuchan al tempo del proyecto, en bucle y, si la canción suena, a tiempo con ella. Sin marcar, cada archivo suena una vez a su velocidad");
@@ -316,7 +729,6 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(format!("loop a {} BPM", crate::tempo_ui::bpm_text(bpm))).color(TEXT_DIM).size(10.5));
         }
     });
-    ui.add(egui::TextEdit::singleline(&mut app.browser.search).hint_text("Buscar muestras, proyectos, presets").desired_width(f32::INFINITY));
     app.hear_analysed();
     // A preview that has played to its end is over.
     if app.browser.previewing.as_ref().is_some_and(|(_, at, length)| at.elapsed().as_secs_f64() > *length) {
@@ -325,51 +737,25 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
     if app.browser.analysing.is_some() {
         ui.ctx().request_repaint_after(Duration::from_millis(50));
     }
-    let root = crate::library::root();
     let factory = crate::factory_sounds::root();
-    let mut places: Vec<(String, PathBuf)> = [
-        ("Samples", crate::library::SAMPLES),
-        ("Proyectos", crate::library::PROJECTS),
-        ("Exportaciones", crate::library::EXPORTS),
-        ("Presets", crate::library::PRESETS),
-    ]
-    .into_iter()
-    .map(|(name, folder)| (name.to_string(), root.join(folder)))
-    .collect();
-    // Pulse's own sounds, made the first time they are opened.
-    places.insert(1, (crate::factory_sounds::NAME.to_string(), factory.clone()));
-    let builtin = places.len();
-    places.extend(app.settings.browser_folders.iter().map(|f| (f.file_name().map_or(f.display().to_string(), |n| n.to_string_lossy().into_owned()), f.clone())));
-
-    let query = app.browser.search.trim().to_string();
-    if !query.is_empty() {
-        let roots: Vec<PathBuf> = places.iter().map(|(_, p)| p.clone()).collect();
-        let found = app.browser.search(&query, &roots);
-        if found.is_empty() {
-            ui.label(RichText::new("Nada con ese nombre").color(TEXT_DIM).size(10.5));
-        }
-        for path in found {
-            file_row(app, ui, &path);
-        }
-        return;
-    }
+    let places = places(app);
     let mut remove = None;
     for (i, (name, dir)) in places.iter().enumerate() {
-        let own = i >= builtin;
+        let own = i >= BUILTIN_PLACES;
         let response = egui::CollapsingHeader::new(RichText::new(name).color(TEXT))
             .id_salt(("browser_place", dir))
             .show(ui, |ui| {
                 if *dir == factory {
                     factory_status(app, ui);
                 }
-                folder(app, ui, dir, 0)
+                folder(app, ui, dir, 0, favs)
             })
             .header_response;
         let response = response.on_hover_text(dir.display().to_string());
         if own {
             response.context_menu(|ui| {
                 if ui.button("Quitar del navegador").clicked() {
-                    remove = Some(i - builtin);
+                    remove = Some(i - BUILTIN_PLACES);
                     ui.close();
                 }
             });
@@ -380,7 +766,7 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui) {
         next.browser_folders.remove(i);
         app.set_settings(next);
     }
-    if item(ui, "+", "Añadir carpeta…", "Una carpeta tuya (de muestras, por ejemplo) en el navegador") {
+    if item(ui, favs, "biblioteca:añadir-carpeta", "+", "Añadir carpeta…", "Una carpeta tuya (de muestras, por ejemplo) en el navegador") {
         if let Some(dir) = crate::files::pick_folder(rfd::FileDialog::new()) {
             let mut next = app.settings.clone();
             if !next.browser_folders.contains(&dir) {
@@ -404,7 +790,7 @@ fn factory_status(app: &mut PulseApp, ui: &mut egui::Ui) {
 }
 
 /// A folder's contents: subfolders to open, files as rows.
-fn folder(app: &mut PulseApp, ui: &mut egui::Ui, dir: &Path, depth: usize) {
+fn folder(app: &mut PulseApp, ui: &mut egui::Ui, dir: &Path, depth: usize, favs: &Favs) {
     let entries = app.browser.list(dir);
     if entries.is_empty() {
         ui.label(RichText::new("Vacía").color(TEXT_DIM).size(10.5));
@@ -412,16 +798,16 @@ fn folder(app: &mut PulseApp, ui: &mut egui::Ui, dir: &Path, depth: usize) {
     for entry in entries {
         if entry.dir {
             if depth < 12 {
-                egui::CollapsingHeader::new(&entry.name).id_salt(("browser_dir", &entry.path)).show(ui, |ui| folder(app, ui, &entry.path, depth + 1));
+                egui::CollapsingHeader::new(&entry.name).id_salt(("browser_dir", &entry.path)).show(ui, |ui| folder(app, ui, &entry.path, depth + 1, favs));
             }
         } else {
-            file_row(app, ui, &entry.path);
+            file_row(app, ui, &entry.path, favs);
         }
     }
 }
 
 /// A file: click to hear it (audio), double click to use it, drag it where it goes.
-fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
+fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path, favs: &Favs) {
     let Some(kind) = kind(path) else { return };
     let name = path.file_stem().map_or(String::new(), |n| n.to_string_lossy().into_owned());
     let width = ui.available_width();
@@ -444,34 +830,23 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
         Kind::Project => "◆",
         Kind::Preset => "☰",
     };
-    ui.painter().text(rect.left_center() + vec2(6.0, 0.0), Align2::LEFT_CENTER, icon, theme::small(), ACCENT);
-    let mut job = egui::text::LayoutJob::simple_singleline(name.clone(), theme::body(), TEXT);
-    job.wrap = egui::text::TextWrapping::truncate_at_width(rect.width() - 26.0);
-    let galley = ui.painter().layout_job(job);
-    ui.painter().galley(pos2(rect.left() + 22.0, rect.center().y - galley.size().y / 2.0), galley, TEXT);
+    let key = format!("archivo:{}", path.display());
+    let star = favs.star(ui, &response, &key);
+    paint_row(ui, rect, icon, &name, "", star);
     let hint = match kind {
         Kind::Audio => "Clic: escuchar (otra vez: parar) · ↑ ↓: el anterior o el siguiente · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
         Kind::Midi => "Doble clic: sus partes en pistas nuevas · arrastrar: a una pista MIDI (todo en un clip) o a un hueco vacío (pistas nuevas)",
         Kind::Project => "Doble clic: abrir el proyecto",
-        Kind::Preset => "Doble clic: aplicar el preset (o el kit) a la pista seleccionada · arrastrar: a una pista MIDI",
+        Kind::Preset => "Doble clic: aplicar el preset, el kit o la cadena a la pista seleccionada · arrastrar: a una pista",
     };
+    favs.menu(&response, &key, |_| {});
     let response = response.on_hover_text(format!("{}\n{hint}", path.display()));
 
     if response.drag_started() && matches!(kind, Kind::Audio | Kind::Midi | Kind::Preset) {
         egui::DragAndDrop::set_payload(ui.ctx(), Dragged(path.to_path_buf()));
     }
     if response.double_clicked() {
-        match kind {
-            Kind::Audio => {
-                app.preview(None);
-                app.add_samples(vec![path.to_path_buf()], Placement::Auto);
-            }
-            Kind::Midi => {
-                app.import_midi(path, None);
-            }
-            Kind::Project => app.open_documents(vec![path.to_path_buf()]),
-            Kind::Preset => app.apply_preset_file(path),
-        }
+        activate(app, &What::File(path.to_path_buf()), false);
     } else if response.clicked() {
         app.browser.selected = Some(path.to_path_buf());
         app.browser.keys = true;
@@ -479,6 +854,11 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path) {
             app.preview((!playing).then_some(path));
         }
     }
+}
+
+/// Whether a JSON file's text is an instrument preset's (else it may be a chain's).
+fn is_preset(text: Option<&str>) -> bool {
+    text.is_some_and(|t| serde_json::from_str::<crate::presets::Preset>(t).is_ok())
 }
 
 impl PulseApp {
@@ -562,9 +942,17 @@ impl PulseApp {
         true
     }
 
-    /// Applies a user preset file to the selected MIDI track.
+    /// Applies a preset file (or a chain's) to the selected track: a preset
+    /// to a MIDI one, a chain's effects to any.
     fn apply_preset_file(&mut self, path: &Path) {
-        let preset = std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<crate::presets::Preset>(&t).ok());
+        let text = std::fs::read_to_string(path).ok();
+        if !is_preset(text.as_deref()) {
+            if let Some(chain) = crate::chains::read(path) {
+                self.load_chain(self.selected_target, &chain, false);
+                return;
+            }
+        }
+        let preset = text.and_then(|t| serde_json::from_str::<crate::presets::Preset>(&t).ok());
         match (preset, self.selected_target) {
             (Some(preset), Target::Track(t)) if !self.project.tracks[t].is_audio() => {
                 self.apply_preset(t, preset);
@@ -593,6 +981,12 @@ impl PulseApp {
         let targets = &self.drop_targets;
         let track = targets.slots.iter().find(|(.., r)| r.contains(pos)).map(|&(t, ..)| t).or_else(|| targets.lanes.iter().find(|(_, r, ..)| r.contains(pos)).map(|&(t, ..)| t));
         let Some(t) = track else { return };
+        if !is_preset(std::fs::read_to_string(path).ok().as_deref()) {
+            if let Some(chain) = crate::chains::read(path) {
+                self.load_chain(Target::Track(t), &chain, false);
+                return;
+            }
+        }
         if self.project.tracks[t].is_audio() || self.project.tracks[t].is_group() {
             self.status = Some("Suelta el preset en una pista MIDI".into());
             return;
@@ -745,12 +1139,14 @@ mod tests {
         for f in ["Baterías/Bombo gordo.wav", "Baterías/Viejas/bombo SECO.aif", "notas.txt", "Mi tema.pulse"] {
             std::fs::write(dir.join(f), b"").unwrap();
         }
-        let mut state = State::default();
-        let names = |found: Vec<PathBuf>| found.iter().map(|p| p.file_name().unwrap().to_string_lossy().into_owned()).collect::<Vec<_>>();
-        assert_eq!(names(state.search("bombo", &[dir.clone()])), vec!["Bombo gordo.wav", "bombo SECO.aif"]);
-        assert_eq!(names(state.search("seco bombo", &[dir.clone()])), vec!["bombo SECO.aif"]);
-        assert_eq!(names(state.search("tema", &[dir.clone()])), vec!["Mi tema.pulse"]);
-        assert!(state.search("notas", &[dir.clone()]).is_empty(), "only files Pulse uses");
+        let files: Vec<crate::search::Item> = crate::search::walk(&[dir.clone()], 1000, |p| kind(p).is_some()).iter().map(|p| crate::search::file_item(p, Path::new("/nada"))).collect();
+        let names = |query: &str| crate::search::find(&[&files], query, 50).into_iter().flat_map(|(_, g)| g.into_iter().map(|i| i.name.clone())).collect::<Vec<_>>();
+        let mut bombos = names("bombo");
+        bombos.sort();
+        assert_eq!(bombos, vec!["Bombo gordo", "bombo SECO"]);
+        assert_eq!(names("seco bombo"), vec!["bombo SECO"]);
+        assert_eq!(names("tema"), vec!["Mi tema"]);
+        assert!(names("notas").is_empty(), "only files Pulse uses");
         // Folders first, hidden files left out.
         let listed: Vec<String> = read(&dir).into_iter().map(|e| e.name).collect();
         assert_eq!(listed, vec!["Baterías", "Mi tema.pulse"]);

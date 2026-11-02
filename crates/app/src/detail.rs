@@ -6,6 +6,7 @@ use crate::{devices, piano_roll, widgets};
 use eframe::egui::{self, vec2, RichText};
 
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
+    let mut save_chain = None;
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 2.0;
         if widgets::flat_button(ui, "Clip", app.detail == Detail::Clip, vec2(60.0, 20.0)).clicked() {
@@ -30,7 +31,16 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
         }
+        // Here, not at the end of the chain: a long one would hide it.
+        if app.detail == Detail::Devices {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                save_chain = crate::chains::save_menu(app, ui, target);
+            });
+        }
     });
+    if let Some((name, with_instrument)) = save_chain {
+        app.save_chain(app.selected_target, &name, with_instrument);
+    }
     ui.add_space(4.0);
     let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(4)).corner_radius(2);
     frame.show(ui, |ui| {

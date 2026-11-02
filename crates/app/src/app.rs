@@ -2774,6 +2774,12 @@ impl PulseApp {
             self.tab_pressed = None;
             return;
         }
+        // ⌘F: the browser's search (shown if it was hidden). ⌃⌘F is full screen.
+        let mac_ctrl = cfg!(target_os = "macos") && ctx.input(|i| i.modifiers.ctrl);
+        if !mac_ctrl && ctx.input(|i| i.modifiers.command && !i.modifiers.alt && !i.modifiers.shift && i.key_pressed(egui::Key::F)) {
+            self.show_browser = true;
+            self.browser.focus_search = true;
+        }
         let input = ctx.input(|i| {
             // ⌘ shortcuts without ⌥: with it they are others (⌥⌘T makes a
             // return, ⌥⌘S opens the versions), read by the menus.

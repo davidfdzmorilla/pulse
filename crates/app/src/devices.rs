@@ -222,6 +222,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                             multiband_body(app, ui, target, index, meter, &mut actions);
                             return;
                         }
+                        if let Effect::Vocoder(_) = effect {
+                            vocoder_body(app, ui, target, index, effect, &sources, &mut actions);
+                            return;
+                        }
                         discrete_controls(ui, effect, index, &sources);
                         for param in 0..effect.params().len() {
                             effect_knob(app, ui, target, index, effect, param, &mut actions);
@@ -418,6 +422,9 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Glue(_) => (7, 1),
         // Two rows: the widest has eight knobs; then the bands' meters.
         Effect::Multiband(_) => return 8.0 * 52.0 + BAND_METERS_WIDTH + 28.0,
+        // The carrier's column, then two rows of knobs (six and five).
+        Effect::Vocoder(_) => return 6.0 * 52.0 + 110.0 + 28.0,
+        Effect::VoiceShift(_) => (5, 1),
         Effect::Plugin(_) => (PLUGIN_KNOBS, 1),
     };
     let meter = if meters(effect) { METER_WIDTH + 4.0 } else { 0.0 };
@@ -508,6 +515,44 @@ fn multiband_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usiz
         });
     });
     band_meters(ui, meter.unwrap_or_default());
+}
+
+/// The Vocoder: its carrier (another track or its own oscillator), then two
+/// rows: the bands (how many, where, moved) and how they follow the voice;
+/// then the esses, its own carrier's note and the output.
+fn vocoder_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize, effect: &mut Effect, sources: &[(u32, String)], actions: &mut Vec<Action>) {
+    discrete_controls(ui, effect, index, sources);
+    let shown = *effect;
+    ui.vertical(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.horizontal(|ui| {
+            for param in [0, 1, 2, 5, 3, 4] {
+                effect_knob(app, ui, target, index, &shown, param, actions);
+            }
+        });
+        ui.horizontal(|ui| {
+            for param in [6, 7, 8, 9, 10] {
+                effect_knob(app, ui, target, index, &shown, param, actions);
+            }
+        });
+    });
+}
+
+/// A Vocoder's carrier: its own oscillator, or the track whose sound it uses.
+fn carrier_combo(ui: &mut egui::Ui, index: usize, value: &mut Option<u32>, sources: &[(u32, String)]) {
+    ui.label(egui::RichText::new("Portadora").color(TEXT_DIM).size(10.5)).on_hover_text("El sonido al que el vocoder pone la voz: su oscilador propio o el de otra pista");
+    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Propia", |(_, name)| name.as_str());
+    egui::ComboBox::from_id_salt(format!("vocoder_sc{index}"))
+        .selected_text(current)
+        .width(96.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, "Propia").on_hover_text("Su oscilador: sierra, súper sierra o ruido, en la nota y el acorde que elijas");
+            for (track, name) in sources {
+                ui.selectable_value(value, Some(*track), name);
+            }
+        })
+        .response
+        .on_hover_text("Con otra pista (un synth tocando acordes), la voz canta sus notas: escucha su sonido tras sus efectos, aunque esté silenciada");
 }
 
 /// The factory settings of an effect that has them (keeping its sidechain).
@@ -673,6 +718,36 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
             });
         }
         Effect::Convolution(p) => convolution_controls(ui, p, index),
+        Effect::Vocoder(p) => {
+            use engine::model::{VocoderCarrier, VocoderChord};
+            ui.vertical(|ui| {
+                ui.set_width(100.0);
+                carrier_combo(ui, index, &mut p.sidechain, sources);
+                ui.add_enabled_ui(p.sidechain.is_none(), |ui| {
+                    egui::ComboBox::from_id_salt(format!("vocoder_osc{index}")).selected_text(p.carrier.label()).width(96.0).show_ui(ui, |ui| {
+                        for carrier in VocoderCarrier::ALL {
+                            let hint = match carrier {
+                                VocoderCarrier::Saw => "Una sierra: el robot clásico, con todos los armónicos",
+                                VocoderCarrier::SuperSaw => "Siete sierras desafinadas por nota («Detune»): un coro ancho",
+                                VocoderCarrier::Noise => "Ruido: la voz susurrada, sin nota",
+                            };
+                            ui.selectable_value(&mut p.carrier, carrier, carrier.label()).on_hover_text(hint);
+                        }
+                    });
+                    egui::ComboBox::from_id_salt(format!("vocoder_chord{index}")).selected_text(p.chord.label()).width(96.0).show_ui(ui, |ui| {
+                        for chord in VocoderChord::ALL {
+                            ui.selectable_value(&mut p.chord, chord, chord.label());
+                        }
+                    }).response.on_hover_text("Las notas que toca su oscilador, desde «Note». Para que siga una melodía, pon un synth en otra pista y elígela como portadora");
+                });
+            });
+        }
+        Effect::VoiceShift(_) => {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Retraso").color(TEXT_DIM).size(10.5));
+                ui.label("32 ms").on_hover_text("Lo que tarda en sonar, con cualquier ajuste: Pulse retrasa lo mismo las demás pistas para que todo siga a tiempo");
+            });
+        }
         Effect::Eq3(_)
         | Effect::EqEight(_)
         | Effect::Multiband(_)

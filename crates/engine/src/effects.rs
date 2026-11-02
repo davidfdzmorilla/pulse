@@ -7,6 +7,7 @@ use crate::model::{
 };
 use crate::dynamics::{Glue, Multiband};
 use crate::convolution::Convolution;
+use crate::voice::{Vocoder, VoiceShift};
 use crate::plugin::PluginProcessor;
 use crate::tuner::Tuner;
 use std::f32::consts::{PI, TAU};
@@ -1550,6 +1551,8 @@ pub enum EffectProcessor {
     Utility(Utility),
     Glue(Box<Glue>),
     Multiband(Box<Multiband>),
+    Vocoder(Box<Vocoder>),
+    VoiceShift(Box<VoiceShift>),
     /// A VST3 effect; None until the app loads it (it then passes the signal through).
     Plugin(PluginId, Option<Box<PluginProcessor>>),
 }
@@ -1599,6 +1602,8 @@ impl EffectProcessor {
             Effect::Utility(params) => Self::Utility(Utility::new(params)),
             Effect::Glue(params) => Self::Glue(Box::new(Glue::new(params, sample_rate))),
             Effect::Multiband(params) => Self::Multiband(Box::new(Multiband::new(params, sample_rate))),
+            Effect::Vocoder(params) => Self::Vocoder(Box::new(Vocoder::new(params, sample_rate))),
+            Effect::VoiceShift(params) => Self::VoiceShift(Box::new(VoiceShift::new(params, sample_rate))),
             Effect::Plugin(id) => Self::Plugin(id, None),
         }
     }
@@ -1610,6 +1615,7 @@ impl EffectProcessor {
             Self::Saturator(fx) if fx.params.oversample => Oversampler::LATENCY,
             Self::Limiter(fx) => fx.latency(),
             Self::Tuner(fx) => fx.latency(),
+            Self::VoiceShift(fx) => fx.latency(),
             Self::Plugin(_, Some(plugin)) => plugin.latency(),
             _ => 0,
         }
@@ -1620,6 +1626,7 @@ impl EffectProcessor {
         match self {
             Self::Compressor(fx) => fx.params.sidechain,
             Self::Glue(fx) => fx.params.sidechain,
+            Self::Vocoder(fx) => fx.params.sidechain,
             Self::Gate(fx) => fx.params.sidechain,
             Self::Ducker(fx) => fx.params.sidechain,
             _ => None,
@@ -1644,6 +1651,7 @@ impl EffectProcessor {
         match self {
             Self::Compressor(fx) => fx.key.feed(left, right),
             Self::Glue(fx) => fx.key.feed(left, right),
+            Self::Vocoder(fx) => fx.key.feed(left, right),
             Self::Gate(fx) => fx.key.feed(left, right),
             Self::Ducker(fx) => fx.key.feed(left, right),
             _ => {}
@@ -1674,6 +1682,8 @@ impl EffectProcessor {
             (Self::Utility(fx), Effect::Utility(p)) => fx.params = p,
             (Self::Glue(fx), Effect::Glue(p)) => fx.params = p,
             (Self::Multiband(fx), Effect::Multiband(p)) => fx.params = p,
+            (Self::Vocoder(fx), Effect::Vocoder(p)) => fx.params = p,
+            (Self::VoiceShift(fx), Effect::VoiceShift(p)) => fx.params = p,
             (Self::Plugin(id, _), Effect::Plugin(other)) => return *id == other,
             _ => return false,
         }
@@ -1703,6 +1713,8 @@ impl EffectProcessor {
             Self::Utility(fx) => Effect::Utility(fx.params),
             Self::Glue(fx) => Effect::Glue(fx.params),
             Self::Multiband(fx) => Effect::Multiband(fx.params),
+            Self::Vocoder(fx) => Effect::Vocoder(fx.params),
+            Self::VoiceShift(fx) => Effect::VoiceShift(fx.params),
             Self::Plugin(id, _) => Effect::Plugin(*id),
         }
     }
@@ -1790,6 +1802,8 @@ impl EffectProcessor {
             Self::Utility(fx) => fx.states = Default::default(),
             Self::Glue(fx) => fx.reset(),
             Self::Multiband(fx) => fx.reset(),
+            Self::Vocoder(fx) => fx.reset(),
+            Self::VoiceShift(fx) => fx.reset(),
             Self::Plugin(..) => {}
         }
     }
@@ -1816,6 +1830,8 @@ impl EffectProcessor {
             Self::Utility(fx) => fx.process(l, r, ctx.sample_rate),
             Self::Glue(fx) => fx.process(l, r),
             Self::Multiband(fx) => fx.process(l, r),
+            Self::Vocoder(fx) => fx.process(l, r),
+            Self::VoiceShift(fx) => fx.process(l, r),
             Self::Plugin(_, Some(plugin)) => {
                 plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &ctx.meter);
                 plugin.process(l, r);

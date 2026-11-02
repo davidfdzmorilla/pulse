@@ -5860,6 +5860,13 @@ mod tests {
                 if t == 3 {
                     chain.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.8, sidechain: Some(6), ..Default::default() })));
                 }
+                // A vocoder whose carrier is another track, and a voice shift (late: compensated).
+                if t == 4 {
+                    chain.push(Device::new(Effect::Vocoder(crate::model::VocoderParams { sidechain: Some(8), ..Default::default() })));
+                }
+                if t == 5 {
+                    chain.push(Device::new(Effect::VoiceShift(crate::model::VoiceShiftParams { pitch: 5.0, formant: -2.0, ..Default::default() })));
+                }
                 assert!(handle.send(Command::ReplaceChain { target: Target::Track(t), chain: build_chain(&chain, SR) }));
                 assert!(handle.send(Command::SetSend { track: t, send: 0, amount: 0.3 }));
                 if (1..4).contains(&t) {

@@ -125,6 +125,8 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         Effect::Compressor(Default::default()),
         Effect::Glue(engine::model::GlueParams { threshold_db: -20.0, ratio: engine::model::GlueRatio::Ten, auto_release: false, soft_clip: true, sidechain_hpf_hz: 120.0, ..Default::default() }),
         Effect::Multiband(engine::model::MultibandParams { depth: 0.4, band_in_db: [1.0, -2.0, 3.0], band_out_db: [-1.0, 0.5, 2.0], ..Default::default() }),
+        Effect::Vocoder(engine::model::VocoderParams { bands: 28.0, low_hz: 150.0, formant: -3.0, sibilance: 0.6, note: 41.0, carrier: engine::model::VocoderCarrier::SuperSaw, chord: engine::model::VocoderChord::Minor7, mix: 0.8, ..Default::default() }),
+        Effect::VoiceShift(engine::model::VoiceShiftParams { pitch: -7.0, fine: 15.0, formant: 2.5, output_db: -1.0, mix: 0.6 }),
         Effect::Delay(Default::default()),
         Effect::Reverb(Default::default()),
         Effect::Convolution(engine::model::ConvolutionParams { space: engine::model::ReverbSpace::Plate, decay: 1.4, predelay_ms: 25.0, ..Default::default() }),

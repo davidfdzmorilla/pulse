@@ -2852,6 +2852,189 @@ impl MultibandParams {
     }
 }
 
+/// What a Vocoder's carrier is when no track feeds it (see
+/// [`VocoderParams::sidechain`]): an oscillator of its own at `note`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VocoderCarrier {
+    #[default]
+    Saw,
+    /// Seven detuned saws a note (`detune`).
+    SuperSaw,
+    /// White noise: a whisper, no pitch.
+    Noise,
+}
+
+impl VocoderCarrier {
+    pub const ALL: [VocoderCarrier; 3] = [VocoderCarrier::Saw, VocoderCarrier::SuperSaw, VocoderCarrier::Noise];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VocoderCarrier::Saw => "Sierra",
+            VocoderCarrier::SuperSaw => "Súper sierra",
+            VocoderCarrier::Noise => "Ruido",
+        }
+    }
+}
+
+/// The notes the Vocoder's own carrier plays, from `note` up.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VocoderChord {
+    #[default]
+    Single,
+    Octaves,
+    Fifth,
+    Major,
+    Minor,
+    Minor7,
+}
+
+impl VocoderChord {
+    pub const ALL: [VocoderChord; 6] = [VocoderChord::Single, VocoderChord::Octaves, VocoderChord::Fifth, VocoderChord::Major, VocoderChord::Minor, VocoderChord::Minor7];
+
+    /// Semitones above the note, each note of the chord.
+    pub fn intervals(self) -> &'static [u8] {
+        match self {
+            VocoderChord::Single => &[0],
+            VocoderChord::Octaves => &[0, 12],
+            VocoderChord::Fifth => &[0, 7, 12],
+            VocoderChord::Major => &[0, 4, 7, 12],
+            VocoderChord::Minor => &[0, 3, 7, 12],
+            VocoderChord::Minor7 => &[0, 3, 7, 10],
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            VocoderChord::Single => "Una nota",
+            VocoderChord::Octaves => "Octavas",
+            VocoderChord::Fifth => "Quinta",
+            VocoderChord::Major => "Mayor",
+            VocoderChord::Minor => "Menor",
+            VocoderChord::Minor7 => "Menor 7",
+        }
+    }
+}
+
+/// The most bands a Vocoder splits the sound into.
+pub const VOCODER_MAX_BANDS: usize = 40;
+
+/// The Vocoder: a bank of band-pass filters hears the track's sound (the
+/// modulator, a voice) and puts each band's level on the same band of the
+/// carrier (another track by sidechain, a synth, or its own oscillator).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VocoderParams {
+    /// How many bands, 8..40 (rounded).
+    pub bands: f32,
+    /// The lowest and highest bands' centres, Hz.
+    pub low_hz: f32,
+    pub high_hz: f32,
+    /// How fast each band's level follows the voice, ms.
+    pub attack_ms: f32,
+    pub release_ms: f32,
+    /// The carrier's bands moved against the voice's, semitones: up, a
+    /// smaller voice; down, a bigger one.
+    pub formant: f32,
+    /// The voice's own highs (its esses and tees) mixed in, 0..1.
+    pub sibilance: f32,
+    /// The own carrier's lowest note (MIDI).
+    pub note: f32,
+    /// How far apart a super saw's saws are, 0..1.
+    pub detune: f32,
+    pub output_db: f32,
+    pub mix: f32,
+    pub carrier: VocoderCarrier,
+    pub chord: VocoderChord,
+    /// The track (by its id) whose sound is the carrier; None: its own.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<u32>,
+}
+
+impl Default for VocoderParams {
+    fn default() -> Self {
+        Self {
+            bands: 20.0,
+            low_hz: 100.0,
+            high_hz: 8000.0,
+            attack_ms: 4.0,
+            release_ms: 60.0,
+            formant: 0.0,
+            sibilance: 0.3,
+            note: 48.0,
+            detune: 0.3,
+            output_db: 0.0,
+            mix: 1.0,
+            carrier: VocoderCarrier::Saw,
+            chord: VocoderChord::Single,
+            sidechain: None,
+        }
+    }
+}
+
+impl VocoderParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, VocoderParams)> {
+        use VocoderCarrier::*;
+        use VocoderChord::*;
+        let d = VocoderParams::default();
+        vec![
+            ("Robot · Robot clásico", VocoderParams { bands: 16.0, attack_ms: 2.0, release_ms: 30.0, note: 43.0, sibilance: 0.25, output_db: -4.0, ..d }),
+            ("Robot · Daft", VocoderParams { bands: 24.0, low_hz: 120.0, high_hz: 9000.0, attack_ms: 1.5, release_ms: 45.0, note: 45.0, carrier: SuperSaw, detune: 0.12, chord: Octaves, sibilance: 0.35, ..d }),
+            ("Robot · Monstruo", VocoderParams { bands: 20.0, formant: -7.0, note: 31.0, release_ms: 50.0, sibilance: 0.1, output_db: -6.0, ..d }),
+            ("Robot · Duende", VocoderParams { bands: 20.0, formant: 6.0, note: 60.0, low_hz: 180.0, high_hz: 10000.0, sibilance: 0.3, ..d }),
+            ("Coros · Coro de cuerdas", VocoderParams { bands: 28.0, attack_ms: 12.0, release_ms: 160.0, note: 45.0, carrier: SuperSaw, detune: 0.5, chord: Minor, sibilance: 0.2, ..d }),
+            ("Coros · Acorde mayor", VocoderParams { bands: 24.0, attack_ms: 8.0, release_ms: 120.0, note: 48.0, carrier: SuperSaw, detune: 0.3, chord: Major, sibilance: 0.25, ..d }),
+            ("Coros · Menor con séptima", VocoderParams { bands: 24.0, attack_ms: 6.0, release_ms: 100.0, note: 45.0, carrier: Saw, chord: Minor7, sibilance: 0.25, ..d }),
+            ("Textura · Susurro", VocoderParams { bands: 32.0, low_hz: 150.0, high_hz: 12000.0, attack_ms: 3.0, release_ms: 80.0, carrier: Noise, sibilance: 0.5, ..d }),
+            ("Clásico · Vocoder de 8 bandas", VocoderParams { bands: 8.0, low_hz: 150.0, high_hz: 6000.0, attack_ms: 5.0, release_ms: 50.0, note: 41.0, sibilance: 0.15, output_db: -4.0, ..d }),
+            ("Clásico · 40 bandas nítido", VocoderParams { bands: 40.0, low_hz: 80.0, high_hz: 12000.0, attack_ms: 1.0, release_ms: 25.0, sibilance: 0.4, ..d }),
+            ("Sidechain · Synth de otra pista", VocoderParams { bands: 24.0, attack_ms: 3.0, release_ms: 60.0, sibilance: 0.35, ..d }),
+        ]
+    }
+}
+
+/// A voice moved in pitch and in formants (the size of the throat that
+/// sings it), each on its own («Voz: tono y formantes», see `voice`).
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct VoiceShiftParams {
+    /// Semitones, −24..24.
+    pub pitch: f32,
+    /// Cents on top, −100..100.
+    pub fine: f32,
+    /// Formants, semitones −12..12: up, a smaller voice («ardilla»); down, a
+    /// bigger one («demonio»), at the same pitch.
+    pub formant: f32,
+    pub output_db: f32,
+    pub mix: f32,
+}
+
+impl Default for VoiceShiftParams {
+    fn default() -> Self {
+        Self { pitch: 0.0, fine: 0.0, formant: 0.0, output_db: 0.0, mix: 1.0 }
+    }
+}
+
+impl VoiceShiftParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, VoiceShiftParams)> {
+        let d = VoiceShiftParams::default();
+        vec![
+            ("Voz · Voz grave", VoiceShiftParams { pitch: -4.0, formant: -3.0, ..d }),
+            ("Voz · Ardilla", VoiceShiftParams { pitch: 9.0, formant: 7.0, ..d }),
+            ("Voz · Demonio", VoiceShiftParams { pitch: -7.0, formant: -6.0, output_db: 1.0, ..d }),
+            ("Voz · Octava abajo", VoiceShiftParams { pitch: -12.0, ..d }),
+            ("Voz · Octava arriba", VoiceShiftParams { pitch: 12.0, ..d }),
+            ("Formantes · Formante femenino", VoiceShiftParams { formant: 3.0, ..d }),
+            ("Formantes · Formante masculino", VoiceShiftParams { formant: -3.0, ..d }),
+            ("Formantes · Niño", VoiceShiftParams { pitch: 5.0, formant: 5.0, ..d }),
+            ("Coros · Coro de octava", VoiceShiftParams { pitch: -12.0, mix: 0.5, ..d }),
+            ("Coros · Quinta arriba", VoiceShiftParams { pitch: 7.0, mix: 0.45, ..d }),
+            ("Coros · Doblado", VoiceShiftParams { fine: 12.0, mix: 0.5, ..d }),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LimiterParams {
     pub gain_db: f32,
@@ -3044,13 +3227,17 @@ pub enum Effect {
     Glue(GlueParams),
     /// The multiband upward and downward compressor («Multibanda (OTT)»).
     Multiband(MultibandParams),
+    /// A channel vocoder (see `voice`).
+    Vocoder(VocoderParams),
+    /// A voice's pitch and formants, each on its own («Voz: tono y formantes»).
+    VoiceShift(VoiceShiftParams),
     /// A VST3 effect plugin (see [`InstrumentKind::Plugin`]).
     Plugin(PluginId),
 }
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 20] {
+    pub fn catalog() -> [Effect; 22] {
         [
             Effect::Eq3(Default::default()),
             Effect::EqEight(Default::default()),
@@ -3064,6 +3251,8 @@ impl Effect {
             Effect::Transient(Default::default()),
             Effect::Tuner(Default::default()),
             Effect::DeEsser(Default::default()),
+            Effect::VoiceShift(Default::default()),
+            Effect::Vocoder(Default::default()),
             Effect::Saturator(Default::default()),
             Effect::Bitcrusher(Default::default()),
             Effect::AutoFilter(Default::default()),
@@ -3083,6 +3272,8 @@ impl Effect {
             Effect::Glue(_) => GlueParams::presets().into_iter().map(|(n, p)| (n, Effect::Glue(p))).collect(),
             Effect::Multiband(_) => MultibandParams::presets().into_iter().map(|(n, p)| (n, Effect::Multiband(p))).collect(),
             Effect::Convolution(_) => ConvolutionParams::presets().into_iter().map(|(n, p)| (n, Effect::Convolution(p))).collect(),
+            Effect::Vocoder(_) => VocoderParams::presets().into_iter().map(|(n, p)| (n, Effect::Vocoder(p))).collect(),
+            Effect::VoiceShift(_) => VoiceShiftParams::presets().into_iter().map(|(n, p)| (n, Effect::VoiceShift(p))).collect(),
             _ => Vec::new(),
         }
     }
@@ -3092,6 +3283,7 @@ impl Effect {
         match self {
             Effect::Compressor(p) => p.sidechain,
             Effect::Glue(p) => p.sidechain,
+            Effect::Vocoder(p) => p.sidechain,
             Effect::Gate(p) => p.sidechain,
             Effect::Ducker(p) => p.sidechain,
             _ => None,
@@ -3103,6 +3295,7 @@ impl Effect {
         match self {
             Effect::Compressor(p) => Some(&mut p.sidechain),
             Effect::Glue(p) => Some(&mut p.sidechain),
+            Effect::Vocoder(p) => Some(&mut p.sidechain),
             Effect::Gate(p) => Some(&mut p.sidechain),
             Effect::Ducker(p) => Some(&mut p.sidechain),
             _ => None,
@@ -3116,7 +3309,9 @@ impl Effect {
         // A Tuner tunes a voice coming in, not a synth (which plays in tune).
         // A Convolution Reverb's impulse responses are rebuilt off the audio
         // thread through the engine's handle, which a synth's effects never see.
-        self.params().len() <= MOD_FX_SLOTS && !matches!(self, Effect::Tuner(_) | Effect::Convolution(_))
+        // A Vocoder or a VoiceShift works on a voice, and the shift is late
+        // (its latency), which a synth's effects can't make up for.
+        self.params().len() <= MOD_FX_SLOTS && !matches!(self, Effect::Tuner(_) | Effect::Convolution(_) | Effect::Vocoder(_) | Effect::VoiceShift(_))
     }
 
     pub fn label(&self) -> &'static str {
@@ -3141,6 +3336,8 @@ impl Effect {
             Effect::Utility(_) => "Utility",
             Effect::Glue(_) => "Compresor de bus",
             Effect::Multiband(_) => "Multibanda (OTT)",
+            Effect::Vocoder(_) => "Vocoder",
+            Effect::VoiceShift(_) => "Voz: tono y formantes",
             Effect::Plugin(_) => "Plugin",
         }
     }
@@ -3192,6 +3389,8 @@ pub enum Unit {
     Octaves,
     Pan,
     Semitones,
+    /// Hundredths of a semitone, shown as "+12 ct".
+    Cents,
     /// A multiplier, shown as "×1.5".
     Times,
     Bits,
@@ -3410,6 +3609,26 @@ const MULTIBAND_PARAMS: [ParamInfo; 9 + 2 * MULTIBAND_BANDS] = [
     ParamInfo::linear("Mid Out", -24.0, 24.0, 0.0, Decibels),
     ParamInfo::linear("High In", -24.0, 24.0, 0.0, Decibels),
     ParamInfo::linear("High Out", -24.0, 24.0, 0.0, Decibels),
+];
+const VOCODER_PARAMS: [ParamInfo; 11] = [
+    ParamInfo::linear("Bands", 8.0, VOCODER_MAX_BANDS as f32, 20.0, Count),
+    ParamInfo::log("Low", 50.0, 1000.0, 100.0, Hertz),
+    ParamInfo::log("High", 1000.0, 16000.0, 8000.0, Hertz),
+    ParamInfo::log("Attack", 0.5, 100.0, 4.0, Milliseconds),
+    ParamInfo::log("Release", 5.0, 1000.0, 60.0, Milliseconds),
+    ParamInfo::linear("Formant", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("Sibilance", 0.0, 1.0, 0.3, Percent),
+    ParamInfo::linear("Note", 24.0, 84.0, 48.0, Note),
+    ParamInfo::linear("Detune", 0.0, 1.0, 0.3, Percent),
+    ParamInfo::linear("Output", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
+];
+const VOICE_SHIFT_PARAMS: [ParamInfo; 5] = [
+    ParamInfo::linear("Pitch", -24.0, 24.0, 0.0, Semitones),
+    ParamInfo::linear("Fine", -100.0, 100.0, 0.0, Cents),
+    ParamInfo::linear("Formant", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("Output", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
 ];
 const SUPERSAW_PARAMS: [ParamInfo; 11] = [
     ParamInfo::linear("Voices", 1.0, 7.0, 7.0, Count),
@@ -3842,6 +4061,8 @@ impl Effect {
             Effect::Utility(_) => &UTILITY_PARAMS,
             Effect::Glue(_) => &GLUE_PARAMS,
             Effect::Multiband(_) => &MULTIBAND_PARAMS,
+            Effect::Vocoder(_) => &VOCODER_PARAMS,
+            Effect::VoiceShift(_) => &VOICE_SHIFT_PARAMS,
             Effect::Plugin(_) => &[],
         }
     }
@@ -3934,6 +4155,22 @@ impl Effect {
                 let band = (i - 9) / 2;
                 if (i - 9) % 2 == 0 { &mut p.band_in_db[band] } else { &mut p.band_out_db[band] }
             }
+            (Effect::Vocoder(p), 0) => &mut p.bands,
+            (Effect::Vocoder(p), 1) => &mut p.low_hz,
+            (Effect::Vocoder(p), 2) => &mut p.high_hz,
+            (Effect::Vocoder(p), 3) => &mut p.attack_ms,
+            (Effect::Vocoder(p), 4) => &mut p.release_ms,
+            (Effect::Vocoder(p), 5) => &mut p.formant,
+            (Effect::Vocoder(p), 6) => &mut p.sibilance,
+            (Effect::Vocoder(p), 7) => &mut p.note,
+            (Effect::Vocoder(p), 8) => &mut p.detune,
+            (Effect::Vocoder(p), 9) => &mut p.output_db,
+            (Effect::Vocoder(p), 10) => &mut p.mix,
+            (Effect::VoiceShift(p), 0) => &mut p.pitch,
+            (Effect::VoiceShift(p), 1) => &mut p.fine,
+            (Effect::VoiceShift(p), 2) => &mut p.formant,
+            (Effect::VoiceShift(p), 3) => &mut p.output_db,
+            (Effect::VoiceShift(p), 4) => &mut p.mix,
             _ => return None,
         })
     }

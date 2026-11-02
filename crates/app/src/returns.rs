@@ -290,6 +290,12 @@ mod tests {
             glued.master.devices.push(engine::model::Device::new(effect));
             assert_eq!(format(&glued), 14);
         }
+        // A Vocoder or a voice shift: 17.
+        for effect in [engine::model::Effect::Vocoder(Default::default()), engine::model::Effect::VoiceShift(Default::default())] {
+            let mut voiced = Project::demo();
+            voiced.tracks[1].devices.push(engine::model::Device::new(effect));
+            assert_eq!(format(&voiced), 17);
+        }
         // A MIDI clip with a controller lane (a recorded bend): 15, and it reads back.
         let mut bent = Project::demo();
         let Some(Clip::Midi(clip)) = bent.tracks[0].clips[0].as_mut() else { panic!("the demo starts with a MIDI clip") };

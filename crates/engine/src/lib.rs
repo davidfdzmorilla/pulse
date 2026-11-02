@@ -24,6 +24,7 @@ mod sample;
 mod sampler;
 mod synth;
 mod tuner;
+mod voice;
 mod workers;
 pub use workers::{default_threads, WorkerInit, MAX_THREADS};
 pub use tuner::scale_bits;

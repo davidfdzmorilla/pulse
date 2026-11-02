@@ -49,8 +49,8 @@ pub fn scale_bits(tonic: u8, minor: bool) -> u16 {
 const CHROMATIC: u16 = 0xFFF;
 
 /// YIN on the newest stretch of input, with FFTs, without allocating.
-struct Detector {
-    len: usize,
+pub(crate) struct Detector {
+    pub(crate) len: usize,
     lag_min: usize,
     lag_max: usize,
     forward: Arc<dyn Fft<f32>>,
@@ -64,8 +64,13 @@ struct Detector {
 
 impl Detector {
     fn new(rate: f32) -> Self {
+        Self::with_range(rate, FMIN, FMAX)
+    }
+
+    /// Hearing pitches from `fmin` to `fmax` (Hz) in the newest 32 ms.
+    pub(crate) fn with_range(rate: f32, fmin: f32, fmax: f32) -> Self {
         let len = (WINDOW_SECONDS * rate) as usize;
-        let (lag_min, lag_max) = ((rate / FMAX).floor() as usize, (rate / FMIN).ceil() as usize);
+        let (lag_min, lag_max) = ((rate / fmax).floor() as usize, (rate / fmin).ceil() as usize);
         let size = len.next_power_of_two();
         let mut planner = FftPlanner::<f32>::new();
         let (forward, inverse) = (planner.plan_fft_forward(size), planner.plan_fft_inverse(size));
@@ -76,7 +81,7 @@ impl Detector {
     /// The period (samples) of `frame` (`len` samples, oldest first), if it
     /// has one: each of its newest samples compared with the one a period
     /// before.
-    fn period(&mut self, frame: &[f32]) -> Option<f32> {
+    pub(crate) fn period(&mut self, frame: &[f32]) -> Option<f32> {
         let (lag_min, lag_max) = (self.lag_min.max(2), self.lag_max);
         let width = self.len - lag_max;
         for (i, slot) in self.a.iter_mut().enumerate() {

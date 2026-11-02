@@ -448,6 +448,7 @@ pub fn format_param(info: &engine::model::ParamInfo, value: f32) -> String {
         Unit::Ratio => format!("{value:.1}:1"),
         Unit::Octaves => format!("{value:.1} oct"),
         Unit::Semitones => format!("{value:+.1} st"),
+        Unit::Cents => format!("{value:+.0} ct"),
         Unit::Times => format!("×{value:.2}"),
         Unit::Bits => format!("{value:.1} bits"),
         Unit::Count => format!("{}", value.round()),

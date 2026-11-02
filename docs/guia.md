@@ -506,7 +506,7 @@ Algunos efectos sacan el sonido un poco tarde. Sin compensarlo, su pista sonarí
 - Para tocar o cantar en directo a través de uno de esos efectos sin que el resto se retrase, quita **Compensar la latencia de los efectos** en **Ajustes › Audio**. La exportación compensa siempre.
 
 +++ Cómo funciona
-- Efectos que retrasan: el **Limiter** (1,5 ms), el **Saturator** con 4× (36 muestras), el **Tuner** y muchos plugins (Pulse les pregunta cuánto).
+- Efectos que retrasan: el **Limiter** (1,5 ms), el **Saturator** con 4× (36 muestras), el **Tuner**, **Voz: tono y formantes** (32 ms) y muchos plugins (Pulse les pregunta cuánto).
 - Cada pista espera a la más lenta: dentro de su grupo, a las del grupo; fuera, a todas las del proyecto.
 - Los envíos llegan juntos a las pistas de retorno, y lo que sale de ellas llega a tiempo con el resto.
 - El metrónomo se retrasa con la canción.
@@ -1883,6 +1883,8 @@ Si haces clic en un instrumento del navegador, sustituye al de la pista MIDI sel
 | **Transient** | Dar más o menos pegada y más o menos cola a cada golpe. |
 | **Tuner** | Afinar una voz o un instrumento a la escala (como Auto-Tune). |
 | **De-esser** | Bajar las eses y silbidos de una voz. |
+| **Voz: tono y formantes** | Cambiar el tono de una voz y, por separado, sus formantes: voz grave, ardilla, coros (ver [[Voz: tono y formantes]]). |
+| **Vocoder** | La voz robot: tu voz sobre un synth que canta sus notas (ver [[Vocoder]]). |
 | **Saturator** | Calentar, ensuciar o romper el sonido. |
 | **Bitcrusher** | Sonido digital, de pocos bits. |
 | **Auto Filter** | Filtro con barrido al ritmo; los barridos ácidos. |
@@ -2114,7 +2116,7 @@ Cambian las notas antes de que lleguen al instrumento, en pistas MIDI.
 
 ### Sidechain: que una pista se aparte de otra
 
-El **Compressor**, el **Compresor de bus**, el **Gate** y el **Ducker** pueden escuchar a otra pista en vez de a la suya. El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
+El **Compressor**, el **Compresor de bus**, el **Gate** y el **Ducker** pueden escuchar a otra pista en vez de a la suya (y el **Vocoder** puede cantar con su sonido, ver [[Vocoder]]). El caso típico: el bajo o el pad se apartan cada vez que suena el bombo, para que no se tapen (y ese «bombeo» del house).
 
 1. Pon un Compressor, un Compresor de bus, un Gate o un Ducker en la pista que debe apartarse (el bajo).
 2. En su menú **Sidechain**, elige la pista que manda (el bombo).
@@ -2217,6 +2219,98 @@ A la derecha, los medidores **L**, **M** y **H** muestran qué hace cada banda: 
 - Cada banda escucha su nivel RMS. Lo que suena más flojo de −90 dBFS no se sube: el silencio sigue en silencio.
 - Las 15 ruedas se pueden automatizar y asignar a MIDI.
 - Un proyecto con un Multibanda no se abre en un Pulse anterior: pide actualizar.
++++
+
+## Vocoder
+
+La voz robot del house, del techno y del electro: el vocoder pone tu voz sobre un sintetizador, que «canta» con sus notas y tu forma de hablar. Ponlo en la pista de la voz; el sonido que canta (la **portadora**) es su oscilador propio o un synth de otra pista.
+
+### Usarlo con su oscilador
+
+1. En la pista de la voz, **EFECTOS DE AUDIO** → **Vocoder**. O abre **Presets** en su barra y elige **Robot clásico**.
+2. Deja **Portadora** en **Propia** y elige su sonido: **Sierra** (el robot de siempre), **Súper sierra** (siete sierras desafinadas por nota: un coro) o **Ruido** (una voz susurrada, sin nota).
+3. Elige las notas: **Note** es la más grave, y el menú de debajo, el acorde (**Una nota**, **Octavas**, **Quinta**, **Mayor**, **Menor**, **Menor 7**).
+4. Para que se entiendan las «s» y las «t», sube **Sibilance**.
+
+> Consejo: la nota y el acorde se pueden automatizar: dibuja **Note** en la pista para que cambie con la canción.
+
+### Que cante las notas de un synth
+
+1. Pon un synth en otra pista y toca o dibuja los acordes. Si no quieres oírlo solo, silénciala: el vocoder la sigue oyendo.
+2. En el Vocoder de la voz, elige esa pista en **Portadora**.
+
+Ahora la voz canta lo que toca el synth, nota a nota, y calla cuando el synth calla. Así sigue una melodía o una progresión sin tocar el vocoder.
+
+- Escucha el sonido de esa pista tras sus efectos y antes de su fader, igual que un sidechain (ver [[Dispositivos y efectos#Sidechain: que una pista se aparte de otra]]).
+- Un synth con muchos armónicos (una sierra, un pad abierto) se entiende mejor que uno oscuro.
+
+### Los controles
+
+- **Bands** (8–40): en cuántas bandas parte el sonido. Pocas, el robot antiguo; muchas, una voz más clara.
+- **Low** y **High**: la banda más grave y la más aguda (100 Hz y 8 kHz al empezar).
+- **Formant**: mueve las bandas del synth frente a las de la voz, en semitonos. Hacia arriba, una garganta más pequeña; hacia abajo, un monstruo.
+- **Attack** y **Release**: lo rápido que cada banda sigue a la voz. Cortos, más nítido y robótico; largos, más suave y legato.
+- **Sibilance**: cuánto de los agudos de la voz (por encima de 5 kHz) se mezcla, para las «s», «t» y «ch».
+- **Note** y **Detune**: la nota de su oscilador y lo desafinadas que van las sierras de la súper sierra. Con un synth como portadora no hacen nada.
+- **Output** y **Dry/Wet**: el volumen a la salida y cuánto de la voz sin procesar.
+
+### Presets
+
+| Preset | Para qué |
+|---|---|
+| **Robot clásico** | Sierra y 16 bandas: la voz robot de siempre. |
+| **Daft** | Súper sierra en octavas, rápido: el robot del french house. |
+| **Monstruo** y **Duende** | Formantes abajo y una nota grave, o arriba y aguda. |
+| **Coro de cuerdas** | Súper sierra en acorde menor, lenta: un coro de pad. |
+| **Acorde mayor** y **Menor con séptima** | Acordes para estribillos. |
+| **Susurro** | Ruido: la voz susurrada, sin nota. |
+| **Vocoder de 8 bandas** | Pocas bandas: el vocoder de los 70. |
+| **40 bandas nítido** | Todas las bandas y muy rápido: se entiende casi todo. |
+| **Synth de otra pista** | Para usarlo con un synth de portadora: elige la pista en **Portadora**. |
+
++++ Detalles
+- Dos bancos de filtros paso banda de 24 dB por octava, repartidos por igual en octavas entre Low y High. Cada banda de la voz sigue su nivel y pone ese nivel en la misma banda del synth.
+- Las bandas del synth se igualan antes (como mucho 40 dB), así un synth oscuro suena tan claro como uno brillante. Si el synth calla, el vocoder calla.
+- Sin voz, sale silencio. No retrasa el sonido.
+- El oscilador propio toca una nota o un acorde fijos (con **Note**). Para seguir una melodía, usa un synth de otra pista como portadora.
+- Bands 8–40 (20), Low 50–1000 Hz (100), High 1–16 kHz (8), Attack 0,5–100 ms (4), Release 5–1000 ms (60), Formant ±12 st, Sibilance 0–100 % (30), Note C0–C5 (C2), Detune 0–100 % (30), Output ±24 dB, Dry/Wet 0–100 % (100).
+- Un proyecto con un Vocoder no se abre en un Pulse anterior: pide actualizar.
++++
+
+## Voz: tono y formantes
+
+Cambia el tono de una voz y, por separado, sus formantes: el tamaño de la garganta que canta. Con el tono haces una voz una octava más grave o un coro; con los formantes, una voz de ardilla o de demonio sin cambiar la nota, o al revés.
+
+### Usarlo
+
+1. En la pista de la voz, **EFECTOS DE AUDIO** → **Voz: tono y formantes**.
+2. Mueve **Pitch** (en semitonos, ±24) y, si hace falta, **Fine** (en centésimas, ±100) para afinar.
+3. Mueve **Formant** (±12 semitones): hacia arriba suena más pequeña, de niño o de ardilla; hacia abajo, más grande, de gigante o de demonio. El tono no cambia.
+4. Para doblar la voz o hacer un coro, baja **Dry/Wet**: la voz original y la movida suenan juntas y a tiempo.
+
+> Consejo: para que una voz suene natural más aguda o más grave, mueve los formantes un poco en el mismo sentido que el tono (un tercio o la mitad). Solo el tono, sin los formantes, suena a la misma persona cantando en otra nota.
+
+### Presets
+
+| Preset | Para qué |
+|---|---|
+| **Voz grave** | 4 semitonos abajo y formantes algo más graves. |
+| **Ardilla** | Tono y formantes muy arriba. |
+| **Demonio** | Tono y formantes muy abajo. |
+| **Octava abajo** y **Octava arriba** | La misma voz una octava más grave o más aguda. |
+| **Formante femenino** y **Formante masculino** | Solo los formantes, 3 semitonos arriba o abajo. |
+| **Niño** | Tono y formantes 5 semitonos arriba. |
+| **Coro de octava** | La octava de abajo mezclada con la voz. |
+| **Quinta arriba** | Una segunda voz una quinta por encima. |
+| **Doblado** | La voz 12 centésimas más aguda junto a la original: más gruesa. |
+
++++ Detalles
+- Oye el periodo de la voz cada 5 ms (como el Tuner) y la parte en granos de dos periodos, centrados en cada pulso de la voz. Para cambiar el tono, los vuelve a poner más juntos o más separados; para cambiar los formantes, lee cada grano más rápido o más despacio.
+- Sigue voces de 70 a 1000 Hz. Donde no hay nota (las «s», la respiración, el silencio), no cambia el tono: no convierte el ruido en zumbido.
+- Retrasa el sonido 32 ms con cualquier ajuste. Pulse retrasa lo mismo las demás pistas (ver [[Grabar#Compensación de latencia]]). Si cantas en directo a través de él, lo oirás con ese retraso.
+- Funciona con una sola voz a la vez: con un coro o un instrumento de acordes suena raro.
+- Pitch ±24 st, Fine ±100 ct, Formant ±12 st, Output ±24 dB, Dry/Wet 0–100 % (100). Todo se puede automatizar.
+- Un proyecto con este efecto no se abre en un Pulse anterior: pide actualizar.
 +++
 
 ## Asistente de mezcla y master

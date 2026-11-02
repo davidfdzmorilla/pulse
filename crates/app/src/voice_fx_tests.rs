@@ -263,7 +263,7 @@ fn voice_fx_demos() {
     let keyed = Effect::Vocoder(VocoderParams { sidechain: Some(2), ..base });
     let demos: Vec<(&str, Vec<Effect>)> = vec![
         ("vocoder-sierra", vec![vocoder("Robot · Robot clásico")]),
-        ("vocoder-daft", vec![vocoder("Robot · Daft")]),
+        ("vocoder-french-house", vec![vocoder("Robot · French house")]),
         ("vocoder-coro-de-cuerdas", vec![vocoder("Coros · Coro de cuerdas")]),
         ("vocoder-susurro", vec![vocoder("Textura · Susurro")]),
         ("vocoder-8-bandas", vec![vocoder("Clásico · Vocoder de 8 bandas")]),

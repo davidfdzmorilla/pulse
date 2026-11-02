@@ -2259,7 +2259,7 @@ Ahora la voz canta lo que toca el synth, nota a nota, y calla cuando el synth ca
 | Preset | Para qué |
 |---|---|
 | **Robot clásico** | Sierra y 16 bandas: la voz robot de siempre. |
-| **Daft** | Súper sierra en octavas, rápido: el robot del french house. |
+| **French house** | Súper sierra en octavas, rápido: el robot del french house. |
 | **Monstruo** y **Duende** | Formantes abajo y una nota grave, o arriba y aguda. |
 | **Coro de cuerdas** | Súper sierra en acorde menor, lenta: un coro de pad. |
 | **Acorde mayor** y **Menor con séptima** | Acordes para estribillos. |

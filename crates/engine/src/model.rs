@@ -2979,7 +2979,7 @@ impl VocoderParams {
         let d = VocoderParams::default();
         vec![
             ("Robot · Robot clásico", VocoderParams { bands: 16.0, attack_ms: 2.0, release_ms: 30.0, note: 43.0, sibilance: 0.25, output_db: -4.0, ..d }),
-            ("Robot · Daft", VocoderParams { bands: 24.0, low_hz: 120.0, high_hz: 9000.0, attack_ms: 1.5, release_ms: 45.0, note: 45.0, carrier: SuperSaw, detune: 0.12, chord: Octaves, sibilance: 0.35, ..d }),
+            ("Robot · French house", VocoderParams { bands: 24.0, low_hz: 120.0, high_hz: 9000.0, attack_ms: 1.5, release_ms: 45.0, note: 45.0, carrier: SuperSaw, detune: 0.12, chord: Octaves, sibilance: 0.35, ..d }),
             ("Robot · Monstruo", VocoderParams { bands: 20.0, formant: -7.0, note: 31.0, release_ms: 50.0, sibilance: 0.1, output_db: -6.0, ..d }),
             ("Robot · Duende", VocoderParams { bands: 20.0, formant: 6.0, note: 60.0, low_hz: 180.0, high_hz: 10000.0, sibilance: 0.3, ..d }),
             ("Coros · Coro de cuerdas", VocoderParams { bands: 28.0, attack_ms: 12.0, release_ms: 160.0, note: 45.0, carrier: SuperSaw, detune: 0.5, chord: Minor, sibilance: 0.2, ..d }),

@@ -1892,7 +1892,7 @@ mod polychrome_tests {
 
     #[test]
     fn the_plucked_string_rings_at_the_played_note_and_dies_away() {
-        let p = factory("Dual Filter · Cuerda pulsada");
+        let p = factory("Doble filtro · Cuerda pulsada");
         for (note, hz) in [(57, 220.0), (69, 440.0)] {
             let l = play_at_120(p, note, 48_000);
             let near = harmonics(&l[1200..], hz, 1)[0];
@@ -1911,7 +1911,7 @@ mod polychrome_tests {
 
     #[test]
     fn the_crossed_filters_move_from_low_to_high_pass() {
-        let l = play_at_120(factory("Dual Filter · LP/HP cruzado"), 60, 110_000);
+        let l = play_at_120(factory("Doble filtro · LP/HP cruzado"), 60, 110_000);
         let (low, high) = (frequency(&l[19_200..28_800]), frequency(&l[91_200..100_800]));
         assert!(high > 2.0 * low, "the high-pass side is brighter: {low} → {high}");
     }

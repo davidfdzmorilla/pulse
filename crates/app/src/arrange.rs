@@ -517,7 +517,7 @@ mod tests {
             let (notes, groove) = drum_gen::generate(&kit, &settings, 16.0, &[], 0, engine::meter::TimeSig::COMMON);
             drums.clips[scene] = Some(Clip::Midi(MidiClip { notes, groove, ..MidiClip::new("Beat", 16.0, [0; 3]) }));
         }
-        let mut kick = Track::new("Bd", [0; 3], InstrumentKind::Kick(KickParams::presets().into_iter().find(|(n, _)| *n == "Hard · Kick").unwrap().1));
+        let mut kick = Track::new("Bd", [0; 3], InstrumentKind::Kick(KickParams::presets().into_iter().find(|(n, _)| *n == "Hard · Contundente").unwrap().1));
         let mut four = MidiClip::new("4/4", 16.0, [0; 3]);
         four.notes = (0..16).map(|b| Note { start: b as f64, length: 0.25, pitch: 36, velocity: 1.0, chance: 1.0 }).collect();
         for scene in 0..3 {

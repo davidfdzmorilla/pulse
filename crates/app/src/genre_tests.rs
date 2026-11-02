@@ -85,7 +85,7 @@ fn the_sidechain_pumps_on_every_kick_of_the_genre() {
         // What the mix assistant puts on the bass.
         // A hardstyle kick's tail is as loud under 600 Hz as its hit: that one
         // listens to the whole sound.
-        let lows = !name.contains("Hardstyle");
+        let lows = !name.contains("hardstyle");
         bass.devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.6, release: 0.25, rate_beats: 1.0, sidechain: Some(kick), lows, ..Default::default() })));
         project.tracks.push(bass);
         project.assign_ids();
@@ -122,7 +122,7 @@ fn a_rumble_is_loud_enough_breathes_and_follows_its_kick() {
     let settings = drum_gen::Settings { style: Style::HardTechno, level: Level::Medium, bars: 8, sounds: Style::HardTechno.sounds(), ..Default::default() };
     let (notes, groove) = drum_gen::generate(&kit, &settings, 32.0, &[], 0, engine::meter::TimeSig::COMMON);
     let cases = [
-        ("Kick Designer «Hard · Kick»", kick_designer("Hard · Kick"), four_on_the_floor(8, 36)),
+        ("Kick Designer «Hard · Contundente»", kick_designer("Hard · Contundente"), four_on_the_floor(8, 36)),
         ("Kick Designer «Techno · Rumble»", kick_designer("Techno · Rumble"), four_on_the_floor(8, 36)),
         ("Kick Designer «Init»", kick_designer("Init"), four_on_the_floor(8, 36)),
         ("Drum Machine Hard techno", InstrumentKind::DrumMachine(Style::HardTechno.sound()), MidiClip { notes, groove, ..MidiClip::new("Beat", 32.0, [0; 3]) }),
@@ -163,7 +163,7 @@ fn a_rumble_is_loud_enough_breathes_and_follows_its_kick() {
 fn a_rumble_follows_its_kick_when_the_kick_changes() {
     let mut project = Project::empty();
     project.tempo = 150.0;
-    project.tracks = vec![track("Kick", kick_designer("Hard · Kick"), four_on_the_floor(8, 36))];
+    project.tracks = vec![track("Kick", kick_designer("Hard · Contundente"), four_on_the_floor(8, 36))];
     let mut app = crate::app::PulseApp::headless(project);
     app.make_rumble(0);
     assert_eq!(app.project.tracks[1].name, "Kick Rumble");

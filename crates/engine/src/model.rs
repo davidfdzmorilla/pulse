@@ -1100,16 +1100,16 @@ impl KickParams {
         let shape = Shape::from_points;
         vec![
             ("Init", base),
-            ("House · Punch", KickParams { tune: 33.0, pitch_amount: 36.0, pitch_time: 45.0, hold: 40.0, decay: 220.0, click: 0.5, click_tone: 4000.0, drive: 0.25, phase: 90.0, punch: 0.3, click_type: 2, limiter: true, ..base }),
+            ("House · Pegada", KickParams { tune: 33.0, pitch_amount: 36.0, pitch_time: 45.0, hold: 40.0, decay: 220.0, click: 0.5, click_tone: 4000.0, drive: 0.25, phase: 90.0, punch: 0.3, click_type: 2, limiter: true, ..base }),
             ("House · Deep", KickParams { tune: 31.0, pitch_amount: 30.0, pitch_time: 55.0, pitch_curve: 0.5, hold: 60.0, decay: 320.0, decay_curve: 0.3, click: 0.2, click_tone: 1800.0, drive: 0.1, sub_level: 0.3, eq_high: -3.0, ..base }),
-            ("Tech House · Tight", KickParams { tune: 34.0, pitch_amount: 40.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 25.0, decay: 160.0, decay_curve: 0.5, click: 0.55, click_tone: 5000.0, click_length: 4.0, drive: 0.35, phase: 90.0, punch: 0.4, click_type: 1, eq_mid: -3.0, eq_mid_freq: 400.0, limiter: true, ..base }),
+            ("Tech House · Apretado", KickParams { tune: 34.0, pitch_amount: 40.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 25.0, decay: 160.0, decay_curve: 0.5, click: 0.55, click_tone: 5000.0, click_length: 4.0, drive: 0.35, phase: 90.0, punch: 0.4, click_type: 1, eq_mid: -3.0, eq_mid_freq: 400.0, limiter: true, ..base }),
             ("Techno · Rumble", KickParams { tune: 29.0, pitch_amount: 44.0, pitch_time: 70.0, hold: 90.0, decay: 650.0, decay_curve: 0.6, harmonics: 0.15, drive: 0.55, sub_level: 0.35, eq_low: 3.0, punch: 0.3, gain: 0.6, ..base }),
             (
                 "Techno · Industrial",
                 KickParams { tune: 30.0, pitch_amount: 50.0, pitch_time: 60.0, hold: 70.0, decay: 420.0, harmonics: 0.25, click: 0.6, click_tone: 7000.0, drive: 0.6, drive_mode: KickDrive::Fold, gain: 0.6, click_type: 5, eq_mid: 3.0, eq_mid_freq: 1500.0, limiter: true, ..base },
             ),
             (
-                "Hard · Kick",
+                "Hard · Contundente",
                 KickParams {
                     tune: 34.0,
                     pitch_amount: 52.0,
@@ -1128,7 +1128,7 @@ impl KickParams {
             ),
             (
                 // A fast "tok" then a pitch plateau that bends down slowly: the long, tonal tail.
-                "Hard · Hardstyle Tail",
+                "Hard · Cola hardstyle",
                 KickParams {
                     tune: 36.0,
                     pitch_amount: 48.0,
@@ -1151,10 +1151,10 @@ impl KickParams {
                 "Hard · Gabber",
                 KickParams { tune: 38.0, pitch_amount: 40.0, pitch_time: 25.0, pitch_curve: 0.8, hold: 90.0, decay: 250.0, harmonics: 0.5, click: 0.8, click_tone: 8000.0, drive: 1.0, drive_mode: KickDrive::Hard, gain: 0.5, click_type: 3, eq_mid: 4.0, eq_mid_freq: 900.0, limiter: true, ..base },
             ),
-            ("Trance · Thud", KickParams { tune: 32.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 30.0, decay: 180.0, decay_curve: 0.6, click: 0.6, click_tone: 2500.0, drive: 0.35, click_type: 2, phase: 90.0, punch: 0.35, limiter: true, ..base }),
-            ("Psytrance · Click", KickParams { tune: 34.0, pitch_amount: 56.0, pitch_time: 20.0, pitch_curve: 0.85, hold: 15.0, decay: 140.0, decay_curve: 0.7, click: 0.8, click_tone: 6500.0, click_length: 3.0, drive: 0.3, gain: 0.6, click_type: 1, punch: 0.3, eq_low: -2.0, limiter: true, ..base }),
-            ("Drum & Bass · Punch", KickParams { tune: 38.0, pitch_amount: 36.0, pitch_time: 25.0, pitch_curve: 0.7, hold: 20.0, decay: 180.0, decay_curve: 0.5, harmonics: 0.1, click: 0.7, click_tone: 4500.0, drive: 0.45, gain: 0.7, click_type: 8, phase: 90.0, punch: 0.5, limiter: true, ..base }),
-            ("808 · Long", KickParams { tune: 28.0, pitch_amount: 24.0, pitch_time: 40.0, hold: 200.0, decay: 1600.0, decay_curve: 0.3, click: 0.15, drive: 0.1, key_follow: true, sub_level: 0.4, ..base }),
+            ("Trance · Golpe sordo", KickParams { tune: 32.0, pitch_amount: 48.0, pitch_time: 35.0, pitch_curve: 0.8, hold: 30.0, decay: 180.0, decay_curve: 0.6, click: 0.6, click_tone: 2500.0, drive: 0.35, click_type: 2, phase: 90.0, punch: 0.35, limiter: true, ..base }),
+            ("Psytrance · Clic", KickParams { tune: 34.0, pitch_amount: 56.0, pitch_time: 20.0, pitch_curve: 0.85, hold: 15.0, decay: 140.0, decay_curve: 0.7, click: 0.8, click_tone: 6500.0, click_length: 3.0, drive: 0.3, gain: 0.6, click_type: 1, punch: 0.3, eq_low: -2.0, limiter: true, ..base }),
+            ("Drum & Bass · Pegada", KickParams { tune: 38.0, pitch_amount: 36.0, pitch_time: 25.0, pitch_curve: 0.7, hold: 20.0, decay: 180.0, decay_curve: 0.5, harmonics: 0.1, click: 0.7, click_tone: 4500.0, drive: 0.45, gain: 0.7, click_type: 8, phase: 90.0, punch: 0.5, limiter: true, ..base }),
+            ("808 · Largo", KickParams { tune: 28.0, pitch_amount: 24.0, pitch_time: 40.0, hold: 200.0, decay: 1600.0, decay_curve: 0.3, click: 0.15, drive: 0.1, key_follow: true, sub_level: 0.4, ..base }),
             (
                 // After the hit the pitch keeps gliding down an octave and a half.
                 "808 · Glide",
@@ -1174,10 +1174,10 @@ impl KickParams {
                 },
             ),
             ("Trap · Boom", KickParams { tune: 26.0, pitch_amount: 28.0, pitch_time: 50.0, hold: 250.0, decay: 1100.0, decay_curve: 0.2, harmonics: 0.1, click: 0.3, click_tone: 2000.0, drive: 0.5, sub_level: 0.5, drive_mode: KickDrive::Tube, limiter: true, ..base }),
-            ("Lo-Fi · Thump", KickParams { tune: 30.0, pitch_amount: 26.0, pitch_time: 50.0, pitch_curve: 0.4, hold: 40.0, decay: 260.0, harmonics: 0.35, click: 0.35, click_tone: 900.0, click_length: 12.0, drive: 0.4, click_type: 11, drive_mode: KickDrive::Crush, eq_high: -6.0, ..base }),
+            ("Lo-Fi · Golpe apagado", KickParams { tune: 30.0, pitch_amount: 26.0, pitch_time: 50.0, pitch_curve: 0.4, hold: 40.0, decay: 260.0, harmonics: 0.35, click: 0.35, click_tone: 900.0, click_length: 12.0, drive: 0.4, click_type: 11, drive_mode: KickDrive::Crush, eq_high: -6.0, ..base }),
             (
                 // The level dips and comes back: two punches from one note.
-                "FX · Double Punch",
+                "FX · Doble golpe",
                 KickParams {
                     tune: 33.0,
                     pitch_amount: 40.0,
@@ -4993,7 +4993,7 @@ impl WaveParams {
         p.fx[0] = chorus;
         p.fx[1] = reverb(0.8, 0.3);
         p.gain = 0.45;
-        list.push(("Analog · Warm Pad", p));
+        list.push(("Analog · Pad cálido", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { unison: 2.0, detune: 0.12, drift: 0.3, ..analog(saw) };
@@ -5004,7 +5004,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Env2, 32, 0.5);
         p.fx[0] = reverb(0.5, 0.15);
         p.gain = 0.5;
-        list.push(("Analog · Brass", p));
+        list.push(("Analog · Metales", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { drift: 0.8, unison: 2.0, detune: 0.08, ..analog(saw) };
@@ -5016,7 +5016,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Lfo1, 3, 0.04);
         p.fx[0] = delay(0.75, 0.2);
         p.gain = 0.85;
-        list.push(("Analog · Drift Lead", p));
+        list.push(("Analog · Lead con deriva", p));
 
         let mut p = init;
         p.osc[0] = harmonic(24.0, 0.3, 0.4);
@@ -5027,7 +5027,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Env2, 0, 0.6);
         p.fx[0] = reverb(0.7, 0.25);
         p.gain = 0.6;
-        list.push(("Harmonic · Glass Keys", p));
+        list.push(("Harmonic · Teclas de cristal", p));
 
         let mut p = init;
         p.osc[0] = harmonic(16.0, 0.5, -0.3);
@@ -5035,7 +5035,7 @@ impl WaveParams {
         p.env[0] = env(0.004, 0.2, 1.0, 0.05);
         p.fx[0] = chorus;
         p.gain = 0.55;
-        list.push(("Harmonic · Drawbar Organ", p));
+        list.push(("Harmonic · Órgano de registros", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { unison: 4.0, detune: 0.18, warp_amount: 0.8, position: 0.2, ..harmonic(40.0, -0.2, 0.0) };
@@ -5045,7 +5045,7 @@ impl WaveParams {
         p.env[0] = env(0.5, 1.0, 1.0, 1.5);
         p.fx[0] = reverb(0.85, 0.35);
         p.gain = 0.3;
-        list.push(("Harmonic · Choir", p));
+        list.push(("Harmonic · Coro", p));
 
         let mut p = init;
         p.osc[0] = analog(saw);
@@ -5082,7 +5082,7 @@ impl WaveParams {
         };
         p.fx[0] = delay(0.75, 0.15);
         p.gain = 0.55;
-        list.push(("Seq · Acid Line", p));
+        list.push(("Seq · Línea acid", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { unison: 3.0, detune: 0.2, warp_amount: 0.2, ..analog(1.0) };
@@ -5102,7 +5102,7 @@ impl WaveParams {
         p.fx[0] = delay(0.75, 0.25);
         p.fx[1] = reverb(0.6, 0.2);
         p.gain = 0.95;
-        list.push(("Seq · Techno Stab", p));
+        list.push(("Seq · Stab de techno", p));
 
         let mut p = init;
         p.osc[0] = harmonic(20.0, 0.1, 0.2);
@@ -5126,7 +5126,7 @@ impl WaveParams {
         p.fx[0] = delay(0.75, 0.3);
         p.fx[1] = reverb(0.7, 0.25);
         p.gain = 1.0;
-        list.push(("Seq · Melodic Pluck", p));
+        list.push(("Seq · Pluck melódico", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { drift: 0.15, ..analog(0.15) };
@@ -5135,7 +5135,7 @@ impl WaveParams {
         p.glide = 25.0;
         p.env[0] = env(0.003, 1.0, 1.0, 0.08);
         p.gain = 0.9;
-        list.push(("Bajo · Analog Sub", p));
+        list.push(("Bajo · Sub analógico", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { kind: OscKind::Wavetable, table: 3, unison: 3.0, detune: 0.2, ..WaveOsc::default() };
@@ -5149,7 +5149,7 @@ impl WaveParams {
         p.env[0] = env(0.8, 1.0, 1.0, 1.8);
         p.fx[0] = reverb(0.9, 0.35);
         p.gain = 0.55;
-        list.push(("Pad · Random Motion", p));
+        list.push(("Pad · Movimiento aleatorio", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { unison: 3.0, detune: 0.15, ..analog(saw) };
@@ -5161,7 +5161,7 @@ impl WaveParams {
         p.lfo[1] = WaveLfo { shape: triangle, sync_beats: 8.0, ..init.lfo[1] };
         p.matrix[1] = slot(ModSource::Lfo2, 32, 0.4);
         p.gain = 0.3;
-        list.push(("Dual Filter · Vowel Sweep", p));
+        list.push(("Doble filtro · Barrido vocal", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { unison: 2.0, detune: 0.1, ..analog(1.0) };
@@ -5173,7 +5173,7 @@ impl WaveParams {
         p.env[0] = env(0.01, 2.5, 0.0, 0.3);
         p.fx[0] = delay(0.5, 0.2);
         p.gain = 0.45;
-        list.push(("FX · Combo Pulse", p));
+        list.push(("FX · Pulso combinado", p));
 
         // ----- Second bank. Matrix destinations used below: 0 A Pos, 2 A Semi,
         // 3 A Fine, 12 A Warp (pulse width / formant gain / FM depth), 16 B Fine,
@@ -5385,7 +5385,7 @@ impl WaveParams {
         p.mono = true;
         p.glide = 40.0;
         p.gain = 0.24;
-        list.push(("Dual Filter · Wah vocal", p));
+        list.push(("Doble filtro · Wah vocal", p));
 
         // Low-pass and high-pass side by side; an LFO over two bars crossfades them.
         let mut p = init;
@@ -5400,7 +5400,7 @@ impl WaveParams {
         p.env[0] = env(0.3, 1.0, 1.0, 1.0);
         p.fx[0] = reverb(0.7, 0.25);
         p.gain = 0.66;
-        list.push(("Dual Filter · LP/HP cruzado", p));
+        list.push(("Doble filtro · LP/HP cruzado", p));
 
         // Plucked string: a burst of noise rings a comb tuned to the note (key
         // tracking 1, C4 at 261.6 Hz), then a low-pass darkens it.
@@ -5415,7 +5415,7 @@ impl WaveParams {
         p.matrix[1] = slot(ModSource::Env2, 4, 1.0);
         p.fx[0] = reverb(0.5, 0.15);
         p.gain = 0.5;
-        list.push(("Dual Filter · Cuerda pulsada", p));
+        list.push(("Doble filtro · Cuerda pulsada", p));
 
         // Rolling techno bass: the off-beat sixteenths, accents opening the filter
         // through the sequencer lane.
@@ -5569,7 +5569,7 @@ impl WaveParams {
         p.gain = 0.9;
                 p.fx[0] = drive(9.0);
         p.fx[1] = delay(0.5, 0.15);
-        list.push(("Lead · Sync Scream", p));
+        list.push(("Lead · Sync chillón", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: saw, unison: 2.0, detune: 0.18, width: 0.3, ..WaveOsc::default() };
@@ -5595,7 +5595,7 @@ impl WaveParams {
         p.mono = true;
         p.gain = 0.45;
                 p.fx[0] = drive(6.0);
-        list.push(("Bajo · Growl", p));
+        list.push(("Bajo · Gruñido", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: saw, unison: 3.0, detune: 0.12, width: 0.5, ..WaveOsc::default() };
@@ -5626,7 +5626,7 @@ impl WaveParams {
         p.sub = WaveSub { on: true, level: 0.5, ..init.sub };
         p.mono = true;
         p.gain = 0.75;
-        list.push(("Bajo · FM Metal", p));
+        list.push(("Bajo · FM metálico", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: saw, unison: 3.0, detune: 0.2, ..WaveOsc::default() };
@@ -5637,7 +5637,7 @@ impl WaveParams {
         p.gain = 0.85;
                 p.fx[0] = delay(0.75, 0.25);
         p.fx[1] = reverb(0.5, 0.18);
-        list.push(("Pluck · Bright", p));
+        list.push(("Pluck · Brillante", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 7, position: 0.2, unison: 2.0, detune: 0.1, ..WaveOsc::default() };
@@ -5658,7 +5658,7 @@ impl WaveParams {
         p.fx[0] = delay(0.75, 0.3);
         p.fx[1] = reverb(0.6, 0.2);
         p.gain = 0.95;
-        list.push(("Arpegio · Trance Pluck", p));
+        list.push(("Arpegio · Pluck de trance", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 3, position: 0.0, unison: 4.0, detune: 0.2, ..WaveOsc::default() };
@@ -5671,7 +5671,7 @@ impl WaveParams {
         p.gain = 0.5;
                 p.fx[0] = chorus;
         p.fx[1] = reverb(0.85, 0.35);
-        list.push(("Pad · Vowel", p));
+        list.push(("Pad · Vocales", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 10, position: 0.1, unison: 6.0, detune: 0.25, ..WaveOsc::default() };
@@ -5680,13 +5680,13 @@ impl WaveParams {
         p.env[0] = env(1.2, 1.0, 1.0, 2.0);
         p.gain = 0.5;
                 p.fx[0] = reverb(0.9, 0.4);
-        list.push(("Pad · Spectral", p));
+        list.push(("Pad · Espectral", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 8, position: 0.7, random_phase: 0.0, ..WaveOsc::default() };
         p.env[0] = env(0.003, 0.2, 1.0, 0.06);
         p.gain = 0.55;
-        list.push(("Teclas · Organ", p));
+        list.push(("Teclas · Órgano", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 5, position: 0.35, random_phase: 0.0, ..WaveOsc::default() };
@@ -5695,7 +5695,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Env2, 0, 0.35);
         p.gain = 0.43;
                 p.fx[0] = reverb(0.7, 0.25);
-        list.push(("Teclas · Bell", p));
+        list.push(("Teclas · Campana", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 2, position: 0.0, unison: 5.0, detune: 0.3, ..WaveOsc::default() };
@@ -5707,7 +5707,7 @@ impl WaveParams {
         p.env[0] = env(0.5, 1.0, 1.0, 1.0);
         p.gain = 0.5;
                 p.fx[0] = reverb(0.9, 0.3);
-        list.push(("FX · Riser 4 bars", p));
+        list.push(("FX · Riser de 4 compases", p));
 
         // ----- Second bank: modern bass, leads, chords, textures and FX.
         let bi = |source, dest: usize, amount| ModSlot { source, dest: dest as u8, amount, bipolar: true };
@@ -7715,7 +7715,7 @@ impl ModularParams {
         let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
         p.audio[c].amount = 0.35;
         p.gain = 0.35;
-        list.push(("FM · Two Groups", p));
+        list.push(("FM · Dos grupos", p));
 
         let mut p = build(&[group, sine(&[]), out(0.002, 3.0, 0.0, 2.0), group, sine(&[(slot::HARMONIC, 3.5)])]);
         let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
@@ -7728,14 +7728,14 @@ impl ModularParams {
         p.modulators[0] = decay;
         p.lanes[0].fx[0] = reverb(0.75, 0.3);
         p.gain = 0.25;
-        list.push(("FM · Bell", p));
+        list.push(("FM · Campana", p));
 
         let mut p = build(&[group, sine(&[]), out(0.002, 1.2, 0.2, 0.8), group, sine(&[(slot::HARMONIC, 1.0), (slot::SEMI, 7.0), (slot::CENT, 13.0)])]);
         let c = p.connect_audio(4, 1, AudioParam::Level).unwrap();
         p.audio[c].amount = 1.0;
         p.lanes[0].fx[0] = delay(0.75, 0.3);
         p.gain = 0.7;
-        list.push(("Ring · Metallic", p));
+        list.push(("Anillo · Metálico", p));
 
         let mut p = build(&[
             group,
@@ -7753,7 +7753,7 @@ impl ModularParams {
         p.modulators[0] = env;
         p.lanes[0].fx[0] = reverb(0.5, 0.15);
         p.gain = 0.4;
-        list.push(("Stack · Detuned Saws", p));
+        list.push(("Capas · Sierras desafinadas", p));
 
         // Group 2's oscillator reaches group 1's filter through an Aux.
         let mut p = build(&[
@@ -7768,7 +7768,7 @@ impl ModularParams {
         let c = p.connect_audio(6, 2, AudioParam::Input).unwrap();
         p.audio[c].amount = 0.6;
         p.gain = 0.25;
-        list.push(("Aux · Cross Feed", p));
+        list.push(("Aux · Alimentación cruzada", p));
 
         let mut p = build(&[group, module(K::Noise, &[(slot::SLOPE, -4.0), (slot::LEVEL, 2.0)], 0), filter(1, 800.0, 6.0, false), out(0.8, 1.0, 1.0, 1.5)]);
         let mut wind = Modulator::new(ModulatorKind::Lfo);
@@ -7777,7 +7777,7 @@ impl ModularParams {
         p.modulators[0] = wind;
         p.lanes[0].fx[0] = reverb(0.9, 0.3);
         p.gain = 0.8;
-        list.push(("Ruido · Wind", p));
+        list.push(("Ruido · Viento", p));
 
         let mut p = build(&[group, sine(&[]), saw(&[(slot::HARMONIC, 2.0), (slot::LEVEL, 0.3)]), filter(0, 700.0, 0.7, true), out(0.003, 1.0, 1.0, 0.1)]);
         p.mono = true;
@@ -7797,7 +7797,7 @@ impl ModularParams {
         p.glide = 50.0;
         p.lanes[0].fx[0] = delay(0.5, 0.2);
         p.gain = 0.9;
-        list.push(("Lead · Sync Sweep", p));
+        list.push(("Lead · Barrido sync", p));
 
         // Two layers in two lanes: a pad to the reverb, a pluck to the delay.
         let mut pluck = out(0.002, 0.35, 0.0, 0.3);
@@ -7827,13 +7827,13 @@ impl ModularParams {
         p.unison = unison(7, UnisonMode::Smooth, 0.4, 1.0, 0.6, 0.0);
         p.lanes[0].fx[0] = reverb(0.6, 0.2);
         p.gain = 0.31;
-        list.push(("Unison · Supersaw", p));
+        list.push(("Unísono · Supersaw", p));
 
         let mut p = build(&[group, saw(&[(slot::LEVEL, 0.8)]), sine(&[(slot::SEMI, -12.0)]), filter(0, 3000.0, 0.7, false), out(0.02, 1.0, 0.9, 0.6)]);
         p.unison = unison(3, UnisonMode::PitchStack, 0.1, 0.8, 0.5, 0.0);
         p.lanes[0].fx[0] = delay(0.75, 0.25);
         p.gain = 0.25;
-        list.push(("Unison · Octave Stack", p));
+        list.push(("Unísono · Octavas apiladas", p));
 
         let mut p = build(&[group, saw(&[]), filter(0, 2500.0, 1.2, true), out(0.003, 0.5, 0.0, 0.3)]);
         p.unison = unison(4, UnisonMode::Chords, 0.15, 0.7, 0.5, -0.2);
@@ -7848,7 +7848,7 @@ impl ModularParams {
         p.lanes[1].fx[0] = reverb(0.7, 0.25);
         p.lanes[0].dest = 1;
         p.gain = 0.45;
-        list.push(("Acordes · Minor 7 Stab", p));
+        list.push(("Acordes · Stab menor 7", p));
 
         // Octaves of the pitch class, loudest around a center that drifts.
         let mut p = build(&[group, module(K::Analog, &[], 2), out(0.5, 1.0, 1.0, 1.5)]);
@@ -7860,7 +7860,7 @@ impl ModularParams {
         p.modulators[0] = drift;
         p.lanes[0].fx[0] = reverb(0.85, 0.35);
         p.gain = 0.2;
-        list.push(("Shepard · Drifting Organ", p));
+        list.push(("Shepard · Órgano a la deriva", p));
 
         let mut acid = module(K::NonlinearFilter, &[(slot::CUTOFF, 400.0), (slot::Q, 9.0), (slot::NL_DRIVE, 15.0)], 0);
         acid.choice[1] = 1;
@@ -7889,7 +7889,7 @@ impl ModularParams {
         let mut p = build(&[group, saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.25), (slot::PHASE_RANDOM, 180.0)]), filter(0, 2200.0, 1.0, false), gate]);
         p.lanes[0].fx[0] = reverb(0.7, 0.25);
         p.gain = 1.0;
-        list.push(("Curve · Gated Pad", p));
+        list.push(("Curve · Pad entrecortado", p));
 
         // Smooth keytracked noise is pitched: a breathy tone that follows the keyboard.
         let mut breath = module(K::Noise, &[(slot::LEVEL, 0.8)], 2);
@@ -7897,7 +7897,7 @@ impl ModularParams {
         let mut p = build(&[group, breath, sine(&[(slot::LEVEL, 0.35)]), filter(0, 2500.0, 0.9, false), out(0.08, 1.0, 0.8, 0.6)]);
         p.lanes[0].fx[0] = reverb(0.8, 0.3);
         p.gain = 0.27;
-        list.push(("Ruido · Pitched Breath", p));
+        list.push(("Ruido · Aliento afinado", p));
 
         // FM into a wavetable; its bandlimit (macro 1) tames the harshness.
         let mut p = build(&[group, module(K::Wavetable, &[(slot::A, 60.0), (slot::BANDLIMIT, 5000.0)], 0), out(0.005, 1.2, 0.5, 0.5), group, sine(&[(slot::HARMONIC, 2.0)])]);
@@ -7909,7 +7909,7 @@ impl ModularParams {
         p.modulators[0] = knob;
         p.lanes[0].fx[0] = reverb(0.5, 0.2);
         p.gain = 0.4;
-        list.push(("Wavetable · Bandlimited FM", p));
+        list.push(("Wavetable · FM sin aliasing", p));
 
         // Modulation chains. Rates and depths are set in real units through `set`.
         let modulator = |kind: ModulatorKind, settings: &[(usize, f32)]| {
@@ -7938,7 +7938,7 @@ impl ModularParams {
         p.modulators[1] = remap;
         p.mono = true;
         p.gain = 0.14;
-        list.push(("Mod · Wobble Bass", p));
+        list.push(("Mod · Bajo wobble", p));
 
         // Fast random values, sampled every sixteenth by a square LFO.
         let mut p = build(&[group, saw(&[(slot::UNISON, 2.0), (slot::DETUNE, 0.1)]), filter(0, 400.0, 4.0, false), out(0.002, 0.3, 0.6, 0.2)]);
@@ -7953,7 +7953,7 @@ impl ModularParams {
         p.modulators[..3].copy_from_slice(&[source, clock, sh]);
         p.lanes[0].fx[0] = delay(0.75, 0.25);
         p.gain = 0.35;
-        list.push(("Mod · Sample & Hold Filter", p));
+        list.push(("Mod · Filtro sample & hold", p));
 
         // Vibrato that fades in: a delayed envelope opens the LFO's depth.
         let mut p = build(&[group, saw(&[]), filter(0, 2500.0, 0.8, false), out(0.02, 1.0, 1.0, 0.3)]);
@@ -7970,7 +7970,7 @@ impl ModularParams {
         p.legato = true;
         p.glide = 60.0;
         p.gain = 0.62;
-        list.push(("Mod · Delayed Vibrato", p));
+        list.push(("Mod · Vibrato retardado", p));
 
         // A one-bar drawn filter rhythm that loops while the chord is held.
         let mut p = build(&[group, saw(&[(slot::UNISON, 4.0), (slot::DETUNE, 0.3), (slot::PHASE_RANDOM, 180.0)]), filter(0, 300.0, 2.0, true), out(0.01, 1.0, 1.0, 0.5)]);
@@ -7982,7 +7982,7 @@ impl ModularParams {
         p.modulators[0] = rhythm;
         p.lanes[0].fx[0] = reverb(0.7, 0.25);
         p.gain = 0.14;
-        list.push(("Mod · Rhythmic Curve", p));
+        list.push(("Mod · Curva rítmica", p));
 
         // Slow, uneven random drift of pitch and pan, different on every note.
         let mut p = build(&[group, saw(&[(slot::LEVEL, 0.7)]), saw(&[(slot::CENT, 9.0), (slot::LEVEL, 0.7)]), filter(0, 1800.0, 0.7, false), out(0.6, 1.0, 1.0, 1.2)]);
@@ -7996,7 +7996,7 @@ impl ModularParams {
         p.modulators[..2].copy_from_slice(&[pitch, pan]);
         p.lanes[0].fx[0] = reverb(0.85, 0.35);
         p.gain = 0.2;
-        list.push(("Mod · Drifting Pad", p));
+        list.push(("Mod · Pad a la deriva", p));
 
         // For a MIDI keyboard: the mod wheel adds vibrato, aftertouch opens the filter.
         let mut p = build(&[group, saw(&[]), module(K::Analog, &[(slot::SEMI, 12.0), (slot::LEVEL, 0.3)], 1), filter(0, 900.0, 1.5, false), out(0.005, 1.0, 0.9, 0.25)]);
@@ -8018,7 +8018,7 @@ impl ModularParams {
         p.legato = true;
         p.glide = 40.0;
         p.gain = 0.55;
-        list.push(("Mod · Expressive Lead", p));
+        list.push(("Mod · Lead expresivo", p));
 
         // Poly lane: each note of the chord is driven on its own, so chords stay clean
         // (no intermodulation); velocity drives harder. A shared reverb lane after it.
@@ -8031,7 +8031,7 @@ impl ModularParams {
         velocity.targets[0] = ModTarget::new(ModularParams::lane_fx_param(0, 0, 0), 0.25);
         p.modulators[0] = velocity;
         p.gain = 0.42;
-        list.push(("Lanes · Poly Drive Chords", p));
+        list.push(("Carriles · Acordes saturados", p));
 
         // Parallel lanes: the same saw clean with chorus in lane 1, crushed in lane 2.
         let mut p = build(&[group, saw(&[]), filter(0, 5000.0, 0.7, false), out(0.005, 0.6, 0.6, 0.3), group, saw(&[]), out(0.005, 0.6, 0.6, 0.3)]);
@@ -8041,7 +8041,7 @@ impl ModularParams {
         p.lanes[1].mix = 0.6;
         p.lanes[1].gain = 0.5;
         p.gain = 0.37;
-        list.push(("Lanes · Parallel Crush", p));
+        list.push(("Carriles · Crush en paralelo", p));
 
         // Sidechain pumping inside the patch: a looping curve beats quarter notes into the
         // sideband, unheard; a follower listening to it ducks the pad.
@@ -8056,7 +8056,7 @@ impl ModularParams {
         p.modulators[0] = follower;
         p.lanes[0].fx[0] = reverb(0.6, 0.2);
         p.gain = 0.3;
-        list.push(("Lanes · Sideband Pump", p));
+        list.push(("Carriles · Bombeo por sideband", p));
 
         // Poly echoes: every note has its own delay, so echoes of one note never
         // smear into the next; a random modulator sets each note's feedback.
@@ -8077,7 +8077,7 @@ impl ModularParams {
         p.modulators[0] = random;
         p.modules[4].set(slot::LEVEL, 1.8);
         p.gain = 1.0;
-        list.push(("Lanes · Poly Echo Pluck", p));
+        list.push(("Carriles · Pluck con eco por voz", p));
 
         // ----- Sounds only a modular stack makes -----
         let envelope = |attack: f32, decay: f32, sustain: f32, release: f32| {
@@ -8280,7 +8280,7 @@ impl ModularParams {
         p.lanes[0].fx[0] = delay(0.75, 0.25);
         p.lanes[0].fx[1] = reverb(0.6, 0.2);
         p.gain = 0.5;
-        list.push(("Unison · Quintas apiladas", p));
+        list.push(("Unísono · Quintas apiladas", p));
 
         // Additive organ: the unison stacks the first six harmonics of one sine,
         // with a chorus for the spin.
@@ -8289,7 +8289,7 @@ impl ModularParams {
         p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams { rate: 4.8, depth: 0.25, delay_ms: 4.0, mix: 0.4 }));
         p.lanes[0].fx[1] = reverb(0.5, 0.15);
         p.gain = 0.25;
-        list.push(("Unison · Órgano aditivo", p));
+        list.push(("Unísono · Órgano aditivo", p));
 
         // A drawn level that bounces like a dropped ball: one note, several hits,
         // each lower and closer than the last.

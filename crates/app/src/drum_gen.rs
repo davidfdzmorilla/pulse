@@ -1226,7 +1226,7 @@ mod tests {
     }
 
     /// The Hard techno machine's kick is clipped: as much presence (1–4 kHz
-    /// against its lows) as the Kick Designer's «Hard · Kick», a little louder
+    /// against its lows) as the Kick Designer's «Hard · Contundente», a little louder
     /// than it was clean. The other styles stay clean.
     #[test]
     fn the_hard_techno_kick_is_distorted() {

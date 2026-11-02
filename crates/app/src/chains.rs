@@ -140,7 +140,9 @@ pub fn factory() -> Vec<Chain> {
             "Voz · Pop",
             vec![
                 eq(&[(0, EqShape::LowCut48, 90.0, 0.0), (4, EqShape::Bell, 3000.0, 2.0), (6, EqShape::HighShelf, 10_000.0, 2.5)]),
-                Effect::Compressor(CompressorParams { threshold_db: -20.0, ratio: 4.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 4.0, sidechain: None }),
+                // Makeup for what the compressor, the de-esser and the sends take: the
+                // voice comes out as loud as it went in (measured on a spoken voice).
+                Effect::Compressor(CompressorParams { threshold_db: -20.0, ratio: 4.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 7.5, sidechain: None }),
                 Effect::DeEsser(DeEsserParams::default()),
                 ott("Voces · Voz de cerca"),
                 Effect::Delay(DelayParams { time_beats: 0.5, feedback: 0.25, mix: 0.12, ping_pong: true, filter_hz: 4000.0 }),
@@ -152,7 +154,7 @@ pub fn factory() -> Vec<Chain> {
             vec![
                 eq(&[(0, EqShape::LowCut48, 350.0, 0.0), (3, EqShape::Bell, 1500.0, 5.0), (7, EqShape::HighCut48, 3500.0, 0.0)]),
                 Effect::Saturator(SaturatorParams { drive_db: 12.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Tube, oversample: false }),
-                Effect::Compressor(CompressorParams { threshold_db: -26.0, ratio: 8.0, attack_ms: 2.0, release_ms: 60.0, makeup_db: 6.0, sidechain: None }),
+                Effect::Compressor(CompressorParams { threshold_db: -26.0, ratio: 8.0, attack_ms: 2.0, release_ms: 60.0, makeup_db: 10.5, sidechain: None }),
                 Effect::Utility(UtilityParams { width: 0.0, ..Default::default() }),
             ],
         ),
@@ -161,7 +163,9 @@ pub fn factory() -> Vec<Chain> {
             vec![
                 Effect::Transient(TransientParams { attack: 0.3, sustain: -0.1, output_db: 0.0 }),
                 glue("Batería · Pegada (ataque lento)"),
-                Effect::Saturator(SaturatorParams { drive_db: 4.0, output_db: -2.0, mix: 0.5, kind: KickDrive::Tube, oversample: false }),
+                // Its output takes back what the bus compressor and the drive add: more
+                // punch, not more level (to judge it by ear, not by loudness).
+                Effect::Saturator(SaturatorParams { drive_db: 4.0, output_db: -3.5, mix: 0.5, kind: KickDrive::Tube, oversample: false }),
             ],
         ),
         Chain::of(
@@ -181,17 +185,20 @@ pub fn factory() -> Vec<Chain> {
                 glue("Mezcla · Pegar la mezcla"),
                 mix(ott("OTT · OTT suave"), 0.4),
                 Effect::Utility(UtilityParams { bass_mono_hz: 120.0, ..Default::default() }),
-                Effect::Limiter(LimiterParams { gain_db: 3.0, ceiling_db: -0.3, release_ms: 120.0 }),
+                // -1 dBTP: room for the encoders of the streaming services.
+                Effect::Limiter(LimiterParams { gain_db: 3.0, ceiling_db: -1.0, release_ms: 120.0 }),
             ],
         ),
         Chain::of(
             "Pad · Ancho y lejano",
             vec![
-                eq(&[(0, EqShape::LowCut48, 200.0, 0.0), (6, EqShape::HighShelf, 9000.0, -2.0)]),
+                eq(&[(0, EqShape::LowCut12, 150.0, 0.0), (6, EqShape::HighShelf, 9000.0, -2.0)]),
                 Effect::Chorus(ChorusParams { mix: 0.35, ..Default::default() }),
                 Effect::Delay(DelayParams { time_beats: 0.75, feedback: 0.45, mix: 0.2, ping_pong: true, filter_hz: 3500.0 }),
                 space("Pads · Sala grande"),
-                Effect::Utility(UtilityParams { width: 1.4, ..Default::default() }),
+                // Wide but still there in mono; the level the chorus, the delay and the
+                // room take, given back.
+                Effect::Utility(UtilityParams { width: 1.15, gain_db: 4.5, ..Default::default() }),
             ],
         ),
     ];
@@ -588,6 +595,31 @@ mod tests {
             assert!(l.iter().chain(&r).all(|s| s.is_finite()), "{}", chain.name);
             let peak = l.iter().chain(&r).fold(0.0f32, |m, s| m.max(s.abs()));
             assert!(peak > 0.01 && peak < 1.5, "{}: pico {peak}", chain.name);
+        }
+    }
+
+    /// «Máster · Club» leaves a true peak of -1 dBTP at most, however hot the
+    /// mix comes in, and makes a mix with room louder.
+    #[test]
+    fn the_club_master_peaks_at_minus_one_dbtp() {
+        let chain = factory().into_iter().find(|c| c.name == "Máster · Club").unwrap();
+        for gain in [0.5, 1.0, 2.0] {
+            let mut app = playing();
+            app.project.tracks[0].mixer.gain = gain;
+            let render = |app: &PulseApp| {
+                let project = app.project.clone();
+                let mut samples = crate::sync::SampleCache::default();
+                let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+                crate::export::render(commands, (0.0, 8.0), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap()
+            };
+            let (dl, dr) = render(&app);
+            app.load_chain(Target::Master, &chain, false);
+            let (l, r) = render(&app);
+            let peak = stems::loudness::true_peak(&l, &r);
+            assert!(peak <= -0.95, "a {gain}: {peak:.2} dBTP");
+            let (before, after) = (stems::loudness::integrated(&dl, &dr, 48_000.0).unwrap(), stems::loudness::integrated(&l, &r, 48_000.0).unwrap());
+            println!("a {gain}: {before:.1} → {after:.1} LUFS, {peak:.2} dBTP");
+            assert!(gain >= 1.0 || after > before + 1.0, "a {gain}: {before:.1} → {after:.1} LUFS");
         }
     }
 }

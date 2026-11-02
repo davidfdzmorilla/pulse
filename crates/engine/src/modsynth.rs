@@ -3312,7 +3312,7 @@ mod modulation_tests {
     fn modulation_presets_move_their_filters() {
         let preset = |name: &str| ModularParams::presets().into_iter().find(|(n, _)| *n == name).unwrap().1;
         // At 120 BPM: the wobble opens every eighth note (6000 samples).
-        let (_, audio) = run(preset("Mod · Wobble Bass"), blocks(2.0), |s, b| {
+        let (_, audio) = run(preset("Mod · Bajo wobble"), blocks(2.0), |s, b| {
             if b == 0 {
                 s.note_on(36, 1.0, HELD);
             }
@@ -3321,7 +3321,7 @@ mod modulation_tests {
         let (low, high) = (b.iter().fold(f32::MAX, |a, &x| a.min(x)), b.iter().fold(0.0f32, |a, &x| a.max(x)));
         assert!(high > low * 3.0, "wobbles: {low} .. {high}");
         // Sample & hold: a different filter setting every sixteenth (6000 samples), flat in between.
-        let (_, audio) = run(preset("Mod · Sample & Hold Filter"), blocks(2.0), |s, b| {
+        let (_, audio) = run(preset("Mod · Filtro sample & hold"), blocks(2.0), |s, b| {
             if b == 0 {
                 s.note_on(48, 1.0, HELD);
             }
@@ -3580,7 +3580,7 @@ mod lane_tests {
 
     #[test]
     fn the_sideband_pump_preset_ducks_on_every_beat() {
-        let (_, preset) = ModularParams::presets().into_iter().find(|(name, _)| name.contains("Sideband Pump")).unwrap();
+        let (_, preset) = ModularParams::presets().into_iter().find(|(name, _)| name.contains("Bombeo por sideband")).unwrap();
         // The level just after each beat (every half second) against the level before the next.
         let dip = |p: ModularParams| {
             let (l, _) = play(p, &[60, 64, 67], 144_000);

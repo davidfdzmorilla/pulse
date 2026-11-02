@@ -3617,7 +3617,7 @@ mod tests {
         use engine::model::{ArrangementClip, Clip, InstrumentKind, KickParams, MidiClip, Note};
         let mut project = Project::empty();
         project.tempo = 150.0;
-        let mut kick = Track::new("Kick", [200, 0, 0], InstrumentKind::Kick(KickParams::presets().into_iter().find(|(n, _)| *n == "Hard · Kick").unwrap().1));
+        let mut kick = Track::new("Kick", [200, 0, 0], InstrumentKind::Kick(KickParams::presets().into_iter().find(|(n, _)| *n == "Hard · Contundente").unwrap().1));
         let mut beat = MidiClip::new("4/4", 32.0, [0; 3]);
         beat.notes = (0..32).map(|b| Note { start: b as f64, length: 0.25, pitch: 36, velocity: 1.0, chance: 1.0 }).collect();
         kick.arrangement.push(ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Midi(beat) });

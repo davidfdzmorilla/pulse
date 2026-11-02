@@ -481,7 +481,7 @@ pub fn recipes() -> Vec<Recipe> {
 /// A riser of `beats` at 120 BPM: noise and a saw stack opening and rising,
 /// cut on the drop.
 fn riser(beats: f64) -> Stereo {
-    let InstrumentKind::Wavetable(mut p) = preset("Wavetable Synth", "FX · Riser 4 bars") else { unreachable!() };
+    let InstrumentKind::Wavetable(mut p) = preset("Wavetable Synth", "FX · Riser de 4 compases") else { unreachable!() };
     p.lfo[0].sync_beats = beats as f32;
     let seconds = beats as f32 * 0.5;
     swell(play(InstrumentKind::Wavetable(p), &[(0.0, 60, 1.0, beats)], beats), seconds, 20.0)

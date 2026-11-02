@@ -1246,7 +1246,7 @@ mod tests {
     #[test]
     #[ignore = "diagnostic: writes the lane presets to $PULSE_OUT"]
     fn lane_presets_to_wav() {
-        render_presets(Some(std::env::var("PULSE_OUT").unwrap()), "Lanes ·");
+        render_presets(Some(std::env::var("PULSE_OUT").unwrap()), "Carriles ·");
     }
 
     /// Renders one modular patch for `seconds`, with `file` loaded into module 1.

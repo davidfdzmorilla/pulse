@@ -2325,14 +2325,14 @@ mod tests {
             // (A hardstyle tail is distorted already; a long 808 or trap sub
             // clipped is a square restarting, with no sweep to tell its hits by.)
             let sub = name.starts_with("808") || name.starts_with("Trap");
-            for clipped in [false, true].into_iter().filter(|&c| !c || !(name.contains("Hardstyle") || sub)) {
+            for clipped in [false, true].into_iter().filter(|&c| !c || !(name.contains("hardstyle") || sub)) {
             if clipped {
                 for x in kl.iter_mut().chain(kr.iter_mut()) {
                     *x = (*x * 8.0).clamp(-0.9, 0.9);
                 }
             }
             // A hardstyle tail is as loud under 600 Hz as its hit: it needs the whole sound.
-            let lows = !name.contains("Hardstyle");
+            let lows = !name.contains("hardstyle");
             let params = crate::model::DuckerParams { depth: 0.6, release: 0.25, sidechain: Some(1), lows, ..Default::default() };
             let mut fx = EffectProcessor::new(&Effect::Ducker(params), sr);
             let ctx = ProcessContext { tempo: 150.0, ..ctx() };

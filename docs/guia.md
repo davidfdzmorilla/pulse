@@ -2153,8 +2153,8 @@ Pulse trae seis de fábrica, hechas con sus presets:
 | **Voz · Radio** | Voz de teléfono o de radio vieja: solo los medios, saturada y en mono. |
 | **Bus de batería · Pegada** | Más ataque y una batería que suena junta. |
 | **Bajo · Sidechain y saturación** | Bajo caliente que bombea con el pulso y graves en mono. |
-| **Máster · Club** | Pegamento, brillo, graves en mono y un limitador que sube el volumen sin pasar de -0,3 dB. |
-| **Pad · Ancho y lejano** | Pad abierto y al fondo: chorus, delay y sala grande. |
+| **Máster · Club** | Pegamento, brillo, graves en mono y un limitador que sube el volumen sin pasar de -1 dB de pico real (lo que piden las plataformas de streaming). |
+| **Pad · Ancho y lejano** | Pad abierto y al fondo: chorus, delay y sala grande, ancho sin desaparecer en mono. |
 
 Para borrar una cadena tuya: clic derecho en ella › **Borrar la cadena**.
 

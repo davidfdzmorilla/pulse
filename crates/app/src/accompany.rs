@@ -126,6 +126,21 @@ impl Part {
         }
     }
 
+    /// The color of a new track for it: one per role, the same in every song
+    /// (basses blue, arpeggios cyan, pads violet, stabs lilac, melodies
+    /// orange), and the next in the palette if the chords already have it.
+    pub(crate) fn color(self, chords: [u8; 3]) -> [u8; 3] {
+        use crate::project::PALETTE;
+        let index = match self {
+            Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => 9,
+            Part::ArpUp | Part::ArpUpDown => 7,
+            Part::Pad => 11,
+            Part::Stabs => 10,
+            Part::Melody(_) => 1,
+        };
+        if PALETTE[index] == chords { PALETTE[(index + 1) % PALETTE.len()] } else { PALETTE[index] }
+    }
+
     /// The name of the track it is written on.
     pub(crate) fn short(self) -> &'static str {
         match self {
@@ -499,7 +514,8 @@ impl PulseApp {
             self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
             return;
         }
-        let color = existing.map_or_else(|| self.clip(clip).map_or([128; 3], |c| c.color()), |t| self.project.tracks[t].color);
+        // A new track takes its role's color; a template's, its own.
+        let color = existing.map_or_else(|| part.color(self.clip(clip).map_or(self.project.tracks[source].color, |c| c.color())), |t| self.project.tracks[t].color);
         // The clip says what it plays: «Bajo: contratiempo», «Pad».
         let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.label(), length, color) });
         let placed = match clip {
@@ -793,6 +809,33 @@ mod tests {
             m.notes.pop();
         }
         assert!(!app.can_vary(new));
+    }
+
+    /// Bass, pad, arpeggio, stabs and melody from the same chords: each new
+    /// track its own color, none the chords', and the same role the same
+    /// color (from the 2026-11 audit: they all came out the chords').
+    #[test]
+    fn each_part_gets_its_own_color() {
+        use crate::melody::{Melody, Style};
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let t = app.project.tracks.iter().position(|t| t.clips[0].as_ref().is_some_and(|c| c.name() == "Am F C G")).unwrap();
+        let chords = app.project.tracks[t].color;
+        let mut colors = Vec::new();
+        for part in [Part::BassRoot, Part::Pad, Part::ArpUp, Part::Stabs, Part::Melody(Melody::new(Style::Hook))] {
+            app.accompany(ClipRef::Session { track: t, slot: 0 }, part);
+            let new = &app.project.tracks[t + 1];
+            assert_eq!(new.name, part.short());
+            assert_ne!(new.color, chords, "{}", new.name);
+            let Some(Clip::Midi(m)) = &new.clips[0] else { panic!() };
+            assert_eq!(m.color, new.color, "its clip too");
+            colors.push(new.color);
+        }
+        let distinct: std::collections::HashSet<[u8; 3]> = colors.iter().copied().collect();
+        assert_eq!(distinct.len(), colors.len(), "{colors:?}");
+        assert_eq!(Part::BassOffbeat.color(chords), Part::BassRoot.color(chords));
+        // Chords already in a role's color: the next one.
+        let blue = crate::project::PALETTE[9];
+        assert_ne!(Part::BassRoot.color(blue), blue);
     }
 
     /// A trance lead from the demo's «Am F C G»: a new «Melodía» track with

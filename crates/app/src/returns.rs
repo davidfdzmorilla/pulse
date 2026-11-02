@@ -14,6 +14,62 @@ pub fn new_return(index: usize) -> ReturnTrack {
     ReturnTrack { name: format!("{} Retorno", return_letter(index)), color: PALETTE[(index * 5 + 8) % PALETTE.len()], mixer: Mixer::default(), devices: Vec::new(), automation: Vec::new() }
 }
 
+/// What a return is called after its letter: «Reverb» in «A Reverb» (all
+/// of it if it doesn't start with its letter).
+pub fn bare_name(name: &str, index: usize) -> &str {
+    let letter = return_letter(index).to_string();
+    if name == letter { "" } else { name.strip_prefix(&format!("{letter} ")).unwrap_or(name) }
+}
+
+/// Calls return `index` `bare`, after its letter, so it keeps moving up a
+/// letter with the others ("C Sala" → "B Sala").
+pub fn set_name(ret: &mut ReturnTrack, index: usize, bare: &str) {
+    ret.name = format!("{} {bare}", return_letter(index));
+}
+
+/// The id of the name field in return `index`'s menu.
+pub fn name_field(index: usize) -> eframe::egui::Id {
+    eframe::egui::Id::new(("return name", index))
+}
+
+/// The right-click menu of return `index`'s header: its name (after the
+/// letter), its color and deleting it. True when «Eliminar retorno» is clicked.
+pub fn header_menu(ui: &mut eframe::egui::Ui, ret: &mut ReturnTrack, index: usize) -> bool {
+    ui.label("Nombre");
+    let mut bare = bare_name(&ret.name, index).to_string();
+    let field = ui.horizontal(|ui| {
+        ui.label(return_letter(index).to_string());
+        ui.add(eframe::egui::TextEdit::singleline(&mut bare).id(name_field(index)).desired_width(120.0)).on_hover_text("El nombre después de la letra. La letra cambia sola si borras un retorno anterior")
+    });
+    if field.inner.changed() {
+        set_name(ret, index, &bare);
+    }
+    ui.label("Color");
+    crate::session::color_picker(ui, &mut ret.color);
+    ui.separator();
+    let delete = ui.button("Eliminar retorno").on_hover_text("Las pistas dejan de enviarle sonido; los retornos de después suben una letra").clicked();
+    if delete {
+        ui.close();
+    }
+    delete
+}
+
+/// An effect as it goes into a chain from the browser: on a return, a reverb,
+/// a delay or a Space all wet (the dry sound is the tracks' own); elsewhere,
+/// as it is.
+pub fn for_target(mut effect: engine::model::Effect, target: Target) -> engine::model::Effect {
+    use engine::model::Effect;
+    if let Target::Return(_) = target {
+        match &mut effect {
+            Effect::Reverb(p) => p.mix = 1.0,
+            Effect::Delay(p) => p.mix = 1.0,
+            Effect::Convolution(p) => p.mix = 1.0,
+            _ => {}
+        }
+    }
+    effect
+}
+
 /// Points the lanes that automate send `from` at `to` (`None`: they go).
 fn move_lanes(lanes: &mut Vec<AutomationLane>, to: impl Fn(usize) -> Option<usize>) {
     lanes.retain_mut(|lane| match lane.param {
@@ -58,6 +114,8 @@ fn relabel(project: &mut Project, from: usize) {
         let old = format!("{} ", return_letter(i + 1));
         if let Some(rest) = ret.name.strip_prefix(&old) {
             ret.name = format!("{} {rest}", return_letter(i));
+        } else if ret.name == return_letter(i + 1).to_string() {
+            ret.name = return_letter(i).to_string();
         }
     }
 }
@@ -259,5 +317,134 @@ mod tests {
         let commands = crate::sync::project_commands(&app.project, &mut crate::sync::SampleCache::default(), 48_000.0, &Default::default());
         assert!(commands.iter().any(|c| matches!(c, engine::Command::SetSends { track: 0, sends } if sends[2] == 1.0)));
         assert!(commands.iter().any(|c| matches!(c, engine::Command::ReplaceChain { target: Target::Return(2), .. })));
+    }
+
+    /// A return is renamed from its header in the Session, as a track is:
+    /// right-click, type the name; its letter stays in front and moves up
+    /// when one before it goes (from the 2026-11 audit: it stayed «C Retorno»).
+    #[test]
+    fn a_return_is_renamed_from_its_header() {
+        use eframe::egui::{self, pos2, vec2, Event, Modifiers, PointerButton, Rect};
+        let mut app = PulseApp::headless(Project::demo());
+        app.add_return();
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |app: &mut PulseApp, events: Vec<Event>| {
+            time += 0.05;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(2400.0, 1000.0))), time: Some(time), events, ..Default::default() };
+            ctx.run_ui(input, |ui| crate::session::show(app, ui))
+        };
+        let texts = |output: &egui::FullOutput| {
+            let mut texts = Vec::new();
+            fn collect(shape: &egui::Shape, texts: &mut Vec<(String, Rect)>) {
+                match shape {
+                    egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), Rect::from_min_size(t.pos, t.galley.size()))),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
+                    _ => {}
+                }
+            }
+            output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+            texts
+        };
+        frame(&mut app, vec![]);
+        let shown = texts(&frame(&mut app, vec![]));
+        let (_, header) = shown.iter().find(|(t, _)| t == "C Retorno").cloned().expect("the new return's header");
+        let at = header.center();
+        frame(&mut app, vec![Event::PointerMoved(at)]);
+        for pressed in [true, false] {
+            frame(&mut app, vec![Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE }]);
+        }
+        let menu = texts(&frame(&mut app, vec![]));
+        for item in ["Nombre", "Color", "Eliminar retorno"] {
+            assert!(menu.iter().any(|(t, _)| t == item), "{item}: {:?}", menu.iter().map(|t| &t.0).collect::<Vec<_>>());
+        }
+        ctx.memory_mut(|m| m.request_focus(name_field(2)));
+        frame(&mut app, vec![]);
+        let backspace = Event::Key { key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: Modifiers::NONE };
+        frame(&mut app, vec![backspace; "Retorno".len()]);
+        frame(&mut app, vec![Event::Text("Sala".into())]);
+        frame(&mut app, vec![]);
+        assert_eq!(app.project.returns[2].name, "C Sala");
+        // A return before it goes: it is «B Sala» now.
+        app.delete_return(0);
+        assert_eq!(app.project.returns.iter().map(|r| r.name.as_str()).collect::<Vec<_>>(), ["A Delay", "B Sala"]);
+        assert_eq!(bare_name("B Sala", 1), "Sala");
+        assert_eq!(bare_name("Bus", 1), "Bus", "a name without its letter is all of it");
+    }
+
+    /// The return's menu, renamed, drawn off screen: `PULSE_SHOTS=<dir>`.
+    #[test]
+    #[ignore]
+    fn return_menu_shot() {
+        use eframe::egui::{self, pos2, vec2, Event, Modifiers, PointerButton, Rect};
+        let Some(dir) = std::env::var_os("PULSE_SHOTS").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = PulseApp::headless(Project::demo());
+        app.add_return();
+        set_name(&mut app.project.returns[2], 2, "Sala");
+        let ctx = egui::Context::default();
+        crate::theme::apply(&ctx);
+        let size = vec2(1000.0, 720.0);
+        let mut canvas = crate::offscreen::Canvas::default();
+        let mut time = 0.0;
+        let mut frame = |app: &mut PulseApp, events: Vec<Event>| {
+            time += 0.05;
+            let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), size)), time: Some(time), events, ..Default::default() };
+            ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| egui::ScrollArea::horizontal().horizontal_scroll_offset(600.0).show(ui, |ui| crate::session::show(app, ui)));
+            })
+        };
+        let mut header = None;
+        for _ in 0..3 {
+            let output = frame(&mut app, vec![]);
+            fn find(shape: &egui::Shape, out: &mut Option<Rect>) {
+                match shape {
+                    egui::Shape::Text(t) if t.galley.text() == "C Sala" => *out = Some(Rect::from_min_size(t.pos, t.galley.size())),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| find(s, out)),
+                    _ => {}
+                }
+            }
+            output.shapes.iter().for_each(|s| find(&s.shape, &mut header));
+            canvas.skip(&output);
+        }
+        let at = header.expect("«C Sala» on screen").center();
+        for pressed in [true, false] {
+            let output = frame(&mut app, vec![Event::PointerButton { pos: at, button: PointerButton::Secondary, pressed, modifiers: Modifiers::NONE }]);
+            canvas.skip(&output);
+        }
+        let output = frame(&mut app, vec![Event::PointerMoved(at)]);
+        canvas.skip(&output);
+        let output = frame(&mut app, vec![]);
+        canvas.draw(&ctx, output, size, 1.0).save_png(&dir.join("retorno-menu.png")).unwrap();
+    }
+
+    /// A reverb, a delay or a Space goes into a return all wet, and into a
+    /// track as it comes; other effects the same everywhere.
+    #[test]
+    fn send_effects_go_into_returns_all_wet() {
+        use engine::model::{Device, Effect};
+        let mut app = PulseApp::headless(Project::demo());
+        app.add_return();
+        for effect in Effect::catalog() {
+            let on_return = for_target(effect, Target::Return(2));
+            let on_track = for_target(effect, Target::Track(0));
+            assert_eq!(on_track, effect);
+            match on_return {
+                Effect::Reverb(p) => assert_eq!(p.mix, 1.0),
+                Effect::Delay(p) => assert_eq!(p.mix, 1.0),
+                Effect::Convolution(p) => assert_eq!(p.mix, 1.0),
+                other => assert_eq!(other, effect),
+            }
+            if let Effect::Convolution(p) = on_track {
+                assert!(p.mix < 0.5, "on a track, some of it");
+            }
+            app.add_device(Target::Return(2), Device::new(on_return));
+        }
+        // The OTT comes in at 30 %; its «OTT clásico» is still the full one.
+        let ott = Effect::catalog().into_iter().find_map(|e| if let Effect::Multiband(p) = e { Some(p) } else { None }).unwrap();
+        assert_eq!(ott.depth, 0.3);
+        let presets = engine::model::MultibandParams::presets();
+        assert_eq!(presets.iter().find(|(n, _)| *n == "OTT · OTT clásico").unwrap().1.depth, 1.0);
+        assert_eq!(presets.iter().find(|(n, _)| *n == "OTT · OTT suave").unwrap().1.depth, 0.3);
     }
 }

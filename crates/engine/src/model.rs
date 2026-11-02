@@ -3056,7 +3056,9 @@ impl Effect {
             Effect::EqEight(Default::default()),
             Effect::Compressor(Default::default()),
             Effect::Glue(Default::default()),
-            Effect::Multiband(Default::default()),
+            // An OTT starts at 30 % depth, where most people start; the
+            // factory «OTT clásico» is the full 100 %.
+            Effect::Multiband(MultibandParams { depth: 0.3, ..Default::default() }),
             Effect::Limiter(Default::default()),
             Effect::Gate(Default::default()),
             Effect::Transient(Default::default()),
@@ -4884,7 +4886,7 @@ impl WaveParams {
         p.glide = 25.0;
         p.env[0] = env(0.003, 1.0, 1.0, 0.08);
         p.gain = 0.9;
-        list.push(("Bass · Analog Sub", p));
+        list.push(("Bajo · Analog Sub", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { kind: OscKind::Wavetable, table: 3, unison: 3.0, detune: 0.2, ..WaveOsc::default() };
@@ -5015,7 +5017,7 @@ impl WaveParams {
         p.mono = true;
         p.fx[0] = saturator(KickDrive::Soft, 4.0, -3.0);
         p.gain = 0.6;
-        list.push(("Bass · Saturado", p));
+        list.push(("Bajo · Saturado", p));
 
         // Reese: two detuned saws, a notch sweeping slowly through them for the phasing.
         let mut p = init;
@@ -5031,7 +5033,7 @@ impl WaveParams {
         p.legato = true;
         p.glide = 30.0;
         p.gain = 0.6;
-        list.push(("Bass · Reese", p));
+        list.push(("Bajo · Reese", p));
 
         // Long sine sub that glides between overlapping notes, with a pitch click
         // and tube saturation so it carries on small speakers.
@@ -5046,7 +5048,7 @@ impl WaveParams {
         p.glide = 120.0;
         p.fx[0] = saturator(KickDrive::Tube, 8.0, -4.0);
         p.gain = 0.7;
-        list.push(("Bass · Sub con glide", p));
+        list.push(("Bajo · Sub con glide", p));
 
         // Short square pluck for house basslines.
         let mut p = init;
@@ -5059,7 +5061,7 @@ impl WaveParams {
         p.matrix[1] = slot(ModSource::Velocity, 32, 0.1);
         p.mono = true;
         p.gain = 0.85;
-        list.push(("Bass · Pluck de house", p));
+        list.push(("Bajo · Pluck de house", p));
 
         // FM bells: a sine phase-modulated by a silent sine at an inharmonic ratio
         // (an octave and a sixth up); the depth fades with envelope 2.
@@ -5332,7 +5334,7 @@ impl WaveParams {
         p.glide = 40.0;
         p.gain = 0.55;
                 p.fx[0] = chorus;
-        list.push(("Bass · Reese", p));
+        list.push(("Bajo · Reese", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 9, position: 0.2, unison: 2.0, detune: 0.1, width: 0.4, ..WaveOsc::default() };
@@ -5344,7 +5346,7 @@ impl WaveParams {
         p.mono = true;
         p.gain = 0.45;
                 p.fx[0] = drive(6.0);
-        list.push(("Bass · Growl", p));
+        list.push(("Bajo · Growl", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: saw, unison: 3.0, detune: 0.12, width: 0.5, ..WaveOsc::default() };
@@ -5354,7 +5356,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Lfo1, 32, 0.75);
         p.mono = true;
         p.gain = 0.45;
-        list.push(("Bass · Wobble 1/8", p));
+        list.push(("Bajo · Wobble 1/8", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: 0.0, level: 0.3, ..WaveOsc::default() };
@@ -5363,7 +5365,7 @@ impl WaveParams {
         p.glide = 30.0;
         p.env[0] = env(0.003, 1.0, 1.0, 0.08);
         p.gain = 0.7;
-        list.push(("Bass · Sub", p));
+        list.push(("Bajo · Sub", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 5, position: 0.55, ..WaveOsc::default() };
@@ -5375,7 +5377,7 @@ impl WaveParams {
         p.sub = WaveSub { on: true, level: 0.5, ..init.sub };
         p.mono = true;
         p.gain = 0.75;
-        list.push(("Bass · FM Metal", p));
+        list.push(("Bajo · FM Metal", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: saw, unison: 3.0, detune: 0.2, ..WaveOsc::default() };
@@ -5407,7 +5409,7 @@ impl WaveParams {
         p.fx[0] = delay(0.75, 0.3);
         p.fx[1] = reverb(0.6, 0.2);
         p.gain = 0.95;
-        list.push(("Arp · Trance Pluck", p));
+        list.push(("Arpegio · Trance Pluck", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 3, position: 0.0, unison: 4.0, detune: 0.2, ..WaveOsc::default() };
@@ -5435,7 +5437,7 @@ impl WaveParams {
         p.osc[0] = WaveOsc { table: 8, position: 0.7, random_phase: 0.0, ..WaveOsc::default() };
         p.env[0] = env(0.003, 0.2, 1.0, 0.06);
         p.gain = 0.55;
-        list.push(("Keys · Organ", p));
+        list.push(("Teclas · Organ", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 5, position: 0.35, random_phase: 0.0, ..WaveOsc::default() };
@@ -5444,7 +5446,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Env2, 0, 0.35);
         p.gain = 0.43;
                 p.fx[0] = reverb(0.7, 0.25);
-        list.push(("Keys · Bell", p));
+        list.push(("Teclas · Bell", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 2, position: 0.0, unison: 5.0, detune: 0.3, ..WaveOsc::default() };
@@ -5489,7 +5491,7 @@ impl WaveParams {
         p.gain = 0.6;
         p.fx[0] = drive(9.0);
         p.fx[1] = glue;
-        list.push(("Bass · Yoi", p));
+        list.push(("Bajo · Yoi", p));
 
         // Neuro: sync and stepped tables through a comb that jumps every beat.
         let mut p = init;
@@ -5510,7 +5512,7 @@ impl WaveParams {
         p.gain = 0.67;
         p.fx[0] = hard(8.0);
         p.fx[1] = glue;
-        list.push(("Bass · Neuro", p));
+        list.push(("Bajo · Neuro", p));
 
         // Dark drum & bass reese: two detuned saws low-passed, with a slowly moving notch.
         let mut p = init;
@@ -5533,7 +5535,7 @@ impl WaveParams {
         p.gain = 0.65;
         p.fx[0] = phaser(0.15, 0.3);
         p.fx[1] = drive(6.0);
-        list.push(("Bass · Reese oscuro", p));
+        list.push(("Bajo · Reese oscuro", p));
 
         // Future bass: wide saw and pulse that glide between notes, with a filter blip.
         let mut p = init;
@@ -5555,7 +5557,7 @@ impl WaveParams {
         p.gain = 0.7;
         p.fx[0] = drive(4.0);
         p.fx[1] = chorus;
-        list.push(("Bass · Future con glide", p));
+        list.push(("Bajo · Future con glide", p));
 
         // Triplet wobble whose depth is Macro 1 (LFO × macro), with Macro 2 as drive.
         let mut p = init;
@@ -5573,7 +5575,7 @@ impl WaveParams {
         p.gain = 0.67;
         p.fx[0] = drive(7.0);
         p.fx[1] = glue;
-        list.push(("Bass · Wobble tresillo", p));
+        list.push(("Bajo · Wobble tresillo", p));
 
         // Synthwave lead: analog square with slow PWM, a second saw, vibrato that fades in.
         let mut p = init;
@@ -5679,7 +5681,7 @@ impl WaveParams {
         p.gain = 0.45;
         p.fx[0] = chorus;
         p.fx[1] = reverb(0.5, 0.18);
-        list.push(("Keys · Piano FM", p));
+        list.push(("Teclas · Piano FM", p));
 
         // Future bass chords: wide saws that pump on every beat; Macro 1 adds an 1/8 wobble.
         let mut p = init;
@@ -5697,7 +5699,7 @@ impl WaveParams {
         p.fx[0] = duck(0.6);
         p.fx[1] = wide_chorus;
         p.fx[2] = reverb(0.7, 0.22);
-        list.push(("Keys · Acordes future", p));
+        list.push(("Teclas · Acordes future", p));
 
         // House organ stab: short, bright drawbars through a closing filter.
         let mut p = init;
@@ -5711,7 +5713,7 @@ impl WaveParams {
         p.gain = 0.72;
         p.fx[0] = delay(0.75, 0.12);
         p.fx[1] = reverb(0.55, 0.2);
-        list.push(("Keys · Stab de house", p));
+        list.push(("Teclas · Stab de house", p));
 
         // Evolving pad: two tables scanned by a slow LFO and smooth randomness, through
         // a low-pass and a band-pass side by side whose balance drifts.
@@ -5783,7 +5785,7 @@ impl WaveParams {
         p.gain = 1.0;
         p.fx[0] = delay(0.75, 0.2);
         p.fx[1] = reverb(0.7, 0.22);
-        list.push(("Arp · Synthwave", p));
+        list.push(("Arpegio · Synthwave", p));
 
         // Techno sequence: a 16-step line with slides on the held key; its lane opens the filter.
         let mut p = init;
@@ -5823,7 +5825,7 @@ impl WaveParams {
         p.glide = 50.0;
         p.gain = 0.55;
         p.fx[0] = delay(0.75, 0.15);
-        list.push(("Arp · Secuencia techno", p));
+        list.push(("Arpegio · Secuencia techno", p));
 
         // Impact: a noise burst and a sub through a filter that falls fast, in a big room.
         let mut p = init;
@@ -7526,13 +7528,13 @@ impl ModularParams {
         p.modulators[0] = wind;
         p.lanes[0].fx[0] = reverb(0.9, 0.3);
         p.gain = 0.8;
-        list.push(("Noise · Wind", p));
+        list.push(("Ruido · Wind", p));
 
         let mut p = build(&[group, sine(&[]), saw(&[(slot::HARMONIC, 2.0), (slot::LEVEL, 0.3)]), filter(0, 700.0, 0.7, true), out(0.003, 1.0, 1.0, 0.1)]);
         p.mono = true;
         p.glide = 25.0;
         p.gain = 0.7;
-        list.push(("Bass · Sub", p));
+        list.push(("Bajo · Sub", p));
 
         let mut p = build(&[group, saw(&[(slot::A, 2.0)]), filter(0, 5000.0, 0.8, false), out(0.005, 0.5, 0.9, 0.2)]);
         let mut sweep = Modulator::new(ModulatorKind::Envelope);
@@ -7567,7 +7569,7 @@ impl ModularParams {
         p.lanes[0].fx[0] = reverb(0.85, 0.35);
         p.lanes[1].fx[0] = delay(0.75, 0.35);
         p.gain = 0.32;
-        list.push(("Layers · Pad + Pluck", p));
+        list.push(("Capas · Pad + Pluck", p));
 
         // ----- Phase 2: global unison, nonlinear filter, curve output, keytracked noise -----
         let unison = |voices: u8, mode: UnisonMode, detune: f32, spread: f32, blend: f32, bias: f32| Unison { voices, mode, detune, spread, blend, bias, ..Unison::default() };
@@ -7597,7 +7599,7 @@ impl ModularParams {
         p.lanes[1].fx[0] = reverb(0.7, 0.25);
         p.lanes[0].dest = 1;
         p.gain = 0.45;
-        list.push(("Chords · Minor 7 Stab", p));
+        list.push(("Acordes · Minor 7 Stab", p));
 
         // Octaves of the pitch class, loudest around a center that drifts.
         let mut p = build(&[group, module(K::Analog, &[], 2), out(0.5, 1.0, 1.0, 1.5)]);
@@ -7646,7 +7648,7 @@ impl ModularParams {
         let mut p = build(&[group, breath, sine(&[(slot::LEVEL, 0.35)]), filter(0, 2500.0, 0.9, false), out(0.08, 1.0, 0.8, 0.6)]);
         p.lanes[0].fx[0] = reverb(0.8, 0.3);
         p.gain = 0.27;
-        list.push(("Noise · Pitched Breath", p));
+        list.push(("Ruido · Pitched Breath", p));
 
         // FM into a wavetable; its bandlimit (macro 1) tames the harshness.
         let mut p = build(&[group, module(K::Wavetable, &[(slot::A, 60.0), (slot::BANDLIMIT, 5000.0)], 0), out(0.005, 1.2, 0.5, 0.5), group, sine(&[(slot::HARMONIC, 2.0)])]);
@@ -7853,7 +7855,7 @@ impl ModularParams {
         p.mono = true;
         p.glide = 30.0;
         p.gain = 0.67;
-        list.push(("Bass · FM con golpe", p));
+        list.push(("Bajo · FM con golpe", p));
 
         // Three saws a little apart beat against each other into a warm, saturated
         // low pass that breathes with a slow LFO.
@@ -7869,7 +7871,7 @@ impl ModularParams {
         p.legato = true;
         p.glide = 40.0;
         p.gain = 0.9;
-        list.push(("Bass · Desafinado oscuro", p));
+        list.push(("Bajo · Desafinado oscuro", p));
 
         // Electric piano: two modulators in a silent group, a bright tine (14×) that
         // dies at once and a body (1×) that fades slowly; velocity opens both.
@@ -7971,7 +7973,7 @@ impl ModularParams {
         p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams::default()));
         p.lanes[0].fx[1] = reverb(0.9, 0.35);
         p.gain = 0.42;
-        list.push(("Layers · Pad en evolución", p));
+        list.push(("Capas · Pad en evolución", p));
 
         // A tuned tom: the pitch falls an octave in a moment and the FM index with it.
         let mut p = build(&[group, sine(&[]), out(0.0005, 0.35, 0.0, 0.3), group, sine(&[(slot::HARMONIC, 1.5)])]);
@@ -8018,7 +8020,7 @@ impl ModularParams {
         p.lanes[0].fx[0] = delay(0.75, 0.3);
         p.lanes[0].fx[1] = reverb(0.85, 0.35);
         p.gain = 0.1;
-        list.push(("Noise · Silbidos al azar", p));
+        list.push(("Ruido · Silbidos al azar", p));
 
         // The global unison as a stack of fifths: root, fifth and ninth from every key.
         let mut p = build(&[group, saw(&[]), filter(0, 2200.0, 1.0, false), out(0.003, 0.4, 0.3, 0.3)]);

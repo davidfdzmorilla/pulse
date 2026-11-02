@@ -235,7 +235,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         section(ui, "EFECTOS DE AUDIO", |ui| {
             for effect in Effect::catalog() {
                 if item(ui, "≈", effect.label(), "Clic: añade el efecto al final de la cadena seleccionada") {
-                    app.add_device(target, Device::new(effect));
+                    app.add_device(target, Device::new(crate::returns::for_target(effect, target)));
                 }
             }
         });

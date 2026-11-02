@@ -237,6 +237,13 @@ fn a_factory_kit_loads_into_the_drum_pads_and_plays() {
     }
     let track = &app.project.tracks[0];
     assert!(matches!(track.instrument, engine::model::InstrumentKind::DrumRack(_)));
+    assert_eq!(track.name, "Drums", "a track with a name of its own keeps it");
+    // One still called as it was made takes the kit's (made now: at once).
+    app.project.tracks[0].name = "1 MIDI".into();
+    app.load_factory_kit(0, kit);
+    assert_eq!(app.project.tracks[0].name, "Kit Techno");
+    assert!(crate::factory_sounds::untitled("12 Audio") && !crate::factory_sounds::untitled("MIDI") && !crate::factory_sounds::untitled("1 MIDI bajo"));
+    let track = &app.project.tracks[0];
     assert_eq!(track.samples.iter().filter(|f| Path::new(f).exists()).count(), engine::model::RACK_PADS);
     // Its pattern through the engine: it sounds, and not too loud.
     let (l, r) = render_loop(&root(), &kits()[kit]);

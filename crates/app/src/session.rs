@@ -168,10 +168,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     if response.clicked() {
                         actions.push(Action::SelectTarget(target));
                     }
-                    response.context_menu(|ui| {
-                        if ui.button("Eliminar retorno").on_hover_text("Las pistas dejan de enviarle sonido; los retornos de después suben una letra").clicked() {
+                    let response = response.on_hover_text("Clic: seleccionar · clic derecho: nombre, color y eliminar");
+                    widgets::edit_menu(&response, |ui| {
+                        if crate::returns::header_menu(ui, &mut app.project.returns[r], r) {
                             actions.push(Action::DeleteReturn(r));
-                            ui.close();
                         }
                     });
                     let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (rows as f32 + 1.0) - 1.0), Sense::hover());

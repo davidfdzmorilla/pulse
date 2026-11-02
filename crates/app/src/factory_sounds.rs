@@ -786,6 +786,12 @@ impl State {
     }
 }
 
+/// Whether a track is still called as Pulse named it: «3 MIDI», «2 Audio».
+pub fn untitled(name: &str) -> bool {
+    let Some((number, kind)) = name.split_once(' ') else { return false };
+    !number.is_empty() && number.chars().all(|c| c.is_ascii_digit()) && matches!(kind, "MIDI" | "Audio")
+}
+
 impl crate::app::PulseApp {
     /// Starts making the library in the background, unless it is made or being made.
     pub fn make_factory_sounds(&mut self) {
@@ -827,6 +833,10 @@ impl crate::app::PulseApp {
         }
         self.set_instrument(track, InstrumentKind::DrumRack(params));
         self.project.tracks[track].samples = files;
+        // A track still called as it was made («1 MIDI») takes the kit's name.
+        if untitled(&self.project.tracks[track].name) {
+            self.project.tracks[track].name = self.free_track_name(&format!("Kit {name}"));
+        }
         self.sync_samples(track);
         self.status = Some(format!("Kit {name} cargado"));
     }

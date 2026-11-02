@@ -1996,7 +1996,7 @@ mod preset_tests {
     fn macro_one_sets_the_depth_of_the_triplet_wobble() {
         // Spread of the brightness over 20 ms windows, across a second.
         let movement = |macro_one: f32| {
-            let mut p = factory("Bass · Wobble tresillo");
+            let mut p = factory("Bajo · Wobble tresillo");
             p.macros[0] = macro_one;
             let l = hold(p, 36, 48_000);
             let levels: Vec<f32> = l[4_800..].chunks(960).map(brightness).collect();

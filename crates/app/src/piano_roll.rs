@@ -33,6 +33,11 @@ const VELOCITY_H: f32 = 60.0;
 const EXPRESSION_H: f32 = 120.0;
 const LANE_HEADER_H: f32 = 22.0;
 const EDGE_GRAB: f32 = 5.0;
+/// How much taller or shorter the rows can be (⌥ + wheel, «Alto»): at the
+/// least, 8½ points, still readable.
+const ROW_ZOOM: (f32, f32) = (0.65, 2.5);
+/// The rows the editor asks the panel room for: two octaves.
+pub const ROWS_WANTED: usize = 24;
 
 const GRIDS: [(f64, &str); 6] = [
     (1.0, "1/4"),
@@ -106,6 +111,17 @@ pub struct State {
     in_view: Vec<u8>,
     /// The notes' scroll offset and the size of what shows of them, last drawn.
     view: Option<(egui::Vec2, egui::Vec2)>,
+    /// Where the notes were drawn (for ⌥ + wheel).
+    notes_rect: Option<Rect>,
+    /// Rows taller (> 1) or shorter.
+    pub(crate) row_zoom: f32,
+    /// The bar's parts as wide as they were drawn (0: not yet).
+    widths: [f32; Part::ALL.len()],
+    /// The bar's parts in «⋯».
+    pub(crate) hidden: Vec<Part>,
+    /// Points the notes lacked (or had to spare) for two octaves at the usual
+    /// height, last drawn: the panel grows by them (see `PulseApp::detail_height`).
+    short: Option<f32>,
 }
 
 /// The insert marker before and after a write into a clip, and the clip before
@@ -156,6 +172,11 @@ impl Default for State {
             grew: false,
             in_view: Vec::new(),
             view: None,
+            notes_rect: None,
+            row_zoom: 1.0,
+            widths: [0.0; Part::ALL.len()],
+            hidden: Vec::new(),
+            short: None,
         }
     }
 }
@@ -179,6 +200,11 @@ impl State {
     #[cfg(test)]
     pub fn insert_at(&self) -> f64 {
         self.insert_at
+    }
+
+    /// What the notes lacked for two octaves, the last time they were drawn.
+    pub(crate) fn take_short(&mut self) -> Option<f32> {
+        self.short.take()
     }
 
     /// The pitches of the rows the editor shows.
@@ -335,7 +361,23 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     } else {
         rows(walk, &clip.notes)
     };
-    let row_h = if !is_drums { 13.0 } else if pitches.len() > 12 { 20.0 } else { 24.0 };
+    let usual_h = if !is_drums { 13.0 } else if pitches.len() > 12 { 20.0 } else { 24.0 };
+    let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
+    // ⌥ + wheel over the notes: taller or shorter rows, the one under the pointer stays.
+    let mut anchored = None;
+    let (alt, dy, pointer) = ui.input(|i| (i.modifiers.alt, i.smooth_scroll_delta.y, i.pointer.hover_pos()));
+    if let (true, Some(p), Some(rect), Some((offset, _))) = (alt && dy != 0.0, pointer, state.notes_rect, state.view) {
+        if rect.contains(p) {
+            let before = (usual_h * state.row_zoom).max(8.0);
+            state.row_zoom = (state.row_zoom * (dy * 0.004).exp()).clamp(ROW_ZOOM.0, ROW_ZOOM.1);
+            let after = (usual_h * state.row_zoom).max(8.0);
+            let at = p.y - rect.top();
+            let row = (offset.y + at - header) / before;
+            anchored = Some((header + row * after - at).max(0.0));
+            ui.input_mut(|i| i.smooth_scroll_delta.y = 0.0);
+        }
+    }
+    let row_h = (usual_h * state.row_zoom).max(8.0);
     // Sixteenths are 18 px at zoom 1.
     let beat_w = 72.0 * state.zoom;
     let grid_w = clip.length as f32 * beat_w;
@@ -343,17 +385,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
     let bottom_h = if state.lane.control.is_some() { EXPRESSION_H } else { VELOCITY_H };
     let lane_height = (ui.available_height() - bottom_h - LANE_HEADER_H - 8.0).max(60.0);
+    state.short = Some(header + pitches.len().min(ROWS_WANTED) as f32 * usual_h + 2.0 - lane_height);
     let mut scroll = egui::ScrollArea::both()
         .id_salt(("piano_roll", format!("{clip_ref:?}")))
         .auto_shrink(false)
         .max_height(lane_height);
     if state.scrolled != Some(clip_ref) {
         state.scrolled = Some(clip_ref);
-        let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
         scroll = scroll.vertical_scroll_offset(centered(&pitches, &clip.notes, row_h, header, lane_height, is_drums));
+    } else if let Some(y) = anchored {
+        scroll = scroll.vertical_scroll_offset(y);
     } else if let Some((offset, size)) = state.view.filter(|_| moved.across || moved.along) {
         // Notes moved with the keys: the view follows them, only as far as it must.
-        let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
         let chosen: Vec<&Note> = state.selection.iter().filter_map(|&i| clip.notes.get(i)).collect();
         let rows: Vec<usize> = chosen.iter().filter_map(|n| pitches.iter().position(|&p| p == n.pitch)).collect();
         if let (true, Some(&top), Some(&bottom)) = (moved.across, rows.iter().min(), rows.iter().max()) {
@@ -636,8 +679,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     });
     state.scroll_x = output.state.offset.x;
     state.view = Some((output.state.offset, output.inner_rect.size()));
+    state.notes_rect = Some(output.inner_rect);
     // The rows in view, for the tests (and nothing else).
-    let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
     let first = ((output.state.offset.y - header) / row_h).floor().max(0.0) as usize;
     let last = ((output.state.offset.y + output.inner_rect.height() - header) / row_h).ceil().max(0.0) as usize;
     state.in_view = pitches.get(first.min(pitches.len())..last.min(pitches.len())).map_or(Vec::new(), |p| p.to_vec());
@@ -837,7 +880,6 @@ fn to_scale(notes: &mut [Note], targets: &[usize], scale: Scale) -> usize {
     moved
 }
 
-/// The editor's bar; the pitches of any chord written, to preview.
 /// A loop's length as said: «4 comp.» in whole bars of `sig`, «3/16» otherwise.
 fn length_label(length: f64, sig: TimeSig) -> String {
     let bars = length / sig.bar();
@@ -848,10 +890,231 @@ fn length_label(length: f64, sig: TimeSig) -> String {
     }
 }
 
+/// A part of the editor's bar. The first ones (`rank` 0) are always in it; the
+/// rest go in it, most used first, while there is room, and into «⋯» if not.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Part {
+    /// «Otra variación», and a melody's style, density and register.
+    Retake,
+    Clip,
+    Loop,
+    Grid,
+    NoteLength,
+    Draw,
+    Groove,
+    Chords,
+    Quantize,
+    /// How much it quantizes, and the ends too.
+    Strength,
+    Chance,
+    Transpose,
+    Scale,
+    Double,
+    Zoom,
+}
+
+impl Part {
+    /// In the order they are drawn.
+    pub(crate) const ALL: [Part; 15] = [
+        Part::Retake,
+        Part::Clip,
+        Part::Loop,
+        Part::Grid,
+        Part::NoteLength,
+        Part::Draw,
+        Part::Groove,
+        Part::Chords,
+        Part::Quantize,
+        Part::Strength,
+        Part::Chance,
+        Part::Transpose,
+        Part::Scale,
+        Part::Double,
+        Part::Zoom,
+    ];
+
+    /// 0: always in the bar (a drop-down can't open inside «⋯»); then, the
+    /// lower, the sooner it gets the room left.
+    fn rank(self) -> u8 {
+        match self {
+            Part::Retake | Part::Clip | Part::Loop | Part::Grid | Part::Draw | Part::Chords => 0,
+            Part::Quantize => 1,
+            Part::NoteLength => 2,
+            Part::Groove => 3,
+            Part::Scale => 4,
+            Part::Transpose => 5,
+            Part::Strength => 6,
+            Part::Double => 7,
+            Part::Chance => 8,
+            Part::Zoom => 9,
+        }
+    }
+
+    /// Its width before it was ever drawn.
+    fn guess(self) -> f32 {
+        match self {
+            Part::Retake => 440.0,
+            Part::Clip => 112.0,
+            Part::Loop => 170.0,
+            Part::Grid => 120.0,
+            Part::NoteLength => 108.0,
+            Part::Draw => 70.0,
+            Part::Groove => 125.0,
+            Part::Chords => 70.0,
+            Part::Quantize => 78.0,
+            Part::Strength => 130.0,
+            Part::Chance => 95.0,
+            Part::Transpose => 140.0,
+            Part::Scale => 150.0,
+            Part::Double => 28.0,
+            Part::Zoom => 250.0,
+        }
+    }
+
+    fn index(self) -> usize {
+        Part::ALL.iter().position(|&p| p == self).unwrap_or(0)
+    }
+}
+
+/// The parts of the bar in rows `room` wide (one if the parts always in it fit
+/// in one, two at most), and those left for «⋯», `more` wide, at the end of
+/// the last row.
+fn lay_out(parts: &[Part], width: impl Fn(Part) -> f32, room: f32, gap: f32, more: f32) -> (Vec<Vec<Part>>, Vec<Part>) {
+    // Rows filled in order; `None` is «⋯».
+    let rows_of = |chosen: &[Part], with_more: bool| -> Vec<Vec<Option<Part>>> {
+        let mut rows: Vec<Vec<Option<Part>>> = vec![Vec::new()];
+        let mut used = 0.0;
+        let items = parts.iter().filter(|p| chosen.contains(p)).map(|&p| Some(p)).chain(with_more.then_some(None));
+        for item in items {
+            let w = item.map_or(more, &width);
+            let last = rows.last_mut().expect("a row");
+            if !last.is_empty() && used + gap + w > room {
+                rows.push(vec![item]);
+                used = w;
+            } else {
+                used += if last.is_empty() { w } else { gap + w };
+                last.push(item);
+            }
+        }
+        rows
+    };
+    let core: Vec<Part> = parts.iter().copied().filter(|p| p.rank() == 0).collect();
+    let mut optional: Vec<Part> = parts.iter().copied().filter(|p| p.rank() > 0).collect();
+    optional.sort_by_key(|p| p.rank());
+    let rows = if rows_of(&core, !optional.is_empty()).len() <= 1 { 1 } else { 2 };
+    let mut chosen = core;
+    for &p in &optional {
+        let mut with = chosen.clone();
+        with.push(p);
+        let all = with.len() == parts.len();
+        if rows_of(&with, !all).len() <= rows {
+            chosen = with;
+        }
+    }
+    let hidden: Vec<Part> = parts.iter().copied().filter(|p| !chosen.contains(p)).collect();
+    let laid = rows_of(&chosen, !hidden.is_empty()).into_iter().map(|row| row.into_iter().flatten().collect()).collect();
+    (laid, hidden)
+}
+
+/// What the parts of the bar change.
+struct Bar<'a> {
+    state: &'a mut State,
+    clip: &'a mut MidiClip,
+    key: Option<Scale>,
+    retake: &'a mut Option<crate::accompany::Retake>,
+    grooves: &'a [crate::project::SavedGroove],
+    previews: Vec<u8>,
+}
+
+/// The editor's bar; the pitches of any chord written, to preview.
 fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Option<Scale>, is_drums: bool, retake: &mut Option<crate::accompany::Retake>, grooves: &[crate::project::SavedGroove]) -> Vec<u8> {
-    let mut previews = Vec::new();
-    ui.horizontal_wrapped(|ui| {
-        if let Some(retake) = retake.as_mut() {
+    let parts: Vec<Part> = Part::ALL
+        .into_iter()
+        .filter(|p| match p {
+            Part::Retake => retake.is_some(),
+            Part::Chords => !is_drums,
+            Part::Scale => key.is_some(),
+            _ => true,
+        })
+        .collect();
+    let gap = ui.spacing().item_spacing.x;
+    let widths = state.widths;
+    let width = |p: Part| if widths[p.index()] > 0.0 { widths[p.index()] } else { p.guess() };
+    let (rows, hidden) = lay_out(&parts, width, ui.available_width(), gap, MORE_W);
+    state.hidden = hidden.clone();
+    let mut bar = Bar { state, clip, key, retake, grooves, previews: Vec::new() };
+    let count = rows.len();
+    for (r, row) in rows.into_iter().enumerate() {
+        ui.horizontal(|ui| {
+            for p in row {
+                let drawn = ui.scope(|ui| part(ui, &mut bar, p, false)).response.rect.width();
+                bar.state.widths[p.index()] = drawn;
+            }
+            if r + 1 == count && !hidden.is_empty() {
+                let names: Vec<&str> = hidden.iter().map(|p| p.name()).collect();
+                // As `widgets::field_menu_button` (it has sliders and fields), with a tooltip.
+                let config = egui::containers::menu::MenuConfig::find(ui).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                let (button, _) = egui::containers::menu::MenuButton::new("⋯").config(config).ui(ui, |ui| {
+                    ui.set_min_width(300.0);
+                    for &p in &hidden {
+                        ui.horizontal_wrapped(|ui| part(ui, &mut bar, p, true));
+                        ui.add_space(2.0);
+                    }
+                });
+                button.on_hover_text(format!("Lo que no cabe en la barra: {}", names.join(", ")));
+            }
+        });
+    }
+    ui.add_space(2.0);
+    bar.previews
+}
+
+/// The width kept for «⋯».
+const MORE_W: f32 = 30.0;
+
+impl Part {
+    /// What «⋯»'s tooltip calls it.
+    fn name(self) -> &'static str {
+        match self {
+            Part::Retake => "variación",
+            Part::Clip => "nombre",
+            Part::Loop => "loop",
+            Part::Grid => "rejilla",
+            Part::NoteLength => "nota",
+            Part::Draw => "dibujar",
+            Part::Groove => "groove",
+            Part::Chords => "acordes",
+            Part::Quantize => "cuantizar",
+            Part::Strength => "intensidad",
+            Part::Chance => "probabilidad",
+            Part::Transpose => "transponer",
+            Part::Scale => "escala",
+            Part::Double => "×2",
+            Part::Zoom => "zoom",
+        }
+    }
+}
+
+/// One part of the bar; `in_menu`: in «⋯», where its drop-downs are lists.
+fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
+    let Bar { state, clip, key, retake, grooves, previews } = bar;
+    let key = *key;
+    let targets = note_edit::targets(&clip.notes, &state.selection);
+    let scope = if state.selection.is_empty() { "todas las notas" } else { "las notas seleccionadas" };
+    // In «⋯» a list of choices, not a drop-down (one can't open inside it).
+    let pick = |ui: &mut egui::Ui, id: &str, name: &str, value: &mut f64, options: &[(f64, &str)]| {
+        label(ui, name);
+        if in_menu {
+            for &(option, text) in options {
+                ui.selectable_value(value, option, text);
+            }
+        } else {
+            combo(ui, id, value, options);
+        }
+    };
+    match p {
+        Part::Retake => {
+            let Some(retake) = retake.as_mut() else { return };
             if widgets::flat_button(ui, "Otra variación", true, vec2(104.0, 20.0)).on_hover_text("Escribe esta parte de otra manera, sobre los mismos acordes").clicked() {
                 retake.again = true;
             }
@@ -863,86 +1126,103 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
                 choice(ui, "melody_register", &mut m.register, &Register::ALL, Register::label, "Lo alta que va la melodía: grave (Do3–Sol4), media (La3–Mi5) o aguda (Sol4–Re6)");
             }
         }
-        let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
-        ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
-        ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(110.0));
-        label(ui, "Loop");
-        let bar = state.sig.bar();
-        let bars = clip.length / bar;
-        egui::ComboBox::from_id_salt("clip_length").selected_text(length_label(clip.length, state.sig)).width(70.0).show_ui(ui, |ui| {
-            for option in [1.0, 2.0, 4.0, 8.0, 16.0] {
-                if ui.selectable_label((bars - option).abs() < 1e-9, format!("{option} comp.")).clicked() {
-                    clip.length = option * bar;
+        Part::Clip => {
+            let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
+            ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
+            ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(92.0)).on_hover_text("El nombre del clip");
+        }
+        Part::Loop => {
+            label(ui, "Loop");
+            let bar_len = state.sig.bar();
+            let bars = clip.length / bar_len;
+            egui::ComboBox::from_id_salt("clip_length").selected_text(length_label(clip.length, state.sig)).width(70.0).show_ui(ui, |ui| {
+                for option in [1.0, 2.0, 4.0, 8.0, 16.0] {
+                    if ui.selectable_label((bars - option).abs() < 1e-9, format!("{option} comp.")).clicked() {
+                        clip.length = option * bar_len;
+                    }
                 }
+            });
+            // Any length in sixteenths: a 3/16 loop over the 4/4 shifts every bar.
+            let mut sixteenths = (clip.length * 4.0).round().max(1.0) as u32;
+            let changed = ui
+                .add(egui::DragValue::new(&mut sixteenths).range(1..=256).speed(0.2).suffix("/16"))
+                .on_hover_text("Longitud del loop en semicorcheas: 3/16, 5/16 o 7/16 sobre el compás de la canción hacen polirritmos")
+                .changed();
+            if changed {
+                clip.length = sixteenths as f64 / 4.0;
             }
-        });
-        // Any length in sixteenths: a 3/16 loop over the 4/4 shifts every bar.
-        let mut sixteenths = (clip.length * 4.0).round().max(1.0) as u32;
-        let changed = ui
-            .add(egui::DragValue::new(&mut sixteenths).range(1..=256).speed(0.2).suffix("/16"))
-            .on_hover_text("Longitud del loop en semicorcheas: 3/16, 5/16 o 7/16 sobre el compás de la canción hacen polirritmos")
-            .changed();
-        if changed {
-            clip.length = sixteenths as f64 / 4.0;
         }
-        label(ui, "Rejilla");
-        combo(ui, "grid", &mut state.grid, &GRIDS);
-        label(ui, "Nota");
-        combo(ui, "note_length", &mut state.note_length, &NOTE_LENGTHS);
-        if widgets::flat_button(ui, "Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
-            state.draw_mode = !state.draw_mode;
+        Part::Grid => pick(ui, "grid", "Rejilla", &mut state.grid, &GRIDS),
+        Part::NoteLength => pick(ui, "note_length", "Nota", &mut state.note_length, &NOTE_LENGTHS),
+        Part::Draw => {
+            if widgets::flat_button(ui, "Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
+                state.draw_mode = !state.draw_mode;
+            }
         }
-        groove_menu(ui, clip, grooves);
-        if !is_drums {
+        Part::Groove => {
+            if in_menu {
+                ui.vertical(|ui| {
+                    label(ui, "Groove");
+                    groove_choices(ui, clip, grooves);
+                });
+            } else {
+                groove_menu(ui, clip, grooves);
+            }
+        }
+        Part::Chords => {
             if let Some(written) = crate::harmony::menu(ui, &mut state.chords, clip, &mut state.insert_at, key, state.sig) {
                 if let Some(names) = written.progression.filter(|_| state.unnamed(&clip.name)) {
                     clip.name = names;
                 }
                 state.grew |= clip.length > written.before.length;
                 if let Some(c) = state.selection_clip.filter(|_| written.at != state.insert_at) {
-                    state.marks.push(Mark { clip: c, before: written.before, after: clip.clone(), from: written.at, to: state.insert_at });
+                    state.marks.push(Mark { clip: c, before: written.before, after: (**clip).clone(), from: written.at, to: state.insert_at });
                     if state.marks.len() > 50 {
                         state.marks.remove(0);
                     }
                 }
                 state.selection = written.added.into_iter().collect();
-                previews = written.pitches;
+                *previews = written.pitches;
                 // The view goes where the chords are.
                 state.scrolled = None;
             }
         }
-        ui.separator();
-        let targets = note_edit::targets(&clip.notes, &state.selection);
-        let scope = if state.selection.is_empty() { "todas las notas" } else { "las notas seleccionadas" };
-        if ui.button("Cuantizar").on_hover_text(crate::theme::keys(&format!("Cuantiza {scope} a la rejilla (⌘U)"))).clicked() {
-            note_edit::quantize(&mut clip.notes, &targets, state.grid, state.quantize_strength, state.quantize_ends, clip.length);
-        }
-        let mut percent = state.quantize_strength * 100.0;
-        if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %")).on_hover_text("Intensidad de la cuantización").changed() {
-            state.quantize_strength = percent / 100.0;
-        }
-        ui.checkbox(&mut state.quantize_ends, "finales").on_hover_text("Cuantiza también el final de las notas");
-        ui.separator();
-        label(ui, "Prob.");
-        let shown = targets.first().and_then(|&i| clip.notes.get(i)).map_or(1.0, |n| n.chance);
-        let mut percent = shown * 100.0;
-        if ui
-            .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %").max_decimals(0))
-            .on_hover_text(format!("Probabilidad de {scope}: cuántas de las veces que pasa el loop suenan. Al 50 % un hat suena una vuelta sí y otra no, al azar pero siempre igual al reproducir y al exportar"))
-            .changed()
-        {
-            note_edit::set_chance(&mut clip.notes, &targets, percent / 100.0);
-        }
-        ui.separator();
-        let walk = key.filter(|_| state.fold);
-        for (text, semitones) in [("-12", -12), ("-1", -1), ("+1", 1), ("+12", 12)] {
-            let hint = if walk.is_some() { format!("Transponer {scope} por la escala (↑↓, ⇧ octava)") } else { format!("Transponer {scope} (↑↓, ⇧ octava)") };
-            if ui.small_button(text).on_hover_text(hint).clicked() {
-                transpose(&mut clip.notes, &targets, semitones, walk);
+        Part::Quantize => {
+            if ui.button("Cuantizar").on_hover_text(crate::theme::keys(&format!("Cuantiza {scope} a la rejilla (⌘U)"))).clicked() {
+                note_edit::quantize(&mut clip.notes, &targets, state.grid, state.quantize_strength, state.quantize_ends, clip.length);
             }
         }
-        if let Some(key) = key {
-            ui.separator();
+        Part::Strength => {
+            label(ui, "Cuantizar al");
+            let mut percent = state.quantize_strength * 100.0;
+            if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %")).on_hover_text("Intensidad de la cuantización").changed() {
+                state.quantize_strength = percent / 100.0;
+            }
+            ui.checkbox(&mut state.quantize_ends, "finales").on_hover_text("Cuantiza también el final de las notas");
+        }
+        Part::Chance => {
+            label(ui, "Prob.");
+            let shown = targets.first().and_then(|&i| clip.notes.get(i)).map_or(1.0, |n| n.chance);
+            let mut percent = shown * 100.0;
+            if ui
+                .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %").max_decimals(0))
+                .on_hover_text(format!("Probabilidad de {scope}: cuántas de las veces que pasa el loop suenan. Al 50 % un hat suena una vuelta sí y otra no, al azar pero siempre igual al reproducir y al exportar"))
+                .changed()
+            {
+                note_edit::set_chance(&mut clip.notes, &targets, percent / 100.0);
+            }
+        }
+        Part::Transpose => {
+            let walk = key.filter(|_| state.fold);
+            for (text, semitones) in [("-12", -12), ("-1", -1), ("+1", 1), ("+12", 12)] {
+                let hint = if walk.is_some() { format!("Transponer {scope} por la escala (↑↓, ⇧ octava)") } else { format!("Transponer {scope} (↑↓, ⇧ octava)") };
+                if ui.small_button(text).on_hover_text(hint).clicked() {
+                    transpose(&mut clip.notes, &targets, semitones, walk);
+                }
+            }
+        }
+        Part::Scale => {
+            let Some(key) = key else { return };
             let hint = format!("Solo las filas de {}: las notas se mueven por la escala", key.name());
             if widgets::flat_button(ui, "Plegar", state.fold, vec2(56.0, 20.0)).on_hover_text(hint).clicked() {
                 state.fold = !state.fold;
@@ -952,17 +1232,22 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
                 to_scale(&mut clip.notes, &targets, key);
             }
         }
-        if ui.small_button("×2").on_hover_text("Duplicar loop: dobla la longitud copiando las notas").clicked() {
-            let length = clip.length;
-            let copies: Vec<Note> = clip.notes.iter().map(|n| Note { start: n.start + length, ..n.clone() }).collect();
-            clip.notes.extend(copies);
-            clip.length *= 2.0;
+        Part::Double => {
+            if ui.small_button("×2").on_hover_text("Duplicar loop: dobla la longitud copiando las notas").clicked() {
+                let length = clip.length;
+                let copies: Vec<Note> = clip.notes.iter().map(|n| Note { start: n.start + length, ..n.clone() }).collect();
+                clip.notes.extend(copies);
+                clip.length *= 2.0;
+            }
         }
-        label(ui, "Zoom");
-        ui.add(egui::Slider::new(&mut state.zoom, 0.5..=4.0).logarithmic(true).show_value(false));
-    });
-    ui.add_space(2.0);
-    previews
+        Part::Zoom => {
+            label(ui, "Zoom");
+            ui.add(egui::Slider::new(&mut state.zoom, 0.5..=4.0).logarithmic(true).show_value(false)).on_hover_text("Ancho de los tiempos");
+            label(ui, "Alto");
+            ui.add(egui::Slider::new(&mut state.row_zoom, ROW_ZOOM.0..=ROW_ZOOM.1).logarithmic(true).show_value(false))
+                .on_hover_text("Alto de las filas de notas (también ⌥ + rueda sobre las notas)");
+        }
+    }
 }
 
 /// «Generar ritmo»: a beat in a style for this drum clip (see `drum_gen`); each
@@ -1133,10 +1418,17 @@ fn take_beat(state: &mut State, clip: &mut MidiClip, settings: &crate::drum_gen:
 /// (swing, softer off-beats, humanize), with some ready-made ones and those
 /// taken from the project's recordings (see `groove_audio`).
 fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::project::SavedGroove]) {
-    use engine::model::Groove;
     let label = if clip.groove.is_some() { "Groove: propio" } else { "Groove: proyecto" };
     widgets::field_menu_button(ui, label, |ui| {
         ui.set_min_width(250.0);
+        groove_choices(ui, clip, grooves);
+    });
+}
+
+/// The clip's groove: the project's or its own, and how.
+fn groove_choices(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::project::SavedGroove]) {
+    use engine::model::Groove;
+    {
         let mut own = clip.groove.is_some();
         ui.radio_value(&mut own, false, "El del proyecto").on_hover_text("El swing del transporte, como los demás clips");
         ui.radio_value(&mut own, true, "Uno propio para este clip");
@@ -1198,7 +1490,7 @@ fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::project
         }
         percent(ui, "Humanizar", &mut groove.humanize, "Pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta");
         ui.label(egui::RichText::new("Se aplica al tocar: las notas no se mueven.").color(theme::TEXT_DIM).size(10.5));
-    });
+    }
 }
 
 /// Prefix marking copied notes in the system clipboard.
@@ -1321,6 +1613,28 @@ mod tests {
         let mut notes = vec![note(65), note(68), note(67)];
         assert_eq!(to_scale(&mut notes, &[0, 1, 2], e_minor), 2);
         assert_eq!(notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![64, 67, 67]);
+    }
+
+    /// The bar: one row while what is always in it fits, the rest by rank
+    /// while there is room, two rows at most, and «⋯» for what is left.
+    #[test]
+    fn the_bar_lays_out_by_rank_in_two_rows_at_most() {
+        let parts: Vec<Part> = Part::ALL.into_iter().filter(|&p| p != Part::Retake).collect();
+        let (rows, hidden) = lay_out(&parts, |p| p.guess(), 10_000.0, 4.0, MORE_W);
+        assert_eq!(rows.len(), 1);
+        assert!(hidden.is_empty());
+        // Narrow: one row, the most used first; the rest in «⋯».
+        let (rows, hidden) = lay_out(&parts, |p| p.guess(), 800.0, 4.0, MORE_W);
+        assert_eq!(rows.len(), 1);
+        assert!(rows[0].contains(&Part::Quantize) && hidden.contains(&Part::Zoom), "{rows:?} / {hidden:?}");
+        assert!(parts.iter().filter(|p| p.rank() == 0).all(|p| rows[0].contains(p)));
+        assert_eq!(rows[0].len() + hidden.len(), parts.len());
+        // What is always there doesn't fit in one: two rows, filled.
+        let (rows, hidden) = lay_out(&Part::ALL, |p| p.guess(), 800.0, 4.0, MORE_W);
+        assert_eq!(rows.len(), 2);
+        assert!(rows.concat().len() + hidden.len() == Part::ALL.len());
+        let row = |r: &[Part]| r.iter().map(|&p| p.guess()).sum::<f32>() + 4.0 * r.len() as f32;
+        assert!(rows.iter().all(|r| row(r) <= 800.0 + MORE_W + 4.0));
     }
 
     /// What the editor draws, as texts and where.

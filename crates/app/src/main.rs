@@ -96,6 +96,8 @@ mod produccion2;
 #[cfg(test)]
 mod interfaz_tests;
 #[cfg(test)]
+mod editor_space_tests;
+#[cfg(test)]
 mod browser_tests;
 #[cfg(test)]
 mod scroll_tests;

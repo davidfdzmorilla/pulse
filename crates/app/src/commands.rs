@@ -52,6 +52,7 @@ pub enum Command {
     ShowSession,
     ShowArrangement,
     ToggleDetail,
+    MaximizeEditor,
     ToggleBrowser,
     FullScreen,
     PlayStop,
@@ -91,7 +92,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 38] = [
+pub const SHORTCUTS: [(&str, &str); 39] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -116,9 +117,10 @@ pub const SHORTCUTS: [(&str, &str); 38] = [
     ("Arrastrar en un hueco", "Seleccionar clips y pistas con un recuadro"),
     ("Arrastrar clip / ⌥", "Mover los clips seleccionados / copiarlos"),
     ("Rueda / ⇧ + rueda", "Desplazar las pistas arriba y abajo / a los lados"),
-    ("⌥ + rueda", "Altura de las pistas del Arrangement"),
+    ("⌥ + rueda", "Altura de las pistas del Arrangement (sobre las notas, de las filas del editor de clips)"),
     ("Tab", "Cambiar entre Session y Arrangement"),
     ("⇧Tab", "Cambiar entre el clip y los dispositivos"),
+    ("⇧⌘E / doble clic en el borde", "Maximizar el editor de clips o devolverlo a su altura"),
     ("⌘F", "Buscar en el navegador"),
     ("⌃⌘F", "Pantalla completa"),
     ("Espacio", "Reproducir / Parar"),
@@ -293,6 +295,7 @@ impl PulseApp {
                     Detail::Devices => Detail::Clip,
                 }
             }
+            Command::MaximizeEditor => self.toggle_editor_max(),
             Command::ToggleBrowser => self.show_browser = !self.show_browser,
             Command::FullScreen => {
                 let full = ctx.input(|i| i.viewport().fullscreen.unwrap_or(false));

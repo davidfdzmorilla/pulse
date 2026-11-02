@@ -103,6 +103,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
             Run(C::ShowSession, "Session  (Tab)", ""),
             Run(C::ShowArrangement, "Arrangement  (Tab)", ""),
             Run(C::ToggleDetail, "Clip o dispositivos  (⇧Tab)", ""),
+            Run(C::MaximizeEditor, "Maximizar el editor", "⇧e"),
             Run(C::ToggleBrowser, "Mostrar u ocultar el navegador", ""),
             Separator,
             Run(C::FullScreen, "Pantalla completa", "⌃f"),
@@ -145,7 +146,10 @@ pub fn pressed(ctx: &eframe::egui::Context, handled: &[Command]) -> Vec<Command>
         if i.consume_key(Modifiers::NONE, Key::F11) {
             found.push(C::FullScreen);
         }
-        for item in MENUS.iter().flat_map(|(_, items)| items.iter()) {
+        // With ⇧, ⌥ or ⌃ first: egui takes ⇧⌘E for ⌘E too.
+        let mut items: Vec<&Item> = MENUS.iter().flat_map(|(_, items)| items.iter()).collect();
+        items.sort_by_key(|item| !matches!(item, Run(_, _, shortcut) if shortcut.chars().count() > 1 && shortcut != &","));
+        for item in items {
             let Run(command, _, shortcut) = *item else { continue };
             if shortcut.is_empty() || handled.contains(&command) || matches!(command, C::FullScreen | C::SelectAll | C::Copy | C::Cut | C::Paste) {
                 continue;
@@ -463,6 +467,7 @@ mod tests {
             found
         };
         assert_eq!(press(eframe::egui::Key::E, eframe::egui::Modifiers::COMMAND), vec![C::Split]);
+        assert_eq!(press(eframe::egui::Key::E, eframe::egui::Modifiers::COMMAND | eframe::egui::Modifiers::SHIFT), vec![C::MaximizeEditor]);
         assert_eq!(press(eframe::egui::Key::J, eframe::egui::Modifiers::COMMAND), vec![C::Join]);
         assert_eq!(press(eframe::egui::Key::Comma, eframe::egui::Modifiers::COMMAND), vec![C::Settings]);
         assert_eq!(press(eframe::egui::Key::F11, eframe::egui::Modifiers::NONE), vec![C::FullScreen]);

@@ -22,7 +22,7 @@ Alrededor de la vista están siempre las mismas piezas:
 
 - Arriba, el **transporte**: tempo, metrónomo, reproducir, parar, grabar, loop y más. Ver [[Transporte]].
 - A la izquierda, el **navegador**: instrumentos, efectos, plugins, muestras y tu biblioteca. **☰** lo muestra u oculta. Ver [[Navegador y biblioteca]].
-- Abajo, el **panel de detalle**: el editor del clip seleccionado o los dispositivos de la pista. {⇧Tab} cambia entre los dos. Arrastra su borde de arriba para darle más o menos sitio; lo que no cabe se desplaza dentro con la rueda.
+- Abajo, el **panel de detalle**: el editor del clip seleccionado o los dispositivos de la pista. {⇧Tab} cambia entre los dos. Arrastra su borde de arriba para darle más o menos sitio: Pulse recuerda la altura que eliges, también en otra ventana. Lo que no cabe se desplaza dentro con la rueda. **Maximizar** ({⇧⌘E}, o doble clic en el borde) hace que ocupe casi toda la ventana, y con lo mismo vuelve a su altura.
 - Abajo del todo, la **barra de estado**: cuenta lo que acaba de pasar y por qué algo no se ha podido hacer. Si no hay mensaje, recuerda los atajos principales.
 
 ### Hacer sonar algo en un minuto
@@ -885,6 +885,23 @@ Al abrir un clip, y al escribir notas con **Acordes**, **Generar ritmo**, **Acom
 Al mover notas con las flechas, la vista las sigue: si iban a salirse por arriba, por abajo o por un lado, se desplaza lo justo para que se vean. Mientras se ven, no se mueve.
 | {⌘U} | Cuantizar |
 
+### Más sitio para las notas
+
+Al abrir un clip, el panel de detalle tiene sitio para dos octavas de notas, y la Session o el Arrangement siguen a la vista encima.
+
+- **Maximizar** el editor: el botón de la derecha del panel, {⇧⌘E} o doble clic en su borde de arriba. Ocupa casi toda la ventana; con lo mismo vuelve a su altura.
+- **Más alto o más bajo**: arrastra el borde. Pulse se acuerda de la altura para la próxima vez.
+- **Filas más altas o más bajas**: {⌥ + rueda} sobre las notas, o el deslizador **Alto**. La fila que tienes bajo el ratón se queda donde está.
+- **La barra** ocupa una fila si cabe y dos como mucho. En una ventana estrecha, lo que menos se usa pasa a **⋯**; ahí funciona igual y el menú no se cierra al tocarlo.
+
++++ Cómo decide Pulse la altura
+- Sin altura elegida, el panel ocupa el 45 % de la ventana o lo que piden dos octavas del editor, lo que sea más, y deja al menos unos 110 puntos de la Session o del Arrangement.
+- La altura que eliges arrastrando se guarda como proporción de la ventana en los ajustes de Pulse, no en el proyecto: sirve para todos los proyectos y para cualquier tamaño de ventana.
+- Maximizado deja una franja de la vista de arriba para que sepas dónde estás.
+- Las filas van de unos 8,5 puntos, aún legibles, a dos veces y media su alto normal.
+- En **⋯**, la rejilla, la nota y el groove aparecen como listas, porque un desplegable no se puede abrir dentro de otro menú. Los desplegables (Loop, Rejilla y Acordes) no salen nunca de la barra.
++++
+
 ### Cambiar la velocidad
 
 Elige **Velocidad** en el carril de abajo y arrastra arriba o abajo cerca de una nota. Las notas seleccionadas cambian juntas.
@@ -897,7 +914,8 @@ Elige **Velocidad** en el carril de abajo y arrastra arriba o abajo cerca de una
 - **Dibujar** ({B}): modo lápiz.
 - **Cuantizar** ({⌘U}) con su **intensidad** (%) y **finales** (cuantiza también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
 - **Prob.** (%): en cuántas vueltas del loop suena cada nota (ver «Notas que no suenan siempre», abajo).
-- **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom**.
+- **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom** (el ancho de los tiempos) y **Alto** (el de las filas).
+- **⋯**: lo que no cabe en la barra. Pasa el ratón por encima para ver qué hay dentro.
 - Con una escala en el proyecto, **Plegar** y **A la escala** (ver [[Tonalidad y escala]]).
 - **Acordes**: escribe acordes de la escala, progresiones enteras, y sugiere el siguiente (ver [[Acordes]]).
 - En pistas de batería, **Generar ritmo** (ver [[Generar ritmos]]).
@@ -3151,6 +3169,7 @@ Todos los atajos de Pulse en una página. **Ayuda › Atajos de teclado** muestr
 |---|---|
 | {Tab} | Cambiar entre Session y Arrangement |
 | {⇧Tab} | Cambiar entre el clip y los dispositivos |
+| {⇧⌘E} | Maximizar el editor de clips o devolverlo a su altura (también doble clic en el borde del panel) |
 | {⌃⌘F} | Pantalla completa |
 | {Espacio} | Reproducir / Parar |
 | {F9} | Grabar en el Arrangement |
@@ -3164,6 +3183,7 @@ Todos los atajos de Pulse en una página. **Ayuda › Atajos de teclado** muestr
 | {B} | Lápiz |
 | {← →} / {↑ ↓} | Mover / transponer notas ({⇧}: compás u octava) |
 | {Esc} | Deseleccionar notas |
+| {⌥ + rueda} sobre las notas | Alto de las filas |
 
 ### Teclado del ordenador
 

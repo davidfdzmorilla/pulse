@@ -64,6 +64,10 @@ pub struct Settings {
     /// Bars a new MIDI clip lasts (double click in the Session or the Arrangement).
     #[serde(default = "four")]
     pub new_clip_bars: u32,
+    /// The share of the window the detail panel (the clip editor, the devices)
+    /// was left at by dragging its edge; none: as tall as two octaves need.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail_share: Option<f32>,
     /// Settings this Pulse doesn't know (a newer one wrote them): kept, so going
     /// back to an older version and forward again loses none.
     #[serde(flatten)]
@@ -80,7 +84,7 @@ fn four() -> u32 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, unknown: Default::default() }
+        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, detail_share: None, unknown: Default::default() }
     }
 }
 
@@ -375,7 +379,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

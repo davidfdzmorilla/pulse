@@ -497,7 +497,7 @@ fn widgets(ctx: &egui::Context) -> Vec<Widget> {
     })
 }
 
-const COMMANDS: [Command; 51] = [
+const COMMANDS: [Command; 52] = [
     Command::New,
     Command::Open,
     Command::ClearRecent,
@@ -533,6 +533,7 @@ const COMMANDS: [Command; 51] = [
     Command::ShowSession,
     Command::ShowArrangement,
     Command::ToggleDetail,
+    Command::MaximizeEditor,
     Command::ToggleBrowser,
     Command::FullScreen,
     Command::PlayStop,

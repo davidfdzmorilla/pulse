@@ -45,6 +45,9 @@ fn busy(tracks: usize) -> Studio {
     app.project.tracks[voice].arrangement.push(ArrangementClip { start: 16.0, length: 32.0, clip: Clip::Audio(audio) });
     app.sync_all();
     app.view = View::Arrangement;
+    // The panel as tall as when these were written (290 points at 1440×900):
+    // they are about the tracks over it.
+    app.settings.detail_share = Some(0.36);
     let mut s = Studio::new(app, std::env::temp_dir());
     s.frames(4);
     s

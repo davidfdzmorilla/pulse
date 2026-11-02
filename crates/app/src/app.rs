@@ -277,6 +277,11 @@ pub struct PulseApp {
     /// What the EQ Eight on view hears (see `eq_ui`).
     pub spectrum: crate::eq_ui::Spectrum,
     pub piano_roll: piano_roll::State,
+    /// The clip editor fills the window (⇧⌘E, double click on its edge).
+    pub editor_max: bool,
+    /// How tall the detail panel has to be for two octaves of notes (see
+    /// `detail::height`): a guess until the editor says.
+    pub editor_need: f32,
     pub arrangement: arrangement::State,
     pub show_browser: bool,
     /// Decoded audio files by path.
@@ -516,6 +521,8 @@ impl PulseApp {
             meters: Meters::default(),
             spectrum: Default::default(),
             piano_roll: Default::default(),
+            editor_max: false,
+            editor_need: crate::detail::NEED_GUESS,
             arrangement: Default::default(),
             show_browser: true,
             samples: SampleCache::default(),
@@ -3034,12 +3041,20 @@ impl eframe::App for PulseApp {
                     .show(ui, |ui| browser::show(self, ui));
             }
             let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(6));
-            egui::Panel::bottom("detail")
+            // Its height is ours (a share of the window, see `detail::height`);
+            // egui only moves it while its edge is dragged.
+            let room = ui.available_rect_before_wrap().height();
+            let id = egui::Id::new("detail");
+            let height = detail::height(room, self.settings.detail_share, self.editor_need, self.editor_max);
+            let state = egui::containers::panel::PanelState { outer_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, height)) };
+            ctx.data_mut(|d| d.insert_persisted(id, state));
+            let shown = egui::Panel::bottom(id)
                 .frame(frame)
                 .resizable(true)
-                .default_size(290.0)
-                .min_size(200.0)
+                .min_size(detail::MIN)
+                .max_size(detail::highest(room))
                 .show(ui, |ui| detail::show(self, ui));
+            self.follow_detail_edge(&ctx, id, shown.response.rect.height(), room);
             let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(6));
             egui::CentralPanel::default().frame(frame).show(ui, |ui| {
                 self.drop_targets.view = Some(ui.max_rect());

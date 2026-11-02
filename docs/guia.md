@@ -224,7 +224,7 @@ Los **marcadores** dan nombre a las partes de la canción (intro, estrofa, estri
 - **Arrastrar en un hueco**: recuadro de selección de clips y pistas ({⌘} o {⇧} añaden).
 - **Arrastrar un clip**: mueve los seleccionados, también a otras pistas del mismo tipo. {⌥} + arrastrar los copia.
 - **Borde derecho** (el cursor cambia a ↔): cambia la longitud. Si el clip es más largo que su contenido, este se repite en bucle; unas líneas marcan cada vuelta.
-- **Soltar archivos de audio**: en una pista de audio, se colocan en ese tiempo; en un hueco vacío, crean una pista nueva.
+- **Soltar archivos de audio** (desde el Finder o el navegador): en una pista de audio, el clip empieza en la línea de la rejilla más cercana (un tiempo o un compás, según el zoom); en un hueco vacío, crean una pista nueva. Con {⌘} o {⌥} pulsada, cae justo donde lo sueltas. Los archivos MIDI caen igual.
 
 Para copiar, pegar, dividir y unir, ver [[Seleccionar, copiar y pegar clips]] y [[Dividir, unir y consolidar]].
 
@@ -565,7 +565,7 @@ Conéctalo y toca: Pulse escucha **todos** los teclados MIDI conectados, en todo
 - Las notas van a las pistas armadas o, si no hay ninguna, a la seleccionada.
 - **Pitch bend**: ±2 semitonos en los instrumentos de Pulse (el Modular tiene su propio rango).
 - **Rueda de modulación** (CC 1): vibrato.
-- **Brillo** (CC 74) y **aftertouch**: abren el filtro de Pulse Synth, Super Saw, Acid Bass y Wavetable.
+- **Brillo** (CC 74) y **aftertouch**: abren el filtro de Pulse Synth, Super Saw, Acid Bass, Wavetable, Polychrome y Sampler, y dan brillo a FM Synth y Pulse Keys. Ver [[Expresión: pitch bend, rueda y controles en el clip#Cómo suena]].
 - **Expresión** (CC 11): el volumen del instrumento, como un pedal de expresión.
 - Al grabar, todo esto queda en el clip. Ver [[Expresión: pitch bend, rueda y controles en el clip]].
 - **Pedal de sustain** (CC 64): las teclas que sueltas con el pedal pisado siguen sonando hasta que lo levantas, en cualquier instrumento. Al grabar, cada nota queda tan larga como sonó, así que se reproduce igual sin pedal. Volver a tocar una tecla sostenida termina la nota anterior.
@@ -881,6 +881,8 @@ Al abrir un clip, y al escribir notas con **Acordes**, **Generar ritmo**, **Acom
 | {Esc} | Deseleccionar |
 | {← →} | Mover por la rejilla ({⇧}: un compás) |
 | {↑ ↓} | Transponer ({⇧}: una octava). Con **Plegar**, una nota de la escala |
+
+Al mover notas con las flechas, la vista las sigue: si iban a salirse por arriba, por abajo o por un lado, se desplaza lo justo para que se vean. Mientras se ven, no se mueve.
 | {⌘U} | Cuantizar |
 
 ### Cambiar la velocidad
@@ -976,7 +978,17 @@ Lo que haces con las ruedas y los controles del teclado al grabar queda en el cl
 
 - Los controles se repiten con el clip en cada vuelta, también en el Arrangement y en los clips lanzados.
 - Al parar o al acabar el clip, el bend vuelve al centro, y la rueda y el aftertouch, a cero: nunca se queda una nota desafinada.
-- En los instrumentos de Pulse: el **bend** dobla ±2 semitonos, la **rueda** da vibrato, el **brillo** (CC 74) y el **aftertouch** abren el filtro de los sintes con filtro, y la **expresión** (CC 11) baja el volumen.
+- En los instrumentos de Pulse: el **bend** dobla ±2 semitonos, la **rueda** da vibrato y la **expresión** (CC 11) baja el volumen.
+- El **brillo** (CC 74) en el centro no cambia nada; hacia arriba da brillo y hacia abajo lo quita. El **aftertouch** suma:
+
+| Instrumento | Brillo (CC 74) | Aftertouch |
+|---|---|---|
+| Pulse Synth, Super Saw, Acid Bass, Wavetable, Polychrome | Abre o cierra el filtro | Abre el filtro |
+| Sampler | Abre o cierra el filtro; hacia abajo oscurece aunque el filtro esté abierto | Abre el filtro |
+| FM Synth | Sube o baja el índice de modulación: más o menos armónicos | Más índice: brilla también en las notas largas |
+| Pulse Keys (pianos eléctricos) | Más o menos «bark» y un tono más brillante u oscuro | Trémolo |
+| Pulse Keys (piano) | Realza o apaga los agudos | Trémolo |
+| Pulse Keys (órgano) | Abre o cierra el filtro de tono | Drive, como si apretaras el pedal de volumen |
 - El **Modular Synth** y los **plugins** reciben todos los controles y hacen lo que tengan asignado.
 - Al **exportar MIDI** se escriben; al **importar** un archivo MIDI, su bend, aftertouch y controles llegan como carriles.
 
@@ -984,6 +996,7 @@ Lo que haces con las ruedas y los controles del teclado al grabar queda en el cl
 
 +++ Detalles
 - Los controles se leen cada 64 muestras, en las mismas muestras siempre: suena igual con cualquier tamaño de búfer y al exportar.
+- En FM Synth y Pulse Keys, el brillo y el aftertouch se deslizan en unos 5 ms, así que un salto no hace clic. En el centro y sin aftertouch, los presets suenan exactamente igual que sin ellos.
 - Mientras suena un clip con un control, ese control manda; el teclado puede moverlo, pero el clip lo vuelve a fijar en cuanto su curva cambia.
 - Entre dos valores grabados con una pausa larga, el valor se mantiene hasta justo antes del siguiente: un salto queda como salto.
 +++
@@ -1234,7 +1247,7 @@ Suena a canción, no a notas al azar:
 
 En el [[Editor MIDI]] de la melodía, junto a **Otra variación**, tienes tres desplegables:
 
-- **Estilo**: la misma toma en otro estilo. El clip cambia de nombre si aún se llama como el estilo.
+- **Estilo**: la misma toma en otro estilo. El clip cambia de nombre si aún se llama como el estilo. Si la pista la creó **Acompañar** y no has tocado su instrumento, el lead cambia también al sonido de serie del nuevo estilo. {⌘Z} deshace las dos cosas. Si has cambiado el sonido, o la melodía está en una pista que ya tenías, el instrumento se queda como está.
 - **Densidad**: **Pocas notas**, **Normal** o **Muchas notas**.
 - **Registro**: **Grave** (C2–G3), **Medio** (A2–E4) o **Agudo** (G3–D5), con los nombres de notas del editor (C3 es el do central).
 

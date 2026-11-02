@@ -370,6 +370,9 @@ pub struct Generated {
     key: Option<Key>,
     /// What it wrote, to know it has not been edited since.
     notes: Vec<Note>,
+    /// The instrument it gave the new track it made (None on a track that was
+    /// there): a melody's follows its style while nobody changes it.
+    instrument: Option<InstrumentKind>,
 }
 
 impl Generated {
@@ -478,7 +481,7 @@ impl PulseApp {
         m.notes = notes.clone();
         self.sync_clip_ref(clip);
         self.select_clip(clip);
-        self.accompaniment = Some(Generated { clip, part, seed, chords, key: Some(key), notes });
+        self.accompaniment = Some(Generated { clip, part, seed, chords, key: Some(key), notes, instrument: None });
         self.status = Some(format!("{} sobre los acordes de la canción: «Otra variación» en el editor escribe otra", part.label()));
     }
 
@@ -548,6 +551,7 @@ impl PulseApp {
             }
             _ => return,
         };
+        let instrument = track.as_ref().map(|t| t.instrument);
         if let Some(track) = track {
             let ids = self.track_ids();
             self.project.tracks.insert(index, track);
@@ -556,7 +560,7 @@ impl PulseApp {
         self.selected_target = Target::Track(index);
         self.sync_all();
         self.select_clip(new);
-        self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes });
+        self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes, instrument });
         let more = if matches!(part, Part::Melody(_)) { ", y ahí cambias densidad y registro" } else { "" };
         self.status = Some(format!("{} para {} acordes: «Otra variación» en el editor escribe otra{more}", part.label(), self.accompaniment.as_ref().map_or(0, |g| g.chords.len())));
     }
@@ -590,12 +594,21 @@ impl PulseApp {
     }
 
     /// The last melody again, the same take in another style, density or
-    /// register; a clip still named after its style takes the new one's name.
+    /// register; a clip still named after its style takes the new one's name,
+    /// and a track it made, still with the style's lead, the new style's.
     pub fn set_melody(&mut self, melody: crate::melody::Melody) {
         let Some(generated) = self.accompaniment.as_mut() else { return };
         let old = generated.part;
         generated.part = Part::Melody(melody);
         let clip = generated.clip;
+        let (t, sound) = (clip.track(), generated.instrument);
+        let restyled = matches!(old, Part::Melody(was) if was.style != melody.style);
+        let untouched = sound.is_some_and(|kind| kind == old.instrument() && self.project.tracks.get(t).is_some_and(|track| track.instrument == kind));
+        if restyled && untouched {
+            let lead = Part::Melody(melody).instrument();
+            generated.instrument = Some(lead);
+            self.set_instrument(t, lead);
+        }
         if let Some(Clip::Midi(m)) = self.clip_mut(clip) {
             if m.name == old.label() {
                 m.name = Part::Melody(melody).label().to_string();
@@ -860,6 +873,55 @@ mod tests {
         let Some(Clip::Midi(other)) = app.clip(new).cloned() else { panic!() };
         assert_ne!(other.notes, high.notes);
         assert!(other.notes.iter().all(|n| (67..=86).contains(&n.pitch)), "another take, still high");
+    }
+
+    /// Another style for a melody on the track Acompañar made: its lead
+    /// changes to that style's, and ⌘Z brings back notes and sound together.
+    /// Once the sound is changed by hand, or on a track that was there, the
+    /// style leaves the instrument alone.
+    #[test]
+    fn the_lead_follows_the_melodys_style() {
+        use crate::melody::{Melody, Register, Style};
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let t = app.project.tracks.iter().position(|t| t.clips[0].as_ref().is_some_and(|c| c.name() == "Am F C G")).unwrap();
+        app.accompany(ClipRef::Session { track: t, slot: 0 }, Part::Melody(Melody::new(Style::Trance)));
+        app.commit_history();
+        let lead = |style| Part::Melody(Melody::new(style)).instrument();
+        let trance = app.project.tracks[t + 1].instrument;
+        assert_eq!(trance, lead(Style::Trance));
+        app.set_melody(Melody::new(Style::Topline));
+        assert_eq!(app.project.tracks[t + 1].instrument, lead(Style::Topline), "the FM flute");
+        assert!(matches!(app.project.tracks[t + 1].instrument, InstrumentKind::Fm(_)));
+        app.commit_history();
+        // Only the register: the sound stays.
+        app.set_melody(Melody { register: Register::High, ..Melody::new(Style::Topline) });
+        assert_eq!(app.project.tracks[t + 1].instrument, lead(Style::Topline));
+        app.commit_history();
+        app.undo();
+        app.undo();
+        assert_eq!(app.project.tracks[t + 1].instrument, trance, "undone: the trance lead again");
+        assert!(matches!(&app.project.tracks[t + 1].clips[0], Some(Clip::Midi(m)) if m.name == "Melodía: lead de trance"));
+        // Changed by hand: the style doesn't touch it.
+        app.accompany(ClipRef::Session { track: t, slot: 0 }, Part::Melody(Melody::new(Style::Hook)));
+        let hook = t + 1;
+        assert_eq!(app.project.tracks[hook].instrument, lead(Style::Hook));
+        let InstrumentKind::Synth(mut mine) = lead(Style::Hook) else { panic!() };
+        mine.cutoff *= 0.5;
+        app.set_instrument(hook, InstrumentKind::Synth(mine));
+        app.set_melody(Melody::new(Style::Trance));
+        assert_eq!(app.project.tracks[hook].instrument, InstrumentKind::Synth(mine), "the user's sound stays");
+        // On a template's own «Melodía»: its instrument stays.
+        let template = crate::templates::all().into_iter().find(|t| t.name == "Beat").unwrap();
+        let mut app = PulseApp::headless(crate::templates::project(&template).unwrap());
+        let chords = app.project.tracks.iter().position(|t| t.name == "Acordes").unwrap();
+        let melody = app.project.tracks.iter().position(|t| t.name == "Melodía").unwrap();
+        let notes: Vec<Note> = [[57, 60, 64], [53, 57, 60], [48, 52, 55], [55, 59, 62]].iter().enumerate().flat_map(|(i, c)| c.iter().map(move |&p| note(i as f64 * 4.0, 4.0, p, 0.8))).collect();
+        app.project.tracks[chords].clips[0] = Some(Clip::Midi(MidiClip { notes, ..MidiClip::new("Acordes", 16.0, [0; 3]) }));
+        let own = app.project.tracks[melody].instrument;
+        app.accompany(ClipRef::Session { track: chords, slot: 0 }, Part::Melody(Melody::new(Style::Trance)));
+        assert!(matches!(&app.project.tracks[melody].clips[0], Some(Clip::Midi(m)) if !m.notes.is_empty()), "{:?}", app.status);
+        app.set_melody(Melody::new(Style::Hook));
+        assert_eq!(app.project.tracks[melody].instrument, own);
     }
 
     /// An empty clip on the Arrangement (and in the Session) gets a melody of

@@ -69,6 +69,8 @@ pub(crate) enum Action {
     Rumble(usize),
     /// A drum machine sound of this track on a track of its own (see `drum_split`).
     SoundApart(usize, usize),
+    /// A Ducker on this track pumping with the kick (see `sidechain`).
+    SidechainFromKick(usize),
     Unfreeze(usize),
     Flatten(usize),
     /// An empty slot clicked: its track selected, no clip, pasting goes there.
@@ -448,6 +450,22 @@ pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut 
     }
 }
 
+/// «Sidechain desde el bombo»: on any track but the kick's own.
+pub(crate) fn sidechain_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl FnMut(Action), t: usize) {
+    let kick = app.kick_for(t);
+    let hint = match kick {
+        Some(crate::sidechain::Kick::Track(k)) => format!("Un Ducker que la aparta con cada golpe de «{}» y la devuelve en una corchea: el bombeo de club", app.project.tracks[k].name),
+        Some(crate::sidechain::Kick::Machine(d)) => format!("Saca el bombo de «{}» a su propia pista y pone aquí un Ducker que se aparta con cada golpe y vuelve en una corchea", app.project.tracks[d].name),
+        Some(crate::sidechain::Kick::Drums(d)) => format!("Un Ducker que escucha los graves de «{}» (casi solo el bombo) y vuelve en una corchea", app.project.tracks[d].name),
+        None => String::new(),
+    };
+    let button = ui.add_enabled(kick.is_some(), egui::Button::new("Sidechain desde el bombo")).on_hover_text(hint).on_disabled_hover_text("No hay otra pista con un bombo: añade un Kick Designer o una batería");
+    if button.clicked() {
+        act(Action::SidechainFromKick(t));
+        ui.close();
+    }
+}
+
 /// «Sacar a su pista ▸», for a Drum Machine track: one of its sounds on a track of its own.
 pub(crate) fn sound_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl FnMut(Action), t: usize) {
     if !matches!(app.project.tracks[t].instrument, engine::model::InstrumentKind::DrumMachine(_)) {
@@ -516,6 +534,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
             freeze_items(ui, frozen, freezing, |action| actions.push(action), t);
             sound_items(app, ui, |action| actions.push(action), t);
         }
+        sidechain_items(app, ui, |action| actions.push(action), t);
     });
     if frozen {
         crate::freeze::mark(ui.painter(), response.rect);
@@ -957,6 +976,7 @@ fn apply(app: &mut PulseApp, action: Action) {
         Action::Freeze(t) => app.freeze(t),
         Action::Rumble(t) => app.make_rumble(t),
         Action::SoundApart(t, voice) => app.sound_apart(t, voice),
+        Action::SidechainFromKick(t) => app.sidechain_from_kick(t),
         Action::Unfreeze(t) => app.unfreeze(t),
         Action::Flatten(t) => app.flatten(t),
         Action::Consolidate(t, slot) => app.consolidate(vec![ClipRef::Session { track: t, slot }]),

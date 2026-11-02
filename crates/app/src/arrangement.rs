@@ -141,6 +141,7 @@ enum TrackAction {
     Fold,
     Rumble,
     SoundApart(usize),
+    SidechainFromKick,
 }
 
 /// What a right-click landed on.
@@ -743,6 +744,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         Some((TrackAction::Fold, t, _)) => app.toggle_fold(t),
         Some((TrackAction::Rumble, t, _)) => app.make_rumble(t),
         Some((TrackAction::SoundApart(voice), t, _)) => app.sound_apart(t, voice),
+        Some((TrackAction::SidechainFromKick, t, _)) => app.sidechain_from_kick(t),
         None => {}
     }
     app.update_clip_gesture(ui, &clip_rects, &lane_rects, &[]);
@@ -1269,12 +1271,14 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
             crate::session::freeze_items(ui, frozen, freezing, |action| chosen = Some(action), t);
             crate::session::sound_items(app, ui, |action| chosen = Some(action), t);
         }
+        crate::session::sidechain_items(app, ui, |action| chosen = Some(action), t);
         match chosen {
             Some(crate::session::Action::Freeze(t)) => app.freeze(t),
             Some(crate::session::Action::Unfreeze(t)) => app.unfreeze(t),
             Some(crate::session::Action::Flatten(t)) => app.flatten(t),
             Some(crate::session::Action::Rumble(t)) => app.arrangement.track_action = Some((TrackAction::Rumble, t, false)),
             Some(crate::session::Action::SoundApart(t, voice)) => app.arrangement.track_action = Some((TrackAction::SoundApart(voice), t, false)),
+            Some(crate::session::Action::SidechainFromKick(t)) => app.arrangement.track_action = Some((TrackAction::SidechainFromKick, t, false)),
             // After the view is drawn, as they change the tracks.
             Some(crate::session::Action::GroupTracks) => app.arrangement.track_action = Some((TrackAction::Group, t, several)),
             Some(crate::session::Action::Ungroup(t)) => app.arrangement.track_action = Some((TrackAction::Ungroup, t, false)),

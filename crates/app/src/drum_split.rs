@@ -46,23 +46,39 @@ impl PulseApp {
     /// Sound `voice` of track `t`'s Drum Machine on a new track, under it and
     /// the ones already taken from it.
     pub fn sound_apart(&mut self, t: usize, voice: usize) {
-        let Some(drums) = self.project.tracks.get(t) else { return };
+        let before = self.project.clone();
+        let at = match self.take_sound(t, voice) {
+            Ok(Some(at)) => at,
+            Ok(None) => return,
+            Err(why) => {
+                self.status = Some(why);
+                return;
+            }
+        };
+        self.selected_target = engine::Target::Track(at);
+        self.history.commit(&self.project, false);
+        // The tracks after it moved: those go again; the rest play on.
+        self.sync_from(&before);
+        self.status = Some(format!("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»", voice_name(voice), self.project.tracks[at].name, self.project.tracks[t].name));
+    }
+
+    /// [`Self::sound_apart`]'s new track (its index; None if `t` has no Drum
+    /// Machine or no such sound), with an id, but neither kept for undo nor
+    /// sent to the engine; why it can't, if it can't.
+    pub(crate) fn take_sound(&mut self, t: usize, voice: usize) -> Result<Option<usize>, String> {
+        let Some(drums) = self.project.tracks.get(t) else { return Ok(None) };
         if !matches!(drums.instrument, InstrumentKind::DrumMachine(_)) || drums.is_group() || voice >= DRUM_SOUNDS {
-            return;
+            return Ok(None);
         }
         if drums.frozen.is_some() {
-            self.status = Some(format!("«{}» está congelada: descongélala para sacar sus sonidos a otras pistas", drums.name));
-            return;
+            return Err(format!("«{}» está congelada: descongélala para sacar sus sonidos a otras pistas", drums.name));
         }
         if let Some(name) = self.sound_track(t, voice) {
-            self.status = Some(format!("«{}» ya suena en «{name}»", voice_name(voice)));
-            return;
+            return Err(format!("«{}» ya suena en «{name}»", voice_name(voice)));
         }
         if self.project.tracks.len() >= engine::MAX_TRACKS {
-            self.status = Some(format!("Máximo de {} pistas", engine::MAX_TRACKS));
-            return;
+            return Err(format!("Máximo de {} pistas", engine::MAX_TRACKS));
         }
-        let before = self.project.clone();
         let drums = &self.project.tracks[t];
         let mut track = Track::new_audio(format!("{} {}", drums.name, voice_name(voice)), drums.color);
         (track.depth, track.monitor, track.audio_from, track.sounds_from) = (drums.depth, Monitor::Off, Some(drums.id), 1 << voice);
@@ -72,11 +88,8 @@ impl PulseApp {
         let ids = self.track_ids();
         self.project.tracks.insert(at, track);
         self.follow_tracks(&ids);
-        self.selected_target = engine::Target::Track(at);
-        self.history.commit(&self.project, false);
-        // The tracks after it moved: those go again; the rest play on.
-        self.sync_from(&before);
-        self.status = Some(format!("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»", voice_name(voice), self.project.tracks[at].name, self.project.tracks[t].name));
+        self.project.assign_ids();
+        Ok(Some(at))
     }
 }
 

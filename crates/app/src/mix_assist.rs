@@ -1520,7 +1520,7 @@ fn low_end_clashes(tracks: &[TrackMeasures]) -> Vec<(usize, usize, f64)> {
 
 /// Whether the assistant takes a track for drums: a drum instrument, the Kick
 /// Designer, or an audio track named like drums («Kick», «Tops», «Perc»…).
-fn is_drums(track: &crate::project::Track) -> bool {
+pub(crate) fn is_drums(track: &crate::project::Track) -> bool {
     track.is_drums() || matches!(track.instrument, engine::model::InstrumentKind::Kick(_)) || (track.is_audio() && crate::loop_key::is_drums(&track.name))
 }
 

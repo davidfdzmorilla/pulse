@@ -144,14 +144,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
 
-            // The tracks a compressor or ducker can listen to: the others.
-            let sources: Vec<(u32, String)> = app
-                .project
-                .tracks
+            // The tracks a compressor or ducker can listen to: the others. Those
+            // that close a loop (its own group, one listening to it) are marked:
+            // heard 64 samples late.
+            let tracks = &app.project.tracks;
+            let sources: Vec<(u32, String)> = tracks
                 .iter()
                 .enumerate()
                 .filter(|&(t, track)| target != Target::Track(t) && track.id != 0)
-                .map(|(_, track)| (track.id, track.name.clone()))
+                .map(|(_, track)| match target {
+                    Target::Track(t) if crate::sidechain::closes_loop(tracks, t, track.id) => (track.id, format!("{} {LOOP_MARK}", track.name)),
+                    _ => (track.id, track.name.clone()),
+                })
                 .collect();
             let count = app.devices(target).len();
             // The first EQ Eight shows the spectrum of what comes out of it.
@@ -547,9 +551,19 @@ fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) ->
 /// What a compressor's or ducker's sidechain does.
 const DUCKS: &str = "Con el bombo, el bajo o el pad se apartan cuando suena";
 
+/// After a sidechain source's name, when listening to it closes a loop.
+const LOOP_MARK: &str = "(bucle)";
+
 /// A compressor's, gate's or ducker's sidechain: none, or the track it listens to.
 fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources: &[(u32, String)], hint: &str) {
-    ui.label(egui::RichText::new("Sidechain").color(TEXT_DIM).size(10.5));
+    let looped = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).is_some_and(|(_, name)| name.ends_with(LOOP_MARK));
+    ui.label(egui::RichText::new(if looped { "Sidechain · bucle" } else { "Sidechain" }).color(if looped { crate::theme::ACCENT } else { TEXT_DIM }).size(10.5));
+    let hint = if sources.iter().any(|(_, name)| name.ends_with(LOOP_MARK)) {
+        format!("{hint}. Las marcadas «{LOOP_MARK}» suenan con esta pista dentro (su grupo) o la escuchan a su vez: se oyen 64 muestras tarde (1,3 ms a 48 kHz), siempre las mismas, sea cual sea el búfer")
+    } else {
+        hint.to_string()
+    };
+    let hint = hint.as_str();
     let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Ninguno", |(_, name)| name.as_str());
     egui::ComboBox::from_id_salt(id)
         .selected_text(current)

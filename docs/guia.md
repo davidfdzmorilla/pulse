@@ -1197,6 +1197,8 @@ Pulse toca contigo: a partir de un clip con acordes escribe un bajo, un arpegio,
 
 El clip se llama como lo que toca («Bajo: contratiempo»). Una pista nueva llega con un instrumento que le va: Acid para los bajos, FM para los arpegios y SuperSaw para el pad. Cámbialo como cualquier otro.
 
+> Consejo: para que el bajo o el pad bombeen con el bombo, clic derecho en su cabecera y **Sidechain desde el bombo** (ver [[Dispositivos y efectos#Sidechain desde el bombo, en un clic]]).
+
 Cada papel tiene su color, el mismo en todas las canciones: azul los bajos, turquesa los arpegios, violeta el pad, lila los acordes rítmicos y naranja la melodía. Si los acordes ya tienen ese color, la pista nueva toma el siguiente de la paleta.
 
 Entra con el fader de la pista de los acordes (el arpegio y el pad, 1,5 dB por debajo), para que al sumar un bajo, un pad y un arpegio la mezcla no pase de 0 dB.
@@ -2124,10 +2126,24 @@ El **Compressor**, el **Compresor de bus**, el **Gate** y el **Ducker** pueden e
 - Escucha el sonido de la pista elegida **tras sus efectos y antes de su fader**: funciona aunque esa pista esté silenciada o con el fader abajo. Puedes tener un bombo solo para disparar el sidechain.
 - Puede escuchar a un **grupo**: oye la suma de sus pistas tras los efectos del grupo.
 
+### Sidechain desde el bombo, en un clic
+
+1. Clic derecho en la cabecera de la pista que debe bombear (el bajo, el pad).
+2. Elige **Sidechain desde el bombo**.
+
+Pulse busca el bombo de la canción y pone al final de los efectos de la pista (antes de un Limiter, si lo hay) un **Ducker** con el bombeo de club: baja de golpe en cada bombo, al 80 %, y vuelve en una corchea del tempo. Se deshace con {⌘Z}.
+
+- **El bombo** es la pista que lo es: un Kick Designer, una pista que se llama «Kick» o «Bombo», o un bombo sacado de una batería. Prefiere una que tenga clips.
+- **Con una Drum Machine**, saca antes su bombo a una pista propia (como [[Pistas#Sacar un sonido de la batería a su pista]]), para que los charles y la caja no la muevan. Lo dice al hacerlo, y {⌘Z} lo deshace todo de una vez.
+- **Con Drum Pads o un loop de batería**, que no se pueden separar, escucha la pista entera, solo sus graves (por debajo de 600 Hz): casi solo el bombo. También lo avisa.
+- Si la pista ya se aparta con ese bombo, no pone otro.
+- No lo ofrece en la pista del bombo ni en un grupo que lo contenga.
+
 +++ Detalles
 - Sigue funcionando con otra pista en solo, en los stems y al congelar.
 - La fuente se recuerda aunque muevas, agrupes o renombres las pistas.
 - Vale también en pistas de grupos, retornos y el Master.
+- **Bucles.** Si la pista escucha a su propio grupo, o a una pista que a su vez la escucha a ella, la fuente no puede sonar antes que ella. En el menú **Sidechain** esas pistas llevan **(bucle)**, y el título se pone en naranja si eliges una. Se oyen siempre **64 muestras tarde** (1,3 ms a 48 kHz): el mismo sonido con cualquier tamaño de búfer, con cualquier número de núcleos y al exportar. Un efecto de un grupo que escucha a una de sus pistas no es un bucle: la oye a tiempo.
 +++
 
 ## Compresor de bus

@@ -16,6 +16,10 @@ no accounts.
 
 The app and its in-app guide are in Spanish.
 
+![The Pulse Arrangement with a full track](docs/capturas/arrangement.png)
+
+*The Arrangement: a full track with its sections, MIDI and audio clips, transitions and filter automation.*
+
 ## What you can do
 
 **Write**
@@ -76,6 +80,30 @@ The app and its in-app guide are in Spanish.
 Everything is explained in the **guide** (in Spanish),
 [`docs/guia.md`](docs/guia.md), which the app shows under Ayuda → Guía de Pulse
 (with search). Every new feature updates the guide in the same pull request.
+
+## Screenshots
+
+![The Session view](docs/capturas/session.png)
+
+*The Session view: clips and scenes to jam with, plus the mixer, sends and the Space and Delay returns.*
+
+![The piano roll](docs/capturas/piano-roll.png)
+
+*The piano roll: a melody written by Accompany over the chords, with its expression lane (brightness).*
+
+![Devices](docs/capturas/dispositivos.png)
+
+*Devices: the drum bus with the bus compressor and the Space convolution reverb.*
+
+![The audio editor](docs/capturas/editor-de-audio-con-letra.png)
+
+*The audio editor: the vocal with its transcribed lyrics, word by word, under the waveform.*
+
+![The mix and master assistant](docs/capturas/asistente-de-mezcla.png)
+
+*The mix and master assistant: it measures loudness, peaks and stereo, and suggests fixes you apply in one click.*
+
+The screenshots come from a sample project built by a test, without opening the app. Regenerate them with `cargo test --release -p app readme_shots -- --ignored`.
 
 ## Systems
 

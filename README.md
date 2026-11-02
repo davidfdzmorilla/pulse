@@ -13,6 +13,10 @@ trabajo por ti: convertir audio en MIDI, escribir acordes, bajos y melodías que
 encajan con tu canción, transcribir la letra de una voz o mezclar y masterizar
 con un asistente. Todo corre en tu ordenador, sin conexión y sin cuentas.
 
+![El Arrangement de Pulse con un tema completo](docs/capturas/arrangement.png)
+
+*El Arrangement: un tema completo con sus secciones, clips MIDI y de audio, transiciones y la automatización del filtro.*
+
 ## Qué puedes hacer
 
 **Componer**
@@ -71,6 +75,30 @@ con un asistente. Todo corre en tu ordenador, sin conexión y sin cuentas.
 Todo está explicado en la **guía**, [`docs/guia.md`](docs/guia.md), que la app
 muestra en Ayuda → Guía de Pulse (con buscador). Cada función nueva se añade a
 la guía en el mismo pull request.
+
+## Capturas
+
+![La Session](docs/capturas/session.png)
+
+*La Session: clips y escenas para improvisar, con el mezclador, los envíos y los retornos de Espacio y Delay.*
+
+![El piano roll](docs/capturas/piano-roll.png)
+
+*El piano roll: una melodía escrita por Acompañar sobre los acordes, con su carril de expresión (brillo).*
+
+![Los dispositivos](docs/capturas/dispositivos.png)
+
+*Los dispositivos: el bus de batería con el Compresor de bus y la reverb de convolución Espacio.*
+
+![El editor de audio](docs/capturas/editor-de-audio-con-letra.png)
+
+*El editor de audio: la voz con su letra transcrita, palabra a palabra, bajo la forma de onda.*
+
+![El asistente de mezcla y master](docs/capturas/asistente-de-mezcla.png)
+
+*El asistente de mezcla y master: mide sonoridad, picos y estéreo, y propone cambios que aplicas con un clic.*
+
+Las capturas salen de un proyecto de ejemplo que monta una prueba, sin abrir la app. Se regeneran con `cargo test --release -p app readme_shots -- --ignored`.
 
 ## Sistemas
 

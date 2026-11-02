@@ -4186,7 +4186,9 @@ mod tests {
         let note = app.mix.note.clone().unwrap();
         println!("{note}");
         assert!(note.starts_with("Mezcla completa en "), "{note}");
-        for part in ["volúmenes y panoramas", "volúmenes reajustados", "reverb y delay", "sonoridad con el limitador del master"] {
+        // A second pass of the volumes («volúmenes reajustados») only when the
+        // first left something to do: some takes need it, others don't.
+        for part in ["volúmenes y panoramas", "reverb y delay", "sonoridad con el limitador del master"] {
             assert!(note.contains(part), "{part}: {note}");
         }
         let report = app.mix.report.clone().unwrap();

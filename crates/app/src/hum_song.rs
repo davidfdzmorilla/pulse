@@ -242,7 +242,8 @@ impl PulseApp {
         }
         let chords = harmonize(&melody, length, key, sig);
         let (harmony, bass_part) = parts(style);
-        let seed = crate::versions::now();
+        // A new take each time; the same one in tests, so they don't hang on the clock.
+        let seed = if cfg!(test) { 1_761_000_000 } else { crate::versions::now() };
         let chord_notes = crate::accompany::generate(harmony, &chords, length, seed, sig);
         let bass = crate::accompany::generate(bass_part, &chords, length, seed ^ 0x9E37, sig);
         let mut drums = crate::project::Track::new("Batería", crate::project::PALETTE[0], InstrumentKind::DrumMachine(style.sound()));

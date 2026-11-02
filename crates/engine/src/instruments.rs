@@ -392,8 +392,13 @@ impl AcidBass {
         self.gate_open = false;
     }
 
+    /// Silent: the gate closed and the release faded out.
+    fn silent(&self) -> bool {
+        !self.gate_open && self.amp < 1e-5
+    }
+
     pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
-        if !self.gate_open && self.amp < 1e-5 {
+        if self.silent() {
             return;
         }
         let p = self.params;
@@ -430,6 +435,16 @@ impl AcidBass {
             let out = self.ladder[3] * (1.0 + p.resonance) * self.amp * level;
             *out_l += out;
             *out_r += out;
+            // Stopping on the sample it falls silent, not at the end of
+            // whatever block that was, and from a known state: the next note
+            // starts the same with any buffer size.
+            if self.silent() {
+                self.amp = 0.0;
+                self.phase = 0.0;
+                self.ladder = [0.0; 4];
+                self.filter_env = 0.0;
+                break;
+            }
         }
     }
 }

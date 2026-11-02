@@ -2110,6 +2110,10 @@ pub struct Engine {
     ids: [u32; MAX_TRACKS],
     key_left: Vec<Vec<f32>>,
     key_right: Vec<Vec<f32>>,
+    /// The same, over the last two cells of the grid (`SUB_BLOCK` frames
+    /// each): what a track listening across a loop hears, a cell late.
+    late_left: Vec<Vec<f32>>,
+    late_right: Vec<Vec<f32>>,
     /// Each track muted this block, itself or by a group (what `audio_from` follows).
     mutes: [bool; MAX_TRACKS],
     /// Delay compensation (see [`Engine::compensate`]): whether it is on, how
@@ -2224,10 +2228,14 @@ fn hosts_plugin(chain: &[ChainSlot]) -> bool {
 //   - a group: its tracks' sound (`out_*`), so after all of them;
 //   - a sidechain or `audio_from` source s (its sound after its effects,
 //     `key_*`), and a drum split its source's drum sounds: after s if s comes
-//     first in the order (this block's sound), else the last block's, and then
-//     s waits for t, so that it doesn't change while t reads it;
-//   - its own delay lines (compensation) and its own sidechain sound of the
-//     last block: its own.
+//     first in the order (this block's sound), else (a loop, see below) s
+//     waits for t, so that it doesn't change while t reads it;
+//   - its own delay lines (compensation): its own.
+//   A source that can't come first (a loop: a track listening to its own
+//   group, to itself, two tracks listening to each other) is heard a fixed
+//   `SUB_BLOCK` (64 frames) late, out of its `late_*` copy of the last cell of
+//   the grid, and still waits for t: late by the same frames whatever the
+//   callbacks are. A drum split across a loop takes nothing.
 //   Frozen tracks are tracks playing an audio clip: nothing apart.
 // - Return r (`process_return`): the sends of the tracks sending to it, in
 //   the order they were processed, and its sidechains' sources: after those.
@@ -2254,6 +2262,8 @@ struct Mix {
     apart: [u16; MAX_TRACKS],
     children: [u64; MAX_TRACKS],
     senders: [u64; MAX_RETURNS],
+    /// Bit `j` of `late[i]`: track `i` hears track `j` a cell late (a loop).
+    late: [u64; MAX_TRACKS],
     /// Frames rendered before this block (see `Engine::rendered`).
     rendered: u64,
 }
@@ -2266,6 +2276,8 @@ struct Job {
     returns: *mut Channel,
     key_left: *mut Vec<f32>,
     key_right: *mut Vec<f32>,
+    late_left: *mut Vec<f32>,
+    late_right: *mut Vec<f32>,
     track_delays: *mut Compensator,
     send_delays: *mut Compensator,
     return_delays: *mut Compensator,
@@ -2306,7 +2318,19 @@ unsafe fn process_track(job: &Job, index: usize) {
     let shared = unsafe { &*job.shared };
     // Another track, done or not started (never `index`).
     let other = |t: usize| unsafe { &*job.tracks.add(t) };
-    let key = |t: usize| unsafe { ((*job.key_left.add(t)).as_slice(), (*job.key_right.add(t)).as_slice()) };
+    // Where this block sits in its cell of the grid (blocks never cross one),
+    // and so where the last cell's same frames are in the late copies.
+    let offset = (mix.rendered % SUB_BLOCK) as usize;
+    let cell = (mix.rendered / SUB_BLOCK % 2) as usize;
+    let last_cell = (1 - cell) * SUB_BLOCK as usize + offset;
+    let late = mix.late[index];
+    let key = |t: usize| unsafe {
+        if late >> t & 1 == 1 {
+            (&(&*job.late_left.add(t))[last_cell..], &(&*job.late_right.add(t))[last_cell..])
+        } else {
+            ((*job.key_left.add(t)).as_slice(), (*job.key_right.add(t)).as_slice())
+        }
+    };
     let track = unsafe { &mut *job.tracks.add(index) };
     // What automation and the sequencer asked of it.
     Track::apply_params(&track.params, &mut track.params_len, &mut track.instrument);
@@ -2326,7 +2350,7 @@ unsafe fn process_track(job: &Job, index: usize) {
     if takes != 0 {
         let taken = &mut track.out_left[..n];
         taken.fill(0.0);
-        let source = track_with(&mix.ids, track.audio_from).filter(|&s| s != index && !mix.mutes[s]);
+        let source = track_with(&mix.ids, track.audio_from).filter(|&s| s != index && !mix.mutes[s] && late >> s & 1 == 0);
         if let Some(Instrument::Drums(drums)) = source.map(|s| &other(s).instrument) {
             for voice in (0..crate::model::DRUM_SOUNDS).filter(|&v| takes >> v & 1 == 1) {
                 for (out, x) in taken.iter_mut().zip(drums.sound(voice)) {
@@ -2398,9 +2422,13 @@ unsafe fn process_track(job: &Job, index: usize) {
         shared.fault(Fault::Track(index));
     }
     // What sidechains listening to it hear: after its effects, before its fader.
+    // And, kept a cell, what those listening across a loop hear.
     unsafe {
         (&mut *job.key_left.add(index))[..n].copy_from_slice(&channel.left[..n]);
         (&mut *job.key_right.add(index))[..n].copy_from_slice(&channel.right[..n]);
+        let now = cell * SUB_BLOCK as usize + offset;
+        (&mut *job.late_left.add(index))[now..now + n].copy_from_slice(&channel.left[..n]);
+        (&mut *job.late_right.add(index))[now..now + n].copy_from_slice(&channel.right[..n]);
     }
 
     let audible = !channel.mute && !mix.silenced[index] && (!mix.any_solo || mix.soloed[index]);
@@ -2458,7 +2486,8 @@ unsafe fn process_return(job: &Job, index: usize) {
 
 /// The order to process tracks in: every track before the group it plays
 /// into, and, where it can be, a sidechain's source before the track that
-/// listens to it (so it hears this block, not the last). `wants[i]` has bit `j`
+/// listens to it (so it hears this block; across a loop, a cell late: see
+/// `Mix::late`). `wants[i]` has bit `j`
 /// set if track `i` listens to track `j`.
 fn processing_order(parents: &[Option<u8>; MAX_TRACKS], wants: &[u64; MAX_TRACKS]) -> [usize; MAX_TRACKS] {
     let mut children = [0u64; MAX_TRACKS];
@@ -2596,6 +2625,8 @@ impl Engine {
             ids: [0; MAX_TRACKS],
             key_left: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
             key_right: (0..MAX_TRACKS).map(|_| vec![0.0; MAX_BLOCK]).collect(),
+            late_left: (0..MAX_TRACKS).map(|_| vec![0.0; 2 * SUB_BLOCK as usize]).collect(),
+            late_right: (0..MAX_TRACKS).map(|_| vec![0.0; 2 * SUB_BLOCK as usize]).collect(),
             mutes: [false; MAX_TRACKS],
             compensating: true,
             track_delays: (0..MAX_TRACKS).map(|_| Compensator::new()).collect(),
@@ -3364,9 +3395,9 @@ impl Engine {
 
     /// What this block's tasks wait for (see the graph above `Mix`): a track
     /// for its group's tracks and for what it listens to, or what listens to
-    /// it for it (it hears its last block); a return for its senders and its
-    /// sidechains' sources. Tracks and returns with plugins stay on the audio
-    /// thread: a plugin may expect every call from one thread.
+    /// it for it (across a loop it hears it a cell late); a return for its
+    /// senders and its sidechains' sources. Tracks and returns with plugins
+    /// stay on the audio thread: a plugin may expect every call from one thread.
     fn plan_block(&mut self, wants: &[u64; MAX_TRACKS], children: &[u64; MAX_TRACKS], senders: &[u64; MAX_RETURNS]) {
         use crate::workers::Mask;
         let plan = &mut *self.plan;
@@ -3471,6 +3502,23 @@ impl Engine {
             }
         }
         self.order = processing_order(&self.parents, &wants);
+        // What can't come first (loops): heard a cell late.
+        let mut at = [0usize; MAX_TRACKS];
+        for (k, &t) in self.order.iter().enumerate() {
+            at[t] = k;
+        }
+        let late: [u64; MAX_TRACKS] = std::array::from_fn(|i| {
+            let mut bits = wants[i];
+            let mut late = 0;
+            while bits != 0 {
+                let j = bits.trailing_zeros() as usize;
+                bits &= bits - 1;
+                if at[j] >= at[i] {
+                    late |= 1 << j;
+                }
+            }
+            late
+        });
         let any_solo = self.tracks.iter().any(|t| t.solo);
         let solo: [bool; MAX_TRACKS] = std::array::from_fn(|i| self.tracks[i].solo);
         let soloed = soloed(&solo, &self.parents, &self.order);
@@ -3516,11 +3564,13 @@ impl Engine {
             self.plan_block(&wants, &children, &senders);
         }
         let job = Job {
-            mix: Mix { n, ctx, any_solo, soloed, silenced, mutes: self.mutes, ids: self.ids, parents: self.parents, order: self.order, apart, children, senders, rendered: self.rendered },
+            mix: Mix { n, ctx, any_solo, soloed, silenced, mutes: self.mutes, ids: self.ids, parents: self.parents, order: self.order, apart, children, senders, late, rendered: self.rendered },
             tracks: self.tracks.as_mut_ptr(),
             returns: self.returns.as_mut_ptr(),
             key_left: self.key_left.as_mut_ptr(),
             key_right: self.key_right.as_mut_ptr(),
+            late_left: self.late_left.as_mut_ptr(),
+            late_right: self.late_right.as_mut_ptr(),
             track_delays: self.track_delays.as_mut_ptr(),
             send_delays: self.send_delays.as_mut_ptr(),
             return_delays: self.return_delays.as_mut_ptr(),
@@ -5828,16 +5878,17 @@ mod tests {
         assert!(one.iter().zip(&four).all(|(a, b)| a.to_bits() == b.to_bits()), "the sidechain heard something else");
     }
 
-    /// Every instrument (but the Polychrome, see above, and the Acid) with
-    /// effects, a group, a send and a sidechain, shared among threads in
-    /// callbacks of any size, sounds as on one thread in callbacks of 1024: the
-    /// same samples.
+    /// Every instrument (but the Polychrome, see above) with effects, a group,
+    /// a send and sidechains, shared among threads in callbacks of any size,
+    /// sounds as on one thread in callbacks of 1024: the same samples. The
+    /// sidechains: a track listening to one outside its group, the group to
+    /// one of its tracks, and two loops (a track listening to its own group,
+    /// two tracks listening to each other), heard a cell (64 frames) late.
     #[test]
     fn neither_threads_nor_the_buffer_size_change_the_sound() {
-        use crate::model::{AutoFilterParams, DuckerParams, ReverbParams};
-        // Known: this low line on the Acid moves by a few samples with the
-        // buffer size on one thread too.
-        let kinds: Vec<InstrumentKind> = InstrumentKind::catalog().into_iter().filter(|k| !matches!(k, InstrumentKind::Polychrome(_) | InstrumentKind::Acid(_))).collect();
+        use crate::model::{AutoFilterParams, CompressorParams, DuckerParams, ReverbParams};
+        let kinds: Vec<InstrumentKind> = InstrumentKind::catalog().into_iter().filter(|k| !matches!(k, InstrumentKind::Polychrome(_))).collect();
+        assert_eq!(kinds.len(), InstrumentKind::catalog().len() - 1);
         let render = |threads: usize, sizes: &[usize]| {
             let (mut engine, mut handle) = crate::audio::detached(SR);
             engine.set_threads(threads);
@@ -5849,16 +5900,32 @@ mod tests {
                 assert!(handle.send(Command::SetSamples { track: t, samples: Box::new(vec![sine_sample(); 16]) }));
                 assert!(handle.send(Command::SetWavetables { track: t, tables: Box::new(vec![Arc::new(crate::wavetable::builtin(0)), Arc::new(crate::wavetable::builtin(3))]) }));
                 let mut clip = MidiClip::new("busy", 4.0, [0, 0, 0]);
-                for (i, pitch) in [36u8, 48, 55, 38, 60, 42, 67, 72].iter().enumerate() {
-                    clip.notes.push(Note { start: i as f64 * 0.5, length: 0.3 + 0.1 * (i % 3) as f64, pitch: *pitch, velocity: 0.7, chance: 1.0 });
+                if matches!(kind, InstrumentKind::Acid(_)) {
+                    // A low line with slides (overlapping notes), accents and rests.
+                    for (start, length, pitch, velocity) in [(0.0, 0.3, 36u8, 0.95f32), (0.25, 0.4, 48, 0.7), (1.0, 0.1, 38, 0.6), (1.5, 0.3, 43, 1.0), (1.75, 0.5, 31, 0.9), (3.0, 0.2, 36, 0.7)] {
+                        clip.notes.push(Note { start, length, pitch, velocity, chance: 1.0 });
+                    }
+                } else {
+                    for (i, pitch) in [36u8, 48, 55, 38, 60, 42, 67, 72].iter().enumerate() {
+                        clip.notes.push(Note { start: i as f64 * 0.5, length: 0.3 + 0.1 * (i % 3) as f64, pitch: *pitch, velocity: 0.7, chance: 1.0 });
+                    }
                 }
                 assert!(handle.send(Command::SetArrangement { track: t, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(clip))]) }));
                 let filter = Device::new(Effect::AutoFilter(AutoFilterParams { lfo_amount: 2.0, lfo_beats: 0.5, ..Default::default() }));
                 let mut chain = vec![filter, Device::new(Effect::Delay(Default::default()))];
-                // Listening to a track outside its group (its own group it would
-                // hear a block late, however long the blocks are).
-                if t == 3 {
-                    chain.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.8, sidechain: Some(6), ..Default::default() })));
+                // Ids are index + 1; tracks 1 to 3 play into the group, track 0.
+                let ducker = |id: u32| Device::new(Effect::Ducker(DuckerParams { depth: 0.8, sidechain: Some(id), ..Default::default() }));
+                match t {
+                    // The group listens to one of its tracks.
+                    0 => chain.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -30.0, ratio: 8.0, attack_ms: 1.0, sidechain: Some(3), ..Default::default() }))),
+                    // In the group, to its own group: a loop.
+                    1 => chain.push(ducker(1)),
+                    // In the group, to a track outside it.
+                    3 => chain.push(ducker(6)),
+                    // Two tracks listening to each other: a loop.
+                    4 => chain.push(ducker(6)),
+                    5 => chain.push(ducker(5)),
+                    _ => {}
                 }
                 assert!(handle.send(Command::ReplaceChain { target: Target::Track(t), chain: build_chain(&chain, SR) }));
                 assert!(handle.send(Command::SetSend { track: t, send: 0, amount: 0.3 }));
@@ -5891,6 +5958,107 @@ mod tests {
         assert!(energy(&one) > 1.0);
         let first = one.iter().zip(&shared).position(|(a, b)| a.to_bits() != b.to_bits());
         assert_eq!(first, None, "differ from frame {:?}", first.map(|i| i / 2));
+    }
+
+    /// A low acid line with slides (overlapping notes), accents (velocity
+    /// over 80 %), rests long enough for the voice to fall silent and
+    /// retriggers: the same samples in blocks of 64, 256, 1024 and odd sizes.
+    #[test]
+    fn the_acid_line_does_not_depend_on_the_buffer_size() {
+        let line = || {
+            let mut clip = MidiClip::new("acid", 4.0, [0, 0, 0]);
+            // (start, length, pitch, velocity): slides at 0.75 and 2.25, accents.
+            for (start, length, pitch, velocity) in [(0.0, 0.2, 36u8, 0.7f32), (0.5, 0.3, 36, 0.95), (0.75, 0.4, 48, 0.7), (1.5, 0.1, 38, 0.6), (2.0, 0.3, 43, 1.0), (2.25, 0.5, 31, 0.9), (3.25, 0.2, 36, 0.7), (3.5, 0.25, 48, 0.85)] {
+                clip.notes.push(Note { start, length, pitch, velocity, chance: 1.0 });
+            }
+            clip
+        };
+        let render = |params: crate::model::AcidParams, sizes: &[usize]| {
+            let (mut engine, mut handle) = crate::audio::detached(SR);
+            assert!(handle.send(Command::set_instrument(0, InstrumentKind::Acid(params), SR)));
+            assert!(handle.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(line()))]) }));
+            assert!(handle.send(Command::SetOutputLimit(false)));
+            assert!(handle.send(Command::Play));
+            let total = 4 * 48_000;
+            let mut out = Vec::with_capacity(2 * total);
+            let mut k = 0;
+            while out.len() < 2 * total {
+                let n = sizes[k % sizes.len()];
+                k += 1;
+                let mut block = vec![0f32; 2 * n];
+                engine.process(&mut block, 2);
+                handle.collect_garbage();
+                out.extend(block);
+            }
+            out.truncate(2 * total);
+            out
+        };
+        for (name, params) in crate::model::AcidParams::presets() {
+            let reference = render(params, &[1024]);
+            assert!(energy(&reference) > 0.1, "{name} is silent");
+            for sizes in [&[64usize][..], &[256], &[1, 63, 500, 4096, 37]] {
+                let other = render(params, sizes);
+                let first = reference.iter().zip(&other).position(|(a, b)| a.to_bits() != b.to_bits());
+                assert_eq!(first, None, "{name} in blocks of {sizes:?} differs from frame {:?}", first.map(|i| i / 2));
+            }
+        }
+    }
+
+    /// A pad in a group with a kick, ducked by its own group (a loop): it hears
+    /// the group a cell (64 frames) late, so it ducks, the same in callbacks
+    /// of any size and on any number of threads.
+    #[test]
+    fn a_track_listening_to_its_own_group_hears_it_a_fixed_cell_late() {
+        use crate::model::DuckerParams;
+        let render = |sidechain: Option<u32>, pad_plays: bool, threads: usize, sizes: &[usize]| {
+            let (mut engine, mut handle) = crate::audio::detached(SR);
+            engine.set_threads(threads);
+            engine.share_above = std::time::Duration::ZERO;
+            assert!(handle.send(Command::SetTrackIds(std::array::from_fn(|t| t as u32 + 1))));
+            let mut pad = MidiClip::new("pad", 4.0, [0, 0, 0]);
+            pad.notes.extend(pad_plays.then_some(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 0.6, chance: 1.0 }));
+            let mut kick = MidiClip::new("kick", 4.0, [0, 0, 0]);
+            for k in 0..4 {
+                kick.notes.push(Note { start: k as f64, length: 0.1, pitch: 36, velocity: 1.0, chance: 1.0 });
+            }
+            assert!(handle.send(Command::set_instrument(1, InstrumentKind::Kick(Default::default()), SR)));
+            assert!(handle.send(Command::SetArrangement { track: 1, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(kick))]) }));
+            assert!(handle.send(Command::SetArrangement { track: 2, clips: Box::new(vec![PlacedClip::new(0.0, 16.0, PlayClip::Midi(pad))]) }));
+            let ducker = Device::new(Effect::Ducker(DuckerParams { depth: 1.0, release: 0.3, sidechain, ..Default::default() }));
+            // Without a sidechain, no ducker (it would pump to the beat).
+            let chain = if sidechain.is_some() { vec![ducker] } else { vec![] };
+            assert!(handle.send(Command::ReplaceChain { target: Target::Track(2), chain: build_chain(&chain, SR) }));
+            let mut parents = [None; MAX_TRACKS];
+            parents[1] = Some(0);
+            parents[2] = Some(0);
+            assert!(handle.send(Command::SetGroups(parents)));
+            assert!(handle.send(Command::SetOutputLimit(false)));
+            assert!(handle.send(Command::Play));
+            let total = 2 * 48_000;
+            let mut out = Vec::with_capacity(2 * total);
+            let mut k = 0;
+            while out.len() < 2 * total {
+                let n = sizes[k % sizes.len()];
+                k += 1;
+                let mut block = vec![0f32; 2 * n];
+                engine.process(&mut block, 2);
+                handle.collect_garbage();
+                out.extend(block);
+            }
+            out.truncate(2 * total);
+            out
+        };
+        let reference = render(Some(1), true, 1, &[1024]);
+        for (threads, sizes) in [(1, &[64usize][..]), (1, &[256]), (1, &[1, 63, 500, 37]), (4, &[1, 63, 64, 500, 1024, 37])] {
+            let other = render(Some(1), true, threads, sizes);
+            let first = reference.iter().zip(&other).position(|(a, b)| a.to_bits() != b.to_bits());
+            assert_eq!(first, None, "{threads} threads, blocks of {sizes:?}: differ from frame {:?}", first.map(|i| i / 2));
+        }
+        // It does duck: the group's kick pushes the pad down.
+        let kick = render(Some(1), false, 1, &[1024]);
+        let pad = |out: &[f32]| energy(&out.iter().zip(&kick).map(|(a, b)| a - b).collect::<Vec<_>>());
+        let (ducked, free) = (pad(&reference), pad(&render(None, true, 1, &[1024])));
+        assert!(ducked < free * 0.8, "{ducked} vs {free}");
     }
 
     #[test]

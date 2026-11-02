@@ -236,7 +236,7 @@ impl Grid {
     }
 }
 
-fn snap_unit(pixels_per_beat: f32, meter: &Meter) -> Grid {
+pub(crate) fn snap_unit(pixels_per_beat: f32, meter: &Meter) -> Grid {
     if pixels_per_beat >= 10.0 {
         Grid::Counts(*meter)
     } else {

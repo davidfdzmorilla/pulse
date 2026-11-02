@@ -104,6 +104,8 @@ pub struct State {
     grew: bool,
     /// The pitches of the rows in view.
     in_view: Vec<u8>,
+    /// The notes' scroll offset and the size of what shows of them, last drawn.
+    view: Option<(egui::Vec2, egui::Vec2)>,
 }
 
 /// The insert marker before and after a write into a clip, and the clip before
@@ -153,6 +155,7 @@ impl Default for State {
             marks: Vec::new(),
             grew: false,
             in_view: Vec::new(),
+            view: None,
         }
     }
 }
@@ -182,6 +185,12 @@ impl State {
     #[cfg(test)]
     pub fn in_view(&self) -> &[u8] {
         &self.in_view
+    }
+
+    /// The notes' scroll offset and the size of what shows of them.
+    #[cfg(test)]
+    pub fn view(&self) -> Option<(egui::Vec2, egui::Vec2)> {
+        self.view
     }
 
     #[cfg(test)]
@@ -318,9 +327,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let (tempo, machine) = drums.as_ref().map_or((None, None), |(kit, bass)| drum_menu(ui, state, clip, clip_ref, kit, bass, drum_machine.is_some()));
     // Folded, notes move along the scale.
     let walk = key.filter(|_| state.fold);
-    if keys_enabled {
-        keyboard(ui, state, clip, walk);
-    }
+    let moved = if keys_enabled { keyboard(ui, state, clip, walk) } else { Moved::default() };
     state.selection.retain(|&i| i < clip.notes.len());
 
     let pitches: Vec<u8> = if is_drums {
@@ -344,6 +351,25 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         state.scrolled = Some(clip_ref);
         let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
         scroll = scroll.vertical_scroll_offset(centered(&pitches, &clip.notes, row_h, header, lane_height, is_drums));
+    } else if let Some((offset, size)) = state.view.filter(|_| moved.across || moved.along) {
+        // Notes moved with the keys: the view follows them, only as far as it must.
+        let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
+        let chosen: Vec<&Note> = state.selection.iter().filter_map(|&i| clip.notes.get(i)).collect();
+        let rows: Vec<usize> = chosen.iter().filter_map(|n| pitches.iter().position(|&p| p == n.pitch)).collect();
+        if let (true, Some(&top), Some(&bottom)) = (moved.across, rows.iter().min(), rows.iter().max()) {
+            let y = follow(offset.y, size.y, header + top as f32 * row_h, header + (bottom + 1) as f32 * row_h, row_h);
+            if y != offset.y {
+                scroll = scroll.vertical_scroll_offset(y);
+            }
+        }
+        let start = chosen.iter().map(|n| n.start).fold(f64::INFINITY, f64::min);
+        let end = chosen.iter().map(|n| n.start + n.length).fold(f64::NEG_INFINITY, f64::max);
+        if moved.along && start <= end {
+            let x = follow(offset.x, size.x, KEY_W + start as f32 * beat_w, KEY_W + end as f32 * beat_w, (state.grid as f32 * beat_w).min(48.0));
+            if x != offset.x {
+                scroll = scroll.horizontal_scroll_offset(x);
+            }
+        }
     }
     let output = scroll.show(ui, |ui| {
         let chord_h = if is_drums { 0.0 } else { CHORD_H };
@@ -609,6 +635,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
     });
     state.scroll_x = output.state.offset.x;
+    state.view = Some((output.state.offset, output.inner_rect.size()));
     // The rows in view, for the tests (and nothing else).
     let header = RULER_H + if is_drums { 0.0 } else { CHORD_H };
     let first = ((output.state.offset.y - header) / row_h).floor().max(0.0) as usize;
@@ -733,6 +760,20 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The scroll offset along one axis that shows `lo..hi` (content px) in a view
+/// `visible` px long now at `offset`: the same if it shows already, else moved
+/// just enough to show it with `margin` around (its start, if it doesn't fit).
+fn follow(offset: f32, visible: f32, lo: f32, hi: f32, margin: f32) -> f32 {
+    if lo >= offset && hi <= offset + visible {
+        return offset;
+    }
+    if lo < offset || hi - lo + 2.0 * margin > visible {
+        (lo - margin).max(0.0)
+    } else {
+        hi + margin - visible
+    }
+}
+
 /// The scroll offset that shows the notes' rows (under `header` px of ruler) in
 /// the middle of a lane `visible` px tall; if they don't all fit, the row most
 /// notes are around (their median), or in a drum kit the lowest (the kick, the
@@ -758,11 +799,14 @@ fn centered(pitches: &[u8], notes: &[Note], row_h: f32, header: f32, visible: f3
     offset.max(0.0)
 }
 
-/// The piano roll's rows, highest first: every note from C0 to C6, or, folded
-/// to a scale, the scale's and those of the notes off it (so none is hidden).
+/// The piano roll's rows, highest first: every note from C0 to C6 (further if a
+/// note is), or, folded to a scale, the scale's and those of the notes off it
+/// (so none is hidden).
 fn rows(folded: Option<Scale>, notes: &[Note]) -> Vec<u8> {
     let scale = folded.map(|k| k.scale());
-    (24..=96).rev().filter(|&p| scale.is_none_or(|s| s[p as usize % 12]) || notes.iter().any(|n| n.pitch == p)).collect()
+    let low = notes.iter().map(|n| n.pitch).min().map_or(24, |p| p.min(24));
+    let high = notes.iter().map(|n| n.pitch).max().map_or(96, |p| p.max(96));
+    (low..=high).rev().filter(|&p| scale.is_none_or(|s| s[p as usize % 12]) || notes.iter().any(|n| n.pitch == p)).collect()
 }
 
 /// Moves notes `semitones` up or down; folded to a scale, ±1 is a step of the
@@ -1176,7 +1220,15 @@ fn pasted_notes(state: &State, text: &str) -> Vec<Note> {
         .unwrap_or_else(|| state.clipboard.clone())
 }
 
-fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Option<Scale>) {
+/// Which way the keys moved the selected notes: to other rows, along the time.
+#[derive(Default)]
+struct Moved {
+    across: bool,
+    along: bool,
+}
+
+fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Option<Scale>) -> Moved {
+    let mut moved = Moved::default();
     let events = ui.input(|i| i.events.clone());
     for event in events {
         let targets = note_edit::targets(&clip.notes, &state.selection);
@@ -1214,11 +1266,13 @@ fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Opt
                         let step = if modifiers.shift { state.sig.bar() } else { state.grid };
                         let sign = if key == Key::ArrowLeft { -1.0 } else { 1.0 };
                         note_edit::shift(&mut clip.notes, &selected, sign * step, clip.length);
+                        moved.along = true;
                     }
                     Key::ArrowUp | Key::ArrowDown if !selected.is_empty() => {
                         let step = if modifiers.shift { 12 } else { 1 };
                         let sign = if key == Key::ArrowUp { 1 } else { -1 };
                         transpose(&mut clip.notes, &selected, sign * step, walk);
+                        moved.across = true;
                     }
                     _ => {}
                 }
@@ -1226,6 +1280,7 @@ fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Opt
             _ => {}
         }
     }
+    moved
 }
 
 #[cfg(test)]

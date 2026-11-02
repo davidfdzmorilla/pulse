@@ -263,7 +263,7 @@ fn a_kit_dragged_from_the_browser_onto_a_midi_track_loads_there() {
     let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
     let midi = (0..app.project.tracks.len()).find(|&t| !app.project.tracks[t].is_audio() && !app.project.tracks[t].is_group()).unwrap();
     let lane = Rect::from_min_max(pos2(300.0, 300.0), pos2(900.0, 350.0));
-    app.drop_targets = crate::browser::DropTargets { slots: Vec::new(), lanes: vec![(midi, lane, 300.0, 14.0)], view: None };
+    app.drop_targets = crate::browser::DropTargets { lanes: vec![(midi, lane, 300.0, 14.0)], ..Default::default() };
     app.drop_from_browser(crate::browser::Dragged(preset), lane.center());
     std::fs::remove_dir_all(&dir).ok();
     let track = &app.project.tracks[midi];

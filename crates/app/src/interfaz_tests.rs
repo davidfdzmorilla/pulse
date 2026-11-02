@@ -316,3 +316,61 @@ fn melody_shots() {
     s.frames(5);
     s.shot("editor-estrecha");
 }
+
+/// A note moved with the keys stays in sight: ⇧↑ and ⇧↓ (octaves), ↑ and ↓,
+/// ⇧→ (bars). The view moves only when the note would leave it, and only as
+/// far as it must.
+#[test]
+fn the_editor_follows_the_note_moved_with_the_keys() {
+    use crate::app::ClipRef;
+    use engine::model::{MidiClip, Note};
+    let mut s = beat("sigue-nota");
+    let bass = track(&s, "Bajo");
+    let mut clip = MidiClip::new("Sigue", 64.0, [0; 3]);
+    clip.notes.push(Note::new(0.0, 1.0, 48, 0.8));
+    s.app.project.tracks[bass].clips[0] = Some(Clip::Midi(clip));
+    let at = ClipRef::Session { track: bass, slot: 0 };
+    s.app.select_clip(at);
+    s.frames(3);
+    s.app.piano_roll.select_notes(at, &[0]);
+    s.frames(2);
+    let pitch = |s: &Studio| midi(s, bass, 0).notes[0].pitch;
+    let offset = |s: &Studio| s.app.piano_roll.view().unwrap().0;
+    assert!(s.app.piano_roll.in_view().contains(&48), "{:?}", s.app.piano_roll.in_view());
+    // A semitone up, still in sight: the view stays where it was.
+    let before = offset(&s);
+    s.key(Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(pitch(&s), 49);
+    assert_eq!(offset(&s), before, "no jump while the note shows");
+    shot(&mut s, "antes");
+    // Octaves up to the top and back down to the bottom: always in sight.
+    for _ in 0..4 {
+        s.key(Key::ArrowUp, Modifiers::SHIFT);
+        s.frames(1);
+        assert!(s.app.piano_roll.in_view().contains(&pitch(&s)), "{} not in {:?}", pitch(&s), s.app.piano_roll.in_view());
+    }
+    assert_eq!(pitch(&s), 97);
+    assert_ne!(offset(&s), before, "the view went up with it");
+    shot(&mut s, "arriba");
+    for _ in 0..6 {
+        s.key(Key::ArrowDown, Modifiers::SHIFT);
+        s.frames(1);
+        assert!(s.app.piano_roll.in_view().contains(&pitch(&s)), "{} not in {:?}", pitch(&s), s.app.piano_roll.in_view());
+    }
+    assert_eq!(pitch(&s), 25);
+    // A row back up from the bottom edge: still in sight, the view stays.
+    let low = offset(&s).y;
+    s.key(Key::ArrowUp, Modifiers::NONE);
+    assert_eq!(offset(&s).y, low, "back up a row, still in sight");
+    // Along the time: bars to the right, past the edge.
+    let (start, size) = s.app.piano_roll.view().unwrap();
+    for _ in 0..15 {
+        s.key(Key::ArrowRight, Modifiers::SHIFT);
+        s.frames(1);
+        let (offset, size) = s.app.piano_roll.view().unwrap();
+        let x = 64.0 + midi(&s, bass, 0).notes[0].start as f32 * 72.0;
+        assert!(x >= offset.x && x + 72.0 <= offset.x + size.x, "beat {} at {x}, view {offset:?} {size:?}", midi(&s, bass, 0).notes[0].start);
+    }
+    assert!(offset(&s).x > start.x + size.x * 0.5, "the view went along");
+    shot(&mut s, "derecha");
+}

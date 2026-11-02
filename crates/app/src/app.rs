@@ -2634,6 +2634,8 @@ impl PulseApp {
             }
         }
         let audio = audio_in(dropped, &mut other);
+        // ⌘ or ⌥ held: on the Arrangement, off the grid.
+        self.drop_targets.free = ctx.input(|i| i.modifiers.command || i.modifiers.alt);
         if !audio.is_empty() {
             // Where the mouse is (macOS knows; the drop doesn't say): the slot, lane
             // or pad under it, as when dragging from the browser.
@@ -2900,6 +2902,7 @@ impl PulseApp {
         painter.galley(rect.min + egui::vec2(5.0, 2.0), text, theme::TEXT);
         if ctx.input(|i| i.pointer.any_released()) {
             egui::DragAndDrop::clear_payload(ctx);
+            self.drop_targets.free = ctx.input(|i| i.modifiers.command || i.modifiers.alt);
             self.drop_from_browser((*dragged).clone(), pos);
         }
     }

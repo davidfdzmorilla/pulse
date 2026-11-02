@@ -61,6 +61,22 @@ pub struct DropTargets {
     pub lanes: Vec<(usize, egui::Rect, f32, f32)>,
     /// The Session or Arrangement area.
     pub view: Option<egui::Rect>,
+    /// Let go with ⌘ or ⌥ held: on the Arrangement, exactly there, off the grid.
+    pub free: bool,
+}
+
+impl DropTargets {
+    /// The beat on the Arrangement at `x` on a timeline whose left edge is at
+    /// `left`, `ppb` pixels a beat: on the grid it shows (by the zoom), or
+    /// with [`Self::free`], exactly there.
+    fn beat(&self, x: f32, left: f32, ppb: f32, meter: &engine::meter::Meter) -> f64 {
+        let beat = (((x - left) / ppb) as f64).max(0.0);
+        if self.free {
+            beat
+        } else {
+            crate::arrangement::snap_unit(ppb, meter).snap(beat).max(0.0)
+        }
+    }
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -625,8 +641,7 @@ impl PulseApp {
         let place = if let Some(&(track, slot, _)) = targets.slots.iter().find(|(.., r)| r.contains(pos)) {
             Some((track, Placement::Session { track, slot }))
         } else if let Some(&(track, _, left, ppb)) = targets.lanes.iter().find(|(_, r, ..)| r.contains(pos)) {
-            let beat = (((pos.x - left) / ppb) as f64).max(0.0).floor();
-            Some((track, Placement::Arrangement { track, start: beat }))
+            Some((track, Placement::Arrangement { track, start: targets.beat(pos.x, left, ppb, &self.project.meter) }))
         } else {
             None
         };
@@ -647,7 +662,7 @@ impl PulseApp {
             }
             None if targets.view.is_some_and(|v| v.contains(pos)) => {
                 // Empty space: a new audio track.
-                let lanes_end = targets.lanes.first().map(|&(_, _, left, ppb)| (((pos.x - left) / ppb) as f64).max(0.0).floor());
+                let lanes_end = targets.lanes.first().map(|&(_, _, left, ppb)| targets.beat(pos.x, left, ppb, &self.project.meter));
                 if let Some(track) = self.add_audio_track() {
                     let placement = match (self.view, lanes_end) {
                         (crate::app::View::Arrangement, Some(start)) => Placement::Arrangement { track, start },
@@ -669,7 +684,7 @@ impl PulseApp {
         let place = if let Some(&(track, slot, _)) = targets.slots.iter().find(|(.., r)| r.contains(pos)) {
             Some((track, Placement::Session { track, slot }))
         } else if let Some(&(track, _, left, ppb)) = targets.lanes.iter().find(|(_, r, ..)| r.contains(pos)) {
-            Some((track, Placement::Arrangement { track, start: (((pos.x - left) / ppb) as f64).max(0.0).floor() }))
+            Some((track, Placement::Arrangement { track, start: targets.beat(pos.x, left, ppb, &self.project.meter) }))
         } else {
             None
         };
@@ -715,6 +730,7 @@ mod tests {
                 slots: vec![(audio, 2, slot), (0, 2, slot.translate(vec2(0.0, 40.0)))],
                 lanes: vec![(audio, lane, 300.0, 14.0)],
                 view: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 800.0))),
+                ..Default::default()
             };
         };
         // On a session slot of the audio track.
@@ -736,6 +752,34 @@ mod tests {
         app.drop_from_browser(Dragged(song), pos2(950.0, 700.0));
         assert_eq!(app.project.tracks.len(), tracks + 1);
         assert!(app.project.tracks[tracks].is_audio());
+    }
+
+    /// Audio let go on the Arrangement starts on the grid it shows: counts zoomed
+    /// in, bars zoomed out; with ⌘ or ⌥, exactly there. In the Session, its slot.
+    #[test]
+    fn audio_dropped_on_the_arrangement_falls_on_the_grid() {
+        let song = crate::test_audio::demo_song();
+        let mut app = PulseApp::headless(Project::demo());
+        let audio = app.add_audio_track().unwrap();
+        let lane = Rect::from_min_max(pos2(300.0, 300.0), pos2(900.0, 350.0));
+        let drop_at = |app: &mut PulseApp, beat: f32, ppb: f32, free: bool| {
+            app.project.tracks[audio].arrangement.clear();
+            app.drop_targets = DropTargets { lanes: vec![(audio, lane, 300.0, ppb)], view: Some(Rect::from_min_max(pos2(0.0, 0.0), pos2(1000.0, 800.0))), free, ..Default::default() };
+            assert!(app.drop_files(vec![song.clone()], pos2(300.0 + beat * ppb, 320.0)));
+            app.project.tracks[audio].arrangement[0].start
+        };
+        // Zoomed in (counts of 4/4): the nearest beat, ahead or behind.
+        assert_eq!(drop_at(&mut app, 8.6, 14.0, false), 9.0);
+        assert_eq!(drop_at(&mut app, 8.3, 14.0, false), 8.0);
+        // Zoomed out: the nearest bar.
+        assert_eq!(drop_at(&mut app, 6.5, 5.0, false), 8.0);
+        assert_eq!(drop_at(&mut app, 5.5, 5.0, false), 4.0);
+        // Held ⌘ or ⌥: off the grid.
+        let free = drop_at(&mut app, 6.5, 5.0, true);
+        assert!((free - 6.5).abs() < 1e-3, "{free}");
+        // In 3/4 the bars are three beats long.
+        app.project.meter = engine::meter::Meter::new(engine::meter::TimeSig::new(3, 4));
+        assert_eq!(drop_at(&mut app, 4.0, 5.0, false), 3.0);
     }
 
     #[test]

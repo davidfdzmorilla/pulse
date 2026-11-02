@@ -2775,7 +2775,9 @@ impl PulseApp {
             return;
         }
         let input = ctx.input(|i| {
-            let cmd = i.modifiers.command;
+            // ⌘ shortcuts without ⌥: with it they are others (⌥⌘T makes a
+            // return, ⌥⌘S opens the versions), read by the menus.
+            let cmd = i.modifiers.command && !i.modifiers.alt;
             let shift = i.modifiers.shift;
             [
                 i.key_pressed(egui::Key::Space),
@@ -2785,7 +2787,7 @@ impl PulseApp {
                 cmd && i.key_pressed(egui::Key::D),
                 cmd && !shift && i.key_pressed(egui::Key::Z),
                 cmd && shift && i.key_pressed(egui::Key::Z),
-                cmd && !shift && !i.modifiers.alt && i.key_pressed(egui::Key::S),
+                cmd && !shift && i.key_pressed(egui::Key::S),
                 cmd && shift && i.key_pressed(egui::Key::S),
                 cmd && i.key_pressed(egui::Key::O),
                 cmd && i.key_pressed(egui::Key::N),
@@ -2793,12 +2795,12 @@ impl PulseApp {
                 cmd && shift && i.key_pressed(egui::Key::T),
                 cmd && i.key_pressed(egui::Key::I),
                 cmd && shift && i.key_pressed(egui::Key::R),
-                !cmd && i.key_pressed(egui::Key::M),
+                !i.modifiers.command && i.key_pressed(egui::Key::M),
                 i.key_pressed(egui::Key::F9),
-                cmd && i.modifiers.alt && i.key_pressed(egui::Key::S),
+                i.modifiers.command && i.modifiers.alt && i.key_pressed(egui::Key::S),
                 cmd && !shift && i.key_pressed(egui::Key::G),
                 cmd && shift && i.key_pressed(egui::Key::G),
-                !cmd && i.key_pressed(egui::Key::Num0),
+                !i.modifiers.command && i.key_pressed(egui::Key::Num0),
             ]
         });
         let [space, tab, shift_tab, delete, duplicate, undo, redo, save, save_as, open, new, add_track, add_audio, import, export, keyboard, record, versions, group, ungroup, mute_clips] =
@@ -3110,6 +3112,32 @@ fn target_track(target: Target) -> Option<usize> {
 #[cfg(test)]
 mod window_tests {
     use super::*;
+
+    /// Without a system menu bar, ⌥⌘T makes a return and nothing else (it
+    /// also made a MIDI track, read as ⌘T); ⌘T and ⇧⌘T still make tracks, and
+    /// ⌥⌘0 doesn't mute clips.
+    #[test]
+    fn option_command_t_only_makes_a_return() {
+        let mut app = PulseApp::headless(Project::demo());
+        assert!(!app.has_menu_bar());
+        let ctx = egui::Context::default();
+        let press = |app: &mut PulseApp, key: egui::Key, modifiers: egui::Modifiers| {
+            let mut input = egui::RawInput::default();
+            input.events.push(egui::Event::ModifiersChanged(modifiers));
+            input.events.push(egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers });
+            let _ = ctx.run_ui(input, |ui| app.handle_shortcuts(ui.ctx()));
+            (app.project.tracks.len(), app.project.returns.len())
+        };
+        let (tracks, returns) = (app.project.tracks.len(), app.project.returns.len());
+        assert!(returns < engine::MAX_RETURNS);
+        let alt_cmd = egui::Modifiers::COMMAND | egui::Modifiers::ALT;
+        assert_eq!(press(&mut app, egui::Key::T, alt_cmd), (tracks, returns + 1));
+        assert_eq!(press(&mut app, egui::Key::T, egui::Modifiers::COMMAND), (tracks + 1, returns + 1));
+        assert_eq!(press(&mut app, egui::Key::T, egui::Modifiers::COMMAND | egui::Modifiers::SHIFT), (tracks + 2, returns + 1));
+        let before = app.project.clone();
+        press(&mut app, egui::Key::Num0, alt_cmd);
+        assert!(app.project == before, "⌥⌘0 isn't 0");
+    }
 
     /// One instrument editor and one of the app's windows at a time: they don't stack.
     #[test]

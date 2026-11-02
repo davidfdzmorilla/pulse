@@ -217,32 +217,28 @@ pub struct Kit {
 
 impl Kit {
     /// From a drum track's rows (note and name: a drum machine's sounds, a rack's
-    /// samples).
+    /// samples), in Spanish or English, with or without accents.
     pub fn from_rows(rows: &[(u8, String)]) -> Self {
-        let find = |words: &[&str], not: &[&str]| {
-            rows.iter().find(|(_, name)| {
-                let n = name.to_lowercase();
-                words.iter().any(|w| n.contains(w)) && !not.iter().any(|w| n.contains(w))
-            })
-            .map(|r| r.0)
-        };
+        let names: Vec<(u8, String)> = rows.iter().map(|(pitch, name)| (*pitch, plain_words(name))).collect();
+        let find = |words: &[&str], not: &[&str]| names.iter().find(|(_, n)| words.iter().any(|w| has_word(n, w)) && !not.iter().any(|w| has_word(n, w))).map(|r| r.0);
         Self {
             kick: find(&["kick", "bombo", "bd", "bass drum"], &[]),
-            snare: find(&["snare", "caja", "sd"], &[]),
+            snare: find(&["snare", "caja", "sd", "redoblante"], &[]),
             clap: find(&["clap", "palma"], &[]),
-            closed: find(&["closed", "cerrad", "chh", "hat", "hh", "charles"], &["open", "abiert"]),
-            open: find(&["open", "abiert", "ohh", "oh "], &[]),
+            closed: find(&["closed", "cerrad", "chh", "hat", "hihat", "hh", "charles"], &["open", "abiert"]),
+            open: find(&["open", "abiert", "ohh", "oh"], &[]),
             tom: find(&["low tom", "floor", "tom grave", "tom bajo"], &[]).or(find(&["tom"], &["mid", "medio", "high", "hi tom", "agudo", "alto"])),
             mid_tom: find(&["mid tom", "tom medio"], &[]),
             high_tom: find(&["high tom", "hi tom", "tom agudo", "tom alto"], &[]),
-            rim: find(&["rim", "stick"], &[]),
-            perc: find(&["cowbell", "cencerro", "perc"], &[]),
-            crash: find(&["crash", "platillo"], &[]),
+            rim: find(&["rim", "stick", "aro", "chasquido", "snap", "clic", "click"], &[]),
+            // The cowbell first; then any other percussion.
+            perc: find(&["cowbell", "cencerro"], &[]).or(find(&["perc", "blip", "gota"], &[])),
+            crash: find(&["crash", "platillo", "cymbal", "splash"], &["reves", "reverse"]),
             ride: find(&["ride"], &[]),
             shaker: find(&["shaker", "maraca", "cabasa"], &[]),
-            tambourine: find(&["tambourine", "pandereta", "tamb"], &[]),
-            conga: find(&["conga", "bongo"], &[]),
-            clave: find(&["clave", "wood"], &[]),
+            tambourine: find(&["tambourine", "pandereta", "pandero", "tamb"], &[]),
+            conga: find(&["conga", "bongo", "tumba", "djembe"], &[]),
+            clave: find(&["clave", "wood", "madera", "bloque", "block"], &[]),
         }
     }
 
@@ -267,6 +263,33 @@ impl Kit {
             Sound::Clave => self.clave,
         }
     }
+}
+
+/// A sound's name lowercased, without accents, its words split by single
+/// spaces («Bongó_02» is «bongo 02»).
+fn plain_words(name: &str) -> String {
+    let plain: String = name.to_lowercase().chars().map(|c| match c {
+        'á' | 'à' | 'ä' | 'â' => 'a',
+        'é' | 'è' | 'ë' | 'ê' => 'e',
+        'í' | 'ì' | 'ï' | 'î' => 'i',
+        'ó' | 'ò' | 'ö' | 'ô' => 'o',
+        'ú' | 'ù' | 'ü' | 'û' => 'u',
+        'ñ' => 'n',
+        'ç' => 'c',
+        c if c.is_alphanumeric() => c,
+        _ => ' ',
+    }).collect();
+    plain.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Whether a plain name (see `plain_words`) has `word`: anywhere if it is
+/// long («cerrad» in «cerrado», «kick» in «909kick»), else only where a word
+/// starts («tom» in «tom 2» but not in «bottom», «oh» in «ohh»).
+fn has_word(name: &str, word: &str) -> bool {
+    if word.len() >= 4 {
+        return name.contains(word);
+    }
+    name.split(' ').any(|w| w.starts_with(word))
 }
 
 /// How busy a beat is.
@@ -727,7 +750,7 @@ pub(crate) fn in_meter(line: &str, map: &Option<Vec<usize>>, sig: TimeSig, last:
 pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take: u64, sig: TimeSig) -> (Vec<Note>, Option<engine::model::Groove>) {
     let options = takes(settings.style, settings.level);
     let groove = &options[take as usize % options.len()];
-    let pitch = |v: V| sound_of(settings, v).and_then(|s| kit.pitch(s));
+    let pitch = |v: V| sound_of(kit, settings, v).and_then(|s| kit.pitch(s));
     let mut dice = Dice(take.wrapping_mul(0x9E37_79B9_7F4A_7C15) | 1);
     let bar_length = sig.bar();
     let map = steps_from_four(sig);
@@ -778,15 +801,17 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
             }
         }
     }
+    percussion_alone(kit, settings, &mut notes, &mut dice, length, sig);
     crash_phrases(kit, settings, &mut notes, length, bar_length);
     follow_bass(kit, settings, &mut notes, bass, length);
     (notes, swing(settings.style, settings.level))
 }
 
-/// Which of the chosen sounds plays a written line: the backbeat on the clap
-/// or the snare (as the style likes), the percussion on what there is.
-fn sound_of(settings: &Settings, v: V) -> Option<Sound> {
-    let on = |s: Sound| settings.sounds[s as usize];
+/// Which of the chosen sounds the kit has plays a written line: the backbeat
+/// on the clap or the snare (as the style likes), the percussion on what
+/// there is.
+fn sound_of(kit: &Kit, settings: &Settings, v: V) -> Option<Sound> {
+    let on = |s: Sound| settings.sounds[s as usize] && kit.pitch(s).is_some();
     let first = |list: &[Sound]| list.iter().copied().find(|&s| on(s));
     let back_clap = matches!(settings.style, Style::House | Style::Techno | Style::Hardgroove | Style::HardTechno | Style::Trap);
     match v {
@@ -798,6 +823,54 @@ fn sound_of(settings: &Settings, v: V) -> Option<Sound> {
         Rim => first(&[Sound::Rim]),
         Perc => first(&[Sound::Cowbell, Sound::Conga, Sound::Shaker]),
         Tom => first(&[Sound::LowTom, Sound::Snare]),
+    }
+}
+
+/// The percussion's own lines, by level (Basic, Medium, Intense), for a beat
+/// of percussion alone.
+const PERCUSSION: [(Sound, [&str; 3]); 9] = [
+    (Sound::LowTom, ["x.....x...x.....", "x..o..x...x..o..", "x..o..x.o.x..o.o"]),
+    (Sound::MidTom, ["...o.......o....", "...o...o...o..o.", "..oo...o..oo..o."]),
+    (Sound::HighTom, [".......o.......o", ".....o.o.....o.o", ".o...o.o.o...o.o"]),
+    (Sound::Shaker, ["..x...x...x...x.", "gxgxgxgxgxgxgxgx", "xgxgxgxxxgxgxgxx"]),
+    (Sound::Tambourine, ["....x.......x...", "....x.......x..o", "..o.x...o.o.x..o"]),
+    (Sound::Cowbell, ["..x...x...x...x.", "..x..x..x.x...x.", "x.x..x.xx.x..x.x"]),
+    (Sound::Conga, ["..o..o....o..o..", "o.o..o.o..o..o.o", "o.oo.o.oo.o.ooo."]),
+    (Sound::Clave, ["x..x..x.........", "x..x..x...x.x...", "x..x..x...x.x..o"]),
+    (Sound::Rim, ["...o..o....o..o.", "...o..o..o.o..o.", "..oo..o..o.o.oo."]),
+];
+
+/// Without the base of a beat (no kick, snare, clap or hats chosen in the
+/// kit), the percussion chosen plays a layer of its own, busier by level: a
+/// percussion track over another's kick and hats. The fill, at the phrase's
+/// end, keeps its beat.
+fn percussion_alone(kit: &Kit, settings: &Settings, notes: &mut Vec<Note>, dice: &mut Dice, length: f64, sig: TimeSig) {
+    let has = |s: Sound| settings.sounds[s as usize] && kit.pitch(s).is_some();
+    if [Sound::Kick, Sound::Snare, Sound::Clap, Sound::Hat, Sound::Open].into_iter().any(has) {
+        return;
+    }
+    let level = match settings.level {
+        Level::Basic => 0,
+        Level::Medium => 1,
+        Level::Intense => 2,
+    };
+    let map = steps_from_four(sig);
+    let bars = (length / sig.bar() - 1e-9).ceil().max(1.0) as usize;
+    for &(sound, lines) in &PERCUSSION {
+        let Some(pitch) = kit.pitch(sound).filter(|_| has(sound)) else { continue };
+        for bar in 0..bars {
+            let phrase_end = bars >= 4 && (bar + 1 == bars || (bar + 1) % 8 == 0);
+            let keep = (settings.fills && phrase_end && fill(settings.style).is_some()).then_some(false);
+            let start = bar as f64 * sig.bar();
+            for (s, c) in in_meter(lines[level], &map, sig, keep).char_indices() {
+                let Some(v) = velocity(c) else { continue };
+                let beat = start + s as f64 * 0.25;
+                if beat < length - 1e-9 {
+                    let v = (v * 0.9 * (0.96 + 0.08 * dice.roll())).clamp(0.05, 1.0);
+                    notes.push(Note { start: beat, length: 0.25, pitch, velocity: v, chance: 1.0 });
+                }
+            }
+        }
     }
 }
 
@@ -846,7 +919,7 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
     let mut seed = vec![[0u8; VOICES]; 64];
     for bar in 0..4 {
         for &(v, steps) in if bar == 3 { groove.b } else { groove.a } {
-            let Some(sound) = sound_of(settings, v) else { continue };
+            let Some(sound) = sound_of(kit, settings, v) else { continue };
             for (s, c) in steps.char_indices() {
                 let level = match c {
                     'X' => 3,
@@ -990,6 +1063,84 @@ pub fn bass_onsets(tracks: &[Track], slot: Option<usize>, span: Option<(f64, f64
 mod tests {
     use super::*;
     use engine::model::drum_note;
+
+    /// A beat of percussion alone (no kick, snare, clap or hats) has a
+    /// layer of its own in every style and level: four hits a bar or more,
+    /// more by level. As in Hardgroove Basic with the Minimal kit's toms,
+    /// rim and shaker, which made 4 notes in 4 bars.
+    #[test]
+    fn percussion_alone_has_its_own_beat() {
+        let percussion = [Sound::Rim, Sound::LowTom, Sound::MidTom, Sound::HighTom, Sound::Shaker, Sound::Tambourine, Sound::Cowbell, Sound::Conga, Sound::Clave];
+        let only = |list: &[Sound]| {
+            let mut sounds = [false; stems::drums::VOICES];
+            list.iter().for_each(|&s| sounds[s as usize] = true);
+            sounds
+        };
+        let count = |kit: &Kit, style: Style, level: Level, sounds: Sounds| {
+            let settings = Settings { style, level, fills: true, follow_bass: false, bars: 4, machine: false, ai: false, sounds };
+            generate(kit, &settings, 16.0, &[], 0, TimeSig::default()).0.len()
+        };
+        for style in Style::ALL {
+            let mut last = 0;
+            for level in Level::ALL {
+                let all = count(&machine(), style, level, only(&percussion));
+                assert!(all >= 16 && all > last, "{style:?} {level:?}: {all} notes in 4 bars");
+                last = all;
+                // Only the style's own percussion, when it has some.
+                let own: Vec<Sound> = percussion.iter().copied().filter(|&s| style.sounds()[s as usize]).collect();
+                if !own.is_empty() {
+                    let n = count(&machine(), style, level, only(&own));
+                    assert!(n >= 16, "{style:?} {level:?} with {own:?}: {n} notes in 4 bars");
+                }
+            }
+        }
+        let rows: Vec<(u8, String)> = crate::factory_sounds::kits().into_iter().find(|k| k.name == "Minimal").unwrap().pads.iter().enumerate()
+            .map(|(pad, p)| (engine::model::RACK_FIRST_NOTE + pad as u8, p.1.to_string())).rev().collect();
+        let minimal = Kit::from_rows(&rows);
+        let n = count(&minimal, Style::Hardgroove, Level::Basic, only(&[Sound::Rim, Sound::LowTom, Sound::MidTom, Sound::HighTom, Sound::Shaker, Sound::Conga]));
+        assert!(n >= 16, "{n}");
+    }
+
+    /// Every drum sound of each kit of «Sonidos de Pulse», loaded on a track,
+    /// is a row that «Generar ritmo» knows (with accents, in Spanish): the
+    /// rim, congas and clave weren't struck out for no reason.
+    #[test]
+    fn every_factory_kit_sound_is_known() {
+        use crate::factory_recipes::{HATS, KICKS, PERC, SNARES};
+        let root = std::path::Path::new("/kits");
+        for kit in crate::factory_sounds::kits() {
+            let mut track = crate::project::Track::new("Kit", [0; 3], engine::model::InstrumentKind::DrumMachine(Default::default()));
+            let (params, files) = crate::factory_sounds::kit_settings(root, &kit);
+            track.instrument = engine::model::InstrumentKind::DrumRack(params);
+            track.samples = files;
+            let rows = track.drum_rows();
+            let known = Kit::from_rows(&rows);
+            for (pad, &(folder, name, _)) in kit.pads.iter().enumerate() {
+                if ![KICKS, SNARES, HATS, PERC].contains(&folder) {
+                    continue;
+                }
+                let alone = Kit::from_rows(&[(engine::model::RACK_FIRST_NOTE + pad as u8, name.to_string())]);
+                assert_ne!(alone, Kit::default(), "{}: «{name}»", kit.name);
+            }
+            let note = |name: &str| kit.pads.iter().position(|p| p.1 == name).map(|pad| engine::model::RACK_FIRST_NOTE + pad as u8);
+            if let Some(rim) = ["Aro techno", "Aro house", "Aro garage", "Aro lo-fi", "Aro boom bap", "Chasquido", "Clic minimal"].iter().find_map(|n| note(n)) {
+                assert!(known.rim.is_some(), "{}: rim {rim}", kit.name);
+            }
+            if note("Bongó").or(note("Conga aguda")).or(note("Conga grave")).is_some() {
+                assert!(known.conga.is_some(), "{}: congas", kit.name);
+            }
+            if note("Bloque de madera").or(note("Clave")).is_some() {
+                assert!(known.clave.is_some(), "{}: clave", kit.name);
+            }
+            // The reversed crash is an effect, not the crash.
+            if let Some(crash) = known.crash {
+                assert_ne!(Some(crash), note("Crash al revés"), "{}", kit.name);
+            }
+        }
+        assert_eq!(Kit::from_rows(&[(60, "Bongó_02".into())]).conga, Some(60));
+        assert_eq!(Kit::from_rows(&[(60, "Bottom".into())]), Kit::default(), "«tom» is a word");
+        assert_eq!(Kit::from_rows(&[(60, "909Kick".into())]).kick, Some(60));
+    }
 
     fn machine() -> Kit {
         let rows: Vec<(u8, String)> = engine::model::DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect();

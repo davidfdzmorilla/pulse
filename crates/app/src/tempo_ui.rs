@@ -158,6 +158,7 @@ impl PulseApp {
                 self.status = Some(if manual {
                     format!("«{name}»: no se encontró un ritmo claro")
                 } else {
+                    self.unwarp_guess(path, clips);
                     format!("«{name}»: no se encontró un ritmo claro; suena a su velocidad")
                 });
                 return;
@@ -208,6 +209,46 @@ impl PulseApp {
             } else {
                 format!("«{name}» va a {} BPM y ahora sigue el tempo del proyecto ({} BPM)", bpm_text(grid.bpm), bpm_text(tempo))
             });
+        }
+    }
+
+    /// Without a beat found, the clips that still have the first guess made on
+    /// importing them (a tempo from their length, see `new_audio_clip`) play
+    /// at their own speed again, as long as the file.
+    fn unwarp_guess(&mut self, path: &str, clips: &[ClipRef]) {
+        let sample = self.sample(path);
+        let duration = sample.duration();
+        let tempo = self.project.tempo;
+        for &clip in clips {
+            let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { continue };
+            if audio.sample != path || audio.warp == WarpMode::Off || !audio.warp_markers.is_empty() {
+                continue;
+            }
+            let guess = self.new_audio_clip(std::path::Path::new(path), &sample, audio.color);
+            let untouched = guess.warp == audio.warp && (guess.original_bpm - audio.original_bpm).abs() < 1e-9
+                && (guess.length - audio.length).abs() < 1e-9 && audio.offset == 0.0;
+            if !untouched {
+                continue;
+            }
+            let length = ((duration * tempo / 60.0) * 4.0).ceil().max(1.0) / 4.0;
+            let new = AudioClip { warp: WarpMode::Off, original_bpm: tempo, length, ..audio.clone() };
+            match clip {
+                ClipRef::Session { track, slot } => self.set_clip(track, slot, Some(Clip::Audio(new))),
+                ClipRef::Arrangement { track, index } => {
+                    let lane = &mut self.project.tracks[track].arrangement;
+                    let placed = &mut lane[index];
+                    if (placed.length - audio.length).abs() < 1e-9 {
+                        let old_end = placed.end();
+                        placed.length = new.length;
+                        let shift = placed.end() - old_end;
+                        placed.clip = Clip::Audio(new);
+                        follow_end(lane, index, old_end, shift);
+                    } else {
+                        placed.clip = Clip::Audio(new);
+                    }
+                    self.sync_arrangement(track);
+                }
+            }
         }
     }
 
@@ -631,5 +672,62 @@ mod tests {
         assert_eq!(warp(0), (WarpMode::Beats, 150.0), "{:?}", app.status);
         assert_eq!(warp(1).0, WarpMode::Stretch);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A take without a beat (a voice: noise in phrases of uneven length, with
+    /// soft swells) lasting 4 bars at 152 comes in guessed as a loop at 152;
+    /// when no beat is found it plays at its own speed again, as long as the
+    /// file, as the status says.
+    #[test]
+    fn audio_without_a_beat_plays_at_its_own_speed() {
+        let dir = std::env::temp_dir().join(format!("pulse-no-beat-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("Voz.wav");
+        let rate = 48_000.0f32;
+        let seconds = 16.0 * 60.0 / 152.0;
+        let mut seed = 11u64;
+        let mut random = || {
+            seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1442695040888963407);
+            (seed >> 33) as f64 / (1u64 << 31) as f64
+        };
+        // Phrases of 0.3 to 1.4 s with gaps of 0.05 to 0.6 s between them.
+        let mut phrases = Vec::new();
+        let mut t = 0.1;
+        while t < seconds {
+            let length = 0.3 + 1.1 * random();
+            phrases.push((t, length));
+            t += length + 0.05 + 0.55 * random();
+        }
+        let voice: Vec<f32> = (0..(seconds * rate as f64) as usize)
+            .map(|i| {
+                let t = i as f64 / rate as f64;
+                let level = phrases.iter().find(|&&(start, length)| t >= start && t < start + length)
+                    .map_or(0.0, |&(start, length)| (std::f64::consts::PI * (t - start) / length).sin().powi(2));
+                ((random() * 2.0 - 1.0) * level * 0.5) as f32
+            })
+            .collect();
+        crate::capture::write_wav(&path, &voice, &voice, rate).unwrap();
+        let mut project = Project::demo();
+        project.tempo = 120.0;
+        let mut app = PulseApp::headless(project);
+        let track = app.add_audio_track().unwrap();
+        app.add_samples(vec![path.clone()], Placement::Arrangement { track, start: 0.0 });
+        let Clip::Audio(guess) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
+        assert_ne!(guess.warp, WarpMode::Off, "first guessed as a loop");
+        let ctx = eframe::egui::Context::default();
+        let started = std::time::Instant::now();
+        while app.tempo.busy() {
+            app.follow_tempo(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(20));
+            assert!(started.elapsed().as_secs() < 60);
+        }
+        std::fs::remove_dir_all(&dir).ok();
+        assert!(app.status.as_deref().is_some_and(|s| s.contains("suena a su velocidad")), "{:?}", app.status);
+        let placed = &app.project.tracks[track].arrangement[0];
+        let Clip::Audio(clip) = &placed.clip else { panic!() };
+        assert_eq!(clip.warp, WarpMode::Off);
+        let beats = seconds * 120.0 / 60.0;
+        assert!(clip.length >= beats && clip.length - beats < 0.25, "{} for {beats}", clip.length);
+        assert_eq!(placed.length, clip.length);
     }
 }

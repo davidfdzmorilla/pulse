@@ -1050,7 +1050,7 @@ Al importar o soltar un audio, Pulse busca su tempo y sus compases y lo ajusta p
 - Si encuentra un ritmo claro, el clip pasa a **Stretch** a ese tempo, o a **Beats** si es un loop de batería (por su nombre, o porque no tiene tonalidad).
 - El clip empieza en el compás del primer tiempo fuerte y dura compases enteros.
 - Si el tempo varía, pone un marcador de warp en cada compás.
-- Si no encuentra un ritmo claro, el clip suena a su velocidad.
+- Si no encuentra un ritmo claro (una voz, un ambiente), el clip vuelve a **Off** y suena a su velocidad, tan largo como el archivo.
 
 ### Corregirlo a mano
 
@@ -1064,7 +1064,8 @@ Al importar o soltar un audio, Pulse busca su tempo y sus compases y lo ajusta p
 - Si su **nombre dice su tempo** y a ese tempo dura compases justos, gana el nombre, diga lo que diga el detector (unos tops sin bombo pueden salirle a 245). También al trocearlo en la Drum Rack.
 - Si no, y el tempo encontrado queda cerca del que hace que dure 1, 2, 3, 4, 6, 8, 12 o 16 compases justos, usa ese: un loop de 4 compases a 150 queda a 150, no a 151.
 - Si el detector se equivoca más, pero el loop dura compases justos al tempo del proyecto, usa el del proyecto.
-- Mientras se analiza, y si no encuentra un ritmo claro, un audio corto se toma por un loop de compases enteros: al tempo de su nombre si lo dice y dura compases justos a él, o de 1, 2, 4 u 8 compases al tempo más cercano al del proyecto.
+- Mientras se analiza, un audio corto se toma por un loop de compases enteros: al tempo de su nombre si lo dice y dura compases justos a él, o de 1, 2, 4 u 8 compases al tempo más cercano al del proyecto.
+  Si al final no encuentra un ritmo claro, deshace esa suposición: el clip vuelve a **Off**, salvo que lo hayas cambiado tú mientras tanto.
 +++
 
 # Componer
@@ -1257,10 +1258,11 @@ En el [[Editor MIDI]] del clip nuevo, **Otra variación** lo vuelve a escribir d
 - **Sonidos**: qué instrumentos puede usar la base: bombo, caja, palmada, charles, ride, crash, rim, toms, shaker, pandereta, cencerro, congas y clave.
   - Cada estilo trae los suyos marcados (el techno sin ride ni cencerro, el pop con crash, toms y pandereta), y puedes quitar o añadir los que quieras.
   - Los que el kit no tiene salen tachados.
+  - Solo con percusión (sin bombo, caja, palmada ni charles), cada sonido marcado toca su propio patrón, más lleno en cada nivel: una pista de percusión para tocar sobre la batería de otra.
   - Con el **crash** marcado y un clip de 4 compases o más, suena al empezar cada frase.
 - **Sonido del estilo**: en una Drum Machine, pone la máquina del estilo (**808** para trap, hip hop y reggaetón; **909** para el resto) afinada como suena el estilo: el bombo largo y grave del trap, el seco del techno, la caja aguda del drum & bass… Si has afinado tú la máquina, solo cambia de máquina y respeta tus ajustes.
 
-Funciona con cualquier kit: Pulse busca cada sonido por su nombre (kick/bombo, snare/caja, clap, hat/charles, tom, rim…) y usa lo que haya.
+Funciona con cualquier kit: Pulse busca cada sonido por su nombre, en español o en inglés y con o sin tildes (kick/bombo, snare/caja, clap/palmada, hat/charles, tom, rim/aro, conga/bongó, clave/bloque de madera…), y usa lo que haya. Si un sonido marcado no está, usa el más parecido que tengas.
 
 ### Que lo toque la IA
 

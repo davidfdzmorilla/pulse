@@ -38,17 +38,25 @@ pub struct Sampler {
     counter: u64,
     /// Pitch bend and vibrato, as a playback-rate ratio.
     pitch: f32,
+    /// What the controllers do to the cutoff, as a ratio (see [`Self::set_brightness`]).
+    bright: f32,
 }
 
 impl Sampler {
     pub fn new(params: SamplerParams, sample_rate: f32) -> Self {
         let voice = SamplerVoice { slot: 0, gate: Gate::OFF, env: Adsr::IDLE, position: 0.0, rate: 1.0, filters: [Svf::default(); 2] };
-        Self { params, voices: [voice; SAMPLER_VOICES], sample_rate, counter: 0, pitch: 1.0 }
+        Self { params, voices: [voice; SAMPLER_VOICES], sample_rate, counter: 0, pitch: 1.0, bright: 1.0 }
     }
 
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
     pub fn set_pitch(&mut self, ratio: f32) {
         self.pitch = ratio;
+    }
+
+    /// Opens (above 1) or closes the filter by `ratio` (brightness, CC 74, and
+    /// pressure). With the filter open, closing it still darkens the sample.
+    pub fn set_brightness(&mut self, ratio: f32) {
+        self.bright = ratio;
     }
 
     pub fn params(&self) -> SamplerParams {
@@ -112,9 +120,11 @@ impl Sampler {
     pub fn render(&mut self, samples: &[Arc<Sample>], left: &mut [f32], right: &mut [f32]) {
         let p = self.params;
         let sr = self.sample_rate;
-        let g = svf_g(p.cutoff, sr);
+        // At rest the preset's own filter, untouched.
+        let cutoff = if self.bright == 1.0 { p.cutoff } else { (p.cutoff.min(19_000.0) * self.bright).clamp(20.0, sr * 0.45) };
+        let g = svf_g(cutoff, sr);
         let k = 2.0 - 1.95 * p.resonance.clamp(0.0, 1.0);
-        let filtered = p.cutoff < 19_000.0;
+        let filtered = cutoff < 19_000.0;
         let pitch = self.pitch as f64;
         for voice in self.voices.iter_mut().filter(|v| v.env.stage != Stage::Idle) {
             // Its sample gone (or swapped for an empty one): silent.

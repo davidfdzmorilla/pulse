@@ -441,6 +441,14 @@ const FM_VOICES: usize = 8;
 /// How much of the modulation index velocity takes away: a full hit plays the
 /// index as set, the softest about half of it (darker, as on a DX7).
 const FM_VELOCITY_INDEX: f32 = 0.5;
+/// Octaves of modulation index the brightness controller (CC 74) moves either way;
+/// the index it adds at the top and full pressure adds, on top of the envelope
+/// (so held notes and soft patches brighten too).
+const FM_BRIGHT_OCTAVES: f32 = 1.0;
+const FM_BRIGHT_INDEX: f32 = 1.5;
+const FM_PRESSURE_INDEX: f32 = 2.0;
+/// How fast the controllers move the index: about 5 ms, so it never clicks.
+const FM_GLIDE: f32 = 0.005;
 
 #[derive(Clone, Copy)]
 struct FmVoice {
@@ -459,12 +467,24 @@ pub struct FmSynth {
     counter: u64,
     /// Pitch bend and vibrato, as a frequency ratio.
     pitch: f32,
+    /// What the controllers do to the index: a ratio and an amount added, as
+    /// asked (see [`Self::set_expression`]) and as now, gliding to it.
+    target: (f32, f32),
+    depth: (f32, f32),
 }
 
 impl FmSynth {
     pub fn new(params: FmParams, sample_rate: f32) -> Self {
         let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, mod_env: 0.0 };
-        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0 }
+        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0, target: (1.0, 0.0), depth: (1.0, 0.0) }
+    }
+
+    /// Brightness (`tone`, -1..1, at rest 0: CC 74) scales the modulation index
+    /// (and above rest adds to it), and `pressure` (0..1) adds to it: both
+    /// brighten the sound.
+    pub fn set_expression(&mut self, tone: f32, pressure: f32) {
+        let tone = tone.clamp(-1.0, 1.0);
+        self.target = (2f32.powf(tone * FM_BRIGHT_OCTAVES), tone.max(0.0) * FM_BRIGHT_INDEX + pressure.clamp(0.0, 1.0) * FM_PRESSURE_INDEX);
     }
 
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
@@ -509,10 +529,20 @@ impl FmSynth {
         let sr = self.sample_rate;
         let mod_decay = decay_coef(p.mod_decay, sr);
         let pitch = self.pitch;
+        let (start, target) = (self.depth, self.target);
+        // At rest the index is the preset's, untouched.
+        let still = start == target && target == (1.0, 0.0);
+        let glide = 1.0 - (-1.0 / (FM_GLIDE * sr)).exp();
+        let step = |(scale, add): (f32, f32)| -> (f32, f32) {
+            let next = (scale + (target.0 - scale) * glide, add + (target.1 - add) * glide);
+            let settle = |x: f32, to: f32| if (x - to).abs() < 1e-6 { to } else { x };
+            (settle(next.0, target.0), settle(next.1, target.1))
+        };
         for voice in self.voices.iter_mut().filter(|v| v.env.stage != Stage::Idle) {
             let freq = midi_to_freq(voice.gate.pitch) * pitch;
             let (carrier_inc, mod_inc) = (freq / sr, freq * p.ratio / sr);
             let index = p.index * (1.0 - FM_VELOCITY_INDEX * (1.0 - voice.gate.velocity.clamp(0.0, 1.0)));
+            let mut depth = start;
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.gate.tick() {
                     voice.env.release(p.release, sr);
@@ -524,12 +554,24 @@ impl FmSynth {
                 voice.mod_env = p.mod_sustain + (voice.mod_env - p.mod_sustain) * mod_decay;
                 let modulator = (TAU * voice.modulator + p.feedback * PI * voice.last_mod).sin();
                 voice.last_mod = modulator;
-                let out = (TAU * voice.carrier + index * voice.mod_env * modulator).sin();
+                let amount = if still {
+                    index * voice.mod_env
+                } else {
+                    depth = step(depth);
+                    index * voice.mod_env * depth.0 + depth.1
+                };
+                let out = (TAU * voice.carrier + amount * modulator).sin();
                 voice.carrier = (voice.carrier + carrier_inc) % 1.0;
                 voice.modulator = (voice.modulator + mod_inc) % 1.0;
                 let s = out * level * voice.gate.velocity * p.gain;
                 *out_l += s;
                 *out_r += s;
+            }
+        }
+        // The glide moves on with the frames, sounding or not.
+        if !still {
+            for _ in 0..left.len() {
+                self.depth = step(self.depth);
             }
         }
     }

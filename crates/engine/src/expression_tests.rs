@@ -166,8 +166,17 @@ fn expression_sets_the_level() {
 /// callbacks of any size and shared among threads.
 #[test]
 fn lanes_sound_the_same_with_any_buffer_and_threads() {
-    use crate::model::{KeysParams, SuperSawParams, WaveParams};
-    let kinds = [synth(), InstrumentKind::SuperSaw(SuperSawParams::default()), InstrumentKind::Wavetable(WaveParams::default()), InstrumentKind::Keys(KeysParams::default())];
+    use crate::model::{FmParams, KeysModel, KeysParams, SamplerParams, SuperSawParams, WaveParams};
+    let kinds = [
+        synth(),
+        InstrumentKind::SuperSaw(SuperSawParams::default()),
+        InstrumentKind::Wavetable(WaveParams::default()),
+        InstrumentKind::Keys(KeysParams::default()),
+        InstrumentKind::Keys(KeysParams { model: KeysModel::Tines, ..KeysParams::default() }),
+        InstrumentKind::Keys(KeysParams { model: KeysModel::Organ, ..KeysParams::default() }),
+        InstrumentKind::Fm(FmParams::default()),
+        InstrumentKind::Sampler(SamplerParams { looping: true, ..Default::default() }),
+    ];
     let lanes = || {
         vec![
             lane(MidiControl::PitchBend, &[(0.0, 0.0), (1.0, 0.7), (1.5, -0.4), (3.0, 0.0)]),
@@ -186,6 +195,7 @@ fn lanes_sound_the_same_with_any_buffer_and_threads() {
             assert!(handle.send(Command::set_instrument(t, *kind, SR)));
             let table = Arc::new(crate::wavetable::builtin(0));
             assert!(handle.send(Command::SetWavetables { track: t, tables: Box::new(vec![table.clone(), table]) }));
+            assert!(handle.send(Command::SetSamples { track: t, samples: Box::new(vec![saw_sample()]) }));
             let mut clip = held_a4(4.0, lanes());
             clip.notes.push(Note::new(1.0, 1.5, 64, 0.8));
             // Looping twice inside its place, starting off the beat.
@@ -245,4 +255,150 @@ fn controllers_played_while_recording_are_captured() {
     assert!((got[0].beat - 1.0).abs() < 0.05, "{}", got[0].beat);
     assert!((got[1].beat - 1.5).abs() < 0.05, "{}", got[1].beat);
     assert!(got.iter().all(|c| c.track == 0));
+}
+
+/// A bright test sample: a 220 Hz saw, a second long.
+fn saw_sample() -> Arc<crate::sample::Sample> {
+    let left: Vec<f32> = (0..48_000).map(|i| ((i as f32 * 220.0 / SR).fract() * 2.0 - 1.0) * 0.5).collect();
+    Arc::new(crate::sample::Sample::from_channels(left.clone(), left, SR))
+}
+
+/// Renders A4 held for two beats on `kind`, with `lanes`; the left channel.
+fn render_held(kind: InstrumentKind, lanes: Vec<ControlLane>) -> Vec<f32> {
+    let (mut engine, mut handle) = crate::audio::detached(SR);
+    assert!(handle.send(Command::set_instrument(0, kind, SR)));
+    assert!(handle.send(Command::SetSamples { track: 0, samples: Box::new(vec![saw_sample()]) }));
+    assert!(handle.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 2.0, PlayClip::Midi(held_a4(2.0, lanes)))]) }));
+    assert!(handle.send(Command::Play));
+    run(&mut engine, 2.0)
+}
+
+/// How much of `x` is high: the energy of its slope against its own.
+fn slope_ratio(x: &[f32]) -> f32 {
+    let slope: f32 = x.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
+    slope / x.iter().map(|v| v * v).sum::<f32>().max(1e-12)
+}
+
+/// Brightness at rest and no pressure leave every factory preset of FM, Keys
+/// and the sampler as it was: the same samples.
+#[test]
+fn at_rest_the_controllers_leave_fm_keys_and_the_sampler_alone() {
+    use crate::model::{FmParams, KeysParams, SamplerParams};
+    let mut kinds: Vec<InstrumentKind> = FmParams::presets().into_iter().map(|(_, p)| InstrumentKind::Fm(p)).collect();
+    kinds.extend(KeysParams::presets().into_iter().map(|(_, p)| InstrumentKind::Keys(p)));
+    kinds.push(InstrumentKind::Sampler(SamplerParams::default()));
+    kinds.push(InstrumentKind::Sampler(SamplerParams { cutoff: 2000.0, resonance: 0.4, ..Default::default() }));
+    for kind in kinds {
+        let plain = render_held(kind, Vec::new());
+        assert!(plain.iter().map(|v| v * v).sum::<f32>() > 0.1, "{kind:?} plays");
+        let rest = vec![lane(MidiControl::Cc(74), &[(0.0, 0.5)]), lane(MidiControl::Pressure, &[(0.0, 0.0)])];
+        assert_eq!(plain, render_held(kind, rest), "{kind:?}");
+        // Moved away for a beat: the controllers do something.
+        let moved = vec![lane(MidiControl::Cc(74), &[(0.0, 0.0), (1.0, 0.0), (1.001, 0.5)]), lane(MidiControl::Pressure, &[(0.0, 1.0), (1.0, 1.0), (1.001, 0.0)])];
+        assert_ne!(plain[..24_000], render_held(kind, moved)[..24_000], "{kind:?}: the controllers do something");
+    }
+}
+
+/// CC 74 and pressure raise the FM synth's modulation index: brighter, no louder.
+#[test]
+fn brightness_and_pressure_brighten_the_fm_synth() {
+    use crate::model::FmParams;
+    let kind = InstrumentKind::Fm(FmParams { mod_sustain: 0.3, sustain: 0.8, ..Default::default() });
+    let plain = render_held(kind, Vec::new());
+    let dark = render_held(kind, vec![lane(MidiControl::Cc(74), &[(0.0, 0.0)])]);
+    let bright = render_held(kind, vec![lane(MidiControl::Cc(74), &[(0.0, 1.0)])]);
+    let pressed = render_held(kind, vec![lane(MidiControl::Pressure, &[(0.0, 1.0)])]);
+    let tail = 24_000..44_000;
+    let (p, d, b, a) = (slope_ratio(&plain[tail.clone()]), slope_ratio(&dark[tail.clone()]), slope_ratio(&bright[tail.clone()]), slope_ratio(&pressed[tail.clone()]));
+    assert!(b > 1.5 * p, "CC 74 up: {b} vs {p}");
+    assert!(d < 0.8 * p, "CC 74 down: {d} vs {p}");
+    assert!(a > 1.5 * p, "pressure: {a} vs {p}");
+    let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+    let ratio = rms(&bright[tail.clone()]) / rms(&plain[tail]);
+    assert!(ratio > 0.7 && ratio < 1.1, "no louder: {ratio}");
+}
+
+/// On Pulse Keys, CC 74 tilts the tone and pressure brings a tremolo (the
+/// organ, drive).
+#[test]
+fn brightness_tilts_the_keys_and_pressure_trembles() {
+    use crate::model::{KeysModel, KeysParams};
+    let tines = InstrumentKind::Keys(KeysParams { model: KeysModel::Tines, tremolo: 0.0, ..KeysParams::default() });
+    let plain = render_held(tines, Vec::new());
+    let bright = render_held(tines, vec![lane(MidiControl::Cc(74), &[(0.0, 1.0)])]);
+    let dark = render_held(tines, vec![lane(MidiControl::Cc(74), &[(0.0, 0.0)])]);
+    let part = 4_800..24_000;
+    let (p, b, d) = (slope_ratio(&plain[part.clone()]), slope_ratio(&bright[part.clone()]), slope_ratio(&dark[part.clone()]));
+    assert!(b > 1.3 * p && d < 0.9 * p, "tone: {d} < {p} < {b}");
+    // Pressure: the level swings at about 5.5 Hz, seen in 10 ms windows.
+    let pressed = render_held(tines, vec![lane(MidiControl::Pressure, &[(0.0, 1.0)])]);
+    let swing = |x: &[f32]| {
+        let levels: Vec<f32> = x[9_600..33_600].chunks(480).map(|c| c.iter().map(|v| v * v).sum::<f32>().sqrt()).collect();
+        let ratios: Vec<f32> = levels.windows(2).map(|w| (w[1] / w[0].max(1e-9)).ln().abs()).collect();
+        ratios.iter().sum::<f32>() / ratios.len() as f32
+    };
+    assert!(swing(&pressed) > 3.0 * swing(&plain), "tremolo: {} vs {}", swing(&pressed), swing(&plain));
+    // The organ drives instead: more overtones.
+    let organ = InstrumentKind::Keys(KeysParams { model: KeysModel::Organ, ..KeysParams::default() });
+    let (calm, pushed) = (render_held(organ, Vec::new()), render_held(organ, vec![lane(MidiControl::Pressure, &[(0.0, 1.0)])]));
+    let (c, d) = (slope_ratio(&calm[part.clone()]), slope_ratio(&pushed[part]));
+    assert!(d > 1.1 * c, "organ drive: {d} vs {c}");
+}
+
+/// The sampler's filter follows CC 74 and pressure: closing it darkens even a
+/// sample played with the filter open.
+#[test]
+fn brightness_moves_the_samplers_filter() {
+    use crate::model::SamplerParams;
+    let open = InstrumentKind::Sampler(SamplerParams::default());
+    let plain = render_held(open, Vec::new());
+    let dark = render_held(open, vec![lane(MidiControl::Cc(74), &[(0.0, 0.0)])]);
+    let part = 4_800..24_000;
+    let (p, d) = (slope_ratio(&plain[part.clone()]), slope_ratio(&dark[part.clone()]));
+    assert!(d < 0.3 * p, "closed: {d} vs {p}");
+    let closed = InstrumentKind::Sampler(SamplerParams { cutoff: 1000.0, ..Default::default() });
+    let shut = render_held(closed, Vec::new());
+    let opened = render_held(closed, vec![lane(MidiControl::Pressure, &[(0.0, 1.0)])]);
+    let (s, o) = (slope_ratio(&shut[part.clone()]), slope_ratio(&opened[part]));
+    assert!(o > 2.0 * s, "opened: {o} vs {s}");
+}
+
+/// With `PULSE_DEMOS=dir`, WAVs of FM and Keys under the controllers: a chord
+/// held twelve beats (120 BPM), first plain, then CC 74 up and down, then
+/// pressure up and away.
+#[test]
+fn expression_demos() {
+    use crate::model::{FmParams, KeysModel, KeysParams};
+    let Ok(dir) = std::env::var("PULSE_DEMOS") else { return };
+    std::fs::create_dir_all(&dir).unwrap();
+    let fm = FmParams::presets().into_iter().find(|(n, _)| *n == "Lead · Flauta FM").map_or(FmParams::default(), |(_, p)| p);
+    let kinds = [
+        ("fm-flauta", InstrumentKind::Fm(fm)),
+        ("fm-defecto", InstrumentKind::Fm(FmParams { sustain: 0.8, mod_sustain: 0.3, ..FmParams::default() })),
+        ("keys-tines", InstrumentKind::Keys(KeysParams { model: KeysModel::Tines, ..KeysParams::default() })),
+        ("keys-piano", InstrumentKind::Keys(KeysParams::default())),
+        ("keys-organo", InstrumentKind::Keys(KeysParams { model: KeysModel::Organ, ..KeysParams::default() })),
+    ];
+    for (name, kind) in kinds {
+        let (mut engine, mut handle) = crate::audio::detached(SR);
+        assert!(handle.send(Command::set_instrument(0, kind, SR)));
+        let mut clip = MidiClip::new("demo", 12.0, [0; 3]);
+        for pitch in [57, 60, 64] {
+            clip.notes.push(Note::new(0.0, 11.5, pitch, 0.8));
+        }
+        clip.controls = vec![
+            lane(MidiControl::Cc(74), &[(0.0, 0.5), (2.0, 0.5), (4.0, 1.0), (6.0, 0.0), (7.0, 0.5)]),
+            lane(MidiControl::Pressure, &[(0.0, 0.0), (8.0, 0.0), (9.5, 1.0), (11.0, 1.0), (11.5, 0.0)]),
+        ];
+        assert!(handle.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 12.0, PlayClip::Midi(clip))]) }));
+        assert!(handle.send(Command::Play));
+        let frames = (12.5 * 0.5 * SR) as usize;
+        let mut out = vec![0.0; frames * 2];
+        for chunk in out.chunks_mut(1024) {
+            engine.process(chunk, 2);
+        }
+        let l: Vec<f32> = out.iter().step_by(2).copied().collect();
+        let r: Vec<f32> = out.iter().skip(1).step_by(2).copied().collect();
+        crate::keys::tests::write_wav(&format!("{dir}/{name}.wav"), &l, &r);
+    }
 }

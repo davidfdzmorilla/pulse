@@ -36,6 +36,20 @@ const ORGAN_RELEASE: f32 = 0.05;
 const SIXTY_DB: f32 = 6.9078;
 /// How hard the strike drives the strings (sets the piano's loudness).
 const PIANO_LEVEL: f32 = 11.0;
+/// The controllers. Brightness (CC 74): on the electric pianos, the pickup's
+/// drive (bark) and the tone filter move this many octaves either way; on the
+/// organ its tone filter; on the piano, the highs above [`TILT_HZ`] get up to
+/// [`TILT_OCTAVES`] of gain either way (+-12 dB). Pressure adds a tremolo this
+/// deep at [`PRESSURE_TREMOLO_HZ`] (the organ, a drive this strong instead).
+/// Both glide in about [`EXPRESSION_GLIDE`] seconds.
+const BARK_OCTAVES: f32 = 1.5;
+const TONE_OCTAVES: f32 = 2.0;
+const TILT_OCTAVES: f32 = 2.0;
+const TILT_HZ: f32 = 1000.0;
+const PRESSURE_TREMOLO: f32 = 0.6;
+const PRESSURE_TREMOLO_HZ: f32 = 5.5;
+const PRESSURE_DRIVE: f32 = 6.0;
+const EXPRESSION_GLIDE: f32 = 0.005;
 
 fn hash(mut x: u32) -> u32 {
     x ^= x >> 16;
@@ -139,6 +153,8 @@ struct Voice {
     offset: f32,
     tone: Svf,
     tone_g: f32,
+    /// The tone filter's cutoff (Hz), for brightness to move.
+    tone_cut: f32,
     low_cut: Svf,
     /// The organ's attack ramp.
     onset: f32,
@@ -175,6 +191,7 @@ impl Voice {
         offset: 0.0,
         tone: Svf { ic1: 0.0, ic2: 0.0 },
         tone_g: 0.0,
+        tone_cut: 0.0,
         low_cut: Svf { ic1: 0.0, ic2: 0.0 },
         onset: 1.0,
         onset_step: 1.0,
@@ -392,6 +409,15 @@ pub struct Keys {
     soundboard: Soundboard,
     lines: Vec<f32>,
     voice_lines: usize,
+    /// What the controllers ask for (brightness -1..1, pressure) and what they
+    /// do now, gliding to it; the brightness at the start of the chunk (the
+    /// filters and the pickups move once a chunk); the piano tilt's low band and
+    /// the pressure tremolo's phase.
+    expression: (f32, f32),
+    expressed: (f32, f32),
+    chunk_tone: f32,
+    tilt: [f32; 2],
+    swell: f32,
 }
 
 impl Keys {
@@ -413,7 +439,19 @@ impl Keys {
             soundboard: Soundboard::new(sample_rate),
             lines: vec![0.0; VOICES * crate::piano::voice_size(sample_rate)],
             voice_lines: crate::piano::voice_size(sample_rate),
+            expression: (0.0, 0.0),
+            expressed: (0.0, 0.0),
+            chunk_tone: 0.0,
+            tilt: [0.0; 2],
+            swell: 0.0,
         }
+    }
+
+    /// Brightness (`tone`, -1..1, at rest 0: CC 74) darkens or brightens the
+    /// sound (on the electric pianos, with more or less bark); `pressure` (0..1)
+    /// adds a tremolo, or drive on the organ.
+    pub fn set_expression(&mut self, tone: f32, pressure: f32) {
+        self.expression = (tone.clamp(-1.0, 1.0), pressure.clamp(0.0, 1.0));
     }
 
     pub fn params(&self) -> KeysParams {
@@ -512,6 +550,10 @@ impl Keys {
         let n = left.len();
         let (p, sr, bend) = (self.params, self.sample_rate, self.pitch);
         let (starts, ends) = (self.offset == 0, self.offset + n == CHUNK);
+        if starts {
+            self.chunk_tone = self.expressed.0;
+        }
+        let tone = self.chunk_tone;
         let mut out_l = [0.0f32; CHUNK];
         let mut out_r = [0.0f32; CHUNK];
         let bars = p.drawbars.map(|d| drawbar(d) / 3.2);
@@ -535,7 +577,7 @@ impl Keys {
                 }
                 *slot = if v.model == KeysModel::Piano { v.piano.tick(&self.soundboard, lines) } else { rotate(v) };
             }
-            shape(v, &mut mono[..n], sr);
+            shape(v, &mut mono[..n], sr, tone);
             for i in 0..n {
                 out_l[i] += mono[i] * v.pan.0;
                 out_r[i] += mono[i] * v.pan.1;
@@ -568,6 +610,8 @@ impl Keys {
             KeysModel::Organ => 1500.0 * 12f32.powf(p.tone),
             _ => 20000.0,
         };
+        let bright = self.chunk_tone;
+        let tone_cut = if bright == 0.0 { tone_cut } else { (tone_cut * 2f32.powf(bright * TONE_OCTAVES)).min(sr * 0.45) };
         let tone_g = svf_g(tone_cut, sr);
         let drive = 1.0 + 9.0 * p.drive * p.drive;
         let trem_step = p.tremolo_rate / sr;
@@ -580,6 +624,10 @@ impl Keys {
             KeysModel::Organ => 0.8,
         };
         let level = p.gain * 2.0;
+        let target = self.expression;
+        let glide = 1.0 - (-1.0 / (EXPRESSION_GLIDE * sr)).exp();
+        let tilt_k = 1.0 - (-TAU * TILT_HZ / sr).exp();
+        let swell_step = PRESSURE_TREMOLO_HZ / sr;
         for i in 0..n {
             let (mut l, mut r) = (left[i] * model_level * 0.5, right[i] * model_level * 0.5);
             if p.model == KeysModel::Piano && p.body > 0.0 {
@@ -597,6 +645,41 @@ impl Keys {
             if p.drive > 0.0 {
                 l = (drive * l).tanh() / drive.sqrt();
                 r = (drive * r).tanh() / drive.sqrt();
+            }
+            // The controllers; at rest, nothing (not even a rounding).
+            if self.expressed != target || target != (0.0, 0.0) {
+                let (tone, pressure) = &mut self.expressed;
+                *tone += (target.0 - *tone) * glide;
+                *pressure += (target.1 - *pressure) * glide;
+                if (*tone - target.0).abs() < 1e-6 {
+                    *tone = target.0;
+                }
+                if (*pressure - target.1).abs() < 1e-6 {
+                    *pressure = target.1;
+                }
+                let (tone, pressure) = (*tone, *pressure);
+                if p.model == KeysModel::Piano && tone != 0.0 {
+                    let gain = 2f32.powf(tone * TILT_OCTAVES);
+                    for (ch, x) in [&mut l, &mut r].into_iter().enumerate() {
+                        self.tilt[ch] += (*x - self.tilt[ch]) * tilt_k;
+                        let low = self.tilt[ch];
+                        *x = low + (*x - low) * gain;
+                    }
+                }
+                if pressure > 0.0 {
+                    if p.model == KeysModel::Organ {
+                        // Pushed into the amp, as an organist leans on the swell pedal.
+                        // Faded in with the pressure, so a light touch doesn't jump.
+                        let push = 1.0 + PRESSURE_DRIVE * pressure;
+                        l += ((push * l).tanh() / push.sqrt() - l) * pressure;
+                        r += ((push * r).tanh() / push.sqrt() - r) * pressure;
+                    } else {
+                        self.swell = (self.swell + swell_step).fract();
+                        let g = 1.0 - PRESSURE_TREMOLO * pressure * 0.5 * (1.0 - (TAU * self.swell).cos());
+                        l *= g;
+                        r *= g;
+                    }
+                }
             }
             if matches!(p.model, KeysModel::Tines | KeysModel::Reed) && p.tremolo > 0.0 {
                 self.tremolo = (self.tremolo + trem_step).fract();
@@ -688,12 +771,19 @@ fn hold_drawbars(v: &mut Voice, bars: &[f32; 9]) {
 }
 
 /// A voice's own sound around its rotators: the hammer, the pickup, its tone.
-fn shape(v: &mut Voice, mono: &mut [f32], sr: f32) {
+/// `tone` is the brightness controller (-1..1, at rest 0): on the electric
+/// pianos, more or less bark and a brighter or darker tone.
+fn shape(v: &mut Voice, mono: &mut [f32], sr: f32, tone: f32) {
     match v.model {
         // The strings and the strike are the whole sound.
         KeysModel::Piano => {}
         KeysModel::Tines | KeysModel::Reed => {
-            let (k, o) = (v.drive, v.offset);
+            let (k, tone_g) = if tone == 0.0 {
+                (v.drive, v.tone_g)
+            } else {
+                (v.drive * 2f32.powf(tone * BARK_OCTAVES), svf_g((v.tone_cut * 2f32.powf(tone * TONE_OCTAVES)).min(sr * 0.45), sr))
+            };
+            let o = v.offset;
             let rest = (k * o).tanh();
             let norm = 1.0 / (k * (1.0 - rest * rest)).max(1e-3);
             let reed = v.model == KeysModel::Reed;
@@ -710,7 +800,7 @@ fn shape(v: &mut Voice, mono: &mut [f32], sr: f32) {
                     let (_, _, high) = v.low_cut.tick(y, low_g, 1.0);
                     y = high;
                 }
-                let (lp, _, _) = v.tone.tick(y, v.tone_g, 1.2);
+                let (lp, _, _) = v.tone.tick(y, tone_g, 1.2);
                 *x = lp + thump;
             }
         }
@@ -782,7 +872,8 @@ fn start_electric(v: &mut Voice, p: &KeysParams, pitch: u8, vel: f32, sr: f32) {
     v.drive = if reed { 1.0 + 4.0 * p.bark } else { 0.8 + 3.0 * p.bark };
     v.offset = if reed { 0.3 + 0.3 * p.bark } else { 0.15 + 0.25 * p.bark };
     let base = if reed { 700.0 + 6000.0 * p.tone * p.tone } else { 500.0 + 9000.0 * p.tone * p.tone };
-    v.tone_g = svf_g(2.0 * f0 + base + 3000.0 * vel * p.dynamics, sr);
+    v.tone_cut = 2.0 * f0 + base + 3000.0 * vel * p.dynamics;
+    v.tone_g = svf_g(v.tone_cut, sr);
     v.noise = p.hammer * 0.06 * vel * v.gain;
     v.noise_decay = (-1.0 / (0.003 * sr)).exp();
     v.noise_g = svf_g(if reed { 1800.0 } else { 1200.0 }, sr);

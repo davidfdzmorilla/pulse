@@ -952,13 +952,20 @@ impl Instrument {
         true
     }
 
-    /// Opens or closes the filter of the subtractive synths by `ratio`.
-    fn set_brightness(&mut self, ratio: f32) {
+    /// Brightness (CC 74, 0..1, at rest 0.5) and pressure (0..1): they open the
+    /// filter of the subtractive synths and the sampler, raise the FM index, and
+    /// give the keys tone and a tremolo (the organ, drive).
+    fn set_expression(&mut self, brightness: f32, pressure: f32) {
+        let tone = (brightness - 0.5) * 2.0;
+        let ratio = || 2f32.powf(tone * BRIGHT_OCTAVES + pressure * PRESSURE_OCTAVES);
         match self {
-            Self::Synth(s) => s.set_brightness(ratio),
-            Self::SuperSaw(s) => s.set_brightness(ratio),
-            Self::Acid(a) => a.set_brightness(ratio),
-            Self::Wavetable(w, _) => w.set_brightness(ratio),
+            Self::Synth(s) => s.set_brightness(ratio()),
+            Self::SuperSaw(s) => s.set_brightness(ratio()),
+            Self::Acid(a) => a.set_brightness(ratio()),
+            Self::Wavetable(w, _) => w.set_brightness(ratio()),
+            Self::Sampler(s) => s.set_brightness(ratio()),
+            Self::Fm(f) => f.set_expression(tone, pressure),
+            Self::Keys(k) => k.set_expression(tone, pressure),
             _ => {}
         }
     }
@@ -1058,7 +1065,8 @@ const EXPRESSION_GLIDE: f32 = 0.005;
 
 /// What the controllers do to a track's built-in instrument: the pitch bend
 /// bends it up to two semitones either way, the modulation wheel adds vibrato,
-/// brightness (CC 74) and pressure open the filter of the subtractive synths,
+/// brightness (CC 74) and pressure open the filter of the subtractive synths
+/// (and brighten FM, Keys and the sampler: see [`Instrument::set_expression`]),
 /// and expression (CC 11) sets its level. (The modular synth and plugins take
 /// the controllers themselves.) At rest, none changes the sound.
 #[derive(Clone, Copy, Debug)]
@@ -1100,8 +1108,7 @@ impl Expression {
         }
         self.changed = true;
         if (self.brightness, self.pressure) != (brightness, pressure) {
-            let octaves = (self.brightness - 0.5) * 2.0 * BRIGHT_OCTAVES + self.pressure * PRESSURE_OCTAVES;
-            instrument.set_brightness(2f32.powf(octaves));
+            instrument.set_expression(self.brightness, self.pressure);
         }
     }
 

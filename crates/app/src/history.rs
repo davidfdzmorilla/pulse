@@ -31,6 +31,9 @@ impl History {
     /// Records a step if the project changed (and isn't being dragged); true then.
     pub fn commit(&mut self, project: &Project, interacting: bool) -> bool {
         if interacting || *project == self.baseline {
+            // The lanes' heights aren't steps, but a step undone brings back
+            // a deleted track as high as it was.
+            self.baseline.take_heights(project);
             return false;
         }
         let previous = std::mem::replace(&mut self.baseline, project.clone());

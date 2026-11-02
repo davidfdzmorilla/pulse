@@ -2402,6 +2402,8 @@ impl PulseApp {
     pub fn undo(&mut self) {
         let before = self.project.clone();
         if self.history.undo(&mut self.project) {
+            // The lanes' heights are the view's: they stay as they are.
+            self.project.take_heights(&before);
             self.after_project_replaced(Some(&before));
         }
     }
@@ -2409,6 +2411,7 @@ impl PulseApp {
     pub fn redo(&mut self) {
         let before = self.project.clone();
         if self.history.redo(&mut self.project) {
+            self.project.take_heights(&before);
             self.after_project_replaced(Some(&before));
         }
     }
@@ -2475,7 +2478,8 @@ impl PulseApp {
     }
 
     pub fn is_dirty(&self) -> bool {
-        self.plugins_edited || self.project != self.saved
+        // A lane made higher isn't a change to undo, but it is to save.
+        self.plugins_edited || self.project != self.saved || !self.project.same_heights(&self.saved)
     }
 
     /// Tells the user when the engine had to silence a channel whose sound

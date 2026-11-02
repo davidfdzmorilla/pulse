@@ -142,6 +142,29 @@ pub struct Track {
     /// machine, and that track no longer plays them (see `drum_split`).
     #[serde(default, skip_serializing_if = "is_default")]
     pub sounds_from: u16,
+    /// Its lane's height on the Arrangement, if it was given one of its own.
+    #[serde(default, skip_serializing_if = "LaneHeight::is_none")]
+    pub height: LaneHeight,
+}
+
+/// A track's lane height on the Arrangement (points), if it was given one of
+/// its own: how it is seen, not what it plays. Saved with the project, but
+/// not a change to undo: projects that differ only here are equal (see
+/// [`Project::same_heights`] for what is saved).
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct LaneHeight(pub Option<f32>);
+
+impl PartialEq for LaneHeight {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl LaneHeight {
+    fn is_none(&self) -> bool {
+        self.0.is_none()
+    }
 }
 
 /// The Drum Machine's sound `voice` (in `DRUM_VOICES` order) as the interface
@@ -176,6 +199,7 @@ impl Track {
             midi_effects: Vec::new(),
             audio_from: None,
             sounds_from: 0,
+            height: LaneHeight(None),
         }
     }
 
@@ -531,6 +555,21 @@ impl Project {
         let chains = self.tracks.iter().map(|t| &t.devices).chain(self.returns.iter().map(|r| &r.devices)).chain([&self.master.devices]);
         let synths = self.tracks.iter().flat_map(|t| t.instrument.own_effects());
         chains.flatten().map(|d| d.effect).chain(synths).any(|e| which(&e))
+    }
+
+    /// Whether its tracks' lanes are as high as `other`'s (which `==` leaves out).
+    pub fn same_heights(&self, other: &Project) -> bool {
+        self.tracks.len() == other.tracks.len() && self.tracks.iter().zip(&other.tracks).all(|(a, b)| a.height.0 == b.height.0)
+    }
+
+    /// Its tracks' lanes as high as those of `other` with their ids (the
+    /// others' as they are): what undoing brings back leaves the view alone.
+    pub fn take_heights(&mut self, other: &Project) {
+        for track in self.tracks.iter_mut().filter(|t| t.id != 0) {
+            if let Some(now) = other.tracks.iter().find(|o| o.id == track.id) {
+                track.height = now.height;
+            }
+        }
     }
 
     /// An id no plugin of the project uses yet.

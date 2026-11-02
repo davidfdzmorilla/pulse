@@ -79,7 +79,7 @@ fn fade_handles(rect: Rect, fades: engine::model::Fades, ppb: f32) -> [Rect; 2] 
 
 /// The fade handle of a selected audio clip of track `t` under `pos`: (clip, out).
 fn fade_at(app: &PulseApp, t: usize, pos: egui::Pos2, clip_top: f32, ppb: f32, origin_x: f32) -> Option<(usize, bool)> {
-    let lane_h = app.arrangement.lane(t);
+    let lane_h = app.arrangement.lane(&app.project.tracks[t]);
     app.project.tracks[t].arrangement.iter().enumerate().rev().find_map(|(index, placed)| {
         let Clip::Audio(audio) = &placed.clip else { return None };
         if !app.is_clip_selected(ClipRef::Arrangement { track: t, index }) {
@@ -123,10 +123,9 @@ pub struct State {
     /// view left them last frame.
     pub(crate) scroll_x: f32,
     view: Rect,
-    /// The lanes' height (⌥ + wheel), and the tracks given one of their own by
-    /// dragging the bottom of their header.
+    /// The lanes' height (⌥ + wheel); a track given one of its own by
+    /// dragging the bottom of its header keeps it (`Track::height`).
     pub(crate) lane_h: f32,
-    pub(crate) heights: HashMap<usize, f32>,
     /// The tracks and the selected one last frame: a new one is scrolled into view.
     seen: (usize, Option<usize>),
 }
@@ -169,13 +168,13 @@ impl State {
         self.automation.clear();
         self.master_automation = None;
         self.takes.clear();
-        self.heights.clear();
         self.scroll_y = 0.0;
     }
 
-    /// The height of track `t`'s lane.
-    pub(crate) fn lane(&self, t: usize) -> f32 {
-        self.heights.get(&t).copied().unwrap_or(self.lane_h)
+    /// The height of `track`'s lane: its own, or the others'.
+    pub(crate) fn lane(&self, track: &crate::project::Track) -> f32 {
+        // A damaged file's height is brought within the range.
+        track.height.0.map_or(self.lane_h, |h| if h.is_finite() { h.clamp(LANE_MIN, LANE_MAX) } else { self.lane_h })
     }
 }
 
@@ -197,7 +196,6 @@ impl Default for State {
             scroll_x: 0.0,
             view: Rect::NOTHING,
             lane_h: LANE_H,
-            heights: HashMap::new(),
             seen: (0, None),
         }
     }
@@ -306,7 +304,7 @@ impl Layout {
         for t in 0..tracks.len() {
             let shown = app.arrangement.automation.get(&t).copied();
             let takes = if app.arrangement.takes.contains(&t) && !groups[t] { crate::comping::take_count(app, t) } else { 0 };
-            let lane = app.arrangement.lane(t);
+            let lane = app.arrangement.lane(&tracks[t]);
             rows.push((y, shown, takes));
             lanes.push(lane);
             if !hidden[t] {
@@ -425,7 +423,6 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             app.sample(&path);
         }
     }
-    app.arrangement.heights.retain(|&t, _| t < tracks);
     let mut headers = Vec::new();
     let mut clip_rects = Vec::new();
     let mut lane_rects = Vec::new();
@@ -947,7 +944,7 @@ fn paint_wave(clipped: &egui::Painter, rect: Rect, body: Rect, audio: &engine::m
 
 /// A track's header: clic to select (⌘ and ⇧ for several), drag to move. Returns where it is.
 fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<Param>, takes: usize) -> Rect {
-    let lane_h = app.arrangement.lane(t);
+    let lane_h = app.arrangement.lane(&app.project.tracks[t]);
     let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(lane_h, shown.is_some(), takes)), Sense::click_and_drag());
     let group = app.project.tracks[t].is_group();
     let hint = if group {
@@ -976,11 +973,11 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     }
     if grip.dragged() {
         if let Some(pos) = ui.ctx().pointer_latest_pos() {
-            app.arrangement.heights.insert(t, (pos.y - rect.top()).clamp(LANE_MIN, LANE_MAX).round());
+            app.project.tracks[t].height = crate::project::LaneHeight(Some((pos.y - rect.top()).clamp(LANE_MIN, LANE_MAX).round()));
         }
     }
     if grip.double_clicked() {
-        app.arrangement.heights.remove(&t);
+        app.project.tracks[t].height = crate::project::LaneHeight(None);
     }
     grip.on_hover_text(crate::theme::keys("Arrastra: altura de la pista · doble clic: la de las demás · ⌥ + rueda: la de todas"));
     let selected = app.is_track_selected(t);

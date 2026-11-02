@@ -296,7 +296,9 @@ Clic derecho en la cabecera: **Nombre**, **Color**, **Mostrar/Ocultar automatiza
 
 +++ Detalles
 - La altura va de 40 a 200 puntos; la de la fila del Master no cambia.
-- La altura es de la vista: no se guarda en el proyecto ni se deshace con {⌘Z}.
+- La altura propia de una pista va con ella: si la mueves, borras otras o la duplicas (la copia sale igual de alta), no cambia. Se guarda con el proyecto.
+- Es de la vista, como el desplazamiento: {⌘Z} no la deshace, y deshacer otra cosa no la cambia. Una pista borrada que vuelve con {⌘Z} vuelve con su altura.
+- La de {⌥ + rueda}, la de todas, no se guarda en el proyecto.
 +++
 
 > Nota: las pistas que están tocando clips de Session se ven oscurecidas en el Arrangement. **► Arrangement**, en el transporte, las devuelve.

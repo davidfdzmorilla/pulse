@@ -143,6 +143,7 @@ impl PulseApp {
         self.selected_clip = self.selected_clip.map(clip);
         self.selected_clips = self.selected_clips.iter().map(|&c| clip(c)).collect();
         self.arrangement.automation = self.arrangement.automation.drain().map(|(t, p)| (new(t), p)).collect();
+        self.arrangement.takes = self.arrangement.takes.drain().map(new).collect();
         self.overridden = self.overridden.drain().map(|(target, p)| (track(target), p)).collect();
         let control = |control: &mut Control| {
             if let Control::Param { target, .. } = control {

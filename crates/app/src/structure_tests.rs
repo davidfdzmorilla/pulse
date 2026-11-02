@@ -121,3 +121,88 @@ fn damaged_files_dont_send_to_returns_that_arent_there() {
     }
     assert_eq!(Project::from_json(&many.to_json().unwrap()).unwrap().returns.len(), engine::MAX_RETURNS);
 }
+
+/// The height of a track's lane goes with it when tracks are moved, deleted
+/// or duplicated (the copy as high), and so do the take lanes shown; the
+/// automation lane shown does too (it always did). Saved and opened, it is
+/// the same; a file without heights opens as before.
+#[test]
+fn a_tracks_height_goes_with_it() {
+    use crate::project::LaneHeight;
+    let mut app = PulseApp::headless(Project::demo());
+    let id = |app: &PulseApp, t: usize| app.project.tracks[t].id;
+    let at = |app: &PulseApp, id: u32| app.project.tracks.iter().position(|t| t.id == id).unwrap();
+    let (tall, low) = (id(&app, 1), id(&app, 2));
+    app.project.tracks[1].height = LaneHeight(Some(150.0));
+    app.project.tracks[2].height = LaneHeight(Some(48.0));
+    app.arrangement.takes.insert(1);
+    app.arrangement.automation.insert(2, Param::Pan);
+    let lane = |app: &PulseApp, id: u32| app.arrangement.lane(&app.project.tracks[at(app, id)]);
+    // Moved: track 1 to the end.
+    assert!(app.move_tracks(&[1], 4));
+    assert_eq!((at(&app, tall), at(&app, low)), (3, 1));
+    assert_eq!((lane(&app, tall), lane(&app, low)), (150.0, 48.0));
+    assert_eq!(app.arrangement.lane(&app.project.tracks[0]), crate::arrangement::LANE_H);
+    assert!(app.arrangement.takes.contains(&3) && app.arrangement.takes.len() == 1);
+    assert_eq!(app.arrangement.automation.get(&1), Some(&Param::Pan));
+    // A track before them deleted.
+    app.delete_track(0);
+    assert_eq!((at(&app, tall), at(&app, low)), (2, 0));
+    assert_eq!((lane(&app, tall), lane(&app, low)), (150.0, 48.0));
+    assert!(app.arrangement.takes.contains(&2) && app.arrangement.takes.len() == 1);
+    assert_eq!(app.arrangement.automation.get(&0), Some(&Param::Pan));
+    // Duplicated: the copy, right after it, as high.
+    app.duplicate_track(at(&app, tall));
+    assert_eq!(app.project.tracks.len(), 4);
+    assert_eq!(app.arrangement.lane(&app.project.tracks[3]), 150.0);
+    assert_eq!((lane(&app, tall), lane(&app, low)), (150.0, 48.0));
+    // Saved and opened.
+    let dir = std::env::temp_dir().join(format!("pulse-heights-{}", std::process::id()));
+    let file = dir.join("H/H.pulse");
+    app.project.save(&file).unwrap();
+    let loaded = Project::load(&file).unwrap();
+    std::fs::remove_dir_all(&dir).ok();
+    let heights = |p: &Project| p.tracks.iter().map(|t| t.height.0).collect::<Vec<_>>();
+    assert_eq!(heights(&loaded), heights(&app.project));
+    assert_eq!(heights(&loaded), vec![Some(48.0), None, Some(150.0), Some(150.0)]);
+    // Without heights, the file is as before (an older Pulse reads it all), and
+    // a damaged height is brought within the range.
+    assert!(!Project::demo().to_json().unwrap().contains("height"));
+    let mut value: serde_json::Value = serde_json::from_str(&Project::demo().to_json().unwrap()).unwrap();
+    value["tracks"][0]["height"] = 5000.0.into();
+    let damaged = Project::from_json(&value.to_string()).unwrap();
+    assert_eq!(app.arrangement.lane(&damaged.tracks[0]), crate::arrangement::LANE_MAX);
+}
+
+/// A lane made higher isn't a step to undo (it is the view's, as scrolling
+/// is), but the project has changed, to be saved; undoing something else
+/// leaves the heights as they are, and a deleted track comes back as high.
+#[test]
+fn a_tracks_height_is_saved_but_not_undone() {
+    use crate::project::LaneHeight;
+    let mut app = PulseApp::headless(Project::demo());
+    app.commit_history();
+    assert!(!app.is_dirty());
+    app.project.tracks[0].height = LaneHeight(Some(120.0));
+    app.commit_history();
+    assert!(!app.can_undo(), "not a step");
+    assert!(app.is_dirty(), "to be saved");
+    // Something else changed, then undone: the height stays.
+    app.project.tracks[1].name = "Otro".into();
+    app.commit_history();
+    app.project.tracks[2].height = LaneHeight(Some(60.0));
+    app.commit_history();
+    app.undo();
+    assert_ne!(app.project.tracks[1].name, "Otro");
+    assert_eq!((app.project.tracks[0].height.0, app.project.tracks[2].height.0), (Some(120.0), Some(60.0)));
+    app.redo();
+    assert_eq!(app.project.tracks[1].name, "Otro");
+    assert_eq!(app.project.tracks[2].height.0, Some(60.0));
+    // Deleted and undone: back as high as it was.
+    let id = app.project.tracks[2].id;
+    app.delete_track(2);
+    app.commit_history();
+    app.undo();
+    let back = app.project.tracks.iter().find(|t| t.id == id).unwrap();
+    assert_eq!(back.height.0, Some(60.0));
+}

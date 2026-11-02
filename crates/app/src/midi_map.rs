@@ -303,6 +303,7 @@ impl PulseApp {
             }
         }
         self.selected_tracks = self.selected_tracks.iter().filter_map(|&t| new(t)).collect();
+        self.arrangement.takes = self.arrangement.takes.iter().filter_map(|&t| new(t)).collect();
         let clip = |clip: crate::app::ClipRef| match clip {
             crate::app::ClipRef::Session { track, slot } => new(track).map(|track| crate::app::ClipRef::Session { track, slot }),
             crate::app::ClipRef::Arrangement { track, index } => new(track).map(|track| crate::app::ClipRef::Arrangement { track, index }),

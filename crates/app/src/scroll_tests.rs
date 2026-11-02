@@ -157,11 +157,12 @@ fn tracks_get_taller() {
     let next = painted(&s, "Pista 3");
     let edge = pos2(header.left() + 60.0, next.top() - 7.0);
     s.drag(edge, edge + vec2(0.0, 40.0), Modifiers::NONE);
-    assert!((s.app.arrangement.lane(1) - 92.0).abs() < 2.0, "{}", s.app.arrangement.lane(1));
-    assert_eq!(s.app.arrangement.lane(0), crate::arrangement::LANE_H);
+    let lane = |s: &Studio, t: usize| s.app.arrangement.lane(&s.app.project.tracks[t]);
+    assert!((lane(&s, 1) - 92.0).abs() < 2.0, "{}", lane(&s, 1));
+    assert_eq!(lane(&s, 0), crate::arrangement::LANE_H);
     assert!((painted(&s, "Pista 3").top() - next.top() - 40.0).abs() < 2.0);
     wheel(&mut s, pos2(900.0, 300.0), vec2(0.0, 80.0), Modifiers::ALT);
-    assert!(s.app.arrangement.lane(0) > crate::arrangement::LANE_H + 10.0);
+    assert!(lane(&s, 0) > crate::arrangement::LANE_H + 10.0);
     assert_eq!(s.app.arrangement.scroll_y, 0.0);
 }
 

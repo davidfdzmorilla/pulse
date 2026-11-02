@@ -296,6 +296,10 @@ mod tests {
             voiced.tracks[1].devices.push(engine::model::Device::new(effect));
             assert_eq!(format(&voiced), 17);
         }
+        // A Vocoder playing the MIDI notes: 18 (an older one would play its fixed note).
+        let mut following = Project::demo();
+        following.tracks[1].devices.push(engine::model::Device::new(engine::model::Effect::Vocoder(engine::model::VocoderParams { midi: true, ..Default::default() })));
+        assert_eq!(format(&following), 18);
         // A MIDI clip with a controller lane (a recorded bend): 15, and it reads back.
         let mut bent = Project::demo();
         let Some(Clip::Midi(clip)) = bent.tracks[0].clips[0].as_mut() else { panic!("the demo starts with a MIDI clip") };

@@ -2293,7 +2293,7 @@ A la derecha, los medidores **L**, **M** y **H** muestran qué hace cada banda: 
 
 ## Vocoder
 
-La voz robot del house, del techno y del electro: el vocoder pone tu voz sobre un sintetizador, que «canta» con sus notas y tu forma de hablar. Ponlo en la pista de la voz; el sonido que canta (la **portadora**) es su oscilador propio o un synth de otra pista.
+La voz robot del house, del techno y del electro: el vocoder pone tu voz sobre un sintetizador, que «canta» con sus notas y tu forma de hablar. Ponlo en la pista de la voz; el sonido que canta (la **portadora**) es su oscilador propio, en una nota fija o tocando tus notas MIDI, o un synth de otra pista.
 
 ### Usarlo con su oscilador
 
@@ -2303,6 +2303,20 @@ La voz robot del house, del techno y del electro: el vocoder pone tu voz sobre u
 4. Para que se entiendan las «s» y las «t», sube **Sibilance**.
 
 > Consejo: la nota y el acorde se pueden automatizar: dibuja **Note** en la pista para que cambie con la canción.
+
+### Que cante las notas MIDI
+
+Su oscilador toca las notas que tú tocas o dibujas, como el vocoder de un teclado: hasta 8 a la vez, así que los acordes suenan.
+
+1. En **Portadora**, elige **Notas MIDI**.
+2. Debajo de **Sierra**, elige de dónde vienen las notas:
+   - **Esta pista**: las de sus clips MIDI y las que tocas en ella en vivo (armada o elegida para tocar).
+   - **Otra pista**: lo normal con la voz en una pista de audio. Dibuja los acordes en una pista MIDI y elígela aquí. Si no quieres oír su synth, silénciala: sus notas siguen llegando.
+3. Canta o pon la voz: sale con la altura de cada nota.
+
+Sin notas, el vocoder calla del todo, «s» incluidas. Cada nota entra y sale con una envolvente corta (3 ms al empezar, 25 ms al acabar), así no hace clic. **Note** y el acorde no hacen nada; **Detune** sí, con la súper sierra.
+
+> Consejo: el preset **Notas MIDI · Acordes que tocas** ya viene con la súper sierra en **Notas MIDI**: solo te queda elegir la pista de los acordes.
 
 ### Que cante las notas de un synth
 
@@ -2321,7 +2335,7 @@ Ahora la voz canta lo que toca el synth, nota a nota, y calla cuando el synth ca
 - **Formant**: mueve las bandas del synth frente a las de la voz, en semitonos. Hacia arriba, una garganta más pequeña; hacia abajo, un monstruo.
 - **Attack** y **Release**: lo rápido que cada banda sigue a la voz. Cortos, más nítido y robótico; largos, más suave y legato.
 - **Sibilance**: cuánto de los agudos de la voz (por encima de 5 kHz) se mezcla, para las «s», «t» y «ch».
-- **Note** y **Detune**: la nota de su oscilador y lo desafinadas que van las sierras de la súper sierra. Con un synth como portadora no hacen nada.
+- **Note** y **Detune**: la nota de su oscilador y lo desafinadas que van las sierras de la súper sierra. Con un synth como portadora no hacen nada; con **Notas MIDI**, **Note** tampoco.
 - **Output** y **Dry/Wet**: el volumen a la salida y cuánto de la voz sin procesar.
 
 ### Presets
@@ -2337,14 +2351,17 @@ Ahora la voz canta lo que toca el synth, nota a nota, y calla cuando el synth ca
 | **Vocoder de 8 bandas** | Pocas bandas: el vocoder de los 70. |
 | **40 bandas nítido** | Todas las bandas y muy rápido: se entiende casi todo. |
 | **Synth de otra pista** | Para usarlo con un synth de portadora: elige la pista en **Portadora**. |
+| **Acordes que tocas** | Súper sierra que toca tus notas MIDI: elige la pista de los acordes. |
 
 +++ Detalles
 - Dos bancos de filtros paso banda de 24 dB por octava, repartidos por igual en octavas entre Low y High. Cada banda de la voz sigue su nivel y pone ese nivel en la misma banda del synth.
 - Las bandas del synth se igualan antes (como mucho 40 dB), así un synth oscuro suena tan claro como uno brillante. Si el synth calla, el vocoder calla.
 - Sin voz, sale silencio. No retrasa el sonido.
-- El oscilador propio toca una nota o un acorde fijos (con **Note**). Para seguir una melodía, usa un synth de otra pista como portadora.
+- El oscilador propio toca una nota o un acorde fijos (con **Note**), o con **Notas MIDI**, las notas que llegan a la pista o a la que elijas: las mismas que oiría su instrumento, tras sus efectos MIDI, en la muestra exacta en que empiezan.
+- Con **Notas MIDI** de otra pista, el vocoder espera a esa pista, como un sidechain. Si escucharla cierra un bucle (está marcada «(bucle)»), no le llegan sus notas. Una pista congelada ya no da notas: es audio.
+- Con **Notas MIDI**, una nota nueva cuando ya suenan 8 toma la que lleva más tiempo.
 - Bands 8–40 (20), Low 50–1000 Hz (100), High 1–16 kHz (8), Attack 0,5–100 ms (4), Release 5–1000 ms (60), Formant ±12 st, Sibilance 0–100 % (30), Note C0–C5 (C2), Detune 0–100 % (30), Output ±24 dB, Dry/Wet 0–100 % (100).
-- Un proyecto con un Vocoder no se abre en un Pulse anterior: pide actualizar.
+- Un proyecto con un Vocoder no se abre en un Pulse anterior: pide actualizar. Con **Notas MIDI**, tampoco en uno con el Vocoder que aún no las tenía.
 +++
 
 ## Voz: tono y formantes

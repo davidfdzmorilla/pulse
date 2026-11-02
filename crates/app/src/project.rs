@@ -315,7 +315,9 @@ pub struct MasterTrack {
 /// corrected by hand included. Only projects that have some.
 /// 17: a Vocoder or a «Voz: tono y formantes»: a Pulse that reads 16
 /// doesn't know them. Only projects that have one.
-pub const FORMAT: u32 = 17;
+/// 18: a Vocoder playing the MIDI notes (`midi`): a Pulse that reads 17
+/// would play its fixed note instead. Only projects that have one.
+pub const FORMAT: u32 = 18;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -653,8 +655,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Vocoder(_) | Effect::VoiceShift(_))) {
+            let format = if self.has_effect(|e| matches!(e, Effect::Vocoder(v) if v.midi)) {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::Vocoder(_) | Effect::VoiceShift(_))) {
+                17
             } else if !self.lyrics.is_empty() {
                 16
             } else if self.has_controls() {

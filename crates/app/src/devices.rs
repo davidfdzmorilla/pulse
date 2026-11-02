@@ -523,10 +523,11 @@ fn multiband_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usiz
 
 /// The Vocoder: its carrier (another track or its own oscillator), then two
 /// rows: the bands (how many, where, moved) and how they follow the voice;
-/// then the esses, its own carrier's note and the output.
+/// then the esses, its own carrier's note (unused following MIDI) and the output.
 fn vocoder_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize, effect: &mut Effect, sources: &[(u32, String)], actions: &mut Vec<Action>) {
     discrete_controls(ui, effect, index, sources);
     let shown = *effect;
+    let fixed_note = matches!(shown, Effect::Vocoder(p) if !p.midi && p.sidechain.is_none());
     ui.vertical(|ui| {
         ui.spacing_mut().item_spacing.y = 2.0;
         ui.horizontal(|ui| {
@@ -536,27 +537,71 @@ fn vocoder_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize,
         });
         ui.horizontal(|ui| {
             for param in [6, 7, 8, 9, 10] {
-                effect_knob(app, ui, target, index, &shown, param, actions);
+                ui.add_enabled_ui(param != 7 || fixed_note, |ui| effect_knob(app, ui, target, index, &shown, param, actions));
             }
         });
     });
 }
 
-/// A Vocoder's carrier: its own oscillator, or the track whose sound it uses.
-fn carrier_combo(ui: &mut egui::Ui, index: usize, value: &mut Option<u32>, sources: &[(u32, String)]) {
-    ui.label(egui::RichText::new("Portadora").color(TEXT_DIM).size(10.5)).on_hover_text("El sonido al que el vocoder pone la voz: su oscilador propio o el de otra pista");
-    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Propia", |(_, name)| name.as_str());
+/// What a Vocoder's carrier is: its own oscillator at a note, its own
+/// oscillator playing the MIDI notes, or another track's sound.
+#[derive(Clone, Copy, PartialEq)]
+enum CarrierChoice {
+    Own,
+    Midi,
+    Track(u32),
+}
+
+/// A Vocoder's carrier: its own oscillator (at its note, or playing the MIDI
+/// notes), or the track whose sound it uses.
+fn carrier_combo(ui: &mut egui::Ui, index: usize, p: &mut engine::model::VocoderParams, sources: &[(u32, String)]) {
+    ui.label(egui::RichText::new("Portadora").color(TEXT_DIM).size(10.5)).on_hover_text("El sonido al que el vocoder pone la voz: su oscilador propio, en una nota o con las notas MIDI, o el de otra pista");
+    let before = match (p.midi, p.sidechain) {
+        (true, _) => CarrierChoice::Midi,
+        (false, None) => CarrierChoice::Own,
+        (false, Some(id)) => CarrierChoice::Track(id),
+    };
+    let mut choice = before;
+    let current = match choice {
+        CarrierChoice::Own => "Propia",
+        CarrierChoice::Midi => "Notas MIDI",
+        CarrierChoice::Track(id) => sources.iter().find(|(s, _)| *s == id).map_or("Propia", |(_, name)| name.as_str()),
+    };
     egui::ComboBox::from_id_salt(format!("vocoder_sc{index}"))
         .selected_text(current)
         .width(96.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(value, None, "Propia").on_hover_text("Su oscilador: sierra, súper sierra o ruido, en la nota y el acorde que elijas");
+            ui.selectable_value(&mut choice, CarrierChoice::Own, "Propia").on_hover_text("Su oscilador: sierra, súper sierra o ruido, en la nota y el acorde que elijas");
+            ui.selectable_value(&mut choice, CarrierChoice::Midi, "Notas MIDI").on_hover_text("Su oscilador toca las notas MIDI que llegan a esta pista u otra (sus clips, lo que tocas en vivo): hasta 8 a la vez. Sin notas, calla");
+            for (track, name) in sources {
+                ui.selectable_value(&mut choice, CarrierChoice::Track(*track), name);
+            }
+        })
+        .response
+        .on_hover_text("Con otra pista (un synth tocando acordes), la voz canta sus notas: escucha su sonido tras sus efectos, aunque esté silenciada. Con «Notas MIDI», las toca su propio oscilador");
+    if choice != before {
+        (p.midi, p.sidechain) = match choice {
+            CarrierChoice::Own => (false, None),
+            CarrierChoice::Midi => (true, None),
+            CarrierChoice::Track(id) => (false, Some(id)),
+        };
+    }
+}
+
+/// Whose notes a Vocoder following MIDI plays: its own track's, or another's.
+fn notes_from_combo(ui: &mut egui::Ui, index: usize, value: &mut Option<u32>, sources: &[(u32, String)]) {
+    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Esta pista", |(_, name)| name.as_str());
+    egui::ComboBox::from_id_salt(format!("vocoder_notes{index}"))
+        .selected_text(current)
+        .width(96.0)
+        .show_ui(ui, |ui| {
+            ui.selectable_value(value, None, "Esta pista").on_hover_text("Las notas de sus clips MIDI y las que tocas en ella en vivo (armada o elegida para tocar)");
             for (track, name) in sources {
                 ui.selectable_value(value, Some(*track), name);
             }
         })
         .response
-        .on_hover_text("Con otra pista (un synth tocando acordes), la voz canta sus notas: escucha su sonido tras sus efectos, aunque esté silenciada");
+        .on_hover_text(format!("De dónde vienen las notas: con la voz en una pista de audio, elige la pista MIDI con los acordes (sus notas llegan aunque esté silenciada). Las marcadas «{LOOP_MARK}» no le dan notas"));
 }
 
 /// The factory settings of an effect that has them (keeping its sidechain).
@@ -571,7 +616,13 @@ fn effect_presets(ui: &mut egui::Ui, index: usize, device: Device, presets: Vec<
                 ui.label(egui::RichText::new(category.to_uppercase()).color(TEXT_DIM).size(10.0));
             }
             if ui.button(short).clicked() {
-                if let (Some(slot), Some(source)) = (effect.sidechain_mut(), device.effect.sidechain()) {
+                // A Vocoder's source is whose sound it takes, or following
+                // MIDI, whose notes: kept between the same kind only.
+                let same = match (effect, device.effect) {
+                    (Effect::Vocoder(a), Effect::Vocoder(b)) => a.midi == b.midi,
+                    _ => true,
+                };
+                if let (Some(slot), Some(source), true) = (effect.sidechain_mut(), device.effect.sidechain(), same) {
                     *slot = Some(source);
                 }
                 actions.push(Action::Replace(index, Device { effect, ..device }));
@@ -736,8 +787,8 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
             use engine::model::{VocoderCarrier, VocoderChord};
             ui.vertical(|ui| {
                 ui.set_width(100.0);
-                carrier_combo(ui, index, &mut p.sidechain, sources);
-                ui.add_enabled_ui(p.sidechain.is_none(), |ui| {
+                carrier_combo(ui, index, p, sources);
+                ui.add_enabled_ui(p.sidechain.is_none() || p.midi, |ui| {
                     egui::ComboBox::from_id_salt(format!("vocoder_osc{index}")).selected_text(p.carrier.label()).width(96.0).show_ui(ui, |ui| {
                         for carrier in VocoderCarrier::ALL {
                             let hint = match carrier {
@@ -748,11 +799,15 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                             ui.selectable_value(&mut p.carrier, carrier, carrier.label()).on_hover_text(hint);
                         }
                     });
+                    if p.midi {
+                        notes_from_combo(ui, index, &mut p.sidechain, sources);
+                        return;
+                    }
                     egui::ComboBox::from_id_salt(format!("vocoder_chord{index}")).selected_text(p.chord.label()).width(96.0).show_ui(ui, |ui| {
                         for chord in VocoderChord::ALL {
                             ui.selectable_value(&mut p.chord, chord, chord.label());
                         }
-                    }).response.on_hover_text("Las notas que toca su oscilador, desde «Note». Para que siga una melodía, pon un synth en otra pista y elígela como portadora");
+                    }).response.on_hover_text("Las notas que toca su oscilador, desde «Note». Para que siga una melodía, elige «Notas MIDI» en la portadora");
                 });
             });
         }

@@ -110,6 +110,26 @@ fn a_vocoder_sings_the_notes_of_its_carrier_track() {
     assert!(rms(&render_project(&silent, 4.0).0) < 1e-6);
 }
 
+/// Following MIDI, the vocoder on the voice sings the notes of a muted MIDI
+/// track's clip (chords too), and goes quiet, to nothing, when they stop.
+#[test]
+fn a_vocoder_following_midi_sings_the_notes_of_another_track() {
+    let voice = vowel_file(120.0, 5.0);
+    let vocoder = Device::new(Effect::Vocoder(VocoderParams { midi: true, sidechain: Some(2), sibilance: 0.5, ..Default::default() }));
+    let synth = InstrumentKind::Synth(Default::default());
+    // A3, then E4, then a C major chord, then nothing for the last two beats.
+    let notes = [(0.0, 57, 2.0), (2.0, 64, 2.0), (4.0, 48, 2.0), (4.0, 52, 2.0), (4.0, 55, 2.0)];
+    let p = voice_and_synth(&voice, 10.0, vec![vocoder], synth, &notes, false);
+    let out = render_project(&p, 10.0);
+    let (a, e) = (pitch(&out, 0.5).expect("a pitch"), pitch(&out, 1.5).expect("a pitch"));
+    let level = |from: f32, to: f32| 20.0 * rms(&out.0[(from * SR) as usize..(to * SR) as usize]).max(1e-12).log10();
+    println!("vocoder con notas MIDI de otra pista: {a:.1} Hz y {e:.1} Hz; acorde {:.1} dB; sin notas {:.1} dB", level(2.2, 2.9), level(3.2, 4.9));
+    assert!((a / 220.0).log2().abs() * 1200.0 < 15.0, "{a}");
+    assert!((e / 329.63).log2().abs() * 1200.0 < 15.0, "{e}");
+    assert!(level(2.2, 2.9) > -30.0, "the chord sounds");
+    assert!(out.0[(3.2 * SR) as usize..(4.9 * SR) as usize].iter().all(|x| *x == 0.0), "the voice goes on, the notes don't: silence");
+}
+
 /// A voice shift moves the voice's pitch in the project, and the mixer
 /// makes up for its latency: a shift of nothing lines up with the voice
 /// on another track sample for sample.
@@ -148,8 +168,15 @@ fn vocoder_and_voice_shift_are_saved_and_opened() {
     let p = voice_and_synth(&voice, 2.0, vec![Device::new(vocoder), Device::new(shift)], InstrumentKind::Synth(Default::default()), &[], true);
     let json = p.to_json().unwrap();
     assert_eq!(serde_json::from_str::<serde_json::Value>(&json).unwrap()["format"], 17);
+    assert!(!json.contains("\"midi\""), "as a Pulse that reads 17 saves it");
     let again = Project::from_json(&json).unwrap();
     assert_eq!(again.tracks[0].devices, p.tracks[0].devices);
+    // Following MIDI (another track's notes): saved and opened the same.
+    let following = Effect::Vocoder(VocoderParams { midi: true, sidechain: Some(2), carrier: VocoderCarrier::SuperSaw, ..Default::default() });
+    let p = voice_and_synth(&voice, 2.0, vec![Device::new(following)], InstrumentKind::Synth(Default::default()), &[], true);
+    let json = p.to_json().unwrap();
+    assert_eq!(serde_json::from_str::<serde_json::Value>(&json).unwrap()["format"], 18);
+    assert_eq!(Project::from_json(&json).unwrap().tracks[0].devices, p.tracks[0].devices);
     // Settings missing from a file take their defaults.
     let older: VocoderParams = serde_json::from_str(r#"{"bands":16.0}"#).unwrap();
     assert_eq!(older, VocoderParams { bands: 16.0, ..Default::default() });
@@ -213,6 +240,15 @@ fn their_devices_show_every_control() {
     let keyed = vec![Device::new(Effect::Vocoder(VocoderParams { sidechain: Some(2), ..Default::default() }))];
     let (texts, _) = draw(keyed, vec2(1200.0, 220.0));
     assert!(texts.iter().any(|t| t == "Synth"), "{texts:?}");
+    // Following MIDI: whose notes, instead of the chord.
+    for (sidechain, from) in [(None, "Esta pista"), (Some(2), "Synth")] {
+        let following = vec![Device::new(Effect::Vocoder(VocoderParams { midi: true, sidechain, ..Default::default() }))];
+        let (texts, _) = draw(following, vec2(1200.0, 220.0));
+        for label in ["Notas MIDI", from, "Sierra"] {
+            assert!(texts.iter().any(|t| t == label), "{label} not drawn: {texts:?}");
+        }
+        assert!(!texts.iter().any(|t| t == "Una nota"), "{texts:?}");
+    }
 }
 
 /// `PULSE_SHOTS=dir cargo test --release -p app voice_fx_shots -- --ignored`.
@@ -261,6 +297,10 @@ fn voice_fx_demos() {
     let pad = InstrumentKind::catalog().into_iter().find(|k| matches!(k, InstrumentKind::SuperSaw(_))).unwrap();
     let Effect::Vocoder(base) = vocoder("Sidechain · Synth de otra pista") else { unreachable!() };
     let keyed = Effect::Vocoder(VocoderParams { sidechain: Some(2), ..base });
+    // Following the synth track's MIDI notes (the chords), not its sound.
+    let Effect::Vocoder(following_params) = vocoder("Notas MIDI · Acordes que tocas") else { unreachable!() };
+    let following_params = VocoderParams { sidechain: Some(2), ..following_params };
+    let following = Effect::Vocoder(following_params);
     let demos: Vec<(&str, Vec<Effect>)> = vec![
         ("vocoder-sierra", vec![vocoder("Robot · Robot clásico")]),
         ("vocoder-french-house", vec![vocoder("Robot · French house")]),
@@ -268,6 +308,8 @@ fn voice_fx_demos() {
         ("vocoder-susurro", vec![vocoder("Textura · Susurro")]),
         ("vocoder-8-bandas", vec![vocoder("Clásico · Vocoder de 8 bandas")]),
         ("vocoder-synth-por-sidechain", vec![keyed]),
+        ("vocoder-notas-midi", vec![following]),
+        ("vocoder-notas-midi-sierra", vec![Effect::Vocoder(VocoderParams { carrier: VocoderCarrier::Saw, ..following_params })]),
         ("tono-mas-5", vec![Effect::VoiceShift(VoiceShiftParams { pitch: 5.0, ..Default::default() })]),
         ("tono-menos-5", vec![Effect::VoiceShift(VoiceShiftParams { pitch: -5.0, ..Default::default() })]),
         ("formantes-mas-4", vec![Effect::VoiceShift(VoiceShiftParams { formant: 4.0, ..Default::default() })]),

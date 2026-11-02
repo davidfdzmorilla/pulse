@@ -1633,6 +1633,24 @@ impl EffectProcessor {
         }
     }
 
+    /// Whether it plays the notes reaching a track (a Vocoder following
+    /// MIDI), and whose: Some(None), its own track's; Some(Some(id)), that
+    /// track's (which it waits for, as for a sidechain).
+    pub fn follows_notes(&self) -> Option<Option<u32>> {
+        match self {
+            Self::Vocoder(fx) if fx.params.midi => Some(fx.params.sidechain),
+            _ => None,
+        }
+    }
+
+    /// Gives an effect playing notes this block's (frame, rank, event),
+    /// sorted. Never allocates.
+    pub(crate) fn feed_notes(&mut self, notes: &[(usize, u8, crate::engine::Event)]) {
+        if let Self::Vocoder(fx) = self {
+            fx.feed_notes(notes);
+        }
+    }
+
     /// What its meter shows after the last block, dB: the gain reduction of
     /// a compressor or limiter (positive), each band's compression of a
     /// multiband (up positive, down negative). None: it has no meter.

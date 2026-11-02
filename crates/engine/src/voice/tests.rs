@@ -290,6 +290,190 @@ fn every_band_count_works_and_the_esses_come_through() {
     assert!(db(level(1.0)) - db(level(0.0)) > 12.0);
 }
 
+// ----- Vocoder following MIDI ------------------------------------------------------------
+
+/// A note held from `from` to `to` (samples), as a clip plays it (a gate).
+fn clip_note(pitch: u8, from: usize, to: usize) -> (usize, Event) {
+    (from, Event::NoteOn { pitch, velocity: 0.8, gate: (to - from) as u32 })
+}
+
+/// A key pressed at `from` and let go at `to`, as played live.
+fn live_note(pitch: u8, from: usize, to: usize) -> [(usize, Event); 2] {
+    [(from, Event::NoteOn { pitch, velocity: 0.8, gate: crate::synth::HELD }), (to, Event::NoteOff { pitch })]
+}
+
+/// A vocoder following MIDI over `voice`, in blocks of `block`, fed `notes`
+/// (sample, event) on their blocks, as the engine feeds them.
+fn run_notes(params: VocoderParams, voice: &[f32], notes: &[(usize, Event)], block: usize) -> Vec<f32> {
+    let mut fx = EffectProcessor::new(&Effect::Vocoder(VocoderParams { midi: true, ..params }), SR);
+    let mut notes = notes.to_vec();
+    notes.sort_by_key(|(at, e)| (*at, matches!(e, Event::NoteOn { .. })));
+    let (mut a, mut b) = (voice.to_vec(), voice.to_vec());
+    let mut queue = Vec::new();
+    for (k, (x, y)) in a.chunks_mut(block).zip(b.chunks_mut(block)).enumerate() {
+        let start = k * block;
+        queue.clear();
+        queue.extend(notes.iter().filter(|(at, _)| (start..start + x.len()).contains(at)).map(|&(at, e)| (at - start, 0u8, e)));
+        fx.feed_notes(&queue);
+        fx.process(x, y, &ctx());
+    }
+    a
+}
+
+fn hz_of(note: u8) -> f32 {
+    440.0 * 2f32.powf((note as f32 - 69.0) / 12.0)
+}
+
+/// Following MIDI, the voice sings each note played, from a clip or live,
+/// about as loud as it went in.
+#[test]
+fn following_midi_the_voice_sings_the_notes_played() {
+    let s = SR as usize;
+    let voice = ah(120.0, 4.0);
+    let mut notes = vec![clip_note(45, 0, s), clip_note(57, s, 2 * s)];
+    notes.extend(live_note(52, 2 * s, 3 * s));
+    notes.extend(live_note(40, 3 * s, 4 * s));
+    for carrier in [VocoderCarrier::Saw, VocoderCarrier::SuperSaw] {
+        let out = run_notes(VocoderParams { carrier, detune: 0.1, sibilance: 0.0, ..Default::default() }, &voice, &notes, 256);
+        assert!(clean(&out));
+        for (k, note) in [45u8, 57, 52, 40].into_iter().enumerate() {
+            let at = k * s + s / 2;
+            let level = db(rms(&out[at - s / 4..at + s / 4])) - db(rms(&voice[at - s / 4..at + s / 4]));
+            assert!(level.abs() < 5.0, "{carrier:?} {note}: {level:+.1} dB");
+            if carrier == VocoderCarrier::Saw {
+                let hz = pitch_at(&out, at).expect("a pitch");
+                println!("{carrier:?}, nota {note}: {hz:.1} Hz (quería {:.1}), nivel {level:+.1} dB", hz_of(note));
+                assert!(cents(hz, hz_of(note)).abs() < 10.0, "{carrier:?} {note}: {hz}");
+            } else {
+                // Seven saws a note, out of phase: YIN may take a harmonic for
+                // the note; its harmonics stand out from a semitone up's.
+                let on = harmonics(&out, at - s / 3, hz_of(note));
+                let off = harmonics(&out, at - s / 3, hz_of(note + 1));
+                println!("{carrier:?}, nota {note}: sus armónicos {:.1} dB sobre un semitono más, nivel {level:+.1} dB", db(on) - db(off));
+                assert!(db(on) - db(off) > 12.0, "{carrier:?} {note}");
+            }
+        }
+    }
+}
+
+/// The magnitude (|X|, Hann) around `hz` in 32768 samples of `x` from `at`
+/// (1.5 Hz a bin): the strongest bin within one of it.
+fn peak_near(x: &[f32], at: usize, hz: f32) -> f32 {
+    const N: usize = 32768;
+    let mut re: Vec<f32> = (0..N).map(|i| x[at + i] * (0.5 - 0.5 * (TAU * i as f32 / N as f32).cos())).collect();
+    let mut im = vec![0.0; N];
+    crate::dsp::fft(&mut re, &mut im);
+    let k = (hz * N as f32 / SR).round() as usize;
+    (k - 1..=k + 1).map(|k| (re[k] * re[k] + im[k] * im[k]).sqrt()).fold(0.0, f32::max)
+}
+
+/// The first four harmonics of `hz` in `x` from `at` (see `peak_near`).
+fn harmonics(x: &[f32], at: usize, hz: f32) -> f32 {
+    (1..=4).map(|k| peak_near(x, at, hz * k as f32)).sum()
+}
+
+/// A chord of three notes: each comes out, and notes not played don't.
+#[test]
+fn following_midi_it_sings_chords() {
+    let s = SR as usize;
+    let voice = ah(120.0, 2.0);
+    let chord = [48u8, 52, 55];
+    let notes: Vec<_> = chord.iter().map(|&p| clip_note(p, 0, 2 * s)).collect();
+    let out = run_notes(VocoderParams { bands: 32.0, sibilance: 0.0, ..Default::default() }, &voice, &notes, 512);
+    // Each note's first harmonics, against those a quarter tone up (no note).
+    let power = |hz: f32| harmonics(&out, s / 2, hz);
+    let off = |hz: f32| power(hz * 2f32.powf(1.0 / 24.0));
+    for note in chord {
+        let (on, beside) = (power(hz_of(note)), off(hz_of(note)));
+        println!("nota {note}: {:.1} dB sobre lo que hay a un cuarto de tono", db(on) - db(beside));
+        assert!(db(on) - db(beside) > 12.0, "{note}: {} {}", db(on), db(beside));
+    }
+    // C sharp and F sharp, not played (none of their harmonics is one of
+    // the chord's): much quieter than the chord's.
+    let played = chord.iter().map(|&p| power(hz_of(p))).fold(f32::MAX, f32::min);
+    for note in [49u8, 54] {
+        println!("nota {note} (no tocada): {:.1} dB bajo las del acorde", db(played) - db(power(hz_of(note))));
+        assert!(db(played) - db(power(hz_of(note))) > 10.0, "{note}");
+    }
+    // Eight at once (the most), and a ninth takes a voice: all finite.
+    let many: Vec<_> = (0..9).map(|k| clip_note(40 + 3 * k as u8, k * 1000, 2 * s)).collect();
+    let out = run_notes(Default::default(), &voice, &many, 256);
+    assert!(clean(&out) && db(rms(&out[s..])) > -30.0);
+}
+
+/// Without notes, silence: exactly, whatever the voice (esses too); after
+/// the last note, it dies away to nothing, no subnormal on the way.
+#[test]
+fn following_midi_without_notes_it_is_silent() {
+    let s = SR as usize;
+    let voice = ah(140.0, 3.0);
+    for carrier in VocoderCarrier::ALL {
+        let params = VocoderParams { carrier, sibilance: 1.0, ..Default::default() };
+        let out = run_notes(params, &voice, &[], 256);
+        assert!(out.iter().all(|x| *x == 0.0), "{carrier:?}");
+        let out = run_notes(params, &voice, &[clip_note(50, s / 4, s / 2)], 256);
+        assert!(clean(&out) && db(rms(&out[s / 4..s / 2])) > -30.0, "{carrier:?} sounds");
+        let tail = db(rms(&out[s / 2 + s / 5..s]));
+        println!("{carrier:?}: 200 ms tras la nota, {tail:.1} dB");
+        assert!(tail < -60.0, "{carrier:?}: {tail}");
+        assert!(out[s / 2 + s / 20..].iter().all(|x| *x == 0.0), "{carrier:?}: {}", db(rms(&out[s / 2 + s / 20..])));
+    }
+    // A track that can't be heard: its notes stop.
+    let mut fx = EffectProcessor::new(&Effect::Vocoder(VocoderParams { midi: true, ..Default::default() }), SR);
+    let (mut a, mut b) = (voice.clone(), voice.clone());
+    for (k, (x, y)) in a.chunks_mut(480).zip(b.chunks_mut(480)).enumerate() {
+        match k {
+            0 => fx.feed_notes(&[(0, 0, Event::NoteOn { pitch: 50, velocity: 1.0, gate: crate::synth::HELD })]),
+            50 => fx.feed_notes(&[(0, 0, Event::AllNotesOff)]),
+            _ => {}
+        }
+        fx.process(x, y, &ctx());
+    }
+    assert!(db(rms(&a[10 * 480..50 * 480])) > -30.0);
+    assert!(a[53 * 480..].iter().all(|x| *x == 0.0), "25 ms after");
+}
+
+/// The biggest jump from one sample to the next in `x[range]`.
+fn biggest_step(x: &[f32], range: std::ops::Range<usize>) -> f32 {
+    x[range].windows(2).map(|w| (w[1] - w[0]).abs()).fold(0.0, f32::max)
+}
+
+/// A note starting and ending, from a clip or live, doesn't click: no jump
+/// there bigger than the held note's own.
+#[test]
+fn following_midi_notes_start_and_end_without_clicks() {
+    let s = SR as usize;
+    // A steady voice already sounding: only the notes start and stop.
+    let voice = ah(110.0, 2.0);
+    let (from, to) = (s / 2 + 17, s + 333);
+    let ms = s / 1000;
+    for notes in [vec![clip_note(45, from, to)], live_note(45, from, to).to_vec()] {
+        for carrier in [VocoderCarrier::Saw, VocoderCarrier::Noise] {
+            let out = run_notes(VocoderParams { carrier, sibilance: 0.0, ..Default::default() }, &voice, &notes, 128);
+            let held = biggest_step(&out, from + 100 * ms..to - 100 * ms);
+            let start = biggest_step(&out, from - 5 * ms..from + 5 * ms);
+            let end = biggest_step(&out, to - 5 * ms..to + 30 * ms);
+            println!("{carrier:?}: salto mayor al empezar {:.2}×, al acabar {:.2}× el de la nota sostenida", start / held, end / held);
+            assert!(start <= held && end <= held, "{carrier:?}: {start} {end} {held}");
+        }
+    }
+}
+
+/// Following MIDI, the same samples whatever the blocks are cut into.
+#[test]
+fn following_midi_it_does_not_depend_on_the_block_size() {
+    let s = SR as usize;
+    let voice = ah(130.0, 1.5);
+    let mut notes = vec![clip_note(48, 100, s / 2), clip_note(55, 777, s), clip_note(60, s / 3, s + 5)];
+    notes.extend(live_note(52, s / 4 + 3, s + 1000));
+    let params = VocoderParams { carrier: VocoderCarrier::SuperSaw, bands: 28.0, ..Default::default() };
+    let reference = run_notes(params, &voice, &notes, 1024);
+    assert!(db(rms(&reference)) > -30.0);
+    for block in [1, 37, 64, 500] {
+        assert!(run_notes(params, &voice, &notes, block) == reference, "blocks of {block}");
+    }
+}
+
 // ----- VoiceShift ------------------------------------------------------------------------
 
 fn shift(pitch: f32, formant: f32) -> Effect {
@@ -460,7 +644,11 @@ fn jumps_and_presets_stay_in_bounds() {
             for (i, info) in preset.params().iter().enumerate() {
                 assert_eq!(info.clamp(preset.get(i)), preset.get(i), "{name}: {}", info.name);
             }
-            let (out, _) = run(preset, &voice, &voice, 256);
+            // Those following MIDI, with a chord played.
+            let out = match preset {
+                Effect::Vocoder(p) if p.midi => run_notes(p, &voice, &[48, 55, 63].map(|n| clip_note(n, 0, voice.len())), 256),
+                _ => run(preset, &voice, &voice, 256).0,
+            };
             let level = db(rms(&out[10_000..]));
             let peak = db(out.iter().fold(0f32, |m, s| m.max(s.abs())));
             println!("{:24} {name:36} rms {level:6.1} dB  pico {peak:5.1} dB", effect.label());
@@ -478,12 +666,19 @@ fn voice_cpu() {
     for effect in [
         Effect::Vocoder(VocoderParams { bands: 40.0, carrier: VocoderCarrier::SuperSaw, chord: VocoderChord::Major, ..Default::default() }),
         Effect::Vocoder(VocoderParams { bands: 20.0, ..Default::default() }),
+        // Following MIDI at its worst: eight notes, seven saws each.
+        Effect::Vocoder(VocoderParams { bands: 40.0, carrier: VocoderCarrier::SuperSaw, midi: true, ..Default::default() }),
+        Effect::Vocoder(VocoderParams { bands: 40.0, carrier: VocoderCarrier::Saw, midi: true, ..Default::default() }),
         shift(7.0, 3.0),
     ] {
         let mut fx = EffectProcessor::new(&effect, SR);
         let (mut a, mut b) = (voice.clone(), voice.clone());
+        let chord: Vec<_> = (0..8u8).map(|k| (0, 0, Event::NoteOn { pitch: 40 + 4 * k, velocity: 0.8, gate: crate::synth::HELD })).collect();
         let started = std::time::Instant::now();
-        for (x, y) in a.chunks_mut(128).zip(b.chunks_mut(128)) {
+        for (k, (x, y)) in a.chunks_mut(128).zip(b.chunks_mut(128)).enumerate() {
+            if k == 0 {
+                fx.feed_notes(&chord);
+            }
             fx.process(x, y, &ctx());
         }
         let us = started.elapsed().as_secs_f64() * 1e6 / (voice.len() / 128) as f64;

@@ -16,6 +16,12 @@
 //! voice's. The voice's own highs (a high-pass at 5 kHz) can be mixed in, so
 //! its esses and tees are understood.
 //!
+//! Its own carrier plays `note` and `chord`, or with `midi`, the notes that
+//! reach the track (or another, `sidechain`): the engine hands it each
+//! block's note events, on their frames ([`Vocoder::feed_notes`]). Up to
+//! [`VOCODER_VOICES`] notes at once, each with a short envelope of its own
+//! (no click), and the esses come in with the notes: without notes, silence.
+//!
 //! **VoiceShift.** Pitch-synchronous overlap-add (TD-PSOLA). YIN (the
 //! Tuner's detector) hears the voice's period every 5 ms; grains two periods
 //! long (Hann), cut a period apart along the voice, are laid out again a
@@ -27,7 +33,8 @@
 //! (about 32 ms, the same at any setting), which the mixer makes up for.
 
 use crate::effects::Key;
-use crate::model::{db_to_gain, VocoderCarrier, VocoderParams, VoiceShiftParams, VOCODER_MAX_BANDS};
+use crate::engine::{Event, MAX_EVENTS};
+use crate::model::{db_to_gain, VocoderCarrier, VocoderParams, VoiceShiftParams, VOCODER_MAX_BANDS, VOCODER_VOICES};
 use crate::tuner::Detector;
 use std::f32::consts::PI;
 
@@ -121,6 +128,28 @@ const MAKEUP: f32 = 0.7;
 /// detune, the outer ones).
 const SAWS: usize = 7;
 const SPREAD_CENTS: f32 = 50.0;
+/// How fast a note played by MIDI comes in and goes (ms): short, no click.
+const NOTE_ATTACK_MS: f32 = 3.0;
+const NOTE_RELEASE_MS: f32 = 25.0;
+/// Each such note's saws, at full level.
+const NOTE_LEVEL: f32 = 0.35;
+
+/// A note its own carrier plays, following MIDI.
+#[derive(Clone, Copy, Default)]
+struct NoteVoice {
+    pitch: u8,
+    /// Sounding (held, or for its gate); false: let go, fading out.
+    on: bool,
+    /// Until its note-off (else for `gate` more samples).
+    held: bool,
+    gate: u32,
+    level: f32,
+    /// When it was struck (the oldest is taken for a new note).
+    struck: u64,
+    /// Each saw's phase and its step.
+    phases: [f32; SAWS],
+    steps: [f32; SAWS],
+}
 
 pub struct Vocoder {
     pub(crate) params: VocoderParams,
@@ -146,6 +175,11 @@ pub struct Vocoder {
     sibilance: Smooth,
     mix: Smooth,
     gain: Smooth,
+    /// This block's note events (frame, event), as fed, in order; and the
+    /// notes it plays from them.
+    notes: Vec<(usize, Event)>,
+    voices: [NoteVoice; VOCODER_VOICES],
+    struck: u64,
 }
 
 impl Vocoder {
@@ -175,7 +209,15 @@ impl Vocoder {
             sibilance: Smooth::new(params.sibilance, 10.0, rate),
             mix: Smooth::new(params.mix, 10.0, rate),
             gain: Smooth::new(db_to_gain(params.output_db), 10.0, rate),
+            notes: Vec::with_capacity(MAX_EVENTS),
+            voices: [NoteVoice::default(); VOCODER_VOICES],
+            struck: 0,
         };
+        for (v, voice) in vocoder.voices.iter_mut().enumerate() {
+            for (s, p) in voice.phases.iter_mut().enumerate() {
+                *p = ((v * SAWS + s) as f32 * 0.618_034).fract();
+            }
+        }
         vocoder.make_filters();
         vocoder
     }
@@ -188,6 +230,129 @@ impl Vocoder {
         self.carrier_level = [0.0; MAX];
         self.total = 0.0;
         self.highs = [Svf::default(); 2];
+        self.notes.clear();
+        self.silence_notes();
+    }
+
+    /// Its notes stop at once (they no longer play).
+    fn silence_notes(&mut self) {
+        for voice in &mut self.voices {
+            voice.on = false;
+            voice.level = 0.0;
+        }
+    }
+
+    /// This block's note events (frame, event), in order: with `midi`, its own
+    /// carrier plays them. Never allocates (what doesn't fit is left out).
+    pub(crate) fn feed_notes(&mut self, notes: &[(usize, u8, Event)]) {
+        self.notes.clear();
+        let room = self.notes.capacity();
+        self.notes.extend(notes.iter().filter(|(_, _, e)| !matches!(e, Event::Control { .. })).map(|&(frame, _, e)| (frame, e)).take(room));
+    }
+
+    /// A note event, now.
+    fn note_event(&mut self, event: Event) {
+        match event {
+            Event::NoteOn { pitch, gate, .. } => {
+                // The same key again, else a quiet voice, else the one let go
+                // that is quietest, else the oldest: it goes on from its level.
+                let voices = &self.voices;
+                let v = voices
+                    .iter()
+                    .position(|v| v.pitch == pitch && (v.on || v.level > 0.0))
+                    .or_else(|| voices.iter().position(|v| !v.on && v.level == 0.0))
+                    .or_else(|| (0..VOCODER_VOICES).filter(|&v| !voices[v].on).min_by(|&a, &b| voices[a].level.total_cmp(&voices[b].level)))
+                    .unwrap_or_else(|| (0..VOCODER_VOICES).min_by_key(|&v| voices[v].struck).unwrap_or(0));
+                self.struck += 1;
+                let steps = self.note_steps(pitch.min(127));
+                let voice = &mut self.voices[v];
+                voice.pitch = pitch.min(127);
+                voice.on = true;
+                voice.held = gate == crate::synth::HELD;
+                voice.gate = gate;
+                voice.struck = self.struck;
+                voice.steps = steps;
+            }
+            Event::NoteOff { pitch } => {
+                for voice in self.voices.iter_mut().filter(|v| v.pitch == pitch) {
+                    voice.on = false;
+                }
+            }
+            Event::AllNotesOff => {
+                for voice in &mut self.voices {
+                    voice.on = false;
+                }
+            }
+            Event::Control { .. } => {}
+        }
+    }
+
+    /// Each saw's phase step for `pitch` (MIDI).
+    fn note_steps(&self, pitch: u8) -> [f32; SAWS] {
+        let saws = if self.params.carrier == VocoderCarrier::SuperSaw { SAWS } else { 1 };
+        let detune = self.params.detune.clamp(0.0, 1.0);
+        let mut steps = [0.0; SAWS];
+        for (s, step) in steps.iter_mut().enumerate().take(saws) {
+            let cents = if saws > 1 { (s as f32 / (saws - 1) as f32 * 2.0 - 1.0) * detune * SPREAD_CENTS } else { 0.0 };
+            *step = (440.0 * 2f32.powf((pitch as f32 - 69.0 + cents / 100.0) / 12.0) / self.rate).min(0.5);
+        }
+        steps
+    }
+
+    /// The next sample of its own carrier playing MIDI notes, `saws` a note
+    /// (`rise` and `fall`: the envelopes' steps), and the notes' level in all.
+    /// The carrier keeps its level as notes come and go (the bands it is
+    /// evened out by can't follow a note's attack): the vocoder's sound is
+    /// faded by the notes' level instead, so they start and end smoothly.
+    #[inline]
+    fn played(&mut self, saws: usize, rise: f32, fall: f32) -> (f32, f32) {
+        let noise = self.params.carrier == VocoderCarrier::Noise;
+        let mut sum = 0.0;
+        let mut power = 0.0;
+        for voice in &mut self.voices {
+            if voice.on && !voice.held {
+                voice.gate = voice.gate.saturating_sub(1);
+                if voice.gate == 0 {
+                    voice.on = false;
+                }
+            }
+            voice.level = if voice.on { (voice.level + rise).min(1.0) } else { (voice.level - fall).max(0.0) };
+            if voice.level == 0.0 {
+                continue;
+            }
+            power += voice.level * voice.level;
+            if noise {
+                continue;
+            }
+            let mut saws_sum = 0.0;
+            for s in 0..saws {
+                let dt = voice.steps[s];
+                let phase = &mut voice.phases[s];
+                saws_sum += saw(*phase, dt);
+                *phase += dt;
+                if *phase >= 1.0 {
+                    *phase -= 1.0;
+                }
+            }
+            sum += saws_sum * voice.level;
+        }
+        if power == 0.0 {
+            return (0.0, 0.0);
+        }
+        let level = power.sqrt();
+        let carrier = if noise { self.white() } else { sum * NOTE_LEVEL / ((saws as f32).sqrt() * level) };
+        (carrier, level.min(1.0))
+    }
+
+    /// White noise, −0.5..0.5.
+    #[inline]
+    fn white(&mut self) -> f32 {
+        let mut x = self.noise;
+        x ^= x << 13;
+        x ^= x >> 17;
+        x ^= x << 5;
+        self.noise = x;
+        (x as f32 / u32::MAX as f32 * 2.0 - 1.0) * 0.5
     }
 
     /// How many bands its settings ask for.
@@ -235,14 +400,7 @@ impl Vocoder {
     /// `steps`: each saw's phase step, `saws` of them a note, `notes` notes.
     fn oscillator(&mut self, steps: &[f32; 4 * SAWS], saws: usize, notes: usize) -> f32 {
         match self.params.carrier {
-            VocoderCarrier::Noise => {
-                let mut x = self.noise;
-                x ^= x << 13;
-                x ^= x >> 17;
-                x ^= x << 5;
-                self.noise = x;
-                (x as f32 / u32::MAX as f32 * 2.0 - 1.0) * 0.5
-            }
+            VocoderCarrier::Noise => self.white(),
             _ => {
                 let mut sum = 0.0;
                 for n in 0..notes {
@@ -268,8 +426,22 @@ impl Vocoder {
         let rate = self.rate;
         let coef = |ms: f32| 1.0 - (-1.0 / (ms.max(0.05) * 0.001 * rate)).exp();
         let (attack, release, follow) = (coef(p.attack_ms), coef(p.release_ms), coef(CARRIER_MS));
-        let keyed = p.sidechain.is_some();
-        let fed = keyed && self.key.take(l.len());
+        // Following MIDI, `sidechain` is whose notes it plays, not its carrier.
+        let midi = p.midi;
+        let keyed = p.sidechain.is_some() && !midi;
+        let fed = self.key.take(l.len()) && keyed;
+        if midi {
+            // Detune may have moved.
+            for v in 0..VOCODER_VOICES {
+                if self.voices[v].on || self.voices[v].level > 0.0 {
+                    self.voices[v].steps = self.note_steps(self.voices[v].pitch);
+                }
+            }
+        } else if self.voices.iter().any(|v| v.on || v.level > 0.0) {
+            self.silence_notes();
+        }
+        let (rise, fall) = (1.0 / (NOTE_ATTACK_MS * 0.001 * rate), 1.0 / (NOTE_RELEASE_MS * 0.001 * rate));
+        let mut next_note = if midi { 0 } else { self.notes.len() };
         // Its own carrier's notes.
         let intervals = p.chord.intervals();
         let root = p.note.round().clamp(0.0, 127.0);
@@ -285,13 +457,25 @@ impl Vocoder {
             }
         }
         let gain_target = db_to_gain(p.output_db);
+        let last = l.len().saturating_sub(1);
         for i in 0..l.len() {
+            // The notes that start or end on this frame (the last one takes
+            // any later: a block the engine feeds has none).
+            while let Some(&(frame, event)) = self.notes.get(next_note) {
+                if frame.min(last) > i {
+                    break;
+                }
+                self.note_event(event);
+                next_note += 1;
+            }
             let (dry_l, dry_r) = (l[i], r[i]);
             let voice = 0.5 * (dry_l + dry_r);
-            let carrier = if keyed {
-                if fed { self.key.mono[i] } else { 0.0 }
+            let (carrier, played) = if keyed {
+                (if fed { self.key.mono[i] } else { 0.0 }, 1.0)
+            } else if midi {
+                self.played(saws, rise, fall)
             } else {
-                self.oscillator(&steps, saws, notes)
+                (self.oscillator(&steps, saws, notes), 1.0)
             };
             self.total += (carrier * carrier - self.total) * follow;
             let floor = (self.total * CARRIER_FLOOR).max(1e-12);
@@ -313,12 +497,13 @@ impl Vocoder {
                 wet += (cb * (*level / heard.max(floor)).sqrt()).clamp(-ceiling, ceiling);
             }
             // The carrier's own level gates it: quiet carrier, quiet vocoder.
-            wet *= MAKEUP * (self.total.sqrt() / CARRIER_REF).min(1.0);
+            wet *= MAKEUP * (self.total.sqrt() / CARRIER_REF).min(1.0) * played;
             let [h0, h1] = &mut self.highs;
             let highs = h1.tick(h0.tick(voice, &self.highs_coefs).1, &self.highs_coefs).1;
             h0.settle();
             h1.settle();
-            wet += highs * self.sibilance.next(p.sibilance.clamp(0.0, 1.0));
+            // Following notes, its esses come with them: silence without.
+            wet += highs * self.sibilance.next(p.sibilance.clamp(0.0, 1.0)) * played;
             if self.total < 1e-24 {
                 self.total = 0.0;
             }
@@ -327,6 +512,8 @@ impl Vocoder {
             l[i] = (dry_l * (1.0 - mix) + wet * mix) * gain;
             r[i] = (dry_r * (1.0 - mix) + wet * mix) * gain;
         }
+        // Fed again for the next block.
+        self.notes.clear();
     }
 }
 

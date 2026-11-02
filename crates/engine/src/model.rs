@@ -2946,9 +2946,19 @@ pub struct VocoderParams {
     pub carrier: VocoderCarrier,
     pub chord: VocoderChord,
     /// The track (by its id) whose sound is the carrier; None: its own.
+    /// With `midi`, the track whose notes its own carrier plays (None: this
+    /// track's): it waits for that track, as for a sidechain.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<u32>,
+    /// Its own carrier plays the MIDI notes that reach the track (or
+    /// `sidechain`'s), up to [`VOCODER_VOICES`] at once, instead of `note`
+    /// and `chord`. Silent without notes.
+    #[serde(skip_serializing_if = "is_default")]
+    pub midi: bool,
 }
+
+/// The most notes a Vocoder following MIDI plays at once.
+pub const VOCODER_VOICES: usize = 8;
 
 impl Default for VocoderParams {
     fn default() -> Self {
@@ -2967,6 +2977,7 @@ impl Default for VocoderParams {
             carrier: VocoderCarrier::Saw,
             chord: VocoderChord::Single,
             sidechain: None,
+            midi: false,
         }
     }
 }
@@ -2989,6 +3000,7 @@ impl VocoderParams {
             ("Clásico · Vocoder de 8 bandas", VocoderParams { bands: 8.0, low_hz: 150.0, high_hz: 6000.0, attack_ms: 5.0, release_ms: 50.0, note: 41.0, sibilance: 0.15, output_db: -4.0, ..d }),
             ("Clásico · 40 bandas nítido", VocoderParams { bands: 40.0, low_hz: 80.0, high_hz: 12000.0, attack_ms: 1.0, release_ms: 25.0, sibilance: 0.4, ..d }),
             ("Sidechain · Synth de otra pista", VocoderParams { bands: 24.0, attack_ms: 3.0, release_ms: 60.0, sibilance: 0.35, ..d }),
+            ("Notas MIDI · Acordes que tocas", VocoderParams { bands: 24.0, attack_ms: 3.0, release_ms: 70.0, carrier: SuperSaw, detune: 0.25, sibilance: 0.3, midi: true, ..d }),
         ]
     }
 }

@@ -38,7 +38,7 @@ pub(crate) const MAX_BLOCK: usize = 1024;
 /// once-a-block thing happen at the same frames whatever size the audio device
 /// (or an export) asks for, so what is exported is what is heard.
 const SUB_BLOCK: u64 = 64;
-const MAX_EVENTS: usize = 512;
+pub(crate) const MAX_EVENTS: usize = 512;
 
 /// `TrackStatus::queued` value meaning "stop at the next quantization boundary".
 pub const QUEUED_STOP: i32 = -2;
@@ -1714,6 +1714,10 @@ struct Track {
     audio_left: Vec<f32>,
     audio_right: Vec<f32>,
     events: EventQueue,
+    /// This block's notes as its instrument gets them (after its MIDI
+    /// effects), for the effects that play them (a Vocoder following MIDI),
+    /// its own and other tracks'.
+    notes: EventQueue,
     /// What its notes go through before the instrument.
     midi_fx: crate::midi_fx::MidiChain,
     /// Pitch bend and modulation wheel for the built-in instruments.
@@ -1819,6 +1823,7 @@ impl Track {
             audio_left: vec![0.0; MAX_BLOCK],
             audio_right: vec![0.0; MAX_BLOCK],
             events: Vec::with_capacity(MAX_EVENTS),
+            notes: Vec::with_capacity(MAX_EVENTS),
             midi_fx: crate::midi_fx::MidiChain::new(MAX_EVENTS),
             expression: Expression::default(),
             controls_sent: [f32::NAN; MIDI_CONTROLS],
@@ -2217,6 +2222,26 @@ fn feed_keys<'a>(chain: &mut [ChainSlot], ids: &[u32; MAX_TRACKS], n: usize, key
     }
 }
 
+/// What a source that can't be heard this block (gone, or across a loop)
+/// gives the effects playing its notes: theirs stop.
+const NO_NOTES: [(usize, u8, Event); 1] = [(0, 0, Event::AllNotesOff)];
+
+/// Gives the effects of a chain that play notes (a Vocoder following MIDI)
+/// this block's: `own`, the chain's track's (None: a return's or the
+/// master's, which have none), or another track's (`notes`: by index, None
+/// when it can't be heard this block). Sorted, on their frames.
+fn feed_notes<'a>(chain: &mut [ChainSlot], ids: &[u32; MAX_TRACKS], own: Option<&'a EventQueue>, notes: impl Fn(usize) -> Option<&'a EventQueue>) {
+    for slot in chain.iter_mut() {
+        let Some(source) = slot.processor.follows_notes() else { continue };
+        let heard = match source.and_then(|id| track_with(ids, id)) {
+            Some(t) => notes(t),
+            None if source.is_none() => own,
+            None => None,
+        };
+        slot.processor.feed_notes(heard.map_or(&NO_NOTES[..], |n| n.as_slice()));
+    }
+}
+
 /// Whether a chain holds a loaded plugin (VST3 or CLAP).
 fn hosts_plugin(chain: &[ChainSlot]) -> bool {
     chain.iter().any(|slot| matches!(*slot.processor, EffectProcessor::Plugin(_, Some(_))))
@@ -2377,6 +2402,9 @@ unsafe fn process_track(job: &Job, index: usize) {
         let timing = crate::midi_fx::Timing { sample_rate: sr, tempo: ctx.tempo, beat: ctx.beat, beats_per_sample: ctx.beats_per_sample };
         track.midi_fx.process(&mut track.events, n, timing);
     }
+    // What its effects playing notes hear: the notes as the instrument gets them.
+    track.notes.clear();
+    track.notes.extend(track.events.iter().filter(|(_, _, e)| !matches!(e, Event::Control { .. })).map(|&(frame, rank, e)| (frame.min(n - 1), rank, e)));
     track.instrument.set_tempo(ctx.tempo);
     if let Instrument::Plugin(_, Some(plugin)) = &mut track.instrument {
         plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &ctx.meter);
@@ -2424,6 +2452,12 @@ unsafe fn process_track(job: &Job, index: usize) {
         }
     }
     feed_keys(&mut channel.chain, &mix.ids, n, key);
+    // Another track's notes, if it came first (across a loop: none).
+    let own = &track.notes;
+    feed_notes(&mut channel.chain, &mix.ids, Some(own), |t| match t == index {
+        true => Some(own),
+        false => (late >> t & 1 == 0).then(|| unsafe { &(*job.tracks.add(t)).notes }),
+    });
     let analyzer = &shared.analyzer;
     if !channel.run_chain(n, ctx, Target::Track(index), analyzer) {
         shared.fault(Fault::Track(index));
@@ -2484,6 +2518,7 @@ unsafe fn process_return(job: &Job, index: usize) {
     }
     let key = |t: usize| unsafe { ((*job.key_left.add(t)).as_slice(), (*job.key_right.add(t)).as_slice()) };
     feed_keys(&mut ret.chain, &mix.ids, n, key);
+    feed_notes(&mut ret.chain, &mix.ids, None, |t| Some(unsafe { &(*job.tracks.add(t)).notes }));
     let analyzer = &shared.analyzer;
     if !ret.run_chain(n, &mix.ctx, Target::Return(index), analyzer) {
         shared.fault(Fault::Return(index));
@@ -3695,6 +3730,8 @@ impl Engine {
         let master = &mut self.master;
         let keys = (&self.key_left, &self.key_right);
         feed_keys(&mut master.chain, &self.ids, n, |t| (keys.0[t].as_slice(), keys.1[t].as_slice()));
+        let tracks = &self.tracks;
+        feed_notes(&mut master.chain, &self.ids, None, |t| Some(&tracks[t].notes));
         let analyzer = &self.shared.analyzer;
         if !master.run_chain(n, &ctx, Target::Master, analyzer) {
             self.shared.fault(Fault::Master);
@@ -4585,6 +4622,59 @@ mod tests {
         h.shared.tracks[2].peak.take();
         h.run_beats(0.5);
         assert_eq!(h.shared.tracks[2].peak.take(), 0.0, "note-off should silence the held note");
+    }
+
+    /// A Vocoder following MIDI sings the notes of another track (muted:
+    /// only its notes count), from its clip or played live, and is silent
+    /// without them. Its own track's notes too.
+    #[test]
+    fn a_vocoder_following_midi_sings_another_tracks_notes() {
+        use crate::model::VocoderParams;
+        let held = |pitch: u8| {
+            let mut clip = MidiClip::new("held", 8.0, [0, 0, 0]);
+            clip.notes.push(Note { start: 0.0, length: 8.0, pitch, velocity: 0.8, chance: 1.0 });
+            PlayClip::Midi(clip)
+        };
+        let vocoder = |sidechain| Device::new(Effect::Vocoder(VocoderParams { midi: true, sidechain, sibilance: 0.0, ..Default::default() }));
+        let start = |source: Option<u32>| {
+            let mut h = Harness::new();
+            h.send(Command::SetTrackIds(std::array::from_fn(|t| t as u32 + 1)));
+            // Track 0's own sound is the voice: a low note, held all along.
+            h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 8.0, held(36))]) });
+            h.send(Command::SetMute { target: Target::Track(1), mute: true });
+            h.send(Command::ReplaceChain { target: Target::Track(0), chain: build_chain(&[vocoder(source)], SR) });
+            h
+        };
+        // From track 1's clip (processed first: it waits for it).
+        let mut h = start(Some(2));
+        h.send(Command::SetArrangement { track: 1, clips: Box::new(vec![PlacedClip::new(0.0, 8.0, held(69))]) });
+        h.send(Command::Play);
+        let out = left_channel(&h.run_beats(2.0));
+        let hz = pitch_of(&out[SR as usize / 2..]);
+        println!("notas de otra pista, de su clip: {hz:.1} Hz");
+        assert!((hz / 440.0).log2().abs() * 1200.0 < 10.0, "{hz}");
+        // Played live on track 1, then let go: silence.
+        let mut h = start(Some(2));
+        h.send(Command::SetInputTrack(Some(1)));
+        h.send(Command::Play);
+        h.run_beats(0.5);
+        h.play_note(64, 0.9);
+        let out = left_channel(&h.run_beats(2.0));
+        let hz = pitch_of(&out[SR as usize / 4..]);
+        println!("notas de otra pista, en vivo: {hz:.1} Hz");
+        assert!((hz / 329.63).log2().abs() * 1200.0 < 10.0, "{hz}");
+        h.play_note(64, 0.0);
+        h.run_beats(0.5);
+        assert!(h.run_beats(1.0).iter().all(|x| *x == 0.0), "no notes, no sound");
+        // Its own track's notes (here, the voice's own: it sings them).
+        let mut h = start(None);
+        h.send(Command::Play);
+        let out = left_channel(&h.run_beats(2.0));
+        assert!(energy(&out) > 1.0);
+        // Never a note: silence, its voice playing all along.
+        let mut h = start(Some(2));
+        h.send(Command::Play);
+        assert!(h.run_beats(2.0).iter().all(|x| *x == 0.0));
     }
 
     #[test]
@@ -5940,6 +6030,16 @@ mod tests {
                 }
                 if t == 5 {
                     chain.push(Device::new(Effect::VoiceShift(crate::model::VoiceShiftParams { pitch: 5.0, formant: -2.0, ..Default::default() })));
+                }
+                // Vocoders following MIDI: another track's notes (one after it
+                // in the list, processed first), one across a loop (none heard),
+                // and their own track's.
+                let following = |sidechain| Device::new(Effect::Vocoder(crate::model::VocoderParams { midi: true, sidechain, carrier: crate::model::VocoderCarrier::SuperSaw, ..Default::default() }));
+                match t {
+                    2 => chain.push(following(Some(10))),
+                    5 => chain.push(following(Some(5))),
+                    7 => chain.push(following(None)),
+                    _ => {}
                 }
                 assert!(handle.send(Command::ReplaceChain { target: Target::Track(t), chain: build_chain(&chain, SR) }));
                 assert!(handle.send(Command::SetSend { track: t, send: 0, amount: 0.3 }));

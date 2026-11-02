@@ -215,6 +215,10 @@ fn track_devices(t: usize) -> Vec<Device> {
         devices.push(Device::new(Effect::VoiceShift(VoiceShiftParams { pitch: -5.0, formant: 3.0, ..Default::default() })));
         devices.push(Device::new(Effect::Vocoder(VocoderParams { bands: 40.0, carrier: VocoderCarrier::SuperSaw, chord: VocoderChord::Minor7, mix: 0.5, ..Default::default() })));
     }
+    // A vocoder singing its own track's notes.
+    if t % 9 == 4 {
+        devices.push(Device::new(Effect::Vocoder(VocoderParams { bands: 32.0, carrier: VocoderCarrier::SuperSaw, midi: true, mix: 0.6, ..Default::default() })));
+    }
     if t % 5 == 0 {
         devices.push(Device::new(Effect::Bitcrusher(BitcrusherParams::default())));
         devices.push(Device::new(Effect::Limiter(LimiterParams::default())));
@@ -330,6 +334,12 @@ fn load_routed_project(engine: &mut Engine, handle: &mut EngineHandle) {
     // A vocoder whose carrier is another track (processed after it).
     let vocoder = Device::new(Effect::Vocoder(VocoderParams { sidechain: Some(28), mix: 0.7, ..Default::default() }));
     send(engine, handle, Command::InsertDevice { target: Target::Track(26), index: 0, slot: ChainSlot::new(&vocoder, SR) });
+    // Vocoders singing another track's notes: one processed after it, one
+    // across a loop (22 and 23 listen to each other), and one on a return.
+    for (target, source) in [(Target::Track(27), 31), (Target::Track(22), 24), (Target::Return(1), 18)] {
+        let following = Device::new(Effect::Vocoder(VocoderParams { sidechain: Some(source), midi: true, mix: 0.7, ..Default::default() }));
+        send(engine, handle, Command::InsertDevice { target, index: 0, slot: ChainSlot::new(&following, SR) });
+    }
     let keyed = Device::new(Effect::Compressor(CompressorParams { threshold_db: -30.0, ratio: 8.0, sidechain: Some(3), ..Default::default() }));
     send(engine, handle, Command::InsertDevice { target: Target::Return(0), index: 0, slot: ChainSlot::new(&keyed, SR) });
     let drums = InstrumentKind::DrumMachine(Default::default());

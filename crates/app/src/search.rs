@@ -212,6 +212,7 @@ fn effect_words(effect: &Effect) -> &'static str {
         Effect::Bitcrusher(_) => "bitcrusher crusher lofi decimator bits",
         Effect::Ducker(_) => "ducker sidechain pump bombeo",
         Effect::Utility(_) => "utility utilidad gain ganancia mono width ancho pan fase",
+        Effect::Transition(_) => "tape stop start parada arranque cinta stutter beat repeat repeticion gross transicion corte drop cut glitch roll redoble",
         _ => "",
     }
 }
@@ -450,6 +451,22 @@ mod tests {
         assert_eq!(first(&items, "voz pop"), "Voz · Pop");
         assert!(names(&items, "zarandajo inventado").is_empty());
         assert!(names(&items, "   ").is_empty());
+    }
+
+    /// The transitions effect and its presets, by what producers call them.
+    #[test]
+    fn transition_words_find_the_transition() {
+        let items = index();
+        for query in ["tape stop", "stutter", "beat repeat", "transicion", "parada", "repeticion", "repetición"] {
+            let found = names(&items, query);
+            assert!(found.iter().any(|n| n == "Transición"), "{query}: {found:?}");
+        }
+        for query in ["tape stop", "stutter", "beat repeat", "transicion"] {
+            assert_eq!(first(&items, query), "Transición");
+        }
+        assert!(names(&items, "parada 1 compas").contains(&"Parada de cinta · 1 compás".to_string()));
+        assert!(names(&items, "stutter").contains(&"Repetición · 1/16 que cae".to_string()), "its presets come too");
+        assert!(names(&items, "drop").contains(&"Corte · Antes del drop".to_string()));
     }
 
     /// A star on a preset that changed name stays on it.

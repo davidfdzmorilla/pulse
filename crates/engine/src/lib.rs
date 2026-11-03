@@ -23,6 +23,7 @@ mod clap_host;
 mod sample;
 mod sampler;
 mod synth;
+mod transition;
 mod tuner;
 mod voice;
 mod workers;

@@ -37,7 +37,7 @@ pub(crate) const MAX_BLOCK: usize = 1024;
 /// engine's start: automation, instruments' control rates and every other
 /// once-a-block thing happen at the same frames whatever size the audio device
 /// (or an export) asks for, so what is exported is what is heard.
-const SUB_BLOCK: u64 = 64;
+pub(crate) const SUB_BLOCK: u64 = 64;
 pub(crate) const MAX_EVENTS: usize = 512;
 
 /// `TrackStatus::queued` value meaning "stop at the next quantization boundary".
@@ -4265,7 +4265,9 @@ mod tests {
             }
         }
         let filter = Device::new(Effect::AutoFilter(AutoFilterParams { steep: true, resonance: 0.9, drive_db: 6.0, lfo_amount: 2.0, lfo_beats: 0.5, ..Default::default() }));
-        for effect in Effect::catalog().into_iter().map(Device::new).chain([filter]) {
+        // Repeating from the start (on from the first frame).
+        let repeat = Device::new(Effect::Transition(crate::model::TransitionParams { mode: crate::model::TransitionMode::Repeat, active: 1.0, grid_beats: 1.0 / 3.0, pitch: -2.0, gate: 0.6, ..Default::default() }));
+        for effect in Effect::catalog().into_iter().map(Device::new).chain([filter, repeat]) {
             if render(None, vec![effect], &[1024]) != render(None, vec![effect], &odd) {
                 differ.push(effect.effect.label().to_string());
             }
@@ -6038,6 +6040,20 @@ mod tests {
                 if t == 5 {
                     chain.push(Device::new(Effect::VoiceShift(crate::model::VoiceShiftParams { pitch: 5.0, formant: -2.0, ..Default::default() })));
                 }
+                // Transitions switched by a lane (late: compensated): repeats
+                // falling in pitch through a filter, and a tape stopping.
+                let transition = match t {
+                    6 => Some(crate::model::TransitionParams { mode: crate::model::TransitionMode::Repeat, grid_beats: 1.0 / 6.0, pitch: -1.0, decay_db: 1.0, filter: Some(crate::model::FilterMode::LowPass), sweep: -0.2, ..Default::default() }),
+                    8 => Some(crate::model::TransitionParams { mode: crate::model::TransitionMode::TapeStop, length_beats: 0.5, curve: 0.4, ..Default::default() }),
+                    _ => None,
+                };
+                if let Some(p) = transition {
+                    let device = chain.len();
+                    chain.push(Device::new(Effect::Transition(p)));
+                    let points = [(0.0, 0.0), (1.37, 0.0), (1.37, 1.0), (3.0, 1.0), (3.0, 0.0), (4.1, 0.0), (4.1, 1.0)];
+                    let points = points.iter().map(|&(beat, value)| crate::model::AutomationPoint { beat, value, curve: 0.0 }).collect();
+                    assert!(handle.send(Command::SetAutomation { target: Target::Track(t), lanes: Box::new(vec![AutomationLane { param: Param::Device { device, param: 0 }, points }]) }));
+                }
                 // Vocoders following MIDI: another track's notes (one after it
                 // in the list, processed first), one across a loop (none heard),
                 // and their own track's.
@@ -6412,6 +6428,42 @@ mod tests {
                 assert_eq!(h.engine.latency(), 0);
             }
         }
+    }
+
+    /// A Transition cutting a drone, switched by a lane drawn on 1/64-note
+    /// lines (which the engine applies a sub-block later): the gap starts and
+    /// ends on those lines, in time with the song (its latency made up for),
+    /// and the drone comes back whole.
+    #[test]
+    fn a_transition_on_a_lane_cuts_on_the_beat() {
+        use crate::model::{AutomationPoint, TransitionMode, TransitionParams};
+        let render = |with: bool| {
+            let mut h = Harness::new();
+            h.send(Command::set_instrument(0, InstrumentKind::Synth(Default::default()), SR));
+            let mut clip = MidiClip::new("drone", 4.0, [0, 0, 0]);
+            clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 57, velocity: 0.8, chance: 1.0 });
+            h.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 4.0, PlayClip::Midi(clip))]) });
+            if with {
+                chain(&mut h, Target::Track(0), &[Device::new(Effect::Transition(TransitionParams { mode: TransitionMode::Cut, ..Default::default() }))]);
+                let points = [(0.0, 0.0), (1.0625, 0.0), (1.0625, 1.0), (2.0625, 1.0), (2.0625, 0.0)];
+                let points = points.iter().map(|&(beat, value)| AutomationPoint { beat, value, curve: 0.0 }).collect();
+                h.send(Command::SetAutomation { target: Target::Track(0), lanes: Box::new(vec![AutomationLane { param: Param::Device { device: 0, param: 0 }, points }]) });
+            }
+            h.send(Command::SetOutputLimit(false));
+            h.send(Command::Play);
+            let out: Vec<f32> = h.run_beats(3.0).chunks(2).map(|f| f[0]).collect();
+            (out, h.engine.latency())
+        };
+        let (dry, none) = render(false);
+        let (cut, late) = render(true);
+        assert_eq!((none, late), (0, crate::transition::LATENCY));
+        // 1/64 notes at 120 BPM are 1500 frames.
+        let (on, off) = (25_500 + late, 49_500 + late);
+        let fade = (0.001 * SR) as usize;
+        assert_eq!(&cut[late..on], &dry[..on - late], "the same until the line");
+        assert!(cut[on + fade..off - fade].iter().all(|&s| s == 0.0), "silent between");
+        assert!(dry[on + fade - late..off - fade - late].iter().any(|&s| s.abs() > 0.05));
+        assert_eq!(&cut[off..], &dry[off - late..cut.len() - late], "whole from the line");
     }
 
     /// In a group: its tracks wait for each other inside it, and the group

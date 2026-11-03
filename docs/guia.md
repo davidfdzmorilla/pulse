@@ -510,7 +510,7 @@ Algunos efectos sacan el sonido un poco tarde. Sin compensarlo, su pista sonarí
 - Para tocar o cantar en directo a través de uno de esos efectos sin que el resto se retrase, quita **Compensar la latencia de los efectos** en **Ajustes › Audio**. La exportación compensa siempre.
 
 +++ Cómo funciona
-- Efectos que retrasan: el **Limiter** (1,5 ms), el **Saturator** con 4× (36 muestras), el **Tuner**, **Voz: tono y formantes** (32 ms) y muchos plugins (Pulse les pregunta cuánto).
+- Efectos que retrasan: el **Limiter** (1,5 ms), el **Saturator** con 4× (36 muestras), el **Tuner**, **Voz: tono y formantes** (32 ms), la **Transición** (128 muestras) y muchos plugins (Pulse les pregunta cuánto).
 - Cada pista espera a la más lenta: dentro de su grupo, a las del grupo; fuera, a todas las del proyecto.
 - Los envíos llegan juntos a las pistas de retorno, y lo que sale de ellas llega a tiempo con el resto.
 - El metrónomo se retrasa con la canción.
@@ -2008,6 +2008,7 @@ Si haces clic en un instrumento del navegador, sustituye al de la pista MIDI sel
 | **Delay** | Eco a tempo. |
 | **Reverb** | Sala. |
 | **Espacio** | Reverb de convolución: salas, placa y muelle de verdad, sin sonido metálico. |
+| **Transición** | Parada y arranque de cinta, repeticiones (stutter) y cortes a tempo, para los cambios de sección (ver [[Parada de cinta, repetición y corte]]). |
 | **Utility** | Volumen, anchura estéreo, graves en mono y arreglar fase. |
 
 #### EQ Eight
@@ -2497,6 +2498,72 @@ Cambia el tono de una voz y, por separado, sus formantes: el tamaño de la garga
 - Retrasa el sonido 32 ms con cualquier ajuste. Pulse retrasa lo mismo las demás pistas (ver [[Grabar#Compensación de latencia]]). Si cantas en directo a través de él, lo oirás con ese retraso.
 - Funciona con una sola voz a la vez: con un coro o un instrumento de acordes suena raro.
 - Pitch ±24 st, Fine ±100 ct, Formant ±12 st, Output ±24 dB, Dry/Wet 0–100 % (100). Todo se puede automatizar.
+- Un proyecto con este efecto no se abre en un Pulse anterior: pide actualizar.
++++
+
+## Parada de cinta, repetición y corte
+
+El efecto **Transición** hace lo que se oye en los cambios de sección: la cinta que frena hasta pararse, el trozo que se repite cada vez más rápido o más grave, el hueco antes del drop. Se enciende con un carril de automatización y suena a tempo, en su sitio.
+
+### Usarlo
+
+1. En la pista (o en el master), **EFECTOS DE AUDIO** → **Transición**, o busca con {⌘F} «tape stop», «stutter», «parada» o «repetición».
+2. Elige el **Modo**: **Parada de cinta**, **Arranque de cinta**, **Repetición** o **Corte**.
+3. En el Arrangement, abre la automatización de la pista y elige **Transición › Active**. Dibuja un escalón: arriba desde donde quieres que empiece y abajo donde termina.
+4. Mientras está encendido, actúa; al apagarse, vuelve el sonido de siempre, justo en ese tiempo.
+
+> Consejo: el botón **Activo** del efecto lo enciende a mano, para probarlo mientras suena. Para que caiga siempre igual, usa el carril.
+
+### Los modos
+
+| Modo | Qué hace |
+|---|---|
+| **Parada de cinta** | El tono y la velocidad caen juntos hasta pararse en **Duración** (de 1/16 a 2 compases). Después, silencio hasta que lo apagas. |
+| **Arranque de cinta** | Al revés: desde parada hasta su velocidad en **Duración**; luego pasa al sonido en directo. |
+| **Repetición** | Coge el trozo de **Rejilla** (1/2 a 1/64, con tresillos «T») en que lo enciendes, desde su línea, y lo repite en cada paso de la rejilla. |
+| **Corte** | Silencio, o con **Filtro**, solo lo que el filtro deja pasar: **High-pass** quita los graves (el 808), **Low-pass** deja solo ellos. |
+
+### Los controles
+
+- **Curve** (cinta): a 0 la velocidad cae (o sube) por igual; hacia arriba frena pronto; hacia abajo aguanta y cae al final.
+- **Decay** (repetición): cuánto más baja cada repetición, en dB.
+- **Pitch** (repetición): cuánto sube o baja cada repetición, en semitonos. Con −1, cada una un semitono más grave: el redoble que cae.
+- **Gate** (repetición): la parte de cada repetición que suena. Por debajo del 100 %, entrecortada.
+- **Filter**, **Sweep** y **Res**: el filtro de las repeticiones (o del corte). **Sweep** lo mueve en cada repetición, en octavas: hacia arriba se abre, hacia abajo se cierra.
+- **Dry/Wet**: con menos del 100 %, se oye también el sonido original (en el corte, cuánto corta).
+
+### Presets
+
+Todos vienen apagados: pon el preset y enciéndelo con el carril o con **Activo**.
+
+| Preset | Para qué |
+|---|---|
+| **Parada de cinta · 1/4**, **1/2**, **1 compás** y **2 compases** | La cinta que se para en ese tiempo: el final de una parte, el freno antes del drop. |
+| **Parada de cinta · Frenazo** | Medio tiempo y frenando pronto: el disco que se para con la mano. |
+| **Arranque de cinta · 1/2** y **1 compás** | La vuelta: el sonido arranca desde parado. |
+| **Repetición · 1/4**, **1/8** y **1/16** | El stutter de siempre, a esa rejilla. |
+| **Repetición · 1/16 que cae** | Cada repetición un semitono más grave y algo más suave. |
+| **Repetición · 1/32 que sube** | Un redoble rápido que sube de tono: la subida al drop. |
+| **Repetición · 1/8 de tresillo** y **1/16 de tresillo cortado** | Repeticiones en tresillo, la segunda entrecortada (trap). |
+| **Repetición · Eco que se apaga** | Corcheas que bajan y se oscurecen. |
+| **Repetición · Redoble que se abre** | Fusas sin graves que se abren cada vez más (EDM). |
+| **Repetición · Tartamudeo** | Trozos de 1/64 entrecortados, con algo del original: la voz que tartamudea. |
+| **Corte · Antes del drop** | El silencio de antes del drop. |
+| **Corte · Sin graves antes del drop** | Quita el bajo y el bombo (por debajo de 300 Hz) y deja el resto. |
+| **Corte · Filtro de radio** | Solo los medios, como en una radio. |
+| **Corte · Solo graves** | Solo lo de debajo de 250 Hz. |
+
+> Consejo: para un redoble que se acelera (1/8, 1/16, 1/32…), cambia la **Rejilla** mientras repite: las repeticiones siguientes usan la nueva. Para que caiga siempre igual, pon varias Transiciones seguidas, cada una con su rejilla, y enciéndelas una detrás de otra con sus carriles.
+
++++ Detalles
+- Suena 128 muestras tarde (2,7 ms a 48 kHz), con cualquier ajuste y aunque esté apagado; Pulse retrasa lo mismo las demás pistas (ver [[Grabar#Compensación de latencia]]). Así sabe de antemano cuándo lo enciende el carril: un escalón dibujado en la rejilla (hasta 1/64) empieza y acaba justo en su sitio, y lo que entra después de un corte llega entero, sin perder el golpe.
+- Al encender y apagar, funde en 1 ms; entre repeticiones, en 2 ms: sin clics.
+- La parada de cinta baja el volumen al final, cuando ya va a menos de una décima de su velocidad, para no acabar en un chasquido.
+- El arranque de cinta termina detrás del directo (lo que ha tardado en arrancar) y se funde con él en 30 ms.
+- Al cambiar la **Rejilla** mientras repite, las repeticiones siguientes se hacen más cortas; no más largas que la primera.
+- Con el transporte parado, el botón **Activo** funciona a tempo del proyecto. Si paras la canción con el efecto encendido, se apaga.
+- Guarda los últimos 10 segundos: una cinta muy larga a un tempo muy lento se acorta para caber.
+- Curve ±1, Decay 0–24 dB, Pitch ±12 st, Gate 5–100 %, Filter 30 Hz–18 kHz, Sweep ±3 octavas, Res 0–90 %, Dry/Wet 0–100 % (100). **Active** se enciende desde el 50 %. Todo se puede automatizar.
 - Un proyecto con este efecto no se abre en un Pulse anterior: pide actualizar.
 +++
 

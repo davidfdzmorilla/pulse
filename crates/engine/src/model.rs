@@ -3115,6 +3115,132 @@ impl VoiceShiftParams {
     }
 }
 
+/// What a «Transición» does while it is on (see `transition`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TransitionMode {
+    /// The tape slows to a stop: pitch and speed fall together.
+    #[default]
+    TapeStop,
+    /// From stopped up to speed, then back to the live sound.
+    TapeStart,
+    /// A piece of the grid caught and played again and again (stutter).
+    Repeat,
+    /// The sound cut, or only filtered (the gap before the drop).
+    Cut,
+}
+
+impl TransitionMode {
+    pub const ALL: [TransitionMode; 4] = [Self::TapeStop, Self::TapeStart, Self::Repeat, Self::Cut];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::TapeStop => "Parada de cinta",
+            Self::TapeStart => "Arranque de cinta",
+            Self::Repeat => "Repetición",
+            Self::Cut => "Corte",
+        }
+    }
+}
+
+/// The grids a «Transición» repeats, in beats: 1/2 to 1/64, triplets too.
+pub const TRANSITION_GRIDS: [f64; 11] = [2.0, 1.0, 2.0 / 3.0, 0.5, 1.0 / 3.0, 0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0, 0.0625, 1.0 / 24.0];
+/// How long a tape stop or start takes, in beats.
+pub const TRANSITION_LENGTHS: [f64; 6] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0];
+
+/// A transitions effect, «Transición»: tape stop and start, repeats
+/// (stutter, beat repeat) and cuts, in time with the song. «Active» is
+/// what an automation lane switches: it does its thing from the moment it
+/// turns on, on the beat, until it turns off.
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct TransitionParams {
+    pub mode: TransitionMode,
+    /// On from 0.5: what the lane automates.
+    pub active: f32,
+    /// How long a tape stop or start takes, beats.
+    pub length_beats: f64,
+    /// What a repeat catches and plays again, beats (see [`TRANSITION_GRIDS`]).
+    pub grid_beats: f64,
+    /// A tape's curve, −1..1: 0, its speed falls (or rises) evenly; up, it
+    /// brakes early; down, it holds and drops at the end.
+    pub curve: f32,
+    /// How much quieter each repeat is, dB.
+    pub decay_db: f32,
+    /// How much each repeat moves in pitch, semitones (down: it falls).
+    pub pitch: f32,
+    /// The part of each repeat that sounds, 0.05..1 (under 1, choppy).
+    pub gate: f32,
+    /// The repeats' filter, or what a cut leaves (None: a cut is silence).
+    pub filter: Option<FilterMode>,
+    pub filter_hz: f32,
+    /// How far each repeat moves the filter, octaves.
+    pub sweep: f32,
+    pub resonance: f32,
+    pub mix: f32,
+}
+
+impl Default for TransitionParams {
+    fn default() -> Self {
+        Self {
+            mode: TransitionMode::TapeStop,
+            active: 0.0,
+            length_beats: 1.0,
+            grid_beats: 0.25,
+            curve: 0.0,
+            decay_db: 0.0,
+            pitch: 0.0,
+            gate: 1.0,
+            filter: None,
+            filter_hz: 1000.0,
+            sweep: 0.0,
+            resonance: 0.3,
+            mix: 1.0,
+        }
+    }
+}
+
+impl TransitionParams {
+    /// On (from 0.5 up).
+    pub fn on(&self) -> bool {
+        self.active >= 0.5
+    }
+
+    /// Factory settings, «Categoría · Nombre». All of them off: an
+    /// automation lane on «Active» (or its button) sets them going.
+    pub fn presets() -> Vec<(&'static str, TransitionParams)> {
+        use FilterMode::*;
+        use TransitionMode::*;
+        let d = TransitionParams::default();
+        let tape = |length_beats, curve| TransitionParams { mode: TapeStop, length_beats, curve, ..d };
+        let start = |length_beats, curve| TransitionParams { mode: TapeStart, length_beats, curve, ..d };
+        let repeat = TransitionParams { mode: Repeat, ..d };
+        let cut = TransitionParams { mode: Cut, ..d };
+        vec![
+            ("Parada de cinta · 1/4", tape(1.0, 0.0)),
+            ("Parada de cinta · 1/2", tape(2.0, 0.0)),
+            ("Parada de cinta · 1 compás", tape(4.0, 0.0)),
+            ("Parada de cinta · 2 compases", tape(8.0, -0.3)),
+            ("Parada de cinta · Frenazo", tape(0.5, 0.6)),
+            ("Arranque de cinta · 1/2", start(2.0, 0.0)),
+            ("Arranque de cinta · 1 compás", start(4.0, -0.3)),
+            ("Repetición · 1/4", TransitionParams { grid_beats: 1.0, ..repeat }),
+            ("Repetición · 1/8", TransitionParams { grid_beats: 0.5, ..repeat }),
+            ("Repetición · 1/16", TransitionParams { grid_beats: 0.25, ..repeat }),
+            ("Repetición · 1/16 que cae", TransitionParams { grid_beats: 0.25, pitch: -1.0, decay_db: 0.5, ..repeat }),
+            ("Repetición · 1/32 que sube", TransitionParams { grid_beats: 0.125, pitch: 0.5, ..repeat }),
+            ("Repetición · 1/8 de tresillo", TransitionParams { grid_beats: 1.0 / 3.0, decay_db: 1.0, ..repeat }),
+            ("Repetición · 1/16 de tresillo cortado", TransitionParams { grid_beats: 1.0 / 6.0, gate: 0.5, ..repeat }),
+            ("Repetición · Eco que se apaga", TransitionParams { grid_beats: 0.5, decay_db: 4.0, filter: Some(LowPass), filter_hz: 8000.0, sweep: -0.5, resonance: 0.2, ..repeat }),
+            ("Repetición · Redoble que se abre", TransitionParams { grid_beats: 0.125, filter: Some(HighPass), filter_hz: 120.0, sweep: 0.15, resonance: 0.4, ..repeat }),
+            ("Repetición · Tartamudeo", TransitionParams { grid_beats: 0.0625, gate: 0.7, mix: 0.8, ..repeat }),
+            ("Corte · Antes del drop", cut),
+            ("Corte · Sin graves antes del drop", TransitionParams { filter: Some(HighPass), filter_hz: 300.0, resonance: 0.2, ..cut }),
+            ("Corte · Filtro de radio", TransitionParams { filter: Some(BandPass), filter_hz: 1500.0, resonance: 0.5, ..cut }),
+            ("Corte · Solo graves", TransitionParams { filter: Some(LowPass), filter_hz: 250.0, resonance: 0.2, ..cut }),
+        ]
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct LimiterParams {
     pub gain_db: f32,
@@ -3311,13 +3437,15 @@ pub enum Effect {
     Vocoder(VocoderParams),
     /// A voice's pitch and formants, each on its own («Voz: tono y formantes»).
     VoiceShift(VoiceShiftParams),
+    /// Tape stop and start, repeats and cuts in time («Transición»).
+    Transition(TransitionParams),
     /// A VST3 effect plugin (see [`InstrumentKind::Plugin`]).
     Plugin(PluginId),
 }
 
 impl Effect {
     /// Every effect type with default settings, in browser order.
-    pub fn catalog() -> [Effect; 22] {
+    pub fn catalog() -> [Effect; 23] {
         [
             Effect::Eq3(Default::default()),
             Effect::EqEight(Default::default()),
@@ -3342,6 +3470,7 @@ impl Effect {
             Effect::Delay(Default::default()),
             Effect::Reverb(Default::default()),
             Effect::Convolution(Default::default()),
+            Effect::Transition(Default::default()),
             Effect::Utility(Default::default()),
         ]
     }
@@ -3355,6 +3484,7 @@ impl Effect {
             Effect::Vocoder(_) => VocoderParams::presets().into_iter().map(|(n, p)| (n, Effect::Vocoder(p))).collect(),
             Effect::VoiceShift(_) => VoiceShiftParams::presets().into_iter().map(|(n, p)| (n, Effect::VoiceShift(p))).collect(),
             Effect::Tuner(_) => TunerParams::presets().into_iter().map(|(n, p)| (n, Effect::Tuner(p))).collect(),
+            Effect::Transition(_) => TransitionParams::presets().into_iter().map(|(n, p)| (n, Effect::Transition(p))).collect(),
             _ => Vec::new(),
         }
     }
@@ -3391,8 +3521,9 @@ impl Effect {
         // A Convolution Reverb's impulse responses are rebuilt off the audio
         // thread through the engine's handle, which a synth's effects never see.
         // A Vocoder or a VoiceShift works on a voice, and the shift is late
-        // (its latency), which a synth's effects can't make up for.
-        self.params().len() <= MOD_FX_SLOTS && !matches!(self, Effect::Tuner(_) | Effect::Convolution(_) | Effect::Vocoder(_) | Effect::VoiceShift(_))
+        // (its latency), which a synth's effects can't make up for. A
+        // Transition follows the song's beat and an automation lane.
+        self.params().len() <= MOD_FX_SLOTS && !matches!(self, Effect::Tuner(_) | Effect::Convolution(_) | Effect::Vocoder(_) | Effect::VoiceShift(_) | Effect::Transition(_))
     }
 
     pub fn label(&self) -> &'static str {
@@ -3419,6 +3550,7 @@ impl Effect {
             Effect::Multiband(_) => "Multibanda (OTT)",
             Effect::Vocoder(_) => "Vocoder",
             Effect::VoiceShift(_) => "Voz: tono y formantes",
+            Effect::Transition(_) => "Transición",
             Effect::Plugin(_) => "Plugin",
         }
     }
@@ -3709,6 +3841,18 @@ const VOICE_SHIFT_PARAMS: [ParamInfo; 5] = [
     ParamInfo::linear("Fine", -100.0, 100.0, 0.0, Cents),
     ParamInfo::linear("Formant", -12.0, 12.0, 0.0, Semitones),
     ParamInfo::linear("Output", -24.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
+];
+/// «Active» first: the one a lane switches.
+const TRANSITION_PARAMS: [ParamInfo; 9] = [
+    ParamInfo::linear("Active", 0.0, 1.0, 0.0, Percent),
+    ParamInfo::linear("Curve", -1.0, 1.0, 0.0, Plain),
+    ParamInfo::linear("Decay", 0.0, 24.0, 0.0, Decibels),
+    ParamInfo::linear("Pitch", -12.0, 12.0, 0.0, Semitones),
+    ParamInfo::linear("Gate", 0.05, 1.0, 1.0, Percent),
+    ParamInfo::log("Filter", 30.0, 18000.0, 1000.0, Hertz),
+    ParamInfo::linear("Sweep", -3.0, 3.0, 0.0, Octaves),
+    ParamInfo::linear("Res", 0.0, 0.9, 0.3, Percent),
     ParamInfo::linear("Dry/Wet", 0.0, 1.0, 1.0, Percent),
 ];
 const SUPERSAW_PARAMS: [ParamInfo; 11] = [
@@ -4151,6 +4295,7 @@ impl Effect {
             Effect::Multiband(_) => &MULTIBAND_PARAMS,
             Effect::Vocoder(_) => &VOCODER_PARAMS,
             Effect::VoiceShift(_) => &VOICE_SHIFT_PARAMS,
+            Effect::Transition(_) => &TRANSITION_PARAMS,
             Effect::Plugin(_) => &[],
         }
     }
@@ -4259,6 +4404,15 @@ impl Effect {
             (Effect::VoiceShift(p), 2) => &mut p.formant,
             (Effect::VoiceShift(p), 3) => &mut p.output_db,
             (Effect::VoiceShift(p), 4) => &mut p.mix,
+            (Effect::Transition(p), 0) => &mut p.active,
+            (Effect::Transition(p), 1) => &mut p.curve,
+            (Effect::Transition(p), 2) => &mut p.decay_db,
+            (Effect::Transition(p), 3) => &mut p.pitch,
+            (Effect::Transition(p), 4) => &mut p.gate,
+            (Effect::Transition(p), 5) => &mut p.filter_hz,
+            (Effect::Transition(p), 6) => &mut p.sweep,
+            (Effect::Transition(p), 7) => &mut p.resonance,
+            (Effect::Transition(p), 8) => &mut p.mix,
             _ => return None,
         })
     }

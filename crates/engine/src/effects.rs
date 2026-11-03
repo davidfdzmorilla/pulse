@@ -9,6 +9,7 @@ use crate::dynamics::{Glue, Multiband};
 use crate::convolution::Convolution;
 use crate::voice::{Vocoder, VoiceShift};
 use crate::plugin::PluginProcessor;
+use crate::transition::Transition;
 use crate::tuner::Tuner;
 use std::f32::consts::{PI, TAU};
 
@@ -1553,6 +1554,7 @@ pub enum EffectProcessor {
     Multiband(Box<Multiband>),
     Vocoder(Box<Vocoder>),
     VoiceShift(Box<VoiceShift>),
+    Transition(Box<Transition>),
     /// A VST3 effect; None until the app loads it (it then passes the signal through).
     Plugin(PluginId, Option<Box<PluginProcessor>>),
 }
@@ -1604,6 +1606,7 @@ impl EffectProcessor {
             Effect::Multiband(params) => Self::Multiband(Box::new(Multiband::new(params, sample_rate))),
             Effect::Vocoder(params) => Self::Vocoder(Box::new(Vocoder::new(params, sample_rate))),
             Effect::VoiceShift(params) => Self::VoiceShift(Box::new(VoiceShift::new(params, sample_rate))),
+            Effect::Transition(params) => Self::Transition(Box::new(Transition::new(params, sample_rate))),
             Effect::Plugin(id) => Self::Plugin(id, None),
         }
     }
@@ -1616,6 +1619,7 @@ impl EffectProcessor {
             Self::Limiter(fx) => fx.latency(),
             Self::Tuner(fx) => fx.latency(),
             Self::VoiceShift(fx) => fx.latency(),
+            Self::Transition(fx) => fx.latency(),
             Self::Plugin(_, Some(plugin)) => plugin.latency(),
             _ => 0,
         }
@@ -1702,6 +1706,7 @@ impl EffectProcessor {
             (Self::Multiband(fx), Effect::Multiband(p)) => fx.params = p,
             (Self::Vocoder(fx), Effect::Vocoder(p)) => fx.params = p,
             (Self::VoiceShift(fx), Effect::VoiceShift(p)) => fx.params = p,
+            (Self::Transition(fx), Effect::Transition(p)) => fx.params = p,
             (Self::Plugin(id, _), Effect::Plugin(other)) => return *id == other,
             _ => return false,
         }
@@ -1733,6 +1738,7 @@ impl EffectProcessor {
             Self::Multiband(fx) => Effect::Multiband(fx.params),
             Self::Vocoder(fx) => Effect::Vocoder(fx.params),
             Self::VoiceShift(fx) => Effect::VoiceShift(fx.params),
+            Self::Transition(fx) => Effect::Transition(fx.params),
             Self::Plugin(id, _) => Effect::Plugin(*id),
         }
     }
@@ -1822,6 +1828,7 @@ impl EffectProcessor {
             Self::Multiband(fx) => fx.reset(),
             Self::Vocoder(fx) => fx.reset(),
             Self::VoiceShift(fx) => fx.reset(),
+            Self::Transition(fx) => fx.reset(),
             Self::Plugin(..) => {}
         }
     }
@@ -1850,6 +1857,7 @@ impl EffectProcessor {
             Self::Multiband(fx) => fx.process(l, r),
             Self::Vocoder(fx) => fx.process(l, r),
             Self::VoiceShift(fx) => fx.process(l, r),
+            Self::Transition(fx) => fx.process(l, r, ctx),
             Self::Plugin(_, Some(plugin)) => {
                 plugin.set_transport(ctx.tempo, ctx.beat, ctx.beats_per_sample > 0.0, &ctx.meter);
                 plugin.process(l, r);

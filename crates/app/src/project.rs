@@ -360,7 +360,9 @@ pub struct MasterTrack {
 /// 19: a Sampler in Mono or Legato or with a glide, pads or drum sounds that
 /// follow pitch bend, or a chromatic pad: a Pulse that reads 18 would play
 /// them otherwise. Only projects that have one.
-pub const FORMAT: u32 = 19;
+/// 20: a «Transición» (tape stop, repeats, cuts): a Pulse that reads 19
+/// doesn't know it. Only projects that have one.
+pub const FORMAT: u32 = 20;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -734,8 +736,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.tracks.iter().any(|t| plays_by_note(&t.instrument)) {
+            let format = if self.has_effect(|e| matches!(e, Effect::Transition(_))) {
                 FORMAT
+            } else if self.tracks.iter().any(|t| plays_by_note(&t.instrument)) {
+                19
             } else if self.has_effect(|e| matches!(e, Effect::Vocoder(v) if v.midi)) {
                 18
             } else if self.has_effect(|e| matches!(e, Effect::Vocoder(_) | Effect::VoiceShift(_))) {

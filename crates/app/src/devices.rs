@@ -230,6 +230,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                             vocoder_body(app, ui, target, index, effect, &sources, &mut actions);
                             return;
                         }
+                        if let Effect::Transition(_) = effect {
+                            transition_body(app, ui, target, index, effect, &mut actions);
+                            return;
+                        }
                         discrete_controls(ui, effect, index, &sources);
                         for param in 0..effect.params().len() {
                             effect_knob(app, ui, target, index, effect, param, &mut actions);
@@ -429,6 +433,8 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         // The carrier's column, then two rows of knobs (six and five).
         Effect::Vocoder(_) => return 6.0 * 52.0 + 110.0 + 28.0,
         Effect::VoiceShift(_) => (5, 1),
+        // Its button and mode, its time (and filter), then the knobs its mode uses.
+        Effect::Transition(p) => (transition_knobs(p).len(), 2),
         Effect::Plugin(_) => (PLUGIN_KNOBS, 1),
     };
     let meter = if meters(effect) { METER_WIDTH + 4.0 } else { 0.0 };
@@ -541,6 +547,108 @@ fn vocoder_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize,
             }
         });
     });
+}
+
+/// The knobs a Transition shows in its mode (indices in its parameter table).
+fn transition_knobs(p: &engine::model::TransitionParams) -> &'static [usize] {
+    use engine::model::TransitionMode;
+    match p.mode {
+        TransitionMode::TapeStop | TransitionMode::TapeStart => &[1, 8],
+        TransitionMode::Repeat => &[2, 3, 4, 5, 6, 7, 8],
+        TransitionMode::Cut => &[5, 7, 8],
+    }
+}
+
+fn grid_label(beats: f64) -> &'static str {
+    const NAMES: [&str; 11] = ["1/2", "1/4", "1/4 T", "1/8", "1/8 T", "1/16", "1/16 T", "1/32", "1/32 T", "1/64", "1/64 T"];
+    engine::model::TRANSITION_GRIDS.iter().position(|&g| g == beats).map_or("—", |i| NAMES[i])
+}
+
+/// The Transition: its button («Active», what a lane switches) and mode;
+/// how long its tape takes or which grid it repeats, and its filter; then
+/// the knobs of its mode.
+fn transition_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize, effect: &mut Effect, actions: &mut Vec<Action>) {
+    use engine::model::{TransitionMode, TRANSITION_GRIDS, TRANSITION_LENGTHS};
+    let Effect::Transition(p) = effect else { return };
+    let id = Param::Device { device: index, param: 0 };
+    let on = app.display_value(target, id) >= 0.5;
+    ui.vertical(|ui| {
+        ui.set_width(96.0);
+        let text = egui::RichText::new(if on { "● Activo" } else { "○ Activo" }).color(if on { ACCENT } else { theme::TEXT });
+        let hint = match app.automation_state(target, id) {
+            Some(false) => "Lo enciende y apaga su carril de automatización («Active»), a tempo. Pulsarlo toma el control a mano",
+            _ => "Enciéndelo para que actúe ya. Para que suene en su sitio, dibuja en el Arrangement un carril de automatización en «Active»: actúa desde que se enciende, a tempo, hasta que se apaga",
+        };
+        if ui.add(egui::Button::new(text).min_size(vec2(92.0, 26.0)).selected(on)).on_hover_text(hint).clicked() {
+            actions.push(Action::Param(id, if on { 0.0 } else { 1.0 }));
+        }
+        ui.label(egui::RichText::new("Modo").color(TEXT_DIM).size(10.5));
+        egui::ComboBox::from_id_salt(format!("transition_mode{index}")).selected_text(p.mode.label()).width(92.0).show_ui(ui, |ui| {
+            for mode in TransitionMode::ALL {
+                let hint = match mode {
+                    TransitionMode::TapeStop => "La cinta frena hasta pararse: el tono y la velocidad caen juntos. Luego, silencio hasta que lo apagas",
+                    TransitionMode::TapeStart => "La cinta arranca desde parada hasta su velocidad y luego vuelve al sonido en directo",
+                    TransitionMode::Repeat => "Repite el trozo de la rejilla en que lo enciendes (stutter): cada repetición puede bajar, subir, apagarse o filtrarse más",
+                    TransitionMode::Cut => "Silencia el sonido o lo deja pasar por un filtro: el hueco antes del drop",
+                };
+                ui.selectable_value(&mut p.mode, mode, mode.label()).on_hover_text(hint);
+            }
+        });
+    });
+    ui.vertical(|ui| {
+        ui.set_width(96.0);
+        match p.mode {
+            TransitionMode::TapeStop | TransitionMode::TapeStart => {
+                let hint = "Lo que tarda la cinta en pararse (o en arrancar), a tempo";
+                ui.label(egui::RichText::new("Duración").color(TEXT_DIM).size(10.5)).on_hover_text(hint);
+                beats_combo(ui, &format!("transition_len{index}"), &mut p.length_beats, &TRANSITION_LENGTHS).on_hover_text(hint);
+            }
+            TransitionMode::Repeat => {
+                let hint = "El trozo que repite: el de la rejilla en que lo enciendes, desde su línea. «T»: tresillo. Cambiarlo mientras repite acorta las repeticiones (un redoble que se acelera)";
+                ui.label(egui::RichText::new("Rejilla").color(TEXT_DIM).size(10.5)).on_hover_text(hint);
+                egui::ComboBox::from_id_salt(format!("transition_grid{index}"))
+                    .selected_text(grid_label(p.grid_beats))
+                    .width(84.0)
+                    .show_ui(ui, |ui| {
+                        for grid in TRANSITION_GRIDS {
+                            ui.selectable_value(&mut p.grid_beats, grid, grid_label(grid));
+                        }
+                    })
+                    .response
+                    .on_hover_text(hint);
+            }
+            TransitionMode::Cut => {}
+        }
+        if matches!(p.mode, TransitionMode::Repeat | TransitionMode::Cut) {
+            let cut = p.mode == TransitionMode::Cut;
+            let hint = if cut {
+                "Sin filtro, el corte es silencio. Con él, deja pasar solo lo que el filtro deja: «High-pass» quita los graves (el 808), «Low-pass» deja solo ellos"
+            } else {
+                "El filtro de las repeticiones: «Sweep» lo mueve en cada una"
+            };
+            ui.label(egui::RichText::new("Filtro").color(TEXT_DIM).size(10.5)).on_hover_text(hint);
+            let name = |f: Option<FilterMode>| f.map_or(if cut { "Silencio" } else { "Sin filtro" }, |m| m.label());
+            egui::ComboBox::from_id_salt(format!("transition_filter{index}"))
+                .selected_text(name(p.filter))
+                .width(84.0)
+                .show_ui(ui, |ui| {
+                    ui.selectable_value(&mut p.filter, None, name(None));
+                    for mode in FilterMode::ALL {
+                        ui.selectable_value(&mut p.filter, Some(mode), mode.label());
+                    }
+                })
+                .response
+                .on_hover_text(hint);
+        }
+        ui.label(egui::RichText::new("Retraso 2,7 ms").color(TEXT_DIM).size(9.5)).on_hover_text("Suena 128 muestras tarde (2,7 ms a 48 kHz) para saber de antemano cuándo lo enciende el carril: así empieza y acaba justo en el tiempo. Pulse retrasa lo mismo las demás pistas");
+    });
+    let shown = *effect;
+    let Effect::Transition(p) = &shown else { return };
+    let filtered = p.filter.is_some();
+    for &param in transition_knobs(p) {
+        // The filter's knobs do nothing without one.
+        ui.add_enabled_ui(filtered || !matches!(param, 5..=7), |ui| effect_knob(app, ui, target, index, &shown, param, actions));
+    }
 }
 
 /// What a Vocoder's carrier is: its own oscillator at a note, its own
@@ -835,6 +943,8 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 });
             });
         }
+        // Drawn by `transition_body`.
+        Effect::Transition(_) => {}
         Effect::VoiceShift(_) => {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Retraso").color(TEXT_DIM).size(10.5));

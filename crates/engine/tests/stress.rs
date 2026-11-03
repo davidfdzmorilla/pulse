@@ -219,6 +219,10 @@ fn track_devices(t: usize) -> Vec<Device> {
     if t % 9 == 4 {
         devices.push(Device::new(Effect::Vocoder(VocoderParams { bands: 32.0, carrier: VocoderCarrier::SuperSaw, midi: true, mix: 0.6, ..Default::default() })));
     }
+    // Repeating all along, with its filter moving.
+    if t % 8 == 3 {
+        devices.push(Device::new(Effect::Transition(TransitionParams { mode: TransitionMode::Repeat, active: 1.0, grid_beats: 0.125, pitch: -0.5, filter: Some(FilterMode::LowPass), sweep: -0.1, ..Default::default() })));
+    }
     if t % 5 == 0 {
         devices.push(Device::new(Effect::Bitcrusher(BitcrusherParams::default())));
         devices.push(Device::new(Effect::Limiter(LimiterParams::default())));

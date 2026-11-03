@@ -341,6 +341,33 @@ fn laps(clip: &Clip, start: f64, length: f64, bar: f64) -> Vec<ArrangementClip> 
     out
 }
 
+/// A looping clip's notes over `bar` beats from `from` (in the clip's time,
+/// from its start), moved to start at 0.
+fn bar_of(clip: &MidiClip, from: f64, bar: f64) -> Vec<Note> {
+    if clip.length <= 0.0 {
+        return Vec::new();
+    }
+    let offset = from.rem_euclid(clip.length);
+    let mut notes = Vec::new();
+    let mut lap = -offset;
+    while lap < bar {
+        notes.extend(clip.notes.iter().filter(|n| n.start + lap >= -1e-9 && n.start + lap < bar - 1e-9).map(|n| Note { start: n.start + lap, ..*n }));
+        lap += clip.length;
+    }
+    notes
+}
+
+/// Whether a section's drums are a half-time beat (trap: the snare or clap on
+/// 3), in bars of four beats.
+fn half_time_section(tracks: &[Track], section: &Section, bar: f64) -> bool {
+    (bar - 4.0).abs() < 1e-9
+        && section.tracks.iter().enumerate().any(|(t, &source)| {
+            let Some(track) = tracks.get(t).filter(|t| t.plays_drums()) else { return false };
+            let Some(Some(Clip::Midi(m))) = source.and_then(|s| track.clips.get(s)) else { return false };
+            crate::drum_gen::half_time(&m.notes, &crate::drum_gen::Kit::from_rows(&track.drum_rows()))
+        })
+}
+
 impl PulseApp {
     /// Lays the sections out on the Arrangement, replacing what it had.
     pub fn lay_out(&mut self, sections: &[Section]) {
@@ -363,15 +390,27 @@ impl PulseApp {
             // A build's last bar is the roll alone: the kick and the other
             // drums stop under it.
             let rolling = section.roll && section.bars > 1 && section.tracks.iter().enumerate().any(|(t, s)| s.is_some() && self.project.tracks.get(t).is_some_and(|t| t.plays_drums()));
+            // A half-time beat (trap) turns around on its hats, with a gap,
+            // not with a snare roll.
+            let trap = rolling && half_time_section(&self.project.tracks, section, last_bar);
             for (t, &source) in section.tracks.iter().enumerate() {
                 let Some(track) = self.project.tracks.get_mut(t) else { continue };
                 let Some(clip) = source.and_then(|s| track.clips.get(s).cloned().flatten()) else { continue };
                 let rolls = rolling && track.plays_drums() && matches!(clip, Clip::Midi(_));
-                let body = if rolling && role(track) == Role::Drums { length - last_bar } else { length - cut };
+                let drums = rolling && role(track) == Role::Drums;
+                let body = if rolls || (drums && !trap) { length - last_bar } else if drums { length - f64::max(cut, 1.0) } else { length - cut };
                 track.arrangement.extend(laps(&clip, start, body, meter.bar_length_at(start)));
                 if rolls {
-                    let pitch = snare(track, meter.first());
-                    track.arrangement.push(ArrangementClip { start: start + length - last_bar, length: last_bar - cut, clip: Clip::Midi(roll(pitch, track.color, last_bar)) });
+                    let turn = match &clip {
+                        Clip::Midi(m) if trap => {
+                            let kit = crate::drum_gen::Kit::from_rows(&track.drum_rows());
+                            let (notes, rolled) = crate::drum_gen::hat_turnaround(&bar_of(m, length - last_bar, last_bar), &kit, last_bar);
+                            let name = if rolled { "Redoble de charles" } else { "Hueco" };
+                            MidiClip { notes, groove: m.groove.clone(), ..MidiClip::new(name, last_bar, track.color) }
+                        }
+                        _ => roll(snare(track, meter.first()), track.color, last_bar),
+                    };
+                    track.arrangement.push(ArrangementClip { start: start + length - last_bar, length: last_bar - cut, clip: Clip::Midi(turn) });
                 }
             }
             start += length;
@@ -465,7 +504,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
             ui.label(RichText::new("Redoble al final").color(TEXT_DIM));
             for s in sections.iter_mut() {
-                ui.checkbox(&mut s.roll, "").on_hover_text("El último compás de la batería, un redoble de caja que sube");
+                ui.checkbox(&mut s.roll, "").on_hover_text("El último compás de la batería, un redoble de caja que sube; en trap, un redoble de charles y un hueco antes de lo siguiente");
             }
             ui.end_row();
             ui.label(RichText::new("Corte antes de lo siguiente").color(TEXT_DIM));
@@ -646,6 +685,71 @@ mod tests {
         assert_eq!(rolls, [23.0 * 4.0, 63.0 * 4.0]);
         // The intro starts with the kick.
         assert_eq!(app.project.tracks[0].arrangement[0].start, 0.0);
+    }
+
+    /// A trap song (the 2026-11 trap audit): the beat on one Drum Machine,
+    /// the hats on another, in «Estrofa» and «Estribillo» scenes. Pop's verses
+    /// end on a hat roll and a gap before the chorus, not on an EDM snare
+    /// roll; a four-on-the-floor song keeps its snare roll.
+    #[test]
+    fn trap_verses_turn_around_on_the_hats() {
+        use crate::drum_gen::{self, Level, Style};
+        use engine::model::drum_note::{CLAP, CLOSED_HAT, KICK, SNARE};
+        let kit = drum_gen::Kit::from_rows(&engine::model::DRUM_VOICES.iter().map(|&(p, n)| (p, n.to_string())).collect::<Vec<_>>());
+        let beat = |sounds: &[drum_gen::Sound], level| {
+            let mut chosen = [false; stems::drums::VOICES];
+            sounds.iter().for_each(|&s| chosen[s as usize] = true);
+            let settings = drum_gen::Settings { style: Style::Trap, level, bars: 4, sounds: chosen, ..Default::default() };
+            let (notes, groove) = drum_gen::generate(&kit, &settings, 16.0, &[], 0, engine::meter::TimeSig::COMMON);
+            Clip::Midi(MidiClip { notes, groove, ..MidiClip::new("Trap", 16.0, [0; 3]) })
+        };
+        use drum_gen::Sound as S;
+        let mut drums = Track::new("Batería", [0; 3], InstrumentKind::DrumMachine(Style::Trap.sound()));
+        let mut hats = Track::new("Charles", [0; 3], InstrumentKind::DrumMachine(Style::Trap.sound()));
+        for (scene, level) in [(0, Level::Medium), (1, Level::Intense)] {
+            drums.clips[scene] = Some(beat(&[S::Kick, S::Snare, S::Clap], level));
+            hats.clips[scene] = Some(beat(&[S::Hat], level));
+        }
+        let mut bass = Track::new("808", [0; 3], InstrumentKind::Synth(Default::default()));
+        bass.clips[0] = Some(Clip::Midi(MidiClip { notes: vec![Note { start: 0.0, length: 2.0, pitch: 29, velocity: 1.0, chance: 1.0 }], ..MidiClip::new("808", 16.0, [0; 3]) }));
+        bass.clips[1] = bass.clips[0].clone();
+        let mut project = Project::empty();
+        project.tempo = 140.0;
+        project.tracks = vec![drums, hats, bass];
+        project.scene_names[0] = "Estrofa".into();
+        project.scene_names[1] = "Estribillo".into();
+        let sections = plan(&project.tracks, &project.scene_names, Template::Pop);
+        assert!(sections[1].roll && sections[1].name == "Estrofa");
+        let mut app = PulseApp::headless(project);
+        app.lay_out(&sections);
+        // The first verse: bars 9 to 24; its last bar from beat 92.
+        let at = |t: usize, start: f64| app.project.tracks[t].arrangement.iter().find(|c| (c.start - start).abs() < 1e-9).cloned();
+        let Some(Clip::Midi(roll)) = at(1, 92.0).map(|c| c.clip) else { panic!("the hats' turnaround") };
+        assert_eq!(roll.name, "Redoble de charles");
+        let triplet = |b: f64| ((b * 6.0) - (b * 6.0).round()).abs() < 1e-6 && ((b * 4.0) - (b * 4.0).round()).abs() > 1e-6;
+        assert!(roll.notes.iter().any(|n| n.pitch == CLOSED_HAT && triplet(n.start)), "triplets");
+        let last: Vec<&Note> = roll.notes.iter().filter(|n| n.start >= 3.0).collect();
+        assert!(last.len() >= 8 && last.windows(2).all(|w| w[1].velocity > w[0].velocity), "rising into the chorus");
+        let Some(Clip::Midi(gap)) = at(0, 92.0).map(|c| c.clip) else { panic!("the beat's last bar") };
+        assert_eq!(gap.name, "Hueco");
+        assert!(gap.notes.iter().any(|n| n.pitch == KICK && n.start == 0.0) && gap.notes.iter().any(|n| [CLAP, SNARE].contains(&n.pitch) && n.start == 2.0), "its first half, the snare on 3");
+        assert!(gap.notes.iter().all(|n| n.start < 3.0), "the last beat empty");
+        let snare_rolls = app.project.tracks.iter().flat_map(|t| &t.arrangement).filter(|c| c.clip.name() == "Redoble").count();
+        assert_eq!(snare_rolls, 0, "no snare roll in trap");
+        // The 808 plays on through.
+        assert!(app.project.tracks[2].arrangement.iter().any(|c| c.start == 32.0 && c.length == 64.0));
+        // A house song in the same scenes keeps its snare roll.
+        let mut house = app.project.clone();
+        let four: Vec<Note> = (0..16).flat_map(|b| [Note { start: b as f64, length: 0.25, pitch: KICK, velocity: 1.0, chance: 1.0 }, Note { start: b as f64 + 0.5, length: 0.25, pitch: CLOSED_HAT, velocity: 0.7, chance: 1.0 }]).chain((0..8).map(|b| Note { start: b as f64 * 2.0 + 1.0, length: 0.25, pitch: CLAP, velocity: 1.0, chance: 1.0 })).collect();
+        for t in 0..2 {
+            for scene in 0..2 {
+                house.tracks[t].clips[scene] = Some(Clip::Midi(MidiClip { notes: four.clone(), ..MidiClip::new("House", 16.0, [0; 3]) }));
+            }
+        }
+        let sections = plan(&house.tracks, &house.scene_names, Template::Pop);
+        let mut app = PulseApp::headless(house);
+        app.lay_out(&sections);
+        assert!(app.project.tracks[0].arrangement.iter().any(|c| c.start == 92.0 && c.clip.name() == "Redoble"));
     }
 
     /// In 3/4 the sections are bars of three and the roll fills the last one.

@@ -1332,6 +1332,9 @@ Marca **Que lo toque la IA** y el modelo de batería de Pulse oye la base del es
 +++ Cómo son los estilos
 - Las bases están escritas a mano, como las tocaría un batería de cada estilo: el bombo a negras y el charles abierto a contratiempo del house, la caja en el 3 y los redobles de charles del trap, el dos-pasos del drum & bass, el dembow del reggaetón…, con sus acentos y notas fantasma.
 - **Hardgroove** (142 BPM) hace rodar toms y congas sobre el bombo a negras, con un poco de swing, y charles que solo suenan algunas vueltas (probabilidad por nota), así que el loop no se repite igual.
+- **Trap** (140 BPM) va a medio tiempo, con la caja en el 3. Con **Caja** y **Palmada** marcadas suenan las dos juntas en el 3, como se hace en trap.
+- Los **redobles de charles del trap** cambian en cada compás: tresillos de semicorchea y de corchea, fusas, tresillos de fusa y, en **Intenso**, semifusas. Cada redoble sube de velocidad, cambia de sitio de un compás a otro y hay más al final de cada frase de cuatro compases. En **Básico** solo hay alguno suelto; en **Intenso**, uno o dos por compás. Desde **Medio** entra a veces un charles abierto.
+- Los redobles de los demás estilos (las palmas del hard techno, por ejemplo) también crecen hasta el golpe.
 - **Hard techno** (152 BPM) lleva un bombo grave, largo y recortado (con Drive, para que corte en la mezcla), que galopa en Intenso, y redobles de palmas al final de cada frase.
 - El hip hop lleva **swing**, y el house un poco: se pone en el **Groove** del clip.
 - La IA es una red pequeña entrenada con las baterías de unas 70.000 canciones (Lakh MIDI Dataset) y de baterías reales (Groove MIDI Dataset).
@@ -1520,6 +1523,7 @@ Las estructuras:
 - Cada parte lleva solo las pistas que le tocan según su **papel**: sin bajo en la intro, sin batería en el break… En el estribillo o el drop suena todo: si una pista no tiene clip en esa escena, trae el suyo de otra.
 - La batería suena en todas las partes que la piden aunque su escena no tenga batería: trae la de la escena más ligera que la tenga. En **Electrónica**, la intro y la outro llevan bombo y percusión para que el DJ pueda mezclar, y la subida tiene batería para su redoble.
 - **Subidas**: con **Redoble al final**, el último compás de la batería es un **redoble** de caja que acelera y crece, y el resto de la batería calla debajo. Si quitas la batería de esa parte, no hay redoble.
+- **En trap** (la caja o la palmada en el 3), **Redoble al final** no pone un redoble de caja: el último compás sigue con su ritmo hasta el 3, los charles hacen un redoble en tresillos que sube, y el último tiempo queda en **hueco** antes del estribillo.
 - **Cortes**: el último tiempo antes del drop va en silencio, para que el drop entre con fuerza.
 
 +++ Cómo elige

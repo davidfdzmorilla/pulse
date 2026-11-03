@@ -397,6 +397,9 @@ fn takes(style: Style, level: Level) -> &'static [Take] {
                 b: &[(Kick, "X...X...X...X.gg"), (Hat, "ggxgggxgggxggg.."), (Open, "..............x."), (Back, "....x.......x..."), (Rim, "......o.......o.")],
             },
         ],
+        // Trap: half time, the backbeat on 3; the hats on eighths or
+        // sixteenths, and their rolls (triplets, thirty-seconds, sixty-fourths,
+        // rising) are laid over them bar by bar (see `trap_rolls`).
         (Style::Trap, Level::Basic) => &[Take {
             a: &[(Kick, "X.........X....."), (Back, "........X......."), (Hat, "x.x.x.x.x.x.x.x.")],
             b: &[(Kick, "X.........X..x.."), (Back, "........X......."), (Hat, "x.x.x.x.x.x.x.x.")],
@@ -404,21 +407,21 @@ fn takes(style: Style, level: Level) -> &'static [Take] {
         (Style::Trap, Level::Medium) => &[
             Take {
                 a: &[(Kick, "X.....x...X....."), (Back, "........X......."), (Hat, "xoxoxoxoxoxoxoxo")],
-                b: &[(Kick, "X.....x.x.X....."), (Back, "........X......."), (Hat, "xoxoxoxoxoxoxorr")],
+                b: &[(Kick, "X.....x.x.X....."), (Back, "........X......."), (Hat, "xoxoxoxoxoxoxoxo")],
             },
             Take {
                 a: &[(Kick, "X..x......X....."), (Back, "........X......."), (Hat, "x.xox.xox.xox.xo"), (Open, "......o.........")],
-                b: &[(Kick, "X..x......X..x.."), (Back, "........X......."), (Hat, "x.xox.xox.xoxrrr"), (Open, "......o.........")],
+                b: &[(Kick, "X..x......X..x.."), (Back, "........X......."), (Hat, "x.xox.xox.xoxoxo"), (Open, "......o.........")],
             },
         ],
         (Style::Trap, Level::Intense) => &[
             Take {
-                a: &[(Kick, "X..x..x...X..x.."), (Back, "........X......."), (Hat, "xoxoxorrxoxoxorr")],
-                b: &[(Kick, "X..x..x...X....."), (Back, "........X.....g."), (Hat, "xoxoxorrxoxorrrr")],
+                a: &[(Kick, "X..x..x...X..x.."), (Back, "........X......."), (Hat, "xoxoxoxoxoxoxoxo")],
+                b: &[(Kick, "X..x..x...X....."), (Back, "........X.....g."), (Hat, "xoxoxoxoxoxoxoxo")],
             },
             Take {
-                a: &[(Kick, "X.....xX..X....x"), (Back, "........X......."), (Hat, "xoxoxoxoxorrxoxo"), (Open, "..............o.")],
-                b: &[(Kick, "X.....xX..X.x..."), (Back, "........X......g"), (Hat, "xoxoxoxoxorrxrrr"), (Open, "..............o.")],
+                a: &[(Kick, "X.....xX..X....x"), (Back, "........X......."), (Hat, "xoxoxoxoxoxoxoxo"), (Open, "..............o.")],
+                b: &[(Kick, "X.....xX..X.x..."), (Back, "........X......g"), (Hat, "xoxoxoxoxoxoxoxo"), (Open, "..............o.")],
             },
         ],
         (Style::DrumAndBass, Level::Basic) => &[Take {
@@ -756,6 +759,8 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
     let map = steps_from_four(sig);
     let bars = (length / bar_length - 1e-9).ceil().max(1.0) as usize;
     let mut notes = Vec::new();
+    // Trap's bars: where each starts, and whether it ends a phrase with its fill.
+    let mut trap_bars = Vec::new();
     for bar in 0..bars {
         let start = bar as f64 * bar_length;
         // A A A B: the fourth bar of each four turns the phrase around.
@@ -778,7 +783,8 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
         for (voice, steps) in &lines {
             let (voice, steps) = (*voice, steps.as_str());
             let Some(pitch) = pitch(voice) else { continue };
-            for (s, c) in steps.char_indices() {
+            let chars: Vec<char> = steps.chars().collect();
+            for (s, &c) in chars.iter().enumerate() {
                 let Some(v) = velocity(c) else { continue };
                 if voice == Hat && open_steps.contains(&s) {
                     continue;
@@ -793,18 +799,196 @@ pub fn generate(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], take:
                 // Some times round only.
                 let chance = if c == 'p' { 0.55 } else { 1.0 };
                 if c == 'r' {
-                    notes.push(Note { start: beat, length: 0.125, pitch, velocity: v, chance: 1.0 });
-                    notes.push(Note { start: beat + 0.125, length: 0.125, pitch, velocity: v * 0.85, chance: 1.0 });
+                    // A roll's thirty-seconds rise through its run of steps,
+                    // from soft to the written hit.
+                    let first = (0..s).rev().take_while(|&k| chars[k] == 'r').count();
+                    let run = first + 1 + chars[s + 1..].iter().take_while(|&&k| k == 'r').count();
+                    for half in 0..2 {
+                        let at = (2 * first + half) as f32 / (2 * run - 1) as f32;
+                        notes.push(Note { start: beat + half as f64 * 0.125, length: 0.125, pitch, velocity: v * (0.55 + 0.45 * at), chance: 1.0 });
+                    }
                 } else {
                     notes.push(Note { start: beat, length: 0.25, pitch, velocity: v, chance });
+                    // Trap's backbeat: the clap and the snare together.
+                    if let Some(layer) = (voice == Back && c == 'X').then(|| backbeat_layer(kit, settings)).flatten() {
+                        notes.push(Note { start: beat, length: 0.25, pitch: layer, velocity: v * 0.9, chance });
+                    }
                 }
             }
         }
+        if settings.style == Style::Trap {
+            trap_bars.push((start, filled.is_some()));
+        }
+    }
+    if let Some(hat) = pitch(Hat) {
+        let open = pitch(Open).filter(|&o| o != hat);
+        trap_rolls(&mut notes, hat, open, settings.level, &trap_bars, bar_length, length, &mut dice);
     }
     percussion_alone(kit, settings, &mut notes, &mut dice, length, sig);
     crash_phrases(kit, settings, &mut notes, length, bar_length);
     follow_bass(kit, settings, &mut notes, bass, length);
     (notes, swing(settings.style, settings.level))
+}
+
+/// What doubles trap's accented backbeat: the snare under the clap, when both
+/// are chosen and the kit has each of its own.
+fn backbeat_layer(kit: &Kit, settings: &Settings) -> Option<u8> {
+    let on = |s: Sound| settings.sounds[s as usize];
+    if settings.style != Style::Trap || !on(Sound::Snare) || !on(Sound::Clap) {
+        return None;
+    }
+    let (clap, snare) = (kit.clap?, kit.snare?);
+    (clap != snare).then_some(snare)
+}
+
+/// A hat roll: how many hits a beat (3 the eighth triplets, 6 the sixteenth
+/// ones, 8 thirty-seconds, 12 their triplets, 16 sixty-fourths) and over how
+/// many beats.
+type Roll = (u32, f64);
+
+/// The rolls each level picks from: plainer ones in Basic, sixty-fourths and
+/// a beat of thirty-second triplets only in Intense.
+fn roll_kinds(level: Level) -> &'static [Roll] {
+    match level {
+        Level::Basic => &[(6, 0.5), (8, 0.5)],
+        Level::Medium => &[(6, 0.5), (8, 0.5), (12, 0.5), (3, 1.0), (6, 1.0)],
+        Level::Intense => &[(6, 0.5), (8, 0.5), (12, 0.5), (16, 0.5), (3, 1.0), (6, 1.0), (12, 1.0)],
+    }
+}
+
+/// Trap's hats, bar by bar (`bars`: where each starts, and whether it ends a
+/// phrase with its fill): rolls of triplets, thirty-seconds and sixty-fourths
+/// over the written hats, each rising, somewhere else every bar and more of
+/// them where the phrase turns (every fourth bar), by level. A phrase's fill
+/// rolls its whole last beat. From Medium, an open hat now and then (`open`).
+#[allow(clippy::too_many_arguments)]
+fn trap_rolls(notes: &mut Vec<Note>, hat: u8, open: Option<u8>, level: Level, bars: &[(f64, bool)], bar: f64, length: f64, dice: &mut Dice) {
+    for (i, &(start, fill)) in bars.iter().enumerate() {
+        let room = bar.min(length - start);
+        let turn = i % 4 == 3;
+        let opens_at = |notes: &Vec<Note>| -> Vec<f64> { notes.iter().filter(|n| Some(n.pitch) == open && n.start >= start - 1e-9 && n.start < start + bar - 1e-9).map(|n| n.start - start).collect() };
+        // An open hat on an off-beat, choking the closed one there.
+        if let Some(open) = open.filter(|_| level != Level::Basic && !fill) {
+            let odds = if level == Level::Intense { 0.45 } else { 0.3 };
+            if dice.roll() < odds && opens_at(notes).is_empty() {
+                let at = if dice.roll() < 0.6 { bar - 0.5 } else { 1.5 };
+                if at < room {
+                    notes.retain(|n| !(n.pitch == hat && (n.start - start - at).abs() < 1e-9));
+                    notes.push(Note { start: start + at, length: 0.5, pitch: open, velocity: 0.55 * (0.96 + 0.08 * dice.roll()), chance: 1.0 });
+                }
+            }
+        }
+        let mut count = match level {
+            Level::Basic => usize::from(turn) + usize::from(i % 4 == 1 && dice.roll() < 0.4),
+            Level::Medium => 1 + usize::from(turn),
+            Level::Intense => 1 + usize::from(dice.roll() < 0.5) + usize::from(turn),
+        };
+        let mut used: Vec<(f64, f64)> = Vec::new();
+        let mut rolls: Vec<(f64, Roll)> = Vec::new();
+        if fill && room >= bar - 1e-9 {
+            // The fill: the last beat, rolled all through.
+            let kind = if dice.roll() < 0.5 { (12, 1.0) } else { (8, 1.0) };
+            used.push((bar - 1.0, bar));
+            rolls.push((bar - 1.0, kind));
+        }
+        let opens = opens_at(notes);
+        let kinds = roll_kinds(level);
+        while count > 0 {
+            count -= 1;
+            // Where the phrase turns, a triplet roll and a straight one.
+            let (triplets, straight): (Vec<Roll>, Vec<Roll>) = kinds.iter().partition(|k| k.0 % 3 == 0);
+            let pool: &[Roll] = if turn && rolls.iter().all(|r| r.1 .0 % 3 != 0) {
+                &triplets
+            } else if turn && rolls.iter().all(|r| r.1 .0 % 3 == 0) {
+                &straight
+            } else {
+                kinds
+            };
+            let kind = pool[((dice.roll() * pool.len() as f32) as usize).min(pool.len() - 1)];
+            let span = kind.1;
+            // Its places: on an eighth (a whole beat's, on the beat) after the
+            // downbeat, free, and later in the bar more likely.
+            let places: Vec<f64> = (1..)
+                .map(|k| k as f64 * 0.5)
+                .take_while(|&p| p + span <= room + 1e-9)
+                .filter(|&p| span < 1.0 || p.fract() == 0.0)
+                .filter(|&p| used.iter().all(|&(a, b)| p + span <= a + 1e-9 || p >= b - 1e-9))
+                .filter(|&p| opens.iter().all(|&o| o < p - 1e-9 || o >= p + span - 1e-9))
+                .collect();
+            if places.is_empty() {
+                continue;
+            }
+            let weight = |p: f64| 1.0 + 3.0 * (p / bar) * (p / bar);
+            let total: f64 = places.iter().map(|&p| weight(p)).sum();
+            let mut pick = dice.roll() as f64 * total;
+            let at = *places.iter().find(|&&p| {
+                pick -= weight(p);
+                pick <= 0.0
+            }).unwrap_or(places.last().unwrap());
+            used.push((at, at + span));
+            rolls.push((at, kind));
+        }
+        for (at, (per_beat, span)) in rolls {
+            let from = start + at;
+            notes.retain(|n| !(n.pitch == hat && n.start >= from - 1e-9 && n.start < from + span - 1e-9));
+            let hits = (per_beat as f64 * span).round() as usize;
+            // Rising: from soft to loud, or a hit, a dip and up.
+            let (low, high) = (0.35 + 0.12 * dice.roll(), 0.82 + 0.13 * dice.roll());
+            let dip = hits >= 4 && dice.roll() < 0.3;
+            for k in 0..hits {
+                let rise = if dip { if k == 0 { None } else { Some((k - 1) as f32 / (hits - 2) as f32) } } else { Some(k as f32 / (hits - 1) as f32) };
+                let v = rise.map_or(0.62, |r| low + (high - low) * r);
+                let step = 1.0 / per_beat as f64;
+                notes.push(Note { start: from + k as f64 * step, length: step, pitch: hat, velocity: (v * 0.85).clamp(0.05, 1.0), chance: 1.0 });
+            }
+        }
+    }
+    notes.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
+}
+
+/// Whether a beat of four-beat bars is in half time, as trap is: its snare or
+/// clap on 3 more than on 2 and 4.
+pub fn half_time(notes: &[Note], kit: &Kit) -> bool {
+    let back = [kit.snare, kit.clap];
+    let (mut three, mut two_four) = (0, 0);
+    for n in notes.iter().filter(|n| back.contains(&Some(n.pitch))) {
+        let at = n.start.rem_euclid(4.0);
+        if (at - 2.0).abs() < 0.05 {
+            three += 1;
+        } else if (at - 1.0).abs() < 0.05 || (at - 3.0).abs() < 0.05 {
+            two_four += 1;
+        }
+    }
+    three > 0 && three > two_four
+}
+
+/// How a trap beat's bar (`notes`, from 0, `bar` beats long) turns into what
+/// comes next: its first half as it is, then its hats roll up (sixteenth
+/// triplets, thirty-seconds, their triplets) while the rest drops out for the
+/// last beat, a gap before the chorus. Without hats, just the gap. Whether its
+/// hats rolled, too.
+pub fn hat_turnaround(notes: &[Note], kit: &Kit, bar: f64) -> (Vec<Note>, bool) {
+    let hat = kit.closed.filter(|&h| notes.iter().any(|n| n.pitch == h)).or(kit.open.filter(|&h| notes.iter().any(|n| n.pitch == h)));
+    let hats = [kit.closed, kit.open];
+    let roll_from = (bar - 2.0).max(0.0);
+    let mut out: Vec<Note> = notes
+        .iter()
+        .filter(|n| n.start < bar - 1.0 - 1e-9 && !(hat.is_some() && hats.contains(&Some(n.pitch)) && n.start >= roll_from - 1e-9))
+        .map(|n| Note { length: n.length.min(bar - 1.0 - n.start), ..*n })
+        .collect();
+    if let Some(hat) = hat {
+        let parts: [(f64, f64, u32); 3] = [(roll_from, bar - 1.0, 6), (bar - 1.0, bar - 0.5, 8), (bar - 0.5, bar, 12)];
+        let hits: Vec<(f64, f64)> = parts.iter().flat_map(|&(a, b, per_beat)| {
+            let step = 1.0 / per_beat as f64;
+            (0..((b - a) * per_beat as f64).round() as usize).map(move |k| (a + k as f64 * step, step))
+        }).collect();
+        for (k, &(start, length)) in hits.iter().enumerate() {
+            let rise = k as f32 / (hits.len() - 1).max(1) as f32;
+            out.push(Note { start, length, pitch: hat, velocity: 0.38 + 0.55 * rise, chance: 1.0 });
+        }
+    }
+    out.sort_by(|a, b| a.start.total_cmp(&b.start).then(a.pitch.cmp(&b.pitch)));
+    (out, hat.is_some())
 }
 
 /// Which of the chosen sounds the kit has plays a written line: the backbeat
@@ -929,6 +1113,10 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
                 };
                 let cell = &mut seed[bar * 16 + s][sound as usize];
                 *cell = (*cell).max(level);
+                // Trap's clap and snare together, so the model hears both.
+                if v == Back && c == 'X' && backbeat_layer(kit, settings).is_some() {
+                    seed[bar * 16 + s][Sound::Snare as usize] = 3;
+                }
             }
         }
     }
@@ -974,6 +1162,15 @@ pub fn generate_ai(kit: &Kit, settings: &Settings, length: f64, bass: &[f64], ta
             }
         }
         notes.sort_by(|a, b| a.start.total_cmp(&b.start));
+    }
+    // Trap's rolls over what it played: it learned its hats on sixteenths.
+    if settings.style == Style::Trap {
+        let hat = sound_of(kit, settings, Hat).and_then(|s| kit.pitch(s));
+        let open = sound_of(kit, settings, Open).and_then(|s| kit.pitch(s)).filter(|&o| Some(o) != hat);
+        if let Some(hat) = hat {
+            let bars: Vec<(f64, bool)> = (0..(length / 4.0).ceil() as usize).map(|b| (b as f64 * 4.0, false)).collect();
+            trap_rolls(&mut notes, hat, open, settings.level, &bars, 4.0, length, &mut dice);
+        }
     }
     follow_bass(kit, settings, &mut notes, bass, length);
     Ok((notes, swing(settings.style, settings.level)))
@@ -1429,6 +1626,125 @@ mod tests {
         // Busier levels have more.
         let count = |level| beat(Style::PopRock, level, false, 4.0).len();
         assert!(count(Level::Intense) > count(Level::Medium) && count(Level::Medium) > count(Level::Basic));
+    }
+
+    /// A hat's subdivision: «16» on the sixteenths, «16T» sixteenth (and
+    /// eighth) triplets, «32», «32T», «64».
+    fn subdivision(start: f64) -> &'static str {
+        let on = |per_beat: f64| ((start * per_beat) - (start * per_beat).round()).abs() < 1e-6;
+        if on(4.0) { "16" } else if on(6.0) { "16T" } else if on(8.0) { "32" } else if on(12.0) { "32T" } else if on(16.0) { "64" } else { "?" }
+    }
+
+    /// The rolls of a hat line: runs of three hits or more shorter than a
+    /// sixteenth, back to back and alike.
+    fn rolls(hats: &[&Note]) -> Vec<Vec<Note>> {
+        let mut runs: Vec<Vec<Note>> = Vec::new();
+        for n in hats.iter().filter(|n| n.length < 0.25 - 1e-6) {
+            let joins = runs.last().and_then(|r| r.last()).is_some_and(|p| (p.start + p.length - n.start).abs() < 1e-6 && (p.length - n.length).abs() < 1e-6);
+            if joins {
+                runs.last_mut().unwrap().push((*n).clone());
+            } else {
+                runs.push(vec![(*n).clone()]);
+            }
+        }
+        runs.retain(|r| r.len() >= 3);
+        runs
+    }
+
+    /// Trap's hats roll as trap does (the 2026-11 audit's Intense gave 64
+    /// sixteenths, 18 thirty-seconds and no triplets, the rolls always on 1.5
+    /// and 3.5 and flat): sixteenth and thirty-second triplets, thirty-seconds
+    /// and, in Intense, sixty-fourths, each rising, somewhere else from one bar
+    /// to the next, more of them by level; with snare and clap, both on 3.
+    #[test]
+    fn trap_hats_roll_in_triplets_and_rise() {
+        let kit = machine();
+        let mut rolled = Vec::new();
+        for level in Level::ALL {
+            for take in 0..2 {
+                let settings = Settings { style: Style::Trap, level, fills: true, bars: 8, sounds: Style::Trap.sounds(), ..Settings::default() };
+                let (notes, _) = generate(&kit, &settings, 32.0, &[], take, TimeSig::COMMON);
+                let hats: Vec<&Note> = notes.iter().filter(|n| n.pitch == drum_note::CLOSED_HAT).collect();
+                let mut by: std::collections::BTreeMap<&str, usize> = Default::default();
+                hats.iter().for_each(|n| *by.entry(subdivision(n.start)).or_default() += 1);
+                // The audit's measure: the first four bars.
+                let mut four: std::collections::BTreeMap<&str, usize> = Default::default();
+                hats.iter().filter(|n| n.start < 16.0).for_each(|n| *four.entry(subdivision(n.start)).or_default() += 1);
+                // And by the note's value: what each roll is.
+                let mut kinds: std::collections::BTreeMap<&str, usize> = Default::default();
+                hats.iter().filter(|n| n.start < 16.0).for_each(|n| {
+                    let per_beat = (1.0 / n.length).round() as u32;
+                    let name = match per_beat { 2 => "1/8", 3 => "1/8T", 4 => "1/16", 6 => "1/16T", 8 => "1/32", 12 => "1/32T", 16 => "1/64", _ => "?" };
+                    *kinds.entry(name).or_default() += 1;
+                });
+                println!("Trap {} v{}: posiciones en 8 compases {by:?}; en 4 {four:?}; figuras en 4 {kinds:?}", level.label(), take + 1);
+                assert!(!by.contains_key("?"), "{by:?}");
+                let triplets = by.get("16T").unwrap_or(&0) + by.get("32T").unwrap_or(&0);
+                assert!(triplets > 0, "{} v{take}: triplets {by:?}", level.label());
+                if level == Level::Intense {
+                    assert!(by.get("32").is_some_and(|&n| n > 0) || by.get("64").is_some_and(|&n| n > 0), "{by:?}");
+                }
+                let runs = rolls(&hats);
+                for run in &runs {
+                    assert!(run.last().unwrap().velocity > run[0].velocity + 0.1, "a roll rises: {:?}", run.iter().map(|n| (n.start, n.velocity)).collect::<Vec<_>>());
+                }
+                // Somewhere else from bar to bar.
+                let places: Vec<Vec<i64>> = (0..8).map(|b| runs.iter().filter(|r| (r[0].start / 4.0) as usize == b).map(|r| ((r[0].start % 4.0) * 12.0).round() as i64).collect()).collect();
+                let distinct: std::collections::BTreeSet<&Vec<i64>> = places.iter().filter(|p| !p.is_empty()).collect();
+                assert!(distinct.len() >= 2, "{} v{take}: {places:?}", level.label());
+                // The phrase's end rolls its last beat.
+                assert!(hats.iter().filter(|n| n.start >= 31.0).count() >= 8, "the fill");
+                rolled.push(runs.len());
+                // The snare under the clap on 3.
+                for bar in 0..7 {
+                    for pitch in [drum_note::CLAP, drum_note::SNARE] {
+                        assert!(hits(&notes, pitch, bar).contains(&8), "{} bar {bar}: {pitch} on 3", level.label());
+                    }
+                }
+            }
+        }
+        // Basic, Medium, Intense: more rolls each.
+        assert!(rolled[0] + rolled[1] < rolled[2] + rolled[3] && rolled[2] + rolled[3] < rolled[4] + rolled[5], "{rolled:?}");
+        // The same take, the same beat.
+        let settings = Settings { style: Style::Trap, level: Level::Intense, sounds: Style::Trap.sounds(), ..Settings::default() };
+        assert_eq!(generate(&kit, &settings, 16.0, &[], 3, TimeSig::COMMON), generate(&kit, &settings, 16.0, &[], 3, TimeSig::COMMON));
+        // Only the clap chosen: the clap alone.
+        let mut sounds = Style::Trap.sounds();
+        sounds[Sound::Snare as usize] = false;
+        let (notes, _) = generate(&kit, &Settings { sounds, ..settings }, 4.0, &[], 0, TimeSig::COMMON);
+        assert!(hits(&notes, drum_note::CLAP, 0).contains(&8) && hits(&notes, drum_note::SNARE, 0).is_empty());
+    }
+
+    /// The other styles' rolls (hard techno's claps and hats) rise to their
+    /// hit instead of fading.
+    #[test]
+    fn written_rolls_rise() {
+        let phrase = beat(Style::HardTechno, Level::Basic, true, 4.0);
+        let roll: Vec<f32> = phrase.iter().filter(|n| n.pitch == drum_note::CLAP && n.start >= 15.0).map(|n| n.velocity).collect();
+        assert_eq!(roll.len(), 8);
+        assert!(roll.windows(2).all(|w| w[1] > w[0] - 0.06) && roll[7] > roll[0] + 0.3, "{roll:?}");
+    }
+
+    /// Before a chorus a trap beat's last bar keeps its first half, rolls
+    /// its hats up and leaves its last beat empty; half time is the snare on 3.
+    #[test]
+    fn a_trap_bar_turns_around_on_its_hats() {
+        let kit = machine();
+        let settings = Settings { style: Style::Trap, level: Level::Medium, fills: false, sounds: Style::Trap.sounds(), ..Settings::default() };
+        let (notes, _) = generate(&kit, &settings, 4.0, &[], 0, TimeSig::COMMON);
+        assert!(half_time(&notes, &kit));
+        assert!(!half_time(&beat(Style::House, Level::Medium, false, 1.0), &kit));
+        let (turn, rolled) = hat_turnaround(&notes, &kit, 4.0);
+        assert!(rolled);
+        assert!(turn.iter().all(|n| n.start < 3.0 || n.pitch == drum_note::CLOSED_HAT), "the last beat: only the hats");
+        let hats: Vec<&Note> = turn.iter().filter(|n| n.pitch == drum_note::CLOSED_HAT && n.start >= 2.0).collect();
+        assert!(hats.iter().any(|n| subdivision(n.start) == "16T") && hats.iter().any(|n| subdivision(n.start) == "32T"));
+        assert!(hats.windows(2).all(|w| w[1].velocity > w[0].velocity));
+        assert!(turn.iter().any(|n| n.pitch == drum_note::KICK && n.start == 0.0), "its first half as it was");
+        // Without hats, the gap only.
+        let kicks: Vec<Note> = notes.iter().filter(|n| n.pitch != drum_note::CLOSED_HAT && n.pitch != drum_note::OPEN_HAT).cloned().collect();
+        let (gap, rolled) = hat_turnaround(&kicks, &kit, 4.0);
+        assert!(!rolled && gap.iter().all(|n| n.start < 3.0) && !gap.is_empty());
     }
 
     #[test]

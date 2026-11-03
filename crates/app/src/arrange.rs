@@ -8,7 +8,7 @@
 //! Arrangement (⌘Z brings it back).
 
 use crate::app::PulseApp;
-use crate::project::Track;
+use crate::project::{Project, Track};
 use crate::theme::{ACCENT, TEXT_DIM};
 use eframe::egui::{self, RichText};
 use engine::model::{ArrangementClip, Clip, InstrumentKind, MidiClip, Note};
@@ -368,59 +368,65 @@ fn half_time_section(tracks: &[Track], section: &Section, bar: f64) -> bool {
         })
 }
 
+/// Lays the sections out on `project`'s Arrangement, replacing what it had,
+/// with a marker each and the loop over the song.
+pub fn lay_out_project(project: &mut Project, sections: &[Section]) {
+    for track in &mut project.tracks {
+        track.arrangement.clear();
+    }
+    let mut start = 0.0;
+    project.markers.clear();
+    let meter = project.meter;
+    for (k, section) in sections.iter().enumerate() {
+        // Its bars in the song's meter, and the last one's length (for the roll).
+        let length = meter.add_bars(start, section.bars as i64) - start;
+        let last_bar = meter.bar_length_at(meter.add_bars(start, section.bars as i64 - 1));
+        project.markers.push(crate::project::SongMarker { beat: start, name: section.name.clone() });
+        // A cut: the last beat silent, before what comes next.
+        let cut = if section.cut && k + 1 < sections.len() { 1.0 } else { 0.0 };
+        // A build's last bar is the roll alone: the kick and the other
+        // drums stop under it.
+        let rolling = section.roll && section.bars > 1 && section.tracks.iter().enumerate().any(|(t, s)| s.is_some() && project.tracks.get(t).is_some_and(|t| t.plays_drums()));
+        // A half-time beat (trap) turns around on its hats, with a gap,
+        // not with a snare roll.
+        let trap = rolling && half_time_section(&project.tracks, section, last_bar);
+        for (t, &source) in section.tracks.iter().enumerate() {
+            let Some(track) = project.tracks.get_mut(t) else { continue };
+            let Some(clip) = source.and_then(|s| track.clips.get(s).cloned().flatten()) else { continue };
+            let rolls = rolling && track.plays_drums() && matches!(clip, Clip::Midi(_));
+            let drums = rolling && role(track) == Role::Drums;
+            let body = if rolls || (drums && !trap) { length - last_bar } else if drums { length - f64::max(cut, 1.0) } else { length - cut };
+            track.arrangement.extend(laps(&clip, start, body, meter.bar_length_at(start)));
+            if rolls {
+                let turn = match &clip {
+                    Clip::Midi(m) if trap => {
+                        let kit = crate::drum_gen::Kit::from_rows(&track.drum_rows());
+                        let (notes, rolled) = crate::drum_gen::hat_turnaround(&bar_of(m, length - last_bar, last_bar), &kit, last_bar);
+                        let name = if rolled { "Redoble de charles" } else { "Hueco" };
+                        MidiClip { notes, groove: m.groove.clone(), ..MidiClip::new(name, last_bar, track.color) }
+                    }
+                    _ => roll(snare(track, meter.first()), track.color, last_bar),
+                };
+                track.arrangement.push(ArrangementClip { start: start + length - last_bar, length: last_bar - cut, clip: Clip::Midi(turn) });
+            }
+        }
+        start += length;
+    }
+    project.loop_start = 0.0;
+    project.loop_end = start;
+    // The chord track: the chords the song plays now.
+    project.chords.clear();
+    let chords = crate::chord_track::song_chords(project, 0.0, start);
+    crate::chord_track::put_all(&mut project.chords, 0.0, start, &chords);
+}
+
 impl PulseApp {
     /// Lays the sections out on the Arrangement, replacing what it had.
     pub fn lay_out(&mut self, sections: &[Section]) {
         if sections.is_empty() {
             return;
         }
-        for track in &mut self.project.tracks {
-            track.arrangement.clear();
-        }
-        let mut start = 0.0;
-        self.project.markers.clear();
-        let meter = self.project.meter;
-        for (k, section) in sections.iter().enumerate() {
-            // Its bars in the song's meter, and the last one's length (for the roll).
-            let length = meter.add_bars(start, section.bars as i64) - start;
-            let last_bar = meter.bar_length_at(meter.add_bars(start, section.bars as i64 - 1));
-            self.project.markers.push(crate::project::SongMarker { beat: start, name: section.name.clone() });
-            // A cut: the last beat silent, before what comes next.
-            let cut = if section.cut && k + 1 < sections.len() { 1.0 } else { 0.0 };
-            // A build's last bar is the roll alone: the kick and the other
-            // drums stop under it.
-            let rolling = section.roll && section.bars > 1 && section.tracks.iter().enumerate().any(|(t, s)| s.is_some() && self.project.tracks.get(t).is_some_and(|t| t.plays_drums()));
-            // A half-time beat (trap) turns around on its hats, with a gap,
-            // not with a snare roll.
-            let trap = rolling && half_time_section(&self.project.tracks, section, last_bar);
-            for (t, &source) in section.tracks.iter().enumerate() {
-                let Some(track) = self.project.tracks.get_mut(t) else { continue };
-                let Some(clip) = source.and_then(|s| track.clips.get(s).cloned().flatten()) else { continue };
-                let rolls = rolling && track.plays_drums() && matches!(clip, Clip::Midi(_));
-                let drums = rolling && role(track) == Role::Drums;
-                let body = if rolls || (drums && !trap) { length - last_bar } else if drums { length - f64::max(cut, 1.0) } else { length - cut };
-                track.arrangement.extend(laps(&clip, start, body, meter.bar_length_at(start)));
-                if rolls {
-                    let turn = match &clip {
-                        Clip::Midi(m) if trap => {
-                            let kit = crate::drum_gen::Kit::from_rows(&track.drum_rows());
-                            let (notes, rolled) = crate::drum_gen::hat_turnaround(&bar_of(m, length - last_bar, last_bar), &kit, last_bar);
-                            let name = if rolled { "Redoble de charles" } else { "Hueco" };
-                            MidiClip { notes, groove: m.groove.clone(), ..MidiClip::new(name, last_bar, track.color) }
-                        }
-                        _ => roll(snare(track, meter.first()), track.color, last_bar),
-                    };
-                    track.arrangement.push(ArrangementClip { start: start + length - last_bar, length: last_bar - cut, clip: Clip::Midi(turn) });
-                }
-            }
-            start += length;
-        }
-        self.project.loop_start = 0.0;
-        self.project.loop_end = start;
-        // The chord track: the chords the song plays now.
-        self.project.chords.clear();
-        let chords = crate::chord_track::song_chords(&self.project, 0.0, start);
-        crate::chord_track::put_all(&mut self.project.chords, 0.0, start, &chords);
+        lay_out_project(&mut self.project, sections);
         self.selected_clip = None;
         self.view = crate::app::View::Arrangement;
         self.sync_all();

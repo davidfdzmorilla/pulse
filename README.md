@@ -17,6 +17,11 @@ con un asistente. Todo corre en tu ordenador, sin conexión y sin cuentas.
 
 *El Arrangement: un tema completo con sus secciones, clips MIDI y de audio, transiciones y la automatización del filtro.*
 
+La primera vez, Pulse pregunta **¿Qué quieres hacer?**: escuchar su canción de
+ejemplo, empezar de una plantilla por género (house, techno, trap, reggaetón,
+pop, lo-fi, drum & bass, podcast), tararear una idea, remezclar una canción o
+seguir una de sus **lecciones** paso a paso, que se marcan solas al hacerlas.
+
 ## Qué puedes hacer
 
 **Componer**
@@ -174,8 +179,8 @@ Todos corren en la CPU con ONNX Runtime, sin conexión.
   `modelo-htdemucs-1` del repositorio y se guarda en `Models`, dentro de la
   carpeta de datos (`~/Library/Application Support/Pulse` en macOS,
   `%LOCALAPPDATA%\Pulse` en Windows). Para regenerarlo, en un entorno de Python
-  con `demucs onnx onnxruntime soundfile` (`demo.wav` es la canción demo de
-  Pulse, `target/release/pulse --render demo.wav`):
+  con `demucs onnx onnxruntime soundfile` (`demo.wav` es la canción de
+  ejemplo de Pulse, `target/release/pulse --render demo.wav`):
 
       python scripts/stems/export_htdemucs.py salida/
       python scripts/stems/make_reference.py salida/ demo.wav

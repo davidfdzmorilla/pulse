@@ -44,6 +44,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         "Archivo",
         &[
             Run(C::New, "Nuevo", "n"),
+            Run(C::Welcome, "¿Qué quieres hacer?…", ""),
             Templates,
             Run(C::Open, "Abrir…", "o"),
             Recent,
@@ -124,7 +125,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         ],
     ),
     ("Ventana", &[System("Minimizar", "performMiniaturize:", "m"), System("Zoom", "performZoom:", "")]),
-    ("Ayuda", &[Run(C::Guide, "Guía de Pulse", ""), Run(C::Shortcuts, "Atajos de teclado", "")]),
+    ("Ayuda", &[Run(C::Guide, "Guía de Pulse", ""), Run(C::Lessons, "Lecciones", ""), Run(C::Shortcuts, "Atajos de teclado", "")]),
 ];
 
 /// Where there is no system menu bar (Windows, Linux) the menus' shortcuts are read

@@ -14,6 +14,7 @@ use std::path::{Path, PathBuf};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Command {
     New,
+    Welcome,
     NewFromTemplate(usize),
     Open,
     OpenRecent(usize),
@@ -65,6 +66,7 @@ pub enum Command {
     Macros,
     Shortcuts,
     Guide,
+    Lessons,
     About,
     Settings,
     CheckUpdates,
@@ -312,6 +314,8 @@ impl PulseApp {
             Command::Macros => self.macro_window.open = !self.macro_window.open,
             Command::Shortcuts => self.open_panel(crate::app::Panel::Shortcuts),
             Command::Guide => self.open_panel(crate::app::Panel::Guide),
+            Command::Lessons => self.toggle_lessons(),
+            Command::Welcome => self.show_welcome(),
             Command::About => self.open_panel(crate::app::Panel::About),
             Command::Settings => self.open_settings(),
             Command::ShowFolder => {

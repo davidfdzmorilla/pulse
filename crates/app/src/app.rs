@@ -376,6 +376,10 @@ pub struct PulseApp {
     pub show_shortcuts: bool,
     pub show_about: bool,
     pub guide: crate::guide::Guide,
+    /// «¿Qué quieres hacer?» (see `welcome`).
+    pub welcome: crate::welcome::Welcome,
+    /// The lessons' panel (see `lessons`).
+    pub lessons: crate::lessons::Lessons,
     pub versions: crate::versions::Window,
     pub macro_window: crate::macros::Window,
     pub mix: crate::mix_assist::Assistant,
@@ -436,6 +440,7 @@ impl PulseApp {
         let settings = crate::settings::Settings::load();
         crate::library::set_root(settings.library.clone());
         let mut app = Self::with_audio(Project::demo(), Audio::start(&settings.audio));
+        let untouched = app.project.clone();
         app.settings = settings;
         crate::plugins::set_trusted(&app.settings.plugin_folders);
         app.plugin_library = crate::plugins::Library::load_cache();
@@ -462,7 +467,8 @@ impl PulseApp {
         // Screenshots and scripts open the project they're given, not the last one.
         let last = app.settings.reopen_last.then(|| app.recent.first().cloned()).flatten().filter(|_| !screenshot);
         // Changes Pulse closed without saving come first.
-        if !app.offer_recovery() {
+        let recovering = app.offer_recovery();
+        if !recovering {
             let reopening = from_finder.is_none() && argument.is_none();
             if let Some(path) = from_finder.or(argument).or(last) {
                 if path.extension().is_some_and(|e| e == "als") {
@@ -473,6 +479,11 @@ impl PulseApp {
                     app.open_from(&path);
                 }
             }
+        }
+        // Nothing opened: the example song, and «¿Qué quieres hacer?». Screenshots
+        // and scripts keep the small demo they were made for.
+        if !recovering && !screenshot && app.project == untouched {
+            app.start_fresh();
         }
         app.sync_all();
         app.check_updates_on_start();
@@ -582,6 +593,8 @@ impl PulseApp {
             show_shortcuts: false,
             show_about: false,
             guide: Default::default(),
+            welcome: Default::default(),
+            lessons: Default::default(),
             versions: Default::default(),
             macro_window: Default::default(),
             mix: Default::default(),
@@ -3119,6 +3132,10 @@ impl eframe::App for PulseApp {
                     .min_size(140.0)
                     .show(ui, |ui| browser::show(self, ui));
             }
+            if self.lessons.open {
+                let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(8));
+                egui::Panel::right("lessons").frame(frame).resizable(false).exact_size(crate::lessons::width()).show(ui, |ui| crate::lessons::panel(self, ui));
+            }
             let frame = egui::Frame::new().fill(theme::PANEL).inner_margin(egui::Margin::same(6));
             // Its height is ours (a share of the window, see `detail::height`);
             // egui only moves it while its edge is dragged.
@@ -3173,6 +3190,7 @@ impl eframe::App for PulseApp {
         crate::macros::window(self, &ctx);
         crate::commands::shortcuts_window(self, &ctx);
         crate::about::window(self, &ctx);
+        crate::welcome::window(self, &ctx);
         crate::guide::window(self, &ctx);
         crate::versions::window(self, &ctx);
         crate::mix_assist::window(self, &ctx);

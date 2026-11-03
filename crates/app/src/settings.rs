@@ -15,6 +15,12 @@ pub struct Settings {
     pub audio: AudioSettings,
     #[serde(default = "yes")]
     pub reopen_last: bool,
+    /// «¿Qué quieres hacer?» when Pulse starts without a project (see `welcome`).
+    #[serde(default = "yes")]
+    pub welcome_at_start: bool,
+    /// The lessons finished (see `lessons`), by their ids.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub lessons_done: Vec<String>,
     /// Folders to look for plugins in, besides the system's.
     #[serde(default)]
     pub plugin_folders: Vec<PathBuf>,
@@ -84,7 +90,7 @@ fn four() -> u32 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, detail_share: None, unknown: Default::default() }
+        Self { audio: AudioSettings::default(), reopen_last: true, welcome_at_start: true, lessons_done: Vec::new(), plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, detail_share: None, unknown: Default::default() }
     }
 }
 
@@ -320,6 +326,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.separator();
         ui.heading("Proyectos");
         ui.checkbox(&mut next.reopen_last, "Abrir el último proyecto al arrancar");
+        ui.checkbox(&mut next.welcome_at_start, "Mostrar «¿Qué quieres hacer?» al arrancar sin proyecto").on_hover_text("La ventana con la canción de ejemplo, las plantillas, las lecciones y los recientes. Siempre está en Archivo › ¿Qué quieres hacer?…");
         ui.horizontal(|ui| {
             ui.label("Proyecto nuevo (⌘N)");
             let shown = next.new_from.clone().unwrap_or(crate::templates::EMPTY.into());
@@ -380,7 +387,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, welcome_at_start: false, lessons_done: vec!["ritmo".into()], plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

@@ -96,8 +96,13 @@ impl Guide {
         }
     }
 
+    /// Whether there is a topic called `title`.
+    #[cfg(test)]
+    pub fn has_topic(&mut self, title: &str) -> bool {
+        self.sections().iter().any(|s| s.title == title)
+    }
+
     /// Opens the guide at a topic (by its title).
-    #[allow(dead_code)]
     pub fn open_at(&mut self, title: &str) {
         self.sections();
         self.open = true;

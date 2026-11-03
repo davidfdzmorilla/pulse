@@ -497,8 +497,9 @@ fn widgets(ctx: &egui::Context) -> Vec<Widget> {
     })
 }
 
-const COMMANDS: [Command; 52] = [
+const COMMANDS: [Command; 54] = [
     Command::New,
+    Command::Welcome,
     Command::Open,
     Command::ClearRecent,
     Command::Revert,
@@ -546,6 +547,7 @@ const COMMANDS: [Command; 52] = [
     Command::Macros,
     Command::Shortcuts,
     Command::Guide,
+    Command::Lessons,
     Command::About,
     Command::Settings,
     Command::CheckUpdates,

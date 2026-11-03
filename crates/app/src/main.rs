@@ -27,6 +27,7 @@ mod devices;
 mod drum_gen;
 mod drum_split;
 mod editor;
+mod example;
 mod eq_ui;
 mod export;
 mod factory_recipes;
@@ -59,6 +60,7 @@ mod input;
 mod keys_ui;
 mod kick_ui;
 mod kits;
+mod lessons;
 mod library;
 mod logs;
 mod macros;
@@ -146,6 +148,7 @@ mod versions;
 mod transitions;
 mod transport;
 mod wave_ui;
+mod welcome;
 mod widgets;
 
 /// The window's size: 1440×900, or PULSE_SIZE=WxH (for screenshots).

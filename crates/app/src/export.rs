@@ -1172,16 +1172,21 @@ fn write_all(renders: Vec<Render>, settings: Settings, progress: &AtomicU32, can
 }
 
 /// Headless export for `pulse --render <out.wav> [project.pulse]`: renders the whole
-/// song (the demo if no project is given) as 24-bit, 48 kHz and prints a report.
+/// song (the example song if no project is given) as 24-bit, 48 kHz and prints a report.
 pub fn render_from_command_line(output: &Path, project: Option<&Path>) -> Result<String, String> {
     let project = match project {
         Some(path) => Project::load(path)?,
-        None => Project::demo(),
+        None => crate::example::song()?,
     };
+    render_project(output, &project)
+}
+
+/// The whole of `project`'s Arrangement as 24-bit, 48 kHz, to `output`: a report.
+pub fn render_project(output: &Path, project: &Project) -> Result<String, String> {
     let settings = Settings::default();
-    beat_range(&project, settings.range).ok_or("El Arrangement está vacío")?;
+    beat_range(project, settings.range).ok_or("El Arrangement está vacío")?;
     let mut samples = SampleCache::default();
-    let renders = plan(&project, &mut samples, &settings, output);
+    let renders = plan(project, &mut samples, &settings, output);
     if let Some(error) = samples.errors.first() {
         eprintln!("{error}");
     }
@@ -1204,6 +1209,8 @@ pub struct Dialog {
     job: Option<Job>,
     /// The settings were taken from the app's (see `window`).
     loaded: bool,
+    /// Exports finished since Pulse started (the lessons look at it).
+    pub exported: u32,
 }
 
 impl PulseApp {
@@ -1293,7 +1300,10 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     if let Some(job) = &mut app.export.job {
         if let Some(result) = job.finished() {
             app.status = Some(match result {
-                Ok(report) => report.summary(),
+                Ok(report) => {
+                    app.export.exported += 1;
+                    report.summary()
+                }
                 Err(error) => error,
             });
             app.export.job = None;

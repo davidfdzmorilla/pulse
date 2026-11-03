@@ -33,7 +33,48 @@ Alrededor de la vista están siempre las mismas piezas:
 4. Haz doble clic en el editor para poner notas, o pulsa {M} y toca con el teclado del ordenador.
 5. Pulsa el **►** del clip para lanzarlo, y {Espacio} para parar.
 
-> Consejo: la primera vez, Pulse abre una canción de demostración (Drums, Bass, Chords, Lead) para que tengas algo que escuchar y desmontar. Después abre el último proyecto; puedes cambiarlo en [[Ajustes]].
+> Consejo: la primera vez, Pulse abre la canción de ejemplo y te pregunta qué quieres hacer (ver [[#¿Qué quieres hacer?]]). Después abre el último proyecto; puedes cambiarlo en [[Ajustes]].
+
+### ¿Qué quieres hacer?
+
+Cuando Pulse arranca sin proyecto, sale una ventana con las formas de empezar. También está en **Archivo › ¿Qué quieres hacer?…**.
+
+- **Escuchar el ejemplo**: abre «Luces de la ciudad», la canción de ejemplo (ver [[#La canción de ejemplo]]).
+- **Tararear una idea**: un proyecto con una pista de audio armada y el metrónomo encendido, y la lección que lleva de tu melodía a una canción (ver [[De tarareo a canción]]).
+- **Remezclar una canción**: eliges un audio, va a una pista del Arrangement y Pulse lo separa en batería, bajo, voz y el resto (ver [[Trocear y separar stems]]).
+- **Empezar de una plantilla**: un proyecto vacío o una de las plantillas, con sus instrumentos, efectos y mezcla preparados (ver [[Proyectos y carpeta de Pulse#Plantillas]]).
+- **Aprender**: empieza una de las lecciones (ver [[#Lecciones]]).
+- **Abrir**: tus proyectos recientes, o cualquiera con **Abrir un proyecto…**.
+
+Si cambias de proyecto con cambios sin guardar, Pulse pregunta antes. Para que no salga al arrancar, quita **Mostrar al arrancar** (o en **Ajustes › Proyectos**). {Esc} o **Cerrar** la cierran y te dejan en la canción de ejemplo.
+
+### La canción de ejemplo
+
+«Luces de la ciudad» es un tema corto de melodic techno en Re menor, a 122 BPM, hecho solo con sonidos de Pulse. Sirve para oír lo que hace Pulse y desmontarlo:
+
+- **Session**: tres escenas, **Intro**, **Drop** y **Break**, para lanzarlas y mezclarlas a tu aire.
+- **Arrangement**: la canción montada, de dos minutos y medio: intro, subida, drop, break con la voz, subida, drop y outro, con subidas e impactos en la pista **Transiciones**.
+- **Acordes y acompañamiento**: los acordes (Rem Sib Fa Do) están en **Acordes**; el bajo rodante, el pad y la melodía los escribió [[Acompañamiento|Acompañar]] a partir de ellos.
+- **Automatización**: el filtro del pad se abre en cada subida, y la melodía lleva brillo y pitch bend en el clip.
+- **Voz con letra**: la pista **Voz** canta en el break, con su letra (ver [[Letras]]).
+- **Mezcla**: un grupo de batería con compresor de bus, retornos de espacio y delay, y el master con compresor y limitador. Pruébala con el [[Asistente de mezcla y master]].
+
+Lo que cambies no toca el original: al guardar, {⌘S} te pregunta dónde. Para volver a tenerla tal cual, **Archivo › ¿Qué quieres hacer?… › Escuchar el ejemplo**.
+
+### Lecciones
+
+**Ayuda › Lecciones** abre un panel a la derecha con lecciones cortas, de unos minutos cada una:
+
+1. **Tu primer ritmo**: una pista de batería, un clip y un ritmo.
+2. **Acordes y bajo**: la tonalidad, unos acordes y un bajo sacado de ellos.
+3. **Graba tu voz y afínala**: una toma y sus notas en su sitio.
+4. **De tarareo a canción**: de una melodía tarareada a cuatro pistas.
+5. **Mezcla con el asistente**: analizar, aplicar y comparar.
+6. **Exporta tu canción**: del Arrangement a un archivo.
+
+Cada paso dice qué hacer y cómo. Los pasos se marcan solos al hacerlos, sobre tu proyecto: por ejemplo, «Crea un clip» se marca cuando la pista de batería tiene un clip más que al empezar la lección. Lo que no se puede ver (que has escuchado el resultado), lo marcas tú con un clic en su círculo, y otro clic lo desmarca. Al terminar una lección, queda marcada con ✓ y puedes pasar a la siguiente. **Más en la guía** abre su tema.
+
+> Consejo: una lección empieza con el proyecto tal como está. Puedes seguirla en la canción de ejemplo o en un proyecto nuevo.
 
 > Consejo: en los menús, para llegar a una opción de un submenú (**⏵**) puedes ir en diagonal: mientras el puntero va hacia el submenú abierto, pasar por encima de otras opciones no lo cambia. Si te paras un momento sobre otra opción con **⏵**, se abre la suya.
 
@@ -3135,10 +3176,22 @@ Si Pulse se cierra por un fallo, deja lo que pasó en `pulse.log` (`~/Library/Lo
 
 Una **plantilla** es un proyecto del que partir. Guarda tus pistas, instrumentos, efectos, muestras de los Drum Pads y el Sampler, mezcla, envíos, retornos, master, tempo, tonalidad, escenas, macros y asignaciones MIDI. No guarda el contenido: ni clips, ni arreglo, ni automatización, ni marcadores.
 
-Para empezar desde una: **Archivo › Nuevo desde plantilla ▸**. Pulse trae dos, y debajo de una línea van las tuyas:
+Para empezar desde una: **Archivo › Nuevo desde plantilla ▸**, o **Archivo › ¿Qué quieres hacer?…**, donde cada una dice qué trae al pasar el puntero. Pulse trae diez, y debajo de una línea van las tuyas:
 
-- **Beat**: Batería 909 con compresor, Bajo ácido, Acordes y Melodía con envíos a la reverb y al delay, a 124 BPM.
-- **Grabar voz**: una pista Base para el instrumental y dos de audio, Voz y Coros, con ecualizador, compresor y envío a la reverb, a 90 BPM.
+| Plantilla | Tempo | Qué trae |
+|---|---|---|
+| **Beat** | 124 | Batería 909 con compresor, Bajo ácido, Acordes y Melodía con envíos a la reverb y al delay |
+| **Grabar voz** | 90 | Una pista Base para el instrumental y dos de audio, Voz y Coros, con ecualizador, compresor y envío a la reverb |
+| **House** | 124 | Kit House, bajo, órgano y pad que bombean en cada tiempo, pluck, una sala y un delay con puntillo |
+| **Techno** | 130 | Kit Techno, bajo rodante, acid, stab menor 7 y atmósfera oscura, con sala grande |
+| **Trap** | 140 | Kit Trap, un 808 del Kick Designer que sigue las notas (con saturación), campanas, pad y una voz |
+| **Reggaetón** | 95 | Drum Machine con el dembow, bajo sub, marimba, lead y una voz |
+| **Pop** | 110 | Batería ochentera, bajo FM, piano, pad ancho, voz y coros |
+| **Lo-Fi** | 85 | Kit Lo-Fi con algo de bitcrusher y swing, piano lo-fi, bajo cálido, textura y cinta en el master (saturación y agudos suaves) |
+| **Drum & Bass** | 174 | Kit Drum & Bass, reese sin graves, sub y pad |
+| **Podcast** | — | Dos voces con puerta, ecualizador, compresor y de-esser, y una pista de música que se aparta cuando habla la primera; master en mono, más alto |
+
+En las de género, los faders dejan margen y el master termina en un limitador: lo que escribas suena sin saturar. Los kits son los de [[Sonidos de Pulse]]: la primera vez que eliges una plantilla con kit, sus sonidos se preparan en un momento.
 
 Para crear una:
 
@@ -3357,6 +3410,7 @@ Dónde está, **Cambiar…** (lo que ya hay no se mueve) y **Mostrar en Finder**
 ### Proyectos
 
 - Abrir el último proyecto al arrancar.
+- Mostrar «¿Qué quieres hacer?» al arrancar sin proyecto (ver [[Primeros pasos#¿Qué quieres hacer?]]).
 - De qué plantilla parte {⌘N} (ver [[Proyectos y carpeta de Pulse]]).
 - **Clips MIDI nuevos**: cuántos compases mide un clip MIDI al crearlo con doble clic o con **Nuevo clip MIDI aquí** (1, 2, 4 u 8; cuatro de entrada).
 - Buscar actualizaciones al arrancar.

@@ -20,6 +20,11 @@ The app and its in-app guide are in Spanish.
 
 *The Arrangement: a full track with its sections, MIDI and audio clips, transitions and filter automation.*
 
+On first start Pulse asks **¿Qué quieres hacer?** (what do you want to do?):
+listen to its example song, start from a genre template (house, techno, trap,
+reggaetón, pop, lo-fi, drum & bass, podcast), hum an idea, remix a song or
+follow one of its step-by-step **lessons**, which tick themselves as you go.
+
 ## What you can do
 
 **Write**
@@ -182,7 +187,7 @@ They all run on the CPU with ONNX Runtime, offline.
   data folder (`~/Library/Application Support/Pulse` on macOS,
   `%LOCALAPPDATA%\Pulse` on Windows). To regenerate it, in a Python
   environment with `demucs onnx onnxruntime soundfile` (`demo.wav` is Pulse's
-  demo song, `target/release/pulse --render demo.wav`):
+  example song, `target/release/pulse --render demo.wav`):
 
       python scripts/stems/export_htdemucs.py out/
       python scripts/stems/make_reference.py out/ demo.wav

@@ -89,6 +89,7 @@ mod export_identity_tests;
 mod plugins;
 mod poly_ui;
 mod presets;
+mod sampler_presets;
 #[cfg(test)]
 mod produccion;
 #[cfg(test)]

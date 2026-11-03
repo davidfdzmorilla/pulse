@@ -91,6 +91,14 @@ pub struct State {
     /// The last roll made, for R.
     roll_step: f64,
     roll_ramp: note_edit::Ramp,
+    /// Semitones a drum roll's last hit goes (see `note_edit::PITCH_RAMPS`).
+    pub(crate) roll_pitch: f32,
+    /// A drum clip's sounds and how far each follows the bend (semitones);
+    /// empty for other clips, which have no pitch ramp.
+    bends: Vec<(u8, f32)>,
+    /// Sounds a pitch ramp was made on that didn't follow the bend: they get
+    /// a range of an octave once the clip is written.
+    wants_bend: Vec<u8>,
     zoom: f32,
     draw_mode: bool,
     selection: Selection,
@@ -171,6 +179,9 @@ impl Default for State {
             grids: Vec::new(),
             roll_step: 0.125,
             roll_ramp: note_edit::Ramp::Up,
+            roll_pitch: 0.0,
+            bends: Vec::new(),
+            wants_bend: Vec::new(),
             zoom: 1.0,
             draw_mode: false,
             selection: Selection::new(),
@@ -383,9 +394,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     // On the Arrangement, the signature where the clip starts; in the Session, the song's first.
     let sig = app.clip_sig(clip_ref);
     let track_name = app.project.tracks[t].name.clone();
+    let bends = drum_bends(&app.project.tracks[t].instrument);
     let state = &mut app.piano_roll;
     state.sig = sig;
     state.track_name = track_name;
+    state.bends = bends;
     let switched = state.selection_clip != Some(clip_ref);
     if switched {
         state.selection.clear();
@@ -879,6 +892,70 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     if changed {
         app.sync_clip_ref(clip_ref);
     }
+    // A pitch ramp on sounds that ignored the bend: they follow it now, an octave.
+    let wanted = std::mem::take(&mut app.piano_roll.wants_bend);
+    if let Some(kind) = with_bend(app.project.tracks[t].instrument, &wanted) {
+        app.set_instrument(t, kind);
+    }
+}
+
+/// How far a pitch ramp bends a sound that didn't follow the bend before.
+pub const RAMP_RANGE: f32 = 12.0;
+
+/// Each sound of a drum instrument by its note, and its bend range.
+fn drum_bends(kind: &engine::model::InstrumentKind) -> Vec<(u8, f32)> {
+    use engine::model::{InstrumentKind, DRUM_VOICES, RACK_FIRST_NOTE, RACK_PADS};
+    match kind {
+        InstrumentKind::DrumRack(p) => {
+            let mut bends: Vec<(u8, f32)> = (0..RACK_PADS).map(|pad| (RACK_FIRST_NOTE + pad as u8, p.bend[pad])).collect();
+            // The chromatic pad's notes bend as it does.
+            if let Some(pad) = (p.chromatic as usize).checked_sub(1).filter(|&pad| pad < RACK_PADS) {
+                bends.extend((0..=127u8).filter(|&n| engine::model::rack_pad(n).is_none()).map(|n| (n, p.bend[pad])));
+            }
+            bends
+        }
+        InstrumentKind::DrumMachine(p) => DRUM_VOICES.iter().enumerate().map(|(voice, &(pitch, _))| (pitch, p.bend[voice])).collect(),
+        _ => Vec::new(),
+    }
+}
+
+/// `kind` with the sounds of `pitches` that don't follow the bend following
+/// it [`RAMP_RANGE`] semitones; None if nothing changes.
+fn with_bend(kind: engine::model::InstrumentKind, pitches: &[u8]) -> Option<engine::model::InstrumentKind> {
+    use engine::model::{InstrumentKind, DRUM_VOICES};
+    let mut kind = kind;
+    let mut changed = false;
+    for &pitch in pitches {
+        let range = match &mut kind {
+            InstrumentKind::DrumRack(p) => p.pad_for(pitch).map(|(pad, _)| &mut p.bend[pad]),
+            InstrumentKind::DrumMachine(p) => DRUM_VOICES.iter().position(|v| v.0 == pitch).map(|voice| &mut p.bend[voice]),
+            _ => None,
+        };
+        if let Some(range) = range.filter(|r| **r == 0.0) {
+            *range = RAMP_RANGE;
+            changed = true;
+        }
+    }
+    changed.then_some(kind)
+}
+
+/// Turns the `selected` notes into rolls of `step` as the menu is set: the
+/// velocities in its ramp, and on the drums its pitch ramp in the bend lane.
+fn make_roll(state: &mut State, clip: &mut MidiClip, selected: &[usize], step: f64) {
+    let pitches: Vec<u8> = selected.iter().filter_map(|&i| clip.notes.get(i)).map(|n| n.pitch).collect();
+    state.selection = note_edit::roll(&mut clip.notes, selected, step, state.roll_ramp);
+    if state.bends.is_empty() || state.roll_pitch == 0.0 {
+        return;
+    }
+    // As far as the first rolled sound that follows the bend goes; the rest get an octave.
+    let range_of = |p: u8| state.bends.iter().find(|b| b.0 == p).map_or(0.0, |b| b.1);
+    let range = pitches.iter().map(|&p| range_of(p)).find(|&r| r > 0.0).unwrap_or(RAMP_RANGE);
+    for &p in &pitches {
+        if range_of(p) == 0.0 && !state.wants_bend.contains(&p) {
+            state.wants_bend.push(p);
+        }
+    }
+    note_edit::pitch_ramp(&mut clip.controls, &clip.notes, &state.selection, state.roll_pitch / range);
 }
 
 /// The scroll offset along one axis that shows `lo..hi` (content px) in a view
@@ -1628,6 +1705,19 @@ fn roll_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
             ui.selectable_value(&mut state.roll_ramp, ramp, ramp.label()).on_hover_text(hint);
         }
     });
+    if !state.bends.is_empty() {
+        ui.horizontal(|ui| {
+            label(ui, "Tono");
+            for (semitones, text) in note_edit::PITCH_RAMPS {
+                let hint = if semitones == 0.0 {
+                    "Todos los golpes en su tono".to_string()
+                } else {
+                    format!("Cada golpe más {} hasta {:+} semitonos en el último (con el pitch bend del clip; el pad que no lo seguía pasa a seguirlo una octava)", if semitones > 0.0 { "agudo" } else { "grave" }, semitones)
+                };
+                ui.selectable_value(&mut state.roll_pitch, semitones, text).on_hover_text(hint);
+            }
+        });
+    }
     if selected.is_empty() {
         label(ui, "Selecciona notas (o un tramo con un recuadro) para hacer un redoble");
     }
@@ -1636,7 +1726,7 @@ fn roll_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
             let button = ui.add_enabled(!selected.is_empty(), egui::Button::new(format!("Redoble {text}")).selected(state.roll_step == step));
             if button.on_hover_text(crate::theme::keys(&format!("Reparte cada nota seleccionada en notas de {text} que la llenan (R repite el último)"))).clicked() {
                 state.roll_step = step;
-                state.selection = note_edit::roll(&mut clip.notes, &selected, step, state.roll_ramp);
+                make_roll(state, clip, &selected, step);
                 ui.close();
             }
         }
@@ -1674,7 +1764,8 @@ fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Opt
                     }
                     Key::B if !cmd => state.draw_mode = !state.draw_mode,
                     Key::R if !cmd && !modifiers.alt && !selected.is_empty() => {
-                        state.selection = note_edit::roll(&mut clip.notes, &selected, state.roll_step, state.roll_ramp);
+                        let step = state.roll_step;
+                        make_roll(state, clip, &selected, step);
                     }
                     Key::Escape => state.selection.clear(),
                     Key::Delete | Key::Backspace if !selected.is_empty() => {

@@ -1284,6 +1284,17 @@ pub struct SamplerParams {
     pub zones: [Zone; SAMPLER_ZONES],
     #[serde(default, skip_serializing_if = "is_zero_u8")]
     pub zone_count: u8,
+    /// One note at a time: a new note cuts the last one.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub mono: bool,
+    /// With `mono`, a note that overlaps the one sounding slides to its pitch
+    /// instead: the sample and its envelope carry on (an 808 slide).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub legato: bool,
+    /// How long a slide takes, ms (Mono: from the last note; Legato: between
+    /// overlapping notes). Poly doesn't glide.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub glide: f32,
 }
 
 fn no_zones(zones: &[Zone; SAMPLER_ZONES]) -> bool {
@@ -1318,6 +1329,9 @@ impl Default for SamplerParams {
             gain: 0.7,
             zones: [Zone::default(); SAMPLER_ZONES],
             zone_count: 0,
+            mono: false,
+            legato: false,
+            glide: 0.0,
         }
     }
 }
@@ -1338,7 +1352,24 @@ pub struct RackParams {
     pub pan: [f32; RACK_PADS],
     /// Pads sharing a non-zero group cut each other off (like open and closed hats).
     pub choke: [u8; RACK_PADS],
+    /// Semitones each pad goes at full pitch bend (0: it ignores the bend).
+    /// Each hit takes the bend it starts with: a bend lane ramping over a
+    /// roll makes it rise or fall in pitch, hit by hit.
+    #[serde(default, skip_serializing_if = "flat_pads")]
+    pub bend: [f32; RACK_PADS],
+    /// A pad the notes outside the pads play chromatically (1-16; 0: none):
+    /// C3 (60) at its own pitch, each note a semitone. Each such note cuts
+    /// the one before (an 808 played from the pads).
+    #[serde(default, skip_serializing_if = "is_zero_u8")]
+    pub chromatic: u8,
 }
+
+fn flat_pads(bend: &[f32; RACK_PADS]) -> bool {
+    bend.iter().all(|&b| b == 0.0)
+}
+
+/// The note at which a chromatic pad plays at its own pitch (C3).
+pub const CHROMATIC_ROOT: u8 = 60;
 
 impl Default for RackParams {
     fn default() -> Self {
@@ -1348,7 +1379,22 @@ impl Default for RackParams {
             level: [0.8; RACK_PADS],
             pan: [0.0; RACK_PADS],
             choke: [0; RACK_PADS],
+            bend: [0.0; RACK_PADS],
+            chromatic: 0,
         }
+    }
+}
+
+impl RackParams {
+    /// The pad `pitch` plays and how many semitones from its tune: its own
+    /// pad, or the chromatic pad (see [`RackParams::chromatic`]) from the
+    /// notes outside the pads.
+    pub fn pad_for(&self, pitch: u8) -> Option<(usize, f32)> {
+        if let Some(pad) = rack_pad(pitch) {
+            return Some((pad, 0.0));
+        }
+        let pad = (self.chromatic as usize).checked_sub(1).filter(|&p| p < RACK_PADS)?;
+        Some((pad, pitch as f32 - CHROMATIC_ROOT as f32))
     }
 }
 
@@ -1416,11 +1462,15 @@ pub struct DrumParams {
     /// Which machine it sounds like.
     #[serde(default, skip_serializing_if = "is_classic")]
     pub model: DrumModel,
+    /// Semitones each sound goes at full pitch bend (0: it ignores the bend);
+    /// each hit takes the bend it starts with (see [`RackParams::bend`]).
+    #[serde(default, skip_serializing_if = "clean")]
+    pub bend: [f32; DRUM_SOUNDS],
 }
 
 impl Default for DrumParams {
     fn default() -> Self {
-        Self { tune: [0.0; DRUM_SOUNDS], decay: [1.0; DRUM_SOUNDS], level: [0.8; DRUM_SOUNDS], drive: [0.0; DRUM_SOUNDS], model: DrumModel::Classic }
+        Self { tune: [0.0; DRUM_SOUNDS], decay: [1.0; DRUM_SOUNDS], level: [0.8; DRUM_SOUNDS], drive: [0.0; DRUM_SOUNDS], model: DrumModel::Classic, bend: [0.0; DRUM_SOUNDS] }
     }
 }
 
@@ -1434,7 +1484,7 @@ impl DrumParams {
         // stay low but playable. (The 808's hats are soft: a touch of drive lifts them.
         // The rides were balanced when the ride sounded 10 dB softer: their levels
         // went down by that much when it was fixed, so the kits sound as balanced.)
-        let kit = |model: DrumModel, tune: [f32; DRUM_SOUNDS], decay: [f32; DRUM_SOUNDS], level: [f32; DRUM_SOUNDS], drive: [f32; DRUM_SOUNDS]| DrumParams { tune, decay, level, drive, model };
+        let kit = |model: DrumModel, tune: [f32; DRUM_SOUNDS], decay: [f32; DRUM_SOUNDS], level: [f32; DRUM_SOUNDS], drive: [f32; DRUM_SOUNDS]| DrumParams { tune, decay, level, drive, model, bend: [0.0; DRUM_SOUNDS] };
         vec![
             ("Init", base),
             (
@@ -3722,7 +3772,7 @@ const KICK_PARAMS: [ParamInfo; 24] = [
     ParamInfo::linear("Punch", 0.0, 1.0, 0.0, Percent),
     ParamInfo::linear("Velocity", 0.0, 1.0, 1.0, Percent),
 ];
-const SAMPLER_PARAMS: [ParamInfo; 10] = [
+const SAMPLER_PARAMS: [ParamInfo; 11] = [
     ParamInfo::linear("Root", 0.0, 127.0, 60.0, Note),
     ParamInfo::linear("Tune", -24.0, 24.0, 0.0, Semitones),
     ParamInfo::linear("Start", 0.0, 0.99, 0.0, Percent),
@@ -3733,69 +3783,73 @@ const SAMPLER_PARAMS: [ParamInfo; 10] = [
     ParamInfo::log("Filter", 40.0, 20000.0, 20000.0, Hertz),
     ParamInfo::linear("Res", 0.0, 0.95, 0.0, Percent),
     ParamInfo::linear("Volume", 0.0, 1.0, 0.7, Percent),
+    ParamInfo::linear("Glide", 0.0, 2000.0, 0.0, Milliseconds),
 ];
-/// Pad parameters, four per pad: "Pad 1 Tune", "Pad 1 Length", …
-const RACK_PARAMS: [ParamInfo; RACK_PADS * 4] = {
-    const NAMES: [[&str; 4]; RACK_PADS] = {
+/// Pad parameters, four per pad: "Pad 1 Tune", "Pad 1 Length", …, then each
+/// pad's bend range (added later: the first ones keep their numbers).
+const RACK_PARAMS: [ParamInfo; RACK_PADS * 5] = {
+    const NAMES: [[&str; 5]; RACK_PADS] = {
         // Built by hand because `format!` is not const.
         [
-            ["Pad 1 Tune", "Pad 1 Length", "Pad 1 Level", "Pad 1 Pan"],
-            ["Pad 2 Tune", "Pad 2 Length", "Pad 2 Level", "Pad 2 Pan"],
-            ["Pad 3 Tune", "Pad 3 Length", "Pad 3 Level", "Pad 3 Pan"],
-            ["Pad 4 Tune", "Pad 4 Length", "Pad 4 Level", "Pad 4 Pan"],
-            ["Pad 5 Tune", "Pad 5 Length", "Pad 5 Level", "Pad 5 Pan"],
-            ["Pad 6 Tune", "Pad 6 Length", "Pad 6 Level", "Pad 6 Pan"],
-            ["Pad 7 Tune", "Pad 7 Length", "Pad 7 Level", "Pad 7 Pan"],
-            ["Pad 8 Tune", "Pad 8 Length", "Pad 8 Level", "Pad 8 Pan"],
-            ["Pad 9 Tune", "Pad 9 Length", "Pad 9 Level", "Pad 9 Pan"],
-            ["Pad 10 Tune", "Pad 10 Length", "Pad 10 Level", "Pad 10 Pan"],
-            ["Pad 11 Tune", "Pad 11 Length", "Pad 11 Level", "Pad 11 Pan"],
-            ["Pad 12 Tune", "Pad 12 Length", "Pad 12 Level", "Pad 12 Pan"],
-            ["Pad 13 Tune", "Pad 13 Length", "Pad 13 Level", "Pad 13 Pan"],
-            ["Pad 14 Tune", "Pad 14 Length", "Pad 14 Level", "Pad 14 Pan"],
-            ["Pad 15 Tune", "Pad 15 Length", "Pad 15 Level", "Pad 15 Pan"],
-            ["Pad 16 Tune", "Pad 16 Length", "Pad 16 Level", "Pad 16 Pan"],
+            ["Pad 1 Tune", "Pad 1 Length", "Pad 1 Level", "Pad 1 Pan", "Pad 1 Bend"],
+            ["Pad 2 Tune", "Pad 2 Length", "Pad 2 Level", "Pad 2 Pan", "Pad 2 Bend"],
+            ["Pad 3 Tune", "Pad 3 Length", "Pad 3 Level", "Pad 3 Pan", "Pad 3 Bend"],
+            ["Pad 4 Tune", "Pad 4 Length", "Pad 4 Level", "Pad 4 Pan", "Pad 4 Bend"],
+            ["Pad 5 Tune", "Pad 5 Length", "Pad 5 Level", "Pad 5 Pan", "Pad 5 Bend"],
+            ["Pad 6 Tune", "Pad 6 Length", "Pad 6 Level", "Pad 6 Pan", "Pad 6 Bend"],
+            ["Pad 7 Tune", "Pad 7 Length", "Pad 7 Level", "Pad 7 Pan", "Pad 7 Bend"],
+            ["Pad 8 Tune", "Pad 8 Length", "Pad 8 Level", "Pad 8 Pan", "Pad 8 Bend"],
+            ["Pad 9 Tune", "Pad 9 Length", "Pad 9 Level", "Pad 9 Pan", "Pad 9 Bend"],
+            ["Pad 10 Tune", "Pad 10 Length", "Pad 10 Level", "Pad 10 Pan", "Pad 10 Bend"],
+            ["Pad 11 Tune", "Pad 11 Length", "Pad 11 Level", "Pad 11 Pan", "Pad 11 Bend"],
+            ["Pad 12 Tune", "Pad 12 Length", "Pad 12 Level", "Pad 12 Pan", "Pad 12 Bend"],
+            ["Pad 13 Tune", "Pad 13 Length", "Pad 13 Level", "Pad 13 Pan", "Pad 13 Bend"],
+            ["Pad 14 Tune", "Pad 14 Length", "Pad 14 Level", "Pad 14 Pan", "Pad 14 Bend"],
+            ["Pad 15 Tune", "Pad 15 Length", "Pad 15 Level", "Pad 15 Pan", "Pad 15 Bend"],
+            ["Pad 16 Tune", "Pad 16 Length", "Pad 16 Level", "Pad 16 Pan", "Pad 16 Bend"],
         ]
     };
-    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); RACK_PADS * 4];
+    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); RACK_PADS * 5];
     let mut pad = 0;
     while pad < RACK_PADS {
         table[pad * 4] = ParamInfo::linear(NAMES[pad][0], -24.0, 24.0, 0.0, Semitones);
         table[pad * 4 + 1] = ParamInfo::log(NAMES[pad][1], 0.02, RACK_FULL_LENGTH, RACK_FULL_LENGTH, Seconds);
         table[pad * 4 + 2] = ParamInfo::linear(NAMES[pad][2], 0.0, 1.0, 0.8, Percent);
         table[pad * 4 + 3] = ParamInfo::linear(NAMES[pad][3], -1.0, 1.0, 0.0, Pan);
+        table[RACK_PADS * 4 + pad] = ParamInfo::linear(NAMES[pad][4], 0.0, 24.0, 0.0, Semitones);
         pad += 1;
     }
     table
 };
-/// Tune, decay and level of each sound in turn, then the drives (added later:
-/// the first ones keep their numbers in saved automation).
-const DRUM_PARAMS: [ParamInfo; DRUM_SOUNDS * 4] = {
+/// Tune, decay and level of each sound in turn, then the drives and the bend
+/// ranges (added later: the first ones keep their numbers in saved automation).
+const DRUM_PARAMS: [ParamInfo; DRUM_SOUNDS * 5] = {
     let names = [
-        ["Kick Tune", "Kick Decay", "Kick Level", "Kick Drive"],
-        ["Rim Tune", "Rim Decay", "Rim Level", "Rim Drive"],
-        ["Snare Tune", "Snare Decay", "Snare Level", "Snare Drive"],
-        ["Clap Tune", "Clap Decay", "Clap Level", "Clap Drive"],
-        ["CH Tune", "CH Decay", "CH Level", "CH Drive"],
-        ["OH Tune", "OH Decay", "OH Level", "OH Drive"],
-        ["Tom Tune", "Tom Decay", "Tom Level", "Tom Drive"],
-        ["Bell Tune", "Bell Decay", "Bell Level", "Bell Drive"],
-        ["Mid Tom Tune", "Mid Tom Decay", "Mid Tom Level", "Mid Tom Drive"],
-        ["High Tom Tune", "High Tom Decay", "High Tom Level", "High Tom Drive"],
-        ["Crash Tune", "Crash Decay", "Crash Level", "Crash Drive"],
-        ["Ride Tune", "Ride Decay", "Ride Level", "Ride Drive"],
-        ["Shaker Tune", "Shaker Decay", "Shaker Level", "Shaker Drive"],
-        ["Tamb Tune", "Tamb Decay", "Tamb Level", "Tamb Drive"],
-        ["Conga Tune", "Conga Decay", "Conga Level", "Conga Drive"],
-        ["Clave Tune", "Clave Decay", "Clave Level", "Clave Drive"],
+        ["Kick Tune", "Kick Decay", "Kick Level", "Kick Drive", "Kick Bend"],
+        ["Rim Tune", "Rim Decay", "Rim Level", "Rim Drive", "Rim Bend"],
+        ["Snare Tune", "Snare Decay", "Snare Level", "Snare Drive", "Snare Bend"],
+        ["Clap Tune", "Clap Decay", "Clap Level", "Clap Drive", "Clap Bend"],
+        ["CH Tune", "CH Decay", "CH Level", "CH Drive", "CH Bend"],
+        ["OH Tune", "OH Decay", "OH Level", "OH Drive", "OH Bend"],
+        ["Tom Tune", "Tom Decay", "Tom Level", "Tom Drive", "Tom Bend"],
+        ["Bell Tune", "Bell Decay", "Bell Level", "Bell Drive", "Bell Bend"],
+        ["Mid Tom Tune", "Mid Tom Decay", "Mid Tom Level", "Mid Tom Drive", "Mid Tom Bend"],
+        ["High Tom Tune", "High Tom Decay", "High Tom Level", "High Tom Drive", "High Tom Bend"],
+        ["Crash Tune", "Crash Decay", "Crash Level", "Crash Drive", "Crash Bend"],
+        ["Ride Tune", "Ride Decay", "Ride Level", "Ride Drive", "Ride Bend"],
+        ["Shaker Tune", "Shaker Decay", "Shaker Level", "Shaker Drive", "Shaker Bend"],
+        ["Tamb Tune", "Tamb Decay", "Tamb Level", "Tamb Drive", "Tamb Bend"],
+        ["Conga Tune", "Conga Decay", "Conga Level", "Conga Drive", "Conga Bend"],
+        ["Clave Tune", "Clave Decay", "Clave Level", "Clave Drive", "Clave Bend"],
     ];
-    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); DRUM_SOUNDS * 4];
+    let mut table = [ParamInfo::linear("", 0.0, 1.0, 0.0, Plain); DRUM_SOUNDS * 5];
     let mut voice = 0;
     while voice < DRUM_SOUNDS {
         table[voice * 3] = ParamInfo::linear(names[voice][0], -12.0, 12.0, 0.0, Semitones);
         table[voice * 3 + 1] = ParamInfo::log(names[voice][1], 0.25, 4.0, 1.0, Times);
         table[voice * 3 + 2] = ParamInfo::linear(names[voice][2], 0.0, 1.0, 0.8, Percent);
         table[DRUM_SOUNDS * 3 + voice] = ParamInfo::linear(names[voice][3], 0.0, 1.0, 0.0, Percent);
+        table[DRUM_SOUNDS * 4 + voice] = ParamInfo::linear(names[voice][4], 0.0, 24.0, 0.0, Semitones);
         voice += 1;
     }
     table
@@ -3941,6 +3995,7 @@ impl InstrumentKind {
             InstrumentKind::Synth(p) => return p.param_mut(index),
             InstrumentKind::Drums | InstrumentKind::Plugin(_) => return None,
             InstrumentKind::DrumMachine(p) => match index % 3 {
+                _ if index >= DRUM_SOUNDS * 4 => p.bend.get_mut(index - DRUM_SOUNDS * 4)?,
                 _ if index >= DRUM_SOUNDS * 3 => p.drive.get_mut(index - DRUM_SOUNDS * 3)?,
                 0 => p.tune.get_mut(index / 3)?,
                 1 => p.decay.get_mut(index / 3)?,
@@ -3995,6 +4050,7 @@ impl InstrumentKind {
                 7 => &mut p.cutoff,
                 8 => &mut p.resonance,
                 9 => &mut p.gain,
+                10 => &mut p.glide,
                 _ => return None,
             },
             InstrumentKind::Wavetable(p) | InstrumentKind::Polychrome(p) => return p.param_mut(index),
@@ -4028,6 +4084,7 @@ impl InstrumentKind {
                 _ => return None,
             },
             InstrumentKind::DrumRack(p) => match index % 4 {
+                _ if index >= RACK_PADS * 4 => p.bend.get_mut(index - RACK_PADS * 4)?,
                 0 => p.tune.get_mut(index / 4)?,
                 1 => p.length.get_mut(index / 4)?,
                 2 => p.level.get_mut(index / 4)?,

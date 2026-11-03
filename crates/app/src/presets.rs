@@ -14,9 +14,14 @@ pub struct Preset {
     pub samples: Vec<String>,
 }
 
-/// Presets that ship with Pulse for this kind of instrument.
+/// Presets that ship with Pulse for this kind of instrument (the Sampler's
+/// play sounds of «Sonidos de Pulse», see `sampler_presets`).
 pub fn factory(kind: &InstrumentKind) -> Vec<Preset> {
-    kind.factory_presets().into_iter().map(|(name, instrument)| Preset { name: name.to_string(), instrument, samples: Vec::new() }).collect()
+    let mut presets: Vec<Preset> = kind.factory_presets().into_iter().map(|(name, instrument)| Preset { name: name.to_string(), instrument, samples: Vec::new() }).collect();
+    if matches!(kind, InstrumentKind::Sampler(_)) {
+        presets.extend(crate::sampler_presets::presets(&crate::factory_sounds::root()));
+    }
+    presets
 }
 
 /// Presets by category, in their order: the part of the name before « · » (the

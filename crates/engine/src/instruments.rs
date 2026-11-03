@@ -93,6 +93,20 @@ impl Adsr {
         }
     }
 
+    /// Fades out over `seconds` from wherever it is, a release under way too.
+    pub(crate) fn cut(&mut self, seconds: f32, sample_rate: f32) {
+        let step = self.level / (seconds.max(0.0005) * sample_rate);
+        match self.stage {
+            Stage::Idle => {}
+            // Already fading: no slower than that.
+            Stage::Release => self.release_step = self.release_step.max(step),
+            _ => {
+                self.stage = Stage::Release;
+                self.release_step = step;
+            }
+        }
+    }
+
     pub(crate) fn tick(&mut self, attack: f32, decay: f32, sustain: f32, sample_rate: f32) -> f32 {
         match self.stage {
             Stage::Attack => {
@@ -144,6 +158,12 @@ impl Gate {
     /// note overlaps this one (a margin keeps notes that only touch apart).
     pub(crate) fn open_for(&self, margin: u32) -> bool {
         self.held || self.remaining > margin
+    }
+
+    /// Shut without its timed end coming (a mono voice cut by the next note).
+    pub(crate) fn close(&mut self) {
+        self.held = false;
+        self.remaining = 0;
     }
 
     /// Advances one sample; true when a timed gate just closed.
@@ -649,6 +669,10 @@ pub struct DrumMachine {
     bell_filter: Svf,
     /// The sounds other tracks take, out of its own output.
     apart: crate::drumkit::Apart,
+    /// Pitch bend now, -1..1.
+    bend: f32,
+    /// Semitones each sound's last hit was bent by (each sound has one voice).
+    hit_tune: [f32; crate::model::DRUM_SOUNDS],
 }
 
 impl DrumMachine {
@@ -664,7 +688,24 @@ impl DrumMachine {
             open_hat_filter: Svf::default(),
             bell_filter: Svf::default(),
             apart: crate::drumkit::Apart::new(),
+            bend: 0.0,
+            hit_tune: [0.0; crate::model::DRUM_SOUNDS],
         }
+    }
+
+    /// Pitch bend, -1..1: the hits that start from now on take it, each sound
+    /// as far as its bend range (`DrumParams::bend`) says.
+    pub fn set_bend(&mut self, bend: f32) {
+        self.bend = bend.clamp(-1.0, 1.0);
+    }
+
+    /// Its settings with each sound tuned as its last hit was (bent).
+    fn played(&self) -> DrumParams {
+        let mut p = self.params;
+        for (tune, bent) in p.tune.iter_mut().zip(self.hit_tune) {
+            *tune += bent;
+        }
+        p
     }
 
     /// A new block, the sounds in `mask` (a bit each, in `DRUM_VOICES` order)
@@ -725,9 +766,10 @@ impl DrumMachine {
             CLAVE | 76 | 77 => (15, 1.0),
             _ => return,
         };
+        self.hit_tune[voice] = self.bend * self.params.bend[voice];
         // The classic machine has its own first eight; the rest are the models'.
         if self.params.model != crate::model::DrumModel::Classic || voice >= 8 {
-            let params = self.params;
+            let params = self.played();
             self.kit.hit(voice, velocity, base, &params);
             return;
         }
@@ -740,11 +782,11 @@ impl DrumMachine {
 
     pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
         // The models ring out even if the model changes meanwhile.
-        let params = self.params;
+        let params = self.played();
         self.kit.render(&params, &mut self.apart, left, right);
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
-        let p = self.params;
+        let p = params;
         let tune = |v: usize| semitones(p.tune[v]);
         let coef = |v: usize, seconds: f32| decay_coef(seconds * p.decay[v], sr);
         let decays = [
@@ -1061,5 +1103,35 @@ mod tests {
         synth.note_off(64);
         let (tail, _) = run(&mut |l, r| synth.render(l, r), 48_000);
         assert!(energy(&tail[tail.len() - 2400..]) < 1e-6);
+    }
+
+    /// The drum machine's sounds follow pitch bend as far as their range,
+    /// each hit taking the bend it starts with: a tom bent fully with a range
+    /// of 12 sounds an octave up, on every model; one without range doesn't move.
+    #[test]
+    fn drum_hits_take_the_bend_they_start_with() {
+        use crate::model::DrumModel;
+        // Rising zero crossings over a stretch after the attack, as Hz.
+        let pitch = |x: &[f32]| {
+            let c: Vec<usize> = (1..x.len()).filter(|&i| x[i - 1] < 0.0 && x[i] >= 0.0).collect();
+            SR * (c.len() - 1) as f32 / (c[c.len() - 1] - c[0]) as f32
+        };
+        for model in [DrumModel::Classic, DrumModel::Tr808, DrumModel::Tr909] {
+            let hit = |range: f32, bend: f32| {
+                let mut params = DrumParams { model, ..DrumParams::default() };
+                params.bend[6] = range;
+                let mut drums = DrumMachine::new(params, SR);
+                drums.set_bend(bend);
+                drums.note_on(drum_note::LOW_TOM, 1.0);
+                drums.set_bend(0.0);
+                let (l, _) = run(&mut |l, r| drums.render(l, r), 9600);
+                pitch(&l[2400..9600])
+            };
+            let (flat, up, ignored) = (hit(12.0, 0.0), hit(12.0, 1.0), hit(0.0, 1.0));
+            let cents = 1200.0 * (up / flat).log2();
+            println!("{model:?} low tom: {flat:.1} Hz, bent {up:.1} Hz ({cents:+.0} cents)");
+            assert!((cents - 1200.0).abs() < 40.0, "{model:?}: {cents}");
+            assert!((ignored - flat).abs() < 0.5, "{model:?}: no range, no bend");
+        }
     }
 }

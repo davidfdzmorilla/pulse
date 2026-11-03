@@ -1675,6 +1675,11 @@ impl PulseApp {
 
     /// Loads a preset's settings (and samples, for instruments that play them).
     pub fn apply_preset(&mut self, track: usize, preset: crate::presets::Preset) {
+        // A factory sound it plays that isn't made yet is made now (a moment).
+        if let Err(error) = crate::sampler_presets::make_missing(&crate::factory_sounds::root(), &preset.samples) {
+            self.status = Some(error);
+            return;
+        }
         self.set_instrument(track, preset.instrument);
         if preset.instrument.uses_samples() {
             self.project.tracks[track].samples = preset.samples;

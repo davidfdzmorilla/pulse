@@ -993,7 +993,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             });
         }
         InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => {
-            device_frame(ui, kind.label(), 600.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
+            device_frame(ui, kind.label(), 700.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 // Which machine it sounds like.
                 if let InstrumentKind::DrumMachine(params) = kind {
                     ui.horizontal(|ui| {
@@ -1031,6 +1031,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                                     knob(ui, actions, voice * 3 + k, label, 18.0);
                                 }
                                 knob(ui, actions, engine::model::DRUM_SOUNDS * 3 + voice, "Drive", 18.0);
+                                knob(ui, actions, engine::model::DRUM_SOUNDS * 4 + voice, "Bend", 18.0);
                             });
                         });
                         if voice % 4 == 3 {
@@ -1101,13 +1102,24 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         let (one_shot, looping) = mode;
                         actions.push(Action::Instrument(InstrumentKind::Sampler(SamplerParams { one_shot, looping, ..base })));
                     }
+                    let mut voices = (base.mono, base.legato && base.mono);
+                    ui.horizontal(|ui| {
+                        ui.spacing_mut().item_spacing.x = 2.0;
+                        ui.selectable_value(&mut voices, (false, false), "Poly").on_hover_text("Varias notas a la vez");
+                        ui.selectable_value(&mut voices, (true, false), "Mono").on_hover_text("Una nota a la vez: cada nota corta la anterior (con Glide, desliza desde ella)");
+                        ui.selectable_value(&mut voices, (true, true), "Legato").on_hover_text("Una nota a la vez: la que se solapa con la anterior desliza a su tono sin volver a empezar la muestra (el slide del 808); tras un silencio empieza en su tono");
+                    });
+                    if voices != (base.mono, base.legato && base.mono) {
+                        let (mono, legato) = voices;
+                        actions.push(Action::Instrument(InstrumentKind::Sampler(SamplerParams { mono, legato, ..base })));
+                    }
                 });
                 ui.vertical(|ui| {
-                    for row in [[0, 1, 2, 7, 8], [3, 4, 5, 6, 9]] {
+                    for row in [&[0, 1, 2, 7, 8][..], &[3, 4, 5, 6, 9, 10][..]] {
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             // With zones, each has its own root.
-                            for i in row.into_iter().filter(|&i| i != 0 || base.zone_count == 0) {
+                            for &i in row.iter().filter(|&&i| i != 0 || base.zone_count == 0) {
                                 knob(ui, actions, i, kind.params()[i].name, 26.0);
                             }
                         });
@@ -1177,7 +1189,16 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         for (k, label) in ["Tune", "Length", "Level", "Pan"].into_iter().enumerate() {
                             knob(ui, &mut body_actions, pad * 4 + k, label, 28.0);
                         }
+                        knob(ui, &mut body_actions, RACK_PADS * 4 + pad, "Bend", 28.0);
                     });
+                    let chromatic = base.chromatic as usize == pad + 1;
+                    let mut on = chromatic;
+                    ui.checkbox(&mut on, "Cromático").on_hover_text("Las notas fuera de los pads (de E2 hacia arriba y bajo C1) tocan este pad, cada una un semitono: C3 en su tono. Cada nota corta la anterior, como un 808");
+                    if on != chromatic {
+                        let mut params: RackParams = base;
+                        params.chromatic = if on { pad as u8 + 1 } else { 0 };
+                        body_actions.push(Action::Instrument(InstrumentKind::DrumRack(params)));
+                    }
                 });
             });
             actions.extend(body_actions);

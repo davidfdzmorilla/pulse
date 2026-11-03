@@ -3,7 +3,7 @@
 //! Selections are sets of indices into `notes`. Operations that add notes append
 //! them and return the new indices, so callers can select what was just created.
 
-use engine::model::Note;
+use engine::model::{AutomationPoint, ControlLane, MidiControl, Note};
 use std::collections::BTreeSet;
 
 pub type Selection = BTreeSet<usize>;
@@ -192,6 +192,52 @@ pub fn roll(notes: &mut Vec<Note>, indices: &[usize], step: f64, ramp: Ramp) -> 
     added
 }
 
+/// The pitch ramps a roll can have on the drums: semitones its last hit goes
+/// (0: none).
+pub const PITCH_RAMPS: [(f32, &str); 4] = [(0.0, "Igual"), (5.0, "Sube 5"), (12.0, "Sube 12"), (-12.0, "Baja 12")];
+
+/// A pitch ramp over the rolls among `added` (as [`roll`] returns them): the
+/// clip's pitch bend lane goes from rest at each roll's first hit to `value`
+/// (-1..1) at its last, holds to the roll's end and goes back to rest. Drum
+/// hits take the bend they start with, so each hit of the roll is a step
+/// higher (or lower). What the lane had over the rolls goes.
+pub fn pitch_ramp(controls: &mut Vec<ControlLane>, notes: &[Note], added: &Selection, value: f32) {
+    let mut hits: Vec<&Note> = added.iter().filter_map(|&i| notes.get(i)).collect();
+    if hits.is_empty() || value == 0.0 {
+        return;
+    }
+    hits.sort_by(|a, b| a.pitch.cmp(&b.pitch).then(a.start.total_cmp(&b.start)));
+    // Runs of one pitch without a gap: (first start, last start, end).
+    let mut runs: Vec<(f64, f64, f64)> = Vec::new();
+    let mut last_pitch = None;
+    for n in hits {
+        match runs.last_mut() {
+            Some(run) if last_pitch == Some(n.pitch) && n.start <= run.2 + 1e-6 => {
+                run.1 = n.start;
+                run.2 = n.start + n.length;
+            }
+            _ => runs.push((n.start, n.start, n.start + n.length)),
+        }
+        last_pitch = Some(n.pitch);
+    }
+    let lane = match controls.iter().position(|l| l.control == MidiControl::PitchBend) {
+        Some(i) => &mut controls[i],
+        None => {
+            controls.push(ControlLane::new(MidiControl::PitchBend));
+            controls.last_mut().unwrap()
+        }
+    };
+    let value = value.clamp(-1.0, 1.0);
+    let point = |beat: f64, value: f32| AutomationPoint { beat, value, curve: 0.0 };
+    for (first, last, end) in runs {
+        lane.points.retain(|p| p.beat < first - 1e-6 || p.beat > end + 1e-6);
+        let hold = (end - 1.0 / 256.0).max(last);
+        lane.points.extend([point(first, 0.0), point(last, value), point(hold, value), point(end, 0.0)]);
+    }
+    lane.points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+    lane.points.dedup_by(|b, a| (a.beat - b.beat).abs() < 1e-9 && a.value == b.value);
+}
+
 /// The grid a clip's notes were written on: of `grids` (coarsest first), the
 /// coarsest two thirds of their starts fall on (sixteenths with a triplet
 /// roll are on 1/16), else the one most fall on; 1/16 if there are no notes.
@@ -293,6 +339,36 @@ mod roll_tests {
         let mut with_roll: Vec<Note> = (0..4).map(|k| note(k as f64 * 0.25, 0.25, 36, 1.0)).collect();
         with_roll.extend((0..16).map(|k| note(2.0 + k as f64 * 0.125, 0.125, 38, 1.0)));
         assert_eq!(guess_grid(&with_roll, &grids), 0.125, "mostly a 1/32 roll");
+    }
+
+    /// A roll with a pitch ramp: the bend lane rises from rest at its first
+    /// hit to the value at its last, and comes back after it; the notes are
+    /// untouched and what the lane had elsewhere stays.
+    #[test]
+    fn a_pitch_ramp_bends_the_roll_and_nothing_else() {
+        let mut notes = vec![note(0.0, 0.5, 36, 0.9), note(1.0, 1.0, 42, 0.8)];
+        let added = roll(&mut notes, &[1], 0.125, Ramp::Up);
+        let mut controls = vec![ControlLane { control: MidiControl::PitchBend, points: vec![AutomationPoint { beat: 3.0, value: 0.5, curve: 0.0 }, AutomationPoint { beat: 1.5, value: -1.0, curve: 0.0 }] }];
+        controls[0].points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
+        pitch_ramp(&mut controls, &notes, &added, 1.0);
+        let lane = &controls[0];
+        assert!(lane.points.windows(2).all(|w| w[0].beat <= w[1].beat));
+        let hits: Vec<f32> = added.iter().map(|&i| lane.value_at(notes[i].start).unwrap()).collect();
+        assert_eq!(hits.len(), 8);
+        assert_eq!(hits[0], 0.0);
+        assert!((hits[7] - 1.0).abs() < 1e-6);
+        assert!(hits.windows(2).all(|w| w[1] > w[0]), "each hit higher: {hits:?}");
+        assert_eq!(lane.value_at(0.0), Some(0.0), "the kick before it isn't bent");
+        assert_eq!(lane.value_at(2.0), Some(0.0), "back at rest after the roll");
+        assert_eq!(lane.value_at(3.0), Some(0.5), "the lane's own point after it stays");
+        // A ramp down, on a clip without a lane: one is made.
+        let mut controls = Vec::new();
+        pitch_ramp(&mut controls, &notes, &added, -0.5);
+        assert!((controls[0].value_at(1.875).unwrap() + 0.5).abs() < 1e-6);
+        // No ramp: nothing written.
+        let mut none = Vec::new();
+        pitch_ramp(&mut none, &notes, &added, 0.0);
+        assert!(none.is_empty());
     }
 }
 

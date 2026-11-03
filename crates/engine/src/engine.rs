@@ -970,11 +970,14 @@ impl Instrument {
         }
     }
 
-    /// The modular synth and plugins follow controllers.
+    /// The modular synth and plugins follow controllers; the drums, pitch
+    /// bend (each hit takes the bend it starts with).
     fn control(&mut self, controller: Controller, pitch: u8, value: f32) {
         match self {
             Self::Modular(m) => m.control(controller, pitch, value),
             Self::Plugin(_, Some(p)) => p.control(controller, pitch, value),
+            Self::Drums(d) if controller == Controller::PitchBend => d.set_bend(value),
+            Self::Rack(r) if controller == Controller::PitchBend => r.set_bend(value),
             _ => {}
         }
     }

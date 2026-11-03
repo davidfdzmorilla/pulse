@@ -437,6 +437,12 @@ pub fn recipes() -> Vec<Recipe> {
         }),
         tuned(SUBS, "808 corto (Do)", Sub, C1, || kick(KickParams { tune: C1 as f32, pitch_amount: 14.0, pitch_time: 30.0, pitch_curve: 0.7, hold: 120.0, decay: 420.0, decay_curve: 0.4, harmonics: 0.1, click: 0.35, click_type: 2, drive: 0.3, sub_level: 0.4, punch: 0.3, ..KickParams::default() })),
         tuned(SUBS, "808 con golpe (Do)", Sub, C1, || kick(KickParams { tune: C1 as f32, pitch_amount: 24.0, pitch_time: 30.0, pitch_curve: 0.8, hold: 200.0, decay: 1100.0, decay_curve: 0.35, harmonics: 0.1, click: 0.7, click_tone: 3500.0, click_type: 1, drive: 0.35, phase: 90.0, punch: 0.5, sub_level: 0.4, ..KickParams::default() })),
+        tuned(SUBS, "808 largo con pegada (Do)", Sub, C1, || {
+            // Long enough to slide on (the Sampler's «808 · Largo con glide»): a
+            // fast pitch drop and a click for the punch, a tube-warm body held long.
+            let p = KickParams { tune: C1 as f32, pitch_amount: 19.0, pitch_time: 32.0, pitch_curve: 0.8, hold: 450.0, decay: 2000.0, decay_curve: 0.3, harmonics: 0.15, click: 0.55, click_tone: 3000.0, click_type: 1, drive: 0.35, drive_mode: KickDrive::Tube, phase: 90.0, punch: 0.4, sub_level: 0.35, ..KickParams::default() };
+            fx(kick(p), &[drive(KickDrive::Soft, 5.0), eq(&[low_cut(25.0)])])
+        }),
         tuned(SUBS, "Sub limpio (Do)", Sub, C1, || kick(KickParams { tune: C1 as f32, pitch_amount: 0.0, attack: 3.0, hold: 500.0, decay: 700.0, decay_curve: 0.3, click: 0.0, drive: 0.0, ..KickParams::default() })),
         tuned(SUBS, "Sub cálido (Do)", Sub, C1, || kick(KickParams { tune: C1 as f32, pitch_amount: 0.0, attack: 3.0, hold: 400.0, decay: 800.0, decay_curve: 0.3, harmonics: 0.35, click: 0.0, drive: 0.25, drive_mode: KickDrive::Tube, sub_level: 0.5, ..KickParams::default() })),
         // ---------------- Bajos

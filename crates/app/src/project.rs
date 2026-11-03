@@ -276,13 +276,17 @@ impl Track {
     /// Drum Machine's in Spanish (see [`voice_name`]).
     pub fn drum_rows(&self) -> Vec<(u8, String)> {
         match self.instrument {
-            InstrumentKind::DrumRack(_) => (0..RACK_PADS)
-                .rev()
-                .map(|pad| {
+            InstrumentKind::DrumRack(params) => {
+                // A chromatic pad: its notes above the pads, from E2 to B4
+                // (named by note only: the beat makers look for sounds by name).
+                let chromatic = (params.chromatic as usize).checked_sub(1).filter(|&p| p < RACK_PADS);
+                let notes = chromatic.map(|_| (RACK_FIRST_NOTE + RACK_PADS as u8..=CHROMATIC_TOP).rev().map(|pitch| (pitch, format!("{} cromático", note_name(pitch)))));
+                let pads = (0..RACK_PADS).rev().map(|pad| {
                     let pitch = RACK_FIRST_NOTE + pad as u8;
                     (pitch, self.sample_name(pad).unwrap_or_else(|| note_name(pitch)))
-                })
-                .collect(),
+                });
+                notes.into_iter().flatten().chain(pads).collect()
+            }
             _ => engine::model::DRUM_VOICES.iter().enumerate().rev().map(|(voice, &(pitch, _))| (pitch, voice_name(voice).to_string())).collect(),
         }
     }
@@ -353,10 +357,27 @@ pub struct MasterTrack {
 /// doesn't know them. Only projects that have one.
 /// 18: a Vocoder playing the MIDI notes (`midi`): a Pulse that reads 17
 /// would play its fixed note instead. Only projects that have one.
-pub const FORMAT: u32 = 18;
+/// 19: a Sampler in Mono or Legato or with a glide, pads or drum sounds that
+/// follow pitch bend, or a chromatic pad: a Pulse that reads 18 would play
+/// them otherwise. Only projects that have one.
+pub const FORMAT: u32 = 19;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
+
+/// The highest note a chromatic pad shows a row for in the piano roll (B4).
+pub const CHROMATIC_TOP: u8 = 83;
+
+/// An instrument with what format 19 brought: a Sampler in Mono or Legato or
+/// gliding, pads or drum sounds bent hit by hit, a chromatic pad.
+fn plays_by_note(instrument: &InstrumentKind) -> bool {
+    match instrument {
+        InstrumentKind::Sampler(p) => p.mono || p.legato || p.glide > 0.0,
+        InstrumentKind::DrumRack(p) => p.chromatic != 0 || p.bend.iter().any(|&b| b != 0.0),
+        InstrumentKind::DrumMachine(p) => p.bend.iter().any(|&b| b != 0.0),
+        _ => false,
+    }
+}
 
 /// A track's sends as saved: two at least (what a Pulse with two returns
 /// reads), and up to the last one that sends.
@@ -706,8 +727,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Vocoder(v) if v.midi)) {
+            let format = if self.tracks.iter().any(|t| plays_by_note(&t.instrument)) {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::Vocoder(v) if v.midi)) {
+                18
             } else if self.has_effect(|e| matches!(e, Effect::Vocoder(_) | Effect::VoiceShift(_))) {
                 17
             } else if !self.lyrics.is_empty() {

@@ -411,3 +411,86 @@ fn expression_demos() {
         crate::keys::tests::write_wav(&format!("{dir}/{name}.wav"), &l, &r);
     }
 }
+
+/// A short sine `hz` Hz, `seconds` long, as a pad's or a sampler's sample.
+fn tone(hz: f32, seconds: f32) -> Arc<crate::sample::Sample> {
+    let data: Vec<f32> = (0..(seconds * SR) as usize).map(|i| 0.5 * (std::f32::consts::TAU * hz * i as f32 / SR).sin()).collect();
+    Arc::new(crate::sample::Sample::from_channels(data.clone(), data, SR))
+}
+
+/// Rising zero crossings of `x`, as Hz.
+fn crossings_hz(x: &[f32]) -> f32 {
+    let c: Vec<f32> = (1..x.len()).filter(|&i| x[i - 1] < 0.0 && x[i] >= 0.0).map(|i| (i - 1) as f32 + x[i - 1] / (x[i - 1] - x[i])).collect();
+    SR * (c.len() - 1) as f32 / (c[c.len() - 1] - c[0])
+}
+
+/// A hat roll on the Drum Pads under a clip's bend lane ramping up an
+/// octave: each hit a step higher, as the lane is where it starts; the kick
+/// in the middle of it, a pad without a bend range, stays in tune.
+#[test]
+fn a_bend_ramp_tunes_a_pad_roll_hit_by_hit() {
+    use crate::model::{RackParams, RACK_PADS};
+    let (mut engine, mut handle) = crate::audio::detached(SR);
+    let mut rack = RackParams::default();
+    rack.bend[6] = 12.0;
+    assert!(handle.send(Command::set_instrument(0, InstrumentKind::DrumRack(rack), SR)));
+    let mut samples = vec![Arc::new(crate::sample::Sample::default()); RACK_PADS];
+    samples[0] = tone(200.0, 0.04);
+    samples[6] = tone(1000.0, 0.04);
+    assert!(handle.send(Command::SetSamples { track: 0, samples: Box::new(samples) }));
+    let mut clip = MidiClip::new("roll", 4.0, [0; 3]);
+    let hats = [1.0, 1.125, 1.25, 1.375, 1.625, 1.75, 1.875];
+    for &beat in &hats {
+        clip.notes.push(Note::new(beat, 0.125, 42, 1.0));
+    }
+    clip.notes.push(Note::new(1.5, 0.125, 36, 1.0));
+    // Up a full bend (an octave on the hat) by the roll's last hit, then back.
+    clip.controls = vec![lane(MidiControl::PitchBend, &[(0.0, 0.0), (1.0, 0.0), (1.875, 1.0), (2.0, 0.0)])];
+    assert!(handle.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 4.0, PlayClip::Midi(clip))]) }));
+    assert!(handle.send(Command::Play));
+    let audio = run(&mut engine, 3.0);
+    let hit = |beat: f64| {
+        let at = (beat * 0.5 * SR as f64) as usize + 48;
+        crossings_hz(&audio[at..at + (0.035 * SR) as usize])
+    };
+    let mut line = String::new();
+    for &beat in &hats {
+        let expected = 1000.0 * 2f32.powf((beat as f32 - 1.0) / 0.875);
+        let heard = hit(beat);
+        line += &format!(" {heard:.0}");
+        let cents = 1200.0 * (heard / expected).log2();
+        assert!(cents.abs() < 10.0, "hat at beat {beat}: {heard} Hz, {expected} expected");
+    }
+    println!("hat roll (Hz):{line}");
+    let kick = hit(1.5);
+    assert!((kick - 200.0).abs() < 1.0, "the kick ignores the bend: {kick}");
+}
+
+/// The Sampler in Legato through the engine with clip notes (timed gates):
+/// the tied note slides, the one after a rest starts on its pitch.
+#[test]
+fn the_sampler_slides_tied_clip_notes_only() {
+    use crate::model::SamplerParams;
+    let (mut engine, mut handle) = crate::audio::detached(SR);
+    let params = SamplerParams { root: 57.0, gain: 1.0, mono: true, legato: true, glide: 80.0, release: 0.02, ..Default::default() };
+    assert!(handle.send(Command::set_instrument(0, InstrumentKind::Sampler(params), SR)));
+    assert!(handle.send(Command::SetSamples { track: 0, samples: Box::new(vec![tone(220.0, 6.0)]) }));
+    let mut clip = MidiClip::new("808", 8.0, [0; 3]);
+    // 45 for two beats, 57 tied over its end, a rest, then 50.
+    clip.notes.push(Note::new(0.0, 2.0, 45, 1.0));
+    clip.notes.push(Note::new(1.75, 1.0, 57, 1.0));
+    clip.notes.push(Note::new(4.0, 1.0, 50, 1.0));
+    assert!(handle.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 8.0, PlayClip::Midi(clip))]) }));
+    assert!(handle.send(Command::Play));
+    let audio = run(&mut engine, 6.0);
+    let note_at = |beat: f64, ms: f32| {
+        let at = (beat * 0.5 * SR as f64) as usize + (ms * 0.001 * SR) as usize;
+        45.0 + 12.0 * (crossings_hz(&audio[at..at + 960]) / 110.0).log2()
+    };
+    let (start, tied, arrived, after_rest) = (note_at(0.0, 15.0), note_at(1.75, 15.0), note_at(1.75, 300.0), note_at(4.0, 15.0));
+    println!("sampler legato: 45 at 15 ms {start:.2}; 57 tied, at 15 ms {tied:.2}, at 300 ms {arrived:.2}; 50 after a rest at 15 ms {after_rest:.2}");
+    assert!((start - 45.0).abs() < 0.05);
+    assert!(tied > 45.5 && tied < 55.0, "{tied}");
+    assert!((arrived - 57.0).abs() < 0.05, "{arrived}");
+    assert!((after_rest - 50.0).abs() < 0.05, "{after_rest}");
+}

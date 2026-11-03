@@ -908,6 +908,17 @@ Los redobles de charles y de caja del trap, en un paso.
 - Una nota más corta que la duración elegida se queda como está.
 +++
 
+#### Redobles que suben de tono
+
+En un clip de **Drum Pads** o de **Drum Machine**, el menú del redoble tiene también **Tono**: **Igual**, **Sube 5**, **Sube 12** o **Baja 12** (los semitonos del último golpe).
+
+1. Elige el tono y luego la duración del redoble, como siempre.
+2. Cada golpe suena un poco más agudo (o más grave) que el anterior: el charles que sube del trap.
+
+- El tono va en el **pitch bend** del clip: sube desde el primer golpe hasta el último y vuelve a su sitio al acabar el redoble. Puedes verlo y retocarlo en su carril (ver [[Expresión: pitch bend, rueda y controles en el clip]]).
+- Cada golpe toma el bend que hay cuando empieza, y solo lo siguen los pads (o sonidos) con **Bend**: el bombo que cae en medio del redoble no se desafina.
+- Si el pad del redoble no seguía el bend, pasa a seguirlo una octava (**Bend 12**).
+
 ### Más sitio para las notas
 
 Al abrir un clip, el panel de detalle tiene sitio para dos octavas de notas, y la Session o el Arrangement siguen a la vista encima. Sin clip, el panel se recoge en una franja y vuelve a su altura al abrir otro.
@@ -1599,7 +1610,9 @@ Toca una muestra en todo el teclado, desde su nota raíz.
 
 - Arrastra un audio a su zona o usa **Cargar…**.
 - Modos: **Clásico** (suena mientras mantienes la nota), **One-shot** (suena entera) y **Loop**.
-- Controles: Root, Tune, Start, filtro y ADSR.
+- Voces: **Poly** (varias notas a la vez), **Mono** (cada nota corta la anterior) y **Legato** (la nota que se solapa con la anterior desliza a su tono sin volver a empezar la muestra ni la envolvente; tras un silencio empieza en su tono). **Glide** es lo que tarda en deslizar; en Mono desliza siempre desde la nota anterior. Ver [[Wavetable y Polychrome#Glide y notas ligadas (el 808)]].
+- Controles: Root, Tune, Start, filtro, ADSR y Glide.
+- **Presets › De fábrica › 808** trae tres 808 hechos con [[Sonidos de Pulse]]: **Largo con glide** (Legato, para los slides del trap), **Corto y sucio** (saturado, corto, desliza rápido) y **Con golpe** (Mono: cada nota con su pegada). La primera vez que eliges uno, Pulse prepara su sonido en un momento. En {⌘F}, búscalos con «808».
 
 #### Multisample
 
@@ -1626,6 +1639,7 @@ Para instrumentos grabados nota a nota (un piano, unas cuerdas):
 
 - Haz clic en un sonido para escucharlo. Se llaman como en **Generar ritmo**: Bombo, Caja, Palmada, Charles, Charles abierto, toms, Cencerro, Pandereta…
 - Cada sonido tiene **Tune**, **Decay**, **Level** y **Drive**. Drive lo recorta como un clipper: más sucio y con más pegada; Level sigue siendo su volumen.
+- **Bend**: cuántos semitonos sube el sonido con el pitch bend al máximo (0: no lo sigue). Cada golpe toma el bend que hay al empezar: así un redoble sube de tono golpe a golpe (ver [[Editor MIDI#Redobles que suben de tono]]).
 - **Máquina** cambia todos los sonidos a la vez:
   - **808**: bombo largo y redondo, palma, cencerro. Hip hop, trap, reggaetón.
   - **909**: bombo con pegada y charles brillantes. House, techno.
@@ -1641,6 +1655,8 @@ Para instrumentos grabados nota a nota (un piano, unas cuerdas):
 - Haz clic en un pad para escucharlo y seleccionarlo.
 - Arrastra uno o varios audios sobre los pads.
 - Por pad: **Tune**, **Length**, **Level**, **Pan** y grupo de **choke**: los pads del mismo grupo se cortan entre sí, como el hi-hat abierto y el cerrado.
+- **Bend** (por pad): cuántos semitonos sube el pad con el pitch bend al máximo (0: no lo sigue). Cada golpe toma el bend que hay al empezar, para los redobles que suben (ver [[Editor MIDI#Redobles que suben de tono]]).
+- **Cromático** (por pad): las notas que no son de los pads (de E2 hacia arriba, y por debajo de C1) tocan ese pad, cada una un semitono; en C3 suena en su tono. Cada nota corta la anterior, como un 808. Así tocas un 808 desde los pads: pon un 808 de [[Sonidos de Pulse]] en un pad, márcalo **Cromático** y escribe la línea en las filas **cromático** del editor (los 808 de la biblioteca están en Do: C3 suena Do).
 - **Kits** carga un kit entero: el **Kit básico** (los sonidos de la Drum Machine) o uno de los diez kits por género de [[Sonidos de Pulse]]. Si la pista aún se llama como al crearla («1 MIDI»), toma el nombre del kit («Kit Techno»).
 - **Trocear archivo…** corta un loop en los pads (ver [[Trocear y separar stems]]).
 
@@ -1787,7 +1803,7 @@ Trae 34 presets de fábrica por categorías: metales, cuerdas y leads analógico
 
 ### Glide y notas ligadas (el 808)
 
-Para un 808 de trap que desliza entre notas, usa el preset **Bajo · 808 con glide** de Polychrome (en {⌘F}, busca «808», «sub» o «glide»).
+Para un 808 de trap que desliza entre notas, usa el preset **Bajo · 808 con glide** de Polychrome, o uno de muestra en el **Sampler**: **808 · Largo con glide** o **808 · Corto y sucio** (en {⌘F}, busca «808», «sub» o «glide»).
 
 1. Pon el sinte en **Legato** y sube **Glide** (el tiempo que tarda en llegar a la nota nueva).
 2. En el editor, escribe las notas sueltas como siempre: cada una empieza en su tono.
@@ -1799,7 +1815,9 @@ Para un 808 de trap que desliza entre notas, usa el preset **Bajo · 808 con gli
 | **Mono** | Una nota cada vez; todas deslizan desde la anterior, también después de un silencio |
 | **Legato** | Una nota cada vez; solo deslizan las notas que se solapan. Tras un silencio, o si una nota empieza justo donde acaba la otra, no hay deslizamiento |
 
-Lo mismo vale para Wavetable y Modular. El Acid desliza siempre que dos notas se solapan.
+Lo mismo vale para Wavetable, Modular y el Sampler (en el Sampler, Poly no desliza). El Acid desliza siempre que dos notas se solapan.
+
+En el **Sampler**, el deslizamiento cambia la velocidad a la que lee la muestra poco a poco, sin saltos: la muestra sigue sonando desde donde iba, sin clics.
 
 +++ Cuándo se solapan dos notas
 - Una nota se solapa con otra si empieza mientras la anterior sigue pulsada: en el teclado, si no la has soltado; en un clip, si la anterior aún no ha llegado a su final.

@@ -8,6 +8,7 @@ mod effects;
 mod engine;
 #[cfg(test)]
 mod expression_tests;
+pub mod follow;
 mod input;
 mod instruments;
 mod drumkit;

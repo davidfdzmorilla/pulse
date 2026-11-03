@@ -339,16 +339,28 @@ fn commands_from(
         }
         commands.push(Command::SetAutomation { target, lanes: active_lanes(&track.automation, target, overridden) });
         commands.push(Command::SetSends { track: t, sends: track.sends });
+        let mut resent = false;
         for slot in 0..NUM_SCENES {
             if old.is_some_and(|o| o.clips[slot] == track.clips[slot]) {
                 continue;
             }
             let clip = track.clips[slot].as_ref().map(|c| Box::new(play_clip(c, samples)));
             commands.push(Command::SetClip { track: t, slot, clip });
+            resent = true;
+        }
+        // A clip sent again has none in the engine: only follow actions
+        // there are or that changed go (a project's sync fills the queue).
+        let none = track.follow.iter().all(|f| *f == Default::default());
+        let changed = !old.is_some_and(|o| o.follow == track.follow);
+        if if none { changed && old.is_some() } else { changed || resent } {
+            commands.push(Command::SetFollows { track: t, follow: track.follow });
         }
         commands.extend(mixer_commands(target, &track.mixer));
     }
     commands.push(Command::SetGroups(crate::groups::parents(&project.tracks)));
+    if !before.is_some_and(|b| b.scene_follow == project.scene_follow) {
+        commands.push(Command::SetSceneFollows(project.scene_follow));
+    }
     // MIDI effects, with the project's key where they follow it.
     let key = project.key.map(|k| engine::model::ScaleKey { tonic: k.tonic, minor: k.minor });
     for t in 0..MAX_TRACKS {

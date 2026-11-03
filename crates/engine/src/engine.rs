@@ -329,6 +329,24 @@ pub enum Command {
     SetMidiEffects { track: usize, devices: [Option<crate::model::MidiDevice>; crate::model::MAX_MIDI_EFFECTS] },
     LaunchScene(usize),
     StopAllClips,
+    /// What a session clip does after playing a while (see [`crate::follow`]).
+    SetFollow {
+        track: usize,
+        slot: usize,
+        follow: crate::follow::Follow,
+    },
+    /// All of a track's follow actions at once (a project's sync).
+    SetFollows {
+        track: usize,
+        follow: [crate::follow::Follow; NUM_SCENES],
+    },
+    /// What a scene does after playing a while: launches another scene.
+    SetSceneFollow {
+        scene: usize,
+        follow: crate::follow::Follow,
+    },
+    /// Every scene's at once.
+    SetSceneFollows([crate::follow::Follow; NUM_SCENES]),
     /// Returns every track from session clips to its arrangement.
     BackToArrangement,
     SetArrangement {
@@ -1027,6 +1045,15 @@ impl Instrument {
 /// Where a launch at `start` waits for: the next step of the `quantize` grid
 /// (beats), or for 4 and over the next line of that many bars (4: each bar, 8:
 /// every other), following the song's time signatures.
+/// Queues scene `slot` on every track (an empty slot stops its track),
+/// switching at `due` (none: the next launch boundary).
+fn queue_scene(tracks: &mut [Track], slot: usize, due: Option<f64>) {
+    for t in tracks {
+        t.queued = if t.slots[slot].is_some() { Queued::Slot(slot) } else { Queued::Stop };
+        t.due = due;
+    }
+}
+
 fn launch_boundary(meter: &crate::meter::Meter, quantize: f64, start: f64) -> f64 {
     if quantize <= 0.0 {
         return start;
@@ -1691,6 +1718,11 @@ struct Track {
     /// Transport beat of the last change of session clip (a launch or a stop).
     switch_beat: f64,
     queued: Queued,
+    /// Each slot's follow action.
+    follow: [crate::follow::Follow; NUM_SCENES],
+    /// When what is queued switches, if a follow action queued it (its own
+    /// time, quantized); else the next launch boundary.
+    due: Option<f64>,
     instrument: Instrument,
     /// What the sampler or drum rack plays.
     samples: Box<Vec<Arc<Sample>>>,
@@ -1808,6 +1840,8 @@ impl Track {
             launch_beat: 0.0,
             switch_beat: 0.0,
             queued: Queued::Nothing,
+            follow: [crate::follow::Follow::default(); NUM_SCENES],
+            due: None,
             instrument: Instrument::new(InstrumentKind::Synth(Default::default()), sample_rate),
             samples: Box::default(),
             tables: Box::default(),
@@ -1976,6 +2010,27 @@ impl Track {
         }
     }
 
+    /// Its playing clip's follow action, if it is time to decide in
+    /// `[start, end)`: what it chooses is queued, switching at its own time
+    /// (quantized).
+    fn follow_action(&mut self, start: f64, end: f64, meter: &crate::meter::Meter, quantize: f64, rng: &mut u64) {
+        use crate::follow::{group, next_decision, resolve, FollowTarget};
+        let Some(slot) = self.playing else { return };
+        let follow = self.follow[slot];
+        let Some(clip) = self.slots[slot].as_ref().filter(|_| follow.is_active()) else { return };
+        let duration = follow.duration(clip.length(), meter, self.launch_beat);
+        let Some(at) = next_decision(self.launch_beat, duration, start).filter(|&at| at < end) else { return };
+        let kind = follow.choose(rng);
+        let slots = &self.slots;
+        let around = group(slot, NUM_SCENES, |s| slots[s].is_some());
+        self.queued = match resolve(kind, slot, around, rng) {
+            Some(FollowTarget::Launch(next)) => Queued::Slot(next),
+            Some(FollowTarget::Stop) => Queued::Stop,
+            None => return,
+        };
+        self.due = Some(launch_boundary(meter, quantize, at));
+    }
+
     fn stop_session_clip(&mut self) {
         self.playing = None;
         self.queued = Queued::Nothing;
@@ -2075,6 +2130,13 @@ pub struct Engine {
     /// Launches wait for this many beats' grid; 4 and over are whole bars (4: one, 8: two).
     quantize: f64,
     meter: crate::meter::Meter,
+    /// Each scene's follow action, the scene that launched last (and when),
+    /// and one queued, with when it switches if a follow action queued it.
+    scene_follow: [crate::follow::Follow; NUM_SCENES],
+    scene: Option<(usize, f64)>,
+    scene_queued: Option<(usize, Option<f64>)>,
+    /// The follow actions' draws (see [`crate::follow::random`]).
+    follow_rng: u64,
     loop_enabled: bool,
     loop_start: f64,
     loop_end: f64,
@@ -2636,6 +2698,10 @@ impl Engine {
             start_marker: 0.0,
             tempo: 120.0,
             quantize: 4.0,
+            scene_follow: [crate::follow::Follow::default(); NUM_SCENES],
+            scene: None,
+            scene_queued: None,
+            follow_rng: crate::follow::SEED,
             meter: Default::default(),
             loop_enabled: false,
             loop_start: 0.0,
@@ -2843,6 +2909,7 @@ impl Engine {
             self.rendered = 0;
             // Whatever plays at random plays the same every time from here,
             // and as exported.
+            self.follow_rng = crate::follow::SEED;
             for track in &mut self.tracks {
                 match &mut track.instrument {
                     Instrument::SuperSaw(s) => s.reseed(),
@@ -2900,6 +2967,8 @@ impl Engine {
                     track.recording = None;
                     track.stop_session_clip();
                 }
+                self.scene = None;
+                self.scene_queued = None;
                 self.arrangement_record = false;
                 self.playing = false;
                 self.counting = None;
@@ -2929,6 +2998,8 @@ impl Engine {
                     return;
                 }
                 let removed = clip.is_none();
+                // A clip comes without a follow action (one follows it, see `SetFollow`).
+                t.follow[slot] = crate::follow::Follow::default();
                 let old = std::mem::replace(&mut t.slots[slot], clip);
                 if removed && t.playing == Some(slot) {
                     t.playing = None;
@@ -2947,6 +3018,7 @@ impl Engine {
                     return;
                 }
                 // Launching an empty slot acts as that track's stop button.
+                t.due = None;
                 t.queued = if t.slots[slot].is_some() {
                     Queued::Slot(slot)
                 } else {
@@ -2959,6 +3031,23 @@ impl Engine {
             Command::StopTrack(track) => {
                 if let Some(t) = self.tracks.get_mut(track) {
                     t.queued = Queued::Stop;
+                    t.due = None;
+                }
+            }
+            Command::SetFollow { track, slot, follow } => {
+                if let Some(f) = self.tracks.get_mut(track).and_then(|t| t.follow.get_mut(slot)) {
+                    *f = follow;
+                }
+            }
+            Command::SetFollows { track, follow } => {
+                if let Some(t) = self.tracks.get_mut(track) {
+                    t.follow = follow;
+                }
+            }
+            Command::SetSceneFollows(follow) => self.scene_follow = follow,
+            Command::SetSceneFollow { scene, follow } => {
+                if let Some(f) = self.scene_follow.get_mut(scene) {
+                    *f = follow;
                 }
             }
             Command::ReorderTracks(order) => {
@@ -3017,21 +3106,21 @@ impl Engine {
                 if slot >= NUM_SCENES {
                     return;
                 }
-                for t in &mut self.tracks {
-                    t.queued = if t.slots[slot].is_some() {
-                        Queued::Slot(slot)
-                    } else {
-                        Queued::Stop
-                    };
-                }
+                queue_scene(&mut self.tracks, slot, None);
+                self.scene_queued = Some((slot, None));
                 self.start_transport();
             }
             Command::StopAllClips => {
                 for t in &mut self.tracks {
                     t.queued = Queued::Stop;
+                    t.due = None;
                 }
+                self.scene = None;
+                self.scene_queued = None;
             }
             Command::BackToArrangement => {
+                self.scene = None;
+                self.scene_queued = None;
                 for t in &mut self.tracks {
                     if t.playing.is_some() {
                         t.switch_beat = self.position;
@@ -3884,6 +3973,15 @@ impl Engine {
                 for track in &mut self.tracks {
                     // Session clips keep their phase across the jump.
                     track.launch_beat -= length;
+                    if let Some(due) = &mut track.due {
+                        *due -= length;
+                    }
+                }
+                if let Some((_, launch)) = &mut self.scene {
+                    *launch -= length;
+                }
+                if let Some((_, Some(due))) = &mut self.scene_queued {
+                    *due -= length;
                 }
             }
         }
@@ -3892,6 +3990,7 @@ impl Engine {
     /// Applies quantized launches and schedules the notes in `[start, end)`.
     fn sequence_segment(&mut self, start: f64, end: f64, timing: &Timing) {
         let boundary = launch_boundary(&self.meter, self.quantize, start);
+        self.scene_follows(start, end, boundary);
 
         let segment = (timing.segment_frame, timing.segment_end);
         let bps = timing.beats_per_sample;
@@ -3900,7 +3999,12 @@ impl Engine {
         // Done as each track is processed (see `Track::run_steps`), as it plays now.
         let notes = |from: f64, to: f64, play: Playing| Step::Notes { from, to, timing: *timing, play };
         let audio = |frames: (usize, usize), beat: f64, play: Playing| Step::Audio { frames, beat, beats_per_sample: bps, tempo, play };
+        let (meter, quantize) = (&self.meter, self.quantize);
         for (index, track) in self.tracks.iter_mut().enumerate() {
+            if track.queued == Queued::Nothing {
+                track.follow_action(start, end, meter, quantize, &mut self.follow_rng);
+            }
+            let boundary = track.due.unwrap_or(boundary);
             if track.queued == Queued::Nothing || boundary >= end {
                 let play = track.now();
                 track.step(notes(start, end, play), tempo_lane);
@@ -3932,6 +4036,7 @@ impl Engine {
             // Session activity on a track overrides its arrangement until "Back to Arrangement".
             track.follows_arrangement = false;
             track.queued = Queued::Nothing;
+            track.due = None;
             track.step(Step::AllNotesOff { frame: timing.frame(boundary) }, tempo_lane);
             let play = track.now();
             track.step(notes(boundary, end, play), tempo_lane);
@@ -3942,6 +4047,46 @@ impl Engine {
         if self.metronome {
             let click = &mut self.click;
             self.meter.counts(start, end, |beat, downbeat| click.trigger(downbeat, timing.frame(beat)));
+        }
+    }
+
+    /// The scene that launched, once it does; and its follow action, if it is
+    /// time: the tracks queue the scene it goes to, switching at its own
+    /// time (quantized).
+    fn scene_follows(&mut self, start: f64, end: f64, boundary: f64) {
+        use crate::follow::{next_decision, resolve, FollowTarget};
+        if let Some((scene, due)) = self.scene_queued {
+            let at = due.unwrap_or(boundary);
+            if at < end {
+                self.scene = Some((scene, at));
+                self.scene_queued = None;
+            }
+        }
+        let Some((scene, launch)) = self.scene.filter(|_| self.scene_queued.is_none()) else { return };
+        let follow = self.scene_follow[scene];
+        if !follow.is_active() {
+            return;
+        }
+        let longest = self.tracks.iter().filter_map(|t| t.slots[scene].as_ref()).map(|c| c.length()).fold(0.0, f64::max);
+        let duration = follow.duration(longest, &self.meter, launch);
+        let Some(at) = next_decision(launch, duration, start).filter(|&at| at < end) else { return };
+        let kind = follow.choose(&mut self.follow_rng);
+        // The scenes up to the last with a clip.
+        let used = (0..NUM_SCENES).rev().find(|&s| self.tracks.iter().any(|t| t.slots[s].is_some())).map_or(0, |s| s + 1);
+        let due = launch_boundary(&self.meter, self.quantize, at);
+        match resolve(kind, scene, 0..used, &mut self.follow_rng) {
+            Some(FollowTarget::Launch(next)) => {
+                queue_scene(&mut self.tracks, next, Some(due));
+                self.scene_queued = Some((next, Some(due)));
+            }
+            Some(FollowTarget::Stop) => {
+                for t in &mut self.tracks {
+                    t.queued = Queued::Stop;
+                    t.due = Some(due);
+                }
+                self.scene = None;
+            }
+            None => {}
         }
     }
 
@@ -4445,6 +4590,185 @@ mod tests {
         h.run_beats(4.0);
         assert_eq!(h.playing(0), 1);
         assert_eq!(h.playing(1), NONE);
+    }
+
+    /// A clip with one note at `at` (beats) of `pitch`, `length` beats long.
+    fn note_at(length: f64, at: f64, pitch: u8) -> Box<PlayClip> {
+        let mut clip = MidiClip::new("test", length, [0, 0, 0]);
+        clip.notes.push(Note { start: at, length: 0.5, pitch, velocity: 1.0, chance: 1.0 });
+        Box::new(PlayClip::Midi(clip))
+    }
+
+    fn silent_clip(length: f64) -> Box<PlayClip> {
+        Box::new(PlayClip::Midi(MidiClip::new("silent", length, [0, 0, 0])))
+    }
+
+    fn follow(a: crate::follow::FollowKind, count: u16, unit: crate::follow::FollowUnit) -> crate::follow::Follow {
+        crate::follow::Follow { a, count, unit, ..Default::default() }
+    }
+
+    /// Renders `frames` frames in blocks of `block`, the left channel.
+    fn render_left(h: &mut Harness, frames: usize, block: usize) -> Vec<f32> {
+        let mut out = vec![0.0; frames * 2];
+        for chunk in out.chunks_mut(block * 2) {
+            h.engine.process(chunk, 2);
+        }
+        out.chunks(2).map(|f| f[0]).collect()
+    }
+
+    /// A follow action after one loop launches the next clip of the group on
+    /// the beat it is due, whatever the block size: the next clip's note
+    /// sounds from that very frame.
+    #[test]
+    fn a_follow_action_launches_the_next_clip_exactly_on_time() {
+        use crate::follow::{FollowKind, FollowUnit};
+        for block in [64, 333, 512] {
+            let mut h = Harness::new();
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(silent_clip(4.0)) });
+            h.send(Command::SetClip { track: 0, slot: 1, clip: Some(note_at(4.0, 0.0, 72)) });
+            h.send(Command::SetFollow { track: 0, slot: 0, follow: follow(FollowKind::Next, 1, FollowUnit::Loops) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            let left = render_left(&mut h, (5.0 * 0.5 * SR as f64) as usize, block);
+            assert_eq!(h.playing(0), 1, "block {block}");
+            let first = left.iter().position(|s| s.abs() > 1e-4).expect("the next clip sounds");
+            let due = (4.0 * 0.5 * SR as f64) as usize;
+            assert!((due..due + 4).contains(&first), "block {block}: first sound at {first}, due at {due}");
+            assert_eq!(h.shared.tracks[0].switch_beat(), 4.0);
+        }
+    }
+
+    /// The time is counted from the launch; a launch quantization makes it
+    /// wait for the next boundary, none goes at once.
+    #[test]
+    fn follow_actions_wait_for_the_launch_quantization() {
+        use crate::follow::{FollowKind, FollowUnit};
+        for (quantize, due) in [(4.0, 4.0), (0.0, 2.0), (1.0, 2.0)] {
+            let mut h = Harness::new();
+            h.send(Command::SetQuantize(quantize));
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(silent_clip(2.0)) });
+            h.send(Command::SetClip { track: 0, slot: 1, clip: Some(silent_clip(2.0)) });
+            h.send(Command::SetFollow { track: 0, slot: 0, follow: follow(FollowKind::Next, 1, FollowUnit::Loops) });
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            h.run_beats(due - 0.1);
+            assert_eq!(h.playing(0), 0, "quantize {quantize}: not yet");
+            h.run_beats(0.2);
+            assert_eq!(h.playing(0), 1, "quantize {quantize}: at {due}");
+            assert_eq!(h.shared.tracks[0].switch_beat(), due);
+        }
+        // Two bars: bars of the song's signature.
+        let mut h = Harness::new();
+        h.send(Command::SetMeter(crate::meter::Meter::new(crate::meter::TimeSig::new(3, 4))));
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(silent_clip(1.0)) });
+        h.send(Command::SetFollow { track: 0, slot: 0, follow: follow(FollowKind::Stop, 2, FollowUnit::Bars) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(5.9);
+        assert_eq!(h.playing(0), 0);
+        h.run_beats(0.2);
+        assert_eq!(h.playing(0), NONE, "stopped after two bars of 3/4");
+    }
+
+    /// The group is the clips next to each other; Next goes round it, «the
+    /// same» starts it again, and a launch by hand wins over what was due.
+    #[test]
+    fn follow_actions_go_round_their_group_and_give_way_to_launches() {
+        use crate::follow::{FollowKind, FollowUnit};
+        let mut h = Harness::new();
+        h.send(Command::SetQuantize(1.0));
+        for slot in [0, 1, 3] {
+            h.send(Command::SetClip { track: 0, slot, clip: Some(silent_clip(1.0)) });
+            h.send(Command::SetFollow { track: 0, slot, follow: follow(FollowKind::Next, 1, FollowUnit::Loops) });
+        }
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(0.5);
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            h.run_beats(1.0);
+            seen.push(h.playing(0));
+        }
+        assert_eq!(seen, [1, 0, 1, 0], "slot 3 is not in the group of 0 and 1");
+        // Alone in its group, Next starts it again: its launch moves on.
+        h.send(Command::LaunchClip { track: 0, slot: 3 });
+        h.run_beats(1.05);
+        let launched = h.shared.tracks[0].launch_beat();
+        h.run_beats(1.0);
+        assert_eq!(h.playing(0), 3);
+        assert_eq!(h.shared.tracks[0].launch_beat(), launched + 1.0);
+        // Queued by hand: the follow action doesn't change it.
+        h.send(Command::SetQuantize(4.0));
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(4.0);
+        assert_eq!(h.playing(0), 0);
+    }
+
+    /// A and B by their chance, the same every time the transport starts (and
+    /// in every export).
+    #[test]
+    fn follow_action_chances_are_kept_and_repeat() {
+        use crate::follow::{Follow, FollowKind, FollowUnit};
+        let run = || {
+            let mut h = Harness::new();
+            h.send(Command::SetQuantize(1.0));
+            let either = Follow { a: FollowKind::Next, b: FollowKind::Previous, chance_a: 0.7, count: 1, unit: FollowUnit::Loops };
+            for slot in 0..3 {
+                h.send(Command::SetClip { track: 0, slot, clip: Some(silent_clip(1.0)) });
+                h.send(Command::SetFollow { track: 0, slot, follow: either });
+            }
+            h.send(Command::LaunchClip { track: 0, slot: 0 });
+            h.run_beats(0.5);
+            let mut played = Vec::new();
+            for _ in 0..300 {
+                h.run_beats(1.0);
+                played.push(h.playing(0));
+            }
+            played
+        };
+        let played = run();
+        assert_eq!(played, run(), "the same draws every time");
+        let forward = played.windows(2).filter(|w| w[1] == (w[0] + 1) % 3).count();
+        let share = forward as f64 / (played.len() - 1) as f64;
+        assert!((0.62..0.78).contains(&share), "Next {share:.2} of the time, for 0.7");
+    }
+
+    /// A scene's follow action launches the next scene on every track, at the
+    /// bar; Stop all clips ends it.
+    #[test]
+    fn scene_follow_actions_launch_the_next_scene() {
+        use crate::follow::{FollowKind, FollowUnit};
+        let mut h = Harness::new();
+        for track in 0..2 {
+            for slot in 0..2 {
+                h.send(Command::SetClip { track, slot, clip: Some(silent_clip(2.0)) });
+            }
+        }
+        h.send(Command::SetSceneFollow { scene: 0, follow: follow(FollowKind::Next, 2, FollowUnit::Bars) });
+        h.send(Command::SetSceneFollow { scene: 1, follow: follow(FollowKind::Next, 1, FollowUnit::Bars) });
+        h.send(Command::LaunchScene(0));
+        h.run_beats(7.9);
+        assert_eq!((h.playing(0), h.playing(1)), (0, 0));
+        h.run_beats(0.2);
+        assert_eq!((h.playing(0), h.playing(1)), (1, 1), "two bars later, scene 2");
+        assert_eq!(h.shared.tracks[1].switch_beat(), 8.0);
+        h.run_beats(4.0);
+        assert_eq!((h.playing(0), h.playing(1)), (0, 0), "and round to the first after one bar");
+        h.send(Command::StopAllClips);
+        h.run_beats(12.0);
+        assert_eq!((h.playing(0), h.playing(1)), (NONE, NONE));
+    }
+
+    /// The transport looping keeps a follow action's time with the clip's phase.
+    #[test]
+    fn follow_actions_keep_time_across_the_loop() {
+        use crate::follow::{FollowKind, FollowUnit};
+        let mut h = Harness::new();
+        h.send(Command::SetLoop { enabled: true, start: 0.0, end: 4.0 });
+        h.send(Command::SetClip { track: 0, slot: 0, clip: Some(silent_clip(8.0)) });
+        h.send(Command::SetClip { track: 0, slot: 1, clip: Some(silent_clip(8.0)) });
+        h.send(Command::SetFollow { track: 0, slot: 0, follow: follow(FollowKind::Next, 1, FollowUnit::Loops) });
+        h.send(Command::LaunchClip { track: 0, slot: 0 });
+        h.run_beats(7.9);
+        assert_eq!(h.playing(0), 0);
+        h.run_beats(0.2);
+        assert_eq!(h.playing(0), 1, "eight beats played, twice round the loop");
     }
 
     #[test]

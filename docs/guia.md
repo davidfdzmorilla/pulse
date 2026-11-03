@@ -168,6 +168,7 @@ Clic derecho en un clip:
 - **Duplicar** ({⌘D}): lo copia al siguiente slot libre de abajo.
 - **Eliminar** ({Supr} o {⌫}).
 - **Desactivar clip**: se queda en su sitio pero no suena. Ver [[Arrangement]].
+- **Acción al acabar**: pasa solo a otro clip tras unas vueltas. Ver [[#Acción al acabar (follow actions)]].
 - Colores.
 - Solo en clips de audio: **Separar en stems…**, **Letra ▸**, **Consolidar**, **Invertir**, **Detectar tempo** y **Usar el tempo de este clip en el proyecto**. Ver [[Trocear y separar stems]], [[Letras]] y [[Tempo de los audios]].
 - Solo en clips MIDI: **Exportar MIDI…**. Ver [[Archivos MIDI]].
@@ -175,7 +176,27 @@ Clic derecho en un clip:
 ### Lanzar escenas
 
 - Clic en una escena de la columna Master la lanza: cada pista toca su clip de esa fila, y las que no tienen clip ahí se paran.
-- Clic derecho en la escena: **Nombre de la escena**.
+- Clic derecho en la escena: **Nombre de la escena** y su **acción al acabar** (por ejemplo, la siguiente escena tras 8 compases).
+
+### Acción al acabar (follow actions)
+
+Un clip puede pasar solo a otro cuando ha sonado un rato: clic derecho en el clip → **Acción al acabar**, o el botón **»** de la barra del panel del clip.
+
+- **Tras**: cuántas vueltas del clip o cuántos compases suena antes de decidir.
+- **A** y **B**: qué hace entonces: **Siguiente**, **Anterior**, **Primero**, **Último**, **Cualquiera**, **Otro al azar**, **El mismo** (vuelve a empezar), **Parar** o **Nada**.
+- **Probabilidad**: cuántas veces de cada cien sale A; el resto, B. Con 100 % sale siempre A.
+- Los clips y las escenas con acción llevan **»** a la derecha.
+- Las acciones van dentro del **grupo** del clip: los clips seguidos de su pista, sin huecos. Siguiente, desde el último, vuelve al primero.
+- Las escenas también la tienen (clic derecho en la escena): Siguiente lanza la escena de debajo en todas las pistas.
+
++++ Detalles
+- El cambio cae a tiempo con la cuantización de lanzamiento: si decide a mitad de compás con cuantización de 1 compás, espera al siguiente.
+- Si sale **Nada** (u **Otro al azar** sin otro clip en el grupo), sigue sonando y vuelve a decidir tras otro tramo.
+- Lanzar un clip a mano gana a la acción pendiente, y **Parar todos los clips** termina las de las escenas.
+- El azar se repite igual cada vez que arrancas el transporte y al exportar: suena lo que oíste.
+- Una escena cuenta las vueltas por su clip más largo, y Siguiente, desde la última escena con clips, vuelve a la primera.
+- La acción va con el clip al moverlo o duplicarlo, y se va con él al borrarlo.
++++
 
 ### Grabar en un slot
 
@@ -610,6 +631,36 @@ Una asignación sigue a su control: si mueves, duplicas, agrupas o borras pistas
 - Al grabar automatización se graba el movimiento de cada control que mueve la macro.
 - Lo que mueve una macro la sigue al mover pistas o efectos, y se va si los borras.
 - Las macros se guardan con el proyecto.
+
+## Controladores de rejilla
+
+Conecta un Launchpad o un APC y lanza los clips de la Session con sus pads, sin configurar nada.
+
+- Pulse reconoce por el nombre de su puerto el **Launchpad Mini MK3**, el **Launchpad X**, el **Launchpad Pro MK3**, el **APC mini**, el **APC mini mk2** y el **APC40 mkII**. Si lo conectas con Pulse abierto, pulsa **Volver a buscar dispositivos MIDI** en [[Ajustes]].
+- Los pads lanzan los clips (un pad vacío para su pista, o graba si está armada), la columna de la derecha lanza escenas y las flechas mueven la zona que controla. En la Session, un recuadro naranja con su nombre marca esa zona.
+- Las luces siguen la Session: el color del clip tenue si está parado, encendido mientras suena, parpadeando mientras espera su turno, y apagado si el slot está vacío.
+- Sus pads no tocan notas: el teclado y los demás controladores siguen tocando los instrumentos.
+
+### Cada modelo
+
+- **Launchpad Mini MK3 y Launchpad X**: **Session** convierte la fila de abajo en los botones de parar pista, y el último botón de escena en parar todo. Otra vez Session la devuelve a clips.
+- **Launchpad Pro MK3**: la fila de debajo de la rejilla para las pistas y **Stop Clip** para todo. Las flechas son ← → arriba y ↑ ↓ a la izquierda.
+- **APC mini y APC mini mk2**: los botones de debajo paran las pistas; **Shift** y los cuatro primeros mueven la zona (↑ ↓ ← →); Shift y el último de escena paran todo.
+- **APC40 mkII**: su rejilla es de 8 × 5. **Clip Stop** para cada pista, **Stop All Clips** todo y los botones de banco mueven la zona.
+
+### Otro controlador con pads
+
+1. Abre [[Ajustes]] → **Controladores de rejilla**.
+2. Pulsa **Aprender como rejilla** junto a su puerto.
+3. Pulsa tres pads: el de arriba a la izquierda, el de su derecha y el de debajo.
+
+Desde entonces sus pads lanzan clips y se encienden con notas, si el controlador lo entiende. **Olvidar la rejilla** lo devuelve a tocar notas.
+
++++ Detalles
+- La zona también se mueve con las flechas de Ajustes, donde se ve qué pistas y escenas abarca.
+- Al cerrar Pulse, los controladores se apagan y vuelven a su modo normal.
+- Pulse pone los Launchpad en su modo programador y el APC40 en su modo para DAW; los APC mini no lo necesitan.
++++
 
 ## Teclado del ordenador
 
@@ -3243,6 +3294,8 @@ Cuando el proyecto pesa, Pulse reparte las pistas y los retornos entre varios n�
 ### MIDI
 
 Los dispositivos conectados, y un botón para volver a buscarlos.
+
+Debajo, **Controladores de rejilla**: los Launchpad y APC en uso con la zona de la Session que controlan (y flechas para moverla), y los demás puertos, para aprender uno como rejilla. Ver [[Controladores de rejilla]].
 
 ### Plugins
 

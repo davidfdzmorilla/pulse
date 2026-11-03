@@ -134,6 +134,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
         }
+        if app.detail == Detail::Clip {
+            ui.add_space(12.0);
+            app.follow_button(ui);
+        }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (text, hint) = if app.editor_max {
                 ("Restaurar", "Devuelve el panel a su altura (⇧⌘E o doble clic en su borde)")

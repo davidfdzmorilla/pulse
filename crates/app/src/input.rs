@@ -14,7 +14,7 @@ pub struct MidiInputs {
 }
 
 impl MidiInputs {
-    pub fn connect(live: Option<LiveInput>, shared: crate::midi_map::Shared) -> Self {
+    pub fn connect(live: Option<LiveInput>, shared: crate::midi_map::Shared, grids: crate::grid_io::Inbox) -> Self {
         let mut inputs = Self::default();
         let Some(live) = live else { return inputs };
         let count = match MidiInput::new("Pulse") {
@@ -31,6 +31,7 @@ impl MidiInputs {
             let name = input.port_name(&port).unwrap_or_else(|_| format!("Puerto {}", index + 1));
             let live = live.clone();
             let shared = shared.clone();
+            let grids = grids.clone();
             // PULSE_MIDI_LOG=1 prints every packet and what it was read as.
             let log = std::env::var_os("PULSE_MIDI_LOG").is_some();
             let port_name = name.clone();
@@ -41,6 +42,10 @@ impl MidiInputs {
                 parser.feed(bytes, |message| {
                     if log {
                         eprintln!("[midi]   → {}", describe(message));
+                    }
+                    // A grid controller's pads launch clips; they don't play notes.
+                    if grids.take(&port_name, message) {
+                        return;
                     }
                     forward(message, &live, &shared)
                 })

@@ -314,12 +314,22 @@ impl PulseApp {
             self.status = Some("Los clips no caben ahí".into());
             return false;
         };
-        let taken: Vec<Option<Clip>> = clips
+        // Their follow actions go with them.
+        let taken: Vec<(Option<Clip>, engine::follow::Follow)> = clips
             .iter()
-            .map(|&(t, s)| if copy { self.project.tracks[t].clips[s].clone() } else { self.project.tracks[t].clips[s].take() })
+            .map(|&(t, s)| {
+                let follow = self.project.tracks[t].follow[s];
+                if copy {
+                    (self.project.tracks[t].clips[s].clone(), follow)
+                } else {
+                    self.project.tracks[t].follow[s] = Default::default();
+                    (self.project.tracks[t].clips[s].take(), follow)
+                }
+            })
             .collect();
-        for (&(t, s), clip) in to.iter().zip(taken) {
+        for (&(t, s), (clip, follow)) in to.iter().zip(taken) {
             self.project.tracks[t].clips[s] = clip;
+            self.project.tracks[t].follow[s] = follow;
         }
         for &(t, s) in clips.iter().chain(&to) {
             self.sync_clip(t, s);

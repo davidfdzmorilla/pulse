@@ -42,6 +42,9 @@ mod freeze_tests;
 #[cfg(test)]
 mod genre_tests;
 mod finite;
+mod follow_ui;
+mod grid;
+mod grid_io;
 mod groups;
 mod guide;
 #[cfg(test)]

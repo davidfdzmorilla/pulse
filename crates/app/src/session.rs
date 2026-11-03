@@ -86,6 +86,8 @@ pub(crate) enum Action {
     Duplicate(usize, usize),
     ToArrangement(usize, usize),
     SetClipColor(usize, usize, [u8; 3]),
+    SetFollow(usize, usize, engine::follow::Follow),
+    SetSceneFollow(usize, engine::follow::Follow),
     StopTrack(usize),
     LaunchScene(usize),
     StopAll,
@@ -118,6 +120,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let mut actions = Vec::new();
     let mut headers = Vec::new();
     let mut slots = Vec::new();
+    // Every cell by column (groups too): where the controllers' windows go.
+    let mut cells: Vec<(usize, usize, Rect)> = Vec::new();
 
     let rows = shown_scenes(&app.project);
     let shown: Vec<usize> = (0..app.project.tracks.len()).filter(|&t| !crate::groups::hidden(&app.project.tracks, t)).collect();
@@ -168,7 +172,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let output = egui::ScrollArea::both().id_salt("session_clips").auto_shrink(false).scroll_bar_visibility(hidden).scroll_offset(vec2(sync.x, sync.top)).show(&mut child, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
-            for &t in &shown {
+            for (column, &t) in shown.iter().enumerate() {
                 let is_group = app.project.tracks[t].is_group();
                 let play = state.as_ref().map_or(
                     TrackPlayState {
@@ -199,10 +203,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     headers.push((t, track_header(app, ui, t, &mut actions)));
                     for slot in 0..rows {
                         if is_group {
-                            group_slot(app, ui, t, slot, state.as_deref(), &mut actions);
+                            let rect = group_slot(app, ui, t, slot, state.as_deref(), &mut actions);
+                            cells.push((column, slot, rect));
                         } else {
                             let rect = clip_slot(app, ui, t, slot, &play, blink, &mut actions);
                             slots.push((t, slot, rect.intersect(ui.clip_rect())));
+                            cells.push((column, slot, rect));
                         }
                     }
                     let stop_queued = play.queued == QUEUED_STOP && blink;
@@ -226,6 +232,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     });
     sync.x = output.state.offset.x;
     sync.top = output.state.offset.y;
+    grid_windows(app, ui, &cells, clips_rect);
 
     // The returns' and the master's rows: the scenes' launchers are the master's.
     let mut child = part(ui, scenes_rect);
@@ -368,6 +375,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     app.update_clip_gesture(ui, &clips, &lanes, &slots);
 }
 
+/// The zone each grid controller controls, as a box over its cells (as in Live).
+fn grid_windows(app: &PulseApp, ui: &egui::Ui, cells: &[(usize, usize, Rect)], clip: Rect) {
+    let painter = ui.painter().with_clip_rect(clip.intersect(ui.clip_rect()));
+    for (name, window, (cols, rows)) in app.grids.windows() {
+        let inside = cells.iter().filter(|&&(c, s, _)| (window.column..window.column + cols).contains(&c) && (window.scene..window.scene + rows).contains(&s));
+        let Some(zone) = inside.map(|&(_, _, r)| r).reduce(|a, b| a.union(b)) else { continue };
+        let zone = zone.expand(1.5);
+        painter.rect_stroke(zone, 3.0, egui::Stroke::new(2.0, theme::GRID_ZONE), egui::StrokeKind::Middle);
+        painter.text(zone.right_bottom() + vec2(-3.0, -2.0), Align2::RIGHT_BOTTOM, name, theme::small(), theme::GRID_ZONE);
+    }
+}
+
 /// How tall the mixer is in a Session `height` tall: whole (`mixer`) if the
 /// clips keep their header, `SCENES_KEPT` of their `rows` and the stop row;
 /// short of room, it gives way first, down to `MIXER_SHARE` of the height.
@@ -435,7 +454,7 @@ pub(crate) fn group_items(ui: &mut egui::Ui, group: bool, in_group: bool, select
 
 /// A group's slot: lit when its tracks have clips in that scene; clicked, they
 /// play them (and the others in the group stop).
-fn group_slot(app: &PulseApp, ui: &mut egui::Ui, g: usize, slot: usize, state: Option<&engine::SharedState>, actions: &mut Vec<Action>) {
+fn group_slot(app: &PulseApp, ui: &mut egui::Ui, g: usize, slot: usize, state: Option<&engine::SharedState>, actions: &mut Vec<Action>) -> Rect {
     let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
     let tracks = &app.project.tracks;
     let inside = crate::groups::children(tracks, g);
@@ -452,6 +471,7 @@ fn group_slot(app: &PulseApp, ui: &mut egui::Ui, g: usize, slot: usize, state: O
             actions.push(Action::LaunchGroup(g, slot));
         }
     }
+    rect
 }
 
 /// Freeze, unfreeze and flatten in a track's menu.
@@ -605,6 +625,7 @@ fn clip_slot(
     let painter = ui.painter();
     let launch = Rect::from_min_size(rect.min, vec2(LAUNCH_W, SLOT_H));
     let clip = app.project.tracks[t].clips[slot].as_ref();
+    let follow = app.project.tracks[t].follow[slot];
     widgets::name(&response, egui::WidgetType::Button, match clip {
         Some(c) => format!("Clip {} · {}", t + 1, c.name()),
         None => format!("Slot {}:{}", t + 1, slot + 1),
@@ -640,6 +661,10 @@ fn clip_slot(
                 theme::small(),
                 theme::text_on(color),
             );
+            // It goes on to another by itself: a mark at its right.
+            if follow.is_active() {
+                painter.text(pos2(rect.right() - 3.0, rect.center().y), Align2::RIGHT_CENTER, "»", theme::small(), theme::text_on(color));
+            }
             if is_playing && clip.length() > 0.0 {
                 let progress = (play.clip_position / clip.length()) as f32;
                 let bar = Rect::from_min_size(pos2(rect.left(), rect.bottom() - 2.0), vec2(rect.width() * progress, 2.0));
@@ -716,6 +741,7 @@ fn clip_slot(
         _ => None,
     };
     let lyrics_busy = app.lyrics_ui.job.is_some();
+    let follow = app.project.tracks[t].follow[slot];
     if let Some(clip) = clip {
         let mut color = clip.color();
         response.context_menu(|ui| {
@@ -814,6 +840,10 @@ fn clip_slot(
                 actions.push(Action::Delete(t, slot));
                 ui.close();
             }
+            let mut follow = follow;
+            if crate::widgets::field_menu_button(ui, "Acción al acabar", |ui| crate::follow_ui::editor(ui, &mut follow, false)) == Some(true) {
+                actions.push(Action::SetFollow(t, slot, follow));
+            }
             ui.separator();
             if color_picker(ui, &mut color) {
                 actions.push(Action::SetClipColor(t, slot, color));
@@ -854,12 +884,21 @@ fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut 
         theme::small(),
         TEXT,
     );
+    let mut follow = app.project.scene_follow[slot];
+    if follow.is_active() {
+        painter.text(pos2(rect.right() - 3.0, rect.center().y), Align2::RIGHT_CENTER, "»", theme::small(), TEXT);
+    }
     if response.clicked() {
         actions.push(Action::LaunchScene(slot));
     }
-    widgets::edit_menu(&response.on_hover_text("Lanzar escena · clic derecho: renombrar"), |ui| {
+    let hint = if follow.is_active() { format!("Lanzar escena · {} · clic derecho: renombrar y acción al acabar", crate::follow_ui::summary(&follow)) } else { "Lanzar escena · clic derecho: renombrar y acción al acabar".into() };
+    widgets::edit_menu(&response.on_hover_text(hint), |ui| {
         ui.label("Nombre de la escena");
         ui.text_edit_singleline(&mut app.project.scene_names[slot]);
+        ui.separator();
+        if crate::follow_ui::editor(ui, &mut follow, true) {
+            actions.push(Action::SetSceneFollow(slot, follow));
+        }
     });
 }
 
@@ -1050,6 +1089,8 @@ fn apply(app: &mut PulseApp, action: Action) {
                 app.sync_clip(t, slot);
             }
         }
+        Action::SetFollow(t, slot, follow) => app.set_follow(t, slot, follow),
+        Action::SetSceneFollow(scene, follow) => app.set_scene_follow(scene, follow),
         Action::StopTrack(t) => app.audio.send(Command::StopTrack(t)),
         Action::LaunchGroup(g, slot) => app.launch_group(g, slot),
         Action::StopGroup(g) => {

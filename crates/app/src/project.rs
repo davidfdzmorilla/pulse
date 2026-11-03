@@ -4,6 +4,7 @@ use engine::model::{
     drum_note::*, AcidParams, ArrangementClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, FmParams, SuperSawParams, CompressorParams, DelayParams, Device, Effect,
     InstrumentKind, MidiClip, Note, Param, PluginId, ReverbParams, SynthParams, RACK_FIRST_NOTE, RACK_PADS,
 };
+use engine::follow::Follow;
 use engine::{MAX_RETURNS, NUM_SCENES};
 use engine::meter::Meter;
 use serde::{Deserialize, Serialize};
@@ -150,6 +151,25 @@ pub struct Track {
     /// take it for harmony (see `loop_key::melodic_slices`).
     #[serde(default, skip_serializing_if = "is_default")]
     pub melodic: bool,
+    /// What each session clip does after playing a while, by slot (see
+    /// `engine::follow`): it stays with the slot's clip when it moves.
+    #[serde(default, skip_serializing_if = "no_follow", deserialize_with = "follows")]
+    pub follow: [Follow; NUM_SCENES],
+}
+
+/// Whether no slot (or scene) has a follow action.
+fn no_follow(follow: &[Follow; NUM_SCENES]) -> bool {
+    follow.iter().all(|f| *f == Follow::default())
+}
+
+/// Follow actions as saved: as many as there were scenes then, the rest none.
+fn follows<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<[Follow; NUM_SCENES], D::Error> {
+    let saved: Vec<Follow> = Vec::deserialize(deserializer)?;
+    let mut follow = [Follow::default(); NUM_SCENES];
+    for (slot, f) in follow.iter_mut().zip(saved) {
+        *slot = f;
+    }
+    Ok(follow)
 }
 
 /// A track's lane height on the Arrangement (points), if it was given one of
@@ -206,6 +226,7 @@ impl Track {
             sounds_from: 0,
             height: LaneHeight(None),
             melodic: false,
+            follow: [Follow::default(); NUM_SCENES],
         }
     }
 
@@ -362,7 +383,9 @@ pub struct MasterTrack {
 /// them otherwise. Only projects that have one.
 /// 20: a «Transición» (tape stop, repeats, cuts): a Pulse that reads 19
 /// doesn't know it. Only projects that have one.
-pub const FORMAT: u32 = 20;
+/// 21: follow actions on session clips or scenes: a Pulse that reads 20
+/// would lose them. Only projects that have some.
+pub const FORMAT: u32 = 21;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -467,6 +490,9 @@ pub struct Project {
     pub returns: Vec<ReturnTrack>,
     pub master: MasterTrack,
     pub scene_names: Vec<String>,
+    /// What each scene does after playing a while (see `engine::follow`).
+    #[serde(default, skip_serializing_if = "no_follow", deserialize_with = "follows")]
+    pub scene_follow: [Follow; NUM_SCENES],
     /// The Pulse that saved the file it came from, if it said (written from
     /// this version on; see `PulseApp::save_to`).
     #[serde(skip)]
@@ -576,6 +602,11 @@ impl Project {
         !self.grooves.is_empty() || self.tracks.iter().any(|t| t.clips.iter().flatten().any(templated) || t.arrangement.iter().any(|p| templated(&p.clip)))
     }
 
+    /// Whether a session clip or a scene has a follow action.
+    pub fn has_follow_actions(&self) -> bool {
+        !no_follow(&self.scene_follow) || self.tracks.iter().any(|t| !no_follow(&t.follow))
+    }
+
     /// Whether any MIDI clip holds controller lanes (see `expression`).
     pub fn has_controls(&self) -> bool {
         let controls = |clip: &Clip| matches!(clip, Clip::Midi(m) if !m.controls.is_empty());
@@ -672,6 +703,7 @@ impl Project {
                 automation: Vec::new(),
             },
             scene_names: (1..=NUM_SCENES).map(|i| i.to_string()).collect(),
+            scene_follow: [Follow::default(); NUM_SCENES],
             plugins: Vec::new(),
             midi_map: Vec::new(),
         }
@@ -736,8 +768,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_effect(|e| matches!(e, Effect::Transition(_))) {
+            let format = if self.has_follow_actions() {
                 FORMAT
+            } else if self.has_effect(|e| matches!(e, Effect::Transition(_))) {
+                20
             } else if self.tracks.iter().any(|t| plays_by_note(&t.instrument)) {
                 19
             } else if self.has_effect(|e| matches!(e, Effect::Vocoder(v) if v.midi)) {

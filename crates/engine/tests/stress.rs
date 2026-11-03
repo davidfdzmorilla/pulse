@@ -568,6 +568,14 @@ fn the_audio_thread_does_not_allocate() {
         changes.push(Command::RemoveDevice { target: Target::Track(t), index: 2 });
         changes.push(Command::SetClip { track: t, slot: 3, clip: Some(Box::new(PlayClip::Midi(busy_clip(50, false)))) });
     }
+    // Follow actions that keep deciding while it plays on.
+    for t in 0..48 {
+        let any = engine::follow::Follow { a: engine::follow::FollowKind::Any, b: engine::follow::FollowKind::Next, chance_a: 0.5, count: 1, unit: engine::follow::FollowUnit::Bars };
+        changes.push(Command::SetFollow { track: t, slot: 1, follow: any });
+        changes.push(Command::SetFollow { track: t, slot: 3, follow: any });
+    }
+    let next = engine::follow::Follow { a: engine::follow::FollowKind::Next, count: 2, unit: engine::follow::FollowUnit::Bars, ..Default::default() };
+    changes.push(Command::SetSceneFollow { scene: 1, follow: next });
     changes.push(Command::LaunchScene(1));
     changes.push(Command::SetTempo(140.0));
     let mut change_allocs = (0, 0);

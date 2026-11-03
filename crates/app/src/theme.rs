@@ -21,6 +21,8 @@ pub const FROZEN: Color32 = Color32::from_rgb(140, 200, 255);
 pub const PLAY: Color32 = Color32::from_rgb(0x6b, 0xe3, 0x6b);
 pub const SOLO: Color32 = Color32::from_rgb(0x5a, 0xa8, 0xf0);
 pub const SELECT: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
+/// The box of the cells a grid controller controls, on the Session.
+pub const GRID_ZONE: Color32 = Color32::from_rgb(0xff, 0x5a, 0x3c);
 pub const KNOB_TRACK: Color32 = Color32::from_rgb(0x52, 0x52, 0x52);
 pub const METER_GREEN: Color32 = Color32::from_rgb(0x5e, 0xd8, 0x6f);
 pub const METER_YELLOW: Color32 = Color32::from_rgb(0xe6, 0xd0, 0x4a);

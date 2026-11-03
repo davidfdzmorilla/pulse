@@ -268,6 +268,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             ui.label(format!("● {name}"));
         }
         rescan_midi = ui.small_button("Volver a buscar dispositivos MIDI").clicked();
+        crate::grid_io::settings(app, ui);
 
         ui.separator();
         ui.heading("Plugins");

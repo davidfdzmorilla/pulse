@@ -326,6 +326,8 @@ pub struct PulseApp {
     pub editors: crate::editor::Editors,
     /// MIDI learn, and the controllers linked to controls.
     pub learn: crate::midi_map::Learn,
+    /// Grid controllers (see `grid_io`).
+    pub grids: crate::grid_io::Grids,
     /// The control the user touched this frame (for MIDI learn).
     pub touched_control: std::cell::Cell<Option<crate::midi_map::Control>>,
     /// How loops are cut into drum rack pads.
@@ -436,6 +438,7 @@ impl PulseApp {
         crate::plugins::set_trusted(&app.settings.plugin_folders);
         app.plugin_library = crate::plugins::Library::load_cache();
         app.learn = crate::midi_map::Learn::load();
+        app.grids = crate::grid_io::Grids::load();
         // Screenshots (a debug aid) leave the user's settings and recent projects alone.
         // So do test scripts.
         app.script = crate::script::Script::from_env();
@@ -471,7 +474,8 @@ impl PulseApp {
         }
         app.sync_all();
         app.check_updates_on_start();
-        app.midi = MidiInputs::connect(app.audio.live(), app.learn.shared.clone());
+        app.midi = MidiInputs::connect(app.audio.live(), app.learn.shared.clone(), app.grids.inbox.clone());
+        app.grids.connect();
         app.sync_midi_map();
         if std::env::var("PULSE_VIEW").as_deref() == Ok("arrangement") {
             app.view = View::Arrangement;
@@ -557,6 +561,7 @@ impl PulseApp {
             plugin_library: Default::default(),
             editors: Default::default(),
             learn: Default::default(),
+            grids: Default::default(),
             touched_control: Default::default(),
             sample_drop_zones: Vec::new(),
             browser: Default::default(),
@@ -673,9 +678,14 @@ impl PulseApp {
     }
 
     pub fn sync_clip(&mut self, track: usize, slot: usize) {
+        // An empty slot has no follow action: a clip put there later starts without.
+        if self.project.tracks[track].clips[slot].is_none() {
+            self.project.tracks[track].follow[slot] = Default::default();
+        }
         let clip = self.project.tracks[track].clips[slot].clone();
         let clip = clip.map(|c| Box::new(sync::play_clip(&c, &mut self.samples)));
         self.audio.send(Command::SetClip { track, slot, clip });
+        self.audio.send(Command::SetFollow { track, slot, follow: self.project.tracks[track].follow[slot] });
         self.show_sample_errors();
     }
 
@@ -1294,6 +1304,7 @@ impl PulseApp {
                 let free = (slot + 1..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
                 if let Some(target) = free {
                     let copy = self.project.tracks[track].clips[slot].clone();
+                    self.project.tracks[track].follow[target] = self.project.tracks[track].follow[slot];
                     self.set_clip(track, target, copy);
                     self.select_clip(ClipRef::Session { track, slot: target });
                 }
@@ -1972,7 +1983,8 @@ impl PulseApp {
 
     pub fn rescan_midi(&mut self) {
         self.midi = MidiInputs::default();
-        self.midi = MidiInputs::connect(self.audio.live(), self.learn.shared.clone());
+        self.midi = MidiInputs::connect(self.audio.live(), self.learn.shared.clone(), self.grids.inbox.clone());
+        self.grids.connect();
         self.status = Some(match self.midi.names.len() {
             0 => "No hay dispositivos MIDI conectados".into(),
             n => format!("{n} dispositivo(s) MIDI: {}", self.midi.names.join(", ")),
@@ -3056,6 +3068,8 @@ impl eframe::App for PulseApp {
         if self.quitting {
             // Asked and answered: nothing is left to recover.
             self.clear_recovery();
+            // The controllers dark and back to their own modes.
+            self.grids.release();
         }
         self.autosave_now_and_then(&ctx);
         self.audio.collect_garbage();
@@ -3138,6 +3152,13 @@ impl eframe::App for PulseApp {
 
         crate::plugins::window(self, &ctx);
         self.poll_editors();
+        if self.tick_grids() {
+            ctx.request_repaint();
+        }
+        if !self.grids.controllers.is_empty() || self.grids.learning.is_some() {
+            // Their presses come from another thread, and their lights follow what plays.
+            ctx.request_repaint_after(std::time::Duration::from_millis(40));
+        }
         self.poll_plugin_edits();
         self.poll_factory_sounds(&ctx);
         self.show_plugin_automation();

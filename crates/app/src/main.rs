@@ -94,6 +94,8 @@ mod produccion;
 #[cfg(test)]
 mod produccion2;
 #[cfg(test)]
+mod produccion3;
+#[cfg(test)]
 mod interfaz_tests;
 #[cfg(test)]
 mod editor_space_tests;

@@ -516,17 +516,23 @@ pub(crate) fn sidechain_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl F
     }
 }
 
-/// «Sacar a su pista ▸», for a Drum Machine track: one of its sounds on a track of its own.
+/// «Sacar a su pista ▸», for a Drum Machine track: one of its sounds on a
+/// track of its own; for a plugin with several outputs, one of them.
 pub(crate) fn sound_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl FnMut(Action), t: usize) {
-    if !matches!(app.project.tracks[t].instrument, engine::model::InstrumentKind::DrumMachine(_)) {
-        return;
-    }
+    let plugin = app.plugin_outputs(t).is_some();
+    let sounds = match app.plugin_outputs(t) {
+        Some(outputs) => 1..outputs.len(),
+        None if matches!(app.project.tracks[t].instrument, engine::model::InstrumentKind::DrumMachine(_)) => 0..engine::model::DRUM_SOUNDS,
+        None => return,
+    };
     let taken = app.sounds_taken(t);
     crate::widgets::menu_button(ui, "Sacar a su pista", |ui| {
-        for voice in 0..engine::model::DRUM_SOUNDS {
-            let name = crate::project::voice_name(voice);
+        for voice in sounds.clone() {
+            let name = app.sound_name(t, voice);
+            let name = name.as_str();
             let hint = match app.sound_track(t, voice) {
                 Some(track) => format!("Ya suena en «{track}»"),
+                None if plugin => format!("Una pista nueva con la salida «{name}» del plugin, con sus efectos, envíos y fader (lo que el plugin mande a esa salida: en su editor eliges qué sonido va a cada una)"),
                 None => format!("Una pista nueva que toca solo «{name}», con sus efectos y su fader: esta deja de tocarlo y los clips siguen aquí"),
             };
             if ui.add_enabled(taken >> voice & 1 == 0, egui::Button::new(name)).on_hover_text(hint).on_disabled_hover_text("Ya está en su pista").clicked() {

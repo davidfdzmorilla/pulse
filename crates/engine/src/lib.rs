@@ -2,12 +2,15 @@
 
 mod audio;
 pub mod convolution;
+pub mod cpu;
 pub mod dsp;
 mod dynamics;
 mod effects;
 mod engine;
 #[cfg(test)]
 mod expression_tests;
+#[cfg(test)]
+mod plugin_io_tests;
 pub mod follow;
 mod input;
 mod instruments;

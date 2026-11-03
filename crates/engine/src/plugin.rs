@@ -12,6 +12,11 @@
 //!
 //! Instances are built on the UI thread ([`instantiate`]), and must also be dropped
 //! there (the engine returns replaced instruments and effects as garbage).
+//!
+//! Every audio bus a plugin has is active, as in most hosts: an effect's second
+//! input is its sidechain (it hears another track's sound, or silence), and an
+//! instrument's outputs after the main one are kept each block for the tracks
+//! that take them (a drum plugin's kick on a track of its own).
 
 #![allow(non_snake_case)]
 
@@ -1032,6 +1037,10 @@ struct Vst3Processor {
     /// (first buffer, channels) of each input and output bus.
     input_layout: Vec<(usize, usize)>,
     output_layout: Vec<(usize, usize)>,
+    /// The input bus a sidechain goes into, if it has one.
+    side_bus: Option<usize>,
+    /// What the outputs after the main one played this block.
+    aux: Aux,
     context: ProcessContext,
     pending: Vec<(u8, u32)>,
     held: [bool; 128],
@@ -1164,12 +1173,13 @@ impl Vst3Processor {
                     right[offset + i] += self.buffers[r][i];
                 }
             }
+            self.aux.keep(&self.buffers, &self.output_layout, n);
             offset += n;
         }
     }
 
-    /// Runs an effect over `left`/`right` in place.
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    /// Runs an effect over `left`/`right` in place, its sidechain hearing `key`.
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let mut offset = 0;
         while offset < left.len() {
             let n = (left.len() - offset).min(MAX_BLOCK);
@@ -1178,6 +1188,9 @@ impl Vst3Processor {
                 if channels > 1 {
                     self.buffers[first + 1][..n].copy_from_slice(&right[offset..offset + n]);
                 }
+            }
+            if let Some(&(first, channels)) = self.side_bus.and_then(|b| self.input_layout.get(b)) {
+                side_into(&mut self.buffers[first..first + channels], key, offset, n);
             }
             self.run(n);
             if let Some(&(first, channels)) = self.output_layout.first() {
@@ -1240,7 +1253,7 @@ impl Vst3Processor {
 
 /// Loads VST3 plugin `cid` from `bundle` (see [`instantiate`]): its processor and handle,
 /// and whether it is an instrument.
-fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(Vst3Processor, Vst3Handle, bool), String> {
+fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(Vst3Processor, Vst3Handle, bool, Io), String> {
     let module = module(bundle)?;
     let class = parse_cid(cid).ok_or_else(|| format!("Identificador de plugin no válido: {cid}"))?;
     let name = vst3_scan(bundle).ok().and_then(|list| list.into_iter().find(|p| p.cid == cid)).map_or_else(|| "Plugin".to_string(), |p| p.name);
@@ -1308,8 +1321,8 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
             handler
         });
 
-        // Buses: the main audio input and output in stereo, the first event input; the
-        // rest stay off but still get buffers.
+        // Buses: every audio one on (the main input and output in stereo: a
+        // sidechain, an instrument's other outputs), the first event input.
         let media = |m: MediaTypes| m as MediaType;
         let (audio, event) = (media(MediaTypes_::kAudio), media(MediaTypes_::kEvent));
         let (input, output) = (BusDirections_::kInput as BusDirection, BusDirections_::kOutput as BusDirection);
@@ -1317,11 +1330,18 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
         let n_out = component.getBusCount(audio, output).max(0) as usize;
         let n_events = component.getBusCount(event, input).max(0) as usize;
         for i in 0..n_in {
-            component.activateBus(audio, input, i as i32, (i == 0) as TBool);
+            component.activateBus(audio, input, i as i32, 1);
         }
         for i in 0..n_out {
-            component.activateBus(audio, output, i as i32, (i == 0) as TBool);
+            component.activateBus(audio, output, i as i32, 1);
         }
+        let bus_info = |dir: BusDirection, i: usize| {
+            let mut info: BusInfo = std::mem::zeroed();
+            (component.getBusInfo(audio, dir, i as i32, &mut info) == kResultOk).then_some(info)
+        };
+        // The sidechain: the first input that says it is one (an aux), else the second.
+        let side_bus = (1..n_in).find(|&i| bus_info(input, i).is_some_and(|b| b.busType == BusTypes_::kAux as BusType)).or((n_in > 1).then_some(1));
+        let output_names: Vec<String> = (0..n_out).map(|i| bus_info(output, i).map(|b| w_string(&b.name)).filter(|n| !n.trim().is_empty()).unwrap_or_else(|| format!("Salida {}", i + 1))).collect();
         for i in 0..n_events {
             component.activateBus(event, input, i as i32, (i == 0) as TBool);
         }
@@ -1435,8 +1455,10 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
             _pointers: pointers,
             inputs,
             outputs,
+            aux: Aux::new(output_layout.len()),
             input_layout,
             output_layout,
+            side_bus,
             context,
             pending: Vec::with_capacity(MAX_PENDING),
             held: [false; 128],
@@ -1444,7 +1466,7 @@ fn vst3_instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[
             controls: Vec::with_capacity(MAX_CHANGES),
             sample_rate,
         };
-        Ok((processor, Vst3Handle { instance, queue }, n_events > 0))
+        Ok((processor, Vst3Handle { instance, queue }, n_events > 0, Io { sidechain: side_bus.is_some(), outputs: output_names }))
     }
 }
 
@@ -1465,6 +1487,167 @@ enum Processor {
 pub struct PluginProcessor {
     inner: Processor,
     pub instrument: bool,
+    /// The track (by id) an effect's sidechain input hears (see
+    /// `EffectProcessor::sidechain`): only if it has one.
+    pub sidechain: Option<u32>,
+    side_input: bool,
+    /// What the sidechain hears this block (`key_len` frames of it), until it runs.
+    key_left: Vec<f32>,
+    key_right: Vec<f32>,
+    key_len: usize,
+    /// What the flight recorder calls it (see [`flight`]); 0: it isn't recorded.
+    pub tag: u64,
+}
+
+/// What goes in and out of a plugin besides its main input and output.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Io {
+    /// It has a sidechain input.
+    pub sidechain: bool,
+    /// Its outputs' names, the main one first.
+    pub outputs: Vec<String>,
+}
+
+/// The sound of a plugin's outputs after the main one, this block, as the
+/// tracks taking them read it.
+pub(crate) struct Aux {
+    left: Vec<Vec<f32>>,
+    right: Vec<Vec<f32>>,
+    /// Frames kept so far this block.
+    at: usize,
+}
+
+impl Aux {
+    /// For `outputs` outputs in all (the main one too, which isn't kept).
+    pub(crate) fn new(outputs: usize) -> Self {
+        let buffers = || (1..outputs.max(1)).map(|_| vec![0f32; MAX_BLOCK]).collect();
+        Self { left: buffers(), right: buffers(), at: 0 }
+    }
+
+    /// Keeps the `n` frames the plugin just played on each output after the
+    /// main one (stereo, or mono on both sides). Never allocates.
+    pub(crate) fn keep(&mut self, buffers: &[Vec<f32>], layout: &[(usize, usize)], n: usize) {
+        if self.left.is_empty() {
+            return;
+        }
+        if self.at + n > MAX_BLOCK {
+            self.at = 0;
+        }
+        let at = self.at;
+        for (k, &(first, channels)) in layout.iter().skip(1).enumerate() {
+            let r = first + if channels > 1 { 1 } else { 0 };
+            self.left[k][at..at + n].copy_from_slice(&buffers[first][..n]);
+            self.right[k][at..at + n].copy_from_slice(&buffers[r][..n]);
+        }
+        self.at += n;
+    }
+
+    /// Output `bus` (1: the first after the main one) so far this block.
+    pub(crate) fn output(&self, bus: usize) -> Option<(&[f32], &[f32])> {
+        let k = bus.checked_sub(1)?;
+        Some((&self.left.get(k)?[..self.at], &self.right.get(k)?[..self.at]))
+    }
+}
+
+/// Puts frames `offset..offset + n` of a sidechain's sound (`key`, left and
+/// right) in its bus's channels (`channels`): mono as their mean, silence
+/// where there is none.
+pub(crate) fn side_into(channels: &mut [Vec<f32>], key: Option<(&[f32], &[f32])>, offset: usize, n: usize) {
+    let count = channels.len();
+    for (c, buffer) in channels.iter_mut().enumerate() {
+        let out = &mut buffer[..n];
+        let Some((l, r)) = key else {
+            out.fill(0.0);
+            continue;
+        };
+        for (i, o) in out.iter_mut().enumerate() {
+            let (a, b) = (l.get(offset + i).copied().unwrap_or(0.0), r.get(offset + i).copied().unwrap_or(0.0));
+            *o = match (count, c) {
+                (1, _) => 0.5 * (a + b),
+                (_, 0) => a,
+                (_, 1) => b,
+                _ => 0.0,
+            };
+        }
+    }
+}
+
+/// The flight recorder: which plugin the audio thread is inside right now,
+/// in a file mapped into memory. Writing it is a store to memory (nothing to
+/// allocate, no lock, no system call); if a plugin takes Pulse down while it
+/// processes, the system still writes the page to the file, and the next start
+/// reads who it was. One recorder for the process: only the instances the app
+/// gives a tag write to it, and only on the thread that plays live (the
+/// audio thread, see [`flight::record_this_thread`]), not an export's.
+pub mod flight {
+    use std::cell::Cell;
+    use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
+
+    static SLOT: AtomicPtr<AtomicU64> = AtomicPtr::new(std::ptr::null_mut());
+
+    thread_local! {
+        static RECORDS: Cell<bool> = const { Cell::new(false) };
+    }
+
+    /// The plugins this thread runs are recorded (the audio thread says so).
+    pub fn record_this_thread() {
+        RECORDS.with(|r| r.set(true));
+    }
+
+    fn slot() -> Option<&'static AtomicU64> {
+        let slot = SLOT.load(Ordering::Relaxed);
+        (!slot.is_null() && RECORDS.with(Cell::get)).then(|| unsafe { &*slot })
+    }
+
+    /// Starts recording into the file at `path`, and gives what it held: the
+    /// tag of the plugin the last Pulse to use it was inside when it ended (0:
+    /// none). Once per process; later calls only read it and clear it.
+    pub fn install(path: &std::path::Path) -> Result<u64, String> {
+        use std::io::{Read, Seek, Write};
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let mut file = std::fs::OpenOptions::new().read(true).write(true).create(true).truncate(false).open(path).map_err(|e| format!("{}: {e}", path.display()))?;
+        let mut bytes = [0u8; 8];
+        let before = if file.read_exact(&mut bytes).is_ok() { u64::from_le_bytes(bytes) } else { 0 };
+        if !SLOT.load(Ordering::Acquire).is_null() {
+            // (Written in place, never shortened: it may be the one mapped.)
+            file.seek(std::io::SeekFrom::Start(0)).and_then(|_| file.write_all(&[0; 8])).map_err(|e| e.to_string())?;
+            return Ok(before);
+        }
+        file.set_len(4096).map_err(|e| e.to_string())?;
+        let mut map = unsafe { memmap2::MmapMut::map_mut(&file) }.map_err(|e| e.to_string())?;
+        map.fill(0);
+        // Lives as long as the process (the audio thread may be writing to it).
+        let map = Box::leak(Box::new(map));
+        SLOT.store(map.as_mut_ptr() as *mut AtomicU64, Ordering::Release);
+        Ok(before)
+    }
+
+    /// Reads what a recorder file holds, without recording into it.
+    pub fn read(path: &std::path::Path) -> u64 {
+        std::fs::read(path).ok().and_then(|b| b.get(..8).map(|b| u64::from_le_bytes(b.try_into().unwrap_or_default()))).unwrap_or(0)
+    }
+
+    #[inline]
+    pub(crate) fn enter(tag: u64) {
+        if let Some(slot) = slot().filter(|_| tag != 0) {
+            slot.store(tag, Ordering::Relaxed);
+        }
+    }
+
+    #[inline]
+    pub(crate) fn leave(tag: u64) {
+        if let Some(slot) = slot().filter(|_| tag != 0) {
+            slot.store(0, Ordering::Relaxed);
+        }
+    }
+
+    /// What the recorder holds now (tests).
+    pub fn now() -> u64 {
+        let slot = SLOT.load(Ordering::Relaxed);
+        if slot.is_null() { 0 } else { unsafe { &*slot }.load(Ordering::Relaxed) }
+    }
 }
 
 macro_rules! each {
@@ -1509,14 +1692,52 @@ impl PluginProcessor {
         each!(&mut self.inner, p => p.set_normalized(id, value))
     }
 
-    /// Adds an instrument's output to `left`/`right`.
+    /// Adds an instrument's output to `left`/`right` (and keeps its other
+    /// outputs': see [`PluginProcessor::output`]).
     pub fn render(&mut self, left: &mut [f32], right: &mut [f32]) {
-        each!(&mut self.inner, p => p.render(left, right))
+        flight::enter(self.tag);
+        each!(&mut self.inner, p => p.render(left, right));
+        flight::leave(self.tag);
     }
 
-    /// Runs an effect over `left`/`right` in place.
+    /// Runs an effect over `left`/`right` in place; its sidechain hears what
+    /// [`PluginProcessor::feed_key`] gave it this block (else silence).
     pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
-        each!(&mut self.inner, p => p.process(left, right))
+        let key = (self.key_len > 0).then(|| (&self.key_left[..self.key_len], &self.key_right[..self.key_len]));
+        flight::enter(self.tag);
+        each!(&mut self.inner, p => p.process(left, right, key));
+        flight::leave(self.tag);
+        self.key_len = 0;
+    }
+
+    /// Whether it has a sidechain input.
+    pub fn has_sidechain(&self) -> bool {
+        self.side_input
+    }
+
+    /// What its sidechain hears in the next [`PluginProcessor::process`].
+    pub fn feed_key(&mut self, left: &[f32], right: &[f32]) {
+        let n = left.len().min(right.len()).min(MAX_BLOCK);
+        self.key_left[..n].copy_from_slice(&left[..n]);
+        self.key_right[..n].copy_from_slice(&right[..n]);
+        self.key_len = n;
+    }
+
+    /// A new block starts: what its outputs keep starts again.
+    pub fn begin_block(&mut self) {
+        match &mut self.inner {
+            Processor::Vst3(p) => p.aux.at = 0,
+            Processor::Clap(p) => p.aux.at = 0,
+        }
+    }
+
+    /// What output `bus` (1: the first after the main one) played since
+    /// [`PluginProcessor::begin_block`]; None if it hasn't that output.
+    pub fn output(&self, bus: usize) -> Option<(&[f32], &[f32])> {
+        match &self.inner {
+            Processor::Vst3(p) => p.aux.output(bus),
+            Processor::Clap(p) => p.aux.output(bus),
+        }
     }
 
     /// How late its sound comes out (samples), as the plugin says.
@@ -1543,6 +1764,8 @@ enum Handle {
 pub struct PluginHandle {
     inner: Handle,
     pub name: String,
+    /// Its sidechain and outputs.
+    pub io: Io,
     /// The parameters, read once (plugins can have thousands), and their index by id.
     params: OnceLock<(Vec<PluginParam>, HashMap<u32, usize>)>,
 }
@@ -1689,14 +1912,24 @@ impl PluginView {
 /// the UI thread.
 pub fn instantiate(bundle: &Path, cid: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(PluginProcessor, PluginHandle), String> {
     let name = scan(bundle).ok().and_then(|list| list.into_iter().find(|p| p.cid == cid)).map_or_else(|| "Plugin".to_string(), |p| p.name);
-    let (processor, handle, instrument) = if is_clap(bundle) {
-        let (p, h, instrument) = crate::clap_host::instantiate(bundle, cid, sample_rate, state)?;
-        (Processor::Clap(p), Handle::Clap(h), instrument)
+    let (processor, handle, instrument, io) = if is_clap(bundle) {
+        let (p, h, instrument, io) = crate::clap_host::instantiate(bundle, cid, sample_rate, state)?;
+        (Processor::Clap(p), Handle::Clap(h), instrument, io)
     } else {
-        let (p, h, instrument) = vst3_instantiate(bundle, cid, sample_rate, state)?;
-        (Processor::Vst3(p), Handle::Vst3(h), instrument)
+        let (p, h, instrument, io) = vst3_instantiate(bundle, cid, sample_rate, state)?;
+        (Processor::Vst3(p), Handle::Vst3(h), instrument, io)
     };
-    Ok((PluginProcessor { inner: processor, instrument }, PluginHandle { inner: handle, name, params: OnceLock::new() }))
+    let processor = PluginProcessor {
+        inner: processor,
+        instrument,
+        sidechain: None,
+        side_input: io.sidechain && !instrument,
+        key_left: vec![0.0; MAX_BLOCK],
+        key_right: vec![0.0; MAX_BLOCK],
+        key_len: 0,
+        tag: 0,
+    };
+    Ok((processor, PluginHandle { inner: handle, name, io, params: OnceLock::new() }))
 }
 
 #[cfg(test)]

@@ -22,6 +22,12 @@ pub struct SampleCache {
     pub plugins: HashMap<PluginId, PluginHandle>,
     /// Plugins loaded again (a new instance) since this was last emptied.
     pub reloaded: Vec<PluginId>,
+    /// Notes what plugins load and play, to find one that takes Pulse down
+    /// (see `plugin_guard`); none in tests and renders of their own.
+    pub guard: Option<Arc<crate::plugin_guard::Guard>>,
+    /// Plugins that don't load: blocked in Ajustes, or this time only.
+    pub blocked: Vec<crate::plugin_guard::PluginKey>,
+    pub skipped: Vec<crate::plugin_guard::PluginKey>,
 }
 
 impl SampleCache {
@@ -206,11 +212,32 @@ pub fn load_plugin(project: &Project, id: PluginId, samples: &mut SampleCache, s
         samples.errors.push(format!("«{}» no se carga: está en {}, fuera de tus carpetas de plugins. Si te fías de él, añade su carpeta en Ajustes → Plugins.", plugin.name, plugin.path));
         return None;
     }
+    if samples.blocked.iter().any(|b| b.matches(plugin)) {
+        samples.errors.push(format!("«{}» está bloqueado y no se carga: su pista queda en silencio. Lo desbloqueas en Ajustes → Plugins.", plugin.name));
+        return None;
+    }
+    if samples.skipped.iter().any(|b| b.matches(plugin)) {
+        samples.errors.push(format!("«{}» no se carga hasta que cierres Pulse (cerró Pulse la última vez).", plugin.name));
+        return None;
+    }
     let state = crate::plugins::decode(&plugin.state);
-    match engine::plugin::instantiate(Path::new(&plugin.path), &plugin.cid, sample_rate, state.as_deref().filter(|s| !s.is_empty())) {
-        Ok((processor, handle)) => {
+    // A note on the disk while it loads: if it takes Pulse down, the next start knows.
+    let key = crate::plugin_guard::PluginKey::of(plugin);
+    if let Some(guard) = &samples.guard {
+        guard.loading(&key);
+    }
+    let loaded = engine::plugin::instantiate(Path::new(&plugin.path), &plugin.cid, sample_rate, state.as_deref().filter(|s| !s.is_empty()));
+    if let Some(guard) = &samples.guard {
+        guard.loaded();
+    }
+    match loaded {
+        Ok((mut processor, handle)) => {
             // Restoring its state is not an edit.
             handle.take_edited();
+            processor.sidechain = plugin.sidechain.filter(|_| handle.io.sidechain);
+            if let Some(guard) = &samples.guard {
+                processor.tag = guard.tag(&key);
+            }
             samples.plugins.insert(id, handle);
             samples.reloaded.push(id);
             Some(processor)
@@ -382,6 +409,13 @@ fn commands_from(
     // The sound each track plays from another (a frozen track has it in its audio already).
     commands.push(Command::SetAudioFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none()).and_then(|track| track.audio_from).unwrap_or(0))));
     commands.push(Command::SetSoundsFrom(std::array::from_fn(|t| project.tracks.get(t).filter(|track| track.frozen.is_none() && track.audio_from.is_some()).map_or(0, |track| track.sounds_from))));
+    // What plugins' sidechains hear (a plugin loaded now has it already).
+    for plugin in &project.plugins {
+        let before = before.and_then(|b| b.plugin(plugin.id)).map(|p| p.sidechain);
+        if before != Some(plugin.sidechain) {
+            commands.push(Command::SetPluginSidechain { id: plugin.id, source: plugin.sidechain.unwrap_or(0) });
+        }
+    }
     // The returns the project doesn't have (any more) are emptied: silent.
     // Switched off: a send left over to one (a damaged file) is not heard dry.
     let off = crate::project::Mixer { active: false, ..Default::default() };

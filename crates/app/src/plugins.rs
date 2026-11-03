@@ -285,6 +285,7 @@ impl PulseApp {
             name: info.name.clone(),
             vendor: info.vendor.clone(),
             state: String::new(),
+            sidechain: None,
         });
         let sample_rate = self.audio.sample_rate();
         let processor = crate::sync::load_plugin(&self.project, id, &mut self.samples, sample_rate);
@@ -348,6 +349,14 @@ impl PulseApp {
                 }
             }
         }
+    }
+
+    /// Points plugin `id`'s sidechain input at the track whose id is `source`
+    /// (None: it hears silence). One step to undo.
+    pub fn set_plugin_sidechain(&mut self, id: PluginId, source: Option<u32>) {
+        let Some(plugin) = self.project.plugins.iter_mut().find(|p| p.id == id) else { return };
+        plugin.sidechain = source;
+        self.audio.send(Command::SetPluginSidechain { id, source: source.unwrap_or(0) });
     }
 
     /// The plugin instance's name, for titles.
@@ -622,6 +631,169 @@ pub(crate) mod tests {
             .clone()
     }
 
+    /// Renders `project` offline from its start, as an export would (fresh
+    /// plugin instances from the saved state): the left channel.
+    fn render_project(project: &crate::project::Project, frames: usize) -> Vec<f32> {
+        let mut renderer = engine::OfflineRenderer::new(48_000.0);
+        for command in crate::sync::project_commands(project, &mut crate::sync::SampleCache::default(), 48_000.0, &Default::default()) {
+            renderer.send(command);
+        }
+        renderer.send(Command::SetOutputLimit(false));
+        renderer.send(Command::Play);
+        let (mut l, mut r) = (Vec::new(), Vec::new());
+        renderer.render(frames, &mut l, &mut r);
+        l
+    }
+
+    /// Two tracks: one playing an A (the test synth, a plugin) and one, quiet
+    /// on its own, with the test gain on it at 0× (it adds what its
+    /// sidechain hears).
+    fn sidechained() -> (PulseApp, PluginId) {
+        let mut app = app();
+        let (synth, gain) = (app.plugin_library.found[0].clone(), app.plugin_library.found[1].clone());
+        app.project.tracks.truncate(2);
+        for track in &mut app.project.tracks {
+            track.clips = Default::default();
+            track.arrangement.clear();
+            track.devices.clear();
+        }
+        app.sync_all();
+        app.set_plugin_instrument(0, &synth);
+        let mut clip = engine::model::MidiClip::new("A", 4.0, [0, 0, 0]);
+        clip.notes.push(engine::model::Note { start: 0.0, length: 4.0, pitch: 69, velocity: 1.0, chance: 1.0 });
+        app.project.tracks[0].arrangement = vec![engine::model::ArrangementClip { start: 0.0, length: 4.0, clip: engine::model::Clip::Midi(clip) }];
+        app.project.tracks[0].mixer.active = false;
+        app.project.tracks[1].instrument = InstrumentKind::Synth(Default::default());
+        app.add_plugin_effect(Target::Track(1), &gain);
+        let Effect::Plugin(id) = app.project.tracks[1].devices[0].effect else { panic!() };
+        app.samples.plugins[&id].set(0, 0.0);
+        app.capture_plugins();
+        (app, id)
+    }
+
+    /// A plugin with a sidechain input (a compressor, Trackspacer) hears the
+    /// track chosen for it, as Pulse's own effects do: offline as live, saved
+    /// with the project (a format an older Pulse refuses), undone with ⌘Z.
+    #[test]
+    fn a_plugins_sidechain_listens_to_the_track_chosen() {
+        let (mut app, id) = sidechained();
+        assert!(app.samples.plugins[&id].io.sidechain, "the test gain has a sidechain input");
+        assert!(rms(&render_project(&app.project, 24_000)[2400..]) < 1e-6, "nothing heard: the source is muted, the gain at 0×");
+        app.commit_history();
+        let source = app.project.tracks[0].id;
+        app.set_plugin_sidechain(id, Some(source));
+        app.commit_history();
+        assert_eq!(app.project.plugin(id).unwrap().sidechain, Some(source));
+        // (At the track's fader, the source's level: the test synth's A at 50 %.)
+        let heard = rms(&render_project(&app.project, 24_000)[2400..]);
+        assert!(heard > 0.15, "the source, by the sidechain: {heard}");
+        // Saved and opened again.
+        let file = std::env::temp_dir().join(format!("pulse-plugin-sidechain-{}.pulse", std::process::id()));
+        app.save_to_path(&file);
+        let text = std::fs::read_to_string(&file).unwrap();
+        assert!(text.contains(&format!("\"format\": {}", crate::project::FORMAT)), "a format older Pulses refuse");
+        let loaded = crate::project::Project::load(&file).unwrap();
+        let _ = std::fs::remove_file(&file);
+        assert_eq!(loaded.plugin(id).unwrap().sidechain, Some(source));
+        assert!((rms(&render_project(&loaded, 24_000)[2400..]) - heard).abs() < 1e-3);
+        // Live: the engine hears it too (a detached engine, run by hand).
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        app.sync_all();
+        app.audio.send(Command::Play);
+        let mut out = vec![0f32; 512 * 2];
+        let state = app.audio.state().unwrap();
+        for _ in 0..20 {
+            engine.process(&mut out, 2);
+            app.audio.collect_garbage();
+        }
+        state.tracks[1].peak.take();
+        for _ in 0..10 {
+            engine.process(&mut out, 2);
+        }
+        assert!(state.tracks[1].peak.take() > 0.1, "live, the track hears it");
+        // Undone: none, and silence again.
+        app.undo();
+        assert_eq!(app.project.plugin(id).unwrap().sidechain, None);
+        for _ in 0..4 {
+            engine.process(&mut out, 2);
+            app.audio.collect_garbage();
+        }
+        state.tracks[1].peak.take();
+        for _ in 0..10 {
+            engine.process(&mut out, 2);
+        }
+        assert_eq!(state.tracks[1].peak.take(), 0.0, "undone live too");
+        // The device shows the choice (and draws).
+        app.selected_target = Target::Track(1);
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 900.0))), ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| crate::devices::show(&mut app, ui));
+        // A loop: track 0 listening to track 1 through a plugin, and track 1 to track 0.
+        app.set_plugin_sidechain(id, Some(source));
+        assert!(crate::sidechain::closes_loop_with(&app.project.tracks, &app.project.plugins, 0, app.project.tracks[1].id));
+        assert!(!crate::sidechain::closes_loop(&app.project.tracks, 0, app.project.tracks[1].id), "without the plugins' sidechains, no loop");
+    }
+
+    /// A duplicated track's plugin is an instance of its own that hears what
+    /// the original's heard.
+    #[test]
+    fn a_duplicated_plugin_keeps_its_sidechain() {
+        let (mut app, id) = sidechained();
+        let source = app.project.tracks[0].id;
+        app.set_plugin_sidechain(id, Some(source));
+        app.duplicate_track(1);
+        assert_eq!(app.project.tracks.len(), 3, "{:?}", app.status);
+        let Effect::Plugin(copy) = app.project.tracks[2].devices[0].effect else { panic!() };
+        assert_ne!(copy, id);
+        assert_eq!(app.project.plugin(copy).unwrap().sidechain, Some(source));
+        assert_eq!(app.project.plugin(id).unwrap().sidechain, Some(source));
+    }
+
+    /// A drum plugin's outputs: «Sacar a su pista» puts one on a track of its
+    /// own (named after it), which plays what the plugin sends there; saved
+    /// and undone as a drum sound is.
+    #[test]
+    fn a_plugin_output_goes_out_on_its_own_track() {
+        let mut app = app();
+        let synth = app.plugin_library.found[0].clone();
+        app.project.tracks.truncate(1);
+        app.project.tracks[0].clips = Default::default();
+        app.project.tracks[0].devices.clear();
+        app.project.tracks[0].name = "Batería".into();
+        app.sync_all();
+        app.set_plugin_instrument(0, &synth);
+        assert_eq!(app.plugin_outputs(0).map(|o| o.to_vec()), Some(vec!["Output".to_string(), "Aux 1".into(), "Aux 2".into()]));
+        // E2 plays on Aux 1.
+        let mut clip = engine::model::MidiClip::new("E", 4.0, [0, 0, 0]);
+        clip.notes.push(engine::model::Note { start: 0.0, length: 4.0, pitch: 40, velocity: 1.0, chance: 1.0 });
+        app.project.tracks[0].arrangement = vec![engine::model::ArrangementClip { start: 0.0, length: 4.0, clip: engine::model::Clip::Midi(clip) }];
+        app.capture_plugins();
+        assert!(rms(&render_project(&app.project, 24_000)) < 1e-6, "an output no track takes isn't heard");
+        app.commit_history();
+        app.sound_apart(0, 1);
+        app.commit_history();
+        assert_eq!(app.project.tracks.len(), 2, "{:?}", app.status);
+        let taker = &app.project.tracks[1];
+        assert_eq!(taker.name, "Batería Aux 1");
+        assert_eq!((taker.audio_from, taker.sounds_from), (Some(app.project.tracks[0].id), 1 << 1));
+        assert!(app.follows_hint(1).unwrap().contains("«Aux 1»"), "{:?}", app.follows_hint(1));
+        assert!(app.status.as_deref().unwrap().contains("«Aux 1»"), "{:?}", app.status);
+        let heard = rms(&render_project(&app.project, 24_000)[2400..]);
+        assert!(heard > 0.15, "{heard}");
+        // Once only; the main output isn't offered.
+        app.sound_apart(0, 1);
+        app.sound_apart(0, 0);
+        assert_eq!(app.project.tracks.len(), 2);
+        let json = app.project.to_json().unwrap();
+        assert!(json.contains(&format!("\"format\": {}", crate::project::FORMAT)));
+        app.undo();
+        assert_eq!(app.project.tracks.len(), 1);
+        // The menu offers the outputs after the main one (and draws).
+        let ctx = egui::Context::default();
+        let _ = ctx.run_ui(Default::default(), |ui| crate::session::sound_items(&app, ui, |_| {}, 0));
+    }
+
     #[test]
     fn plugin_names_and_values_fit_under_a_knob() {
         assert_eq!(short("Delay Time", 8), "Delay T…");
@@ -670,7 +842,7 @@ pub(crate) mod tests {
         let load = |path: PathBuf| {
             let mut project = crate::project::Project::demo();
             let id = PluginId(77);
-            project.plugins.push(PluginRef { id, path: path.to_string_lossy().into_owned(), cid: info.cid.clone(), name: "Raro".into(), vendor: String::new(), state: String::new() });
+            project.plugins.push(PluginRef { id, path: path.to_string_lossy().into_owned(), cid: info.cid.clone(), name: "Raro".into(), vendor: String::new(), state: String::new(), sidechain: None });
             let mut samples = crate::sync::SampleCache::default();
             let loaded = crate::sync::load_plugin(&project, id, &mut samples, 48_000.0).is_some();
             (loaded, samples.errors)
@@ -981,7 +1153,7 @@ pub(crate) mod tests {
     #[test]
     fn missing_plugins_leave_a_silent_slot_and_say_so() {
         let mut project = crate::project::Project::demo();
-        project.plugins.push(PluginRef { id: PluginId(1), path: "/nowhere/Gone.vst3".into(), cid: "00".repeat(16), name: "Gone".into(), vendor: String::new(), state: String::new() });
+        project.plugins.push(PluginRef { id: PluginId(1), path: "/nowhere/Gone.vst3".into(), cid: "00".repeat(16), name: "Gone".into(), vendor: String::new(), state: String::new(), sidechain: None });
         project.tracks[3].instrument = InstrumentKind::Plugin(PluginId(1));
         let mut app = PulseApp::headless(project);
         app.sync_all();

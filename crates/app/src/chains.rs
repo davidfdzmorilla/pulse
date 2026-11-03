@@ -412,7 +412,7 @@ impl PulseApp {
                 // `set_instrument` loads it from its state, as an undo would.
                 Some(saved) if Path::new(&saved.path).exists() => {
                     let id = self.project.new_plugin_id();
-                    self.project.plugins.push(PluginRef { id, path: saved.path.clone(), cid: saved.cid.clone(), name: saved.name.clone(), vendor: saved.vendor.clone(), state: saved.state.clone() });
+                    self.project.plugins.push(PluginRef { id, path: saved.path.clone(), cid: saved.cid.clone(), name: saved.name.clone(), vendor: saved.vendor.clone(), state: saved.state.clone(), sidechain: None });
                     Some(InstrumentKind::Plugin(id))
                 }
                 Some(saved) => {
@@ -456,7 +456,7 @@ impl PulseApp {
             return Err(format!("«{}» (no está instalado)", saved.name));
         }
         let id = self.project.new_plugin_id();
-        self.project.plugins.push(PluginRef { id, path: saved.path.clone(), cid: saved.cid.clone(), name: saved.name.clone(), vendor: saved.vendor.clone(), state: saved.state.clone() });
+        self.project.plugins.push(PluginRef { id, path: saved.path.clone(), cid: saved.cid.clone(), name: saved.name.clone(), vendor: saved.vendor.clone(), state: saved.state.clone(), sidechain: None });
         let sample_rate = self.audio.sample_rate();
         match crate::sync::load_plugin(&self.project, id, &mut self.samples, sample_rate) {
             Some(processor) => Ok((id, processor)),

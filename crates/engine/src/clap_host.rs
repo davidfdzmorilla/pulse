@@ -7,7 +7,7 @@
 //! if the plugin prefers it); controllers, pitch bend and pressure as MIDI.
 
 use crate::engine::Controller;
-use crate::plugin::{binary, PluginInfo, PluginParam, MAX_BLOCK};
+use crate::plugin::{binary, side_into, Aux, Io, PluginInfo, PluginParam, MAX_BLOCK};
 use crate::synth::HELD;
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
@@ -354,6 +354,10 @@ pub(crate) struct ClapProcessor {
     outputs: Vec<clap_audio_buffer>,
     input_layout: Vec<(usize, usize)>,
     output_layout: Vec<(usize, usize)>,
+    /// The input port a sidechain goes into, if it has one.
+    side_port: Option<usize>,
+    /// What the outputs after the main one played this block.
+    pub(crate) aux: Aux,
     transport: clap_event_transport,
     steady: i64,
     pending: Vec<(u8, u32)>,
@@ -500,11 +504,12 @@ impl ClapProcessor {
                     right[offset + i] += self.buffers[r][i];
                 }
             }
+            self.aux.keep(&self.buffers, &self.output_layout, n);
             offset += n;
         }
     }
 
-    pub fn process(&mut self, left: &mut [f32], right: &mut [f32]) {
+    pub fn process(&mut self, left: &mut [f32], right: &mut [f32], key: Option<(&[f32], &[f32])>) {
         let mut offset = 0;
         while offset < left.len() {
             let n = (left.len() - offset).min(MAX_BLOCK);
@@ -513,6 +518,9 @@ impl ClapProcessor {
                 if channels > 1 {
                     self.buffers[first + 1][..n].copy_from_slice(&right[offset..offset + n]);
                 }
+            }
+            if let Some(&(first, channels)) = self.side_port.and_then(|p| self.input_layout.get(p)) {
+                side_into(&mut self.buffers[first..first + channels], key, offset, n);
             }
             self.run(n);
             if let Some(&(first, channels)) = self.output_layout.first() {
@@ -796,7 +804,7 @@ impl Drop for ClapView {
 
 /// Creates CLAP plugin `id` from `bundle` at `sample_rate`, restoring `state` if given:
 /// its processor and handle, and whether it is an instrument. Main thread only.
-pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(ClapProcessor, ClapHandle, bool), String> {
+pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Option<&[u8]>) -> Result<(ClapProcessor, ClapHandle, bool, Io), String> {
     let _ = MAIN_THREAD.set(std::thread::current().id());
     let library = library(bundle)?;
     let info = scan(bundle)?.into_iter().find(|p| p.cid == id).ok_or_else(|| format!("{} no tiene el plugin {id}", bundle.display()))?;
@@ -858,17 +866,27 @@ pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Opti
         unsafe { ext.load.map(|load| load(plugin, &stream)) };
     }
 
-    // Audio ports: the main ones get Pulse's stereo signal; the rest get buffers too.
-    let ports = |input: bool| -> Vec<usize> {
+    // Audio ports: the main ones get Pulse's stereo signal, a second input is
+    // the sidechain, the outputs after the main one are kept for the tracks
+    // taking them: (channels, name, main) of each.
+    let ports = |input: bool| -> Vec<(usize, String, bool)> {
         let Some(ext) = (unsafe { audio_ports.as_ref() }) else { return Vec::new() };
         (0..unsafe { ext.count.map_or(0, |f| f(plugin, input)) })
             .map(|i| {
                 let mut info: clap_audio_port_info = unsafe { std::mem::zeroed() };
-                if unsafe { ext.get.is_some_and(|f| f(plugin, i, input, &mut info)) } { info.channel_count.max(1) as usize } else { 2 }
+                if unsafe { ext.get.is_some_and(|f| f(plugin, i, input, &mut info)) } {
+                    (info.channel_count.max(1) as usize, chars(&info.name), info.flags & CLAP_AUDIO_PORT_IS_MAIN != 0)
+                } else {
+                    (2, String::new(), i == 0)
+                }
             })
             .collect()
     };
-    let (ins, outs) = (ports(true), ports(false));
+    let (in_ports, out_ports) = (ports(true), ports(false));
+    let side_port = (1..in_ports.len()).find(|&i| !in_ports[i].2);
+    let output_names: Vec<String> = out_ports.iter().enumerate().map(|(i, p)| if p.1.trim().is_empty() { format!("Salida {}", i + 1) } else { p.1.clone() }).collect();
+    let ins: Vec<usize> = in_ports.iter().map(|p| p.0).collect();
+    let outs: Vec<usize> = out_ports.iter().map(|p| p.0).collect();
     let (mut clap_notes, mut midi) = (true, false);
     if let Some(ext) = unsafe { note_ports.as_ref() } {
         if unsafe { ext.count.map_or(0, |f| f(plugin, true)) } > 0 {
@@ -948,8 +966,10 @@ pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Opti
         _pointers: pointers,
         inputs,
         outputs,
+        aux: Aux::new(output_layout.len()),
         input_layout,
         output_layout,
+        side_port,
         transport,
         steady: 0,
         pending: Vec::with_capacity(MAX_PENDING),
@@ -958,5 +978,5 @@ pub(crate) fn instantiate(bundle: &Path, id: &str, sample_rate: f32, state: Opti
         midi,
         latency,
     };
-    Ok((processor, ClapHandle { instance, queue: Mutex::new(producer) }, info.instrument))
+    Ok((processor, ClapHandle { instance, queue: Mutex::new(producer) }, info.instrument, Io { sidechain: side_port.is_some(), outputs: output_names }))
 }

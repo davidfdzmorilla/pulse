@@ -95,6 +95,8 @@ mod structure_tests;
 #[cfg(test)]
 mod export_identity_tests;
 mod plugins;
+mod plugin_guard;
+mod cpu_meter;
 mod poly_ui;
 mod presets;
 mod sampler_presets;

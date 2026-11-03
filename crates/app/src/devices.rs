@@ -78,6 +78,8 @@ pub(crate) enum Action {
     ExportKick,
     /// Opens a plugin's editor or its parameter window.
     OpenPlugin(crate::plugins::PluginWindow),
+    /// Points a plugin's sidechain input at a track (by id), or at none.
+    PluginSidechain(engine::model::PluginId, Option<u32>),
 }
 
 /// Plugin parameters shown as knobs on its device; the rest are in its window.
@@ -153,7 +155,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 .enumerate()
                 .filter(|&(t, track)| target != Target::Track(t) && track.id != 0)
                 .map(|(_, track)| match target {
-                    Target::Track(t) if crate::sidechain::closes_loop(tracks, t, track.id) => (track.id, format!("{} {LOOP_MARK}", track.name)),
+                    Target::Track(t) if crate::sidechain::closes_loop_with(tracks, &app.project.plugins, t, track.id) => (track.id, format!("{} {LOOP_MARK}", track.name)),
                     _ => (track.id, track.name.clone()),
                 })
                 .collect();
@@ -207,6 +209,15 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     },
                     |ui| {
                         if let Effect::Plugin(id) = *effect {
+                            // A sidechain input (a compressor's, a ducker's): the same choice as Pulse's own.
+                            if app.samples.plugins.get(&id).is_some_and(|h| h.io.sidechain) {
+                                let mut source = app.project.plugin(id).and_then(|p| p.sidechain);
+                                let before = source;
+                                ui.vertical(|ui| sidechain_combo(ui, &format!("plugin_sc{index}"), &mut source, &sources, "El plugin la oye por su entrada lateral (sidechain): un compresor que aparta el bajo con el bombo, un Trackspacer que hace hueco a la voz"));
+                                if source != before {
+                                    actions.push(Action::PluginSidechain(id, source));
+                                }
+                            }
                             let as_param = |param: u32| Param::Device { device: index, param: param as usize };
                             crate::plugins::device_body(app, ui, target, &as_param, id, PLUGIN_KNOBS, &mut actions);
                             return;
@@ -396,6 +407,7 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
             }
             Action::OpenPlugin(crate::plugins::PluginWindow::Params(id)) => app.plugin_library.window = Some(id),
             Action::OpenPlugin(crate::plugins::PluginWindow::Editor(id)) => app.open_editor(id),
+            Action::PluginSidechain(id, source) => app.set_plugin_sidechain(id, source),
             Action::ExportKick => {
                 if let Target::Track(t) = target {
                     crate::kick_ui::export(app, t);

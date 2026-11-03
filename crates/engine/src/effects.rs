@@ -1633,6 +1633,8 @@ impl EffectProcessor {
             Self::Vocoder(fx) => fx.params.sidechain,
             Self::Gate(fx) => fx.params.sidechain,
             Self::Ducker(fx) => fx.params.sidechain,
+            // A plugin with a sidechain input: the track the app points it at.
+            Self::Plugin(_, Some(plugin)) if plugin.has_sidechain() => plugin.sidechain,
             _ => None,
         }
     }
@@ -1676,6 +1678,7 @@ impl EffectProcessor {
             Self::Vocoder(fx) => fx.key.feed(left, right),
             Self::Gate(fx) => fx.key.feed(left, right),
             Self::Ducker(fx) => fx.key.feed(left, right),
+            Self::Plugin(_, Some(plugin)) => plugin.feed_key(left, right),
             _ => {}
         }
     }

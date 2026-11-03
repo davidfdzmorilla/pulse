@@ -393,7 +393,10 @@ pub struct MasterTrack {
 /// 22: the chord track, and tracks that follow it: a Pulse that reads 21
 /// would lose them (and play those tracks' notes as written). Only projects
 /// that have chords or a track following them.
-pub const FORMAT: u32 = 22;
+/// 23: a plugin's sidechain pointed at a track (`PluginRef::sidechain`), or a
+/// plugin instrument's output on a track of its own (`sounds_from` of a
+/// plugin): a Pulse that reads 22 would lose them. Only projects that have one.
+pub const FORMAT: u32 = 23;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -572,13 +575,17 @@ pub struct PluginRef {
     /// The plugin's state, in base64, as of the last save (see `PulseApp::capture_plugins`).
     #[serde(default)]
     pub state: String,
+    /// The track (by id) its sidechain input hears, if it has one and was
+    /// pointed at one (see `engine::plugin::Io`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sidechain: Option<u32>,
 }
 
 /// The state is left out: it changes inside the plugin and is copied in only to
 /// save, so it must not count as an edit (or undo would undo the plugin's sound).
 impl PartialEq for PluginRef {
     fn eq(&self, other: &Self) -> bool {
-        (self.id, &self.path, &self.cid, &self.name, &self.vendor) == (other.id, &other.path, &other.cid, &other.name, &other.vendor)
+        (self.id, &self.path, &self.cid, &self.name, &self.vendor, self.sidechain) == (other.id, &other.path, &other.cid, &other.name, &other.vendor, other.sidechain)
     }
 }
 
@@ -616,6 +623,13 @@ impl Project {
     /// Whether the song has chords on its chord track, or a track follows it.
     pub fn has_chord_track(&self) -> bool {
         !self.chords.is_empty() || self.tracks.iter().any(|t| t.follow_chords.is_some())
+    }
+
+    /// Whether a plugin's sidechain points at a track, or a track takes a
+    /// plugin instrument's output (what format 23 brought).
+    pub fn has_plugin_routing(&self) -> bool {
+        let plugin_source = |t: &Track| t.sounds_from != 0 && self.tracks.iter().any(|s| Some(s.id) == t.audio_from && matches!(s.instrument, InstrumentKind::Plugin(_)));
+        self.plugins.iter().any(|p| p.sidechain.is_some()) || self.tracks.iter().any(plugin_source)
     }
 
     /// Whether a session clip or a scene has a follow action.
@@ -785,8 +799,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_chord_track() {
+            let format = if self.has_plugin_routing() {
                 FORMAT
+            } else if self.has_chord_track() {
+                22
             } else if self.has_follow_actions() {
                 21
             } else if self.has_effect(|e| matches!(e, Effect::Transition(_))) {

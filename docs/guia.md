@@ -129,6 +129,22 @@ A la derecha del todo, el medidor del master te dice cuánto suena la canción m
 - La sonoridad no cuenta el metrónomo ni lo que escuchas en el navegador.
 +++
 
+### La carga del audio y los cortes
+
+Al lado del medidor del master, **CPU** dice cuánto trabaja el audio: el tiempo que tarda Pulse en hacer cada trozo de sonido, sobre lo que dura. La barra es la media y la rayita el pico.
+
+- Por encima del 70 % se pone naranja, y del 90 % rojo: estás cerca de que el sonido se corte.
+- Si un trozo llega tarde, cuenta un **corte** (en rojo, a su lado).
+- **Clic** abre **Rendimiento**: lo que se lleva cada pista, su instrumento, cada efecto y cada plugin, la más pesada primero. **Poner a cero** vuelve a contar los cortes.
+
+Si hay cortes, sube el búfer en **Ajustes › Audio**, congela las pistas pesadas (ver [[Pistas#Congelar una pista]]) o quita plugins.
+
++++ Detalles
+- Un corte es un trozo que Pulse hizo en más tiempo del que dura, o una llamada de la tarjeta de sonido que llegó tarde.
+- El detalle por pista solo se mide con **Rendimiento** abierto: cerrado no gasta nada.
+- Los plugins suenan uno tras otro en el núcleo del audio: el reparto entre núcleos no los ayuda.
++++
+
 ### Cambiar el compás
 
 1. Abre el menú **Compás**, junto al tempo, y elige uno: 4/4, 3/4, 2/4, 6/8, 12/8, 5/4, 7/8, 9/8, 5/8, 7/4 o 2/2. En **Otro**, cualquier otro: los tiempos y la figura.
@@ -2052,6 +2068,48 @@ Si un plugin ya no está instalado, su dispositivo lo avisa y no suena.
 
 Una pista o un retorno con un plugin se procesa siempre en el núcleo del audio, no en los otros (ver [[Ajustes]]): algunos plugins solo aceptan que se les llame desde ahí.
 
+### Sidechain en un plugin
+
+Un compresor, un Trackspacer o un Kickstart con **entrada lateral (sidechain)** puede escuchar otra pista, como los efectos de Pulse:
+
+1. En el dispositivo del plugin, abre **Sidechain** y elige la pista (por ejemplo, el bombo).
+2. Activa en el propio plugin su sidechain externo, si tiene ese botón (muchos lo llaman «External» o «SC»).
+
+El plugin la oye tras sus efectos y antes de su fader, aunque esté silenciada. **Ninguno** le da silencio. El selector solo sale si el plugin tiene entrada lateral.
+
++++ Cómo funciona
+- Escucha esa pista en el mismo trozo de sonido, como los efectos de Pulse. Si la pista lo escucha a su vez (o es su grupo), se oye 64 muestras tarde: sale marcada «(bucle)».
+- Se guarda con el proyecto, se deshace con {⌘Z} y una pista duplicada sigue escuchando lo mismo.
+- Un proyecto con un sidechain en un plugin se abre solo con esta versión de Pulse o una más nueva.
++++
+
+### Varias salidas: cada una a su pista
+
+Las baterías y los samplers (Battery, Kontakt, una caja de ritmos VST) pueden mandar cada sonido a una salida. Cada salida puede ir a una pista propia, con sus efectos, envíos y fader:
+
+1. En el plugin, manda cada sonido a su salida (en su editor).
+2. Clic derecho en la cabecera de la pista del plugin → **Sacar a su pista ▸** y elige la salida. Aparece una pista nueva debajo que la toca.
+
+La salida principal sigue en la pista del plugin. Una salida que no toca ninguna pista no se oye.
+
++++ Cómo funciona
+- Como con la Drum Machine (ver [[Pistas#Sacar un sonido de la batería a su pista]]): la pista nueva no tiene clips, sigue al plugin y se silencia con él.
+- Si el plugin retrasa su sonido, las salidas llegan igual de tarde y Pulse las compensa como a la principal: todo suena a la vez.
+- Caben 15 salidas además de la principal.
++++
+
+### Si un plugin cierra Pulse
+
+Antes de cargar un plugin, Pulse lo apunta en el disco, y mientras lo hace sonar sabe en cuál está. Si Pulse se cierra de golpe por un plugin, al volver a abrirlo te dice cuál ha sido y te deja elegir:
+
+- **Bloquearlo**: no se carga en ningún proyecto hasta que lo desbloquees en **Ajustes › Plugins**.
+- **Solo esta vez**: no se carga hasta que cierres Pulse.
+- **Cargarlo**: como siempre.
+
+Un plugin que no se carga deja su pista en silencio, pero sigue en el proyecto con sus ajustes: al desbloquearlo vuelve a sonar como estaba.
+
+> Nota: si Pulse se queda colgado mientras carga un plugin y lo cierras tú, también lo detecta.
+
 ### Plugins de otras carpetas
 
 Un plugin es código que se ejecuta dentro de Pulse. Por eso un proyecto solo carga plugins de tus carpetas de plugins: las del sistema y las de **Ajustes › Plugins**.
@@ -3402,6 +3460,8 @@ Debajo, **Controladores de rejilla**: los Launchpad y APC en uso con la zona de 
 ### Plugins
 
 Las carpetas donde Pulse busca plugins, y **Buscar plugins** (ver [[Plugins VST3 y CLAP]]).
+
+Debajo, los plugins **bloqueados** porque cerraron Pulse: **Desbloquear** los vuelve a cargar (ver [[Plugins VST3 y CLAP#Si un plugin cierra Pulse]]).
 
 ### Carpeta de Pulse
 

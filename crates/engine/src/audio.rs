@@ -242,12 +242,25 @@ where
     T: SizedSample + FromSample<f32>,
 {
     let channels = config.channels as usize;
+    let rate = config.sample_rate as f64;
     // Scratch space for formats other than f32, sized up front so the callback never allocates.
     let mut scratch = vec![0f32; 8192 * channels];
+    // When the device last asked, and for how long a block: one asking much
+    // later ran dry (a dropout), see `Cpu::callback`.
+    let mut last: Option<(std::time::Instant, std::time::Duration)> = None;
     device
         .build_output_stream(
             config,
             move |data: &mut [T], info: &cpal::OutputCallbackInfo| {
+                let now = std::time::Instant::now();
+                if last.is_none() {
+                    // The plugins played live are recorded here (see `plugin::flight`).
+                    crate::plugin::flight::record_this_thread();
+                }
+                if let Some((then, lasted)) = last {
+                    engine.shared().cpu.callback(now - then, lasted);
+                }
+                last = Some((now, std::time::Duration::from_secs_f64(data.len() as f64 / channels.max(1) as f64 / rate)));
                 // What is rendered now is heard this much later (buffer, device, safety offset).
                 let time = info.timestamp();
                 engine.shared().set_output_latency(time.playback.duration_since(time.callback).as_secs_f64());

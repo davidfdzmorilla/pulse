@@ -23,6 +23,11 @@ pub fn club_pump(source: u32) -> DuckerParams {
 /// groups). The engine can't hear such a source in the same block: it hears
 /// it 64 frames late.
 pub fn closes_loop(tracks: &[Track], listener: usize, source: u32) -> bool {
+    closes_loop_with(tracks, &[], listener, source)
+}
+
+/// [`closes_loop`], with the plugins' sidechains (`plugins`, the project's) too.
+pub fn closes_loop_with(tracks: &[Track], plugins: &[crate::project::PluginRef], listener: usize, source: u32) -> bool {
     let Some(start) = tracks.iter().position(|t| t.id == source && source != 0) else { return false };
     let by_id = |id: u32| tracks.iter().position(|t| t.id == id && id != 0);
     let mut seen = vec![false; tracks.len()];
@@ -38,7 +43,11 @@ pub fn closes_loop(tracks: &[Track], listener: usize, source: u32) -> bool {
         // listen to and the track it plays.
         let track = &tracks[t];
         stack.extend(crate::groups::children(tracks, t));
-        stack.extend(track.devices.iter().filter_map(|d| d.effect.sidechain()).chain(track.audio_from).filter_map(by_id));
+        let plugin_sidechain = |d: &engine::model::Device| match d.effect {
+            Effect::Plugin(id) => plugins.iter().find(|p| p.id == id).and_then(|p| p.sidechain),
+            _ => None,
+        };
+        stack.extend(track.devices.iter().filter_map(|d| d.effect.sidechain().or_else(|| plugin_sidechain(d))).chain(track.audio_from).filter_map(by_id));
     }
     false
 }

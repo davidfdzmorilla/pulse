@@ -334,7 +334,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
         // The view switch and meter at the right edge, if they fit after the rest
         // of the row; otherwise they follow on the next one.
-        let right = 420.0 + if app.has_menu_bar() { 0.0 } else { 320.0 };
+        let right = 530.0 + if app.has_menu_bar() { 0.0 } else { 320.0 };
         // (In a wrapping row, what is left is up to the row's right edge.)
         if ui.max_rect().right() - ui.cursor().min.x < right {
             ui.end_row();
@@ -342,6 +342,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             master_meter(ui, &mut app.meters);
+            ui.add_space(8.0);
+            crate::cpu_meter::show(app, ui);
             ui.add_space(8.0);
             let arrangement = app.view == View::Arrangement;
             if widgets::flat_button(ui, "Arrangement", arrangement, vec2(92.0, 22.0)).on_hover_text("Tab").clicked() {

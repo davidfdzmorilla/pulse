@@ -4,6 +4,14 @@
 //! host's loading, buses, events, parameter changes and state round trips can all
 //! be checked without any third-party plugin installed. The same library is also a
 //! CLAP plugin with both (see `clap`).
+//!
+//! Like the plugins it stands for, the Gain has a sidechain input (it adds what
+//! comes in there to its output, so a test hears that it arrived) and the Synth
+//! has two outputs besides its main one, as a drum plugin does: notes from C1
+//! (36) to B1 go to «Aux 1», those below C1 to «Aux 2», the rest to the main one.
+//!
+//! Started at some sample rates the VST3 plugins misbehave on purpose, for the
+//! host's tests (see [`Mode`]): they hang while loading, crash, or are slow.
 
 #![allow(non_snake_case)]
 
@@ -38,6 +46,55 @@ fn copy_wstring(src: &str, dst: &mut [TChar]) {
     }
     if len < dst.len() {
         dst[len] = 0;
+    }
+}
+
+/// What a plugin started at an odd sample rate does instead of behaving.
+#[derive(Clone, Copy, PartialEq)]
+enum Mode {
+    Normal,
+    /// At 11 025 Hz: loading waits while the file [`hold_file`] exists.
+    Hold,
+    /// At 8 000 Hz: loading takes the process down (abort).
+    CrashLoading,
+    /// At 8 100 Hz: the first block takes the process down.
+    CrashProcessing,
+    /// At 16 000 Hz: each block takes 2 ms more (a heavy plugin).
+    Slow,
+    /// At 22 050 Hz: the synth's sound comes out [`LATENCY`] samples late, as it says.
+    Late,
+}
+
+/// How late a synth in [`Mode::Late`] sounds.
+const LATENCY: usize = 256;
+
+impl Mode {
+    fn at(sample_rate: f64) -> Mode {
+        match sample_rate as u32 {
+            11_025 => Mode::Hold,
+            8_000 => Mode::CrashLoading,
+            8_100 => Mode::CrashProcessing,
+            16_000 => Mode::Slow,
+            22_050 => Mode::Late,
+            _ => Mode::Normal,
+        }
+    }
+}
+
+/// Where the host's tests say a plugin in [`Mode::Hold`] waits.
+fn hold_file() -> std::path::PathBuf {
+    std::env::temp_dir().join("pulse-testplug-hold")
+}
+
+/// Output buses of the synth: the main one and two more.
+const SYNTH_OUTPUTS: i32 = 3;
+
+/// The output a note plays on (see the module's notes).
+fn output_of(pitch: i16) -> usize {
+    match pitch {
+        p if p < 36 => 2,
+        p if p < 48 => 1,
+        _ => 0,
     }
 }
 
@@ -91,6 +148,8 @@ struct Processor {
     sample_rate: Cell<f64>,
     /// Sounding notes: (pitch, velocity, phase).
     voices: RefCell<Vec<(i16, f32, f64)>>,
+    /// Each output's last [`LATENCY`] samples, in [`Mode::Late`].
+    delay: RefCell<Vec<std::collections::VecDeque<f32>>>,
 }
 
 impl Class for Processor {
@@ -99,7 +158,7 @@ impl Class for Processor {
 
 impl Processor {
     fn new(kind: Kind) -> Self {
-        Self { kind, values: RefCell::new(params(kind).iter().map(|p| p.3).collect()), sample_rate: Cell::new(44_100.0), voices: RefCell::new(Vec::new()) }
+        Self { kind, values: RefCell::new(params(kind).iter().map(|p| p.3).collect()), sample_rate: Cell::new(44_100.0), voices: RefCell::new(Vec::new()), delay: RefCell::new(Vec::new()) }
     }
 }
 
@@ -125,24 +184,34 @@ impl IComponentTrait for Processor {
 
     unsafe fn getBusCount(&self, media: MediaType, dir: BusDirection) -> i32 {
         match (media as MediaTypes, dir as BusDirections, self.kind) {
-            (MediaTypes_::kAudio, BusDirections_::kOutput, _) => 1,
-            (MediaTypes_::kAudio, BusDirections_::kInput, Kind::Gain) => 1,
+            (MediaTypes_::kAudio, BusDirections_::kOutput, Kind::Synth) => SYNTH_OUTPUTS,
+            (MediaTypes_::kAudio, BusDirections_::kOutput, Kind::Gain) => 1,
+            // The main input and a sidechain.
+            (MediaTypes_::kAudio, BusDirections_::kInput, Kind::Gain) => 2,
             (MediaTypes_::kEvent, BusDirections_::kInput, Kind::Synth) => 1,
             _ => 0,
         }
     }
 
     unsafe fn getBusInfo(&self, media: MediaType, dir: BusDirection, index: i32, bus: *mut BusInfo) -> tresult {
-        if index != 0 || unsafe { self.getBusCount(media, dir) } == 0 {
+        if index < 0 || index >= unsafe { self.getBusCount(media, dir) } {
             return kInvalidArgument;
         }
         let bus = unsafe { &mut *bus };
         bus.mediaType = media;
         bus.direction = dir;
         bus.channelCount = if media as MediaTypes == MediaTypes_::kAudio { 2 } else { 16 };
-        copy_wstring(if dir as BusDirections == BusDirections_::kInput { "Input" } else { "Output" }, &mut bus.name);
-        bus.busType = BusTypes_::kMain as BusType;
-        bus.flags = BusInfo_::BusFlags_::kDefaultActive as _;
+        let input = dir as BusDirections == BusDirections_::kInput;
+        let name = match (input, index) {
+            (true, 0) => "Input",
+            (true, _) => "Sidechain",
+            (false, 0) => "Output",
+            (false, 1) => "Aux 1",
+            (false, _) => "Aux 2",
+        };
+        copy_wstring(name, &mut bus.name);
+        bus.busType = if index == 0 { BusTypes_::kMain } else { BusTypes_::kAux } as BusType;
+        bus.flags = if index == 0 { BusInfo_::BusFlags_::kDefaultActive as _ } else { 0 };
         kResultOk
     }
 
@@ -170,20 +239,19 @@ impl IComponentTrait for Processor {
 
 impl IAudioProcessorTrait for Processor {
     unsafe fn setBusArrangements(&self, inputs: *mut SpeakerArrangement, num_ins: i32, outputs: *mut SpeakerArrangement, num_outs: i32) -> tresult {
-        let expected_ins = if self.kind == Kind::Gain { 1 } else { 0 };
-        if num_ins != expected_ins || num_outs != 1 {
+        let (expected_ins, expected_outs) = if self.kind == Kind::Gain { (2, 1) } else { (0, SYNTH_OUTPUTS) };
+        if num_ins != expected_ins || num_outs != expected_outs {
             return kResultFalse;
         }
-        unsafe {
-            if (num_ins == 1 && *inputs != SpeakerArr::kStereo) || *outputs != SpeakerArr::kStereo {
-                return kResultFalse;
-            }
+        let stereo = |arrs: *mut SpeakerArrangement, n: i32| (0..n as usize).all(|i| unsafe { *arrs.add(i) } == SpeakerArr::kStereo);
+        if !stereo(inputs, num_ins) || !stereo(outputs, num_outs) {
+            return kResultFalse;
         }
         kResultTrue
     }
 
-    unsafe fn getBusArrangement(&self, _dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
-        if index != 0 {
+    unsafe fn getBusArrangement(&self, dir: BusDirection, index: i32, arr: *mut SpeakerArrangement) -> tresult {
+        if index < 0 || index >= unsafe { self.getBusCount(MediaTypes_::kAudio as MediaType, dir) } {
             return kInvalidArgument;
         }
         unsafe { *arr = SpeakerArr::kStereo };
@@ -195,11 +263,22 @@ impl IAudioProcessorTrait for Processor {
     }
 
     unsafe fn getLatencySamples(&self) -> u32 {
-        0
+        if self.kind == Kind::Synth && Mode::at(self.sample_rate.get()) == Mode::Late { LATENCY as u32 } else { 0 }
     }
 
     unsafe fn setupProcessing(&self, setup: *mut ProcessSetup) -> tresult {
-        self.sample_rate.set(unsafe { (*setup).sampleRate });
+        let sample_rate = unsafe { (*setup).sampleRate };
+        self.sample_rate.set(sample_rate);
+        match Mode::at(sample_rate) {
+            Mode::CrashLoading => std::process::abort(),
+            Mode::Hold => {
+                let started = std::time::Instant::now();
+                while hold_file().exists() && started.elapsed() < std::time::Duration::from_secs(60) {
+                    std::thread::sleep(std::time::Duration::from_millis(2));
+                }
+            }
+            _ => {}
+        }
         kResultOk
     }
 
@@ -209,6 +288,16 @@ impl IAudioProcessorTrait for Processor {
 
     unsafe fn process(&self, data: *mut ProcessData) -> tresult {
         let data = unsafe { &*data };
+        match Mode::at(self.sample_rate.get()) {
+            Mode::CrashProcessing if data.numSamples > 0 => std::process::abort(),
+            Mode::Slow if data.numSamples > 0 => {
+                let started = std::time::Instant::now();
+                while started.elapsed() < std::time::Duration::from_millis(2) {
+                    std::hint::spin_loop();
+                }
+            }
+            _ => {}
+        }
         let mut values = self.values.borrow_mut();
         if let Some(changes) = unsafe { ComRef::from_raw(data.inputParameterChanges) } {
             for i in 0..unsafe { changes.getParameterCount() } {
@@ -245,20 +334,31 @@ impl IAudioProcessorTrait for Processor {
         if data.numOutputs < 1 || n == 0 {
             return kResultOk;
         }
+        let channels = |bus: &AudioBusBuffers| unsafe { slice::from_raw_parts(bus.__field0.channelBuffers32, bus.numChannels as usize) };
         let out = unsafe { &*data.outputs };
-        let outs = unsafe { slice::from_raw_parts(out.__field0.channelBuffers32, out.numChannels as usize) };
+        let outs = channels(out);
         match self.kind {
             Kind::Gain => {
                 if data.numInputs < 1 {
                     return kResultOk;
                 }
                 let input = unsafe { &*data.inputs };
-                let ins = unsafe { slice::from_raw_parts(input.__field0.channelBuffers32, input.numChannels as usize) };
+                let ins = channels(input);
                 let gain = (values[0] * 2.0) as f32;
                 for (i, o) in ins.iter().zip(outs) {
                     let (i, o) = unsafe { (slice::from_raw_parts(*i, n), slice::from_raw_parts_mut(*o, n)) };
                     for (o, i) in o.iter_mut().zip(i) {
                         *o = i * gain;
+                    }
+                }
+                // What comes in by the sidechain goes out too.
+                if data.numInputs > 1 {
+                    let side = channels(unsafe { &*data.inputs.add(1) });
+                    for (s, o) in side.iter().zip(outs) {
+                        let (s, o) = unsafe { (slice::from_raw_parts(*s, n), slice::from_raw_parts_mut(*o, n)) };
+                        for (o, s) in o.iter_mut().zip(s) {
+                            *o += s;
+                        }
                     }
                 }
             }
@@ -267,16 +367,28 @@ impl IAudioProcessorTrait for Processor {
                 // Octave: -1, 0 or +1; bend: ±2 semitones.
                 let octave = (values[1] * 2.0).round() - 1.0 + (values[2] * 2.0 - 1.0) * 2.0 / 12.0;
                 let sr = self.sample_rate.get();
-                let mut mix = vec![0f32; n];
+                let mut mix = vec![vec![0f32; n]; SYNTH_OUTPUTS as usize];
                 for (pitch, velocity, phase) in voices.iter_mut() {
                     let freq = 440.0 * 2f64.powf((*pitch as f64 - 69.0) / 12.0 + octave);
-                    for s in mix.iter_mut() {
+                    for s in mix[output_of(*pitch)].iter_mut() {
                         *s += (*phase * std::f64::consts::TAU).sin() as f32 * *velocity * level;
                         *phase = (*phase + freq / sr).fract();
                     }
                 }
-                for o in outs {
-                    unsafe { slice::from_raw_parts_mut(*o, n) }.copy_from_slice(&mix);
+                if Mode::at(sr) == Mode::Late {
+                    let mut delay = self.delay.borrow_mut();
+                    delay.resize_with(mix.len(), || std::iter::repeat_n(0.0, LATENCY).collect());
+                    for (line, mix) in delay.iter_mut().zip(mix.iter_mut()) {
+                        for s in mix.iter_mut() {
+                            line.push_back(*s);
+                            *s = line.pop_front().unwrap_or(0.0);
+                        }
+                    }
+                }
+                for (bus, mix) in mix.iter().enumerate().take(data.numOutputs.max(0) as usize) {
+                    for o in channels(unsafe { &*data.outputs.add(bus) }) {
+                        unsafe { slice::from_raw_parts_mut(*o, n) }.copy_from_slice(mix);
+                    }
                 }
             }
         }

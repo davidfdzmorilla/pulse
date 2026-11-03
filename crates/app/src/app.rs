@@ -60,7 +60,13 @@ impl Audio {
     /// Audio from an engine the caller runs by hand (tests).
     #[cfg(test)]
     pub(crate) fn detached() -> (Self, engine::Engine) {
-        let (engine, handle) = engine::detached(48_000.0);
+        Self::detached_at(48_000.0)
+    }
+
+    /// The same at another sample rate.
+    #[cfg(test)]
+    pub(crate) fn detached_at(sample_rate: f32) -> (Self, engine::Engine) {
+        let (engine, handle) = engine::detached(sample_rate);
         (Self { _output: None, handle: Some(handle), error: None }, engine)
     }
 
@@ -274,6 +280,8 @@ pub struct PulseApp {
     /// Track headers being dragged to a new place.
     pub track_drag: Option<crate::tracks::TrackDrag>,
     pub meters: Meters,
+    /// The audio's load and dropouts (see `cpu_meter`).
+    pub cpu: crate::cpu_meter::CpuMeter,
     /// What the EQ Eight on view hears (see `eq_ui`).
     pub spectrum: crate::eq_ui::Spectrum,
     pub piano_roll: piano_roll::State,
@@ -442,6 +450,7 @@ impl PulseApp {
         let mut app = Self::with_audio(Project::demo(), Audio::start(&settings.audio));
         let untouched = app.project.clone();
         app.settings = settings;
+        app.samples.blocked = app.settings.blocked_plugins.clone();
         crate::plugins::set_trusted(&app.settings.plugin_folders);
         app.plugin_library = crate::plugins::Library::load_cache();
         app.learn = crate::midi_map::Learn::load();
@@ -454,6 +463,9 @@ impl PulseApp {
         app.recent = crate::commands::load_recent();
         if app.interactive {
             app.recovery = Some(crate::recovery::Recovery::standard());
+            // Before any plugin loads: did one close Pulse last time?
+            app.samples.guard = Some(Arc::new(crate::plugin_guard::Guard::standard()));
+            app.offer_plugin_recovery();
         }
         crate::library::prepare();
         app.templates = crate::templates::all();
@@ -542,6 +554,7 @@ impl PulseApp {
             selected_tracks: Vec::new(),
             track_drag: None,
             meters: Meters::default(),
+            cpu: Default::default(),
             spectrum: Default::default(),
             piano_roll: Default::default(),
             editor_max: false,
@@ -1949,6 +1962,12 @@ impl PulseApp {
                 if let Some(sidechain) = device.effect.sidechain_mut() {
                     *sidechain = sidechain.map(to_copy);
                 }
+                // A plugin's (its copy is an instance of its own).
+                if let Effect::Plugin(id) = device.effect {
+                    if let Some(plugin) = self.project.plugins.iter_mut().find(|p| p.id == id) {
+                        plugin.sidechain = plugin.sidechain.map(to_copy);
+                    }
+                }
             }
         }
         self.selected_target = Target::Track(at);
@@ -3171,6 +3190,7 @@ impl eframe::App for PulseApp {
         crate::table_editor::window(self, &ctx);
 
         crate::plugins::window(self, &ctx);
+        crate::cpu_meter::window(self, &ctx);
         self.poll_editors();
         if self.tick_grids() {
             ctx.request_repaint();

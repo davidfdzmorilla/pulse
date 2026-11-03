@@ -74,6 +74,9 @@ pub struct Settings {
     /// was left at by dragging its edge; none: as tall as two octaves need.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub detail_share: Option<f32>,
+    /// Plugins that don't load (one closed Pulse, see `plugin_guard`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub blocked_plugins: Vec<crate::plugin_guard::PluginKey>,
     /// Settings this Pulse doesn't know (a newer one wrote them): kept, so going
     /// back to an older version and forward again loses none.
     #[serde(flatten)]
@@ -90,7 +93,7 @@ fn four() -> u32 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, welcome_at_start: true, lessons_done: Vec::new(), plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, detail_share: None, unknown: Default::default() }
+        Self { audio: AudioSettings::default(), reopen_last: true, welcome_at_start: true, lessons_done: Vec::new(), plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, detail_share: None, blocked_plugins: Vec::new(), unknown: Default::default() }
     }
 }
 
@@ -147,7 +150,13 @@ impl PulseApp {
         let count_in = settings.count_in_bars != self.settings.count_in_bars;
         let compensate = settings.compensate != self.settings.compensate;
         let plugin_folders = settings.plugin_folders != self.settings.plugin_folders;
+        let blocked = settings.blocked_plugins != self.settings.blocked_plugins;
         self.settings = settings;
+        if blocked {
+            self.samples.blocked = self.settings.blocked_plugins.clone();
+            // Unblocked: it may load now; blocked: it goes.
+            self.sync_all();
+        }
         if plugin_folders {
             crate::plugins::set_trusted(&self.settings.plugin_folders);
             // Plugins left out for being elsewhere may load now.
@@ -209,6 +218,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut refresh = false;
     let mut search_plugins = false;
     let mut show_folder = false;
+    let mut unblock = None;
     egui::Window::new("Ajustes").open(&mut open).resizable(false).collapsible(false).default_width(460.0).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
         ui.heading("Audio");
         ui.label(egui::RichText::new(format!("En uso: {}", app.audio_summary())).color(TEXT_DIM).size(10.5));
@@ -301,6 +311,17 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             }
             search_plugins = ui.button("Buscar plugins").clicked();
         });
+        if !next.blocked_plugins.is_empty() {
+            ui.label(egui::RichText::new("Bloqueados: no se cargan (cerraron Pulse). Sus pistas quedan en silencio, con sus ajustes guardados").color(TEXT_DIM).size(10.5));
+            for (i, plugin) in next.blocked_plugins.iter().enumerate() {
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new(format!("⊘ {}", plugin.name)).size(10.5)).on_hover_text(&plugin.path);
+                    if ui.small_button("Desbloquear").on_hover_text("Vuelve a cargarse en los proyectos que lo usan. Si cierra Pulse otra vez, Pulse te lo volverá a preguntar").clicked() {
+                        unblock = Some(i);
+                    }
+                });
+            }
+        }
 
         ui.separator();
         ui.heading("Carpeta de Pulse");
@@ -346,6 +367,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         });
         ui.checkbox(&mut next.check_updates, "Buscar actualizaciones al arrancar");
     });
+    if let Some(i) = unblock {
+        let plugin = next.blocked_plugins.remove(i);
+        app.unblock_plugin(&plugin);
+        next.blocked_plugins = app.settings.blocked_plugins.clone();
+    }
     if next != app.settings {
         app.set_settings(next);
     }
@@ -387,7 +413,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, welcome_at_start: false, lessons_done: vec!["ritmo".into()], plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, welcome_at_start: false, lessons_done: vec!["ritmo".into()], plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), blocked_plugins: vec![crate::plugin_guard::PluginKey { name: "Roto".into(), path: "/x/Roto.vst3".into(), cid: "AB".into() }], unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

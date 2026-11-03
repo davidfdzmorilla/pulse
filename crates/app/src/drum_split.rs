@@ -4,6 +4,11 @@
 //! no longer plays it. So the kick of a kit can have its own EQ, saturation
 //! and fader, and be what a sidechain listens to, while the pattern stays one
 //! clip on the drum track.
+//!
+//! A plugin instrument with outputs besides its main one (a drum plugin, a
+//! sampler with its parts on outputs of their own) does the same with each of
+//! them: the plugin chooses what plays on which output, and the new track
+//! takes that output, in stereo, with its effects, sends and fader.
 
 use crate::app::PulseApp;
 use crate::project::{voice_name, Monitor, Track};
@@ -32,12 +37,32 @@ impl PulseApp {
         self.takers(t).find(|&i| self.project.tracks[i].sounds_from >> voice & 1 == 1).map(|i| self.project.tracks[i].name.as_str())
     }
 
+    /// The outputs of track `t`'s plugin instrument (the main one first), if
+    /// it has more than one and is loaded.
+    pub fn plugin_outputs(&self, t: usize) -> Option<&[String]> {
+        let InstrumentKind::Plugin(id) = self.project.tracks.get(t)?.instrument else { return None };
+        let outputs = &self.samples.plugins.get(&id)?.io.outputs;
+        (outputs.len() > 1).then_some(&outputs[..outputs.len().min(16)])
+    }
+
+    /// What sound (a drum's) or output (a plugin's) `voice` of track `t` is called.
+    pub fn sound_name(&self, t: usize, voice: usize) -> String {
+        match self.plugin_outputs(t) {
+            Some(outputs) => outputs.get(voice).cloned().unwrap_or_else(|| format!("Salida {}", voice + 1)),
+            None => voice_name(voice).to_string(),
+        }
+    }
+
     /// What a track that plays another's sound does, for its header's hint.
     pub fn follows_hint(&self, t: usize) -> Option<String> {
         let source = self.follows(t)?;
         let sounds = self.project.tracks[t].sounds_from;
+        let from = self.project.tracks.iter().position(|o| Some(o.id) == self.project.tracks[t].audio_from);
         Some(if sounds == 0 {
             format!("Toca lo que suena en «{source}», después de sus efectos (un rumble: no tiene clips propios, sigue a esa pista y se silencia con ella)")
+        } else if let Some(s) = from.filter(|&s| matches!(self.project.tracks[s].instrument, InstrumentKind::Plugin(_))) {
+            let names: Vec<String> = (1..16).filter(|v| sounds >> v & 1 == 1).map(|v| format!("«{}»", self.sound_name(s, v))).collect();
+            format!("Toca la salida {} del plugin de «{source}», antes de sus efectos. No tiene clips propios: sigue a esa pista y se silencia con ella", names.join(", "))
         } else {
             format!("Toca {} de la Drum Machine de «{source}», antes de sus efectos; «{source}» ya no lo toca. No tiene clips propios: sigue a esa pista y se silencia con ella", sound_names(sounds))
         })
@@ -59,7 +84,7 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         // The tracks after it moved: those go again; the rest play on.
         self.sync_from(&before);
-        self.status = Some(format!("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»", voice_name(voice), self.project.tracks[at].name, self.project.tracks[t].name));
+        self.status = Some(format!("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»", self.sound_name(t, voice), self.project.tracks[at].name, self.project.tracks[t].name));
     }
 
     /// [`Self::sound_apart`]'s new track (its index; None if `t` has no Drum
@@ -67,20 +92,27 @@ impl PulseApp {
     /// sent to the engine; why it can't, if it can't.
     pub(crate) fn take_sound(&mut self, t: usize, voice: usize) -> Result<Option<usize>, String> {
         let Some(drums) = self.project.tracks.get(t) else { return Ok(None) };
-        if !matches!(drums.instrument, InstrumentKind::DrumMachine(_)) || drums.is_group() || voice >= DRUM_SOUNDS {
+        let sounds = match self.plugin_outputs(t) {
+            // A plugin's outputs after its main one (that one stays on its track).
+            Some(outputs) => 1..outputs.len(),
+            None if matches!(drums.instrument, InstrumentKind::DrumMachine(_)) => 0..DRUM_SOUNDS,
+            None => 0..0,
+        };
+        if drums.is_group() || !sounds.contains(&voice) {
             return Ok(None);
         }
         if drums.frozen.is_some() {
             return Err(format!("«{}» está congelada: descongélala para sacar sus sonidos a otras pistas", drums.name));
         }
         if let Some(name) = self.sound_track(t, voice) {
-            return Err(format!("«{}» ya suena en «{name}»", voice_name(voice)));
+            return Err(format!("«{}» ya suena en «{name}»", self.sound_name(t, voice)));
         }
         if self.project.tracks.len() >= engine::MAX_TRACKS {
             return Err(format!("Máximo de {} pistas", engine::MAX_TRACKS));
         }
+        let name = format!("{} {}", self.project.tracks[t].name, self.sound_name(t, voice));
         let drums = &self.project.tracks[t];
-        let mut track = Track::new_audio(format!("{} {}", drums.name, voice_name(voice)), drums.color);
+        let mut track = Track::new_audio(name, drums.color);
         (track.depth, track.monitor, track.audio_from, track.sounds_from) = (drums.depth, Monitor::Off, Some(drums.id), 1 << voice);
         // As loud as it was in the kit: the drums' fader, not a new track's.
         (track.mixer.gain, track.mixer.pan) = (drums.mixer.gain, drums.mixer.pan);

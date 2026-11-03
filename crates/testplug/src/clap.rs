@@ -2,6 +2,8 @@
 //! (Octave −1..1 stepped, Bend ±2 semitones, Gain 0..2×), so the host's conversion to
 //! and from normalized values is tested too. The synth takes notes as CLAP note
 //! events or MIDI, and maps the modulation wheel to Level and pitch bend to Bend.
+//! As in VST3, the Gain adds what reaches its sidechain port to its output, and
+//! the Synth plays notes below C2 on two more output ports.
 
 use clap_sys::audio_buffer::clap_audio_buffer;
 use clap_sys::entry::clap_plugin_entry;
@@ -141,20 +143,39 @@ unsafe extern "C" fn process(plugin: *const clap_plugin, process: *const clap_pr
                     *o = i * gain;
                 }
             }
+            if process.audio_inputs_count > 1 {
+                let side: &clap_audio_buffer = unsafe { &*process.audio_inputs.add(1) };
+                let side = unsafe { std::slice::from_raw_parts(side.data32, side.channel_count as usize) };
+                for (s, o) in side.iter().zip(outs) {
+                    let (s, o) = unsafe { (std::slice::from_raw_parts(*s, n), std::slice::from_raw_parts_mut(*o, n)) };
+                    for (o, s) in o.iter_mut().zip(s) {
+                        *o += s;
+                    }
+                }
+            }
         }
         Kind::Synth => {
             let level = p.values[0] as f32;
             let shift = p.values[1].round() + p.values[2] / 12.0;
-            let mut mix = vec![0f32; n];
+            let mut mix = vec![vec![0f32; n]; SYNTH_OUTPUTS as usize];
             for (key, velocity, phase) in p.voices.iter_mut() {
                 let freq = 440.0 * 2f64.powf((*key as f64 - 69.0) / 12.0 + shift);
-                for s in mix.iter_mut() {
+                let port = match *key {
+                    k if k < 36 => 2,
+                    k if k < 48 => 1,
+                    _ => 0,
+                };
+                for s in mix[port].iter_mut() {
                     *s += (*phase * std::f64::consts::TAU).sin() as f32 * *velocity * level;
                     *phase = (*phase + freq / p.sample_rate).fract();
                 }
             }
-            for o in outs {
-                unsafe { std::slice::from_raw_parts_mut(*o, n) }.copy_from_slice(&mix);
+            let _ = outs;
+            for (port, mix) in mix.iter().enumerate().take(process.audio_outputs_count as usize) {
+                let out: &clap_audio_buffer = unsafe { &*process.audio_outputs.add(port) };
+                for o in unsafe { std::slice::from_raw_parts(out.data32, out.channel_count as usize) } {
+                    unsafe { std::slice::from_raw_parts_mut(*o, n) }.copy_from_slice(mix);
+                }
             }
         }
     }
@@ -254,10 +275,16 @@ unsafe extern "C" fn state_load(plugin: *const clap_plugin, stream: *const clap_
 
 static STATE: clap_plugin_state = clap_plugin_state { save: Some(state_save), load: Some(state_load) };
 
+/// Output ports of the synth: the main one and two more.
+const SYNTH_OUTPUTS: u32 = 3;
+
 unsafe extern "C" fn audio_ports_count(plugin: *const clap_plugin, is_input: bool) -> u32 {
     match (unsafe { data(plugin) }.kind, is_input) {
         (Kind::Synth, true) => 0,
-        _ => 1,
+        (Kind::Synth, false) => SYNTH_OUTPUTS,
+        // The main input and a sidechain.
+        (Kind::Gain, true) => 2,
+        (Kind::Gain, false) => 1,
     }
 }
 
@@ -266,9 +293,16 @@ unsafe extern "C" fn audio_ports_get(plugin: *const clap_plugin, index: u32, is_
         return false;
     }
     let info = unsafe { &mut *info };
-    info.id = if is_input { 0 } else { 1 };
-    copy(if is_input { "In" } else { "Out" }, &mut info.name);
-    info.flags = CLAP_AUDIO_PORT_IS_MAIN;
+    info.id = if is_input { index } else { 10 + index };
+    let name = match (is_input, index) {
+        (true, 0) => "In",
+        (true, _) => "Sidechain",
+        (false, 0) => "Out",
+        (false, 1) => "Aux 1",
+        (false, _) => "Aux 2",
+    };
+    copy(name, &mut info.name);
+    info.flags = if index == 0 { CLAP_AUDIO_PORT_IS_MAIN } else { 0 };
     info.channel_count = 2;
     info.port_type = CLAP_PORT_STEREO.as_ptr();
     info.in_place_pair = clap_sys::id::CLAP_INVALID_ID;

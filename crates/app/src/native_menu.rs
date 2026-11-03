@@ -115,6 +115,7 @@ pub const MENUS: [(&str, &[Item]); 8] = [
         &[
             Run(C::PlayStop, "Reproducir / Parar  (Espacio)", ""),
             Run(C::Record, "Grabar en el Arrangement  (F9)", ""),
+            Run(C::CaptureMidi, "Capturar MIDI", "⇧c"),
             Run(C::Loop, "Loop", ""),
             Run(C::Metronome, "Metrónomo", ""),
             Run(C::AutomationArm, "Armar automatización", ""),
@@ -138,7 +139,8 @@ pub fn pressed(ctx: &eframe::egui::Context, handled: &[Command]) -> Vec<Command>
     ctx.input_mut(|i| {
         for event in &i.events {
             match event {
-                Event::Copy => found.push(C::Copy),
+                // ⇧⌘C (Ctrl+Shift+C) is «Capturar MIDI», not copy.
+                Event::Copy if !i.modifiers.shift => found.push(C::Copy),
                 Event::Cut => found.push(C::Cut),
                 Event::Paste(_) => found.push(C::Paste),
                 _ => {}

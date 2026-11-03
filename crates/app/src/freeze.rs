@@ -64,7 +64,7 @@ pub fn refresh_frozen(project: &mut Project) {
 }
 
 /// Volume, pan and sends: the mixer's, which a freeze leaves live.
-fn mixer_param(param: Param) -> bool {
+pub(crate) fn mixer_param(param: Param) -> bool {
     matches!(param, Param::Volume | Param::Pan | Param::Send(_))
 }
 
@@ -91,7 +91,7 @@ pub fn playing(track: &Track) -> std::borrow::Cow<'_, Track> {
 /// Warp markers from where the render was at each frame (`map`): each beat
 /// where it was rendered. Past the song's end (its tail) the beats go on at the
 /// tempo `after`, to cover `seconds`.
-fn warp_markers(map: &[(f64, usize)], rate: f32, seconds: f64, after: f64) -> Vec<engine::model::WarpMarker> {
+pub(crate) fn warp_markers(map: &[(f64, usize)], rate: f32, seconds: f64, after: f64) -> Vec<engine::model::WarpMarker> {
     let mut markers: Vec<engine::model::WarpMarker> = Vec::new();
     for &(beat, frame) in map {
         let time = frame as f64 / rate as f64;
@@ -134,7 +134,7 @@ struct Rendered {
 /// sidechains listen to plays too, unheard (soloed out), with groups, their
 /// tracks, and sources of sources, so it ducks as in the song. Its session
 /// clips' mixer envelopes stay out: they still move the frozen clips.
-fn solo_project(project: &Project, t: usize) -> Project {
+pub(crate) fn solo_project(project: &Project, t: usize) -> Project {
     let mut render = crate::export::only(project, t);
     let flat = |track: &mut Track| {
         track.mixer.gain = 1.0;

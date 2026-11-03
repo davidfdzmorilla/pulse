@@ -101,6 +101,7 @@ El transporte es la barra de arriba: desde ahí reproduces, paras, grabas y cont
 | **Posición** | Por dónde va la canción (compás. tiempo. semicorchea), contada en su compás. Durante la cuenta atrás muestra «Cuenta N». |
 | **► Reproducir** / **■ Parar** | {Espacio}. |
 | **● Grabar** | {F9}: graba en el Arrangement. |
+| **Capturar MIDI** | {⇧⌘C}: un clip con lo último que has tocado, aunque no grabaras. Se enciende cuando hay algo. Ver [[Grabar#Capturar lo que acabas de tocar]]. |
 | **Cuenta atrás** | Sin cuenta, 1, 2 o 4 compases de metrónomo antes de grabar. |
 | **A** (Armar automatización) | Encendido, al grabar se graban también los controles que muevas. Ver [[Automatización]]. |
 | **⟲ Loop** | Repite una parte del Arrangement. Al lado, su inicio y su longitud; la región se elige en la franja de arriba del Arrangement. |
@@ -337,6 +338,7 @@ Clic derecho en un clip:
 - Con un solo clip: **Nombre** y **Color**.
 - Solo en clips de audio: **Separar en stems…**, **Letra ▸** (ver [[Letras]]), **Detectar tempo**, **Usar el tempo de este clip en el proyecto**, **Consolidar** e **Invertir**.
 - Solo en clips MIDI: **Exportar MIDI…**. Ver [[Archivos MIDI]].
+- **Convertir en audio en una pista nueva**: lo que suenan los clips seleccionados pasa a audio. Ver [[Pistas#Convertir un tramo en audio y remuestrear]].
 
 ### Desactivar un clip sin borrarlo
 
@@ -367,7 +369,7 @@ Los botones de la cabecera, de izquierda a derecha:
 - **In / Auto / Off**: monitorización (solo audio); cada clic pasa al siguiente modo. Ver [[Grabar]].
 - **A**: muestra el carril de automatización. Ver [[Automatización]].
 
-Clic derecho en la cabecera: **Nombre**, **Color**, **Mostrar/Ocultar automatización**, **Mostrar/Ocultar tomas**, **Duplicar**, **Eliminar** y **Congelar**. Ver [[Pistas]].
+Clic derecho en la cabecera: **Nombre**, **Color**, **Mostrar/Ocultar automatización**, **Mostrar/Ocultar tomas**, **Duplicar**, **Eliminar**, **Congelar**, **Convertir el tramo en audio** y **Remuestrear en una pista nueva**. Clic derecho en la cabecera del Master: **Remuestrear el Master**. Ver [[Pistas]].
 
 #### Altura de las pistas
 
@@ -480,6 +482,28 @@ En la Drum Machine, un sonido sacado lleva una flecha (**Bombo →**); al pasar 
 - El primer golpe suena entero (sin el fundido de entrada de los clips) y, al exportar, la cola congelada (reverb, delay) se exporta completa.
 +++
 
+### Convertir un tramo en audio y remuestrear
+
+Pasa a audio lo que suena un trozo de la canción en una o varias pistas, en un grupo o en el Master, para trocearlo, darle la vuelta, procesarlo como audio o ahorrar CPU.
+
+El **tramo** es el de los clips seleccionados en el Arrangement o, si no hay ninguno, el del loop. El menú dice qué compases va a tomar.
+
+1. Selecciona los clips (o pon el loop sobre el tramo).
+2. Clic derecho en la cabecera de la pista o del grupo › **Convertir el tramo en audio**. Con varias pistas seleccionadas, convierte todas. También está en el menú de los clips: **Convertir en audio en una pista nueva**.
+3. Debajo de cada una sale una pista de audio con lo que sonaba, con su mismo volumen, paneo, envíos y su automatización, dentro de los mismos grupos. Los clips de ese tramo se cortan en sus bordes y quedan desactivados: la canción suena igual.
+
+- **Remuestrear en una pista nueva** hace lo mismo pero no toca nada: la pista nueva sale silenciada (actívala con su número para oírla en lugar de la original).
+- **Remuestrear el Master** (clic derecho en la cabecera del Master): la canción entera en ese tramo, como al exportarla, en una pista de audio nueva silenciada.
+- {⌘Z} lo deshace.
+
++++ Cómo funciona convertir en audio
+- Se renderiza como al congelar: el instrumento y los efectos de la pista (de un grupo, sus pistas y sus efectos), sin su volumen, paneo ni envíos, que se quedan en vivo en la pista nueva. Con la cola de los efectos: el clip nuevo dura lo que dura la reverb o el delay.
+- El audio va en Re-Pitch al tempo del proyecto, que suena muestra a muestra igual. Si luego cambias el tempo, pásalo a Stretch en el editor de audio para que no cambie de tono. Con automatización de tempo, sigue el tempo tal como sonaba.
+- Los envíos de las pistas de un grupo a los retornos no van en el audio del grupo.
+- Lo que la pista disparaba por sidechain en otra (un ducker que la escuchaba) deja de dispararse en ese tramo, porque sus clips quedan desactivados.
+- Los archivos van a `Samples/Convertidos`, dentro de la carpeta del proyecto.
++++
+
 # Grabar y tocar
 
 ## Grabar
@@ -507,6 +531,26 @@ Lo que queda grabado:
 - **Automatización**: con **A** (Armar automatización) encendido en el transporte, también se graban los controles que muevas. Ver [[Automatización]].
 
 > Nota: lo nuevo se pone encima. Los clips que ya había no se borran ni se recortan.
+
+### Capturar lo que acabas de tocar
+
+Pulse escucha siempre lo que tocas en la pista armada (o en la seleccionada, si no hay ninguna armada), aunque no estés grabando. Si improvisas algo que te gusta, quédatelo:
+
+1. Toca. El botón **Capturar MIDI** del transporte (junto al ●) se enciende cuando hay algo que capturar.
+2. Pulsa ese botón o {⇧⌘C}.
+3. Sale un clip «Captura» con lo último que tocaste: en el primer slot libre de la pista (en la Session) o en el Arrangement.
+
+- **Con la música sonando**: el clip empieza en el compás de la primera nota y dura compases enteros (1, 2, 4 u 8). En el Arrangement queda donde lo tocaste.
+- **Con el transporte parado**: la primera nota es el principio del compás. Si el proyecto aún está vacío, Pulse saca el tempo de lo que tocaste y lo pone en el proyecto (si se parece al que hay, deja el que hay).
+- Solo se captura la última frase: lo de antes de un silencio de más de 3 segundos no entra. Como mucho, los últimos 8 compases.
+- Lo capturado no se vuelve a capturar. {⌘Z} quita el clip.
+
++++ Cómo funciona capturar
+- Pulse guarda en la interfaz las notas que tocas con el momento en que las tocaste (con el teclado MIDI, el del ordenador o la voz). El hilo de audio no hace nada de más.
+- El pedal de sustain alarga las notas como al grabar. Una tecla que aún tienes pulsada acaba al capturar.
+- El tempo se busca entre 70 y 160 BPM: el que pone las notas en una rejilla de corcheas, y entre dos que valen igual, el más cercano a 120.
+- No aplica **Rec Q**: las notas quedan como las tocaste. Cuantízalas en el editor si quieres.
++++
 
 ### Grabar en un slot de la Session
 
@@ -1027,6 +1071,28 @@ En un clip de **Drum Pads** o de **Drum Machine**, el menú del redoble tiene ta
 - Cada golpe toma el bend que hay cuando empieza, y solo lo siguen los pads (o sonidos) con **Bend**: el bombo que cae en medio del redoble no se desafina.
 - Si el pad del redoble no seguía el bend, pasa a seguirlo una octava (**Bend 12**).
 
+### Transformar notas
+
+**Transformar**, en la barra del editor, cambia las notas seleccionadas (o todas, si no hay ninguna) de una de estas maneras:
+
+| Transformación | Qué hace |
+|---|---|
+| **Rasgueo** | Las notas de cada acorde entran una tras otra, **Arriba** (de la grave a la aguda) o **Abajo**, en el tiempo que elijas; **Curva** las junta al principio o al final. El final del acorde no cambia. |
+| **Humanizar** | Mueve un poco al azar el tiempo y la velocidad de cada nota. Con la misma **Semilla** sale siempre lo mismo; **Otra** prueba otra. |
+| **Velocidad** | **Rampa** de una velocidad a otra, **Comprimir / expandir** las diferencias con la media, o **Dar la vuelta** (lo fuerte, suave). |
+| **Longitud** | **Legato** (cada nota llega a la siguiente) o **Multiplicar** su duración (×¼ para staccato, ×2…). |
+| **Ornamentos** | Una **Nota de gracia** justo antes de cada nota (en pasos de la escala si hay tonalidad), o un **Flam**: la misma nota, antes y más suave. |
+| **Arpegiar** | Cada acorde, nota a nota (**Sube**, **Baja**, **Sube y baja**), a la rejilla y la duración que elijas. |
+| **Conectar** | Rellena los huecos entre una nota y la siguiente con pasos de la escala (cromáticos si el proyecto no tiene tonalidad). |
+| **Invertir** | **Tonos**: lo agudo pasa abajo (en la escala, si hay tonalidad). **Retrogradar**: del final al principio. |
+
+1. Pulsa **Transformar** y elige una. El clip cambia al momento: lo ves y, si suena, lo oyes.
+2. Mueve sus ajustes hasta que te guste.
+3. **Aplicar** se queda con ello (un solo {⌘Z} lo deshace). **Cancelar**, o cerrar el menú, deja las notas como estaban.
+
+- Con clic derecho en las notas, **Transformar ▸** hace cualquiera al momento, con los últimos ajustes que elegiste.
+- Cuantizar, el groove (con su humanizar distinto en cada vuelta), los redobles y **A la escala** están en sus botones de la barra.
+
 ### Más sitio para las notas
 
 Al abrir un clip, el panel de detalle tiene sitio para dos octavas de notas, y la Session o el Arrangement siguen a la vista encima. Sin clip, el panel se recoge en una franja y vuelve a su altura al abrir otro.
@@ -1056,7 +1122,7 @@ Elige **Velocidad** en el carril de abajo y arrastra arriba o abajo cerca de una
 - **Dibujar** ({B}): modo lápiz.
 - **Cuantizar** ({⌘U}) con su **intensidad** (%) y **finales** (cuantiza también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
 - **Prob.** (%): en cuántas vueltas del loop suena cada nota (ver «Notas que no suenan siempre», abajo).
-- **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Redoble**: ver [[Editor MIDI#Redobles]]. **Zoom** (el ancho de los tiempos) y **Alto** (el de las filas).
+- **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Redoble**: ver [[Editor MIDI#Redobles]]. **Transformar**: ver [[Editor MIDI#Transformar notas]]. **Zoom** (el ancho de los tiempos) y **Alto** (el de las filas).
 - **⋯**: lo que no cabe en la barra. Pasa el ratón por encima para ver qué hay dentro.
 - Con una escala en el proyecto, **Plegar** y **A la escala** (ver [[Tonalidad y escala]]).
 - **Acordes**: escribe acordes de la escala, progresiones enteras, y sugiere el siguiente (ver [[Acordes]]).
@@ -3569,6 +3635,7 @@ Todos los atajos de Pulse en una página. **Ayuda › Atajos de teclado** muestr
 | {⌃⌘F} | Pantalla completa |
 | {Espacio} | Reproducir / Parar |
 | {F9} | Grabar en el Arrangement |
+| {⇧⌘C} | Capturar MIDI: un clip con lo último que has tocado |
 
 ### Editor de clips
 

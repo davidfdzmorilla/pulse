@@ -268,6 +268,8 @@ pub struct PulseApp {
     pub paste_slot: Option<(usize, usize)>,
     /// A track being frozen.
     pub freeze_job: Option<crate::freeze::FreezeJob>,
+    /// «Convertir el tramo en audio» or «Remuestrear» rendering (see `bounce`).
+    pub bounce_job: Option<crate::bounce::BounceJob>,
     /// The audio clip editor shows the whole file (else just the clip's part).
     pub sample_view_whole: bool,
     /// Clips selected together with the selected one (⌘ clic, recuadro); see `clip_select`.
@@ -404,6 +406,8 @@ pub struct PulseApp {
     pub chord_lane: crate::chord_track::Lane,
     /// The session clips playing while recording onto the arrangement.
     pub session_capture: Option<crate::session_rec::SessionCapture>,
+    /// What was played lately, for «Capturar MIDI» (see `midi_capture`).
+    pub(crate) midi_capture: crate::midi_capture::Listener,
     /// Preferences, the window for them and the devices it shows.
     pub settings: crate::settings::Settings,
     pub show_settings: bool,
@@ -547,6 +551,7 @@ impl PulseApp {
             selected_clip: Some(ClipRef::Session { track: 0, slot: 0 }),
             paste_slot: None,
             freeze_job: None,
+            bounce_job: None,
             sample_view_whole: false,
             selected_clips: Vec::new(),
             clip_gesture: None,
@@ -618,6 +623,7 @@ impl PulseApp {
             accompaniment: None,
             chord_lane: Default::default(),
             session_capture: None,
+            midi_capture: Default::default(),
             settings: Default::default(),
             show_settings: false,
             updates: Default::default(),
@@ -3134,6 +3140,7 @@ impl eframe::App for PulseApp {
             self.keyboard.handle(&ctx, live.as_ref());
         }
         self.update_input_track();
+        self.listen_midi();
         self.update_recording();
         self.follow_voice(&ctx);
 
@@ -3232,11 +3239,15 @@ impl eframe::App for PulseApp {
         }
 
         // A sweep of a controller is one undo step, like a drag.
-        let interacting = ctx.input(|i| i.pointer.any_down()) || self.learn.moving();
+        // So is a transformation tried in the clip editor until it is applied.
+        let interacting = ctx.input(|i| i.pointer.any_down()) || self.learn.moving() || self.piano_roll.transform.trying();
         if self.history.commit(&self.project, interacting) {
             self.check_frozen();
         }
         self.follow_freeze(&ctx);
+        if self.follow_bounce() {
+            ctx.request_repaint_after(std::time::Duration::from_millis(100));
+        }
         self.follow_tuning(&ctx);
         self.follow_hum_song(&ctx);
         self.update_title(&ctx);

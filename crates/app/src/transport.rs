@@ -112,6 +112,15 @@ fn icon_button(ui: &mut egui::Ui, icon: &str, active: bool, active_color: Color3
             let span = if icon == "punch in" { egui::Rect::from_min_max(egui::pos2(x + 3.0, c.y - 3.0), egui::pos2(x + 10.0, c.y + 3.0)) } else { egui::Rect::from_min_max(egui::pos2(x - 10.0, c.y - 3.0), egui::pos2(x - 3.0, c.y + 3.0)) };
             ui.painter().rect_filled(span, 1.0, color);
         }
+        // A clip with notes in it.
+        "capture" => {
+            let c = rect.center();
+            let clip = egui::Rect::from_center_size(c, vec2(14.0, 11.0));
+            ui.painter().rect_stroke(clip, 1.5, egui::Stroke::new(1.2, color), egui::StrokeKind::Inside);
+            for (x, y, w) in [(-4.5, -2.5, 4.0), (0.0, 0.5, 4.0), (2.0, 2.8, 3.0)] {
+                ui.painter().line_segment([egui::pos2(c.x + x, c.y + y), egui::pos2(c.x + x + w, c.y + y)], egui::Stroke::new(1.6, color));
+            }
+        }
         other => {
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, other, theme::body(), color);
         }
@@ -192,6 +201,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let recording = app.is_arrangement_recording();
         if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (si no hay ninguna, arma las seleccionadas) y, con «A» encendido, los controles que muevas como automatización (F9)").clicked() {
             press(app, Transport::Record);
+        }
+        // Lit while there is something played to capture.
+        let can = app.can_capture();
+        let hint = if can { "Capturar MIDI: un clip con lo último que has tocado en la pista armada o seleccionada, aunque no grabaras (⇧⌘C)" } else { "Capturar MIDI: toca algo en la pista armada o seleccionada y luego pulsa aquí para quedártelo en un clip, aunque no grabaras (⇧⌘C)" };
+        if icon_button(ui, "capture", can, theme::ACCENT, hint).clicked() {
+            app.capture_midi();
         }
         let bars = app.settings.count_in_bars;
         let label = |b: u32| if b == 0 { "Sin cuenta".to_string() } else { format!("Cuenta {b} c.") };

@@ -1158,6 +1158,15 @@ fn master_header(app: &mut PulseApp, ui: &mut egui::Ui, row: usize, shown: Optio
     if let Some(param) = shown {
         automation_picker(app, ui, rect, row, param, 0, LANE_H);
     }
+    crate::widgets::edit_menu(&response, |ui| {
+        let range = app.bounce_range();
+        let span = app.range_label(range);
+        let button = ui.add_enabled(app.bounce_job.is_none(), egui::Button::new(format!("Remuestrear el Master ({span})")));
+        if button.on_hover_text(format!("Toda la canción en {span} (los clips seleccionados o, si no hay, el loop), como al exportarla, en una pista de audio nueva silenciada")).clicked() {
+            app.bounce(vec![crate::bounce::Source::Master], range, true);
+            ui.close();
+        }
+    });
 }
 
 /// The parameter list of a row's automation lane, and «Borrar automatización».
@@ -1326,6 +1335,7 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
             crate::session::sound_items(app, ui, |action| chosen = Some(action), t);
         }
         crate::session::sidechain_items(app, ui, |action| chosen = Some(action), t);
+        bounce_items(app, ui, t, several);
         match chosen {
             Some(crate::session::Action::Freeze(t)) => app.freeze(t),
             Some(crate::session::Action::Unfreeze(t)) => app.unfreeze(t),
@@ -1346,6 +1356,28 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
 fn chord_strip(rect: Rect) -> Rect {
     let top = rect.top() + LOOP_H + MARKER_H + RULER_H;
     Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + CHORD_H))
+}
+
+/// «Convertir el tramo en audio» and «Remuestrear» in a track's menu (the
+/// selected tracks, if it is one of them), over the selected clips' span or the loop.
+fn bounce_items(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, several: bool) {
+    ui.separator();
+    let range = app.bounce_range();
+    let span = app.range_label(range);
+    let tracks = if several { app.track_selection() } else { vec![t] };
+    let sources: Vec<crate::bounce::Source> = tracks.iter().map(|&t| crate::bounce::Source::Track(t)).collect();
+    let busy = app.bounce_job.is_some();
+    let what = if several { format!("{} pistas", tracks.len()) } else if app.project.tracks[t].is_group() { "el grupo".to_string() } else { "la pista".to_string() };
+    let button = ui.add_enabled(!busy, egui::Button::new(format!("Convertir el tramo en audio ({span})")));
+    if button.on_hover_text(format!("Lo que suena {what} en {span} (los clips seleccionados o, si no hay, el loop) pasa a una pista de audio nueva debajo, con su volumen, paneo y envíos; sus clips de ahí se desactivan y la canción suena igual")).clicked() {
+        app.bounce(sources.clone(), range, false);
+        ui.close();
+    }
+    let button = ui.add_enabled(!busy, egui::Button::new(format!("Remuestrear en una pista nueva ({span})")));
+    if button.on_hover_text(format!("Lo que suena {what} en {span}, en una pista de audio nueva silenciada; la original sigue igual. Para trocearlo, darle la vuelta o procesarlo como audio")).clicked() {
+        app.bounce(sources, range, true);
+        ui.close();
+    }
 }
 
 /// The markers: a flag and its name in their strip, a faint line down the lanes.
@@ -1612,6 +1644,15 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     if ui.button(label(if muted { "Activar" } else { "Desactivar" }) + "   0").on_hover_text("Desactivado, el clip se queda donde está pero no suena").clicked() {
         app.toggle_clips_muted();
         ui.close();
+    }
+    if !app.project.tracks[track].is_group() {
+        let range = app.bounce_range();
+        let tracks = app.selected_clip_tracks();
+        let hint = format!("Lo que suenan {} en {} pasa a una pista de audio nueva debajo de la suya; los clips se desactivan y la canción suena igual", if count > 1 { "estos clips" } else { "este clip" }, app.range_label(range));
+        if ui.add_enabled(app.bounce_job.is_none(), egui::Button::new(label("Convertir en audio en una pista nueva"))).on_hover_text(hint).clicked() {
+            app.bounce(tracks.into_iter().map(crate::bounce::Source::Track).collect(), range, false);
+            ui.close();
+        }
     }
     let all_audio = app.clip_selection().iter().all(|&c| matches!(app.clip(c), Some(Clip::Audio(_))));
     if audio && all_audio && ui.button(label("Consolidar")).on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {

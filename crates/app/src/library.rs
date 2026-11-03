@@ -34,6 +34,7 @@ pub const STEMS: &str = "Stems";
 pub const SLICES: &str = "Trozos";
 pub const CONSOLIDATED: &str = "Consolidados";
 pub const FROZEN: &str = "Congelados";
+pub const BOUNCED: &str = "Convertidos";
 pub const TRANSITIONS: &str = "Transiciones";
 
 /// The folder chosen in Settings, if not the default.

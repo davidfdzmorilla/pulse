@@ -147,6 +147,8 @@ pub struct State {
     widths: [f32; Part::ALL.len()],
     /// The bar's parts in «⋯».
     pub(crate) hidden: Vec<Part>,
+    /// «Transformar»: its settings and what is being tried.
+    pub(crate) transform: crate::midi_transform::Panel,
     /// Points the notes lacked (or had to spare) for two octaves at the usual
     /// height, last drawn: the panel grows by them (see `PulseApp::detail_height`).
     short: Option<f32>,
@@ -210,6 +212,7 @@ impl Default for State {
             row_zoom: 1.0,
             widths: [0.0; Part::ALL.len()],
             hidden: Vec::new(),
+            transform: Default::default(),
             short: None,
         }
     }
@@ -405,6 +408,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         state.selection_clip = Some(clip_ref);
         state.drag = None;
         state.insert_at = 0.0;
+        state.transform.switched();
     }
     let clip = match clip_ref {
         ClipRef::Session { track, slot } => app.project.tracks[track].clips[slot].as_mut(),
@@ -615,6 +619,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         response.context_menu(|ui| {
             roll_menu(ui, state, clip);
+            ui.separator();
+            let length = clip.length;
+            widgets::menu_button(ui, "Transformar", |ui| crate::midi_transform::quick_menu(ui, &mut state.transform, &mut clip.notes, &mut state.selection, length, key));
         });
 
         // ----- Pointer -------------------------------------------------------------
@@ -1066,12 +1073,14 @@ pub(crate) enum Part {
     Scale,
     Double,
     Roll,
+    /// «Transformar»: strum, humanize, velocities… (see `midi_transform`).
+    Transform,
     Zoom,
 }
 
 impl Part {
     /// In the order they are drawn.
-    pub(crate) const ALL: [Part; 16] = [
+    pub(crate) const ALL: [Part; 17] = [
         Part::Retake,
         Part::Clip,
         Part::Loop,
@@ -1087,6 +1096,7 @@ impl Part {
         Part::Scale,
         Part::Double,
         Part::Roll,
+        Part::Transform,
         Part::Zoom,
     ];
 
@@ -1095,7 +1105,7 @@ impl Part {
     fn rank(self) -> u8 {
         match self {
             Part::Retake | Part::Clip | Part::Loop | Part::Grid | Part::Draw | Part::Chords => 0,
-            Part::Quantize => 1,
+            Part::Quantize | Part::Transform => 1,
             Part::NoteLength | Part::Roll => 2,
             Part::Groove => 3,
             Part::Scale => 4,
@@ -1125,6 +1135,7 @@ impl Part {
             Part::Scale => 150.0,
             Part::Double => 28.0,
             Part::Roll => 70.0,
+            Part::Transform => 95.0,
             Part::Zoom => 250.0,
         }
     }
@@ -1200,6 +1211,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
     let width = |p: Part| if widths[p.index()] > 0.0 { widths[p.index()] } else { p.guess() };
     let (rows, hidden) = lay_out(&parts, width, ui.available_width(), gap, MORE_W);
     state.hidden = hidden.clone();
+    state.transform.begin();
     let mut bar = Bar { state, clip, key, retake, grooves, previews: Vec::new() };
     let count = rows.len();
     for (r, row) in rows.into_iter().enumerate() {
@@ -1224,6 +1236,10 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
         });
     }
     ui.add_space(2.0);
+    // «Transformar» closed without «Aplicar»: the notes as they were.
+    if let Some(clip_ref) = bar.state.selection_clip {
+        bar.state.transform.end(clip_ref, &mut bar.clip.notes, &mut bar.state.selection);
+    }
     bar.previews
 }
 
@@ -1249,6 +1265,7 @@ impl Part {
             Part::Scale => "escala",
             Part::Double => "×2",
             Part::Roll => "redoble",
+            Part::Transform => "transformar",
             Part::Zoom => "zoom",
         }
     }
@@ -1409,6 +1426,17 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
                 widgets::menu_button(ui, "Redoble", |ui| roll_menu(ui, state, clip))
                     .response
                     .on_hover_text(crate::theme::keys("Reparte las notas seleccionadas en redobles de 1/16 a 1/64, con la velocidad en rampa (R repite el último)"));
+            }
+        }
+        Part::Transform => {
+            let Some(clip_ref) = state.selection_clip else { return };
+            let length = clip.length;
+            if in_menu {
+                ui.vertical(|ui| crate::midi_transform::panel(ui, &mut state.transform, clip_ref, &mut clip.notes, &mut state.selection, length, key));
+            } else {
+                let config = egui::containers::menu::MenuConfig::find(ui).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
+                let (button, _) = egui::containers::menu::MenuButton::new("Transformar").config(config).ui(ui, |ui| crate::midi_transform::panel(ui, &mut state.transform, clip_ref, &mut clip.notes, &mut state.selection, length, key));
+                button.on_hover_text(format!("Rasguear, humanizar, velocidades, legato, ornamentos, arpegiar, conectar o invertir {scope}, viéndolo antes de aplicarlo"));
             }
         }
         Part::Zoom => {

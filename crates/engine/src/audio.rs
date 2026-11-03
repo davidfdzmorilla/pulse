@@ -11,13 +11,46 @@ use std::sync::Arc;
 /// Sends live notes straight to the audio thread. Cloneable, so MIDI input
 /// callbacks on other threads can share it.
 #[derive(Clone)]
-pub struct LiveInput(Arc<Mutex<Producer<LiveNote>>>);
+pub struct LiveInput(Arc<Mutex<Producer<LiveNote>>>, Arc<Mutex<Option<Producer<HeardNote>>>>);
+
+/// A live note as it was sent, and when: what «Capturar MIDI» listens to (on
+/// the UI thread, never the audio thread's).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct HeardNote {
+    pub at: std::time::Instant,
+    pub note: LiveNote,
+}
+
+/// Where the notes heard come out (see [`LiveInput::listen`]).
+pub type HeardQueue = Consumer<HeardNote>;
+
+/// Notes the UI may not have read yet (a few seconds of a busy player).
+const HEARD_QUEUE: usize = 8192;
 
 impl LiveInput {
+    fn new(producer: Producer<LiveNote>) -> Self {
+        Self(Arc::new(Mutex::new(producer)), Arc::default())
+    }
+
     pub fn send(&self, note: LiveNote) {
         if let Ok(mut producer) = self.0.lock() {
             let _ = producer.push(note);
         }
+        if let Ok(mut tap) = self.1.lock() {
+            if let Some(tap) = tap.as_mut() {
+                let _ = tap.push(HeardNote { at: std::time::Instant::now(), note });
+            }
+        }
+    }
+
+    /// Every note sent from now on, also to the consumer returned (the last
+    /// one asked for: an earlier one hears no more).
+    pub fn listen(&self) -> HeardQueue {
+        let (producer, consumer) = RingBuffer::new(HEARD_QUEUE);
+        if let Ok(mut tap) = self.1.lock() {
+            *tap = Some(producer);
+        }
+        consumer
     }
 }
 
@@ -227,7 +260,7 @@ pub fn detached(sample_rate: f32) -> (Engine, EngineHandle) {
         commands: command_tx,
         recorded: recorded_rx,
         recorded_controls: controls_rx,
-        live: LiveInput(Arc::new(Mutex::new(live_tx))),
+        live: LiveInput::new(live_tx),
         garbage: garbage_rx,
         state,
         sample_rate,

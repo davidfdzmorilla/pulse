@@ -58,6 +58,7 @@ pub enum Command {
     FullScreen,
     PlayStop,
     Record,
+    CaptureMidi,
     Loop,
     Metronome,
     AutomationArm,
@@ -94,7 +95,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 40] = [
+pub const SHORTCUTS: [(&str, &str); 41] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -127,6 +128,7 @@ pub const SHORTCUTS: [(&str, &str); 40] = [
     ("⌃⌘F", "Pantalla completa"),
     ("Espacio", "Reproducir / Parar"),
     ("F9", "Grabar en el Arrangement"),
+    ("⇧⌘C", "Capturar MIDI: un clip con lo último que has tocado"),
     ("M", "Teclado del ordenador como teclado MIDI"),
     ("A S D F G H J K L", "Teclas blancas (con el teclado del ordenador)"),
     ("W E T Y U O P", "Teclas negras"),
@@ -160,6 +162,7 @@ impl PulseApp {
             Command::Split | Command::Join => matches!(self.selected_clip, Some(crate::app::ClipRef::Arrangement { .. })),
             Command::Paste => self.clip_clipboard.is_some() || editing_notes,
             Command::SelectAll => editing_notes,
+            Command::CaptureMidi => self.can_capture(),
             Command::DuplicateTrack | Command::DeleteTrack | Command::GroupTracks => track,
             Command::Ungroup => matches!(self.selected_target, Target::Track(t) if self.project.tracks.get(t).is_some_and(|t| t.is_group())),
             _ => true,
@@ -306,6 +309,7 @@ impl PulseApp {
             }
             Command::PlayStop => self.toggle_play(),
             Command::Record => self.toggle_arrangement_record(),
+            Command::CaptureMidi => self.capture_midi(),
             Command::Loop => self.transport(crate::midi_map::Transport::Loop),
             Command::Metronome => self.transport(crate::midi_map::Transport::Metronome),
             Command::AutomationArm => self.toggle_automation_arm(),

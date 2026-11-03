@@ -156,6 +156,9 @@ pub fn factory() -> Vec<Chain> {
                 Effect::Saturator(SaturatorParams { drive_db: 12.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Tube, oversample: false }),
                 Effect::Compressor(CompressorParams { threshold_db: -26.0, ratio: 8.0, attack_ms: 2.0, release_ms: 60.0, makeup_db: 10.5, sidechain: None }),
                 Effect::Utility(UtilityParams { width: 0.0, ..Default::default() }),
+                // The compressor's makeup and the saturator's edge left a hot voice
+                // over 0 dBFS: held at -1 dB of true peak.
+                Effect::Limiter(LimiterParams { gain_db: 0.0, ceiling_db: -1.0, release_ms: 60.0 }),
             ],
         ),
         Chain::of(
@@ -595,6 +598,33 @@ mod tests {
             assert!(l.iter().chain(&r).all(|s| s.is_finite()), "{}", chain.name);
             let peak = l.iter().chain(&r).fold(0.0f32, |m, s| m.max(s.abs()));
             assert!(peak > 0.01 && peak < 1.5, "{}: pico {peak}", chain.name);
+        }
+    }
+
+    /// «Voz · Radio» never takes a track over 0 dBFS, however hot the voice
+    /// comes in (its compressor's makeup and the saturator's edge used to
+    /// leave it at +0.2).
+    #[test]
+    fn the_radio_voice_stays_under_full_scale() {
+        let chain = factory().into_iter().find(|c| c.name == "Voz · Radio").unwrap();
+        // As it was, without its limiter: for the record.
+        let mut unlimited = chain.clone();
+        unlimited.devices.pop();
+        for (chain, gain) in [-12.0, 0.0, 6.0, 12.0].into_iter().flat_map(|g| [(&unlimited, g), (&chain, g)]) {
+            let mut app = playing();
+            app.add_device(Target::Track(0), Device::new(Effect::Utility(engine::model::UtilityParams { gain_db: gain, ..Default::default() })));
+            app.load_chain(Target::Track(0), chain, false);
+            let project = app.project.clone();
+            let mut samples = crate::sync::SampleCache::default();
+            let commands = crate::sync::project_commands(&project, &mut samples, 48_000.0, &Default::default());
+            let (l, r) = crate::export::render(commands, (0.0, 8.0), crate::export::Song::of(&project), 48_000.0, &Default::default(), &|_| {}).unwrap();
+            let (peak, true_peak) = (stems::loudness::sample_peak(&l, &r), stems::loudness::true_peak(&l, &r));
+            let limited = chain.devices.len() > unlimited.devices.len();
+            println!("Voz · Radio {} con {gain:+} dB de entrada: pico {peak:.2} dBFS, pico real {true_peak:.2} dBTP, {:.1} LUFS", if limited { "ahora" } else { "antes" }, stems::loudness::integrated(&l, &r, 48_000.0).unwrap_or(-99.0));
+            if !limited {
+                continue;
+            }
+            assert!(peak <= -0.5 && true_peak <= 0.0, "a {gain}: {peak:.2} dBFS, {true_peak:.2} dBTP");
         }
     }
 

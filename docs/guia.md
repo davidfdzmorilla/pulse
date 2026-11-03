@@ -1524,7 +1524,8 @@ Las estructuras:
 
 +++ Cómo elige
 - **Escenas**: cada parte toma la escena que se llama como ella («Break» para el break, «Intro», «Drop», «Estribillo»…; también «Build» o «Subida» para la subida). Si no hay ninguna, una que se llame como una parte de su energía («Groove» para la estrofa). Si tampoco, la más llena (más batería, bajo y melodía) es el estribillo o el drop, la siguiente la estrofa y la más ligera la intro.
-- **Papeles**: Pulse deduce el papel de cada pista (batería, bajo, armonía, melodía) del instrumento, el nombre y las notas. El Kick Designer es batería. Una pista de audio es lo que sean sus loops: un loop de batería (en **Beats**, o con nombre de batería como «Tops_150») es batería, aunque la pista se llame «6 Audio».
+- **Papeles**: Pulse deduce el papel de cada pista (batería, bajo, armonía, melodía) del instrumento, el nombre y las notas. El Kick Designer es batería. Una pista de audio es lo que sean sus loops: un loop de batería (en **Beats**, o con nombre de batería como «Tops_150») es batería, aunque la pista se llame «6 Audio». Un Drum Pads que sale de **Trocear** un sample con notas (acordes, una melodía) es armonía, no batería: no entra en las estrofas por la batería ni lleva redoble. Un break troceado sigue siendo batería.
+- **Audios que no duran compases enteros**: un audio que dura compases enteros se repite en bucle por toda la parte. Uno que no (una voz en **Off** de 30,75 tiempos) suena una vez al principio de cada frase de compases enteros (1, 2, 4, 8… compases) y calla hasta la siguiente, para que la segunda vuelta no se adelante.
 - **Redobles**: son de caja, o de palmas si la caja no está en el 2 y el 4; nunca del bombo. Lo que calla debajo es el resto de la batería: el bombo en su pista y los loops.
 +++
 
@@ -2150,7 +2151,7 @@ Pulse trae seis de fábrica, hechas con sus presets:
 | Cadena | Para qué |
 |---|---|
 | **Voz · Pop** | Voz limpia y delante: EQ, compresión, de-esser, un poco de OTT, delay corto y placa. |
-| **Voz · Radio** | Voz de teléfono o de radio vieja: solo los medios, saturada y en mono. |
+| **Voz · Radio** | Voz de teléfono o de radio vieja: solo los medios, saturada y en mono, con un limitador al final para que no pase de −1 dB. |
 | **Bus de batería · Pegada** | Más ataque y una batería que suena junta. |
 | **Bajo · Sidechain y saturación** | Bajo caliente que bombea con el pulso y graves en mono. |
 | **Máster · Club** | Pegamento, brillo, graves en mono y un limitador que sube el volumen sin pasar de -1 dB de pico real (lo que piden las plataformas de streaming). |
@@ -2505,6 +2506,7 @@ Pone cada pista donde suele empezar una mezcla (volumen, panorama y graves), par
 - **Sin enterrar los medios**: a una pista con notas o voz (voz, coros, solista, acordes, pad) la baja como mucho **6 dB** desde donde estaba antes del asistente, salvo que sonara por encima del bombo: entonces puede bajar hasta su nivel. Lo que se queda sin bajar lo dice («no más bajo»).
 - **Graves frente a medios**: antes de aplicar, calcula cómo sonaría la mezcla y compara la octava de 63 Hz (bombo y bajo) con los medios (de 500 Hz a 2 kHz) frente a una mezcla de club típica, donde los graves van unos 3 dB por encima. Si se pasa en más de 3 dB, deshace parte de las bajadas de esas pistas hasta quedar dentro.
 - **Panorama**: el bombo, el bajo y la voz, al centro. Si hay dos o más pistas de acordes, pads, coros, percusión o solistas en el centro, las abre a izquierda y derecha. Lo que ya has panoramizado tú no lo toca.
+- **Pads troceados**: un Drum Pads que sale de **Trocear** un sample con notas cuenta como acordes, no como batería: no le pone compresor de batería ni lo sube como a ella.
 - **Graves**: a lo que no los necesita (voz, coros, acordes, pads, solistas, percusión, efectos) y aun así tiene algo por debajo de unos 60 Hz, le pone un **EQ Eight** con corte de graves: 90 Hz en la voz, 250 Hz en la percusión, 150 Hz en el resto.
 +++
 
@@ -2517,7 +2519,7 @@ Una pista que pasa de 0 dB satura en cuanto pasa por algo que no lo aguante. **A
 Dos pistas llenan los graves (por debajo de 120 Hz) a la vez y se emborronan. Si una es la batería, **Aplicar** pone a la otra un **Ducker** con sidechain de la batería, para que se aparte cada vez que suena. Si no, recorta los graves de la que menos tiene con un **EQ Three**.
 
 +++ Cómo lo calcula
-- Cuenta como batería una Drum Machine, una Drum Rack, el **Kick Designer** (el bombo en su propia pista) y una pista de audio con nombre de batería («Kick», «Tops», «Perc»…).
+- Cuenta como batería una Drum Machine, una Drum Rack (salvo los trozos de un sample con notas), el **Kick Designer** (el bombo en su propia pista) y una pista de audio con nombre de batería («Kick», «Tops», «Perc»…).
 - Si las dos son batería y una es el Kick Designer, el bombo se queda los graves y se recortan los de la otra.
 - Si una ya se aparta de la otra con un sidechain (el bajo del bombo, o un rumble), no es un choque: lo dice en verde.
 +++
@@ -2622,6 +2624,19 @@ La mezcla o alguna pista está en contrafase: sus dos canales se anulan entre s�
 - Graves en estéreo (una décima parte o más de la pista es grave, y su lado está a menos de 10 dB de su centro): los pone en mono por debajo de 120 Hz.
 +++
 
+#### Mezcla casi mono
+
+Si todo suena en el centro, la mezcla se queda estrecha. El consejo sale cuando, por encima de **200 Hz**, la correlación pasa de **0,9** (por debajo, el bombo, el bajo y el 808 van en mono a propósito). Dice qué abriría, y **Aplicar** lo hace.
+
++++ Cómo lo calcula
+- Abre lo que suele ir a los lados: charles y percusión, acordes o el sample, pads, solistas y melodías, coros y efectos. Si hay una sola pista de ese papel en el centro, va a un lado; la siguiente, al otro, por turnos.
+- Cuánto: percusión 30 %, acordes 35 %, pads y efectos 40 %, solista 25 %, coros 50 %.
+- Un sonido mono panoramizado sigue siendo mono: a las pistas con notas que suenan en mono (acordes, pads, melodías, coros, efectos) les pone además un **Chorus** suave (35 %), que hace distintos sus dos lados. Los charles y la percusión solo se mueven.
+- El bombo, el bajo (y el 808), la caja y la batería, y la voz principal se quedan en el centro.
+- No toca lo que ya has panoramizado ni lo que ya es ancho. Si hay dos o más pistas del mismo papel, las abre la **Mezcla de partida**.
+- Los retornos de reverb y delay ya suenan abiertos: no los mueve.
++++
+
 #### Dinámica
 
 Avisa si la mezcla está muy apretada o tiene partes muy lejos en volumen. No trae botón: es para que lo revises a mano.
@@ -2631,7 +2646,7 @@ Avisa si la mezcla está muy apretada o tiene partes muy lejos en volumen. No tr
 **Aplicar todo** (junto a «Consejos») hace los cambios de los consejos uno tras otro, en el orden de una mezcla. Vuelve a medir después de cada uno, porque cada cambio decide el siguiente:
 
 1. Pistas por encima de 0 dB.
-2. Mezcla de partida.
+2. Mezcla de partida, y abrir una mezcla casi mono.
 3. Graves.
 4. Huecos en los medios: todos a la vez, uno por cada pareja de pistas, donde más se tapan.
 5. Compresión, y el compresor de bus de la batería.

@@ -99,6 +99,28 @@ pub fn sounds_tonal(mono: &[f32], rate: f32) -> bool {
     tonal(&stems::key::chroma(mono, rate))
 }
 
+/// Whether the slices of `region` (start and length, s) of `sample`, a file
+/// called `name`, are of a sound with notes (a chord loop, a melody) rather
+/// than drums: its name doesn't say drums, and in most of its stretches that
+/// sound (about a sixth of a second each, a chord or two at a time) some
+/// pitches stand out. A drum break stays drums: its hits and its hats don't.
+pub fn melodic_slices(sample: &engine::Sample, region: (f64, f64), name: &str) -> bool {
+    const STRETCH: usize = 8192;
+    if is_drums(name) {
+        return false;
+    }
+    let rate = sample.sample_rate as f64;
+    let from = ((region.0 * rate).max(0.0) as usize).min(sample.left.len());
+    let to = (((region.0 + region.1) * rate) as usize).clamp(from, sample.left.len());
+    let mono: Vec<f32> = sample.left[from..to].iter().zip(&sample.right[from..to]).map(|(l, r)| 0.5 * (l + r)).collect();
+    let power = |x: &[f32]| x.iter().map(|v| v * v).sum::<f32>() / x.len().max(1) as f32;
+    let loudest = mono.chunks_exact(STRETCH).map(power).fold(0.0, f32::max);
+    // The stretches that sound (within 30 dB of the loudest).
+    let sounding: Vec<&[f32]> = mono.chunks_exact(STRETCH).filter(|c| loudest > 0.0 && power(c) > loudest * 1e-3).collect();
+    let tonal = sounding.iter().filter(|c| sounds_tonal(c, sample.sample_rate)).count();
+    !sounding.is_empty() && tonal * 5 >= sounding.len() * 3
+}
+
 /// The semitones (-6..=5) that move a loop in `from` into `to`: to its tonic,
 /// or to its relative's if one is minor and the other major.
 pub fn shift(from: Key, to: Key) -> i32 {

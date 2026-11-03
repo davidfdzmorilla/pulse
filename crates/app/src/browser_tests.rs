@@ -113,7 +113,7 @@ fn search_keys_favourites_and_chains_through_the_interface() {
     s.key(Key::F, Modifiers::COMMAND);
     s.type_text("voz radio");
     s.key(Key::Enter, Modifiers::ALT);
-    assert_eq!(labels(&s.app, track), ["EQ Eight", "Saturator", "Compressor", "Utility"]);
+    assert_eq!(labels(&s.app, track), ["EQ Eight", "Saturator", "Compressor", "Utility", "Limiter"]);
     s.menu(Command::Undo);
     assert_eq!(s.app.devices(track).len(), count + 6, "⌘Z: the chain before");
     s.key(Key::Escape, Modifiers::NONE);

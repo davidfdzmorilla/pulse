@@ -1723,6 +1723,7 @@ impl PulseApp {
                 let pads = sliced.clip.notes.len();
                 self.set_instrument(track, InstrumentKind::DrumRack(sliced.params));
                 self.project.tracks[track].samples = sliced.files;
+                self.project.tracks[track].melodic = crate::loop_key::melodic_slices(&sample, region, &name);
                 self.sync_samples(track);
                 let free = (0..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
                 match free {
@@ -1769,6 +1770,7 @@ impl PulseApp {
         sliced.params.level = [engine::model::db_to_gain(audio.gain_db).min(1.0); RACK_PADS];
         let pads = sliced.clip.notes.len();
         let name = audio.name.clone();
+        let melodic = crate::loop_key::melodic_slices(&sample, region, &name) && !std::path::Path::new(&audio.sample).file_stem().is_some_and(|f| crate::loop_key::is_drums(&f.to_string_lossy()));
         let midi = Clip::Midi(sliced.clip);
         let placed = match clip_ref {
             ClipRef::Arrangement { track, index } => self.project.tracks[track].arrangement.get(index).map(|a| (a.start, a.length)),
@@ -1777,6 +1779,7 @@ impl PulseApp {
         let added = self.push_track(|_, color| {
             let mut track = Track::new(format!("{name} Slices"), color, InstrumentKind::DrumRack(sliced.params));
             track.samples = sliced.files;
+            track.melodic = melodic;
             match (clip_ref, placed) {
                 (ClipRef::Session { slot, .. }, _) => track.clips[slot] = Some(midi),
                 (_, Some((start, length))) => track.arrangement.push(ArrangementClip { start, length, clip: midi }),

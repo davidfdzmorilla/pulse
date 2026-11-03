@@ -145,6 +145,11 @@ pub struct Track {
     /// Its lane's height on the Arrangement, if it was given one of its own.
     #[serde(default, skip_serializing_if = "LaneHeight::is_none")]
     pub height: LaneHeight,
+    /// A Drum Pads whose pads are slices of a sound with notes (chords, a
+    /// melody), not of drums: the mix assistant and the automatic arrangement
+    /// take it for harmony (see `loop_key::melodic_slices`).
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub melodic: bool,
 }
 
 /// A track's lane height on the Arrangement (points), if it was given one of
@@ -200,6 +205,7 @@ impl Track {
             audio_from: None,
             sounds_from: 0,
             height: LaneHeight(None),
+            melodic: false,
         }
     }
 
@@ -237,6 +243,12 @@ impl Track {
 
     pub fn is_drums(&self) -> bool {
         self.instrument.is_drums()
+    }
+
+    /// Plays drums: a drum instrument whose pads aren't slices of a sound
+    /// with notes (see `melodic`).
+    pub fn plays_drums(&self) -> bool {
+        self.is_drums() && !self.melodic
     }
 
     /// The file in sample slot `slot`, if any.

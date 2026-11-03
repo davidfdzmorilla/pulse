@@ -59,7 +59,7 @@ use crate::app::PulseApp;
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
-use engine::model::{UtilityParams, CompressorParams, ConvolutionParams, GlueParams, DeEsserParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, SaturatorParams};
+use engine::model::{UtilityParams, ChorusParams, CompressorParams, ConvolutionParams, GlueParams, DeEsserParams, DelayParams, Device, DuckerParams, Effect, Eq3Params, EqEightParams, EqShape, InstrumentKind, KickDrive, LimiterParams, Param, SaturatorParams};
 use engine::MAX_RETURNS;
 use stems::loudness;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -134,7 +134,25 @@ pub struct Measures {
     pub true_peak: f64,
     pub peak: f64,
     pub correlation: f64,
+    /// Its correlation over [`WIDTH_FROM`] Hz: how wide it is where it can be.
+    pub upper_correlation: f64,
     pub bands: [f64; 10],
+}
+
+/// Under this (Hz) a mix is in mono on purpose (the kick, the bass, the
+/// 808): its width is what is over it.
+pub const WIDTH_FROM: f64 = 200.0;
+
+/// The correlation of `left` and `right` over [`WIDTH_FROM`] Hz (0 in silence).
+pub fn upper_correlation(left: &[f32], right: &[f32], rate: f32) -> f64 {
+    let high = |x: &[f32]| {
+        let x: Vec<f64> = x.iter().map(|&v| v as f64).collect();
+        let q = std::f64::consts::FRAC_1_SQRT_2;
+        filtered(&filtered(&x, rate, WIDTH_FROM, q, 0), rate, WIDTH_FROM, q, 0)
+    };
+    let (l, r) = (high(left), high(right));
+    let (lr, ll, rr) = l.iter().zip(&r).fold((0.0, 0.0, 0.0), |(lr, ll, rr), (a, b)| (lr + a * b, ll + a * a, rr + b * b));
+    if ll * rr > 0.0 { lr / (ll * rr).sqrt() } else { 0.0 }
 }
 
 impl Measures {
@@ -146,6 +164,7 @@ impl Measures {
             true_peak: loudness::true_peak(left, right),
             peak: loudness::sample_peak(left, right),
             correlation: loudness::correlation(left, right),
+            upper_correlation: upper_correlation(left, right, rate),
             bands: loudness::bands(left, right, rate),
         }
     }
@@ -1073,7 +1092,18 @@ pub fn role_hint(name: &str, instrument: &InstrumentKind, drums: bool) -> Option
 /// Only an audio track, or a Sampler playing a recording, sings.
 pub fn track_role(track: &crate::project::Track) -> Option<Role> {
     let synth = !track.is_audio() && !track.is_group() && !matches!(track.instrument, InstrumentKind::Sampler(_));
-    match role_hint(&track.name, &track.instrument, is_drums(track)) {
+    let hint = role_hint(&track.name, &track.instrument, is_drums(track));
+    // Slices of a chord loop or a melody: the harmony, unless the name says
+    // which part of it they are («Pad», «Lead»…).
+    if track.is_drums() && track.melodic {
+        return match hint {
+            None | Some(Role::Kick | Role::Drums | Role::Percussion) => Some(Role::Chords),
+            Some(Role::Vocal) => Some(Role::Lead),
+            Some(Role::Backing) => Some(Role::Pad),
+            other => other,
+        };
+    }
+    match hint {
         Some(Role::Vocal) if synth => Some(Role::Lead),
         Some(Role::Backing) if synth => Some(Role::Pad),
         other => other,
@@ -1285,6 +1315,60 @@ pub fn balance_tracks(tracks: &[TrackMeasures]) -> (Option<&TrackMeasures>, Vec<
     (Some(anchor), changes)
 }
 
+/// Over this correlation a mix is all but mono: everything in the middle.
+/// A mix with its hats, its sample and its melody to the sides is at 0.4–0.8.
+pub const MONO_MIX: f64 = 0.9;
+
+/// A track opened in a mix all in the middle (see [`widen`]): its pan, and
+/// whether it gets a chorus (a mono sound panned is still mono: the chorus
+/// makes its two sides differ).
+#[derive(Clone, Debug, PartialEq)]
+pub struct Opening {
+    pub track: usize,
+    pub name: String,
+    pub role: Role,
+    pub pan: f32,
+    pub chorus: bool,
+}
+
+impl Opening {
+    fn describe(&self) -> String {
+        let side = format!("panorama {:.0} % {}", self.pan.abs() * 100.0, if self.pan < 0.0 { "izquierda" } else { "derecha" });
+        format!("«{}» ({}): {side}{}", self.name, self.role.label(), if self.chorus { " y un Chorus suave para abrirla" } else { "" })
+    }
+}
+
+/// The Chorus [`widen`] puts on a mono sound with notes: a light ensemble,
+/// its two sides a quarter of a cycle apart.
+pub const WIDE_CHORUS: ChorusParams = ChorusParams { rate: 0.5, depth: 0.4, delay_ms: 12.0, mix: 0.35 };
+
+/// A mix that is all in the middle opened: what usually goes to a side
+/// (hats and percussion, chords or a sample, pads, a lead, backing vocals and
+/// effects) that is alone in its role in the middle (several of one are
+/// spread by [`balance_tracks`]), taken in turns to the left and the right,
+/// as far as its role's spread; the ones with notes that are mono also get a
+/// chorus. The kick, the bass, the drums (the snare) and the voice stay in
+/// the middle, and so does what was panned by hand or is wide already (its
+/// correlation under 0.7).
+pub fn widen(tracks: &[TrackMeasures]) -> Vec<Opening> {
+    let sounding: Vec<&TrackMeasures> = tracks.iter().filter(|t| t.lufs.is_some() && !t.group).collect();
+    let centred = |t: &TrackMeasures| t.pan.abs() < 0.05;
+    let mut left = true;
+    let mut out = Vec::new();
+    for t in &sounding {
+        let Some(spread) = t.role.spread() else { continue };
+        let alike = sounding.iter().filter(|o| o.role == t.role && centred(o)).count();
+        if !centred(t) || alike != 1 || t.correlation < 0.7 {
+            continue;
+        }
+        let pan = if left { -spread } else { spread };
+        left = !left;
+        let chorus = t.correlation > 0.95 && matches!(t.role, Role::Chords | Role::Pad | Role::Lead | Role::Backing | Role::Fx);
+        out.push(Opening { track: t.index, name: t.name.clone(), role: t.role, pan, chorus });
+    }
+    out
+}
+
 /// Whether a track's effects already cut its lows (an EQ Eight's low cut, or
 /// an EQ Three with its lows well down).
 fn cuts_lows(track: &crate::project::Track) -> bool {
@@ -1355,6 +1439,9 @@ pub enum Fix {
     MasterEq { low: f32, mid: f32, high: f32 },
     /// A starting balance (see [`balance_tracks`]).
     Balance(Vec<Change>),
+    /// A mix all in the middle opened: these tracks panned, some with a
+    /// chorus (see [`widen`]).
+    Widen(Vec<Opening>),
     /// Room made in a track at `hz` for another (an EQ Eight bell down).
     Carve { track: usize, name: String, hz: f32, for_name: String },
     /// A compressor to start from on a track (see [`compression`]).
@@ -1386,7 +1473,7 @@ pub enum Fix {
 fn stage(fix: &Fix) -> u8 {
     match fix {
         Fix::TrackGain { .. } | Fix::Stereo { .. } => 0,
-        Fix::Balance(_) => 1,
+        Fix::Balance(_) | Fix::Widen(_) => 1,
         Fix::Duck { .. } | Fix::CutLows { .. } => 2,
         Fix::Carve { .. } => 3,
         Fix::Compress { .. } | Fix::Glue { track: Some(_), .. } => 4,
@@ -1438,6 +1525,7 @@ fn fix_label(fix: &Fix) -> String {
         Fix::CutLows { name, .. } => format!("graves de «{name}»"),
         Fix::MasterEq { .. } => "EQ del master".into(),
         Fix::Balance(_) => "volúmenes y panoramas".into(),
+        Fix::Widen(changes) => format!("{} {} abiertas a los lados", changes.len(), if changes.len() == 1 { "pista" } else { "pistas" }),
         Fix::Carve { name, for_name, .. } => format!("hueco en «{name}» para «{for_name}»"),
         Fix::Compress { name, .. } => format!("compresor en «{name}»"),
         Fix::Glue { track: Some(_), name, .. } => format!("compresor de bus en «{name}»"),
@@ -1493,6 +1581,10 @@ fn num(x: f64) -> String {
     format!("{x:.1}").replace('.', ",")
 }
 
+fn num2(x: f64) -> String {
+    format!("{x:.2}").replace('.', ",")
+}
+
 /// A level below which a track is not playing in the low end (dB of power).
 const LOW_END_ON: f64 = -30.0;
 
@@ -1520,8 +1612,9 @@ fn low_end_clashes(tracks: &[TrackMeasures]) -> Vec<(usize, usize, f64)> {
 
 /// Whether the assistant takes a track for drums: a drum instrument, the Kick
 /// Designer, or an audio track named like drums («Kick», «Tops», «Perc»…).
+/// Not a Drum Pads of slices of a sound with notes (see `Track::melodic`).
 pub(crate) fn is_drums(track: &crate::project::Track) -> bool {
-    track.is_drums() || matches!(track.instrument, engine::model::InstrumentKind::Kick(_)) || (track.is_audio() && crate::loop_key::is_drums(&track.name))
+    track.plays_drums() || matches!(track.instrument, engine::model::InstrumentKind::Kick(_)) || (track.is_audio() && crate::loop_key::is_drums(&track.name))
 }
 
 /// The tracks (ids) a track's sidechains listen to.
@@ -1866,6 +1959,21 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     // Stereo.
     if mix.correlation < 0.0 {
         out.push(advice(Level::Warning, format!("Correlación estéreo {:.2}: hay mucho en contrafase y en mono (un móvil, un club) se perderá", mix.correlation), None));
+    }
+    if mix.upper_correlation > MONO_MIX {
+        let changes = widen(&report.tracks);
+        let text = format!("Correlación estéreo {} por encima de {WIDTH_FROM} Hz: la mezcla es casi mono, todo suena en el centro", num2(mix.upper_correlation));
+        if changes.is_empty() {
+            out.push(advice(Level::Note, format!("{text}. No queda nada que suela ir a un lado en el centro: dale anchura a los pads o al sample con un chorus o una reverb"), None));
+        } else {
+            let mut a = advice(
+                Level::Note,
+                format!("{text}. Abrir lo que suele ir a los lados (charles, percusión, el sample o los acordes, pads y melodías) le da anchura; el bombo, el bajo, la caja y la voz siguen en el centro"),
+                Some(Fix::Widen(changes.clone())),
+            );
+            a.details = changes.iter().map(Opening::describe).collect();
+            out.push(a);
+        }
     }
     for t in report.tracks.iter().filter(|t| t.lufs.is_some() && !t.group) {
         let Some(fix) = stereo_fix(t) else { continue };
@@ -2954,6 +3062,16 @@ impl PulseApp {
                 }
                 self.status = Some(format!("Mezcla de partida: {} pistas en su sitio (⌘Z lo deshace)", changes.len()));
             }
+            Fix::Widen(changes) if changes.iter().all(|c| track_ok(self, c.track, &c.name)) => {
+                for c in changes {
+                    let track = &mut self.project.tracks[c.track];
+                    track.mixer.pan = c.pan;
+                    if c.chorus && !track.devices.iter().any(|d| matches!(d.effect, Effect::Chorus(_))) {
+                        track.devices.push(Device::new(Effect::Chorus(WIDE_CHORUS)));
+                    }
+                }
+                self.status = Some(format!("Mezcla abierta: {} {} a los lados (⌘Z lo deshace)", changes.len(), if changes.len() == 1 { "pista" } else { "pistas" }));
+            }
             Fix::Carve { track, name, hz, for_name } if track_ok(self, *track, name) => {
                 if let Some(to) = self.project.tracks.iter().find(|t| &t.name == for_name).map(|t| t.id) {
                     self.mix.carved.push((self.project.tracks[*track].id, to));
@@ -3366,6 +3484,7 @@ fn fix_hint(fix: &Fix) -> String {
         ),
         Fix::Space { .. } => "Pone los envíos de cada pista a la reverb y al delay según su papel (y crea esos retornos si faltan): un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
         Fix::Balance(_) => "Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
+        Fix::Widen(_) => "Mueve el panorama de esas pistas, una a cada lado por turnos, y a las de notas que suenan en mono les pone un Chorus suave (35 %) para que sus dos lados no sean iguales; el bombo, el bajo, la caja y la voz se quedan en el centro. ⌘Z lo deshace todo".into(),
     }
 }
 
@@ -3407,7 +3526,7 @@ mod tests {
     }
 
     fn report(lufs: f64, true_peak: f64, tracks: Vec<TrackMeasures>) -> Report {
-        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new(), master_glued: false, master_clean: true, groups: Vec::new() }
+        Report { mix: Measures { lufs: Some(lufs), range: Some(6.0), short_max: Some(lufs + 3.0), true_peak, peak: true_peak, correlation: 0.8, upper_correlation: 0.8, bands: [0.0; 10] }, tracks, tempo: 120.0, space: Space { reverb: Some(0), delay: Some(1), returns: 2 }, start: 0.0, echo: 0.75, sections: Vec::new(), master_automated: false, limited: None, carved: Vec::new(), master_glued: false, master_clean: true, groups: Vec::new() }
     }
 
     /// A hard techno track (the Hard techno machine's beat and an acid bass at
@@ -4865,6 +4984,92 @@ mod tests {
         assert!(bass.stereo.low_side < 0.01 * bass.stereo.low_mid, "the lows in mono");
         assert!(after.mix.correlation > 0.5);
         assert!(advise(&after, Target::Streaming, None).iter().all(|a| !matches!(a.fix, Some(Fix::Stereo { .. }))));
+    }
+
+    /// The 2026-11 trap audit: every track in the middle, a mix at 0.96 of
+    /// correlation, and the assistant said nothing (each role had one track).
+    /// For real: a kick, an 808, a snare, a voice, hats, chords and a melody,
+    /// all mono in the middle. It says the mix is all but mono and opens the
+    /// hats, the chords and the melody to the sides, leaving the kick, the 808,
+    /// the snare and the voice in the middle; the correlation comes down. And
+    /// «Aplicar todo» does it too.
+    #[test]
+    fn a_mix_all_in_the_middle_is_opened() {
+        use crate::project::{Project, Track};
+        use engine::model::{AudioClip, Clip, WarpMode};
+        let rate = 48_000.0f32;
+        let n = (8.0 * rate) as usize;
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut seed = 7u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+            (seed >> 9) as f32 / (1u32 << 23) as f32 * 2.0 - 1.0
+        };
+        let sine = |hz: f32, t: f32| (std::f32::consts::TAU * hz * t).sin();
+        // Each a sound of its own, every so often (s), its envelope from there.
+        let sound = |every: f32, voice: &mut dyn FnMut(f32, f32) -> f32| -> Vec<f32> { (0..n).map(|i| i as f32 / rate).map(|t| voice(t, t % every)).collect() };
+        let kick = sound(0.5, &mut |_, l| 0.8 * sine(55.0 - 20.0 * l, l) * (-l * 12.0).exp());
+        let bass = sound(2.0, &mut |t, l| 0.5 * sine(44.0, t) * (-l * 0.8).exp());
+        let snare = sound(1.0, &mut |_, l| if l < 0.5 { 0.0 } else { 0.4 * noise() * (-(l - 0.5) * 25.0).exp() });
+        let hats = sound(0.125, &mut |_, l| 0.15 * noise() * (-l * 60.0).exp());
+        let chords = sound(2.0, &mut |t, _| 0.06 * (sine(220.0, t) + sine(277.2, t) + sine(329.6, t)));
+        let melody = sound(0.5, &mut |t, l| 0.08 * sine([659.3, 587.3, 523.3, 493.9][(t / 0.5) as usize % 4], t) * (-l * 3.0).exp());
+        let voice = sound(1.0, &mut |t, _| 0.12 * (sine(196.0, t) + 0.5 * sine(392.0, t) + 0.25 * sine(588.0, t)) * (0.6 + 0.4 * sine(5.0, t)));
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        project.returns.clear();
+        project.tracks.clear();
+        for (name, audio) in [("Bombo", &kick), ("808", &bass), ("Caja", &snare), ("Voz", &voice), ("Charles", &hats), ("Acordes", &chords), ("Melodía", &melody)] {
+            let path = dir.join(format!("mono-{name}-{}.wav", std::process::id()));
+            crate::export::write(&path, audio, audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
+            let mut track = Track::new_audio(name, [0; 3]);
+            track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+            project.tracks.push(track);
+        }
+        let mut app = PulseApp::headless(project.clone());
+        let ctx = egui::Context::default();
+        let wait = |app: &mut PulseApp| {
+            let started = std::time::Instant::now();
+            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+                app.follow_mix(&ctx);
+                std::thread::sleep(std::time::Duration::from_millis(20));
+                assert!(started.elapsed().as_secs() < 600);
+            }
+        };
+        app.analyze_mix();
+        wait(&mut app);
+        let before = app.mix.report.clone().unwrap();
+        let advice = advise(&before, Target::Club, None);
+        let wide = advice.iter().find(|a| matches!(a.fix, Some(Fix::Widen(_)))).unwrap_or_else(|| panic!("{:.2}: {advice:?}", before.mix.correlation));
+        println!("{}\n  {}", wide.text, wide.details.join("\n  "));
+        let Some(Fix::Widen(changes)) = wide.fix.clone() else { unreachable!() };
+        let opened: Vec<(&str, bool)> = changes.iter().map(|c| (c.name.as_str(), c.chorus)).collect();
+        assert_eq!(opened, [("Charles", false), ("Acordes", true), ("Melodía", true)], "a chorus on what has notes");
+        assert!(changes[0].pan < 0.0 && changes[1].pan > 0.0 && changes[2].pan < 0.0, "in turns");
+        app.mix.report = None;
+        app.apply_fix(&Fix::Widen(changes));
+        app.mix.keys = None;
+        app.analyze_mix();
+        wait(&mut app);
+        let after = app.mix.report.clone().unwrap();
+        let (b, a) = (&before.mix, &after.mix);
+        println!("correlación: antes {:.2} ({:.2} por encima de 200 Hz), después {:.2} ({:.2})", b.correlation, b.upper_correlation, a.correlation, a.upper_correlation);
+        assert!(b.upper_correlation > MONO_MIX);
+        assert!(a.upper_correlation < MONO_MIX && a.correlation < b.correlation, "{:.2} → {:.2}", b.upper_correlation, a.upper_correlation);
+        for t in 0..4 {
+            assert_eq!(app.project.tracks[t].mixer.pan, 0.0, "{} in the middle", app.project.tracks[t].name);
+        }
+        assert!(advise(&after, Target::Club, None).iter().all(|a| !matches!(a.fix, Some(Fix::Widen(_)))), "once");
+        // «Aplicar todo» opens them too.
+        let mut app = PulseApp::headless(project);
+        app.analyze_mix();
+        wait(&mut app);
+        app.apply_all();
+        wait(&mut app);
+        let pans: Vec<f32> = app.project.tracks.iter().map(|t| t.mixer.pan).collect();
+        println!("panoramas tras «Aplicar todo»: {pans:?}");
+        assert!(pans[..4].iter().all(|p| p.abs() < 1e-6) && pans[4..].iter().all(|p| p.abs() > 0.1), "{pans:?}");
     }
 
     /// The song (its arrangement) rendered as the export does it, written to

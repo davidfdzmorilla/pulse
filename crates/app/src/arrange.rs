@@ -52,7 +52,18 @@ fn has(name: &str, words: &[&str]) -> bool {
 /// A track's role: from its instrument, its name (or its audio loops'), and
 /// how low its notes are.
 pub fn role(track: &Track) -> Role {
-    if track.is_drums() || matches!(track.instrument, InstrumentKind::Kick(_)) || has(&track.name, &["drum", "bater", "kick", "bombo", "perc", "hat", "snare", "caja", "beat"]) {
+    // Pads cut from a chord loop or a melody are harmony, whatever they are
+    // played on (their notes are the pads', not the sound's).
+    if track.is_drums() && track.melodic {
+        return if has(&track.name, &["bass", "bajo", "sub", "808"]) {
+            Role::Bass
+        } else if has(&track.name, &["lead", "melod", "vox", "voz", "vocal", "solo"]) {
+            Role::Lead
+        } else {
+            Role::Harmony
+        };
+    }
+    if track.plays_drums() || matches!(track.instrument, InstrumentKind::Kick(_)) || has(&track.name, &["drum", "bater", "kick", "bombo", "perc", "hat", "snare", "caja", "beat"]) {
         return Role::Drums;
     }
     // Audio: what its loops are. Drum loops come in in Beats, or say so in
@@ -308,6 +319,28 @@ fn roll(pitch: u8, color: [u8; 3], bar: f64) -> MidiClip {
     clip
 }
 
+/// How a part `length` beats long from `start` plays `clip`: looping, if it
+/// lasts whole bars of `bar` beats (or is MIDI); an audio that doesn't (a
+/// voice in Off, 30.75 beats) once on the first beat of each phrase of whole
+/// bars it fits in (1, 2, 4, 8… bars), silent until the next, so its second
+/// lap comes in on a phrase's first beat and not before.
+fn laps(clip: &Clip, start: f64, length: f64, bar: f64) -> Vec<ArrangementClip> {
+    let whole = |beats: f64| (beats / bar - (beats / bar).round()).abs() < 1e-3;
+    let lap = match clip {
+        Clip::Audio(a) if a.length > 0.0 && bar > 0.0 && !whole(a.length) => a.length,
+        _ => return vec![ArrangementClip { start, length, clip: clip.clone() }],
+    };
+    let bars = ((lap / bar) - 1e-6).ceil().max(1.0) as u32;
+    let phrase = bars.next_power_of_two() as f64 * bar;
+    let mut out = Vec::new();
+    let mut at = start;
+    while at < start + length - 1e-6 {
+        out.push(ArrangementClip { start: at, length: lap.min(start + length - at), clip: clip.clone() });
+        at += phrase;
+    }
+    out
+}
+
 impl PulseApp {
     /// Lays the sections out on the Arrangement, replacing what it had.
     pub fn lay_out(&mut self, sections: &[Section]) {
@@ -329,13 +362,13 @@ impl PulseApp {
             let cut = if section.cut && k + 1 < sections.len() { 1.0 } else { 0.0 };
             // A build's last bar is the roll alone: the kick and the other
             // drums stop under it.
-            let rolling = section.roll && section.bars > 1 && section.tracks.iter().enumerate().any(|(t, s)| s.is_some() && self.project.tracks.get(t).is_some_and(|t| t.is_drums()));
+            let rolling = section.roll && section.bars > 1 && section.tracks.iter().enumerate().any(|(t, s)| s.is_some() && self.project.tracks.get(t).is_some_and(|t| t.plays_drums()));
             for (t, &source) in section.tracks.iter().enumerate() {
                 let Some(track) = self.project.tracks.get_mut(t) else { continue };
                 let Some(clip) = source.and_then(|s| track.clips.get(s).cloned().flatten()) else { continue };
-                let rolls = rolling && track.is_drums() && matches!(clip, Clip::Midi(_));
+                let rolls = rolling && track.plays_drums() && matches!(clip, Clip::Midi(_));
                 let body = if rolling && role(track) == Role::Drums { length - last_bar } else { length - cut };
-                track.arrangement.push(ArrangementClip { start, length: body, clip: clip.clone() });
+                track.arrangement.extend(laps(&clip, start, body, meter.bar_length_at(start)));
                 if rolls {
                     let pitch = snare(track, meter.first());
                     track.arrangement.push(ArrangementClip { start: start + length - last_bar, length: last_bar - cut, clip: Clip::Midi(roll(pitch, track.color, last_bar)) });
@@ -679,5 +712,149 @@ mod tests {
         assert_eq!(markers[..3], [(0.0, "Intro"), (64.0, "Subida"), (96.0, "Drop")]);
         assert_eq!(markers.len(), 7);
         assert!(app.view == crate::app::View::Arrangement);
+    }
+
+    /// An audio clip in Off for the project's tempo, `beats` long.
+    fn audio(name: &str, path: &str, beats: f64) -> engine::model::AudioClip {
+        engine::model::AudioClip {
+            hard_start: false,
+            fades: Default::default(),
+            name: name.into(),
+            color: [0; 3],
+            sample: path.into(),
+            length: beats,
+            offset: 0.0,
+            warp: engine::model::WarpMode::Off,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            takes: Vec::new(),
+            key: None,
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(),
+            muted: false,
+        }
+    }
+
+    /// The 2026-11 trap audit: a chord sample cut into a Drum Pads («Trocear»)
+    /// plays chords, not drums. Sliced for real, the chord loop's pads are
+    /// harmony and a drum break's stay drums; in the arrangement the chords'
+    /// pads don't come into the verses (their scene doesn't have them) nor roll,
+    /// and the mix assistant takes them for chords (no drum compressor).
+    #[test]
+    fn slices_of_a_chord_sample_are_harmony_and_a_break_stays_drums() {
+        use crate::app::ClipRef;
+        let rate = 48_000u32;
+        let n = 4 * rate as usize;
+        let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../target/test-media");
+        std::fs::create_dir_all(&dir).unwrap();
+        // The audit's Fm, Eb, Db, C: a chord every two beats at 120 BPM (1 s).
+        let chords = [[53.0, 56.0, 60.0], [51.0, 55.0, 58.0], [49.0, 53.0, 56.0], [48.0, 52.0, 55.0]];
+        let pitched: Vec<f32> = (0..n)
+            .map(|i| {
+                let t = i as f32 / rate as f32;
+                let chord = chords[t as usize % 4];
+                let env = (-(t % 1.0) * 1.5).exp();
+                chord.iter().map(|&p: &f32| (std::f32::consts::TAU * 440.0 * 2f32.powf((p - 69.0) / 12.0) * t).sin()).sum::<f32>() * 0.2 * env
+            })
+            .collect();
+        // A break that doesn't say so in its name: a kick every two beats
+        // (a sweep down to 50 Hz) and noisy hats every eighth.
+        let mut seed = 1u32;
+        let hits: Vec<f32> = (0..n)
+            .map(|i| {
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 9) as f32 / (1u32 << 23) as f32 * 2.0 - 1.0;
+                let t = i as f32 / rate as f32;
+                let (hat, kick) = (t % 0.25, t % 1.0);
+                let thump = (std::f32::consts::TAU * (50.0 * kick + 60.0 * (1.0 - (-kick * 30.0).exp()) / 30.0)).sin() * (-kick * 8.0).exp();
+                noise * 0.4 * (-hat * 40.0).exp() + 0.6 * thump
+            })
+            .collect();
+        let mut project = Project::empty();
+        project.tempo = 120.0;
+        project.tracks.clear();
+        let mut paths = Vec::new();
+        for (name, sound) in [("Acordes Fm", &pitched), ("Loop 7", &hits)] {
+            let path = dir.join(format!("trozos-{name}-{}.wav", std::process::id()));
+            crate::export::write(&path, sound, sound, rate, crate::export::BitDepth::Float32, 1.0).unwrap();
+            let mut track = Track::new_audio(name, [0; 3]);
+            track.clips[0] = Some(Clip::Audio(audio(name, &path.to_string_lossy(), 8.0)));
+            project.tracks.push(track);
+            paths.push(path);
+        }
+        let mut app = PulseApp::headless(project);
+        app.slice_mode = crate::slicing::SliceMode::Grid(1.0);
+        app.slice_clip(ClipRef::Session { track: 0, slot: 0 });
+        app.slice_clip(ClipRef::Session { track: 1, slot: 0 });
+        let (sample, brk) = (&app.project.tracks[2], &app.project.tracks[3]);
+        assert!(sample.is_drums() && brk.is_drums(), "{:?}", app.status);
+        assert!(sample.melodic && !brk.melodic);
+        assert_eq!((role(sample), role(brk)), (Role::Harmony, Role::Drums));
+        assert!(!crate::mix_assist::is_drums(sample) && crate::mix_assist::is_drums(brk));
+        assert_eq!(crate::mix_assist::track_role(sample), Some(crate::mix_assist::Role::Chords));
+        assert_eq!(crate::mix_assist::track_role(brk), Some(crate::mix_assist::Role::Drums));
+        // The saved project keeps it; one from before loads as drums.
+        let json = serde_json::to_string(sample).unwrap();
+        assert!(serde_json::from_str::<Track>(&json).unwrap().melodic);
+        assert!(!serde_json::to_string(brk).unwrap().contains("melodic"));
+        for path in paths {
+            std::fs::remove_file(path).ok();
+        }
+
+        // In a song: the drums in both scenes, the chord pads only in the chorus.
+        let mut song = Project::empty();
+        song.tracks.clear();
+        let beat = |pitches: &[u8]| -> Clip {
+            let notes = (0..16).flat_map(|b| pitches.iter().map(move |&p| Note { start: b as f64, length: 0.25, pitch: p, velocity: 1.0, chance: 1.0 })).collect();
+            Clip::Midi(MidiClip { notes, ..MidiClip::new("Beat", 16.0, [0; 3]) })
+        };
+        let mut drums = Track::new("Ritmo", [0; 3], InstrumentKind::DrumRack(Default::default()));
+        drums.clips[0] = Some(beat(&[36, 38]));
+        drums.clips[1] = drums.clips[0].clone();
+        let mut pads = Track::new("Sample troceado", [0; 3], InstrumentKind::DrumRack(Default::default()));
+        pads.melodic = true;
+        pads.clips[1] = Some(beat(&[36, 37, 38, 39]));
+        song.tracks = vec![drums, pads];
+        song.scene_names[0] = "Estrofa".into();
+        song.scene_names[1] = "Estribillo".into();
+        let sections = plan(&song.tracks, &song.scene_names, Template::Pop);
+        for s in &sections {
+            assert_eq!(s.tracks[1].is_some(), s.name == "Estribillo", "{}: {:?}", s.name, s.tracks);
+        }
+        let mut app = PulseApp::headless(song);
+        app.lay_out(&sections);
+        assert!(app.project.tracks[1].arrangement.iter().all(|c| c.clip.name() != "Redoble"), "the chords don't roll");
+        assert!(app.project.tracks[0].arrangement.iter().any(|c| c.clip.name() == "Redoble"), "the drums do");
+    }
+
+    /// The trap audit's voice: 30.75 beats in Off. In a 16-bar chorus it
+    /// came in again 1.25 beats before bar 9; now it starts on bars 1 and 9
+    /// of each part, and a loop of whole bars still loops as one clip.
+    #[test]
+    fn an_audio_of_uneven_length_starts_on_each_phrase() {
+        let mut song = Project::empty();
+        song.tracks.clear();
+        let mut voice = Track::new_audio("Voz", [0; 3]);
+        voice.clips[0] = Some(Clip::Audio(audio("Voz", "/voces/voz.wav", 30.75)));
+        let mut tops = Track::new_audio("Tops", [0; 3]);
+        tops.clips[0] = Some(Clip::Audio(audio("Tops", "/loops/tops.wav", 16.0)));
+        song.tracks = vec![voice, tops];
+        song.scene_names[0] = "Estribillo".into();
+        let sections = plan(&song.tracks, &song.scene_names, Template::Pop);
+        let mut app = PulseApp::headless(song);
+        app.lay_out(&sections);
+        let chorus = app.project.markers.iter().find(|m| m.name == "Estribillo").unwrap().beat;
+        let lane: Vec<(f64, f64)> = app.project.tracks[0].arrangement.iter().filter(|c| c.start >= chorus && c.start < chorus + 64.0).map(|c| (c.start - chorus, c.length)).collect();
+        assert_eq!(lane, [(0.0, 30.75), (32.0, 30.75)]);
+        for clip in &app.project.tracks[0].arrangement {
+            assert!(clip.start.rem_euclid(32.0) < 1e-9, "on a phrase's first beat: {}", clip.start);
+            assert!(clip.length <= 30.75 + 1e-9);
+        }
+        let tops: Vec<(f64, f64)> = app.project.tracks[1].arrangement.iter().filter(|c| c.start == chorus).map(|c| (c.start - chorus, c.length)).collect();
+        assert_eq!(tops, [(0.0, 64.0)], "whole bars: one clip that loops");
+        // Shorter than a bar, it comes in on every bar.
+        let short = laps(&Clip::Audio(audio("Grito", "/x.wav", 3.0)), 8.0, 16.0, 4.0);
+        assert_eq!(short.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), [(8.0, 3.0), (12.0, 3.0), (16.0, 3.0), (20.0, 3.0)]);
     }
 }

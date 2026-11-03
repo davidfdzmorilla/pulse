@@ -7966,7 +7966,9 @@ impl ModularParams {
         gate.curve = Shape::from_points(&[(0.0, 0.0, 0.0), (0.02, 1.0, 0.0), (0.4, 0.9, 0.0), (0.42, 0.0, 0.0), (0.5, 0.0, 0.0), (0.52, 1.0, 0.0), (0.7, 0.8, 0.0), (0.72, 0.0, 0.0), (1.0, 0.0, 0.0)]);
         let mut p = build(&[group, saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.25), (slot::PHASE_RANDOM, 180.0)]), filter(0, 2200.0, 1.0, false), gate]);
         p.lanes[0].fx[0] = reverb(0.7, 0.25);
-        p.gain = 1.0;
+        // Measured with its gate looping under clip notes too (it faded out
+        // at once before: their notes didn't count as held).
+        p.gain = 0.2;
         list.push(("Curve · Pad entrecortado", p));
 
         // Smooth keytracked noise is pitched: a breathy tone that follows the keyboard.

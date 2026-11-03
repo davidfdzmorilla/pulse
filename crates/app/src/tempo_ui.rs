@@ -13,6 +13,9 @@ use std::sync::{Arc, Mutex};
 
 type Outcome = Result<Option<Grid>, String>;
 
+/// Said when an analysis thread ends without a result (it failed).
+pub(crate) const TEMPO_INTERRUPTED: &str = "El análisis del tempo se interrumpió por un fallo interno";
+
 /// A file being analysed, and the clips waiting for the result.
 pub struct TempoJob {
     path: String,
@@ -20,6 +23,8 @@ pub struct TempoJob {
     /// Asked for from a menu (then the clip is set whatever it was).
     manual: bool,
     result: Arc<Mutex<Option<Outcome>>>,
+    /// Its thread: ended without a result, the analysis failed (a panic).
+    thread: std::thread::JoinHandle<()>,
 }
 
 /// What has been found per file, and what is being analysed.
@@ -122,14 +127,14 @@ impl PulseApp {
         let sample: Arc<Sample> = self.sample(&path);
         let result = Arc::new(Mutex::new(None));
         let shared = result.clone();
-        std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             let outcome = beats::analyze(&sample.left, &sample.right, sample.sample_rate);
             if let Ok(mut r) = shared.lock() {
                 *r = Some(outcome);
             }
         });
         self.status = Some(format!("Analizando el tempo de «{}»…", first.name));
-        self.tempo.jobs.push(TempoJob { path, clips, manual, result });
+        self.tempo.jobs.push(TempoJob { path, clips, manual, result, thread });
     }
 
     /// Every frame: applies the analyses that have finished.
@@ -138,10 +143,18 @@ impl PulseApp {
             return;
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
-        let done: Vec<usize> = (0..self.tempo.jobs.len()).filter(|&i| self.tempo.jobs[i].result.lock().is_ok_and(|r| r.is_some())).collect();
+        // Done, or its thread ended without a result (asked first: a result
+        // set just before the end isn't taken for a failure).
+        let done: Vec<usize> = (0..self.tempo.jobs.len())
+            .filter(|&i| {
+                let job = &self.tempo.jobs[i];
+                let ended = job.thread.is_finished();
+                ended || job.result.lock().map_or(true, |r| r.is_some())
+            })
+            .collect();
         for i in done.into_iter().rev() {
             let job = self.tempo.jobs.remove(i);
-            let outcome = job.result.lock().ok().and_then(|mut r| r.take()).unwrap_or(Err("Análisis interrumpido".into()));
+            let outcome = job.result.lock().ok().and_then(|mut r| r.take()).unwrap_or(Err(TEMPO_INTERRUPTED.into()));
             if let Ok(grid) = &outcome {
                 self.tempo.grids.insert(job.path.clone(), grid.clone());
             }
@@ -308,6 +321,21 @@ mod tests {
     use crate::app::Placement;
     use crate::project::Project;
 
+    /// An analysis whose thread dies (a panic) ends with a clear error, not
+    /// «Analizando el tempo…» for ever.
+    #[test]
+    fn an_analysis_whose_thread_dies_ends_with_an_error() {
+        let mut app = PulseApp::headless(Project::demo());
+        let ctx = eframe::egui::Context::default();
+        let thread = std::thread::spawn(|| panic!("an analysis that fails (on purpose)"));
+        app.tempo.jobs.push(TempoJob { path: "/no/such.wav".into(), clips: Vec::new(), manual: true, result: Arc::new(Mutex::new(None)), thread });
+        crate::test_audio::wait_for("el análisis que falla", 30, || {
+            app.follow_tempo(&ctx);
+            !app.tempo.busy()
+        });
+        assert_eq!(app.status.as_deref(), Some(TEMPO_INTERRUPTED));
+    }
+
     #[test]
     fn a_clip_follows_with_whole_bars_from_the_bar_line() {
         let clip = AudioClip { hard_start: false, fades: Default::default(),
@@ -378,12 +406,13 @@ mod tests {
         app.add_samples(vec![song.clone()], Placement::Arrangement { track, start: 8.0 });
         assert!(app.tempo.busy(), "analysing");
         let ctx = eframe::egui::Context::default();
-        let started = std::time::Instant::now();
-        while app.tempo.busy() {
+        crate::test_audio::wait_for("el análisis del tempo", 600, || {
+            if !(app.tempo.busy()) {
+                return true;
+            }
             app.follow_tempo(&ctx);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            assert!(started.elapsed().as_secs() < 600);
-        }
+            false
+        });
         let placed = &app.project.tracks[track].arrangement[0];
         let Clip::Audio(audio) = &placed.clip else { panic!() };
         assert_eq!((audio.warp, audio.original_bpm), (WarpMode::Stretch, 120.0), "{:?}", app.status);
@@ -416,10 +445,13 @@ mod tests {
         let track = app.add_audio_track().unwrap();
         app.add_samples(vec![song], Placement::Arrangement { track, start: 8.0 });
         let ctx = eframe::egui::Context::default();
-        while app.tempo.busy() {
+        crate::test_audio::wait_for("el análisis del tempo", 600, || {
+            if !(app.tempo.busy()) {
+                return true;
+            }
             app.follow_tempo(&ctx);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+            false
+        });
         let rate = 48_000.0;
         let mut renderer = engine::OfflineRenderer::new(rate);
         let mut samples = crate::sync::SampleCache::default();
@@ -486,10 +518,13 @@ mod tests {
         let track = app.add_audio_track().unwrap();
         app.add_samples(vec![path], Placement::Arrangement { track, start: 8.0 });
         let ctx = eframe::egui::Context::default();
-        while app.tempo.busy() {
+        crate::test_audio::wait_for("el análisis del tempo", 600, || {
+            if !(app.tempo.busy()) {
+                return true;
+            }
             app.follow_tempo(&ctx);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+            false
+        });
         let Clip::Audio(audio) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
         assert!(audio.warp_markers.len() >= 40, "{} markers ({:?})", audio.warp_markers.len(), app.status);
 
@@ -552,10 +587,13 @@ mod tests {
         let track = app.add_audio_track().unwrap();
         app.add_samples(vec![song, other], Placement::Arrangement { track, start: 0.0 });
         let ctx = eframe::egui::Context::default();
-        while app.tempo.busy() {
+        crate::test_audio::wait_for("el análisis del tempo", 600, || {
+            if !(app.tempo.busy()) {
+                return true;
+            }
             app.follow_tempo(&ctx);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+            false
+        });
         std::fs::remove_dir_all(&dir).ok();
         let lane = &app.project.tracks[track].arrangement;
         assert_eq!(lane.len(), 2);
@@ -605,10 +643,13 @@ mod tests {
         let track = app.add_audio_track().unwrap();
         app.add_samples(vec![path.clone()], Placement::Arrangement { track, start: 0.0 });
         let ctx = eframe::egui::Context::default();
-        while app.tempo.busy() {
+        crate::test_audio::wait_for("el análisis del tempo", 600, || {
+            if !(app.tempo.busy()) {
+                return true;
+            }
             app.follow_tempo(&ctx);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
+            false
+        });
         assert_eq!(app.file_bpm(&path.to_string_lossy()), Some(150.0), "for slicing too");
         std::fs::remove_dir_all(&dir).ok();
         let Clip::Audio(clip) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
@@ -659,12 +700,13 @@ mod tests {
         let track = app.add_audio_track().unwrap();
         app.add_samples(vec![hats, pad], Placement::Arrangement { track, start: 0.0 });
         let ctx = eframe::egui::Context::default();
-        let started = std::time::Instant::now();
-        while app.tempo.busy() {
+        crate::test_audio::wait_for("el análisis del tempo", 600, || {
+            if !(app.tempo.busy()) {
+                return true;
+            }
             app.follow_tempo(&ctx);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            assert!(started.elapsed().as_secs() < 600);
-        }
+            false
+        });
         let warp = |i: usize| match &app.project.tracks[track].arrangement[i].clip {
             Clip::Audio(a) => (a.warp, a.original_bpm),
             _ => panic!(),
@@ -715,12 +757,13 @@ mod tests {
         let Clip::Audio(guess) = &app.project.tracks[track].arrangement[0].clip else { panic!() };
         assert_ne!(guess.warp, WarpMode::Off, "first guessed as a loop");
         let ctx = eframe::egui::Context::default();
-        let started = std::time::Instant::now();
-        while app.tempo.busy() {
+        crate::test_audio::wait_for("el análisis del tempo", 600, || {
+            if !(app.tempo.busy()) {
+                return true;
+            }
             app.follow_tempo(&ctx);
-            std::thread::sleep(std::time::Duration::from_millis(20));
-            assert!(started.elapsed().as_secs() < 600);
-        }
+            false
+        });
         std::fs::remove_dir_all(&dir).ok();
         assert!(app.status.as_deref().is_some_and(|s| s.contains("suena a su velocidad")), "{:?}", app.status);
         let placed = &app.project.tracks[track].arrangement[0];

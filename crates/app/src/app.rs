@@ -1706,6 +1706,39 @@ impl PulseApp {
         });
     }
 
+    /// Drum Pads sliced before they were marked (`Track::melodic`, #197),
+    /// heard again from their slices as the project opens: a chord loop's
+    /// count as harmony, a break's stay drums. Only Drum Pads whose pads are
+    /// all slices of one sound (one folder of the project's «Trozos») and
+    /// unmarked; at most their first 30 seconds are heard (the files are
+    /// loaded to play anyway), so opening stays quick.
+    fn mark_melodic_slices(&mut self) {
+        const LISTEN: f64 = 30.0;
+        for t in 0..self.project.tracks.len() {
+            let track = &self.project.tracks[t];
+            if !track.is_drums() || track.melodic {
+                continue;
+            }
+            let files: Vec<String> = track.samples.iter().filter(|f| !f.is_empty()).cloned().collect();
+            let Some(name) = sliced_from(&files) else { continue };
+            let mut slices = Vec::with_capacity(files.len());
+            for file in &files {
+                let slice = self.sample(file);
+                if slice.frames() == 0 {
+                    break;
+                }
+                slices.push(slice);
+            }
+            if slices.len() != files.len() {
+                continue;
+            }
+            let rate = slices[0].sample_rate;
+            let (left, right): (Vec<f32>, Vec<f32>) = slices.iter().filter(|s| s.sample_rate == rate).flat_map(|s| s.left.iter().copied().zip(s.right.iter().copied())).unzip();
+            let whole = Sample::from_channels(left, right, rate);
+            self.project.tracks[t].melodic = crate::loop_key::melodic_slices(&whole, (0.0, whole.duration().min(LISTEN)), &name);
+        }
+    }
+
     /// A new folder for the slices of `name`, with the project's media.
     fn slices_dir(&self, name: &str) -> PathBuf {
         let base = self.media_dir(crate::library::SLICES);
@@ -2488,6 +2521,7 @@ impl PulseApp {
         self.mix.listening = None;
         self.project.assign_ids();
         crate::freeze::refresh_frozen(&mut self.project);
+        self.mark_melodic_slices();
         self.saved = self.project.clone();
         self.history.reset(&self.project);
         self.file = file;
@@ -2498,6 +2532,7 @@ impl PulseApp {
         self.selected_target = Target::Track(0);
         self.overridden.clear();
         self.arrangement.forget_project();
+        self.arrangement.take_lane_height(&self.project);
         for window in [&mut self.kick_window, &mut self.wave_window, &mut self.poly_window, &mut self.modular_window] {
             *window = None;
         }
@@ -3157,6 +3192,18 @@ impl eframe::App for PulseApp {
 }
 
 /// The track of a target, if it is one.
+/// The sound `files` are slices of, by its name: when they all are in one
+/// folder of a project's «Trozos» (see `slices_dir`).
+fn sliced_from(files: &[String]) -> Option<String> {
+    let folder = |f: &String| Path::new(f).parent().map(Path::to_path_buf);
+    let first = folder(files.first()?)?;
+    let in_slices = first.parent().and_then(Path::file_name).is_some_and(|n| n == crate::library::SLICES);
+    if !in_slices || files.iter().any(|f| folder(f).as_ref() != Some(&first)) {
+        return None;
+    }
+    first.file_name().map(|n| n.to_string_lossy().into_owned())
+}
+
 fn target_track(target: Target) -> Option<usize> {
     match target {
         Target::Track(t) => Some(t),

@@ -495,6 +495,10 @@ pub struct Project {
     /// The words sung in audio files, with their times (see `lyrics`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub lyrics: Vec<crate::lyrics::Lyrics>,
+    /// The Arrangement's lanes' height (⌥ + wheel), if it was changed: saved
+    /// with the project like each track's own (`Track::height`), not undone.
+    #[serde(default, skip_serializing_if = "LaneHeight::is_none")]
+    pub lane_height: LaneHeight,
 }
 
 /// A groove taken from a recording, with the name of where it came from.
@@ -592,12 +596,14 @@ impl Project {
 
     /// Whether its tracks' lanes are as high as `other`'s (which `==` leaves out).
     pub fn same_heights(&self, other: &Project) -> bool {
-        self.tracks.len() == other.tracks.len() && self.tracks.iter().zip(&other.tracks).all(|(a, b)| a.height.0 == b.height.0)
+        self.lane_height.0 == other.lane_height.0
+            && self.tracks.len() == other.tracks.len() && self.tracks.iter().zip(&other.tracks).all(|(a, b)| a.height.0 == b.height.0)
     }
 
     /// Its tracks' lanes as high as those of `other` with their ids (the
     /// others' as they are): what undoing brings back leaves the view alone.
     pub fn take_heights(&mut self, other: &Project) {
+        self.lane_height = other.lane_height;
         for track in self.tracks.iter_mut().filter(|t| t.id != 0) {
             if let Some(now) = other.tracks.iter().find(|o| o.id == track.id) {
                 track.height = now.height;
@@ -644,6 +650,7 @@ impl Project {
             tunings: Vec::new(),
             grooves: Vec::new(),
             lyrics: Vec::new(),
+            lane_height: LaneHeight::default(),
             tracks: (0..2)
                 .map(|i| {
                     Track::new(

@@ -44,11 +44,14 @@ const PIANO_LEVEL: f32 = 11.0;
 /// falls [`BARK_OCTAVES`]. On the organ its tone filter moves [`TONE_OCTAVES`],
 /// and up it pulls the upper drawbars (4' and above) out to
 /// [`ORGAN_BRIGHT_DRAWBAR`], down pushes them in (as an organist registers
-/// brighter or darker). On the piano, the highs above [`TILT_HZ`] get up to
-/// [`TILT_OCTAVES`] of gain either way (+-21 dB), [`TILT_LEVEL`] octaves less
-/// overall going up. Pressure adds a tremolo this deep at
-/// [`PRESSURE_TREMOLO_HZ`] (the organ, a drive this strong instead). Both
-/// glide in about [`EXPRESSION_GLIDE`] seconds.
+/// brighter or darker). On the piano, the keys go down with a harder or
+/// softer hammer ([`HAMMER_BRIGHT`] of Tono either way), and a shelf centred
+/// on [`TILT_HZ`] moves the highs up to [`TILT_OCTAVES`] of gain either way
+/// (+-21 dB), [`TILT_LEVEL`] octaves less overall going up and
+/// [`TILT_DARK_LEVEL`] more going down (measured: centroid -35 %/+80 % at
+/// the default, level within +-5 dB). Pressure adds a tremolo this deep at
+/// [`PRESSURE_TREMOLO_HZ`]; on the organ, the scanner vibrato instead
+/// ([`SCANNER_HZ`], no louder). Both glide in about [`EXPRESSION_GLIDE`] seconds.
 const BARK_OCTAVES: f32 = 1.5;
 const BRIGHT_BARK: [f32; 2] = [6.0, 3.0];
 const BRIGHT_LEVEL: [f32; 2] = [1.6, 1.4];
@@ -56,11 +59,16 @@ const EP_TONE_OCTAVES: f32 = 3.0;
 const TONE_OCTAVES: f32 = 2.0;
 const ORGAN_BRIGHT_DRAWBAR: f32 = 4.0;
 const TILT_OCTAVES: f32 = 3.5;
-const TILT_HZ: f32 = 1500.0;
+const TILT_HZ: f32 = 1000.0;
 const TILT_LEVEL: f32 = 1.2;
+const TILT_DARK_LEVEL: f32 = 0.6;
+const HAMMER_BRIGHT: f32 = 0.6;
 const PRESSURE_TREMOLO: f32 = 0.6;
 const PRESSURE_TREMOLO_HZ: f32 = 5.5;
-const PRESSURE_DRIVE: f32 = 6.0;
+/// The organ's scanner vibrato under pressure: its rate, and its delay's
+/// swing at full pressure (seconds; about ±23 cents).
+const SCANNER_HZ: f32 = 6.9;
+const SCANNER_DEPTH: f32 = 0.00065;
 const EXPRESSION_GLIDE: f32 = 0.005;
 
 fn hash(mut x: u32) -> u32 {
@@ -398,6 +406,46 @@ impl Reflections {
     }
 }
 
+/// A short stereo delay line read between samples (the organ's scanner).
+struct Scanner {
+    lines: [Vec<f32>; 2],
+    mask: usize,
+    at: usize,
+}
+
+impl Scanner {
+    /// Room for `longest` samples of delay; allocates.
+    fn new(longest: f32) -> Self {
+        let size = (longest.ceil() as usize + 4).next_power_of_two();
+        Self { lines: [vec![0.0; size], vec![0.0; size]], mask: size - 1, at: 0 }
+    }
+
+    fn push(&mut self, l: f32, r: f32) {
+        self.at = (self.at + 1) & self.mask;
+        self.lines[0][self.at] = l;
+        self.lines[1][self.at] = r;
+    }
+
+    /// Channel `ch`, `delay` samples ago (0: the newest, exactly). Cubic
+    /// Hermite; what would be ahead of the newest is the newest.
+    fn read(&self, ch: usize, delay: f32) -> f32 {
+        let whole = delay.floor();
+        let t = 1.0 - (delay - whole);
+        let back = whole as usize + 1;
+        let line = &self.lines[ch];
+        let x = |k: usize| line[self.at.wrapping_sub(k) & self.mask];
+        if t >= 1.0 {
+            return x(back - 1);
+        }
+        // y1 at `back`, y2 at `back - 1` (newer); y0 older, y3 newer still.
+        let (y0, y1, y2, y3) = (x(back + 1), x(back), x(back - 1), x(back.saturating_sub(2)));
+        let c1 = 0.5 * (y2 - y0);
+        let c2 = y0 - 2.5 * y1 + 2.0 * y2 - 0.5 * y3;
+        let c3 = 0.5 * (y3 - y0) + 1.5 * (y1 - y2);
+        ((c3 * t + c2) * t + c1) * t + y1
+    }
+}
+
 /// The soundboard's strongest resonances: (Hz, level).
 const BOARD: [(f32, f32); 5] = [(98.0, 0.5), (196.0, 0.45), (410.0, 0.35), (860.0, 0.25), (1700.0, 0.15)];
 
@@ -430,6 +478,9 @@ pub struct Keys {
     chunk_tone: f32,
     tilt: [f32; 2],
     swell: f32,
+    /// The organ's scanner vibrato (pressure): its delay line and phase.
+    scanner: Scanner,
+    scanner_phase: f32,
 }
 
 impl Keys {
@@ -456,6 +507,8 @@ impl Keys {
             chunk_tone: 0.0,
             tilt: [0.0; 2],
             swell: 0.0,
+            scanner: Scanner::new(SCANNER_DEPTH * sample_rate),
+            scanner_phase: 0.0,
         }
     }
 
@@ -499,7 +552,7 @@ impl Keys {
         match p.model {
             KeysModel::Piano => {
                 let lines = &mut self.lines[index * self.voice_lines..(index + 1) * self.voice_lines];
-                start_piano(&mut v, &p, pitch, vel, sr, lines);
+                start_piano(&mut v, &p, pitch, vel, self.expression.0, sr, lines);
                 if (self.pitch - 1.0).abs() > 1e-6 {
                     v.piano.bend(self.pitch, sr);
                 }
@@ -643,8 +696,8 @@ impl Keys {
         let level = p.gain * 2.0;
         let target = self.expression;
         let glide = 1.0 - (-1.0 / (EXPRESSION_GLIDE * sr)).exp();
-        let tilt_k = 1.0 - (-TAU * TILT_HZ / sr).exp();
         let swell_step = PRESSURE_TREMOLO_HZ / sr;
+        let (scanner_step, scanner_depth) = (SCANNER_HZ / sr, SCANNER_DEPTH * sr);
         for i in 0..n {
             let (mut l, mut r) = (left[i] * model_level * 0.5, right[i] * model_level * 0.5);
             if p.model == KeysModel::Piano && p.body > 0.0 {
@@ -663,6 +716,9 @@ impl Keys {
                 l = (drive * l).tanh() / drive.sqrt();
                 r = (drive * r).tanh() / drive.sqrt();
             }
+            if p.model == KeysModel::Organ {
+                self.scanner.push(l, r);
+            }
             // The controllers; at rest, nothing (not even a rounding).
             if self.expressed != target || target != (0.0, 0.0) {
                 let (tone, pressure) = &mut self.expressed;
@@ -676,8 +732,12 @@ impl Keys {
                 }
                 let (tone, pressure) = (*tone, *pressure);
                 if p.model == KeysModel::Piano && tone != 0.0 {
+                    // A shelf centred on TILT_HZ (its pole and zero half its
+                    // gain either side): the note's own partials move too,
+                    // not only what is far above it.
                     let gain = 2f32.powf(tone * TILT_OCTAVES);
-                    let trim = 2f32.powf(-tone.max(0.0) * TILT_LEVEL);
+                    let trim = 2f32.powf(-tone * if tone > 0.0 { TILT_LEVEL } else { TILT_DARK_LEVEL });
+                    let tilt_k = 1.0 - (-TAU * (TILT_HZ * gain.sqrt()).min(sr * 0.45) / sr).exp();
                     for (ch, x) in [&mut l, &mut r].into_iter().enumerate() {
                         self.tilt[ch] += (*x - self.tilt[ch]) * tilt_k;
                         let low = self.tilt[ch];
@@ -686,11 +746,14 @@ impl Keys {
                 }
                 if pressure > 0.0 {
                     if p.model == KeysModel::Organ {
-                        // Pushed into the amp, as an organist leans on the swell pedal.
-                        // Faded in with the pressure, so a light touch doesn't jump.
-                        let push = 1.0 + PRESSURE_DRIVE * pressure;
-                        l += ((push * l).tanh() / push.sqrt() - l) * pressure;
-                        r += ((push * r).tanh() / push.sqrt() - r) * pressure;
+                        // The scanner vibrato, deeper the harder the keys are
+                        // pressed: a delay swinging between nothing and its
+                        // depth, so a light touch starts from the dry sound,
+                        // and no louder.
+                        self.scanner_phase = (self.scanner_phase + scanner_step).fract();
+                        let delay = pressure * scanner_depth * 0.5 * (1.0 - (TAU * self.scanner_phase).cos());
+                        l = self.scanner.read(0, delay);
+                        r = self.scanner.read(1, delay);
                     } else {
                         self.swell = (self.swell + swell_step).fract();
                         let g = 1.0 - PRESSURE_TREMOLO * pressure * 0.5 * (1.0 - (TAU * self.swell).cos());
@@ -845,7 +908,9 @@ fn key_pan(pitch: u8, width: f32) -> (f32, f32) {
     (angle.cos(), angle.sin())
 }
 
-fn start_piano(v: &mut Voice, p: &KeysParams, pitch: u8, vel: f32, sr: f32, lines: &mut [f32]) {
+/// `bright`: the brightness controller (-1..1) as the key goes down: a
+/// harder or softer hammer.
+fn start_piano(v: &mut Voice, p: &KeysParams, pitch: u8, vel: f32, bright: f32, sr: f32, lines: &mut [f32]) {
     let length = p.length.max(0.05);
     // Seconds the singing string takes to fall 60 dB: long in the bass, short up top.
     let t60 = SIXTY_DB as f64 * 4.0 * 2f64.powf(-(pitch as f64 - 60.0) / 24.0) * length as f64;
@@ -855,7 +920,7 @@ fn start_piano(v: &mut Voice, p: &KeysParams, pitch: u8, vel: f32, sr: f32, line
         velocity: vel,
         // Short treble strings take less from the strike: they get it back here.
         gain: v.gain * PIANO_LEVEL * 10f32.powf(0.4 * (pitch as f32 - 48.0).max(0.0) / 20.0),
-        tone: p.tone,
+        tone: if bright == 0.0 { p.tone } else { (p.tone + bright * HAMMER_BRIGHT).clamp(0.0, 1.3) },
         knock: p.hammer * 0.12,
         detune: p.strings,
         t60,

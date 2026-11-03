@@ -16,6 +16,17 @@ pub fn demo_song() -> PathBuf {
     .clone()
 }
 
+/// Calls `step` until it says it is done, for at most `seconds`: else a
+/// clear failure (a background thread that hung or died) instead of a test
+/// that never ends.
+pub fn wait_for(what: &str, seconds: u64, mut step: impl FnMut() -> bool) {
+    let started = std::time::Instant::now();
+    while !step() {
+        assert!(started.elapsed().as_secs() < seconds, "{what}: sin terminar tras {seconds} s (¿un hilo se colgó o murió?)");
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+}
+
 #[test]
 fn the_demo_song_is_the_demo_rendered() {
     let song = engine::Sample::load(&demo_song()).unwrap();

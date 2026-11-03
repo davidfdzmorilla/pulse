@@ -2280,11 +2280,28 @@ pub struct Job {
     progress: Arc<AtomicU32>,
     cancel: Arc<AtomicBool>,
     result: Arc<Mutex<Option<Outcome>>>,
+    /// Its thread: ended without a result, it failed (a panic).
+    thread: std::thread::JoinHandle<()>,
 }
 
 pub struct ReferenceJob {
     name: String,
     result: Arc<Mutex<Option<Measures>>>,
+    thread: std::thread::JoinHandle<()>,
+}
+
+/// Said when a measuring thread ends without a result (it failed).
+const INTERRUPTED: &str = "El análisis se interrumpió por un fallo interno: vuelve a intentarlo";
+
+/// What a job's thread left in `result`: `Some(None)` when it ended without
+/// one. Whether it ended is asked first, so a result set just before the end
+/// is never taken for a failure.
+fn take_result<T>(result: &Mutex<Option<T>>, thread: &std::thread::JoinHandle<()>) -> Option<Option<T>> {
+    let ended = thread.is_finished();
+    match result.lock().ok().and_then(|mut r| r.take()) {
+        Some(value) => Some(Some(value)),
+        None => ended.then_some(None),
+    }
 }
 
 /// The window's state.
@@ -2534,7 +2551,7 @@ impl PulseApp {
         let voices: Vec<bool> = self.project.tracks.iter().map(|t| matches!(track_role(t), Some(Role::Vocal | Role::Backing))).collect();
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
-        std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             // The mix and every track at once (see `export::render_each`).
             let measured = export::render_each(renders, RATE, &p, &c, |render, left, right| {
                 Ok(match render.track {
@@ -2607,7 +2624,7 @@ impl PulseApp {
             }
         });
         self.mix.mix_stale = !mix;
-        self.mix.job = Some(Job { progress, cancel, result });
+        self.mix.job = Some(Job { progress, cancel, result, thread });
         self.status = Some(if mix { "Analizando la mezcla…" } else { "Midiendo las pistas…" }.into());
     }
 
@@ -2627,13 +2644,13 @@ impl PulseApp {
         }
         let result = Arc::new(Mutex::new(None));
         let shared = result.clone();
-        std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             let measures = Measures::of(&sample.left, &sample.right, sample.sample_rate);
             if let Ok(mut slot) = shared.lock() {
                 *slot = Some(measures);
             }
         });
-        self.mix.reference_job = Some(ReferenceJob { name, result });
+        self.mix.reference_job = Some(ReferenceJob { name, result, thread });
     }
 
     /// Every frame: picks up finished analyses.
@@ -2648,17 +2665,25 @@ impl PulseApp {
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
         if let Some(job) = &self.mix.reference_job {
-            if let Some(measures) = job.result.lock().ok().and_then(|mut r| r.take()) {
-                let name = job.name.clone();
-                self.mix.reference = Some((name, measures));
-                self.mix.reference_job = None;
-                if self.mix.target != Target::Reference && self.mix.report.is_some() {
-                    self.status = Some("Referencia lista: los consejos ya la comparan".into());
+            match take_result(&job.result, &job.thread) {
+                Some(Some(measures)) => {
+                    let name = job.name.clone();
+                    self.mix.reference = Some((name, measures));
+                    self.mix.reference_job = None;
+                    if self.mix.target != Target::Reference && self.mix.report.is_some() {
+                        self.status = Some("Referencia lista: los consejos ya la comparan".into());
+                    }
                 }
+                Some(None) => {
+                    self.status = Some(format!("No se pudo medir «{}»: {INTERRUPTED}", job.name));
+                    self.mix.reference_job = None;
+                }
+                None => {}
             }
         }
         let Some(job) = &self.mix.job else { return };
-        let Some(outcome) = job.result.lock().ok().and_then(|mut r| r.take()) else { return };
+        let Some(outcome) = take_result(&job.result, &job.thread) else { return };
+        let outcome = outcome.unwrap_or_else(|| Err(INTERRUPTED.to_string()));
         self.mix.job = None;
         match outcome {
             Ok(Done::Loud { trial, held, ceiling_db, mix }) => self.set_loudness(trial, held, ceiling_db, mix),
@@ -2868,7 +2893,7 @@ impl PulseApp {
         let alone = at + 1 == self.project.master.devices.len() && self.project.master.mixer.pan.abs() < 1e-6;
         let (progress, cancel, result) = (Arc::new(AtomicU32::new(0)), Arc::new(AtomicBool::new(false)), Arc::new(Mutex::new(None)));
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
-        std::thread::spawn(move || {
+        let thread = std::thread::spawn(move || {
             let rendered = export::render_each(renders, RATE, &p, &c, |_, left, right| Ok((left, right)));
             let outcome = rendered.map_err(|_| "Cancelado".to_string()).and_then(|mut all| {
                 let (left, right) = all.pop().ok_or("Nada que medir")?;
@@ -2891,7 +2916,7 @@ impl PulseApp {
                 *slot = Some(outcome);
             }
         });
-        self.mix.job = Some(Job { progress, cancel, result });
+        self.mix.job = Some(Job { progress, cancel, result, thread });
         self.status = Some("Buscando la ganancia del limitador…".into());
     }
 
@@ -3521,6 +3546,29 @@ fn balance_chart(ui: &mut egui::Ui, mix: &[f64; 10], reference: Option<&[f64; 10
 mod tests {
     use super::*;
 
+    /// A measuring thread that dies (a panic) ends the job with a clear
+    /// error, instead of «Analizando…» for ever.
+    #[test]
+    fn a_measuring_thread_that_dies_ends_with_an_error() {
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let ctx = egui::Context::default();
+        let thread = std::thread::spawn(|| panic!("a measure that fails (on purpose)"));
+        app.mix.job = Some(Job { progress: Default::default(), cancel: Default::default(), result: Arc::new(Mutex::new(None)), thread });
+        crate::test_audio::wait_for("el análisis que falla", 30, || {
+            app.follow_mix(&ctx);
+            app.mix.job.is_none()
+        });
+        assert_eq!(app.status.as_deref(), Some(INTERRUPTED));
+        let thread = std::thread::spawn(|| panic!("a reference that fails (on purpose)"));
+        app.mix.reference_job = Some(ReferenceJob { name: "Ref".into(), result: Arc::new(Mutex::new(None)), thread });
+        crate::test_audio::wait_for("la referencia que falla", 30, || {
+            app.follow_mix(&ctx);
+            app.mix.reference_job.is_none()
+        });
+        assert!(app.status.as_deref().is_some_and(|s| s.contains("«Ref»") && s.contains("fallo interno")), "{:?}", app.status);
+        assert!(app.mix.reference.is_none());
+    }
+
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {
         TrackMeasures { index, id: index as u32 + 10, name: name.into(), drums, kick: false, listens: Vec::new(), peak, lufs: Some(-20.0), correlation: 0.9, low_end: low, role: Role::Other, pan: 0.0, cut: false, bands: [0.0; 10], gain: 0.5, start_gain: 0.5, mids: Vec::new(), carves: Vec::new(), dynamics: None, compressed: false, group: false, sends: [0.0; MAX_RETURNS], levels: Vec::new(), automated: false, esses: None, deessed: false, thrown: false, stereo: Stereo::default(), utility: None }
     }
@@ -3553,12 +3601,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -3646,12 +3695,13 @@ mod tests {
         app.mix.range = Range::Loop;
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -3749,12 +3799,13 @@ mod tests {
         app.make_rumble(0);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -3888,12 +3939,13 @@ mod tests {
         app.project.tracks[3].mixer.gain *= 0.1;
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -3990,12 +4042,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -4076,12 +4129,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -4203,12 +4257,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         // The mix's level (dB) between 0.7 and 1.9 s of each 2 s, where only a tail can sound.
         let gaps = |app: &mut PulseApp| {
@@ -4289,12 +4344,13 @@ mod tests {
         }
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -4417,10 +4473,13 @@ mod tests {
         }
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(10));
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -4484,12 +4543,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         assert!(app.heard(true).is_none(), "nothing to compare yet");
         app.analyze_mix();
@@ -4619,12 +4679,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         let spread = |report: &Report| {
             let found = phrases(&report.tracks[0].levels, &base_levels(&report.tracks, 0));
@@ -4697,12 +4758,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -4786,12 +4848,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         // The mix's level (dB) in the silences: 0.3 to 0.7 s after each phrase.
         let gaps = |app: &mut PulseApp| {
@@ -4872,12 +4935,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -4958,12 +5022,13 @@ mod tests {
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -5030,12 +5095,13 @@ mod tests {
         let mut app = PulseApp::headless(project.clone());
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -5181,12 +5247,13 @@ mod tests {
         app.mix.target = Target::Club;
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+            crate::test_audio::wait_for("el asistente de mezcla", 600, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 600);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);
@@ -5276,12 +5343,13 @@ mod tests {
         app.mix.target = Target::Club;
         let ctx = egui::Context::default();
         let wait = |app: &mut PulseApp| {
-            let started = std::time::Instant::now();
-            while app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some() {
+            crate::test_audio::wait_for("el asistente de mezcla", 900, || {
+                if !(app.mix.job.is_some() || app.mix.report.is_none() || app.mix.auto.is_some()) {
+                    return true;
+                }
                 app.follow_mix(&ctx);
-                std::thread::sleep(std::time::Duration::from_millis(20));
-                assert!(started.elapsed().as_secs() < 900);
-            }
+                false
+            });
         };
         app.analyze_mix();
         wait(&mut app);

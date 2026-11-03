@@ -450,7 +450,9 @@ fn following_midi_notes_start_and_end_without_clicks() {
     for notes in [vec![clip_note(45, from, to)], live_note(45, from, to).to_vec()] {
         for carrier in [VocoderCarrier::Saw, VocoderCarrier::Noise] {
             let out = run_notes(VocoderParams { carrier, sibilance: 0.0, ..Default::default() }, &voice, &notes, 128);
-            let held = biggest_step(&out, from + 100 * ms..to - 100 * ms);
+            // The held note's own, up to its end (it settles a little louder
+            // as it goes: the end's window starts within it).
+            let held = biggest_step(&out, from + 100 * ms..to);
             let start = biggest_step(&out, from - 5 * ms..from + 5 * ms);
             let end = biggest_step(&out, to - 5 * ms..to + 30 * ms);
             println!("{carrier:?}: salto mayor al empezar {:.2}×, al acabar {:.2}× el de la nota sostenida", start / held, end / held);
@@ -683,5 +685,56 @@ fn voice_cpu() {
         }
         let us = started.elapsed().as_secs_f64() * 1e6 / (voice.len() / 128) as f64;
         println!("{:24} {us:6.1} µs por bloque de 128 ({:.1} % de un núcleo)", effect.label(), us / (128.0 / 48_000.0 * 1e6) * 100.0);
+    }
+}
+
+/// Formants moved down read each grain slower, so a grain covers less than
+/// its periods: the grains would carry the pulse's sign, a DC offset. None
+/// comes out (the input has none), and the sound around it is the same.
+#[test]
+fn formants_down_add_no_dc() {
+    // A voice without DC of its own (a mic's is cut by its preamp).
+    let mut voice = ah(140.0, 2.0);
+    let mean = voice.iter().sum::<f32>() / voice.len() as f32;
+    voice.iter_mut().for_each(|s| *s -= mean);
+    let input_dc = voice[24_000..].iter().sum::<f32>() / (voice.len() - 24_000) as f32;
+    let mut worst = (0.0f32, 0.0, 0.0);
+    for (pitch, formant) in [(0.0, -12.0), (0.0, -7.0), (0.0, -3.0), (7.0, -5.0), (-12.0, -12.0), (0.0, 5.0)] {
+        let (out, _) = run(shift(pitch, formant), &voice, &voice, 256);
+        let tail = &out[24_000..];
+        let dc = tail.iter().sum::<f32>() / tail.len() as f32;
+        let level = rms(tail);
+        println!("tono {pitch:+} formante {formant:+}: DC {dc:+.5} ({:.1} dB bajo el RMS), entrada {input_dc:+.5}", db(level) - db(dc.abs()));
+        if dc.abs() / level > worst.0 {
+            worst = (dc.abs() / level, pitch, formant);
+        }
+    }
+    assert!(worst.0 < 0.003, "{} {}: DC {:.1} dB under its RMS", worst.1, worst.2, db(worst.0));
+}
+
+/// The same voice comes out about as loud whatever note the carrier plays,
+/// low or high, its own or by MIDI (a vocoder can't make what is under its
+/// note, so the bands it has left are made up for).
+#[test]
+fn the_vocoder_is_as_loud_on_high_notes_as_on_low() {
+    let s = SR as usize;
+    let voice = ah(120.0, 2.0);
+    let input = db(rms(&voice[s / 2..]));
+    let mut spread: Vec<(String, f32, f32)> = Vec::new();
+    for carrier in [VocoderCarrier::Saw, VocoderCarrier::SuperSaw, VocoderCarrier::Noise] {
+        let (mut lo, mut hi) = (f32::MAX, f32::MIN);
+        for note in [36u8, 40, 43, 48, 52, 55, 60, 64, 67, 72, 76, 79, 84] {
+            let own = run(Effect::Vocoder(VocoderParams { carrier, note: note as f32, sibilance: 0.0, ..Default::default() }), &voice, &voice, 256).0;
+            let midi = run_notes(VocoderParams { carrier, sibilance: 0.0, ..Default::default() }, &voice, &[clip_note(note, 0, 2 * s)], 256);
+            let (a, b) = (db(rms(&own[s / 2..])) - input, db(rms(&midi[s / 2..])) - input);
+            println!("{carrier:?} nota {note}: propia {a:+.1} dB, MIDI {b:+.1} dB");
+            lo = lo.min(a).min(b);
+            hi = hi.max(a).max(b);
+        }
+        spread.push((format!("{carrier:?}"), lo, hi));
+    }
+    for (carrier, lo, hi) in spread {
+        println!("{carrier}: de {lo:+.1} a {hi:+.1} dB");
+        assert!(hi - lo < 1.5, "{carrier}: {lo:+.1}…{hi:+.1} dB");
     }
 }

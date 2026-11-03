@@ -902,6 +902,21 @@ mod tests {
         let json = serde_json::to_string(sample).unwrap();
         assert!(serde_json::from_str::<Track>(&json).unwrap().melodic);
         assert!(!serde_json::to_string(brk).unwrap().contains("melodic"));
+        // A project saved before the mark: opened, its chord slices are
+        // heard again and marked (not a change to save), the break's not.
+        let mut old = app.project.clone();
+        old.tracks.iter_mut().for_each(|t| t.melodic = false);
+        let started = std::time::Instant::now();
+        app.replace_project(old, None);
+        println!("recalculado al abrir en {:.1} ms", started.elapsed().as_secs_f64() * 1000.0);
+        assert!(app.project.tracks[2].melodic && !app.project.tracks[3].melodic);
+        assert!(!app.is_dirty());
+        // Drum Pads not made of slices are left as they are.
+        let mut kit = app.project.clone();
+        kit.tracks[2].melodic = false;
+        kit.tracks[2].samples = kit.tracks[2].samples.iter().map(|_| paths[0].to_string_lossy().into_owned()).collect();
+        app.replace_project(kit, None);
+        assert!(!app.project.tracks[2].melodic);
         for path in paths {
             std::fs::remove_file(path).ok();
         }

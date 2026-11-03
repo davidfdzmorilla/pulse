@@ -4220,8 +4220,8 @@ mod tests {
     }
 
     /// The same song rendered in callbacks of any size sounds the same, sample
-    /// for sample: every instrument (but the Polychrome, see below) and every
-    /// effect, also the ones whose settings move.
+    /// for sample: every instrument (the Polychrome too, its glides, random and
+    /// drift) and every effect, also the ones whose settings move.
     #[test]
     fn the_buffer_size_never_changes_the_sound() {
         use crate::model::{AutoFilterParams, Device, Effect, Groove};
@@ -4270,11 +4270,7 @@ mod tests {
                 differ.push(effect.effect.label().to_string());
             }
         }
-        // Known: the Polychrome evaluates its modulation over each piece it is
-        // asked for (glides, smooth random and drift integrate over it), so a
-        // buffer that isn't a multiple of 64 moves those updates by under 32
-        // samples: inaudible, but not the same samples.
-        assert_eq!(differ, ["Polychrome Synth"], "depend on the buffer size");
+        assert!(differ.is_empty(), "depend on the buffer size: {differ:?}");
     }
 
     fn one_note_clip() -> Box<PlayClip> {
@@ -5987,7 +5983,7 @@ mod tests {
         assert!(one.iter().zip(&four).all(|(a, b)| a.to_bits() == b.to_bits()), "the sidechain heard something else");
     }
 
-    /// Every instrument (but the Polychrome, see above) with effects, a group,
+    /// Every instrument (the Polychrome too) with effects, a group,
     /// a send and sidechains, shared among threads in callbacks of any size,
     /// sounds as on one thread in callbacks of 1024: the same samples. The
     /// sidechains: a track listening to one outside its group, the group to
@@ -5996,8 +5992,7 @@ mod tests {
     #[test]
     fn neither_threads_nor_the_buffer_size_change_the_sound() {
         use crate::model::{AutoFilterParams, CompressorParams, DuckerParams, ReverbParams};
-        let kinds: Vec<InstrumentKind> = InstrumentKind::catalog().into_iter().filter(|k| !matches!(k, InstrumentKind::Polychrome(_))).collect();
-        assert_eq!(kinds.len(), InstrumentKind::catalog().len() - 1);
+        let kinds: Vec<InstrumentKind> = InstrumentKind::catalog().to_vec();
         let render = |threads: usize, sizes: &[usize]| {
             let (mut engine, mut handle) = crate::audio::detached(SR);
             engine.set_threads(threads);

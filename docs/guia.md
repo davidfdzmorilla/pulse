@@ -300,7 +300,7 @@ Clic derecho en la cabecera: **Nombre**, **Color**, **Mostrar/Ocultar automatiza
 - La altura va de 40 a 200 puntos; la de la fila del Master no cambia.
 - La altura propia de una pista va con ella: si la mueves, borras otras o la duplicas (la copia sale igual de alta), no cambia. Se guarda con el proyecto.
 - Es de la vista, como el desplazamiento: {⌘Z} no la deshace, y deshacer otra cosa no la cambia. Una pista borrada que vuelve con {⌘Z} vuelve con su altura.
-- La de {⌥ + rueda}, la de todas, no se guarda en el proyecto.
+- La de {⌥ + rueda}, la de todas, también se guarda con el proyecto: al abrirlo, las pistas salen como las dejaste. Un proyecto que no la tiene se abre con la altura de siempre.
 +++
 
 > Nota: las pistas que están tocando clips de Session se ven oscurecidas en el Arrangement. **► Arrangement**, en el transporte, las devuelve.
@@ -1039,8 +1039,8 @@ Lo que haces con las ruedas y los controles del teclado al grabar queda en el cl
 | Sampler | Abre o cierra el filtro; hacia abajo oscurece aunque el filtro esté abierto | Abre el filtro |
 | FM Synth | Sube o baja el índice de modulación: más o menos armónicos, en la misma medida en todos los presets | Más índice: brilla también en las notas largas |
 | Pulse Keys (pianos eléctricos) | Más o menos «bark» y un tono más brillante u oscuro, sin saltar de volumen | Trémolo |
-| Pulse Keys (piano) | Realza o apaga los agudos | Trémolo |
-| Pulse Keys (órgano) | Saca o mete los registros agudos (de 4' para arriba) y abre o cierra el filtro de tono | Drive, como si apretaras el pedal de volumen |
+| Pulse Keys (piano) | Las notas que tocas con el brillo arriba salen con un martillo más duro, y con él abajo, más blando; además realza o apaga los agudos de lo que ya suena, sin subir el volumen | Trémolo |
+| Pulse Keys (órgano) | Saca o mete los registros agudos (de 4' para arriba) y abre o cierra el filtro de tono | Vibrato, como el del escáner de un Hammond: más hondo cuanto más aprietas, al mismo volumen |
 - El **Modular Synth** y los **plugins** reciben todos los controles y hacen lo que tengan asignado.
 - Al **exportar MIDI** se escriben; al **importar** un archivo MIDI, su bend, aftertouch y controles llegan como carriles.
 
@@ -2455,6 +2455,7 @@ Ahora la voz canta lo que toca el synth, nota a nota, y calla cuando el synth ca
 +++ Detalles
 - Dos bancos de filtros paso banda de 24 dB por octava, repartidos por igual en octavas entre Low y High. Cada banda de la voz sigue su nivel y pone ese nivel en la misma banda del synth.
 - Las bandas del synth se igualan antes (como mucho 40 dB), así un synth oscuro suena tan claro como uno brillante. Si el synth calla, el vocoder calla.
+- Suena igual de fuerte en notas graves y agudas: una nota aguda tiene pocos armónicos (y nada por debajo de ella), y el vocoder lo compensa poco a poco (en unos 150 ms, como mucho 6 dB).
 - Sin voz, sale silencio. No retrasa el sonido.
 - El oscilador propio toca una nota o un acorde fijos (con **Note**), o con **Notas MIDI**, las notas que llegan a la pista o a la que elijas: las mismas que oiría su instrumento, tras sus efectos MIDI, en la muestra exacta en que empiezan.
 - Con **Notas MIDI** de otra pista, el vocoder espera a esa pista, como un sidechain. Si escucharla cierra un bucle (está marcada «(bucle)»), no le llegan sus notas. Una pista congelada ya no da notas: es audio.

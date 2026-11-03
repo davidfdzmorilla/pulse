@@ -29,7 +29,10 @@
 //! grain's shape) stay. Each grain is also read faster or slower (resampled
 //! by the formant ratio), which moves the formants and not the pitch.
 //! Without a voice (esses, breath, silence) the grains keep their spacing:
-//! no buzz is made out of noise. It sounds [`VoiceShift::latency`] late
+//! no buzz is made out of noise. Formants moved down read each grain slower,
+//! so a grain spans less than its periods and keeps the pulse's sign: the
+//! grains' sum goes through a DC blocker (5 Hz), which leaves the voice as it
+//! was and takes that offset out. It sounds [`VoiceShift::latency`] late
 //! (about 32 ms, the same at any setting), which the mixer makes up for.
 
 use crate::effects::Key;
@@ -122,8 +125,14 @@ const CARRIER_REF: f32 = 0.03;
 const CARRIER_MS: f32 = 10.0;
 /// The voice's highs mixed in for its esses, above this (Hz).
 const SIBILANCE_HZ: f32 = 5000.0;
-/// The vocoder's level against the voice's (makes up for the narrow bands).
-const MAKEUP: f32 = 1.0;
+/// The vocoder's level against the voice's.
+const MAKEUP: f32 = 0.58;
+/// The wet level is evened out to the voice's bands' (their power summed,
+/// times this: what a dense carrier, a low saw or noise, gives, so it starts
+/// right), followed over about 150 ms, at most this far either way.
+const LEVEL_REF: f32 = 1.35;
+const LEVEL_MS: f32 = 150.0;
+const LEVEL_RANGE: f32 = 2.0;
 /// Each super saw note's saws, and how far apart they go (cents at full
 /// detune, the outer ones).
 const SAWS: usize = 7;
@@ -167,6 +176,11 @@ pub struct Vocoder {
     voice_level: [f32; MAX],
     carrier_level: [f32; MAX],
     total: f32,
+    /// The voice's bands' power summed and the wet's (followed slowly), and
+    /// how fast they are followed.
+    wanted: f32,
+    made_level: f32,
+    level_follow: f32,
     highs: [Svf; 2],
     highs_coefs: Coefs,
     /// Its own carrier: each saw's phase, and the noise's state.
@@ -202,6 +216,9 @@ impl Vocoder {
             voice_level: [0.0; MAX],
             carrier_level: [0.0; MAX],
             total: 0.0,
+            wanted: 0.0,
+            made_level: 0.0,
+            level_follow: 1.0 - (-1.0 / (LEVEL_MS * 0.001 * rate)).exp(),
             highs: [Svf::default(); 2],
             highs_coefs: Coefs::new(SIBILANCE_HZ, std::f32::consts::FRAC_1_SQRT_2, rate),
             phases,
@@ -229,6 +246,8 @@ impl Vocoder {
         self.voice_level = [0.0; MAX];
         self.carrier_level = [0.0; MAX];
         self.total = 0.0;
+        self.wanted = 0.0;
+        self.made_level = 0.0;
         self.highs = [Svf::default(); 2];
         self.notes.clear();
         self.silence_notes();
@@ -484,6 +503,7 @@ impl Vocoder {
             self.total += (carrier * carrier - self.total) * follow;
             let floor = (self.total * CARRIER_FLOOR).max(1e-12);
             let mut wet = 0.0;
+            let mut wanted = 0.0;
             for b in 0..n {
                 let [v0, v1] = &mut self.voice[b];
                 let vb = v1.tick(v0.tick(voice, &self.analysis[b]).0, &self.analysis[b]).0;
@@ -498,10 +518,29 @@ impl Vocoder {
                 let heard = &mut self.carrier_level[b];
                 *heard += (cb * cb - *heard) * follow;
                 let ceiling = BAND_CEILING * level.sqrt();
-                wet += (cb * (*level / heard.max(floor)).sqrt()).clamp(-ceiling, ceiling);
+                let band = (cb * (*level / heard.max(floor)).sqrt()).clamp(-ceiling, ceiling);
+                // Every other band upside down: two neighbours are half a turn
+                // apart where they cross, so a carrier's harmonic there adds
+                // up instead of cancelling.
+                wet += if b % 2 == 0 { band } else { -band };
+                wanted += *level;
             }
+            // As loud as the voice's bands ask for, whatever note the carrier
+            // plays: a high note's harmonics are few and far between (and
+            // nothing under it), so they sum to less than a low note's.
+            // Followed only while the carrier sounds (by as much as it does):
+            // between notes it keeps what it had, and a note starts as the
+            // last one went.
+            let gate = (self.total.sqrt() / CARRIER_REF).min(1.0) * played;
+            let follow = self.level_follow * gate;
+            self.wanted += (wanted - self.wanted) * follow;
+            self.made_level += (wet * wet - self.made_level) * follow;
+            if self.wanted < 1e-20 && self.made_level < 1e-20 {
+                (self.wanted, self.made_level) = (0.0, 0.0);
+            }
+            let even = ((self.wanted * LEVEL_REF + 1e-12) / (self.made_level + 1e-12)).sqrt().clamp(1.0 / LEVEL_RANGE, LEVEL_RANGE);
             // The carrier's own level gates it: quiet carrier, quiet vocoder.
-            wet *= MAKEUP * (self.total.sqrt() / CARRIER_REF).min(1.0) * played;
+            wet *= even * MAKEUP * gate;
             let [h0, h1] = &mut self.highs;
             let highs = h1.tick(h0.tick(voice, &self.highs_coefs).1, &self.highs_coefs).1;
             h0.settle();
@@ -550,6 +589,9 @@ const EPOCH: f32 = 0.25;
 /// The input and output lines (samples, powers of two).
 const IN_LINE: usize = 1 << 13;
 const OUT_LINE: usize = 1 << 13;
+/// The DC blocker on the grains' sum (Hz), and below what it is let go to 0.
+const DC_HZ: f32 = 5.0;
+const DC_FLOOR: f32 = 1e-7;
 
 pub struct VoiceShift {
     pub(crate) params: VoiceShiftParams,
@@ -576,6 +618,9 @@ pub struct VoiceShift {
     /// Where the next grain is centred (output) and the last grain's mark (input).
     next: f64,
     mark: f64,
+    /// The DC blocker's coefficient and its state per channel (last in, last out).
+    dc_coef: f32,
+    dc: [(f32, f32); 2],
     /// 0 when it moves nothing (the input, only later), 1 when it moves.
     shifted: Smooth,
     mix: Smooth,
@@ -607,6 +652,8 @@ impl VoiceShift {
             now: 0,
             next: 0.0,
             mark: 0.0,
+            dc_coef: (-2.0 * PI * DC_HZ / rate).exp(),
+            dc: [(0.0, 0.0); 2],
             shifted: Smooth::new(if Self::moves(&params) { 1.0 } else { 0.0 }, 10.0, rate),
             mix: Smooth::new(params.mix, 10.0, rate),
             gain: Smooth::new(db_to_gain(params.output_db), 10.0, rate),
@@ -625,6 +672,7 @@ impl VoiceShift {
         self.period = UNVOICED * self.rate;
         self.line.iter_mut().for_each(|l| l.fill(0.0));
         self.sum.iter_mut().for_each(|l| l.fill(0.0));
+        self.dc = [(0.0, 0.0); 2];
         self.now = IN_LINE as u64;
         self.next = self.now as f64 + self.longest as f64;
         self.mark = self.next - self.latency as f64;
@@ -728,6 +776,18 @@ impl VoiceShift {
         self.next = at + spacing.max(1.0) as f64;
     }
 
+    /// Channel `c` of the grains' sum without its DC (one pole, one zero).
+    #[inline]
+    fn block_dc(&mut self, c: usize, x: f32) -> f32 {
+        let (last_in, last_out) = self.dc[c];
+        let mut y = x - last_in + self.dc_coef * last_out;
+        if y.abs() < DC_FLOOR && x == 0.0 {
+            y = 0.0;
+        }
+        self.dc[c] = (x, y);
+        y
+    }
+
     pub fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         let p = self.params;
         let ratio = 2f32.powf((p.pitch.clamp(-24.0, 24.0) + p.fine.clamp(-100.0, 100.0) / 100.0) / 12.0);
@@ -755,6 +815,7 @@ impl VoiceShift {
             let (a, b) = (self.sum[0][o], self.sum[1][o]);
             self.sum[0][o] = 0.0;
             self.sum[1][o] = 0.0;
+            let (a, b) = (self.block_dc(0, a), self.block_dc(1, b));
             let d = (self.now as usize - self.latency) & (IN_LINE - 1);
             let (dry_l, dry_r) = (self.line[0][d], self.line[1][d]);
             let shifted = self.shifted.next(moves);

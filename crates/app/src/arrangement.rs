@@ -175,6 +175,11 @@ impl State {
         self.scroll_y = 0.0;
     }
 
+    /// The lanes' height the project was saved with (⌥ + wheel), or the usual.
+    pub(crate) fn take_lane_height(&mut self, project: &crate::project::Project) {
+        self.lane_h = project.lane_height.0.filter(|h| h.is_finite()).map_or(LANE_H, |h| h.clamp(LANE_MIN, LANE_MAX));
+    }
+
     /// The height of `track`'s lane: its own, or the others'.
     pub(crate) fn lane(&self, track: &crate::project::Track) -> f32 {
         // A damaged file's height is brought within the range.
@@ -447,6 +452,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let state = &mut app.arrangement;
             if alt {
                 state.lane_h = (state.lane_h + dy * 0.25).clamp(LANE_MIN, LANE_MAX);
+                // Saved with the project (not a change to undo).
+                app.project.lane_height.0 = Some(state.lane_h);
             } else {
                 state.scroll_y = (state.scroll_y - dy).max(0.0);
             }

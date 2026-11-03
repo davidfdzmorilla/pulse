@@ -205,4 +205,14 @@ fn a_tracks_height_is_saved_but_not_undone() {
     app.undo();
     let back = app.project.tracks.iter().find(|t| t.id == id).unwrap();
     assert_eq!(back.height.0, Some(60.0));
+    // All the lanes' (⌥ + wheel): the same.
+    let mut app = PulseApp::headless(Project::demo());
+    app.commit_history();
+    app.project.lane_height = LaneHeight(Some(90.0));
+    app.commit_history();
+    assert!(!app.can_undo() && app.is_dirty());
+    app.project.tracks[1].name = "Otro".into();
+    app.commit_history();
+    app.undo();
+    assert_eq!(app.project.lane_height.0, Some(90.0));
 }

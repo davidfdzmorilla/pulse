@@ -374,3 +374,20 @@ fn the_editor_follows_the_note_moved_with_the_keys() {
     assert!(offset(&s).x > start.x + size.x * 0.5, "the view went along");
     shot(&mut s, "derecha");
 }
+
+/// A piece of the screen captured on a screen bigger than the usual one: the
+/// piece is all there (the whole screen was drawn, not only the usual size).
+#[test]
+fn a_piece_of_a_bigger_screen_is_captured_whole() {
+    let dir = std::env::temp_dir().join(format!("pulse-shot-of-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mut s = Studio::new(crate::app::PulseApp::headless(Project::empty()), dir.clone());
+    s.size = vec2(1920.0, 1080.0);
+    s.frames(3);
+    let path = s.shot_of("esquina", Rect::from_min_max(pos2(1700.0, 980.0), pos2(1900.0, 1060.0)));
+    let png = std::fs::read(&path).unwrap();
+    // The PNG's own width and height (its IHDR), in pixels at 1.5×.
+    let side = |at: usize| u32::from_be_bytes(png[at..at + 4].try_into().unwrap());
+    assert_eq!((side(16), side(20)), (300, 120));
+    std::fs::remove_dir_all(&dir).ok();
+}

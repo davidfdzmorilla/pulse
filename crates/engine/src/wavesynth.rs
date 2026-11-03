@@ -28,7 +28,8 @@ const HARMONIC_EVERY: u32 = 4;
 /// Sample and granular oscillators play their file at its own pitch on C3.
 pub(crate) const SAMPLE_ROOT_HZ: f32 = 261.625_58;
 const UNISON: usize = 16;
-/// Modulation is evaluated every `CONTROL` samples.
+/// Modulation is evaluated every `CONTROL` samples, counted from the synth's
+/// start (not from each buffer's), so the sound doesn't depend on the buffer.
 const CONTROL: usize = 32;
 pub(crate) const COMB: usize = 2048;
 /// Indices into the parameter table (see `WAVE_PARAMS`).
@@ -320,6 +321,11 @@ struct Voice {
     smooth: f32,
     random_phase: f32,
     filter2: [FilterState; 2],
+    /// Its modulated parameters and frequency this control period, and the
+    /// period they are of: a period played in pieces (a buffer that ends in
+    /// it, a note starting in it) plays each piece with the same.
+    snap: ([f32; PARAMS], f32),
+    snap_period: u64,
 }
 
 impl Voice {
@@ -350,6 +356,8 @@ impl Voice {
             smooth: 0.5,
             random_phase: 0.0,
             filter2: [FilterState::new(), FilterState::new()],
+            snap: ([0.0; PARAMS], 0.0),
+            snap_period: u64::MAX,
         }
     }
 
@@ -467,8 +475,15 @@ pub struct WaveSynth {
     tempo: f64,
     voices: Vec<Voice>,
     counter: u64,
-    /// Seconds since the synth started, for free-running LFOs.
+    /// Seconds since the synth started, for free-running LFOs: `frames` over
+    /// the rate (exact, however the blocks are cut).
     clock: f64,
+    frames: u64,
+    /// Control periods (`CONTROL` samples) since it started, and how far into
+    /// the current one it is: modulation moves once a period, on the same
+    /// samples whatever the buffer size.
+    period: u64,
+    period_at: usize,
     /// Notes held in mono mode, oldest first.
     held: [u8; 16],
     held_count: usize,
@@ -536,6 +551,9 @@ impl WaveSynth {
             voices,
             counter: 0,
             clock: 0.0,
+            frames: 0,
+            period: 0,
+            period_at: 0,
             held: [0; 16],
             held_count: 0,
             last_note: None,
@@ -596,6 +614,8 @@ impl WaveSynth {
         let random = self.random();
         let voice = &mut self.voices[index];
         let was_active = voice.active;
+        // Its modulation is worked out again from here.
+        voice.snap_period = u64::MAX;
         voice.gate = Gate::new(pitch, velocity, gate, self.counter);
         voice.target = pitch as f32;
         voice.velocity = velocity;
@@ -898,9 +918,11 @@ impl WaveSynth {
         let has_fx = self.fx.iter().any(|slot| matches!(slot, Some((_, true))));
         let mut offset = 0;
         while offset < left.len() {
-            let n = (left.len() - offset).min(CONTROL);
-            self.arp_tick(n);
-            self.seq_tick(n);
+            let n = (left.len() - offset).min(CONTROL - self.period_at);
+            if self.period_at == 0 {
+                self.arp_tick(CONTROL);
+                self.seq_tick(CONTROL);
+            }
             let mut scratch = self.scratch;
             scratch[0][..n].fill(0.0);
             scratch[1][..n].fill(0.0);
@@ -932,20 +954,23 @@ impl WaveSynth {
                 right[offset + i] += scratch[1][i];
             }
             self.scratch = scratch;
-            self.clock += n as f64 / self.sample_rate as f64;
+            self.frames += n as u64;
+            self.clock = self.frames as f64 / self.sample_rate as f64;
+            self.period_at += n;
+            if self.period_at == CONTROL {
+                self.period_at = 0;
+                self.period += 1;
+            }
             offset += n;
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn render_voice(&mut self, v: usize, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], base: &[f32; PARAMS], amounts: &[f32; WAVE_SLOTS], left: &mut [f32], right: &mut [f32]) {
+    /// Moves voice `v`'s modulation a period (`block` seconds) on, and works
+    /// out its modulated parameters and frequency for the period (kept).
+    fn modulate(&mut self, v: usize, base: &[f32; PARAMS], amounts: &[f32; WAVE_SLOTS], block: f32) -> ([f32; PARAMS], f32) {
         let p = self.params;
         let pitch = self.pitch;
-        let sr = self.sample_rate;
-        let dt = 1.0 / sr;
-        let block = left.len() as f32 * dt;
-
-        // Modulation sources at the start of the block.
+        // Modulation sources at the start of the period.
         let mut lfos = [0f32; 4];
         {
             let voice = &mut self.voices[v];
@@ -1000,6 +1025,22 @@ impl WaveSynth {
             voice.note = voice.target;
         }
         let freq = note_freq(voice.note) * pitch;
+        voice.snap = (m, freq);
+        voice.snap_period = self.period;
+        (m, freq)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn render_voice(&mut self, v: usize, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], base: &[f32; PARAMS], amounts: &[f32; WAVE_SLOTS], left: &mut [f32], right: &mut [f32]) {
+        let p = self.params;
+        let sr = self.sample_rate;
+        let dt = 1.0 / sr;
+        // Modulation moves a whole period at a time, at the period's first
+        // piece (or a note's); the rest of it plays with what was found then.
+        let block = CONTROL as f32 * dt;
+        let fresh = self.voices[v].snap_period != self.period;
+        let (m, freq) = if fresh { self.modulate(v, base, amounts, block) } else { self.voices[v].snap };
+        let voice = &mut self.voices[v];
 
         let mut oscs: [Option<OscBlock>; 2] = [None, None];
         for (o, slot) in oscs.iter_mut().enumerate() {
@@ -1026,11 +1067,13 @@ impl WaveSynth {
                 // Analog drift: each voice wanders slowly towards a new random offset.
                 let mut drift = 0.0;
                 if osc.kind == OscKind::Analog && drift_cents > 0.0 {
-                    let (current, target) = voice.drift[o][u];
-                    let current = current + (target - current) * (1.0 - (-block * 2.0).exp());
-                    let target = if (current - target).abs() < 0.05 { voice.random() * 2.0 - 1.0 } else { target };
-                    voice.drift[o][u] = (current, target);
-                    drift = current * drift_cents;
+                    if fresh {
+                        let (current, target) = voice.drift[o][u];
+                        let current = current + (target - current) * (1.0 - (-block * 2.0).exp());
+                        let target = if (current - target).abs() < 0.05 { voice.random() * 2.0 - 1.0 } else { target };
+                        voice.drift[o][u] = (current, target);
+                    }
+                    drift = voice.drift[o][u].0 * drift_cents;
                 }
                 incs[u] = f * 2f32.powf((s * spread_cents + drift) / 1200.0) / sr;
                 let centre = 1.0 - s.abs();
@@ -1046,7 +1089,7 @@ impl WaveSynth {
                 g.1 *= scale;
             }
             let top = f * 2f32.powf(spread_cents / 1200.0);
-            if osc.kind == OscKind::Harmonic && voice.harmonic_wait == 0 {
+            if fresh && osc.kind == OscKind::Harmonic && voice.harmonic_wait == 0 {
                 let x = WAVE_OSC_EXTRA + o * 4;
                 let max_harmonic = ((sr * 0.5) / top.max(1.0)) as usize;
                 build_harmonic(&mut voice.harmonic[o], &self.sine, m[x + 1], m[x + 2], m[x + 3], at(0), at(12), max_harmonic);
@@ -1095,7 +1138,9 @@ impl WaveSynth {
         let coefs2 = p.filter2.on.then(|| FilterCoefs::new(p.filter2.mode, cutoff2, m[WAVE_FILTER2 + 1], m[WAVE_FILTER2 + 2], m[WAVE_FILTER2 + 3], sr));
         let balance = m[WAVE_BALANCE].clamp(0.0, 1.0);
         let parallel = p.filter_parallel && coefs.is_some() && coefs2.is_some();
-        voice.harmonic_wait = if voice.harmonic_wait == 0 { HARMONIC_EVERY } else { voice.harmonic_wait - 1 };
+        if fresh {
+            voice.harmonic_wait = if voice.harmonic_wait == 0 { HARMONIC_EVERY } else { voice.harmonic_wait - 1 };
+        }
         let sub_inc = freq * 2f32.powf(m[SUB].round()) / sr;
         let sub_angle = (m[SUB + 2].clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
         let sub_gain = (sub_angle.cos() * m[SUB + 1] * std::f32::consts::SQRT_2, sub_angle.sin() * m[SUB + 1] * std::f32::consts::SQRT_2);
@@ -1301,7 +1346,9 @@ impl WaveSynth {
             *out_l += (wet_l + dry_l) * gain;
             *out_r += (wet_r + dry_r) * gain;
         }
-        voice.age += block;
+        if fresh {
+            voice.age += block;
+        }
     }
 }
 

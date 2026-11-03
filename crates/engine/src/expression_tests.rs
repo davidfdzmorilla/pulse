@@ -328,7 +328,7 @@ fn brightness_and_pressure_brighten_the_fm_synth() {
 }
 
 /// On Pulse Keys, CC 74 tilts the tone and pressure brings a tremolo (the
-/// organ, drive).
+/// organ, a vibrato).
 #[test]
 fn brightness_tilts_the_keys_and_pressure_trembles() {
     use crate::model::{KeysModel, KeysParams};
@@ -347,11 +347,11 @@ fn brightness_tilts_the_keys_and_pressure_trembles() {
         ratios.iter().sum::<f32>() / ratios.len() as f32
     };
     assert!(swing(&pressed) > 3.0 * swing(&plain), "tremolo: {} vs {}", swing(&pressed), swing(&plain));
-    // The organ drives instead: more overtones.
+    // The organ's is a vibrato instead (see below): another sound, as loud.
     let organ = InstrumentKind::Keys(KeysParams { model: KeysModel::Organ, ..KeysParams::default() });
     let (calm, pushed) = (render_held(organ, Vec::new()), render_held(organ, vec![lane(MidiControl::Pressure, &[(0.0, 1.0)])]));
-    let (c, d) = (slope_ratio(&calm[part.clone()]), slope_ratio(&pushed[part]));
-    assert!(d > 1.1 * c, "organ drive: {d} vs {c}");
+    assert_ne!(calm[part.clone()], pushed[part.clone()]);
+    assert!((level_db(&pushed[part.clone()]) - level_db(&calm[part])).abs() < 1.0, "organ pressure: no louder");
 }
 
 /// The sampler's filter follows CC 74 and pressure: closing it darkens even a
@@ -493,4 +493,67 @@ fn the_sampler_slides_tied_clip_notes_only() {
     assert!(tied > 45.5 && tied < 55.0, "{tied}");
     assert!((arrived - 57.0).abs() < 0.05, "{arrived}");
     assert!((after_rest - 50.0).abs() < 0.05, "{after_rest}");
+}
+
+/// The magnitude spectrum's centroid (Hz) of `x` (its first 16384 samples,
+/// Hann), between 50 Hz and 12 kHz.
+fn centroid(x: &[f32]) -> f32 {
+    const N: usize = 16384;
+    let mut re: Vec<f32> = (0..N).map(|i| x[i] * (0.5 - 0.5 * (std::f32::consts::TAU * i as f32 / N as f32).cos())).collect();
+    let mut im = vec![0.0; N];
+    crate::dsp::fft(&mut re, &mut im);
+    let (mut sum, mut weighted) = (0.0f64, 0.0f64);
+    for k in 1..N / 2 {
+        let hz = k as f32 * SR / N as f32;
+        if (50.0..12_000.0).contains(&hz) {
+            let m = (re[k] * re[k] + im[k] * im[k]).sqrt() as f64;
+            sum += m;
+            weighted += m * hz as f64;
+        }
+    }
+    (weighted / sum) as f32
+}
+
+fn level_db(x: &[f32]) -> f32 {
+    10.0 * (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).max(1e-20).log10()
+}
+
+/// The piano's CC 74 is heard clearly: from down to up the centroid more
+/// than doubles (each way at least 15 %: a bright or soft preset has less room one way), the level within a few dB; the
+/// organ's pressure brings a vibrato (the pitch wobbles, some cents) and
+/// doesn't make it louder.
+#[test]
+fn the_pianos_brightness_is_clear_and_the_organs_pressure_is_a_vibrato() {
+    use crate::model::{KeysModel, KeysParams};
+    let part = 2_400..26_000;
+    let pianos = [("defecto", KeysParams::default())].into_iter().chain(KeysParams::presets().into_iter().filter(|(_, p)| p.model == KeysModel::Piano));
+    for (name, piano) in pianos {
+        let kind = InstrumentKind::Keys(piano);
+        let plain = render_held(kind, Vec::new());
+        let bright = render_held(kind, vec![lane(MidiControl::Cc(74), &[(0.0, 1.0)])]);
+        let dark = render_held(kind, vec![lane(MidiControl::Cc(74), &[(0.0, 0.0)])]);
+        let (p, b, d) = (centroid(&plain[part.clone()]), centroid(&bright[part.clone()]), centroid(&dark[part.clone()]));
+        let (lb, ld) = (level_db(&bright[part.clone()]) - level_db(&plain[part.clone()]), level_db(&dark[part.clone()]) - level_db(&plain[part.clone()]));
+        println!("piano {name}: centroide {d:.0} ← {p:.0} → {b:.0} Hz ({:+.0} %, {:+.0} %), nivel {ld:+.1} / {lb:+.1} dB", (d / p - 1.0) * 100.0, (b / p - 1.0) * 100.0);
+        // Down, at most as dark as the fundamental almost alone (A4, 440 Hz).
+        assert!(b > 1.15 * p && (d < 0.85 * p || d < 560.0) && b > 2.2 * d, "{name}: CC 74 {d} ← {p} → {b}");
+        assert!(lb.abs() < 4.5 && ld.abs() < 6.0, "{name}: {lb:+.1} {ld:+.1} dB");
+    }
+    let organs = [("defecto", KeysParams { model: KeysModel::Organ, ..KeysParams::default() })].into_iter().chain(KeysParams::presets().into_iter().filter(|(_, p)| p.model == KeysModel::Organ));
+    for (name, organ) in organs {
+        let kind = InstrumentKind::Keys(organ);
+        let calm = render_held(kind, Vec::new());
+        let pressed = render_held(kind, vec![lane(MidiControl::Pressure, &[(0.0, 1.0)])]);
+        let level = level_db(&pressed[part.clone()]) - level_db(&calm[part.clone()]);
+        // The pitch in windows 20 ms apart: how far apart it goes, in cents.
+        let wobble = |x: &[f32]| {
+            let hz: Vec<f32> = (0..20).map(|k| pitch_of(&x[4_800 + k * 960..4_800 + k * 960 + 2400])).collect();
+            let (lo, hi) = hz.iter().fold((f32::MAX, 0f32), |(lo, hi), h| (lo.min(*h), hi.max(*h)));
+            1200.0 * (hi / lo).log2() / 2.0
+        };
+        let (wc, wp) = (wobble(&calm), wobble(&pressed));
+        println!("órgano {name}: con presión nivel {level:+.1} dB, el tono se mueve ±{wp:.1} cents (sin ella ±{wc:.1})");
+        assert!(level.abs() < 1.0, "{name}: pressure {level:+.1} dB");
+        assert!(wp > 15.0 && wp > wc + 10.0, "{name}: vibrato {wp} vs {wc}");
+    }
 }

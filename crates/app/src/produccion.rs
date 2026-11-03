@@ -165,7 +165,8 @@ impl Studio {
         self.shots += 1;
         let path = self.out.join(format!("{:02}-{name}.png", self.shots));
         let output = self.last.take().unwrap();
-        let image = self.canvas.draw(&self.ctx, output, SIZE, SCALE);
+        // The screen as big as it is now (a window made larger or smaller).
+        let image = self.canvas.draw(&self.ctx, output, self.size, SCALE);
         let px = |v: f32| (v * SCALE).max(0.0) as usize;
         image.crop(px(rect.left()), px(rect.top()), px(rect.width()), px(rect.height())).save_png(&path).unwrap();
         self.note(format!("  captura {}", path.display()));

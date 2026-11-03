@@ -167,8 +167,19 @@ fn tracks_get_taller() {
     assert_eq!(lane(&s, 0), crate::arrangement::LANE_H);
     assert!((painted(&s, "Pista 3").top() - next.top() - 40.0).abs() < 2.0);
     wheel(&mut s, pos2(900.0, 300.0), vec2(0.0, 80.0), Modifiers::ALT);
-    assert!(lane(&s, 0) > crate::arrangement::LANE_H + 10.0);
+    let taller = lane(&s, 0);
+    assert!(taller > crate::arrangement::LANE_H + 10.0);
     assert_eq!(s.app.arrangement.scroll_y, 0.0);
+    // Saved with the project (to save, not to undo), and so opened again.
+    let json = serde_json::to_string(&s.app.project).unwrap();
+    let mut other = PulseApp::headless(Project::empty());
+    assert_eq!(other.arrangement.lane(&other.project.tracks[0]), crate::arrangement::LANE_H);
+    other.replace_project(serde_json::from_str(&json).unwrap(), None);
+    assert_eq!(other.arrangement.lane(&other.project.tracks[0]), taller);
+    assert!(!other.is_dirty());
+    // Another project, without one: the usual height.
+    other.replace_project(Project::empty(), None);
+    assert_eq!(other.arrangement.lane(&other.project.tracks[0]), crate::arrangement::LANE_H);
 }
 
 /// With an audio clip open (its editor is tall), the panel still goes down: what

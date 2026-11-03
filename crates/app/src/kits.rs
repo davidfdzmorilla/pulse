@@ -23,6 +23,9 @@ const BASIC_KIT: [(u8, &str, u8, f32); 13] = [
     (50, "Tom", LOW_TOM, 8.0),
 ];
 
+/// Tells apart the files being written at once (see [`basic_kit`]).
+static PART: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+
 /// Where generated kits are kept.
 pub fn kits_dir() -> PathBuf {
     paths::data_dir().join("Kits")
@@ -41,7 +44,15 @@ pub fn basic_kit(dir: &Path) -> Result<(RackParams, Vec<String>), String> {
         let path = dir.join(format!("{name}.wav"));
         if !path.exists() {
             let (left, right) = render_drum_hit(full_level, sound, SAMPLE_RATE);
-            write_wav(&path, &left, &right, SAMPLE_RATE)?;
+            // Written beside it and renamed into place: a file cut short (a
+            // crash, a full disk) or half written by another call is never
+            // taken for the sound.
+            let part = dir.join(format!(".{name}.wav.{}-{}.part", std::process::id(), PART.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
+            let written = write_wav(&part, &left, &right, SAMPLE_RATE).and_then(|_| std::fs::rename(&part, &path).map_err(|e| format!("No se pudo guardar {}: {e}", path.display())));
+            if written.is_err() {
+                let _ = std::fs::remove_file(&part);
+            }
+            written?;
         }
         files[pad] = path.to_string_lossy().into_owned();
         params.tune[pad] = tune;
@@ -71,5 +82,33 @@ mod tests {
         }
         assert_eq!(params.choke[6], params.choke[10]);
         std::fs::remove_dir_all(&dir).ok();
+    }
+
+    /// Asked for at once from several places (two tracks, two windows), the
+    /// kit is never handed out half written, and leaves nothing temporary.
+    #[test]
+    fn the_basic_kit_is_written_whole_even_asked_for_at_once() {
+        for round in 0..4 {
+            let dir = std::env::temp_dir().join(format!("pulse-kit-race-{}-{round}", std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            let loaded: Vec<Result<usize, String>> = std::thread::scope(|scope| {
+                let calls: Vec<_> = (0..6)
+                    .map(|_| {
+                        scope.spawn(|| {
+                            let (_, files) = basic_kit(&dir)?;
+                            files.iter().filter(|f| !f.is_empty()).map(|f| engine::Sample::load(Path::new(f)).map(|s| s.frames())).sum::<Result<usize, _>>()
+                        })
+                    })
+                    .collect();
+                calls.into_iter().map(|c| c.join().unwrap()).collect()
+            });
+            for frames in &loaded {
+                assert_eq!(frames.as_ref().ok(), loaded[0].as_ref().ok(), "round {round}: {loaded:?}");
+            }
+            assert!(loaded[0].is_ok(), "{loaded:?}");
+            let left: Vec<_> = std::fs::read_dir(&dir).unwrap().filter_map(|e| e.ok()).map(|e| e.file_name().to_string_lossy().into_owned()).filter(|n| n.ends_with(".part")).collect();
+            assert!(left.is_empty(), "{left:?}");
+            std::fs::remove_dir_all(&dir).ok();
+        }
     }
 }

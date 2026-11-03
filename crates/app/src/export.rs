@@ -1752,9 +1752,10 @@ mod tests {
         .join()
         .unwrap();
         assert_eq!(*without.lock().unwrap(), Some(worker), "no plugins: dropped there");
-        while with.lock().unwrap().is_none() {
+        crate::test_audio::wait_for("los plugins que acaban en la interfaz", 60, || {
             drop_later();
-        }
+            with.lock().unwrap().is_some()
+        });
         assert_ne!(*with.lock().unwrap(), Some(worker), "with plugins: not on the render's thread");
     }
 
@@ -2062,16 +2063,17 @@ mod tests {
             let settings = Settings { stems: true, range: Range::Song, format, ..Default::default() };
             let project = Project::demo();
             let renders = plan(&project, &mut SampleCache::default(), &settings, &dir.join("demo.wav"));
-            let cancel = AtomicBool::new(false);
-            // Cancelled once the first stems are written.
+            let (cancel, over) = (AtomicBool::new(false), AtomicBool::new(false));
+            // Cancelled once the first stems are written (and no longer
+            // waited for once the export is over, files or not).
             let watcher = std::thread::scope(|scope| {
                 scope.spawn(|| {
-                    while std::fs::read_dir(&dir).map_or(0, |d| d.count()) == 0 {
-                        std::thread::yield_now();
-                    }
+                    crate::test_audio::wait_for("los primeros stems", 300, || std::fs::read_dir(&dir).map_or(0, |d| d.count()) > 0 || over.load(Ordering::Relaxed));
                     cancel.store(true, Ordering::Relaxed);
                 });
-                run(renders, settings, &AtomicU32::new(0), &cancel)
+                let result = run(renders, settings, &AtomicU32::new(0), &cancel);
+                over.store(true, Ordering::Relaxed);
+                result
             });
             assert!(watcher.is_err());
             let left: Vec<_> = std::fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name()).collect();
@@ -2102,12 +2104,12 @@ mod tests {
         // Nothing there yet: not asked (an answer would be left over).
         app.export_to(&destination);
         let mut job = app.export.job.take().expect("started");
-        let report = loop {
-            if let Some(done) = job.finished() {
-                break done.unwrap();
-            }
-            std::thread::sleep(std::time::Duration::from_millis(5));
-        };
+        let mut report = None;
+        crate::test_audio::wait_for("la exportación", 300, || {
+            report = job.finished();
+            report.is_some()
+        });
+        let report = report.unwrap().unwrap();
         assert_eq!(report.files.len(), names.len());
         std::fs::write(&names[1], b"mio").unwrap();
         app.answers.push_back(crate::commands::Answer::Cancel);

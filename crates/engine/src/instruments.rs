@@ -160,7 +160,7 @@ impl Gate {
         self.held || self.remaining > margin
     }
 
-    /// Shut without its timed end coming (a mono voice cut by the next note).
+    /// Let go now, held or timed (also a mono voice cut by the next note).
     pub(crate) fn close(&mut self) {
         self.held = false;
         self.remaining = 0;

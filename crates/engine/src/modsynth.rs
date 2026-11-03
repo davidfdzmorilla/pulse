@@ -855,7 +855,8 @@ fn modulate(p: &ModularParams, voice: &mut Voice, inputs: &ModInputs, m: &mut [f
                 CurveInput::Random => voice.random,
             }),
             ModulatorKind::Velocity => voice.velocity,
-            ModulatorKind::NoteGate => voice.gate.held as u8 as f32,
+            // Held, or a clip's note still within its length.
+            ModulatorKind::NoteGate => voice.gate.open_for(0) as u8 as f32,
             ModulatorKind::Pressure => voice.pressure.max(inputs.pressure),
             ModulatorKind::Macro => m[MOD_MACRO_PARAMS + (modulator.index as usize).min(7)],
             ModulatorKind::Remap => modulator.shape.value_at(source.clamp(0.0, 1.0)),
@@ -1197,7 +1198,8 @@ impl ModSynth {
     }
 
     fn release(voice: &mut Voice, p: &ModularParams) {
-        voice.gate.held = false;
+        // A clip's note let go early (all notes off) is let go for good.
+        voice.gate.close();
         // Modulators with a trigger input are released by it instead.
         for (state, modulator) in voice.mods.iter_mut().zip(p.modulators.iter()) {
             if modulator.trigger_source == MOD_NO_MODULATOR {
@@ -1671,7 +1673,8 @@ impl ModSynth {
             if voice.gate.tick() {
                 Self::release(voice, &p);
             }
-            let held = voice.gate.held;
+            // Held, or a clip's note within its length (sustain loops, curves).
+            let held = voice.gate.open_for(0);
             let mut sounding = false;
             let (mut l, mut r) = (0f32, 0f32);
             for k in 0..last {
@@ -3305,6 +3308,15 @@ mod modulation_tests {
         let held = seen[blocks(0.2)];
         assert_eq!((held[0], held[1], held[2], held[3]), (0.7, 1.0, 0.4, 1.0));
         assert_eq!(seen.last().unwrap()[3], 0.0, "the note gate closes");
+        // A clip's note (a timed gate, no note-off): open for its length.
+        let mut seen = Vec::new();
+        run(patch(&[gate]), blocks(0.5), |s, b| {
+            if b == 0 {
+                s.note_on(69, 1.0, (0.3 * SR) as u32);
+            }
+            seen.push(s.voices[0].mods[0].out);
+        });
+        assert_eq!((seen[blocks(0.2)], seen[blocks(0.45)]), (1.0, 0.0), "a clip note's gate: {seen:?}");
         // Bent up a whole tone: A4 becomes B4.
         let crossings = audio[blocks(0.1) * CONTROL..blocks(0.3) * CONTROL].windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f32 / 0.2;
         assert!((crossings - 493.9).abs() < 8.0, "{crossings} Hz");

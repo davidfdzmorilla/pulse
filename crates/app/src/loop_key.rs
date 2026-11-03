@@ -217,6 +217,8 @@ impl PulseApp {
         self.project.key = key;
         self.follow_key();
         self.sync_all_midi_effects();
+        // What follows the chord track in its scale changes with it.
+        self.sync_chord_followers();
     }
 
     /// Transposes every clip that follows the project's key to it (and the

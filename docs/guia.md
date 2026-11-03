@@ -210,7 +210,7 @@ Un clip puede pasar solo a otro cuando ha sonado un rato: clic derecho en el cli
 
 El Arrangement es la línea de tiempo de la canción: cada pista es una fila, y los clips se colocan de izquierda a derecha en el orden en que suenan.
 
-Arriba está la **franja del loop**, debajo la de **marcadores** y después la **regla** con los números de compás. En la barra de herramientas tienes el **Zoom**, **Ver todo** (ajusta el zoom para que quepa la canción entera) y **Seguir cursor**, que desplaza la vista con el cursor al reproducir. Con el zoom al mínimo cabe una canción de cinco minutos aunque la ventana sea estrecha; la regla numera entonces cada 4, 8 o 16 compases.
+Arriba está la **franja del loop**, debajo la de **marcadores** y después la **regla** con los números de compás y, bajo ella, la franja **Acordes** (ver [[Pista de acordes]]). En la barra de herramientas tienes el **Zoom**, **Ver todo** (ajusta el zoom para que quepa la canción entera) y **Seguir cursor**, que desplaza la vista con el cursor al reproducir. Con el zoom al mínimo cabe una canción de cinco minutos aunque la ventana sea estrecha; la regla numera entonces cada 4, 8 o 16 compases.
 
 > Consejo: el zoom también decide la rejilla. Con zoom alto los clips se ajustan a tiempos; con zoom bajo, a compases.
 
@@ -1298,9 +1298,58 @@ Las notas nuevas quedan seleccionadas, para moverlas o transponerlas.
 Cada acorde lleva el bajo abajo y las demás notas juntas, en la inversión más cercana a la del acorde anterior. Así las voces se mueven lo menos posible, como lo tocaría un pianista.
 +++
 
+## Pista de acordes
+
+Los acordes de toda la canción en una franja del [[Arrangement]], bajo la regla. Escríbelos a mano o sácalos de un audio, y deja que el bajo, los pads y las melodías los sigan.
+
+### Escribir los acordes
+
+- **Doble clic** en un hueco de la franja **Acordes**: escribe un acorde de un compás (o hasta el siguiente). Es la tónica de la **Escala** o, si ya hay uno antes, el que suele ir después.
+- **Clic derecho** en la franja: los siete acordes de la escala por grados (I, ii, iii…), con los que suelen ir después en naranja. Cada clic escribe uno y pasa al siguiente sitio: clic, clic, clic construye la progresión.
+- En ese menú, **Nombre** acepta cualquier acorde: **Lam**, **F#m7**, **Sol/Si**, **Bb**, **Gsus4** o, con escala, su grado (**vi**, **V7**). Pulsa **Poner** (o Intro).
+- **Duración**: medio compás, 1, 2 o 4 compases. **Con séptima**: cuatriadas.
+- **Progresiones**: las del menú [[Acordes]], desde donde hiciste clic. Con **Repetir hasta el final de la canción**, la llenan entera.
+- Clic derecho **sobre un acorde**: elige otro para cambiarlo, o **Eliminar acorde**.
+- **Arrastra** un acorde para moverlo, o su **borde derecho** para alargarlo o acortarlo. Un clic lleva el cursor a su inicio.
+
+Los nombres siguen la tonalidad del proyecto (**Sib** en Fa mayor, **La#** en Si mayor) y, si caben, llevan su grado: **Fa · VI**. Un acorde que se sale de la escala sale en violeta. {⌘Z} deshace cualquier cambio.
+
+### Sacarlos de un audio o de un clip
+
+- Clic derecho en un clip del Arrangement (un audio de piano o guitarra, una canción, un clip MIDI) → **Sus acordes a la pista de acordes**. Pulse los oye y los escribe donde está el clip, con su ritmo armónico: un acorde nuevo cada vez que cambia (como mucho cada dos tiempos).
+- Clic derecho en la franja → **Sacar los acordes de** → una pista: los de todos sus clips.
+- **Todos los clips MIDI de la canción**: los acordes que suenan juntando las pistas MIDI, sin la batería.
+
+> Consejo: el flujo completo en tres clics: un audio con acordes → **Sus acordes a la pista de acordes** → clic derecho en la franja → **Acompañar toda la canción** → **Bajo: raíz**, y otra vez → **Pad**.
+
+### Que la canción los siga
+
+**Acompañar**: clic derecho en la franja → **Acompañar toda la canción** (o **Acompañar «Estribillo»**, la parte entre ese marcador y el siguiente) → una parte. Escribe un bajo, un arpegio, un pad, acordes rítmicos o una melodía en un clip de esa longitud, en la pista vacía de su papel o en una nueva al final (ver [[Acompañamiento]]). Si cambias acordes después, **Otra variación** en el editor la vuelve a escribir con los nuevos.
+
+**Pistas que siguen los acordes**: clic derecho en la cabecera de una pista MIDI → **Seguir la pista de acordes** y un modo. Sus notas no cambian: cambia lo que suena, compás a compás, aunque el clip sea un bucle de un compás.
+
+| Modo | Qué hace | Para |
+|---|---|---|
+| **Notas del acorde** | Cada nota va a la nota del acorde más cercana, sin repetir notas en un mismo golpe. | Pads y acordes |
+| **Escala del acorde** | Cada nota va a la más cercana de la escala, con las notas del acorde dentro. | Melodías y arpegios |
+| **Bajo: mover el riff** | El riff entero se mueve a la nota del bajo de cada acorde y conserva su forma. La nota que más suena del clip hace de raíz. | Bajos |
+
+Sus clips dicen **sigue los acordes**. Para quedarte con lo que suena:
+
+- **Seguir la pista de acordes** → **Escribirlo en las notas**: las notas de todos sus clips pasan a ser las que suenan, y la pista deja de seguirlos.
+- Clic derecho en un clip MIDI → **Ajustar a la pista de acordes** → un modo: solo ese clip.
+
++++ Más detalles
+- [[De tarareo a canción]] en un clip del Arrangement escribe sus acordes en la pista de acordes. Si ya hay acordes ahí y la melodía encaja con ellos (al menos la mitad de lo que canta son notas del acorde), usa esos en vez de inventar otros.
+- El [[Arreglo automático]] escribe en la pista de acordes los que suenan en la canción que monta.
+- Una melodía que pides con **Acompañar** en un clip MIDI vacío del Arrangement toca sobre la pista de acordes si tiene acordes ahí.
+- Una nota que entra un pelo antes del cambio de acorde (menos de una semifusa) ya cuenta para el acorde nuevo. Donde no hay acorde, las notas suenan como están.
+- Un proyecto con pista de acordes se guarda en el formato 22: una versión anterior de Pulse no lo abre.
++++
+
 ## Acompañamiento
 
-Pulse toca contigo: a partir de un clip con acordes escribe un bajo, un arpegio, un pad, acordes rítmicos o una melodía que los siguen compás a compás.
+Pulse toca contigo: a partir de un clip con acordes (o de la [[Pista de acordes]], para toda la canción) escribe un bajo, un arpegio, un pad, acordes rítmicos o una melodía que los siguen compás a compás.
 
 ### Añadir una parte
 

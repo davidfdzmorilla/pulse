@@ -4,7 +4,7 @@
 
 use crate::key::{note_name, Key};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum Quality {
     Major,
     Minor,
@@ -19,7 +19,7 @@ pub enum Quality {
 }
 
 impl Quality {
-    const ALL: [Quality; 10] = [
+    pub const ALL: [Quality; 10] = [
         Quality::Major,
         Quality::Minor,
         Quality::Seventh,
@@ -48,7 +48,7 @@ impl Quality {
         }
     }
 
-    fn suffix(self) -> &'static str {
+    pub fn suffix(self) -> &'static str {
         match self {
             Quality::Major => "",
             Quality::Minor => "m",
@@ -76,12 +76,13 @@ impl Quality {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Chord {
     /// Pitch class of the root (0 = C).
     pub root: u8,
     pub quality: Quality,
     /// Pitch class of the bass, when it is not the root (an inversion).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bass: Option<u8>,
 }
 

@@ -240,7 +240,23 @@ impl PulseApp {
         if self.project.key.is_none() {
             self.set_key(Some(key));
         }
-        let chords = harmonize(&melody, length, key, sig);
+        // On the Arrangement: the chord track's chords there if the tune fits
+        // them; else its own, written on the chord track.
+        let at = match clip {
+            ClipRef::Arrangement { track, index } => self.project.tracks[track].arrangement.get(index).map(|a| a.start),
+            ClipRef::Session { .. } => None,
+        };
+        let chords = match at.and_then(|start| crate::chord_track::fitting(&self.project.chords, &melody, start, length)) {
+            Some(chords) => chords,
+            None => {
+                let chords = harmonize(&melody, length, key, sig);
+                if let Some(start) = at {
+                    let placed: Vec<_> = chords.iter().map(|&(a, b, c)| (start + a, start + b, c)).collect();
+                    crate::chord_track::put_all(&mut self.project.chords, start, start + length, &placed);
+                }
+                chords
+            }
+        };
         let (harmony, bass_part) = parts(style);
         // A new take each time; the same one in tests (see `versions::seed`).
         let seed = crate::versions::seed();

@@ -334,8 +334,10 @@ fn commands_from(
             Command::SetMonitor { track: t, on: track.monitors() && new.is_some_and(|t| t.frozen.is_none()) },
         ]);
         commands.extend(chain_commands(project, target, old.map(|o| o.devices.as_slice()), &track.devices, samples, sample_rate));
-        if !old.is_some_and(|o| o.arrangement == track.arrangement && o.samples == track.samples) {
-            commands.push(Command::SetArrangement { track: t, clips: placed_clips(track, samples) });
+        // A track that follows the chord track plays it again when its chords or the key change.
+        let same_chords = track.follow_chords.is_none() || before.is_some_and(|b| b.chords == project.chords && b.key == project.key);
+        if !old.is_some_and(|o| o.arrangement == track.arrangement && o.samples == track.samples && o.follow_chords == track.follow_chords && same_chords) {
+            commands.push(Command::SetArrangement { track: t, clips: crate::chord_track::placed_clips(project, track, samples) });
         }
         commands.push(Command::SetAutomation { target, lanes: active_lanes(&track.automation, target, overridden) });
         commands.push(Command::SetSends { track: t, sends: track.sends });

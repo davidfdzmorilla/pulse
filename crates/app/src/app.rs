@@ -388,6 +388,8 @@ pub struct PulseApp {
     pub hum_song: Option<crate::hum_song::HumJob>,
     /// The accompaniment written last (see `accompany`).
     pub accompaniment: Option<crate::accompany::Generated>,
+    /// The Arrangement's chord strip (see `chord_track`).
+    pub chord_lane: crate::chord_track::Lane,
     /// The session clips playing while recording onto the arrangement.
     pub session_capture: Option<crate::session_rec::SessionCapture>,
     /// Preferences, the window for them and the devices it shows.
@@ -588,6 +590,7 @@ impl PulseApp {
             tuner: Default::default(),
             hum_song: None,
             accompaniment: None,
+            chord_lane: Default::default(),
             session_capture: None,
             settings: Default::default(),
             show_settings: false,
@@ -690,7 +693,7 @@ impl PulseApp {
     }
 
     pub fn sync_arrangement(&mut self, track: usize) {
-        let clips = sync::placed_clips(&self.project.tracks[track], &mut self.samples);
+        let clips = crate::chord_track::placed_clips(&self.project, &self.project.tracks[track], &mut self.samples);
         self.audio.send(Command::SetArrangement { track, clips });
         self.show_sample_errors();
     }

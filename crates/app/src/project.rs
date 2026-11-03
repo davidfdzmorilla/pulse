@@ -155,6 +155,10 @@ pub struct Track {
     /// `engine::follow`): it stays with the slot's clip when it moves.
     #[serde(default, skip_serializing_if = "no_follow", deserialize_with = "follows")]
     pub follow: [Follow; NUM_SCENES],
+    /// Its MIDI clips play their notes moved onto the chord track's chords
+    /// (see `chord_track`), and how.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_chords: Option<crate::chord_track::Follow>,
 }
 
 /// Whether no slot (or scene) has a follow action.
@@ -227,6 +231,7 @@ impl Track {
             height: LaneHeight(None),
             melodic: false,
             follow: [Follow::default(); NUM_SCENES],
+            follow_chords: None,
         }
     }
 
@@ -385,7 +390,10 @@ pub struct MasterTrack {
 /// doesn't know it. Only projects that have one.
 /// 21: follow actions on session clips or scenes: a Pulse that reads 20
 /// would lose them. Only projects that have some.
-pub const FORMAT: u32 = 21;
+/// 22: the chord track, and tracks that follow it: a Pulse that reads 21
+/// would lose them (and play those tracks' notes as written). Only projects
+/// that have chords or a track following them.
+pub const FORMAT: u32 = 22;
 const FORMAT_KEY: &str = "format";
 /// The Pulse that saved a file (see [`Project::saved_by`]).
 const SAVED_BY_KEY: &str = "saved_by";
@@ -503,6 +511,9 @@ pub struct Project {
     /// Named places on the Arrangement: the song's parts.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub markers: Vec<SongMarker>,
+    /// The song's chords in the time (see `chord_track`), in order.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub chords: Vec<crate::chord_track::SongChord>,
     /// MIDI controllers linked to the project's controls (see `midi_map`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub midi_map: Vec<crate::midi_map::Mapping>,
@@ -602,6 +613,11 @@ impl Project {
         !self.grooves.is_empty() || self.tracks.iter().any(|t| t.clips.iter().flatten().any(templated) || t.arrangement.iter().any(|p| templated(&p.clip)))
     }
 
+    /// Whether the song has chords on its chord track, or a track follows it.
+    pub fn has_chord_track(&self) -> bool {
+        !self.chords.is_empty() || self.tracks.iter().any(|t| t.follow_chords.is_some())
+    }
+
     /// Whether a session clip or a scene has a follow action.
     pub fn has_follow_actions(&self) -> bool {
         !no_follow(&self.scene_follow) || self.tracks.iter().any(|t| !no_follow(&t.follow))
@@ -678,6 +694,7 @@ impl Project {
             key: None,
             meter: Meter::COMMON,
             markers: Vec::new(),
+            chords: Vec::new(),
             macros: Vec::new(),
             next_id: 0,
             tunings: Vec::new(),
@@ -768,8 +785,10 @@ impl Project {
     pub fn to_json_repaired(&self) -> Result<(String, usize), String> {
         let (mut value, repaired) = crate::finite::repair(self)?;
         if let Some(object) = value.as_object_mut() {
-            let format = if self.has_follow_actions() {
+            let format = if self.has_chord_track() {
                 FORMAT
+            } else if self.has_follow_actions() {
+                21
             } else if self.has_effect(|e| matches!(e, Effect::Transition(_))) {
                 20
             } else if self.tracks.iter().any(|t| plays_by_note(&t.instrument)) {

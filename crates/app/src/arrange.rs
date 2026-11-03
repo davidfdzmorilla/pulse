@@ -417,6 +417,10 @@ impl PulseApp {
         }
         self.project.loop_start = 0.0;
         self.project.loop_end = start;
+        // The chord track: the chords the song plays now.
+        self.project.chords.clear();
+        let chords = crate::chord_track::song_chords(&self.project, 0.0, start);
+        crate::chord_track::put_all(&mut self.project.chords, 0.0, start, &chords);
         self.selected_clip = None;
         self.view = crate::app::View::Arrangement;
         self.sync_all();

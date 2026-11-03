@@ -454,6 +454,9 @@ pub struct Generated {
     /// The instrument it gave the new track it made (None on a track that was
     /// there): a melody's follows its style while nobody changes it.
     instrument: Option<InstrumentKind>,
+    /// Written over the chord track from..to (song beats): another take reads
+    /// its chords again, as they are now.
+    song: Option<(f64, f64)>,
 }
 
 impl Generated {
@@ -477,7 +480,7 @@ pub struct Retake {
 impl PulseApp {
     /// The chords of a clip, in its beats: a MIDI clip's from its notes, an
     /// audio one's heard.
-    fn clip_chords(&mut self, clip: ClipRef) -> (Vec<(f64, f64, Chord)>, f64) {
+    pub(crate) fn clip_chords(&mut self, clip: ClipRef) -> (Vec<(f64, f64, Chord)>, f64) {
         let key = self.project.key;
         let sig = self.clip_sig(clip);
         match self.clip(clip).cloned() {
@@ -497,6 +500,15 @@ impl PulseApp {
     /// scene's clips, or what the Arrangement plays under it), in its beats.
     fn song_chords(&self, clip: ClipRef) -> Vec<(f64, f64, Chord)> {
         let Some(length) = self.clip(clip).map(|c| c.length()) else { return Vec::new() };
+        // On the Arrangement, the chord track's chords if it has some there.
+        if let ClipRef::Arrangement { track, index } = clip {
+            if let Some(p) = self.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) {
+                let chords = crate::chord_track::between(&self.project.chords, p.start, p.start + length.min(p.length));
+                if !chords.is_empty() {
+                    return chords;
+                }
+            }
+        }
         let mut notes = Vec::new();
         // A clip's notes over `from..to` of the song, looping, moved by `shift`.
         let mut add = |m: &MidiClip, from: f64, to: f64, shift: f64| {
@@ -562,7 +574,7 @@ impl PulseApp {
         m.notes = notes.clone();
         self.sync_clip_ref(clip);
         self.select_clip(clip);
-        self.accompaniment = Some(Generated { clip, part, seed, chords, key: Some(key), notes, instrument: None });
+        self.accompaniment = Some(Generated { clip, part, seed, chords, key: Some(key), notes, instrument: None, song: None });
         self.status = Some(format!("{} sobre los acordes de la canción: «Otra variación» en el editor escribe otra", part.label()));
     }
 
@@ -641,9 +653,55 @@ impl PulseApp {
         self.selected_target = Target::Track(index);
         self.sync_all();
         self.select_clip(new);
-        self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes, instrument });
+        self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes, instrument, song: None });
         let more = if matches!(part, Part::Melody(_)) { ", y ahí cambias densidad y registro" } else { "" };
         self.status = Some(format!("{} para {} acordes: «Otra variación» en el editor escribe otra{more}", part.label(), self.accompaniment.as_ref().map_or(0, |g| g.chords.len())));
+    }
+
+    /// Writes `part` over the chord track's chords from `from` to `to` (song
+    /// beats, the whole song or a part): a clip there on the empty track of
+    /// its role if there is one, else on a new track at the bottom.
+    pub fn accompany_chords(&mut self, part: Part, from: f64, to: f64) {
+        let from = self.project.meter.prev_bar(from.max(0.0));
+        let chords = crate::chord_track::between(&self.project.chords, from, to);
+        if chords.is_empty() || to <= from {
+            self.status = Some("La pista de acordes no tiene acordes ahí: escríbelos o sácalos de un audio".into());
+            return;
+        }
+        let existing = self.track_for(part, usize::MAX);
+        if existing.is_none() && self.project.tracks.len() >= MAX_TRACKS {
+            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            return;
+        }
+        let length = to - from;
+        let sig = self.project.meter.sig_at(from);
+        let seed = crate::versions::seed() ^ part.id() << 32;
+        let key = matches!(part, Part::Melody(_)).then(|| crate::melody::key_for(&chords, self.project.key));
+        let notes = write(part, &chords, length, seed, sig, key);
+        let color = existing.map_or_else(|| part.color([0; 3]), |t| self.project.tracks[t].color);
+        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.label(), length, color) });
+        let (index, instrument) = match existing {
+            Some(t) => (t, None),
+            None => {
+                let mut track = crate::project::Track::new(self.free_track_name(part.short()), color, part.instrument());
+                // A new track's fader, as from a chord clip on one (see `fader_db`).
+                track.mixer.gain *= 10f32.powf(part.fader_db() / 20.0);
+                let instrument = track.instrument;
+                let ids = self.track_ids();
+                self.project.tracks.push(track);
+                self.follow_tracks(&ids);
+                (self.project.tracks.len() - 1, Some(instrument))
+            }
+        };
+        let arrangement = &mut self.project.tracks[index].arrangement;
+        arrangement.push(engine::model::ArrangementClip { start: from, length, clip: midi });
+        let new = ClipRef::Arrangement { track: index, index: arrangement.len() - 1 };
+        self.selected_target = Target::Track(index);
+        self.sync_all();
+        self.select_clip(new);
+        let count = chords.len();
+        self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes, instrument, song: Some((from, to)) });
+        self.status = Some(format!("{} sobre {count} acordes de la pista de acordes: «Otra variación» en el editor escribe otra", part.label()));
     }
 
     /// `name`, or «name 2», «name 3»… if a track already has it.
@@ -705,6 +763,13 @@ impl PulseApp {
             Some(Clip::Midi(m)) => m.length,
             _ => return,
         };
+        // Over the chord track: its chords as they are now.
+        if let Some((from, to)) = generated.song {
+            let chords = crate::chord_track::between(&self.project.chords, from, to);
+            if !chords.is_empty() {
+                generated.chords = chords;
+            }
+        }
         let notes = write(generated.part, &generated.chords, length, generated.seed, self.clip_sig(generated.clip), generated.key);
         let clip = generated.clip;
         if let Some(Clip::Midi(m)) = self.clip_mut(clip) {

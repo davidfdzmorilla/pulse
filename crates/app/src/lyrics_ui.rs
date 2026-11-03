@@ -784,7 +784,7 @@ mod tests {
             frame(app, vec![press(false)]);
             frame(app, vec![])
         };
-        let at = pos2(150.0 + 6.0 * app.arrangement.pixels_per_beat, 96.0 + t as f32 * 53.0);
+        let at = pos2(150.0 + 6.0 * app.arrangement.pixels_per_beat, 96.0 + crate::arrangement::CHORD_H + t as f32 * 53.0);
         let menu = texts(&click(&mut app, &mut frame, at, PointerButton::Secondary));
         let (_, letra) = menu.iter().find(|(t, _)| t == "Letra").cloned().expect("a Letra submenu");
         let sub = texts(&click(&mut app, &mut frame, letra.center(), PointerButton::Primary));

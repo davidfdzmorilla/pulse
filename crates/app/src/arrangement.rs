@@ -24,8 +24,10 @@ const LOOP_H: f32 = 12.0;
 /// The markers' strip, between the loop's and the ruler.
 const MARKER_H: f32 = 15.0;
 const RULER_H: f32 = 20.0;
-/// The loop's, markers' and ruler's strips, on top: they don't scroll.
-const TOP_H: f32 = LOOP_H + MARKER_H + RULER_H;
+/// The chord track's strip, under the ruler (see `chord_track`).
+pub(crate) const CHORD_H: f32 = 20.0;
+/// The loop's, markers', ruler's and chords' strips, on top: they don't scroll.
+const TOP_H: f32 = LOOP_H + MARKER_H + RULER_H + CHORD_H;
 /// A track lane's height, unless changed (and the master's always).
 pub(crate) const LANE_H: f32 = 52.0;
 /// How low and how tall a track's lane can be made.
@@ -159,6 +161,8 @@ enum Menu {
     Marker(usize),
     /// The markers' strip, at a beat (snapped).
     Markers(f64),
+    /// The chord strip, at a beat (snapped), over a chord or not.
+    Chords { beat: f64, chord: Option<usize> },
 }
 
 impl State {
@@ -582,6 +586,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             });
 
+            // The chord track.
+            crate::chord_track::paint(app, &painter, chord_strip(rect), &x_at, ui.clip_rect());
+
             // Loop region.
             let loop_rect = Rect::from_min_max(
                 pos2(x_at(app.project.loop_start), rect.top() + 1.0),
@@ -618,6 +625,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             // Clips.
             for t in (0..tracks).filter(|&t| in_sight(t) && !layout.groups[t]) {
                 let lane = lane_rect(t);
+                let follows = crate::chord_track::following(&app.project, &app.project.tracks[t]).is_some();
                 for (index, placed) in app.project.tracks[t].arrangement.iter().enumerate() {
                     let clip_rect = Rect::from_min_max(
                         pos2(x_at(placed.start), lane.top() + 1.0),
@@ -638,6 +646,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         Clip::Midi(_) => None,
                     };
                     paint_clip(&tracks_painter, clip_rect, placed, sample, lyrics, selected, ppb, app.project.tempo);
+                    // A track that follows the chord track says so on its clips.
+                    if follows && matches!(placed.clip, Clip::Midi(_)) && clip_rect.width() > 70.0 {
+                        let clipped = tracks_painter.with_clip_rect(clip_rect.intersect(tracks_painter.clip_rect()));
+                        clipped.text(clip_rect.right_bottom() + vec2(-4.0, -3.0), Align2::RIGHT_BOTTOM, "sigue los acordes", theme::small(), TEXT_DIM);
+                    }
                 }
             }
 
@@ -734,6 +747,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         });
         app.arrangement.scroll_x = output.state.offset.x;
         let layout = output.inner;
+        // The chord strip's name, over the headers.
+        let strip = chord_strip(column);
+        ui.painter().rect_filled(strip, 0.0, theme::shade(theme::SLOT, 0.7));
+        let label = match app.project.key {
+            Some(key) => format!("Acordes · {}", key.name()),
+            None => "Acordes".to_string(),
+        };
+        ui.painter().text(pos2(strip.left() + 8.0, strip.center().y), Align2::LEFT_CENTER, label, theme::small(), TEXT_DIM);
 
         // The headers, scrolled with the lanes, and the master's under them.
         let top = column.top() + TOP_H;
@@ -1300,6 +1321,7 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
         let mut chosen = None;
         crate::session::group_items(ui, group, in_group, count, |action| chosen = Some(action), t);
         if !group {
+            crate::chord_track::track_items(app, ui, t);
             crate::session::freeze_items(ui, frozen, freezing, |action| chosen = Some(action), t);
             crate::session::sound_items(app, ui, |action| chosen = Some(action), t);
         }
@@ -1318,6 +1340,12 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
             _ => {}
         }
     });
+}
+
+/// The chord track's strip in the timeline (or the header column) `rect`: under the ruler.
+fn chord_strip(rect: Rect) -> Rect {
+    let top = rect.top() + LOOP_H + MARKER_H + RULER_H;
+    Rect::from_min_max(pos2(rect.left(), top), pos2(rect.right(), top + CHORD_H))
 }
 
 /// The markers: a flag and its name in their strip, a faint line down the lanes.
@@ -1436,6 +1464,7 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                 meter_menu(app, ui, beat);
                 crate::transitions::menu(app, ui, app.project.meter.round_to_bar(beat));
             }
+            Menu::Chords { beat, chord } => crate::chord_track::menu(app, ui, beat, chord),
             Menu::Clip(clip, beat) => clip_menu(app, ui, clip, beat),
             Menu::Lane { track, beat } => {
                 let Some(t) = app.project.tracks.get(track) else { return ui.close() };
@@ -1533,6 +1562,13 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     }
     if count == 1 && !app.project.tracks[track].is_drums() {
         song_menu(ui, app, |app, style| app.hum_to_song(clip, style));
+        if ui.button("Sus acordes a la pista de acordes").on_hover_text("Lee los acordes del clip (un audio, oyéndolo) y los escribe en la pista de acordes, en su sitio").clicked() {
+            app.chords_from_clip(clip);
+            ui.close();
+        }
+        if !audio {
+            crate::chord_track::clip_items(app, ui, track, index);
+        }
     }
     if audio && count == 1 {
         crate::widgets::menu_button(ui, "Convertir a MIDI", |ui| {
@@ -1678,6 +1714,15 @@ fn handle_pointer(
     // The markers' strip: its own clicks and drags.
     if handle_markers(app, ui, response, rect, pos, beat, unit, origin_x) {
         return;
+    }
+    // The chord strip: its own too.
+    match crate::chord_track::handle(app, ui, response, chord_strip(rect), pos, beat, unit, origin_x) {
+        Some(crate::chord_track::Took::Menu { beat, chord }) => {
+            app.arrangement.menu = Some(Menu::Chords { beat, chord });
+            return;
+        }
+        Some(crate::chord_track::Took::Pointer) => return,
+        None => {}
     }
     // A right-click picks what the menu is about (and selects a clip not selected).
     if response.secondary_clicked() {
@@ -2182,7 +2227,7 @@ mod tests {
 
     /// Lane `t` at `beat`, with no automation lanes shown above it.
     fn at(app: &PulseApp, t: usize, beat: f64) -> Pos2 {
-        pos2(150.0 + beat as f32 * app.arrangement.pixels_per_beat, 96.0 + t as f32 * 53.0)
+        pos2(150.0 + beat as f32 * app.arrangement.pixels_per_beat, 96.0 + CHORD_H + t as f32 * 53.0)
     }
 
     fn app() -> PulseApp {
@@ -2307,7 +2352,7 @@ mod tests {
         app.project.tempo = 121.0;
         app.commit_history();
         let mut screen = Screen::new();
-        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 70.0 + 53.0 + 53.0 + 40.0);
+        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 70.0 + CHORD_H + 53.0 + 53.0 + 40.0);
         hold_and_drag(&mut screen, &mut app, from, vec2(20.0, -10.0), 3);
         assert_eq!(app.automation(Target::Track(1)).iter().find(|l| l.param == Param::Volume).map(|l| l.points.len()), Some(1), "a point is being dragged");
         app.undo();
@@ -2443,6 +2488,46 @@ mod tests {
         assert!(texts.iter().any(|(t, _)| t == "Marcador 1"));
     }
 
+    /// The chord strip, under the ruler: a double click writes the key's
+    /// first chord, its menu the one clicked (and the next after it), and
+    /// dragging a chord's right edge changes how long it lasts.
+    #[test]
+    fn chords_are_written_and_stretched_in_their_strip() {
+        let mut app = app();
+        app.project.key = Some(stems::key::Key { tonic: 9, minor: true });
+        let mut screen = Screen::new();
+        screen.frame(&mut app, vec![]);
+        let ppb = app.arrangement.pixels_per_beat;
+        let strip = |beat: f64| pos2(150.0 + beat as f32 * ppb, 22.5 + LOOP_H + MARKER_H + RULER_H + CHORD_H / 2.0);
+        let at = strip(1.0);
+        let press = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        screen.click(&mut app, at, PointerButton::Primary);
+        screen.frame(&mut app, vec![press(at, true)]);
+        screen.frame(&mut app, vec![press(at, false)]);
+        let texts = screen.frame(&mut app, vec![]);
+        let names = |app: &PulseApp| app.project.chords.iter().map(|c| (c.start, c.end(), c.chord.name())).collect::<Vec<_>>();
+        assert_eq!(names(&app), [(0.0, 4.0, "Lam".to_string())], "a double click writes one");
+        assert!(texts.iter().any(|(t, _)| t == "Lam"), "{:?}", texts.iter().map(|t| &t.0).filter(|t| t.len() < 30).collect::<Vec<_>>());
+        // The menu on the free bar after it: Fa (VI) is written there, Sol (VII) after it.
+        let texts = screen.click(&mut app, strip(4.0), PointerButton::Secondary);
+        for item in ["VI\nFa", "VII\nSol"] {
+            let texts = if item == "VI\nFa" { texts.clone() } else { screen.frame(&mut app, vec![]) };
+            let Some((_, rect)) = texts.iter().find(|(t, _)| t == item) else { panic!("no «{item}»: {:?}", texts.iter().map(|t| &t.0).filter(|t| t.len() < 30).collect::<Vec<_>>()) };
+            screen.click(&mut app, rect.center(), PointerButton::Primary);
+        }
+        assert_eq!(names(&app), [(0.0, 4.0, "Lam".into()), (4.0, 8.0, "Fa".into()), (8.0, 12.0, "Sol".into())]);
+        // Closed with a click away; Sol's edge dragged from bar 4 to beat 14.
+        screen.click(&mut app, pos2(1300.0, 600.0), PointerButton::Primary);
+        let (from, to) = (strip(12.0) - vec2(2.0, 0.0), strip(14.0));
+        screen.frame(&mut app, vec![egui::Event::PointerMoved(from)]);
+        screen.frame(&mut app, vec![press(from, true)]);
+        for k in 1..=6 {
+            screen.frame(&mut app, vec![egui::Event::PointerMoved(from + (to - from) * k as f32 / 6.0)]);
+        }
+        screen.frame(&mut app, vec![press(to, false)]);
+        assert_eq!(names(&app)[2], (8.0, 14.0, "Sol".into()));
+    }
+
     /// The master's row, last, opens its automation on the tempo.
     #[test]
     fn the_master_row_shows_tempo_automation() {
@@ -2462,12 +2547,12 @@ mod tests {
         let mut app = app();
         let mut screen = Screen::new();
         let tracks = app.project.tracks.len();
-        let header = |t: usize| pos2(60.0, 70.0 + t as f32 * 53.0);
+        let header = |t: usize| pos2(60.0, 70.0 + CHORD_H + t as f32 * 53.0);
         screen.menu(&mut app, header(1), "Mostrar automatización");
         assert_eq!(app.arrangement.automation.get(&1), Some(&Param::Volume));
         // Points on the lane, then its menu (the lane is under track 1's clips).
         app.lane_mut(Target::Track(1), Param::Volume).points.push(AutomationPoint { beat: 0.0, value: 0.5, curve: 0.0 });
-        let lane = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 55.0 + 53.0 + 53.0 + 30.0);
+        let lane = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 55.0 + CHORD_H + 53.0 + 53.0 + 30.0);
         screen.menu(&mut app, lane, "Borrar automatización");
         assert!(app.automation(Target::Track(1)).iter().all(|l| l.param != Param::Volume || l.points.is_empty()));
         screen.menu(&mut app, lane, "Ocultar carril");
@@ -2501,7 +2586,7 @@ mod tests {
             let _ = screen.ctx.run_ui(input, |ui| show(app, ui));
         };
         // The middle of the stretch, in track 1's automation lane (under its clips).
-        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 70.0 + 53.0 + 53.0 + 40.0);
+        let from = pos2(150.0 + 20.0 * app.arrangement.pixels_per_beat, 70.0 + CHORD_H + 53.0 + 53.0 + 40.0);
         let to = from - vec2(0.0, 30.0);
         let button = |pos, pressed| egui::Event::PointerButton { pos, button: PointerButton::Primary, pressed, modifiers: Modifiers::ALT };
         frame(&mut app, vec![egui::Event::PointerMoved(from)]);

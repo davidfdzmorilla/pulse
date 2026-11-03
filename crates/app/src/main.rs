@@ -11,6 +11,7 @@ mod beatbox;
 mod automation_rec;
 mod browser;
 mod chains;
+mod chord_track;
 mod capture;
 mod clip_envelope;
 mod expression;

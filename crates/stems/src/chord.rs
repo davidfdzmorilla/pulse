@@ -2,9 +2,7 @@
 //! and the bass), the chords of a key and what usually follows each, and
 //! voicing them so that one leads smoothly into the next.
 
-use crate::key::Key;
-
-const NAMES: [&str; 12] = ["Do", "Do#", "Re", "Mib", "Mi", "Fa", "Fa#", "Sol", "Lab", "La", "Sib", "Si"];
+use crate::key::{note_name, Key};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Quality {
@@ -97,11 +95,17 @@ impl Chord {
         self.quality.intervals().iter().map(|i| (self.root + i) % 12).collect()
     }
 
-    /// «Lam», «Sol7», «Do/Mi».
+    /// «Lam», «Sol7», «Do/Mi», with the commonest spelling of each note.
     pub fn name(&self) -> String {
-        let name = format!("{}{}", NAMES[self.root as usize], self.quality.suffix());
+        self.name_in(None)
+    }
+
+    /// Its name spelt as `key` writes its notes: «Reb» in F minor, «Do#» in
+    /// A major (see [`Key::spell`]).
+    pub fn name_in(&self, key: Option<Key>) -> String {
+        let name = format!("{}{}", note_name(self.root, key), self.quality.suffix());
         match self.bass {
-            Some(b) => format!("{name}/{}", NAMES[b as usize]),
+            Some(b) => format!("{name}/{}", note_name(b, key)),
             None => name,
         }
     }
@@ -484,6 +488,16 @@ mod tests {
         let names: Vec<String> = diatonic(a, false).iter().map(|ch| ch.name()).collect();
         assert_eq!(names, ["Lam", "Si°", "Do", "Rem", "Mim", "Fa", "Sol"]);
         assert_eq!(on_degree(a, 4, false, true).name(), "Mi");
+        // Spelt as the key writes them: the Andalusian cadence in F minor.
+        let f = Key { tonic: 5, minor: true };
+        let andaluza: Vec<String> = [0, 6, 5, 4].iter().map(|&d| on_degree(f, d, false, true).name_in(Some(f))).collect();
+        assert_eq!(andaluza, ["Fam", "Mib", "Reb", "Do"]);
+        let e = Key { tonic: 4, minor: false };
+        let names: Vec<String> = diatonic(e, false).iter().map(|ch| ch.name_in(Some(e))).collect();
+        assert_eq!(names, ["Mi", "Fa#m", "Sol#m", "La", "Si", "Do#m", "Re#°"]);
+        let mut inverted = Chord::new(1, Quality::Major);
+        inverted.bass = Some(8);
+        assert_eq!((inverted.name(), inverted.name_in(Some(Key { tonic: 8, minor: false }))), ("Do#/Lab".to_string(), "Reb/Lab".to_string()));
         assert_eq!(Chord::new(4, Quality::Major).numeral(a).as_deref(), Some("V"));
         assert_eq!(Chord::new(1, Quality::Major).numeral(c), None);
     }

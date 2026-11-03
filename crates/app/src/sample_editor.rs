@@ -152,6 +152,18 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     .on_hover_text("Corta la región del clip en golpes, uno por pad, en una pista MIDI nueva con un clip que los toca en orden")
                     .clicked();
             });
+            if app.slice_mode == SliceMode::Transients {
+                ui.horizontal(|ui| {
+                    label(ui, "");
+                    let mut percent = app.slice_sensitivity * 100.0;
+                    let response = ui
+                        .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5).fixed_decimals(0).prefix("sensibilidad ").suffix(" %"))
+                        .on_hover_text("Más alta, más trozos: corta también en los golpes suaves; más baja, solo en los fuertes. En un loop de acordes corta además donde cambia el acorde. Para acordes tenidos, mejor una rejilla (1/4, 1/8)");
+                    if response.changed() {
+                        app.slice_sensitivity = percent / 100.0;
+                    }
+                });
+            }
             ui.horizontal(|ui| {
                 label(ui, "");
                 ui.checkbox(&mut app.show_cuts, "Editar cortes").on_hover_text("Muestra dónde se cortará, bajo la forma de onda: arrastra un corte para moverlo, doble clic para añadir o quitar uno (hasta 16, uno por pad)");

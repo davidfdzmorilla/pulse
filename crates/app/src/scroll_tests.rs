@@ -48,6 +48,8 @@ fn busy(tracks: usize) -> Studio {
     // The panel as tall as when these were written (290 points at 1440×900):
     // they are about the tracks over it.
     app.settings.detail_share = Some(0.36);
+    // On the devices, so it keeps that height with no clip selected.
+    app.detail = crate::app::Detail::Devices;
     let mut s = Studio::new(app, std::env::temp_dir());
     s.frames(4);
     s
@@ -174,6 +176,9 @@ fn tracks_get_taller() {
 #[test]
 fn the_panel_goes_down_with_an_audio_clip_open() {
     let mut s = busy(10);
+    // Its height with a MIDI clip open (with none, it is only its tabs).
+    s.app.select_clip(ClipRef::Arrangement { track: 0, index: 0 });
+    s.frames(4);
     let closed = panel_top(&s);
     let voice = s.app.project.tracks.len() - 1;
     s.app.select_clip(ClipRef::Arrangement { track: voice, index: 0 });
@@ -212,6 +217,75 @@ fn the_session_keeps_its_master_and_mixer_in_sight() {
     assert_eq!(painted(&s, "Master"), master);
 }
 
+/// With nothing to edit, the panel is only its tabs: the Arrangement gets the
+/// window (it took 60 % in the third audit); a clip opened, it comes back to
+/// its height, and goes again when the clip is let go.
+#[test]
+fn the_empty_panel_leaves_the_room_to_the_view() {
+    let mut s = busy(16);
+    s.app.settings.detail_share = None;
+    s.app.detail = crate::app::Detail::Clip;
+    s.frames(40);
+    let empty = panel_top(&s);
+    assert!(empty > s.size.y - 110.0, "{empty}");
+    assert!(s.has("Selecciona un clip para editarlo · doble clic en un slot vacío o en una pista del Arrangement crea uno nuevo"));
+    let tracks = (1..=16).filter(|t| in_sight(&s, &format!("Pista {t}"))).count();
+    s.app.select_clip(ClipRef::Arrangement { track: 0, index: 0 });
+    s.frames(4);
+    let open = panel_top(&s);
+    assert!(open < empty - 250.0, "{empty} → {open}");
+    let fewer = (1..=16).filter(|t| in_sight(&s, &format!("Pista {t}"))).count();
+    assert!(tracks >= fewer + 4, "{tracks} tracks without the editor, {fewer} with it");
+    s.app.selected_clip = None;
+    // Not at once: the second click of a double click lands where the first did.
+    s.frames(4);
+    assert!((panel_top(&s) - open).abs() < 2.0, "{open} → {}", panel_top(&s));
+    s.frames(40);
+    assert!((panel_top(&s) - empty).abs() < 2.0);
+    // The devices always have something to show: their tab keeps its height.
+    s.app.detail = crate::app::Detail::Devices;
+    s.frames(40);
+    assert!((panel_top(&s) - open).abs() < 2.0, "{open} → {}", panel_top(&s));
+}
+
+/// The zoom fits a whole song: at its least, five minutes at 140 BPM in a
+/// narrow window; «Ver todo» fits the 104 bars of the audit's song.
+#[test]
+fn the_whole_song_fits_in_the_arrangement() {
+    use crate::arrangement::{fit_zoom, ZOOM_MIN};
+    assert!(ZOOM_MIN * 700.0 <= 1000.0 - 150.0 - 190.0 - 200.0, "five minutes at 140 BPM in a window 1000 wide");
+    let mut s = busy(4);
+    s.size = vec2(1000.0, 720.0);
+    let beats = 104.0 * 4.0;
+    s.app.project.tracks[0].arrangement[0].length = beats;
+    s.frames(4);
+    s.click("Ver todo");
+    s.frames(4);
+    let ppb = s.app.arrangement.pixels_per_beat;
+    // The ruler's «1» is 3 points after the song's start.
+    let end = painted(&s, "1").left() - 3.0 + ppb * beats as f32;
+    assert!(end <= 1000.0, "the song ends at {end}");
+    assert!(end > 900.0, "and fills the view: {end}");
+    assert_eq!(s.app.arrangement.scroll_x, 0.0);
+    assert!((fit_zoom(beats, 600.0) - 584.0 / 416.0).abs() < 1e-4);
+    assert_eq!(fit_zoom(20_000.0, 600.0), ZOOM_MIN);
+}
+
+/// With more tracks than fit, the returns narrow to their fader and pan, and
+/// the tracks keep the width.
+#[test]
+fn the_returns_narrow_when_the_tracks_dont_fit() {
+    let width = |s: &Studio, name: &str| s.seen.iter().find(|w| w.text == format!("Pista {name}") && w.role != "Texto").map(|w| w.rect.width()).unwrap();
+    let mut s = busy(4);
+    s.app.view = View::Session;
+    s.frames(6);
+    assert!(width(&s, "A Reverb") > 100.0, "with room, as wide as a track");
+    let mut s = busy(16);
+    s.app.view = View::Session;
+    s.frames(6);
+    assert!(width(&s, "A Reverb") < 70.0 && width(&s, "Pista 1") > 100.0);
+}
+
 /// The pictures of the audit's problems, before and after:
 /// `PULSE_SHOTS=dir cargo test --release -p app many_tracks_shots -- --ignored`.
 #[test]
@@ -235,6 +309,20 @@ fn many_tracks_shots() {
     s.app.selected_clip = None;
     s.frames(4);
     shot(&mut s, "session-16-pistas");
+    // A clip open in the editor, at the panel's own height: the scenes stay.
+    let mut clip = MidiClip::new("Acordes", 16.0, s.app.project.tracks[0].color);
+    clip.notes.push(engine::model::Note::new(0.0, 4.0, 60, 0.8));
+    s.app.set_clip(0, 0, Some(Clip::Midi(clip)));
+    s.app.select_clip(ClipRef::Session { track: 0, slot: 0 });
+    s.app.settings.detail_share = None;
+    shot(&mut s, "session-con-editor");
+    // A song of 104 bars, whole.
+    s.app.selected_clip = None;
+    s.app.project.tracks[0].arrangement[0].length = 416.0;
+    s.app.view = View::Arrangement;
+    s.frames(40);
+    s.click("Ver todo");
+    shot(&mut s, "arrangement-104-compases");
     s.size = vec2(1000.0, 720.0);
     s.frames(6);
     shot(&mut s, "session-estrecha");

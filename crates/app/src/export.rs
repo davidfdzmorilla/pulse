@@ -2375,7 +2375,7 @@ mod playback {
         let sample = engine::Sample::from_channels(audio.clone(), audio.clone(), rate);
         let dir = std::env::temp_dir().join(format!("pulse-slice-play-{}", std::process::id()));
         let mode = crate::slicing::SliceMode::Transients;
-        let (sliced, _) = crate::slicing::slice(&sample, (0.0, 2.0), 120.0, mode, "Loop", &dir, PALETTE[1]).unwrap();
+        let (sliced, _) = crate::slicing::slice(&sample, (0.0, 2.0), 120.0, mode, crate::slicing::DEFAULT_SENSITIVITY, "Loop", &dir, PALETTE[1], None).unwrap();
         assert_eq!(sliced.clip.notes.len(), 4);
 
         let mut project = Project::empty();

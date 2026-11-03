@@ -293,7 +293,7 @@ impl PulseApp {
             ClipRef::Session { slot, .. } => ClipRef::Session { track: source + 1, slot },
             ClipRef::Arrangement { .. } => ClipRef::Arrangement { track: source + 1, index: 0 },
         });
-        let names: Vec<String> = chords.iter().map(|c| c.2.name()).collect();
+        let names: Vec<String> = chords.iter().map(|c| c.2.name_in(Some(key))).collect();
         self.status = Some(format!("Canción en {}: {} notas de melodía, acordes {}, bajo y batería {}", key.name(), melody.len(), names.join(" "), style.label()));
     }
 }

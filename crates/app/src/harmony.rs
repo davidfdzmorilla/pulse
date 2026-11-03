@@ -158,8 +158,8 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         ui.label(RichText::new(format!("Acordes de {}", key.name())).strong());
         match previous {
             Some(p) if !suggested.is_empty() => {
-                let names: Vec<String> = suggested.iter().map(|&d| chords[d].name()).collect();
-                ui.label(RichText::new(format!("Después de {} suelen ir: {}", p.name(), names.join(", "))).color(TEXT_DIM).size(10.5));
+                let names: Vec<String> = suggested.iter().map(|&d| chords[d].name_in(Some(key))).collect();
+                ui.label(RichText::new(format!("Después de {} suelen ir: {}", p.name_in(Some(key)), names.join(", "))).color(TEXT_DIM).size(10.5));
             }
             _ => {
                 ui.label(RichText::new("Se escriben en el marcador naranja, uno detrás de otro").color(TEXT_DIM).size(10.5));
@@ -168,7 +168,7 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         egui::Grid::new("diatonic").spacing(egui::vec2(3.0, 3.0)).show(ui, |ui| {
             for (d, c) in chords.iter().enumerate() {
                 let numeral = c.numeral(key).unwrap_or_default();
-                let mut text = RichText::new(format!("{numeral}\n{}", c.name()));
+                let mut text = RichText::new(format!("{numeral}\n{}", c.name_in(Some(key))));
                 if suggested.contains(&d) {
                     text = text.color(ACCENT);
                 }
@@ -180,7 +180,7 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         });
         if key.minor {
             let five = chord::on_degree(key, 4, settings.sevenths, true);
-            if ui.button(format!("V {} (menor armónica)", five.name())).on_hover_text("La dominante mayor, que lleva con más fuerza a la tónica").clicked() {
+            if ui.button(format!("V {} (menor armónica)", five.name_in(Some(key)))).on_hover_text("La dominante mayor, que lleva con más fuerza a la tónica").clicked() {
                 chosen = Some((vec![five], false));
             }
         }
@@ -197,7 +197,7 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         ui.label(RichText::new("Progresiones").color(TEXT_DIM).size(10.5));
         for progression in chord::progressions(key) {
             let chords: Vec<Chord> = progression.degrees.iter().map(|&d| chord::on_degree(key, d, settings.sevenths, progression.major_five)).collect();
-            let names: Vec<String> = chords.iter().map(|c| c.name()).collect();
+            let names: Vec<String> = chords.iter().map(|c| c.name_in(Some(key))).collect();
             if ui.button(progression.name).on_hover_text(format!("{} (si no caben, el clip se alarga)", names.join(" – "))).clicked() {
                 chosen = Some((chords, true));
             }
@@ -207,7 +207,7 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
     let (chords, progression) = chosen?;
     let (before, from) = (clip.clone(), *at);
     let (added, pitches) = write(clip, at, settings.length, &chords, key, sig.bar());
-    let progression = progression.then(|| chords.iter().map(|c| c.name()).collect::<Vec<_>>().join(" "));
+    let progression = progression.then(|| chords.iter().map(|c| c.name_in(key)).collect::<Vec<_>>().join(" "));
     Some(Written { added, pitches, before, at: from, progression })
 }
 

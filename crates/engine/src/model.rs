@@ -2343,6 +2343,24 @@ impl Default for TunerParams {
     }
 }
 
+impl TunerParams {
+    /// Factory settings, «Categoría · Nombre». They keep the device's scale
+    /// (see `devices::effect_presets`).
+    pub fn presets() -> Vec<(&'static str, TunerParams)> {
+        let d = TunerParams::default();
+        vec![
+            // At once: the stepped, robotic sound of trap and hyperpop.
+            ("Afinación · Dura (0 ms)", TunerParams { speed_ms: 0.0, humanize: 0.0, amount: 1.0, ..d }),
+            // Quick but with a hint of glide: modern pop, in tune without the steps.
+            ("Afinación · Rápida", TunerParams { speed_ms: 8.0, humanize: 0.15, amount: 1.0, ..d }),
+            // Long notes keep their vibrato: sounds sung, not tuned.
+            ("Afinación · Natural", TunerParams { speed_ms: 35.0, humanize: 0.5, amount: 1.0, ..d }),
+            // Slow and part of the way: only what drifts off is brought back.
+            ("Afinación · Suave", TunerParams { speed_ms: 90.0, humanize: 0.8, amount: 0.75, ..d }),
+        ]
+    }
+}
+
 /// Takes down the voice's esses and hisses when they jump out: what is over
 /// `freq_hz`, while it is over the threshold, at most `range_db`.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -3286,6 +3304,7 @@ impl Effect {
             Effect::Convolution(_) => ConvolutionParams::presets().into_iter().map(|(n, p)| (n, Effect::Convolution(p))).collect(),
             Effect::Vocoder(_) => VocoderParams::presets().into_iter().map(|(n, p)| (n, Effect::Vocoder(p))).collect(),
             Effect::VoiceShift(_) => VoiceShiftParams::presets().into_iter().map(|(n, p)| (n, Effect::VoiceShift(p))).collect(),
+            Effect::Tuner(_) => TunerParams::presets().into_iter().map(|(n, p)| (n, Effect::Tuner(p))).collect(),
             _ => Vec::new(),
         }
     }

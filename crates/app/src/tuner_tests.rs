@@ -95,3 +95,33 @@ fn a_tuner_is_saved_and_needs_a_pulse_that_knows_it() {
     // Not among a synth's own effects.
     assert!(!Effect::Tuner(Default::default()).fits_in_synths());
 }
+
+/// Its presets go from hard (at once, the trap sound) to soft (only part of the
+/// way), and keep the scale chosen on the device.
+#[test]
+fn the_tuners_presets_go_from_hard_to_soft_and_keep_the_scale() {
+    let presets = Effect::Tuner(Default::default()).factory_presets();
+    let names: Vec<&str> = presets.iter().map(|(n, _)| *n).collect();
+    assert_eq!(names, ["Afinación · Dura (0 ms)", "Afinación · Rápida", "Afinación · Natural", "Afinación · Suave"]);
+    let params: Vec<TunerParams> = presets.iter().map(|(_, e)| match e { Effect::Tuner(p) => *p, _ => unreachable!() }).collect();
+    assert_eq!(params[0].speed_ms, 0.0);
+    assert!(params.windows(2).all(|w| w[0].speed_ms < w[1].speed_ms && w[0].humanize <= w[1].humanize), "{params:?}");
+    // Applied on a Tuner in E minor, it stays in E minor.
+    let own = Effect::Tuner(TunerParams { scale: TunerScale::Key { tonic: 4, minor: true }, ..Default::default() });
+    let Effect::Tuner(applied) = crate::devices::keep_own_settings(presets[0].1, &own) else { unreachable!() };
+    assert_eq!((applied.speed_ms, applied.scale), (0.0, TunerScale::Key { tonic: 4, minor: true }));
+    // Heard: the hard one takes the flat F# to F#; the soft one leaves some of it.
+    let heard = |p: TunerParams| {
+        let mut project = project(TunerScale::Chromatic);
+        project.tracks[0].devices[0].effect = Effect::Tuner(TunerParams { scale: TunerScale::Chromatic, ..p });
+        let mut app = PulseApp::headless(project);
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        app.sync_all();
+        played(&mut app, &mut engine)
+    };
+    let (hard, soft) = (heard(params[0]), heard(params[3]));
+    println!("sung 66.40: hard {hard:.2}, soft {soft:.2}");
+    assert!((hard - 66.0).abs() < 0.05, "{hard}");
+    assert!(soft > 66.05 && soft < 66.3, "{soft}");
+}

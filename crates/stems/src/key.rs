@@ -5,7 +5,19 @@
 /// Kessler, 1982), from the tonic up.
 const MAJOR: [f64; 12] = [6.35, 2.23, 3.48, 2.33, 4.38, 4.09, 2.52, 5.19, 2.39, 3.66, 2.29, 2.88];
 const MINOR: [f64; 12] = [6.33, 2.68, 3.52, 5.38, 2.60, 3.53, 2.54, 4.75, 3.98, 2.69, 3.34, 3.17];
-const NAMES: [&str; 12] = ["Do", "Do#", "Re", "Mib", "Mi", "Fa", "Fa#", "Sol", "Lab", "La", "Sib", "Si"];
+/// Note names without a key: the commonest spelling of each black key.
+pub const NAMES: [&str; 12] = ["Do", "Do#", "Re", "Mib", "Mi", "Fa", "Fa#", "Sol", "Lab", "La", "Sib", "Si"];
+const SHARPS: [&str; 12] = ["Do", "Do#", "Re", "Re#", "Mi", "Fa", "Fa#", "Sol", "Sol#", "La", "La#", "Si"];
+const FLATS: [&str; 12] = ["Do", "Reb", "Re", "Mib", "Mi", "Fa", "Solb", "Sol", "Lab", "La", "Sib", "Si"];
+
+/// The name of pitch class `class` (0 = C), spelt as `key` writes it (see
+/// [`Key::spell`]), or the commonest spelling without one.
+pub fn note_name(class: u8, key: Option<Key>) -> &'static str {
+    match key {
+        Some(key) => key.spell(class),
+        None => NAMES[class as usize % 12],
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Key {
@@ -98,9 +110,38 @@ impl Key {
         [false, true].into_iter().flat_map(|minor| (0..12).map(move |tonic| Key { tonic, minor }))
     }
 
-    /// «Mi menor», «Do mayor».
+    /// Whether its key signature has flats (Some(true)) or sharps (Some(false));
+    /// None for C major and A minor, which have neither. G♭ major and D♯ minor
+    /// are taken as F♯ major and E♭ minor, the commoner ones.
+    pub fn flats(&self) -> Option<bool> {
+        let relative_major = if self.minor { (self.tonic + 3) % 12 } else { self.tonic % 12 };
+        match relative_major {
+            0 => None,
+            1 | 3 | 5 | 8 | 10 => Some(true),
+            6 => Some(self.minor),
+            _ => Some(false),
+        }
+    }
+
+    /// The name of pitch class `class` (0 = C) in this key: with flats in keys
+    /// with flats (Reb in F minor), sharps in those with sharps (Do# in A
+    /// major). A minor key's raised seventh, the third of its major V, is a
+    /// sharp in any (Do# in D minor).
+    pub fn spell(&self, class: u8) -> &'static str {
+        let class = class as usize % 12;
+        if self.minor && class == (self.tonic as usize + 11) % 12 {
+            return SHARPS[class];
+        }
+        match self.flats() {
+            Some(true) => FLATS[class],
+            Some(false) => SHARPS[class],
+            None => NAMES[class],
+        }
+    }
+
+    /// «Mi menor», «Do mayor», «Reb mayor».
     pub fn name(&self) -> String {
-        format!("{} {}", NAMES[self.tonic as usize % 12], if self.minor { "menor" } else { "mayor" })
+        format!("{} {}", self.spell(self.tonic), if self.minor { "menor" } else { "mayor" })
     }
 }
 
@@ -141,6 +182,34 @@ pub fn chroma(mono: &[f32], rate: f32) -> [f64; 12] {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Each key spells its notes as its key signature does.
+    #[test]
+    fn notes_are_spelt_as_the_key_writes_them() {
+        let key = |tonic: u8, minor: bool| Key { tonic, minor };
+        let f_minor = key(5, true);
+        let spelt: Vec<&str> = (0..7).map(|d| f_minor.spell(f_minor.degree(d))).collect();
+        assert_eq!(spelt, ["Fa", "Sol", "Lab", "Sib", "Do", "Reb", "Mib"]);
+        let e_major = key(4, false);
+        let spelt: Vec<&str> = (0..7).map(|d| e_major.spell(e_major.degree(d))).collect();
+        assert_eq!(spelt, ["Mi", "Fa#", "Sol#", "La", "Si", "Do#", "Re#"]);
+        // The raised seventh of a minor key with flats is a sharp.
+        assert_eq!(key(2, true).spell(1), "Do#");
+        assert_eq!(key(7, true).spell(6), "Fa#");
+        // Without accidentals of its own, the usual names.
+        assert_eq!((key(0, false).spell(10), key(9, true).spell(3)), ("Sib", "Mib"));
+        // In every key with a signature, its seven notes have seven letters
+        // (but those of six, F# major and Eb minor, whose E# and Cb are
+        // written Fa and Si).
+        let six = |k: &Key| (k.tonic, k.minor) == (6, false) || (k.tonic, k.minor) == (3, true);
+        for k in Key::all().filter(|k| k.flats().is_some() && !six(k)) {
+            let letters: std::collections::BTreeSet<&str> = (0..7).map(|d| k.spell(k.degree(d)).trim_end_matches(['#', 'b'])).collect();
+            assert_eq!(letters.len(), 7, "{}: {letters:?}", k.name());
+        }
+        let names: Vec<String> = [key(1, false), key(8, false), key(6, false), key(1, true), key(8, true), key(3, true), key(10, true)].iter().map(Key::name).collect();
+        assert_eq!(names, ["Reb mayor", "Lab mayor", "Fa# mayor", "Do# menor", "Sol# menor", "Mib menor", "Sib menor"]);
+        assert_eq!((note_name(1, None), note_name(1, Some(f_minor)), note_name(1, Some(key(9, false)))), ("Do#", "Reb", "Do#"));
+    }
 
     fn weights(pitches: &[u8]) -> [f64; 12] {
         let mut w = [0.0; 12];

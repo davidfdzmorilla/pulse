@@ -34,7 +34,11 @@ pub(crate) const LANE_MAX: f32 = 200.0;
 /// The grip at the bottom of a track's header that changes its height.
 const HEIGHT_GRAB: f32 = 4.0;
 /// How close to an edge of the view a dragged clip scrolls it.
-const AUTOSCROLL_EDGE: f32 = 24.0;
+pub(crate) const AUTOSCROLL_EDGE: f32 = 24.0;
+/// The zoom's range, points per beat. At the least, five minutes at 140 BPM
+/// (700 beats) fit in 420 points: a whole song in a narrow window.
+pub const ZOOM_MIN: f32 = 0.6;
+pub const ZOOM_MAX: f32 = 60.0;
 const EDGE_GRAB: f32 = 6.0;
 const AUTO_H: f32 = 64.0;
 const POINT_GRAB: f32 = 6.0;
@@ -384,9 +388,16 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let state = app.audio.state();
 
     // Toolbar.
+    let song_end = app.project.tracks.iter().map(|t| t.arrangement_end()).fold(0.0, f64::max);
+    let mut to_start = false;
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new("Zoom").color(TEXT_DIM).size(10.5));
-        ui.add(egui::Slider::new(&mut app.arrangement.pixels_per_beat, 3.0..=60.0).logarithmic(true).show_value(false));
+        ui.add(egui::Slider::new(&mut app.arrangement.pixels_per_beat, ZOOM_MIN..=ZOOM_MAX).logarithmic(true).show_value(false));
+        let width = if app.arrangement.view.is_positive() { app.arrangement.view.width() } else { ui.available_width() - HEADER_W };
+        if ui.add_enabled(song_end > 0.0, egui::Button::new("Ver todo")).on_hover_text("Ajusta el zoom para ver la canción entera").clicked() {
+            app.arrangement.pixels_per_beat = fit_zoom(song_end, width);
+            to_start = true;
+        }
         ui.checkbox(&mut app.arrangement.follow, "Seguir cursor");
         let hint = crate::theme::keys("Doble clic: nuevo clip · clic en un clip: punto de corte (⌘E corta ahí) · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop");
         // Cut with "…" in a narrow window; the tooltip has all of it.
@@ -465,6 +476,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let view = ui.available_width();
             let x = position as f32 * ppb;
             scroll = scroll.horizontal_scroll_offset((x - view * 0.3).max(0.0));
+        } else if to_start {
+            scroll = scroll.horizontal_scroll_offset(0.0);
         } else if let Some(x) = autoscroll_x(app, ui) {
             scroll = scroll.horizontal_scroll_offset(x);
         }
@@ -526,7 +539,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             // The song's counts and bar lines, in its time signatures.
             let meter = app.project.meter;
             let bar_px = 4.0 * ppb.max(0.01) as f64;
-            let label_every = if bar_px < 24.0 { 4 } else if bar_px < 40.0 { 2 } else { 1 };
+            let label_every = label_every(bar_px);
             if ppb >= 8.0 {
                 meter.counts(0.0, total_beats, |beat, downbeat| {
                     if !downbeat {
@@ -538,9 +551,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let changes = meter.changes();
             meter.bars(0.0, total_beats + 1e-9, |bar, beat| {
                 let x = x_at(beat);
-                painter.line_segment([pos2(x, lanes_top), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::from_gray(58)));
                 // Where the signature changes (and at the start, if it isn't 4/4), it says so.
                 let change = changes.iter().find(|c| c.bar as i64 == bar).filter(|c| c.bar > 0 || !meter.is_common());
+                // Zoomed far out, only the numbered bars have a line: not a wash of grey.
+                if bar_px >= 6.0 || bar % label_every == 0 || change.is_some() {
+                    painter.line_segment([pos2(x, lanes_top), pos2(x, rect.bottom())], Stroke::new(1.0, Color32::from_gray(58)));
+                }
                 if bar % label_every == 0 || change.is_some() {
                     painter.line_segment(
                         [pos2(x, rect.top() + LOOP_H + MARKER_H + 8.0), pos2(x, lanes_top)],
@@ -747,9 +763,21 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     app.update_clip_gesture(ui, &clip_rects, &lane_rects, &[]);
 }
 
+/// Every how many bars the ruler numbers them, with bars `bar_px` wide: the
+/// numbers at least 28 points apart.
+fn label_every(bar_px: f64) -> i64 {
+    [1, 2, 4, 8, 16, 32].into_iter().find(|&n| bar_px * n as f64 >= 28.0).unwrap_or(64)
+}
+
+/// The zoom at which a song `beats` long fills `width` points (a little room
+/// left at the end), within the zoom's range.
+pub fn fit_zoom(beats: f64, width: f32) -> f32 {
+    ((width - 16.0).max(1.0) / beats.max(1.0) as f32).clamp(ZOOM_MIN, ZOOM_MAX)
+}
+
 /// How fast (points a frame) a drag at `p` scrolls the view between `lo` and
 /// `hi`: faster the further past its edge, none away from them.
-fn edge_speed(p: f32, lo: f32, hi: f32) -> f32 {
+pub(crate) fn edge_speed(p: f32, lo: f32, hi: f32) -> f32 {
     let step = |past: f32| (past / AUTOSCROLL_EDGE).min(3.0) * 8.0;
     if p < lo + AUTOSCROLL_EDGE {
         -step(lo + AUTOSCROLL_EDGE - p)

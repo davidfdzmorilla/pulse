@@ -615,21 +615,45 @@ fn effect_presets(ui: &mut egui::Ui, index: usize, device: Device, presets: Vec<
                 group = category;
                 ui.label(egui::RichText::new(category.to_uppercase()).color(TEXT_DIM).size(10.0));
             }
-            if ui.button(short).clicked() {
-                // A Vocoder's source is whose sound it takes, or following
-                // MIDI, whose notes: kept between the same kind only.
-                let same = match (effect, device.effect) {
-                    (Effect::Vocoder(a), Effect::Vocoder(b)) => a.midi == b.midi,
-                    _ => true,
-                };
-                if let (Some(slot), Some(source), true) = (effect.sidechain_mut(), device.effect.sidechain(), same) {
-                    *slot = Some(source);
-                }
+            let hint = preset_hint(&effect);
+            let mut button = ui.button(short);
+            if !hint.is_empty() {
+                button = button.on_hover_text(hint);
+            }
+            if button.clicked() {
+                effect = keep_own_settings(effect, &device.effect);
                 actions.push(Action::Replace(index, Device { effect, ..device }));
                 ui.close();
             }
         }
     });
+}
+
+/// What a factory preset sets, for its tooltip (empty when its name says it).
+fn preset_hint(effect: &Effect) -> String {
+    match effect {
+        Effect::Tuner(p) => format!("Speed {:.0} ms · Humanize {:.0} % · Amount {:.0} %. Mantiene la escala elegida", p.speed_ms, p.humanize * 100.0, p.amount * 100.0),
+        _ => String::new(),
+    }
+}
+
+/// `preset` with what is the device's own, not the sound's: its sidechain
+/// source and a Tuner's scale.
+pub(crate) fn keep_own_settings(mut preset: Effect, own: &Effect) -> Effect {
+    // A Vocoder's source is whose sound it takes, or following MIDI, whose
+    // notes: kept between the same kind only.
+    let same = match (preset, *own) {
+        (Effect::Vocoder(a), Effect::Vocoder(b)) => a.midi == b.midi,
+        _ => true,
+    };
+    if let (Some(slot), Some(source), true) = (preset.sidechain_mut(), own.sidechain(), same) {
+        *slot = Some(source);
+    }
+    // A Tuner's presets are about how it tunes, not to which notes.
+    if let (Effect::Tuner(p), Effect::Tuner(o)) = (&mut preset, own) {
+        p.scale = o.scale;
+    }
+    preset
 }
 
 fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) -> egui::Response {

@@ -625,7 +625,7 @@ fn voice_effects_do_not_depend_on_the_block_size() {
 #[test]
 fn jumps_and_presets_stay_in_bounds() {
     let voice = ah(160.0, 2.0);
-    for effect in [Effect::Vocoder(Default::default()), Effect::VoiceShift(Default::default())] {
+    for effect in [Effect::Vocoder(Default::default()), Effect::VoiceShift(Default::default()), Effect::Tuner(Default::default())] {
         let mut fx = EffectProcessor::new(&effect, SR);
         let (mut l, mut r) = (voice.clone(), voice.clone());
         for (k, (a, b)) in l.chunks_mut(480).zip(r.chunks_mut(480)).enumerate() {

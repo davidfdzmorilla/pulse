@@ -4,14 +4,22 @@
 //! in the settings), else 45 % or what two octaves of notes need, whichever is
 //! more, leaving some of the Session or the Arrangement in sight. Maximized
 //! (⇧⌘E, double click on its edge, «Maximizar») it fills almost all of it.
+//! With nothing to edit (the «Clip» tab, no clip selected) it is only its tabs
+//! and a line saying how to open one: the Session or the Arrangement get the rest.
 
 use crate::app::{Detail, PulseApp};
 use crate::theme::{self, TEXT_DIM};
 use crate::{devices, piano_roll, widgets};
 use eframe::egui::{self, vec2, RichText};
 
-/// The panel is never shorter.
+/// The panel is never shorter, except when empty.
 pub const MIN: f32 = 200.0;
+/// Its height with nothing to edit: the tabs and one line.
+pub const EMPTY: f32 = 62.0;
+/// How long it waits, with nothing to edit and no button down, before folding:
+/// a double click in an empty place (a new clip) lets go of the clip first,
+/// and what is under the second click must not have moved.
+pub const FOLD_AFTER: f64 = 0.5;
 /// The share of the window it starts at, if two octaves fit in it.
 pub const SHARE: f32 = 0.45;
 /// How tall two octaves of the editor are, until it says (see `PulseApp::editor_need`).
@@ -39,6 +47,35 @@ pub fn height(room: f32, share: Option<f32>, need: f32, maximized: bool) -> f32 
 }
 
 impl PulseApp {
+    /// Whether the panel has nothing to show: the clip editor with no clip.
+    pub fn detail_empty(&self) -> bool {
+        self.detail == Detail::Clip && !self.editor_max && self.selected_clip.filter(|&c| self.clip(c).is_some()).is_none()
+    }
+
+    /// Whether the panel folds to its tabs this frame: empty for `FOLD_AFTER`
+    /// with no button down (at once when the app starts). A clip opens it at once.
+    pub(crate) fn fold_detail(&mut self, ctx: &egui::Context) -> bool {
+        if !self.detail_empty() {
+            self.detail_empty_since = None;
+            self.detail_folded = false;
+            return false;
+        }
+        let (now, down) = ctx.input(|i| (i.time, i.pointer.any_down()));
+        let since = *self.detail_empty_since.get_or_insert(now);
+        if !self.detail_folded {
+            let starting = since == now && ctx.cumulative_frame_nr() < 2;
+            if starting || (!down && now - since >= FOLD_AFTER) {
+                self.detail_folded = true;
+            } else if !down {
+                ctx.request_repaint_after(std::time::Duration::from_secs_f64(FOLD_AFTER - (now - since) + 0.01));
+            } else {
+                // Held down: it waits from when the button comes up.
+                self.detail_empty_since = Some(now);
+            }
+        }
+        self.detail_folded
+    }
+
     /// Maximizes the panel, or brings it back to its height.
     pub fn toggle_editor_max(&mut self) {
         self.editor_max = !self.editor_max;
@@ -118,6 +155,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
     ui.add_space(4.0);
     let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(4)).corner_radius(2);
+    if app.detail_folded {
+        frame.show(ui, |ui| {
+            ui.set_min_width(ui.available_width());
+            let text = "Selecciona un clip para editarlo · doble clic en un slot vacío o en una pista del Arrangement crea uno nuevo";
+            ui.add(egui::Label::new(RichText::new(text).color(TEXT_DIM).size(10.5)).truncate()).on_hover_text(text);
+        });
+        return;
+    }
     frame.show(ui, |ui| {
         ui.set_min_size(ui.available_size());
         // What doesn't fit scrolls inside: the panel never grows to hold it, so

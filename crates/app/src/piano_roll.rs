@@ -449,8 +449,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let r = Rect::from_min_max(pos2(x_of(from) + 1.0, strip_y + 1.0), pos2(x_of(to) - 1.0, strip_y + CHORD_H - 1.0));
                 painter.rect_filled(r, 2.0, Color32::from_gray(52));
                 let text = match key.and_then(|k| chord.numeral(k)) {
-                    Some(numeral) => format!("{} · {numeral}", chord.name()),
-                    None => chord.name(),
+                    Some(numeral) => format!("{} · {numeral}", chord.name_in(key)),
+                    None => chord.name_in(key),
                 };
                 painter.with_clip_rect(r.intersect(painter.clip_rect())).text(pos2(r.left() + 4.0, r.center().y), Align2::LEFT_CENTER, text, theme::small(), Color32::from_gray(225));
             }

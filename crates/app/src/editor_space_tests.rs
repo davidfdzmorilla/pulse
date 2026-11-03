@@ -82,11 +82,15 @@ fn a_clip_opened_shows_two_octaves() {
         // The Session's track names and the clip's slot are above the panel.
         let slot = s.seen.iter().filter(|x| x.text == "Bajo").map(|x| x.rect).min_by(|a, b| a.top().total_cmp(&b.top())).unwrap();
         assert!(slot.bottom() < panel_top(&s) - 40.0, "{w}×{h}: the Session is covered");
-        // Opened again, nothing moves.
+        // Closed, the panel is only its tabs; opened again, back where it was.
         let top = panel_top(&s);
+        let clip = s.app.selected_clip;
         s.app.selected_clip = None;
+        s.frames(40);
+        assert!(panel_top(&s) > h - 110.0, "{w}×{h}: with no clip, the view gets the room");
+        s.app.selected_clip = clip;
         s.frames(4);
-        assert!((panel_top(&s) - top).abs() < 2.0, "{w}×{h}: the panel stays when the clip closes");
+        assert!((panel_top(&s) - top).abs() < 2.0, "{w}×{h}: the panel comes back to its height");
     }
 }
 

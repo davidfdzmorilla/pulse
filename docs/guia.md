@@ -22,7 +22,7 @@ Alrededor de la vista están siempre las mismas piezas:
 
 - Arriba, el **transporte**: tempo, metrónomo, reproducir, parar, grabar, loop y más. Ver [[Transporte]].
 - A la izquierda, el **navegador**: instrumentos, efectos, plugins, muestras y tu biblioteca. **☰** lo muestra u oculta. Ver [[Navegador y biblioteca]].
-- Abajo, el **panel de detalle**: el editor del clip seleccionado o los dispositivos de la pista. {⇧Tab} cambia entre los dos. Arrastra su borde de arriba para darle más o menos sitio: Pulse recuerda la altura que eliges, también en otra ventana. Lo que no cabe se desplaza dentro con la rueda. **Maximizar** ({⇧⌘E}, o doble clic en el borde) hace que ocupe casi toda la ventana, y con lo mismo vuelve a su altura.
+- Abajo, el **panel de detalle**: el editor del clip seleccionado o los dispositivos de la pista. {⇧Tab} cambia entre los dos. Sin ningún clip seleccionado, en **Clip** se queda en una franja con sus pestañas, y la Session o el Arrangement ocupan el resto. Arrastra su borde de arriba para darle más o menos sitio: Pulse recuerda la altura que eliges, también en otra ventana. Lo que no cabe se desplaza dentro con la rueda. **Maximizar** ({⇧⌘E}, o doble clic en el borde) hace que ocupe casi toda la ventana, y con lo mismo vuelve a su altura.
 - Abajo del todo, la **barra de estado**: cuenta lo que acaba de pasar y por qué algo no se ha podido hacer. Si no hay mensaje, recuerda los atajos principales.
 
 ### Hacer sonar algo en un minuto
@@ -141,7 +141,9 @@ La vista Session es una cuadrícula de clips que suenan en bucle y lanzas cuando
 
 Cada pista es una columna de slots, y cada fila es una **escena**. Se ven las escenas que usas y una vacía más (8 como mínimo, hasta 16); al poner un clip en la última, aparece otra. A la derecha están el botón **+** (nueva pista MIDI), los retornos (**A Reverb** y **B Delay** en un proyecto nuevo) con su propio **+** (nuevo retorno) y la columna **Master** con las escenas.
 
-Con muchas pistas, los retornos y el Master se quedan fijos a la derecha, y el mezclador, abajo, con los botones **●** de armar a la vista. La rueda desplaza los clips arriba y abajo, y {⇧ + rueda} o el trackpad, a los lados; el mezclador va con ellos.
+Con muchas pistas, los retornos y el Master se quedan fijos a la derecha, y el mezclador, abajo, con los botones **●** de armar a la vista. Si las pistas no caben, los retornos se estrechan (su nombre entero sale al pasar el ratón) para dejarles más sitio. La rueda desplaza los clips arriba y abajo, y {⇧ + rueda} o el trackpad, a los lados; el mezclador va con ellos. Al arrastrar un clip cerca del borde, la vista se desplaza sola.
+
+Con el editor abierto y poco sitio, la Session deja a la vista al menos seis escenas: el mezclador cede antes y se desplaza con la rueda.
 
 ### Lanzar y parar clips
 
@@ -187,7 +189,7 @@ Clic derecho en un clip:
 
 El Arrangement es la línea de tiempo de la canción: cada pista es una fila, y los clips se colocan de izquierda a derecha en el orden en que suenan.
 
-Arriba está la **franja del loop**, debajo la de **marcadores** y después la **regla** con los números de compás. En la barra de herramientas tienes el **Zoom** y **Seguir cursor**, que desplaza la vista con el cursor al reproducir.
+Arriba está la **franja del loop**, debajo la de **marcadores** y después la **regla** con los números de compás. En la barra de herramientas tienes el **Zoom**, **Ver todo** (ajusta el zoom para que quepa la canción entera) y **Seguir cursor**, que desplaza la vista con el cursor al reproducir. Con el zoom al mínimo cabe una canción de cinco minutos aunque la ventana sea estrecha; la regla numera entonces cada 4, 8 o 16 compases.
 
 > Consejo: el zoom también decide la rejilla. Con zoom alto los clips se ajustan a tiempos; con zoom bajo, a compases.
 
@@ -889,7 +891,7 @@ Al mover notas con las flechas, la vista las sigue: si iban a salirse por arriba
 
 ### Más sitio para las notas
 
-Al abrir un clip, el panel de detalle tiene sitio para dos octavas de notas, y la Session o el Arrangement siguen a la vista encima.
+Al abrir un clip, el panel de detalle tiene sitio para dos octavas de notas, y la Session o el Arrangement siguen a la vista encima. Sin clip, el panel se recoge en una franja y vuelve a su altura al abrir otro.
 
 - **Maximizar** el editor: el botón de la derecha del panel, {⇧⌘E} o doble clic en su borde de arriba. Ocupa casi toda la ventana; con lo mismo vuelve a su altura.
 - **Más alto o más bajo**: arrastra el borde. Pulse se acuerda de la altura para la próxima vez.
@@ -1132,6 +1134,8 @@ La escala es la tonalidad de tu canción. Con ella, el Editor MIDI te enseña qu
 > Nota: mi menor y sol mayor usan las mismas notas. Si sale la relativa y no es la que quieres, elígela a mano.
 
 La escala se guarda con el proyecto y se deshace con {⌘Z}. Las pistas de batería no la usan.
+
+Los acordes (en el editor, en **Acordes** y en los pads troceados) y las escalas se escriben como en la armadura: con bemoles en las que tienen bemoles (en Fa menor, **Reb** y **Mib**) y con sostenidos en las que tienen sostenidos (en Mi mayor, **Do#** y **Sol#**). La sensible de una escala menor va siempre con sostenido (**Do#** en Re menor). Sin escala, o en Do mayor y La menor, se usan los nombres de siempre (Do#, Mib, Fa#, Lab, Sib).
 
 ### Escribir notas en la escala
 
@@ -1416,9 +1420,20 @@ Dos formas de partir un audio: en golpes, para tocarlos desde pads, o en sus ins
 
 1. Abre el clip en el [[Editor de audio]].
 2. En **Trocear**, elige cómo cortar: **Transitorios** (en cada golpe), **1/16**, **1/8** o **1/4**.
-3. Pulsa **A Drum Pads**.
+3. Con **Transitorios**, ajusta la **sensibilidad**: más alta, más trozos (corta también en los golpes suaves); más baja, solo en los fuertes.
+4. Pulsa **A Drum Pads**.
 
-El clip se corta en golpes, hasta 16, cada uno en un pad de un **Drum Pads** en una pista nueva. Un clip MIDI los toca en orden en el mismo sitio. Al cambiar el tempo, el groove lo sigue sin estirar el audio, y en el [[Editor MIDI]] puedes reordenar o repetir golpes.
+El clip se corta en golpes, hasta 16, cada uno en un pad de un **Drum Pads** en una pista nueva, «… troceado». Un clip MIDI los toca en orden en el mismo sitio, con cada nota en la rejilla. Al cambiar el tempo, el groove lo sigue sin estirar el audio, y en el [[Editor MIDI]] puedes reordenar o repetir golpes.
+
+- **Loops de acordes**: por transitorios, también corta donde cambia el acorde, aunque no haya golpe. Para trocear acordes tenidos en tiempos, usa **1/4** o **1/8**.
+- **Nombres de los pads**: el número del trozo y su acorde («05 · Mib»), o, en una batería, dónde empieza en el loop («05 · 2.1» es el compás 2, tiempo 1). Así se distinguen en las filas del editor. Los acordes se escriben como en la escala del proyecto (Reb en Fa menor).
+- Si una rejilla da más de 16 trozos, se ensancha hasta que caben, y la barra de estado lo dice (por ejemplo, «cada 1/8: a 1/16 no caben en 16 pads»).
+
++++ Cómo encuentra los cortes
+- Un golpe es una subida de nivel en alguna banda de frecuencias, más marcada en los agudos. La sensibilidad baja o sube el umbral (de cuatro veces a un cuarto del normal); al 50 % corta como siempre.
+- Un cambio de acorde cuenta si el audio tiene una tonalidad clara y el acorde nuevo dura al menos dos tiempos (no una nota de paso). El corte cae en el ataque que haya justo ahí.
+- Una nota a menos de 20 ms de una semicorchea cae en ella.
++++
 
 El Drum Pads también tiene **Trocear archivo…**, para cortar un audio directamente en sus pads.
 
@@ -2002,6 +2017,7 @@ Un afinador de voz, como Auto-Tune. Lleva cada nota a la nota más cercana de la
 - **Speed**: lo que tarda en llegar a la nota. A 0 ms va al instante y cada cambio de nota es un salto: el efecto robótico del pop y el trap. Con 20–50 ms afina sin que se note; con 100–400 ms, solo corrige lo que se aleja mucho.
 - **Humanize**: cuanto más alto, más libre deja una nota que mantienes (su vibrato se queda), mientras las notas cortas siguen afinadas.
 - **Amount**: cuánto del camino recorre: al 100 % llega a la nota; al 50 %, se queda a medias.
+- **Presets**, en su cabecera, para empezar: **Dura (0 ms)**, el salto robótico del trap; **Rápida**, afinada sin escalones (pop); **Natural**, que deja el vibrato de las notas largas; y **Suave**, que solo devuelve lo que se va. Mantienen la escala que hayas elegido.
 
 +++ Cómo funciona
 - Con **Del proyecto**, si el proyecto no tiene escala, usa todas las notas, y cambia en cuanto le pongas una.

@@ -8,10 +8,8 @@ use eframe::egui::{self, RichText};
 use engine::model::{ArpMode, ChordParams, MidiDevice, MidiEffect, ScaleKey, MAX_MIDI_EFFECTS};
 use engine::Command;
 
-const NAMES: [&str; 12] = ["Do", "Do#", "Re", "Mib", "Mi", "Fa", "Fa#", "Sol", "Lab", "La", "Sib", "Si"];
-
 fn key_name(key: ScaleKey) -> String {
-    format!("{} {}", NAMES[key.tonic as usize % 12], if key.minor { "menor" } else { "mayor" })
+    stems::key::Key { tonic: key.tonic, minor: key.minor }.name()
 }
 
 fn mode_label(mode: ArpMode) -> &'static str {

@@ -282,6 +282,10 @@ pub struct PulseApp {
     /// How tall the detail panel has to be for two octaves of notes (see
     /// `detail::height`): a guess until the editor says.
     pub editor_need: f32,
+    /// Since when (the UI's clock) the panel has had nothing to edit, and
+    /// whether it is folded to its tabs (see `PulseApp::fold_detail`).
+    pub(crate) detail_empty_since: Option<f64>,
+    pub(crate) detail_folded: bool,
     pub arrangement: arrangement::State,
     pub show_browser: bool,
     /// Decoded audio files by path.
@@ -326,6 +330,8 @@ pub struct PulseApp {
     pub touched_control: std::cell::Cell<Option<crate::midi_map::Control>>,
     /// How loops are cut into drum rack pads.
     pub slice_mode: crate::slicing::SliceMode,
+    /// How soft a hit «Transitorios» still cuts at, 0..1.
+    pub slice_sensitivity: f32,
     /// Shows where a clip will be sliced, to move, add or remove cuts by hand.
     pub show_cuts: bool,
     pub slice_cuts: Option<crate::slicing::SliceCuts>,
@@ -523,6 +529,8 @@ impl PulseApp {
             piano_roll: Default::default(),
             editor_max: false,
             editor_need: crate::detail::NEED_GUESS,
+            detail_empty_since: None,
+            detail_folded: false,
             arrangement: Default::default(),
             show_browser: true,
             samples: SampleCache::default(),
@@ -538,6 +546,7 @@ impl PulseApp {
             overridden: HashSet::new(),
             selected_pad: 0,
             slice_mode: crate::slicing::SliceMode::Transients,
+            slice_sensitivity: crate::slicing::DEFAULT_SENSITIVITY,
             show_cuts: false,
             slice_cuts: None,
             kick_window: None,
@@ -1718,9 +1727,9 @@ impl PulseApp {
             .unwrap_or(self.project.tempo);
         let color = self.project.tracks[track].color;
         let region = (0.0, sample.duration());
-        match crate::slicing::slice(&sample, region, bpm, self.slice_mode, &name, &self.slices_dir(&name), color) {
+        match crate::slicing::slice(&sample, region, bpm, self.slice_mode, self.slice_sensitivity, &name, &self.slices_dir(&name), color, self.project.key) {
             Ok((sliced, _)) => {
-                let pads = sliced.clip.notes.len();
+                let pads = crate::slicing::slices_text(sliced.clip.notes.len());
                 self.set_instrument(track, InstrumentKind::DrumRack(sliced.params));
                 self.project.tracks[track].samples = sliced.files;
                 self.sync_samples(track);
@@ -1728,9 +1737,9 @@ impl PulseApp {
                 match free {
                     Some(slot) => {
                         self.set_clip(track, slot, Some(Clip::Midi(sliced.clip)));
-                        self.status = Some(format!("{name}: {pads} trozos a {bpm:.1} BPM, clip en la escena {}", slot + 1));
+                        self.status = Some(format!("{name}: {pads} a {bpm:.1} BPM, clip en la escena {}", slot + 1));
                     }
-                    None => self.status = Some(format!("{name}: {pads} trozos (no quedan slots libres para el clip)")),
+                    None => self.status = Some(format!("{name}: {pads} (no quedan slots libres para el clip)")),
                 }
             }
             Err(error) => self.status = Some(error),
@@ -1751,9 +1760,10 @@ impl PulseApp {
         let dir = self.slices_dir(&audio.name);
         // The cuts edited by hand, if they are shown for this clip.
         let edited = self.show_cuts.then(|| self.cuts_for(clip_ref)).flatten();
+        let key = self.project.key;
         let result = match &edited {
-            Some(cuts) => crate::slicing::slice_at(&sample, region, bpm, cuts, &audio.name, &dir, audio.color).map(|s| (s, 0.0)),
-            None => crate::slicing::slice(&sample, region, bpm, mode, &audio.name, &dir, audio.color),
+            Some(cuts) => crate::slicing::slice_at(&sample, region, bpm, cuts, &audio.name, &dir, audio.color, key).map(|s| (s, 0.0)),
+            None => crate::slicing::slice(&sample, region, bpm, mode, self.slice_sensitivity, &audio.name, &dir, audio.color, key),
         };
         let (mut sliced, grid) = match result {
             Ok(result) => result,
@@ -1767,7 +1777,7 @@ impl PulseApp {
         sliced.clip.length = audio.length;
         sliced.params.tune = [audio.transpose; RACK_PADS];
         sliced.params.level = [engine::model::db_to_gain(audio.gain_db).min(1.0); RACK_PADS];
-        let pads = sliced.clip.notes.len();
+        let pads = crate::slicing::slices_text(sliced.clip.notes.len());
         let name = audio.name.clone();
         let midi = Clip::Midi(sliced.clip);
         let placed = match clip_ref {
@@ -1775,7 +1785,7 @@ impl PulseApp {
             ClipRef::Session { .. } => None,
         };
         let added = self.push_track(|_, color| {
-            let mut track = Track::new(format!("{name} Slices"), color, InstrumentKind::DrumRack(sliced.params));
+            let mut track = Track::new(format!("{name} troceado"), color, InstrumentKind::DrumRack(sliced.params));
             track.samples = sliced.files;
             match (clip_ref, placed) {
                 (ClipRef::Session { slot, .. }, _) => track.clips[slot] = Some(midi),
@@ -1789,8 +1799,14 @@ impl PulseApp {
             ClipRef::Session { slot, .. } => ClipRef::Session { track, slot },
             ClipRef::Arrangement { .. } => ClipRef::Arrangement { track, index: 0 },
         });
-        let grid_note = if grid > 0.0 { format!(" (rejilla de {grid} beats)") } else { String::new() };
-        self.status = Some(format!("{name}: {pads} trozos en un Drum Pads nuevo{grid_note}"));
+        // Said only when the grid had to widen to fit the pads.
+        let grid_note = match mode {
+            crate::slicing::SliceMode::Grid(asked) if edited.is_none() && grid > asked + 1e-9 => {
+                format!(" (cada {}: a {} no caben en {RACK_PADS} pads)", crate::slicing::grid_label(grid), crate::slicing::grid_label(asked))
+            }
+            _ => String::new(),
+        };
+        self.status = Some(format!("{name}: {pads} en un Drum Pads nuevo{grid_note}"));
     }
 
     fn push_track(&mut self, make: impl FnOnce(usize, [u8; 3]) -> Track) -> Option<usize> {
@@ -3048,16 +3064,20 @@ impl eframe::App for PulseApp {
             // egui only moves it while its edge is dragged.
             let room = ui.available_rect_before_wrap().height();
             let id = egui::Id::new("detail");
-            let height = detail::height(room, self.settings.detail_share, self.editor_need, self.editor_max);
+            // With nothing to edit, only its tabs: the view above gets the room.
+            let empty = self.fold_detail(&ctx);
+            let height = if empty { detail::EMPTY } else { detail::height(room, self.settings.detail_share, self.editor_need, self.editor_max) };
             let state = egui::containers::panel::PanelState { outer_rect: egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1.0, height)) };
             ctx.data_mut(|d| d.insert_persisted(id, state));
             let shown = egui::Panel::bottom(id)
                 .frame(frame)
-                .resizable(true)
-                .min_size(detail::MIN)
-                .max_size(detail::highest(room))
+                .resizable(!empty)
+                .min_size(if empty { detail::EMPTY } else { detail::MIN })
+                .max_size(if empty { detail::EMPTY } else { detail::highest(room) })
                 .show(ui, |ui| detail::show(self, ui));
-            self.follow_detail_edge(&ctx, id, shown.response.rect.height(), room);
+            if !empty {
+                self.follow_detail_edge(&ctx, id, shown.response.rect.height(), room);
+            }
             let frame = egui::Frame::new().fill(theme::BG).inner_margin(egui::Margin::same(6));
             egui::CentralPanel::default().frame(frame).show(ui, |ui| {
                 self.drop_targets.view = Some(ui.max_rect());

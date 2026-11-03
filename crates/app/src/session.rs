@@ -10,6 +10,12 @@ use engine::{Command, Target, NONE, MAX_RETURNS, NUM_SCENES, QUEUED_STOP};
 use std::sync::atomic::Ordering;
 
 const COL_W: f32 = 108.0;
+/// A return's column when the tracks don't all fit: its pan and fader still do.
+const RETURN_NARROW_W: f32 = 64.0;
+/// The scene rows the clips keep in sight over the mixer, if they have them,
+/// while that leaves the mixer at least `MIXER_SHARE` of the height.
+const SCENES_KEPT: usize = 6;
+const MIXER_SHARE: f32 = 0.45;
 const HEADER_H: f32 = 22.0;
 const SLOT_H: f32 = 22.0;
 const LAUNCH_W: f32 = 18.0;
@@ -124,11 +130,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let full = ui.available_rect_before_wrap();
     let returns = app.project.returns.len();
     let more_returns = returns < MAX_RETURNS;
-    let right_w = 10.0 + returns as f32 * (COL_W + 1.0) + if more_returns { PLUS_W + 1.0 } else { 0.0 } + 10.0 + COL_W + 1.0;
+    let right_w = |return_w: f32| 10.0 + returns as f32 * (return_w + 1.0) + if more_returns { PLUS_W + 1.0 } else { 0.0 } + 10.0 + COL_W + 1.0;
+    // When the tracks don't all fit, the returns narrow (they have no clips):
+    // the tracks keep more of the width.
+    let tracks_w = shown.len() as f32 * (COL_W + 1.0) + PLUS_W + 1.0;
+    let return_w = if tracks_w > full.width() - right_w(COL_W) { RETURN_NARROW_W } else { COL_W };
+    let right_w = right_w(return_w);
     let left_w = (full.width() - right_w).max((COL_W + 1.0).min(full.width()));
     // The mixer whole if it can be (its arm buttons at the bottom), leaving the
-    // clips a header and a few scenes; they scroll.
-    let bottom_h = sync.mixer_h.min((full.height() - (HEADER_H + 3.0 * (SLOT_H + 1.0))).max(full.height() * 0.4)).max(0.0);
+    // clips a header and some scenes (`SCENES_KEPT`, and the stop row); they
+    // scroll. Short of room, the mixer gives way first and scrolls.
+    let bottom_h = mixer_height(full.height(), sync.mixer_h, rows);
     let top_h = full.height() - bottom_h;
     let split = full.left() + left_w;
     let clips_rect = Rect::from_min_max(full.min, pos2(split, full.top() + top_h));
@@ -144,6 +156,15 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
     // The tracks' clips.
     let mut child = part(ui, clips_rect);
+    // A clip dragged near an edge of the clips scrolls them that way.
+    if let Some(pos) = ui.ctx().pointer_latest_pos().filter(|_| matches!(app.clip_gesture, Some(crate::clip_select::Gesture::SessionMove { .. }))) {
+        let (dx, dy) = (crate::arrangement::edge_speed(pos.x, clips_rect.left(), clips_rect.right()), crate::arrangement::edge_speed(pos.y, clips_rect.top() + HEADER_H, clips_rect.bottom()));
+        if (dx != 0.0 || dy != 0.0) && clips_rect.expand(crate::arrangement::AUTOSCROLL_EDGE).contains(pos) {
+            sync.x = (sync.x + dx).max(0.0);
+            sync.top = (sync.top + dy).max(0.0);
+            ui.ctx().request_repaint();
+        }
+    }
     let output = egui::ScrollArea::both().id_salt("session_clips").auto_shrink(false).scroll_bar_visibility(hidden).scroll_offset(vec2(sync.x, sync.top)).show(&mut child, |ui| {
         ui.horizontal_top(|ui| {
             ui.spacing_mut().item_spacing = vec2(1.0, 1.0);
@@ -214,21 +235,21 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.add_space(10.0);
             for r in 0..returns {
                 ui.vertical(|ui| {
-                    ui.set_width(COL_W);
+                    ui.set_width(return_w);
                     let target = Target::Return(r);
                     let name = app.project.returns[r].name.clone();
                     let color = theme::rgb(app.project.returns[r].color);
-                    let response = header(ui, &name, color, app.selected_target == target, Sense::click());
+                    let response = header(ui, &name, color, app.selected_target == target, Sense::click(), return_w);
                     if response.clicked() {
                         actions.push(Action::SelectTarget(target));
                     }
-                    let response = response.on_hover_text("Clic: seleccionar · clic derecho: nombre, color y eliminar");
+                    let response = response.on_hover_text(format!("{name} · clic: seleccionar · clic derecho: nombre, color y eliminar"));
                     widgets::edit_menu(&response, |ui| {
                         if crate::returns::header_menu(ui, &mut app.project.returns[r], r) {
                             actions.push(Action::DeleteReturn(r));
                         }
                     });
-                    let (rect, _) = ui.allocate_exact_size(vec2(COL_W, (SLOT_H + 1.0) * (rows as f32 + 1.0) - 1.0), Sense::hover());
+                    let (rect, _) = ui.allocate_exact_size(vec2(return_w, (SLOT_H + 1.0) * (rows as f32 + 1.0) - 1.0), Sense::hover());
                     ui.painter().rect_filled(rect, 2.0, theme::shade(SLOT, 0.8));
                 });
             }
@@ -249,7 +270,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.vertical(|ui| {
                 ui.set_width(COL_W);
                 let target = Target::Master;
-                if header(ui, "Master", theme::CONTROL_HOVER, app.selected_target == target, Sense::click()).clicked() {
+                if header(ui, "Master", theme::CONTROL_HOVER, app.selected_target == target, Sense::click(), COL_W).clicked() {
                     actions.push(Action::SelectTarget(target));
                 }
                 for slot in 0..rows {
@@ -276,7 +297,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let strip = ui.vertical(|ui| {
                     ui.set_width(COL_W);
                     ui.add_space(6.0);
-                    mixer_strip(app, ui, Target::Track(t));
+                    mixer_strip(app, ui, Target::Track(t), COL_W);
                 });
                 tallest = tallest.max(strip.response.rect.height());
             }
@@ -296,9 +317,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.add_space(10.0);
             for r in 0..returns {
                 let strip = ui.vertical(|ui| {
-                    ui.set_width(COL_W);
+                    ui.set_width(return_w);
                     ui.add_space(6.0);
-                    mixer_strip(app, ui, Target::Return(r));
+                    mixer_strip(app, ui, Target::Return(r), return_w);
                 });
                 tallest = tallest.max(strip.response.rect.height());
             }
@@ -309,7 +330,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             let strip = ui.vertical(|ui| {
                 ui.set_width(COL_W);
                 ui.add_space(6.0);
-                mixer_strip(app, ui, Target::Master);
+                mixer_strip(app, ui, Target::Master, COL_W);
             });
             tallest = tallest.max(strip.response.rect.height());
         });
@@ -347,6 +368,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     app.update_clip_gesture(ui, &clips, &lanes, &slots);
 }
 
+/// How tall the mixer is in a Session `height` tall: whole (`mixer`) if the
+/// clips keep their header, `SCENES_KEPT` of their `rows` and the stop row;
+/// short of room, it gives way first, down to `MIXER_SHARE` of the height.
+fn mixer_height(height: f32, mixer: f32, rows: usize) -> f32 {
+    let kept = (HEADER_H + (rows.min(SCENES_KEPT) + 1) as f32 * (SLOT_H + 1.0)).min(height * (1.0 - MIXER_SHARE));
+    mixer.min(height - kept).max(0.0)
+}
+
 /// How many scenes the Session shows: the ones in use and an empty one after
 /// them to fill, at least 8, up to all of them.
 pub fn shown_scenes(project: &crate::project::Project) -> usize {
@@ -354,12 +383,13 @@ pub fn shown_scenes(project: &crate::project::Project) -> usize {
     (used + 1).clamp(8, NUM_SCENES)
 }
 
-fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: Sense) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(vec2(COL_W, HEADER_H), sense);
+fn header(ui: &mut egui::Ui, name: &str, color: Color32, selected: bool, sense: Sense, width: f32) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(vec2(width, HEADER_H), sense);
     widgets::name(&response, egui::WidgetType::Button, format!("Pista {name}"));
     let painter = ui.painter();
     painter.rect_filled(rect, 2.0, if selected { color } else { theme::shade(color, 0.72) });
-    painter.text(
+    // A long name is cut at the column's edge.
+    painter.with_clip_rect(rect.shrink(2.0).intersect(painter.clip_rect())).text(
         rect.left_center() + vec2(6.0, 0.0),
         Align2::LEFT_CENTER,
         name,
@@ -501,7 +531,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
         Some(follows) => format!("{follows} · {hint}"),
         None => hint.to_string(),
     };
-    let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag()).on_hover_text(crate::theme::keys(&hint));
+    let response = header(ui, &name, theme::rgb(track.color), app.is_track_selected(t), Sense::click_and_drag(), COL_W).on_hover_text(crate::theme::keys(&hint));
     group_marks(app, ui.painter(), t, response.rect);
     // The fold arrow.
     let on_arrow = response.interact_pointer_pos().is_some_and(|p| p.x < response.rect.left() + 18.0);
@@ -833,7 +863,7 @@ fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut 
     });
 }
 
-fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
+fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target, width: f32) {
     let monitoring_input = matches!(target, Target::Track(t) if app.project.tracks[t].armed && app.project.tracks[t].is_audio());
     let peak = match (&app.capture, monitoring_input) {
         (Some(capture), true) => capture.level,
@@ -844,7 +874,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
 
     // When an audio track plays its input.
     // The same height on every strip, so the faders line up.
-    let (row, _) = ui.allocate_exact_size(vec2(COL_W, MONITOR_H), Sense::hover());
+    let (row, _) = ui.allocate_exact_size(vec2(width, MONITOR_H), Sense::hover());
     if let Target::Track(t) = target {
         if app.project.tracks[t].is_audio() {
             let mut child = ui.new_child(egui::UiBuilder::new().max_rect(row).layout(egui::Layout::left_to_right(egui::Align::Center)));
@@ -893,7 +923,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
 
     ui.horizontal(|ui| {
         ui.set_height(PAN_H);
-        ui.add_space((COL_W - 46.0) / 2.0);
+        ui.add_space((width - 46.0) / 2.0);
         let value = app.display_value(target, Param::Pan);
         let state = app.automation_state(target, Param::Pan);
         if let Some(v) = widgets::param_knob(ui, &PAN_PARAM, value, "Pan", 26.0, state) {
@@ -902,7 +932,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
     });
 
     ui.horizontal(|ui| {
-        ui.add_space((COL_W - 34.0) / 2.0);
+        ui.add_space((width - 34.0) / 2.0);
         let mut gain = app.display_value(target, Param::Volume);
         let response = widgets::fader_with_meter(ui, &mut gain, peak, FADER_H);
         widgets::automation_dot(ui.painter(), response.rect.left_top() + vec2(2.0, 2.0), app.automation_state(target, Param::Volume));
@@ -927,7 +957,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target) {
             return;
         }
         let active = app.mixer(target).active;
-        let width = if matches!(target, Target::Track(_)) { (COL_W - 4.0) / 3.0 } else { COL_W };
+        let width = if matches!(target, Target::Track(_)) { (width - 4.0) / 3.0 } else { width };
         if widgets::toggle(ui, active, &label, ACCENT, vec2(width, 18.0))
             .on_hover_text("Activador de pista (silenciar)")
             .clicked()
@@ -1073,6 +1103,21 @@ mod scene_tests {
             // Saved again and opened: the same.
             assert_eq!(Project::from_json(&project.to_json().unwrap()).unwrap(), project);
         }
+    }
+
+    /// Short of room (the editor open), the clips keep their scenes in sight.
+    #[test]
+    fn with_little_room_the_mixer_gives_way_to_the_scenes() {
+        let scenes = |height: f32, mixer: f32| ((height - mixer_height(height, mixer, 8) - HEADER_H) / (SLOT_H + 1.0)).floor() as usize - 1;
+        // The audit's Session with the editor open (300 points): five scenes and
+        // the stop row, where there were three; the mixer keeps 45 %.
+        assert!(scenes(300.0, 330.0) >= 5, "{}", scenes(300.0, 330.0));
+        assert!(mixer_height(300.0, 330.0, 8) >= 0.45 * 300.0 - 0.5);
+        // With room, the mixer whole and six scenes or more.
+        assert_eq!(mixer_height(560.0, 330.0, 8), 330.0);
+        assert!(scenes(560.0, 330.0) >= 6);
+        // A mixer that fits takes no more than it needs.
+        assert_eq!(mixer_height(800.0, 330.0, 16), 330.0);
     }
 
     /// The Session shows the scenes in use and one more, 8 at least.

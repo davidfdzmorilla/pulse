@@ -883,9 +883,28 @@ Al abrir un clip, y al escribir notas con **Acordes**, **Generar ritmo**, **Acom
 | {Esc} | Deseleccionar |
 | {← →} | Mover por la rejilla ({⇧}: un compás) |
 | {↑ ↓} | Transponer ({⇧}: una octava). Con **Plegar**, una nota de la escala |
+| {⌘U} | Cuantizar |
+| {R} | Redoble de las notas seleccionadas, como el último |
 
 Al mover notas con las flechas, la vista las sigue: si iban a salirse por arriba, por abajo o por un lado, se desplaza lo justo para que se vean. Mientras se ven, no se mueve.
-| {⌘U} | Cuantizar |
+
+### Redobles
+
+Los redobles de charles y de caja del trap, en un paso.
+
+1. Selecciona las notas (clic, o un recuadro sobre el tramo). Para un redoble de un tiempo, basta una nota de un tiempo.
+2. Clic derecho → **Redoble 1/16**, **1/16T**, **1/32**, **1/32T** o **1/64**. También está en el botón **Redoble** de la barra.
+3. Cada nota se reparte en notas de esa duración que la llenan. Con {R} repites el último redoble.
+
+- **Velocidad**: **Crece** (de suave a fuerte, como un redoble que entra), **Se apaga** (de fuerte a suave) o **Plana**. La rampa va del 35 % al 100 % de la velocidad de la nota.
+- El redoble queda seleccionado: elige otra duración y se rehace entero con ella.
+- {⌘Z} lo deshace.
+
++++ Cómo reparte las notas
+- Las notas seleccionadas de una misma fila que van seguidas, sin hueco, forman un solo redoble. Por eso un redoble hecho se puede rehacer con otra duración.
+- La velocidad de la rampa sale de la nota más fuerte del tramo.
+- Una nota más corta que la duración elegida se queda como está.
++++
 
 ### Más sitio para las notas
 
@@ -912,11 +931,11 @@ Elige **Velocidad** en el carril de abajo y arrastra arriba o abajo cerca de una
 
 - **Nombre** del clip.
 - **Loop**: 1, 2, 4, 8 o 16 compases (del compás donde está el clip), o cualquier número de semicorcheas en el campo **/16**. Un clip de 3/16, 5/16 o 7/16 sobre un 4/4 se desplaza en cada compás: sirve para polirritmos.
-- **Rejilla** (1/4 a 1/32, con tresillos) y **Nota** (longitud de las notas nuevas).
+- **Rejilla** (1/4 a 1/64, con tresillos de 1/8, 1/16 y 1/32) y **Nota** (longitud de las notas nuevas). Cada clip recuerda la suya: si pones 1/16T en los charles, el bajo sigue en 1/16. Un clip que aún no has abierto toma la rejilla en la que están escritas sus notas.
 - **Dibujar** ({B}): modo lápiz.
 - **Cuantizar** ({⌘U}) con su **intensidad** (%) y **finales** (cuantiza también el final de las notas). Actúa sobre las notas seleccionadas o, si no hay, sobre todas.
 - **Prob.** (%): en cuántas vueltas del loop suena cada nota (ver «Notas que no suenan siempre», abajo).
-- **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Zoom** (el ancho de los tiempos) y **Alto** (el de las filas).
+- **-12, -1, +1, +12**: transponer. **×2**: duplica el loop copiando las notas. **Redoble**: ver [[Editor MIDI#Redobles]]. **Zoom** (el ancho de los tiempos) y **Alto** (el de las filas).
 - **⋯**: lo que no cabe en la barra. Pasa el ratón por encima para ver qué hay dentro.
 - Con una escala en el proyecto, **Plegar** y **A la escala** (ver [[Tonalidad y escala]]).
 - **Acordes**: escribe acordes de la escala, progresiones enteras, y sugiere el siguiente (ver [[Acordes]]).
@@ -1745,6 +1764,27 @@ El mismo motor que Wavetable, en páginas **SYNTH**, **SEQ**, **FX** y **MATRIX*
   - **Variar** cambia notas al azar dentro de la escala.
 
 Trae 34 presets de fábrica por categorías: metales, cuerdas y leads analógicos, bajos, órganos, campanas y flautas armónicos, filtros dobles (vocales, cruces y una cuerda pulsada), secuencias, pads y efectos (ver [[Presets]]).
+
+### Glide y notas ligadas (el 808)
+
+Para un 808 de trap que desliza entre notas, usa el preset **Bajo · 808 con glide** de Polychrome (en {⌘F}, busca «808», «sub» o «glide»).
+
+1. Pon el sinte en **Legato** y sube **Glide** (el tiempo que tarda en llegar a la nota nueva).
+2. En el editor, escribe las notas sueltas como siempre: cada una empieza en su tono.
+3. Para un deslizamiento, alarga la nota hasta que pise la siguiente. La siguiente desliza desde ella sin un ataque nuevo.
+
+| Modo | Con Glide |
+|---|---|
+| **Poly** | Varias notas a la vez; cada una desliza desde la anterior |
+| **Mono** | Una nota cada vez; todas deslizan desde la anterior, también después de un silencio |
+| **Legato** | Una nota cada vez; solo deslizan las notas que se solapan. Tras un silencio, o si una nota empieza justo donde acaba la otra, no hay deslizamiento |
+
+Lo mismo vale para Wavetable y Modular. El Acid desliza siempre que dos notas se solapan.
+
++++ Cuándo se solapan dos notas
+- Una nota se solapa con otra si empieza mientras la anterior sigue pulsada: en el teclado, si no la has soltado; en un clip, si la anterior aún no ha llegado a su final.
+- Si la anterior acaba menos de 2 ms después, cuentan como seguidas y no se deslizan: así, dos notas que se tocan en la rejilla no se ligan por un redondeo.
++++
 
 ## Modular Synth
 
@@ -3200,6 +3240,7 @@ Todos los atajos de Pulse en una página. **Ayuda › Atajos de teclado** muestr
 | {⌘A} | Seleccionar todas las notas |
 | {⌘U} | Cuantizar notas |
 | {B} | Lápiz |
+| {R} | Redoble de las notas seleccionadas, como el último |
 | {← →} / {↑ ↓} | Mover / transponer notas ({⇧}: compás u octava) |
 | {Esc} | Deseleccionar notas |
 | {⌥ + rueda} sobre las notas | Alto de las filas |

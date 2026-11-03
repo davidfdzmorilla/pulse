@@ -7,6 +7,7 @@
 
 use crate::effects::{EffectProcessor, ProcessContext};
 use crate::instruments::{saw, square, svf_g, Gate, Svf};
+use crate::synth::HELD;
 use crate::model::{
     wave_is_target, ArpMode, SEQ_STEPS, WAVE_BALANCE, WAVE_FILTER2, WAVE_OSC_EXTRA, WAVE_RANDOM_RATE, KickWave, LfoMode, ModSource, OscKind, OscWarp, ParamInfo, WaveEnv, WaveFilter, WaveParams,
     WAVE_GRAIN, WAVE_PARAMS, WAVE_SLOTS,
@@ -583,7 +584,9 @@ impl WaveSynth {
     fn start_voice(&mut self, index: usize, pitch: u8, velocity: f32, gate: u32, retrigger: bool) {
         let p = self.params;
         self.counter += 1;
-        let glide_from = if p.glide > 0.0 { self.last_note } else { None };
+        // Legato glides only into a note that overlaps one still sounding
+        // (the 808 slide); Poly and Mono glide from the last note always.
+        let glide_from = if p.glide > 0.0 && (!(p.mono && p.legato) || self.overlaps()) { self.last_note } else { None };
         let mut randoms = [[0f32; UNISON]; 2];
         for osc in &mut randoms {
             for r in osc.iter_mut() {
@@ -767,10 +770,18 @@ impl WaveSynth {
         self.play_on(pitch, velocity, gate);
     }
 
+    /// A note still sounding (held, or a clip note whose length hasn't run
+    /// out): a new one overlaps it. Notes that only touch don't count.
+    fn overlaps(&self) -> bool {
+        let margin = (self.sample_rate * 0.002) as u32;
+        self.voices.iter().any(|v| v.active && v.gate.open_for(margin))
+    }
+
     fn play_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
         if self.params.mono {
-            let legato = self.params.legato && self.voices[0].active && self.voices[0].gate.held && self.held_count > 0;
-            if self.held_count < self.held.len() {
+            let legato = self.params.legato && self.voices[0].active && self.overlaps();
+            // Only held notes get a note-off; timed ones (from clips) end on their own.
+            if gate == HELD && self.held_count < self.held.len() {
                 self.held[self.held_count] = pitch;
                 self.held_count += 1;
             }
@@ -1298,7 +1309,6 @@ impl WaveSynth {
 mod tests {
     use super::*;
     use crate::model::{ModSlot, Shape, WaveFilter};
-    use crate::synth::HELD;
     use crate::wavetable::builtin;
 
     const SR: f32 = 48_000.0;
@@ -1511,6 +1521,103 @@ mod tests {
         r.fill(0.0);
         synth.render(&[], &t, &mut l, &mut r);
         assert!((frequency(&l[24_000..]) - 220.0).abs() < 3.0);
+    }
+
+    /// The 808 preset glides only between notes that overlap: a note after a
+    /// rest, or one that just touches the last, starts on its own pitch.
+    #[test]
+    fn legato_glides_only_into_overlapping_notes() {
+        let p = WaveParams::polychrome_presets().into_iter().find(|(n, _)| *n == "Bajo · 808 con glide").expect("808 preset").1;
+        assert!(p.mono && p.legato && p.glide > 0.0);
+        let t = tables();
+        let ms = |m: f32| (m * SR / 1000.0) as usize;
+        let run = |synth: &mut WaveSynth, frames: usize| {
+            let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+            synth.render(&[], &t, &mut l, &mut r);
+        };
+        let mut synth = WaveSynth::new(p, SR);
+        // Overlapping: 27 still sounds when 39 starts, so 39 slides up from 27.
+        synth.note_on(27, 1.0, ms(500.0) as u32);
+        run(&mut synth, ms(400.0));
+        let level = synth.voices[0].envs[0].level;
+        synth.note_on(39, 1.0, ms(500.0) as u32);
+        run(&mut synth, ms(15.0));
+        let tied = synth.voices[0].note;
+        assert!(tied < 36.0, "a tied note starts below its pitch and slides: {tied}");
+        assert!(synth.voices[0].envs[0].level < level * 1.05, "no new attack on a tied note");
+        run(&mut synth, ms(600.0));
+        assert!((synth.voices[0].note - 39.0).abs() < 0.1, "the slide arrives");
+        // After a rest: no glide at all.
+        run(&mut synth, ms(300.0));
+        synth.note_on(25, 1.0, ms(500.0) as u32);
+        run(&mut synth, ms(15.0));
+        let after_rest = synth.voices[0].note;
+        assert!((after_rest - 25.0).abs() < 0.05, "a note after a rest starts on its pitch: {after_rest}");
+        // Back to back (the next starts as this one ends): a new note, not a slide.
+        run(&mut synth, ms(500.0) - ms(15.0));
+        synth.note_on(32, 1.0, ms(500.0) as u32);
+        run(&mut synth, ms(15.0));
+        let touching = synth.voices[0].note;
+        assert!((touching - 32.0).abs() < 0.05, "touching notes don't slide: {touching}");
+        // Mono (not legato) keeps the classic always-on portamento.
+        let mut synth = WaveSynth::new(WaveParams { legato: false, ..p }, SR);
+        synth.note_on(39, 1.0, ms(200.0) as u32);
+        run(&mut synth, ms(500.0));
+        synth.note_on(27, 1.0, ms(200.0) as u32);
+        run(&mut synth, ms(15.0));
+        assert!(synth.voices[0].note > 30.0, "mono glides from the last note: {}", synth.voices[0].note);
+    }
+
+    /// The 808 preset playing a trap line (one tied slide, notes after rests),
+    /// its pitch printed 15 and 120 ms into each note, Legato (as it is) and
+    /// Mono (how clip notes played before glides kept to tied notes):
+    /// `PULSE_WAV=dir cargo test --release -p engine glide_808_wavs -- --ignored --nocapture`.
+    #[test]
+    #[ignore]
+    fn glide_808_wavs() {
+        let Some(dir) = std::env::var("PULSE_WAV").ok() else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let p = WaveParams::polychrome_presets().into_iter().find(|(n, _)| *n == "Bajo · 808 con glide").unwrap().1;
+        let t = tables();
+        let beat = 60.0 / 140.0 * SR as f64;
+        // (beat, length, pitch): 39 slides in over 27, then notes after rests.
+        let notes = [(0.0, 3.0, 27u8), (2.75, 1.0, 39), (4.0, 2.5, 27), (8.0, 3.0, 25), (12.0, 1.5, 32)];
+        for (name, legato) in [("808-legato", true), ("808-mono", false)] {
+            let mut synth = WaveSynth::new(WaveParams { legato, ..p }, SR);
+            let total = (16.0 * beat) as usize;
+            let (mut l, mut r) = (vec![0.0; total], vec![0.0; total]);
+            let starts: Vec<usize> = notes.iter().map(|n| (n.0 * beat) as usize).collect();
+            let probes: Vec<(usize, usize)> = starts.iter().enumerate().flat_map(|(k, &s)| [(k, s + (0.015 * SR) as usize), (k, s + (0.12 * SR) as usize)]).collect();
+            let mut marks: Vec<usize> = starts.iter().copied().chain(probes.iter().map(|p| p.1)).collect();
+            marks.push(total);
+            marks.sort();
+            marks.dedup();
+            let mut at = 0;
+            let mut line = String::new();
+            for &mark in &marks {
+                synth.render(&[], &t, &mut l[at..mark], &mut r[at..mark]);
+                at = mark;
+                if let Some(k) = starts.iter().position(|&s| s == mark) {
+                    let (_, length, pitch) = notes[k];
+                    synth.note_on(pitch, 0.9, (length * beat) as u32);
+                }
+                for &(k, _) in probes.iter().filter(|p| p.1 == mark) {
+                    line += &format!(" {}:{:.1}", notes[k].2, synth.voices[0].note);
+                }
+            }
+            println!("{name}:{line}");
+            crate::keys::tests::write_wav(&format!("{dir}/{name}.wav"), &l, &r);
+        }
+    }
+
+    /// Notes from a clip (timed gates) don't pile up in the held-notes stack.
+    #[test]
+    fn timed_notes_leave_the_mono_stack_alone() {
+        let mut synth = WaveSynth::new(WaveParams { mono: true, ..saw_patch() }, SR);
+        for n in 0..20 {
+            synth.note_on(40 + n, 1.0, 100);
+        }
+        assert_eq!(synth.held_count, 0);
     }
 
     #[test]

@@ -5284,8 +5284,9 @@ impl WaveParams {
         p.gain = 0.6;
         list.push(("Bajo · Reese", p));
 
-        // Long sine sub that glides between overlapping notes, with a pitch click
-        // and tube saturation so it carries on small speakers.
+        // Trap 808: a long sine sub that glides only between overlapping notes
+        // (legato), with a pitch click and tube saturation so it carries on
+        // small speakers.
         let mut p = init;
         p.osc[0] = analog(0.0);
         p.filter.on = false;
@@ -5297,7 +5298,7 @@ impl WaveParams {
         p.glide = 120.0;
         p.fx[0] = saturator(KickDrive::Tube, 8.0, -4.0);
         p.gain = 0.7;
-        list.push(("Bajo · Sub con glide", p));
+        list.push(("Bajo · 808 con glide", p));
 
         // Short square pluck for house basslines.
         let mut p = init;
@@ -5879,7 +5880,7 @@ impl WaveParams {
         p.mono = true;
         p.legato = true;
         p.glide = 150.0;
-        p.gain = 0.8;
+        p.gain = 0.7;
         p.fx[0] = chorus;
         p.fx[1] = reverb(0.7, 0.22);
         list.push(("Lead · Rave noventero", p));
@@ -7877,7 +7878,8 @@ impl ModularParams {
         p.legato = true;
         p.glide = 60.0;
         p.lanes[0].fx[0] = delay(0.75, 0.2);
-        p.gain = 0.75;
+        // Tied notes don't retrigger the filter envelope (legato): the resonance rings louder.
+        p.gain = 0.45;
         list.push(("Nonlinear · Acid", p));
 
         // A drawn rhythmic gate that loops while the note is held.

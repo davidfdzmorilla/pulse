@@ -844,9 +844,9 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 devices::preset_menu(app, ui, t, &mut actions);
                 ui.separator();
                 let mut voicing = (base.mono, base.legato);
-                ui.selectable_value(&mut voicing, (false, false), "Poly");
-                ui.selectable_value(&mut voicing, (true, false), "Mono");
-                ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text("Mono; las notas que se solapan se deslizan sin reiniciar las envolventes");
+                ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text("Varias notas a la vez; con Glide, cada nota desliza desde la anterior");
+                ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio");
+                ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono");
                 if voicing != (base.mono, base.legato) {
                     set(&mut actions, WaveParams { mono: voicing.0, legato: voicing.1, ..base });
                 }

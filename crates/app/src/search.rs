@@ -235,6 +235,27 @@ fn instrument_words(kind: &InstrumentKind) -> &'static str {
     }
 }
 
+/// Other words a preset goes by, from words of its name: a trap producer
+/// looks for «808» and finds the sub basses and glides too.
+fn preset_words(name: &str) -> String {
+    let name = fold(name);
+    let has = |w: &str| name.split(' ').any(|n| n == w);
+    let mut words = String::new();
+    for (word, also) in [
+        ("bajo", "bass"),
+        ("sub", "808 trap bass"),
+        ("808", "trap sub bass"),
+        ("glide", "slide portamento legato"),
+        ("trap", "808"),
+    ] {
+        if has(word) {
+            words.push(' ');
+            words.push_str(also);
+        }
+    }
+    words
+}
+
 fn midi_words(effect: &MidiEffect) -> &'static str {
     match effect {
         MidiEffect::Arpeggiator(_) => "arp arpeggiator",
@@ -261,10 +282,12 @@ pub fn catalog(sources: &Sources) -> Vec<Item> {
     for kind in InstrumentKind::catalog() {
         items.push(Item::new(format!("instrumento:{}", kind.label()), kind.label(), "Instrumento", Group::Instruments, What::Instrument(kind), instrument_words(&kind)));
         for preset in crate::presets::factory(&kind) {
-            items.push(Item::new(format!("preset:{}:{}", kind.label(), preset.name), preset.name.clone(), kind.label(), Group::Presets, What::Preset(Box::new(preset)), instrument_words(&kind)));
+            let words = format!("{}{}", instrument_words(&kind), preset_words(&preset.name));
+            items.push(Item::new(format!("preset:{}:{}", kind.label(), preset.name), preset.name.clone(), kind.label(), Group::Presets, What::Preset(Box::new(preset)), &words));
         }
         for preset in crate::presets::list(sources.presets, &kind) {
-            items.push(Item::new(format!("preset-mio:{}:{}", kind.label(), preset.name), preset.name.clone(), format!("{} · mío", kind.label()), Group::Presets, What::Preset(Box::new(preset)), instrument_words(&kind)));
+            let words = format!("{}{}", instrument_words(&kind), preset_words(&preset.name));
+            items.push(Item::new(format!("preset-mio:{}:{}", kind.label(), preset.name), preset.name.clone(), format!("{} · mío", kind.label()), Group::Presets, What::Preset(Box::new(preset)), &words));
         }
     }
     for effect in MidiEffect::catalog() {
@@ -335,6 +358,9 @@ pub fn walk(roots: &[PathBuf], limit: usize, shows: impl Fn(&Path) -> bool) -> V
 
 // ----- Favourites ----------------------------------------------------------------------
 
+/// Factory presets that changed name: a star on the old one stays on it.
+const RENAMED: &[(&str, &str)] = &[("preset:Polychrome Synth:Bajo · Sub con glide", "preset:Polychrome Synth:Bajo · 808 con glide")];
+
 /// The entries starred, kept with the user's settings (not in the project).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Favorites {
@@ -354,7 +380,13 @@ pub fn favorites_path() -> PathBuf {
 
 impl Favorites {
     pub fn load_from(path: &Path) -> Favorites {
-        crate::store::read_json(path)
+        let mut favorites: Favorites = crate::store::read_json(path);
+        for key in &mut favorites.keys {
+            if let Some(&(_, new)) = RENAMED.iter().find(|(old, _)| old == key) {
+                *key = new.to_string();
+            }
+        }
+        favorites
     }
 
     pub fn save_to(&self, path: &Path) {
@@ -418,6 +450,33 @@ mod tests {
         assert_eq!(first(&items, "voz pop"), "Voz · Pop");
         assert!(names(&items, "zarandajo inventado").is_empty());
         assert!(names(&items, "   ").is_empty());
+    }
+
+    /// A star on a preset that changed name stays on it.
+    #[test]
+    fn renamed_presets_keep_their_star() {
+        let dir = std::env::temp_dir().join(format!("pulse-test-renombrado-{}", std::process::id()));
+        let path = dir.join("favoritos.json");
+        let old = Favorites { version: 1, keys: vec!["preset:Polychrome Synth:Bajo · Sub con glide".into(), "efecto:Reverb".into()] };
+        old.save_to(&path);
+        let loaded = Favorites::load_from(&path);
+        assert_eq!(loaded.keys, ["preset:Polychrome Synth:Bajo · 808 con glide", "efecto:Reverb"]);
+        assert!(index().iter().any(|i| i.key == loaded.keys[0]), "the new key is a real entry");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A trap producer finds the melodic 808 by «808», and the subs and glides
+    /// by their usual words.
+    #[test]
+    fn trap_words_find_the_808_bass() {
+        let items = index();
+        let found = names(&items, "808");
+        assert!(found.iter().any(|n| n == "Bajo · 808 con glide"), "{found:?}");
+        assert_eq!(first(&items, "808 bajo"), "Bajo · 808 con glide");
+        assert!(names(&items, "slide").iter().any(|n| n == "Bajo · 808 con glide"));
+        assert!(names(&items, "portamento").iter().any(|n| n == "Bajo · 808 con glide"));
+        assert!(names(&items, "808").iter().any(|n| n == "Bajo · Sub"), "subs come with «808» too");
+        assert!(names(&items, "sub bass").iter().any(|n| n == "Bajo · 808 con glide"));
     }
 
     /// The device itself before its presets, presets before files; whole words

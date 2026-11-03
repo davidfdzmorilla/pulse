@@ -866,9 +866,9 @@ fn voice_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, ac
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("VOZ").color(TEXT_DIM).size(10.0).strong());
             let mut voicing = (p.mono, p.legato);
-            ui.selectable_value(&mut voicing, (false, false), "Poly");
-            ui.selectable_value(&mut voicing, (true, false), "Mono");
-            ui.selectable_value(&mut voicing, (true, true), "Legato");
+            ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text("Varias notas a la vez; con Glide, cada nota desliza desde la anterior");
+            ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio");
+            ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono");
             (next.mono, next.legato) = voicing;
             ui.add_enabled(!p.mono, egui::DragValue::new(&mut next.polyphony).range(1..=MOD_POLYPHONY).suffix(" notas"))
                 .on_hover_text("Polifonía: notas a la vez (cada una usa una voz por voz de unísono)");

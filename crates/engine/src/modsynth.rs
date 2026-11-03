@@ -681,6 +681,9 @@ pub struct ModSynth {
     pressure: f32,
     /// Another note was held when the latest note started (legato triggers).
     phrase: bool,
+    /// The latest note glides from the last one: always, except in Legato
+    /// mode, where only a note that overlaps another slides.
+    slide: bool,
 }
 
 /// The recent audio of each lane and the master, decimated, for pitch tracking.
@@ -974,6 +977,7 @@ impl ModSynth {
             bend: 0.0,
             pressure: 0.0,
             phrase: false,
+            slide: false,
         }
     }
 
@@ -1038,7 +1042,7 @@ impl ModSynth {
 
     #[allow(clippy::too_many_arguments)]
     fn start_voice(&mut self, index: usize, pitch: u8, velocity: f32, gate: u32, retrigger: bool, (j, count): (usize, usize), randoms: &[[f32; UNISON]; MOD_MODULES]) {
-        let glide_from = if self.params.glide > 0.0 { self.last_note } else { None };
+        let glide_from = if self.params.glide > 0.0 && self.slide { self.last_note } else { None };
         let random = self.random();
         // Where this unison voice starts in every oscillator's cycle.
         let offset = match self.params.unison.mode {
@@ -1054,7 +1058,7 @@ impl ModSynth {
             *r = self.random();
         }
         // In a legato phrase, untriggered modulators carry on from the newest held note.
-        let donor = self.voices.iter().enumerate().filter(|&(k, v)| k != index && v.active && v.gate.held).max_by_key(|(_, v)| v.gate.age).map(|(_, v)| v.mods);
+        let donor = self.voices.iter().enumerate().filter(|&(k, v)| k != index && v.active && v.gate.open_for(0)).max_by_key(|(_, v)| v.gate.age).map(|(_, v)| v.mods);
         let phrase = self.phrase;
         if !self.voices[index].active {
             for (processor, _) in self.poly[index].iter_mut().flatten().flatten() {
@@ -1133,14 +1137,24 @@ impl ModSynth {
         voice.active = true;
     }
 
+    /// A note still sounding (held, or a clip note whose length hasn't run
+    /// out): a new one overlaps it. Notes that only touch don't count.
+    fn overlaps(&self) -> bool {
+        let margin = (self.sample_rate * 0.002) as u32;
+        self.voices.iter().any(|v| v.active && v.gate.open_for(margin))
+    }
+
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
         let count = self.unisons();
         let randoms = self.note_randoms();
         self.counter += 1;
+        let overlap = self.overlaps();
+        self.slide = !(self.params.mono && self.params.legato) || overlap;
         if self.params.mono {
-            self.phrase = self.held_count > 0;
-            let legato = self.params.legato && self.voices[0].active && self.voices[0].gate.held && self.held_count > 0;
-            if self.held_count < self.held.len() {
+            self.phrase = overlap;
+            let legato = self.params.legato && self.voices[0].active && overlap;
+            // Only held notes get a note-off; timed ones (from clips) end on their own.
+            if gate == crate::synth::HELD && self.held_count < self.held.len() {
                 self.held[self.held_count] = pitch;
                 self.held_count += 1;
             }
@@ -1153,7 +1167,7 @@ impl ModSynth {
             self.last_note = Some(pitch as f32);
             return;
         }
-        self.phrase = self.voices.iter().any(|v| v.active && v.gate.held);
+        self.phrase = overlap;
         let limit = (VOICES / count).min((self.params.polyphony as usize).max(1));
         loop {
             let free = self.voices.iter().filter(|v| !v.active).count();
@@ -2385,6 +2399,39 @@ mod tests {
             poly.note_on(40 + k, 1.0, HELD);
         }
         assert_eq!(poly.voices.iter().filter(|v| v.active).count(), ModularParams::default().polyphony as usize);
+    }
+
+    /// Legato glides only into overlapping notes, also with clip (timed) notes;
+    /// a note after a rest starts on its pitch.
+    #[test]
+    fn legato_glides_only_into_overlapping_notes() {
+        let mut p = stack(&[group(), sine(), output()]);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 120.0;
+        let ms = |m: f32| (m * SR / 1000.0) as usize;
+        let run = |synth: &mut ModSynth, frames: usize| {
+            let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+            synth.render(&[], &[], &mut l, &mut r);
+        };
+        let mut synth = ModSynth::new(p, SR);
+        synth.note_on(27, 1.0, ms(500.0) as u32);
+        run(&mut synth, ms(400.0));
+        synth.note_on(39, 1.0, ms(500.0) as u32);
+        run(&mut synth, ms(15.0));
+        assert!(synth.voices[0].note < 36.0, "a tied note slides: {}", synth.voices[0].note);
+        run(&mut synth, ms(900.0));
+        synth.note_on(25, 1.0, ms(500.0) as u32);
+        run(&mut synth, ms(15.0));
+        assert!((synth.voices[0].note - 25.0).abs() < 0.05, "after a rest, no glide: {}", synth.voices[0].note);
+        assert_eq!(synth.held_count, 0, "clip notes stay off the held stack");
+        // Mono keeps the always-on portamento.
+        let mut synth = ModSynth::new(ModularParams { legato: false, ..p }, SR);
+        synth.note_on(39, 1.0, ms(200.0) as u32);
+        run(&mut synth, ms(500.0));
+        synth.note_on(27, 1.0, ms(200.0) as u32);
+        run(&mut synth, ms(15.0));
+        assert!(synth.voices[0].note > 30.0, "mono glides from the last note");
     }
 
     // ----- Phase 2: generators, nonlinear filter, curve output, global unison -----

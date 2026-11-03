@@ -5,6 +5,8 @@
 //! with a rectangle, double-click to create or delete. Draw mode (B): click to add
 //! (drag to lengthen) or delete. The velocity lane below edits note velocities.
 //! Keys: arrows move/transpose, ⌘A/⌘C/⌘X/⌘V/⌘D, ⌘U quantizes, Delete removes.
+//! Right click or «Redoble» turns the selected notes into rolls (R: the last one again).
+//! Each clip keeps its own grid (see `State::open_grid`).
 //!
 //! With a project key the scale's rows are lit and the tonic's marked; «Plegar»
 //! leaves only the scale's rows, and then notes move along the scale.
@@ -39,15 +41,19 @@ const ROW_ZOOM: (f32, f32) = (0.65, 2.5);
 /// The rows the editor asks the panel room for: two octaves.
 pub const ROWS_WANTED: usize = 24;
 
-const GRIDS: [(f64, &str); 6] = [
+const GRIDS: [(f64, &str); 8] = [
     (1.0, "1/4"),
     (0.5, "1/8"),
     (1.0 / 3.0, "1/8T"),
     (0.25, "1/16"),
     (1.0 / 6.0, "1/16T"),
     (0.125, "1/32"),
+    (1.0 / 12.0, "1/32T"),
+    (0.0625, "1/64"),
 ];
-const NOTE_LENGTHS: [(f64, &str); 8] = [
+const NOTE_LENGTHS: [(f64, &str); 10] = [
+    (0.0625, "1/64"),
+    (1.0 / 12.0, "1/32T"),
     (0.125, "1/32"),
     (1.0 / 6.0, "1/16T"),
     (0.25, "1/16"),
@@ -57,6 +63,13 @@ const NOTE_LENGTHS: [(f64, &str); 8] = [
     (2.0, "1/2"),
     (4.0, "1/1"),
 ];
+
+/// The rates a roll can go at (see `note_edit::roll`), slowest first.
+pub(crate) const ROLLS: [(f64, &str); 5] = [(0.25, "1/16"), (1.0 / 6.0, "1/16T"), (0.125, "1/32"), (1.0 / 12.0, "1/32T"), (0.0625, "1/64")];
+
+/// The grids a clip's grid is guessed among when the editor opens it (see
+/// `note_edit::guess_grid`): 1/16 and finer, coarsest first.
+const GUESSED: [f64; 5] = [0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0, 0.0625];
 
 #[derive(Clone)]
 enum Drag {
@@ -71,6 +84,13 @@ enum Drag {
 pub struct State {
     note_length: f64,
     grid: f64,
+    /// Each clip's grid and note length, as last left in this session: a
+    /// clip opened again finds them; one not opened yet, a grid guessed from
+    /// its notes.
+    grids: Vec<(ClipRef, (f64, f64))>,
+    /// The last roll made, for R.
+    roll_step: f64,
+    roll_ramp: note_edit::Ramp,
     zoom: f32,
     draw_mode: bool,
     selection: Selection,
@@ -148,6 +168,9 @@ impl Default for State {
         Self {
             note_length: 0.25,
             grid: 0.25,
+            grids: Vec::new(),
+            roll_step: 0.125,
+            roll_ramp: note_edit::Ramp::Up,
             zoom: 1.0,
             draw_mode: false,
             selection: Selection::new(),
@@ -217,6 +240,39 @@ impl State {
     #[cfg(test)]
     pub fn view(&self) -> Option<(egui::Vec2, egui::Vec2)> {
         self.view
+    }
+
+    /// The grid and note length `clip` was left with, or guessed from its notes.
+    fn open_grid(&mut self, clip: ClipRef, notes: &[Note]) {
+        let (grid, length) = match self.grids.iter().find(|(c, _)| *c == clip) {
+            Some(&(_, kept)) => kept,
+            None => {
+                let grid = note_edit::guess_grid(notes, &GUESSED);
+                (grid, grid)
+            }
+        };
+        self.grid = grid;
+        self.note_length = length;
+    }
+
+    /// Keeps the grid and note length `clip` has now.
+    fn keep_grid(&mut self, clip: ClipRef) {
+        let kept = (self.grid, self.note_length);
+        match self.grids.iter_mut().find(|(c, _)| *c == clip) {
+            Some(entry) => entry.1 = kept,
+            None => self.grids.push((clip, kept)),
+        }
+    }
+
+    #[cfg(test)]
+    pub fn grid(&self) -> (f64, f64) {
+        (self.grid, self.note_length)
+    }
+
+    #[cfg(test)]
+    pub fn set_grid(&mut self, grid: f64, note_length: f64) {
+        self.grid = grid;
+        self.note_length = note_length;
     }
 
     #[cfg(test)]
@@ -330,7 +386,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let state = &mut app.piano_roll;
     state.sig = sig;
     state.track_name = track_name;
-    if state.selection_clip != Some(clip_ref) {
+    let switched = state.selection_clip != Some(clip_ref);
+    if switched {
         state.selection.clear();
         state.selection_clip = Some(clip_ref);
         state.drag = None;
@@ -341,6 +398,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ClipRef::Arrangement { track, index } => app.project.tracks[track].arrangement.get_mut(index).map(|a| &mut a.clip),
     };
     let Some(Clip::Midi(clip)) = clip else { return };
+    if switched {
+        state.open_grid(clip_ref, &clip.notes);
+    }
     // Chords undone (or redone): the insert marker goes back (or on) with them.
     let at = state.insert_at;
     if let Some(mark) = state.marks.iter().rev().find(|m| m.clip == clip_ref && ((m.to == at && m.before == *clip) || (m.from == at && m.after == *clip))) {
@@ -493,6 +553,10 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             // Triplet steps are not exact in floating point, so compare with a tolerance.
             let on = |unit: f64| ((beat / unit) - (beat / unit).round()).abs() < 1e-6;
             let gray = if on(state.sig.bar()) { 95 } else if on(state.sig.count()) { 66 } else { 50 };
+            // 1/64 zoomed out: only every other line, or they'd fill the grid.
+            if gray == 50 && state.grid as f32 * beat_w < 4.0 && step % 2 == 1 {
+                continue;
+            }
             let x = x_of(beat);
             painter.line_segment([pos2(x, grid.top()), pos2(x, grid.bottom())], Stroke::new(1.0, Color32::from_gray(gray)));
         }
@@ -526,6 +590,19 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             widgets::play_triangle(&painter, pos2(x, rect.top() + 8.0), 7.0, Color32::WHITE);
         }
         painter.rect_stroke(grid, 0.0, Stroke::new(1.0, Color32::from_gray(70)), StrokeKind::Inside);
+
+        // Right click: the note under the pointer joins the selection, and the menu opens.
+        if response.secondary_clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                let under = clip.notes.iter().enumerate().rev().find_map(|(i, n)| note_rect(n)?.contains(pos).then_some(i));
+                if let Some(i) = under.filter(|i| !state.selection.contains(i)) {
+                    state.selection = Selection::from([i]);
+                }
+            }
+        }
+        response.context_menu(|ui| {
+            roll_menu(ui, state, clip);
+        });
 
         // ----- Pointer -------------------------------------------------------------
         let Some(pos) = response.interact_pointer_pos().or_else(|| response.hover_pos()) else { return };
@@ -759,6 +836,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
     }
 
+    state.keep_grid(clip_ref);
     let changed = *clip != before;
     // Grown by what was written: on the Arrangement, all of it is placed, up to the next clip.
     if std::mem::take(&mut app.piano_roll.grew) {
@@ -910,12 +988,13 @@ pub(crate) enum Part {
     Transpose,
     Scale,
     Double,
+    Roll,
     Zoom,
 }
 
 impl Part {
     /// In the order they are drawn.
-    pub(crate) const ALL: [Part; 15] = [
+    pub(crate) const ALL: [Part; 16] = [
         Part::Retake,
         Part::Clip,
         Part::Loop,
@@ -930,6 +1009,7 @@ impl Part {
         Part::Transpose,
         Part::Scale,
         Part::Double,
+        Part::Roll,
         Part::Zoom,
     ];
 
@@ -939,7 +1019,7 @@ impl Part {
         match self {
             Part::Retake | Part::Clip | Part::Loop | Part::Grid | Part::Draw | Part::Chords => 0,
             Part::Quantize => 1,
-            Part::NoteLength => 2,
+            Part::NoteLength | Part::Roll => 2,
             Part::Groove => 3,
             Part::Scale => 4,
             Part::Transpose => 5,
@@ -967,6 +1047,7 @@ impl Part {
             Part::Transpose => 140.0,
             Part::Scale => 150.0,
             Part::Double => 28.0,
+            Part::Roll => 70.0,
             Part::Zoom => 250.0,
         }
     }
@@ -1090,6 +1171,7 @@ impl Part {
             Part::Transpose => "transponer",
             Part::Scale => "escala",
             Part::Double => "×2",
+            Part::Roll => "redoble",
             Part::Zoom => "zoom",
         }
     }
@@ -1238,6 +1320,18 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
                 let copies: Vec<Note> = clip.notes.iter().map(|n| Note { start: n.start + length, ..n.clone() }).collect();
                 clip.notes.extend(copies);
                 clip.length *= 2.0;
+            }
+        }
+        Part::Roll => {
+            if in_menu {
+                ui.vertical(|ui| {
+                    label(ui, "Redoble");
+                    roll_menu(ui, state, clip);
+                });
+            } else {
+                widgets::menu_button(ui, "Redoble", |ui| roll_menu(ui, state, clip))
+                    .response
+                    .on_hover_text(crate::theme::keys("Reparte las notas seleccionadas en redobles de 1/16 a 1/64, con la velocidad en rampa (R repite el último)"));
             }
         }
         Part::Zoom => {
@@ -1519,6 +1613,36 @@ struct Moved {
     along: bool,
 }
 
+/// «Redoble»: the selected notes as rolls at a rate, their velocities in a
+/// ramp; the choice is what R makes next.
+fn roll_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
+    let selected: Vec<usize> = state.selection.iter().copied().filter(|&i| i < clip.notes.len()).collect();
+    ui.horizontal(|ui| {
+        label(ui, "Velocidad");
+        for ramp in note_edit::Ramp::ALL {
+            let hint = match ramp {
+                note_edit::Ramp::Up => "De suave a fuerte, como un redoble que entra",
+                note_edit::Ramp::Down => "De fuerte a suave, como un eco",
+                note_edit::Ramp::Flat => "Todas con la misma velocidad",
+            };
+            ui.selectable_value(&mut state.roll_ramp, ramp, ramp.label()).on_hover_text(hint);
+        }
+    });
+    if selected.is_empty() {
+        label(ui, "Selecciona notas (o un tramo con un recuadro) para hacer un redoble");
+    }
+    ui.horizontal(|ui| {
+        for (step, text) in ROLLS {
+            let button = ui.add_enabled(!selected.is_empty(), egui::Button::new(format!("Redoble {text}")).selected(state.roll_step == step));
+            if button.on_hover_text(crate::theme::keys(&format!("Reparte cada nota seleccionada en notas de {text} que la llenan (R repite el último)"))).clicked() {
+                state.roll_step = step;
+                state.selection = note_edit::roll(&mut clip.notes, &selected, step, state.roll_ramp);
+                ui.close();
+            }
+        }
+    });
+}
+
 fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Option<Scale>) -> Moved {
     let mut moved = Moved::default();
     let events = ui.input(|i| i.events.clone());
@@ -1549,6 +1673,9 @@ fn keyboard(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, walk: Opt
                         note_edit::quantize(&mut clip.notes, &targets, state.grid, state.quantize_strength, state.quantize_ends, clip.length);
                     }
                     Key::B if !cmd => state.draw_mode = !state.draw_mode,
+                    Key::R if !cmd && !modifiers.alt && !selected.is_empty() => {
+                        state.selection = note_edit::roll(&mut clip.notes, &selected, state.roll_step, state.roll_ramp);
+                    }
                     Key::Escape => state.selection.clear(),
                     Key::Delete | Key::Backspace if !selected.is_empty() => {
                         note_edit::delete(&mut clip.notes, &state.selection);
@@ -1725,6 +1852,122 @@ mod tests {
         assert_eq!(app.piano_roll.drum_error.as_deref(), Some("Falta el modelo"));
         let Some(Clip::Midi(midi)) = app.clip(asked) else { panic!() };
         assert_eq!(midi.notes.len(), 2);
+    }
+
+    /// The editor drawn with these events.
+    fn frame(app: &mut PulseApp, events: Vec<egui::Event>) {
+        let ctx = egui::Context::default();
+        let input = egui::RawInput { screen_rect: Some(Rect::from_min_size(pos2(0.0, 0.0), vec2(1600.0, 900.0))), events, ..Default::default() };
+        let _ = ctx.run_ui(input, |ui| show(app, ui));
+    }
+
+    /// R turns the selected notes into a roll with the last choice, the roll
+    /// stays selected (to try another rate), and ⌘Z brings the note back.
+    #[test]
+    fn r_rolls_the_selected_notes_and_undoes() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let clip = ClipRef::Session { track: 0, slot: 0 };
+        let mut midi = MidiClip::new("Charles", 4.0, [0; 3]);
+        midi.notes = vec![Note::new(0.0, 0.25, 42, 0.8), Note::new(3.0, 1.0, 42, 0.9)];
+        app.set_clip(0, 0, Some(Clip::Midi(midi)));
+        app.select_clip(clip);
+        frame(&mut app, Vec::new());
+        app.commit_history();
+        app.piano_roll.select_notes(clip, &[1]);
+        app.piano_roll.roll_step = 1.0 / 12.0;
+        app.piano_roll.roll_ramp = note_edit::Ramp::Up;
+        let r = egui::Event::Key { key: Key::R, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        frame(&mut app, vec![r]);
+        let Some(Clip::Midi(rolled)) = app.clip(clip).cloned() else { panic!() };
+        assert_eq!(rolled.notes.len(), 13, "the first note and twelve 1/32T");
+        let roll: Vec<&Note> = rolled.notes.iter().filter(|n| n.start >= 3.0).collect();
+        assert_eq!(roll.len(), 12);
+        assert!((roll[1].start - roll[0].start - 1.0 / 12.0).abs() < 1e-9);
+        assert!(roll[0].velocity < roll[11].velocity, "a rising ramp");
+        assert_eq!(app.piano_roll.selection.len(), 12, "the roll is selected");
+        app.commit_history();
+        app.undo();
+        let Some(Clip::Midi(back)) = app.clip(clip).cloned() else { panic!() };
+        assert_eq!(back.notes.len(), 2, "⌘Z: the note as it was");
+    }
+
+    /// Each clip keeps its grid: 1/16T on the hats doesn't follow to the 808,
+    /// which opens on the 1/16 its notes are on; the hats find theirs again.
+    #[test]
+    fn the_grid_stays_with_its_clip() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let hats = ClipRef::Session { track: 0, slot: 0 };
+        let bass = ClipRef::Session { track: 1, slot: 0 };
+        app.select_clip(hats);
+        frame(&mut app, Vec::new());
+        app.piano_roll.set_grid(1.0 / 6.0, 1.0 / 6.0);
+        frame(&mut app, Vec::new());
+        app.select_clip(bass);
+        frame(&mut app, Vec::new());
+        assert_eq!(app.piano_roll.grid(), (0.25, 0.25), "the bass opens on 1/16");
+        app.select_clip(hats);
+        frame(&mut app, Vec::new());
+        assert_eq!(app.piano_roll.grid(), (1.0 / 6.0, 1.0 / 6.0), "the hats keep 1/16T");
+        // A clip written in triplets, opened for the first time: 1/16T.
+        let mut midi = MidiClip::new("Tresillos", 4.0, [0; 3]);
+        midi.notes = (0..12).map(|k| Note::new(k as f64 / 6.0, 1.0 / 6.0, 42, 0.8)).collect();
+        app.set_clip(0, 2, Some(Clip::Midi(midi)));
+        app.select_clip(ClipRef::Session { track: 0, slot: 2 });
+        frame(&mut app, Vec::new());
+        assert_eq!(app.piano_roll.grid().0, 1.0 / 6.0);
+    }
+
+    /// Pictures of the editor with a roll and of the «Redoble» menu:
+    /// `PULSE_SHOTS=dir cargo test --release -p app roll_shots -- --ignored`.
+    #[test]
+    #[ignore]
+    fn roll_shots() {
+        let Some(dir) = std::env::var_os("PULSE_SHOTS").map(std::path::PathBuf::from) else { return };
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let clip = ClipRef::Session { track: 0, slot: 0 };
+        let mut midi = MidiClip::new("Charles", 4.0, [90, 160, 220]);
+        midi.notes = (0..12).map(|k| Note::new(k as f64 * 0.25, 0.25, 42, 0.8)).collect();
+        midi.notes.push(Note::new(3.0, 1.0, 42, 0.9));
+        app.set_clip(0, 0, Some(Clip::Midi(midi)));
+        app.select_clip(clip);
+        let shoot = |app: &mut PulseApp, name: &str, size: egui::Vec2, menu: bool| {
+            let ctx = egui::Context::default();
+            theme::apply(&ctx);
+            let mut canvas = crate::offscreen::Canvas::default();
+            let input = || egui::RawInput { screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, size)), ..Default::default() };
+            let mut output = None;
+            for frame in 0..4 {
+                ctx.set_pixels_per_point(2.0);
+                output = Some(ctx.run_ui(input(), |ui| {
+                    egui::CentralPanel::default().show(ui, |ui| {
+                        if menu {
+                            egui::Frame::menu(ui.style()).show(ui, |ui| {
+                                let state = &mut app.piano_roll;
+                                let Some(Clip::Midi(clip)) = app.project.tracks[0].clips[0].as_mut() else { return };
+                                roll_menu(ui, state, clip);
+                            });
+                        } else {
+                            show(app, ui);
+                        }
+                    });
+                }));
+                if frame < 3 {
+                    canvas.draw(&ctx, output.take().unwrap(), size, 2.0);
+                }
+            }
+            canvas.draw(&ctx, output.unwrap(), size, 2.0).save_png(&dir.join(name)).unwrap();
+        };
+        shoot(&mut app, "redoble-menu-vacio.png", vec2(520.0, 120.0), true);
+        app.piano_roll.select_notes(clip, &[12]);
+        shoot(&mut app, "redoble-menu.png", vec2(520.0, 120.0), true);
+        app.piano_roll.roll_step = 1.0 / 12.0;
+        let selected: Vec<usize> = vec![12];
+        let Some(Clip::Midi(midi)) = app.project.tracks[0].clips[0].as_mut() else { panic!() };
+        app.piano_roll.selection = note_edit::roll(&mut midi.notes, &selected, 1.0 / 12.0, note_edit::Ramp::Up);
+        app.piano_roll.set_grid(1.0 / 12.0, 1.0 / 12.0);
+        shoot(&mut app, "redoble-editor.png", vec2(1600.0, 600.0), false);
+        shoot(&mut app, "redoble-editor-estrecho.png", vec2(1000.0, 600.0), false);
     }
 
     /// A drum clip's editor has «Generar ritmo»; a bass clip's, not.

@@ -127,6 +127,175 @@ pub fn in_region(notes: &[Note], (from, to): (f64, f64), pitches: impl Fn(u8) ->
         .collect()
 }
 
+/// How the velocities of a roll go: from soft to loud, the other way, or flat.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ramp {
+    Up,
+    Down,
+    Flat,
+}
+
+impl Ramp {
+    pub const ALL: [Ramp; 3] = [Ramp::Up, Ramp::Down, Ramp::Flat];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Ramp::Up => "Crece",
+            Ramp::Down => "Se apaga",
+            Ramp::Flat => "Plana",
+        }
+    }
+}
+
+/// Where a ramp starts (or ends), as a share of the note's velocity.
+pub const RAMP_LOW: f32 = 0.35;
+
+/// Turns the notes at `indices` into rolls of `step` beats. Each run of
+/// selected notes of one pitch that follow on without a gap (a long note, or a
+/// roll made before) becomes one roll as long as it, its velocities ramped
+/// from the loudest of them. The new notes are appended; the rest keep their
+/// order. Returns the new notes' indices.
+pub fn roll(notes: &mut Vec<Note>, indices: &[usize], step: f64, ramp: Ramp) -> Selection {
+    if indices.is_empty() || step <= 0.0 {
+        return Selection::new();
+    }
+    let mut chosen: Vec<Note> = indices.iter().filter_map(|&i| notes.get(i).cloned()).collect();
+    chosen.sort_by(|a, b| a.pitch.cmp(&b.pitch).then(a.start.total_cmp(&b.start)));
+    // Runs: (start, end, velocity, model note).
+    let mut runs: Vec<(f64, f64, f32, Note)> = Vec::new();
+    for n in chosen {
+        match runs.last_mut() {
+            Some(run) if run.3.pitch == n.pitch && n.start <= run.1 + 1e-6 => {
+                run.1 = run.1.max(n.start + n.length);
+                run.2 = run.2.max(n.velocity);
+            }
+            _ => runs.push((n.start, n.start + n.length, n.velocity, n)),
+        }
+    }
+    let removed: Selection = indices.iter().copied().collect();
+    delete(notes, &removed);
+    let mut added = Selection::new();
+    for (start, end, velocity, model) in runs {
+        let count = (((end - start) / step) + 1e-6).floor().max(1.0) as usize;
+        let length = if count == 1 { end - start } else { step };
+        for k in 0..count {
+            let at = if count > 1 { k as f32 / (count - 1) as f32 } else { 1.0 };
+            let share = match ramp {
+                Ramp::Up => RAMP_LOW + (1.0 - RAMP_LOW) * at,
+                Ramp::Down => 1.0 - (1.0 - RAMP_LOW) * at,
+                Ramp::Flat => 1.0,
+            };
+            notes.push(Note { start: start + k as f64 * step, length, velocity: (velocity * share).clamp(0.05, 1.0), ..model.clone() });
+            added.insert(notes.len() - 1);
+        }
+    }
+    added
+}
+
+/// The grid a clip's notes were written on: of `grids` (coarsest first), the
+/// coarsest two thirds of their starts fall on (sixteenths with a triplet
+/// roll are on 1/16), else the one most fall on; 1/16 if there are no notes.
+pub fn guess_grid(notes: &[Note], grids: &[f64]) -> f64 {
+    let fits = |g: f64| notes.iter().filter(|n| ((n.start / g) - (n.start / g).round()).abs() < 1e-3).count();
+    if notes.is_empty() {
+        return 0.25;
+    }
+    if let Some(&g) = grids.iter().find(|&&g| fits(g) * 3 >= notes.len() * 2) {
+        return g;
+    }
+    let mut best = (0.25, 0);
+    for &g in grids {
+        let count = fits(g);
+        if count > best.1 {
+            best = (g, count);
+        }
+    }
+    best.0
+}
+
+#[cfg(test)]
+mod roll_tests {
+    use super::*;
+
+    fn note(start: f64, length: f64, pitch: u8, velocity: f32) -> Note {
+        Note { start, length, pitch, velocity, chance: 1.0 }
+    }
+
+    /// A quarter note becomes six 1/16T notes rising from soft to its velocity.
+    #[test]
+    fn a_long_note_becomes_a_ramped_roll() {
+        let mut notes = vec![note(0.0, 0.5, 36, 0.9), note(1.0, 1.0, 42, 0.8)];
+        let added = roll(&mut notes, &[1], 1.0 / 6.0, Ramp::Up);
+        assert_eq!(added.len(), 6);
+        assert_eq!(notes.len(), 7);
+        assert_eq!(notes[0].pitch, 36, "the other note stays");
+        let rolled: Vec<&Note> = added.iter().map(|&i| &notes[i]).collect();
+        for (k, n) in rolled.iter().enumerate() {
+            assert!((n.start - (1.0 + k as f64 / 6.0)).abs() < 1e-9, "on the 1/16T grid");
+            assert!((n.length - 1.0 / 6.0).abs() < 1e-9);
+            assert_eq!(n.pitch, 42);
+        }
+        assert!((rolled[0].velocity - 0.8 * RAMP_LOW).abs() < 1e-6);
+        assert!((rolled[5].velocity - 0.8).abs() < 1e-6);
+        assert!(rolled.windows(2).all(|w| w[1].velocity > w[0].velocity), "rising");
+    }
+
+    /// Each rate fills the note: 1/16, 1/16T, 1/32, 1/32T, 1/64 in one beat.
+    #[test]
+    fn every_rate_fills_the_note() {
+        for (step, count) in [(0.25, 4), (1.0 / 6.0, 6), (0.125, 8), (1.0 / 12.0, 12), (0.0625, 16)] {
+            let mut notes = vec![note(2.0, 1.0, 38, 1.0)];
+            let added = roll(&mut notes, &[0], step, Ramp::Flat);
+            assert_eq!(added.len(), count, "step {step}");
+            let end = notes.iter().map(|n| n.start + n.length).fold(0.0, f64::max);
+            assert!((end - 3.0).abs() < 1e-9, "ends where the note did");
+            assert!(notes.iter().all(|n| n.velocity == 1.0));
+        }
+    }
+
+    /// A roll rolled again at another rate is one roll, not a roll of each
+    /// note; fading out goes the other way. Separate notes stay separate.
+    #[test]
+    fn a_roll_can_be_rolled_again_and_runs_are_by_pitch() {
+        let mut notes = vec![note(0.0, 1.0, 42, 0.7)];
+        let first = roll(&mut notes, &[0], 0.125, Ramp::Up);
+        let indices: Vec<usize> = first.into_iter().collect();
+        let again = roll(&mut notes, &indices, 1.0 / 12.0, Ramp::Down);
+        assert_eq!(again.len(), 12);
+        assert_eq!(notes.len(), 12);
+        let v: Vec<f32> = notes.iter().map(|n| n.velocity).collect();
+        assert!((v[0] - 0.7).abs() < 1e-6 && (v[11] - 0.7 * RAMP_LOW).abs() < 1e-6, "{v:?}");
+        // Two pitches and a gap: three rolls.
+        let mut notes = vec![note(0.0, 0.5, 42, 1.0), note(1.0, 0.5, 42, 1.0), note(0.0, 0.5, 46, 1.0)];
+        let added = roll(&mut notes, &[0, 1, 2], 0.125, Ramp::Flat);
+        assert_eq!(added.len(), 12);
+        assert!(!notes.iter().any(|n| n.start >= 0.5 && n.start < 1.0), "the gap stays empty");
+        // A note shorter than one step stays one note.
+        let mut notes = vec![note(0.0, 0.1, 42, 1.0)];
+        roll(&mut notes, &[0], 0.125, Ramp::Up);
+        assert_eq!(notes.len(), 1);
+        assert!((notes[0].length - 0.1).abs() < 1e-9);
+    }
+
+    #[test]
+    fn the_grid_is_guessed_from_the_notes() {
+        let grids = [0.25, 1.0 / 6.0, 0.125, 1.0 / 12.0, 0.0625];
+        assert_eq!(guess_grid(&[], &grids), 0.25);
+        let sixteenths: Vec<Note> = (0..16).map(|k| note(k as f64 * 0.25, 0.25, 36, 1.0)).collect();
+        assert_eq!(guess_grid(&sixteenths, &grids), 0.25, "the 808 on sixteenths");
+        let triplets: Vec<Note> = (0..12).map(|k| note(k as f64 / 6.0, 1.0 / 6.0, 42, 1.0)).collect();
+        assert_eq!(guess_grid(&triplets, &grids), 1.0 / 6.0);
+        let mut hats = sixteenths.clone();
+        hats.extend((0..6).map(|k| note(3.0 + k as f64 / 6.0, 1.0 / 6.0, 42, 1.0)));
+        assert_eq!(guess_grid(&hats, &grids), 0.25, "mostly sixteenths, a triplet roll");
+        let quarters: Vec<Note> = (0..4).map(|k| note(k as f64, 1.0, 60, 1.0)).collect();
+        assert_eq!(guess_grid(&quarters, &grids), 0.25, "no coarser than 1/16");
+        let mut with_roll: Vec<Note> = (0..4).map(|k| note(k as f64 * 0.25, 0.25, 36, 1.0)).collect();
+        with_roll.extend((0..16).map(|k| note(2.0 + k as f64 * 0.125, 0.125, 38, 1.0)));
+        assert_eq!(guess_grid(&with_roll, &grids), 0.125, "mostly a 1/32 roll");
+    }
+}
+
 #[cfg(test)]
 mod chance_tests {
     use super::*;

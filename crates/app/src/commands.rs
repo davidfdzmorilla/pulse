@@ -92,7 +92,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
-pub const SHORTCUTS: [(&str, &str); 39] = [
+pub const SHORTCUTS: [(&str, &str); 40] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
     ("⌘S / ⇧⌘S", "Guardar / Guardar como"),
@@ -132,6 +132,7 @@ pub const SHORTCUTS: [(&str, &str); 39] = [
     ("C / V", "Velocidad abajo / arriba"),
     ("⌘U", "Cuantizar notas (editor de clips)"),
     ("B", "Lápiz (editor de clips)"),
+    ("R", "Redoble con las notas seleccionadas (editor de clips)"),
 ];
 
 impl PulseApp {

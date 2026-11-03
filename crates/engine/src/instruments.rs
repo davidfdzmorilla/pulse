@@ -140,6 +140,12 @@ impl Gate {
         Self { pitch, velocity, held: gate == HELD, remaining: gate, age }
     }
 
+    /// Still open, held or timed, for more than `margin` samples: the next
+    /// note overlaps this one (a margin keeps notes that only touch apart).
+    pub(crate) fn open_for(&self, margin: u32) -> bool {
+        self.held || self.remaining > margin
+    }
+
     /// Advances one sample; true when a timed gate just closed.
     pub(crate) fn tick(&mut self) -> bool {
         if self.held || self.remaining == 0 {

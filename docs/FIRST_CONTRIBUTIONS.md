@@ -11,7 +11,7 @@ same work.
 |---|---|---|---|---|
 | 1 | [English versions of the install and platform docs](#1-english-versions-of-the-install-and-platform-docs) | Documentation | Easy | ✅ |
 | 2 | [Readable dim text: fix `TEXT_DIM` contrast](#2-readable-dim-text-fix-text_dim-contrast) | UX / accessibility | Easy | ✅ |
-| 3 | [Make the Windows test suite pass: path separator bugs](#3-make-the-windows-test-suite-pass-path-separator-bugs) | Tests / quality | Easy | ✅ |
+| 3 | [Windows: audio to MIDI with any number of threads](#3-windows-audio-to-midi-with-any-number-of-threads) | Tests / quality | Medium | |
 | 4 | [`cargo check` on Linux](#4-cargo-check-on-linux) | Platform | Medium | |
 | 5 | [`pulse --help` and errors for unknown flags](#5-pulse---help-and-errors-for-unknown-flags) | App / CLI | Easy | ✅ |
 
@@ -105,61 +105,77 @@ passes. The screenshots show the change.
 
 ---
 
-## 3. Make the Windows test suite pass: path separator bugs
+## 3. Windows: audio to MIDI with any number of threads
 
-**Labels:** `windows`, `bug`, `good first issue`
+**Labels:** `windows`, `bug`, `help wanted`
 
-**Problem.** The Windows CI (`.github/workflows/windows.yml`) has been
-failing on `main` since 2026-10-29. Two of the four failing tests are bugs in
-the tests themselves. They build an expected path by joining a string that
-contains `/`, so on Windows they expect a path with mixed separators:
+**Problem.** One test fails on every run of the Windows CI
+(`.github/workflows/windows.yml`), and passes on macOS:
+`transcribe::tests::more_threads_give_the_same_notes`
+(`crates/stems/src/transcribe.rs`, the `assert!(a == b)` at line 329).
 
-- `crates/app/src/factory_sounds_tests.rs:271`:
-  `dir.join("Bombos/Bombo house.wav")`.
-- `crates/app/src/lyrics.rs:307` and `:320`:
-  `dir.join("Canción/Audio/voz.wav")`. Opening the project resolves the
-  relative path with the system separator (`crates/app/src/library.rs`,
-  `resolve`), so the loaded path is `…\Canción\Audio\voz.wav` and the
-  comparison fails.
+The test runs the Basic Pitch model on 2 threads and on the default count
+(`threads()`: the cores minus one, between 1 and 4, so 3 on CI's 4-core
+runner). It then requires the two sets of activations to be **bit-identical**.
+On macOS (Apple Silicon) they are. On Windows x64, ONNX Runtime's CPU
+kernels may split and sum the work differently per thread count, so the
+floats can differ in the last bits. The failure message is just
+`assertion failed: a == b`, so nobody knows yet by how much they differ, or
+whether the **notes** (which are what the user gets) differ too.
 
-Failing run: <https://github.com/davidfdzmorilla/pulse/actions/runs/41789816848>
-(`factory_sounds_tests::a_kit_dragged_from_the_browser_onto_a_midi_track_loads_there`,
-`lyrics::tests::lyrics_are_saved_and_opened_with_the_project`).
+Failing runs, for example
+<https://github.com/davidfdzmorilla/pulse/actions/runs/41794967564> (2026-11-04).
 
-**Goal.** Both tests pass on Windows and still pass on macOS.
+**Goal.** Know how far apart the two results are on Windows, and make the
+test check what matters: that audio to MIDI gives the same notes whatever
+the thread count.
 
-**Scope.** These two tests only. Fix the expected paths, not the app code. If
-you find the app is the one that's wrong, say so in the issue first.
+**Scope.** This test, and only if needed the thread setup in
+`Transcriber::load_on`. Don't weaken the test to make it pass. The notes
+must stay identical. If they differ on Windows, that's a real bug to report,
+not something to hide.
 
-**Files.** `crates/app/src/factory_sounds_tests.rs`, `crates/app/src/lyrics.rs`.
+**Files.** `crates/stems/src/transcribe.rs`.
 
 **Steps.**
-1. Build the expected paths component by component:
-   `dir.join("Bombos").join("Bombo house.wav")`, and the same for
-   `Canción/Audio/voz.wav`.
-2. Check that line 318 of `lyrics.rs` (the saved file stores
-   `"Audio/voz.wav"` with `/`) still holds. That one is intentional:
-   projects store `/` on every OS.
-3. Run `cargo test --release -p app factory_sounds_tests lyrics` on macOS.
-4. Open the PR. The Windows CI job is the test on Windows.
+1. Replace `assert!(a == b)` with a check that reports the largest absolute
+   difference between the two activations, and how many values differ.
+2. Push a branch and open a draft PR so the Windows CI runs. Read the numbers
+   in its log.
+3. If only the activations differ (by a tiny amount) and the notes are
+   identical: compare activations within a stated tolerance, keep
+   `assert_eq!` on the notes, and explain the tolerance in a comment.
+4. If the notes differ too: don't loosen anything. Report it in the issue,
+   with the numbers, so the fix can be chosen. One option is fixing the
+   thread count for transcription.
+5. Run it on macOS: `cargo test --release -p stems more_threads_give_the_same_notes`.
 
-**Acceptance criteria.** Both tests pass in the Windows CI job and on macOS.
+**Acceptance criteria.** The test passes on both CI jobs. Notes are still
+compared exactly. Any tolerance on activations is justified by numbers from
+the Windows log.
 
-**Tests.** The two tests themselves, on both CI jobs.
+**Tests.** The test itself on both CI jobs, plus `cargo test --release -p stems`.
 
-**Knowledge.** Basic Rust, `std::path::Path`. No Windows machine needed.
+**Knowledge.** Rust, basic floating point. ONNX Runtime experience helps.
+No Windows machine needed: CI is the Windows test.
 
-**Follow-ups (not for a first PR).** The other two Windows failures need
-more care:
+**Already fixed, for reference.** Two other tests failed on Windows because
+they built an expected path with `/` inside one `Path::join` (`dir.join("Bombos/Bombo house.wav")`).
+Pulse itself returns clean Windows paths there. They are fixed on the
+`funcion/preparar-lanzamiento` branch and pass on macOS:
+
+```bash
+cargo test --release -p app factory_sounds_tests
+cargo test --release -p app lyrics
+```
+
+**Other Windows failures, not for a first PR.** These fail only on some runs:
 - `engine::tests::with_threads_a_sidechain_waits_for_its_source`
-  (`crates/engine/src/engine.rs:6380`) expects worker threads to have
-  "helped". In this two-track graph the second track depends on the first,
-  so the audio thread can win every race, especially with Windows' coarser
-  thread wake-up.
-- `transcribe::tests::more_threads_give_the_same_notes`
-  (`crates/stems/src/transcribe.rs:329`) requires bit-identical ONNX
-  activations with 2 and 4 threads, which ONNX Runtime's x64 CPU kernels
-  may not guarantee.
+  (`crates/engine/src/engine.rs:6380`, "the other threads did nothing").
+- `the_audio_threads_do_not_allocate_with_workers` in
+  `crates/engine/tests/stress.rs:669` ("the workers allocate"). It is a
+  real-time-safety check, so it needs the maintainer's attention.
+- `transcribe::tests::finds_the_notes_basic_pitch_finds`.
 
 ---
 

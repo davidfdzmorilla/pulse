@@ -305,7 +305,8 @@ mod tests {
     fn lyrics_are_saved_and_opened_with_the_project() {
         let dir = std::env::temp_dir().join(format!("pulse-lyrics-save-{}", std::process::id()));
         let file = dir.join("Canción/Canción.pulse");
-        let voice = dir.join("Canción/Audio/voz.wav").to_string_lossy().into_owned();
+        // Part by part, as opening the project resolves it (with backslashes on Windows).
+        let voice = dir.join("Canción").join("Audio").join("voz.wav").to_string_lossy().into_owned();
         let mut project = crate::project::Project::demo();
         project.save(&file).unwrap();
         assert!(!std::fs::read_to_string(&file).unwrap().contains("\"format\": 16"), "no lyrics, no new format");

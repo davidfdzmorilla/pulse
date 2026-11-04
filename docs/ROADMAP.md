@@ -12,7 +12,7 @@ each version: [CHANGELOG](../CHANGELOG.md).
 
 | Item | State | Source |
 |---|---|---|
-| Windows test suite green on CI | 4 tests failing since 2026-10-29 | [FIRST_CONTRIBUTIONS.md #3](FIRST_CONTRIBUTIONS.md#3-make-the-windows-test-suite-pass-path-separator-bugs) |
+| Windows test suite green on CI | Red since 2026-10-29: 1 constant failure left after the path-test fixes, plus 3 intermittent ones | [FIRST_CONTRIBUTIONS.md #3](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads) |
 | Windows tested on real hardware (audio, MIDI, plugins, display scaling) | Not done | [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md#pendiente-de-verificar-en-windows) |
 | Windows packages attached to releases | Not yet | [BUILD_WINDOWS.md](BUILD_WINDOWS.md) |
 | Windows code signing (Authenticode) | No certificate | [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md#limitaciones-conocidas) |

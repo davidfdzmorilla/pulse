@@ -46,7 +46,7 @@ stems y análisis de la mezcla. Todo corre en tu ordenador, sin conexión y sin 
 | | macOS 13.4+ (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
 | Descarga | [`Pulse-<versión>.zip`](https://github.com/davidfdzmorilla/pulse/releases/latest) | Aún no se publica: [compílalo](docs/BUILD_WINDOWS.md) o usa un artefacto de la CI | — |
-| Estado | **Soportado**: cada versión pasa todas las pruebas y se prueba a mano antes de publicarse | **Experimental**: compila, pasa pruebas, se instala y arranca en el Windows de la CI; sin probar con audio/MIDI reales ni plugins de terceros | No soportado |
+| Estado | **Soportado**: cada versión pasa todas las pruebas y se prueba a mano antes de publicarse | **Experimental**: compila, se instala y arranca en el Windows de la CI, donde aún fallan algunas pruebas; sin probar con audio/MIDI reales ni plugins de terceros | No soportado |
 | Firma | Certificado propio, **sin notarizar** por Apple (un paso de Gatekeeper la primera vez) | Sin firma (aviso de SmartScreen); las actualizaciones se comprueban con la firma Ed25519 de Pulse | — |
 
 Detalle por función: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md). Los Mac con Intel aún no están soportados.
@@ -120,8 +120,9 @@ Detalle por función: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md). Los 
 
 **Motor**
 - Audio en tiempo real sin bloqueos ni reservas de memoria en el hilo de
-  audio, repartido entre varios núcleos. Suena igual con cualquier tamaño de
-  buffer y cualquier número de hilos, y lo comprueban las pruebas.
+  audio, repartido entre varios núcleos. El motor está diseñado para que el
+  render sea determinista con cualquier tamaño de buffer y número de hilos, y
+  hay pruebas automáticas que lo cubren.
 
 Todo está explicado en la **guía**, [`docs/guia.md`](docs/guia.md), que la app
 muestra en Ayuda → Guía de Pulse (con buscador). Cada función nueva se añade a
@@ -192,9 +193,10 @@ renderizar sin interfaz: `target/release/pulse --render salida.wav`.
   etiqueta y la publica en GitHub, de donde la app se actualiza. El paquete de
   Windows se añade a esa publicación desde Windows con
   `scripts/package-windows.ps1` (ver [`docs/BUILD_WINDOWS.md`](docs/BUILD_WINDOWS.md)).
-- La CI compila, prueba y empaqueta Pulse en cada pull request, de forma nativa
-  en Windows (`.github/workflows/windows.yml`) y en Apple Silicon
-  (`.github/workflows/macos.yml`). Sus paquetes son de prueba, no publicaciones.
+- La CI compila y prueba Pulse en cada pull request, de forma nativa en Windows
+  (`.github/workflows/windows.yml`, que además lo empaqueta e instala) y en
+  Apple Silicon (`.github/workflows/macos.yml`, que lo empaqueta en `main`).
+  Sus paquetes son de prueba, no publicaciones.
 
 ## Modelos de IA
 

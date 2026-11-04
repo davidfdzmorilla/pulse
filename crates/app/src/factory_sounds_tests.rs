@@ -268,7 +268,9 @@ fn a_kit_dragged_from_the_browser_onto_a_midi_track_loads_there() {
     std::fs::remove_dir_all(&dir).ok();
     let track = &app.project.tracks[midi];
     assert!(matches!(track.instrument, engine::model::InstrumentKind::DrumRack(_)), "{:?}", app.status);
-    assert_eq!(track.samples[0], dir.join("Bombos/Bombo house.wav").to_string_lossy());
+    // Joined part by part: "Bombos/Bombo house.wav" in one join would leave a
+    // "/" inside a Windows path, which the loaded sample (rightly) doesn't have.
+    assert_eq!(track.samples[0], dir.join("Bombos").join("Bombo house.wav").to_string_lossy());
 }
 
 /// The whole library and a table of what was measured, to listen to:

@@ -46,7 +46,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
 | | macOS 13.4+ (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
 | Download | [`Pulse-<version>.zip`](https://github.com/davidfdzmorilla/pulse/releases/latest) | Not published yet: [build it](docs/BUILD_WINDOWS.md) or use a CI artifact | — |
-| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: builds, tests, installs and starts on CI's Windows; not tested with real audio/MIDI hardware or third-party plugins | Not supported |
+| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: builds, installs and starts on CI's Windows, where some tests still fail; not tested with real audio/MIDI hardware or third-party plugins | Not supported |
 | Signing | Self-signed, **not notarized** by Apple (one-time Gatekeeper step) | Unsigned (SmartScreen warning); updates are checked with Pulse's own Ed25519 signature | — |
 
 Details per feature: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) · Intel Macs are not supported yet.
@@ -121,8 +121,9 @@ Details per feature: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) · Int
 
 **Engine**
 - Real-time audio with no locks or memory allocation on the audio thread,
-  spread across several cores. It sounds the same at any buffer size and
-  thread count, and the tests check it.
+  spread across several cores. The audio engine is designed for
+  deterministic rendering across buffer sizes and thread counts, with
+  automated tests covering this behavior.
 
 Everything is explained in the **guide** (in Spanish),
 [`docs/guia.md`](docs/guia.md), which the app shows under Ayuda → Guía de Pulse
@@ -193,9 +194,10 @@ interface: `target/release/pulse --render out.wav`.
   the tag and publishes it on GitHub, where the app updates from. The Windows
   package is added to that release from Windows with
   `scripts/package-windows.ps1` (see [`docs/BUILD_WINDOWS.md`](docs/BUILD_WINDOWS.md)).
-- CI builds, tests and packages Pulse for every pull request, natively on
-  Windows (`.github/workflows/windows.yml`) and on Apple Silicon
-  (`.github/workflows/macos.yml`). CI packages are test builds, not releases.
+- CI builds and tests Pulse for every pull request, natively on Windows
+  (`.github/workflows/windows.yml`, which also packages and installs it) and
+  on Apple Silicon (`.github/workflows/macos.yml`, which packages on `main`).
+  CI packages are test builds, not releases.
 
 ## AI models
 

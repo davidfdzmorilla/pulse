@@ -16,7 +16,7 @@ Detalle de Windows: [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md).
 | Función | macOS (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
 | Compilación nativa | Verificado | CI (MSVC; también enlaza desde macOS con `cargo xwin`) | No soportado |
-| Pruebas automáticas | Verificado (`cargo test --release`) | Parcial: la CI corre; 4 pruebas fallan en `main` desde el 29-10-2026 | No soportado |
+| Pruebas automáticas | Verificado (`cargo test --release`) | Parcial: la CI corre; en `main` fallan 3 pruebas en cada ejecución (2 de rutas, ya corregidas en `funcion/preparar-lanzamiento` y sin probar aún en Windows) y otras 3 solo a veces | No soportado |
 | Arranque y ventana | Verificado | CI (la ventana arranca y sigue un guion) | No soportado |
 | Rutas de datos | Verificado | Implementado (reglas probadas en macOS) | Implementado (XDG) |
 | Abrir y guardar proyectos | Verificado | Implementado | — |

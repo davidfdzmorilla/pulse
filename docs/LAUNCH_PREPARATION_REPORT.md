@@ -18,7 +18,7 @@ Task IDs (A1–A22) refer to that document's last table.
 - `CONTRIBUTING.md`: 44 lines in Spanish, with no setup or architecture.
 - Windows docs out of date: they said CI was blocked by billing and that
   nothing had run on Windows. In fact CI built, ran and installed Pulse
-  natively until 2026-10-29, and has been red since (4 tests).
+  natively until 2026-10-29, and has been red since: 3 tests fail on every run, 3 more on some runs.
 - CI Windows packages labelled `0.1.3` (shallow clone, no tags).
 - No macOS CI. Discussions, private vulnerability reporting and topics are
   all off.
@@ -102,10 +102,10 @@ Not claimed: notarization, Developer ID, Authenticode, or Windows stability.
 
 **Needs the maintainer on github.com** (steps in
 [GITHUB_COMMUNITY_SETUP.md](GITHUB_COMMUNITY_SETUP.md)):
-1. the Code of Conduct contact (P0);
+1. ~~the Code of Conduct contact~~: done, `correo@davidfdzmorilla.dev`;
 2. private vulnerability reporting (P0);
 3. Discussions and its 8 categories;
-4. 8 new labels (copy-paste `gh label create` commands);
+4. ~~8 new labels~~: created on 2026-11-04;
 5. topics, social preview and a shorter description;
 6. optionally `FUNDING.yml` (no account defined) and a ruleset on `main`.
 
@@ -121,8 +121,9 @@ The five proposed first issues ([FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md)
 2. **Readable dim text: fix `TEXT_DIM` contrast.** UX/accessibility, easy,
    good first issue. Measured 3.92:1 and 3.23:1 on two surfaces, against
    WCAG AA's 4.5:1.
-3. **Make the Windows test suite pass: path separator bugs.** Tests, easy,
-   good first issue. Two of the four red tests mix `/` into `Path::join`.
+3. **Windows: audio to MIDI with any number of threads.** Tests, medium.
+   It replaces the original path-separator task, which this branch has
+   already fixed (see the pre-merge review below).
 4. **`cargo check` on Linux.** Platform, medium.
 5. **`pulse --help` and errors for unknown flags.** CLI, easy, good first
    issue.
@@ -151,14 +152,15 @@ None has been published.
    the release notes require: *"Pulse listo para recibir usuarios y
    colaboradores: README en inglés, guías y plantillas"*. Open the PR and
    watch the first `macOS` workflow run.
-2. **P0** Put a real contact in `CODE_OF_CONDUCT.md`. Enable private
-   vulnerability reporting.
+2. **P0** Enable private vulnerability reporting. (The Code of Conduct
+   contact is set: `correo@davidfdzmorilla.dev`.)
 3. **P0** Get legal advice on the contribution licence clause before the
    first external merge.
 4. **P1** Enable Discussions, create the labels, publish the five first
    issues.
-5. **P1** Fix the four Windows test failures, or let issue #3 take the two
-   easy ones. Then add CI badges.
+5. **P1** Open the PR so Windows CI checks the two path-test fixes. Then
+   fix the remaining Windows failures (issue #3 for the ONNX one; the
+   intermittent engine ones need the maintainer). Then add CI badges.
 6. **P1** Record the demo video and add it to the README.
 7. **P1** Plan the localization layer (English UI).
 8. **P2** Developer ID + notarization; Windows hardware QA, then Windows
@@ -193,3 +195,32 @@ None has been published.
 | External URLs in new/changed files | ✅ checked with `curl -L` (per-version changelog links sampled: v0.1.1, v0.1.60 and v0.1.121 give 200). The only 404s are expected: `blob/main/SECURITY.md` and `blob/main/docs/DOWNLOADS.md` (exist once this branch is merged), and the Discussions URLs, which appear only in an HTML comment and in the setup instructions, until Discussions is enabled |
 | `python3 scripts/changelog.py --check` | ✅ |
 | macOS CI packaging steps (local simulation) | ✅ |
+
+## Pre-merge review (2026-11-04)
+
+A last pass over this branch, before the PR.
+
+| Item | Status | Change |
+|---|---|---|
+| Task 3 of `FIRST_CONTRIBUTIONS.md` used `cargo test --release -p app factory_sounds_tests lyrics` (Cargo: "unexpected argument 'lyrics'") | **Corrected** | Two commands (`… factory_sounds_tests`, `… lyrics`), both run: 4 and 10 tests pass. The task itself was replaced, because its two tests are now fixed (next row). The new task 3 is the ONNX thread-count test |
+| Windows path tests `a_kit_dragged_from_the_browser_onto_a_midi_track_loads_there`, `lyrics_are_saved_and_opened_with_the_project` | **Corrected** (macOS); **not verifiable** on Windows from here | CI logs show Pulse returning native paths (`…\Bombos\Bombo house.wav`), while the tests expected `…\Bombos/Bombo house.wav`. So the bug was in the tests, not a product incompatibility. The expected paths are now joined part by part. No product code changed |
+| Absolute determinism claims (README EN/ES, CONTRIBUTING, DEVELOPMENT, audit) | **Corrected** | "Designed for deterministic rendering … with automated tests covering this behavior". DEVELOPMENT notes that plugins and ONNX models are outside it |
+| `SECURITY.md` / `CODE_OF_CONDUCT.md` notices were HTML comments, invisible on GitHub | **Corrected** | Visible note that private reporting is not enabled yet. CoC contact set to `correo@davidfdzmorilla.dev` (maintainer's choice), also the e-mail fallback in `SECURITY.md` |
+| README/CONTRIBUTING said macOS CI packages every PR | **Corrected** | It packages only on `main`/manual runs |
+| Owner-only actions | **Pending, manual** | Table at the top of [GITHUB_COMMUNITY_SETUP.md](GITHUB_COMMUNITY_SETUP.md#owner-actions-at-a-glance) |
+
+Windows failures on `main` (CI runs 41627764299 to 41794967564, 2026-11-03/04):
+- **On every run:** the two path tests above, and
+  `transcribe::tests::more_threads_give_the_same_notes` (ONNX activations
+  not bit-identical between 2 and 3 threads on x64).
+- **On some runs:** `engine::tests::with_threads_a_sidechain_waits_for_its_source`,
+  `the_audio_threads_do_not_allocate_with_workers` (`stress.rs:669`, "the
+  workers allocate") and `transcribe::tests::finds_the_notes_basic_pitch_finds`.
+
+None was hidden or skipped. The intermittent no-allocation failure is a
+real-time-safety signal that needs the maintainer's attention.
+
+Checks: `cargo test --release --locked -p app -p stems` ✅ (725 + 1 + 48
+passed, 0 failed); `cargo check --release --target x86_64-pc-windows-msvc -p
+app --tests` ✅; YAML ✅; local links/anchors ✅ (0 problems);
+`scripts/changelog.py --check` ✅; `git diff --check` ✅.

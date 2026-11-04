@@ -73,11 +73,15 @@ sequenceDiagram
   started off the audio thread, that help render each block's tracks
   following their dependencies (sidechains, groups, returns). A late worker
   only means less help, never a late block.
-- **Determinism.** The output doesn't depend on buffer size or thread count,
-  and every render repeats bit for bit. Tests check both (for example
+- **Determinism.** The engine is designed so its output doesn't depend on
+  buffer size or thread count, and so a render repeats exactly. Automated
+  tests cover this (for example
   `threads_play_the_same_samples` and `any_callback_size_plays_the_same` in
   `stress.rs`, `what_plays_does_not_depend_on_the_buffer_size` in
-  `crates/app/src/fidelity_tests.rs`).
+  `crates/app/src/fidelity_tests.rs`). They cover the engine's own
+  instruments and effects. Third-party plugins and the ML models (ONNX
+  Runtime) are outside that guarantee: see the Windows thread-count test in
+  [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads).
 - **Offline rendering** (`crates/engine/src/offline.rs`, used by
   `crates/app/src/export.rs`) runs the same `Engine` without an audio device,
   faster than real time, on a background thread. `pulse --render out.wav

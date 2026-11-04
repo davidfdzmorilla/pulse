@@ -79,7 +79,7 @@ so far (details in [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md)):
 | Native build (MSVC, GitHub's `windows-2022` runner) | Verified in CI |
 | Native execution: `pulse.exe --render`, window start driven by a script | Verified in CI (no audio device) |
 | Installer: silent install, `.pulse` association, uninstall keeps settings | Verified in CI |
-| Test suite on Windows | **Failing**: 4 tests have failed on `main` since 2026-10-29 ([details](FIRST_CONTRIBUTIONS.md#3-make-the-windows-test-suite-pass-path-separator-bugs)) |
+| Test suite on Windows | **Failing** on `main` since 2026-10-29: 3 tests fail on every run and 3 more on some runs ([details](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)). Two of the constant ones were test bugs. They are fixed on the launch branch but haven't run on Windows yet |
 | Real audio (WASAPI), MIDI hardware, third-party plugins, display scaling | **Not verified**: no Windows machine has tried them yet |
 
 If you want to help test it:

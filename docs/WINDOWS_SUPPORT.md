@@ -11,8 +11,12 @@ qué se ha cambiado y qué está comprobado. Documentos relacionados:
 ([ejecución 40853681048](https://github.com/davidfdzmorilla/pulse/actions/runs/40853681048),
 commit `90bfbae`), compiló de forma nativa con MSVC y pasó todas las pruebas.
 También renderizó un proyecto con `pulse.exe --render`, arrancó la ventana con
-un guion, e instaló, asoció `.pulse` y desinstaló. Desde ese día **4 pruebas
-fallan en Windows** (ver [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-make-the-windows-test-suite-pass-path-separator-bugs)).
+un guion, e instaló, asoció `.pulse` y desinstaló. Desde ese día la CI de Windows
+está en rojo: **3 pruebas fallan en cada ejecución** y otras 3 solo en algunas
+(detalle en [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)). Dos de las fijas
+eran fallos de las propias pruebas (un `/` dentro de `Path::join`); están
+corregidas en la rama `funcion/preparar-lanzamiento`, pero aún no se han
+ejecutado en Windows.
 Sigue sin probarse en un equipo Windows real: audio por WASAPI, MIDI, plugins
 de terceros, escala de pantalla y actualizador. Pulse **no está listo para
 publicarse en Windows** hasta que las pruebas vuelvan a pasar y se haga esa
@@ -67,7 +71,7 @@ comprobado la CI.*
 | 15 | Ventana de consola, icono y versión | `app/src/main.rs`, `app/build.rs` | Programa de consola, sin recursos | Al abrir Pulse salía una consola; icono de egui | `windows_subsystem = "windows"` en release (las opciones de línea de órdenes se enganchan a la consola que las lanzó), recurso de icono y versión con `embed-resource`, icono de la ventana | Implementado, pendiente de Windows |
 | 16 | Sin registro de fallos | `app/src/logs.rs` | Un cierre inesperado no dejaba rastro (también en macOS) | No se podía diagnosticar | `pulse.log` en la carpeta de logs, con la traza de cada pánico | Verificado en macOS (escritura y rotación) |
 | 17 | Sin empaquetado de Windows | `scripts/package-windows.ps1`, `packaging/windows/` | Solo `bundle.sh` (Pulse.app) | No había nada que instalar | Zip portable + instalador Inno Setup por usuario, sin administrador | Implementado, pendiente de Windows |
-| 18 | Sin CI | `.github/workflows/windows.yml` | — | Nada comprobaba Windows | Workflow de Windows: compila, prueba, empaqueta, renderiza, arranca la ventana con un guion e instala y desinstala | Verificado en la CI (verde el 29-10-2026; antes estuvo bloqueada por la facturación de GitHub). 4 pruebas fallan desde entonces |
+| 18 | Sin CI | `.github/workflows/windows.yml` | — | Nada comprobaba Windows | Workflow de Windows: compila, prueba, empaqueta, renderiza, arranca la ventana con un guion e instala y desinstala | Verificado en la CI (verde el 29-10-2026; antes estuvo bloqueada por la facturación de GitHub). desde entonces hay pruebas que fallan (ver el resumen) |
 
 ## Comprobaciones hechas
 

@@ -22,9 +22,10 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 - **The audio thread is sacred.** `Engine::process` never allocates, never
   locks and never waits for the OS. A stress test checks this
   (`crates/engine/tests/stress.rs`).
-- **Determinism.** A project sounds the same at any buffer size and thread
-  count, and every offline render repeats bit for bit. There are tests for
-  both.
+- **Determinism.** The engine is designed so a project renders the same at
+  any buffer size and thread count, and an offline render repeats exactly.
+  Automated tests cover both. A change that breaks them needs a very good
+  reason.
 - **Local and offline.** The analysis tools (audio to MIDI, stems, lyrics,
   tempo, chords) run on your machine. No accounts, no telemetry.
 - **Honest status.** We don't call something supported until it has been
@@ -97,9 +98,11 @@ If you have the Windows target, check that Windows still compiles:
 cargo check --release --target x86_64-pc-windows-msvc --workspace --all-targets
 ```
 
-CI (`.github/workflows/windows.yml`) builds, tests and packages Pulse natively
-on Windows for every pull request. The macOS workflow
-(`.github/workflows/macos.yml`) does the same on Apple Silicon.
+For every pull request, CI builds and tests Pulse natively on Windows
+(`.github/workflows/windows.yml`, which also packages and installs it) and on
+Apple Silicon (`.github/workflows/macos.yml`, new: it packages only on
+`main`). The Windows job is currently red for reasons unrelated to most
+changes: see [docs/FIRST_CONTRIBUTIONS.md](docs/FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads).
 
 ## Formatting and lints
 

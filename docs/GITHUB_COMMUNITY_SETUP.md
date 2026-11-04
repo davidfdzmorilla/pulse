@@ -16,14 +16,23 @@ State checked on 2026-11-04 with the GitHub CLI:
 | Topics | **None** | `gh repo view --json repositoryTopics` |
 | Website | Empty | `gh repo view --json homepageUrl` |
 | Community profile | 57 % (before this branch: README, CONTRIBUTING, LICENSE) | `gh api repos/davidfdzmorilla/pulse/community/profile` |
-| Labels | GitHub's defaults plus `accessibility` | `gh label list` |
+| Labels | GitHub's defaults plus `accessibility`; the 8 labels of section 3 created on 2026-11-04 | `gh label list` |
+
+## Owner actions at a glance
+
+Only the repository owner can do these. Until they are done, the docs say
+so openly (a visible note in `SECURITY.md`):
+
+| # | Action | Where | Blocks |
+|---|---|---|---|
+| 1 | ~~Code of Conduct contact~~ **Done:** `correo@davidfdzmorilla.dev` (also the e-mail fallback in `SECURITY.md`) | — | — |
+| 2 | Enable **Private vulnerability reporting** | Settings → Code security | The reporting path in `SECURITY.md` |
+| 3 | Legal review of the extra license clause (point 3) in `CONTRIBUTING.md` | a lawyer; questions in [PROJECT_MODEL.md](PROJECT_MODEL.md#open-questions-for-the-maintainer-not-legal-advice) | Merging the first outside contribution |
+| 4 | Enable Discussions and add topics (labels: **done** on 2026-11-04) | sections 2 and 4 below | Community |
 
 ## 1. Before announcing anything
 
-- [ ] **Code of Conduct contact.** Replace `[INSERT CONTACT METHOD]` in
-  `CODE_OF_CONDUCT.md` with a private address you will read. Ideally a
-  dedicated one, not your personal mail. Without it, the Code of Conduct
-  can't be enforced.
+- [x] **Code of Conduct contact:** `correo@davidfdzmorilla.dev`.
 - [ ] **Private vulnerability reporting.** Settings → *Code security* →
   *Private vulnerability reporting* → **Enable**. `SECURITY.md` points to
   it. Then remove the `MAINTAINER ACTION REQUIRED` comment in `SECURITY.md`.
@@ -54,8 +63,9 @@ Afterwards:
 
 ## 3. Labels
 
-The issue forms and `docs/FIRST_CONTRIBUTIONS.md` use these labels. Labels
-that don't exist are silently skipped by issue forms, so create them first.
+**Done on 2026-11-04**: these labels exist. The commands stay here for
+reference (or for a fork). The issue forms and `docs/FIRST_CONTRIBUTIONS.md`
+use them.
 Existing labels (`bug`, `enhancement`, `documentation`, `good first issue`,
 `help wanted`, `accessibility`) are kept.
 

@@ -100,8 +100,8 @@ quality or performance against other DAWs):
   lyrics with timing, tempo, key and chords;
 - composing helpers that follow the song's chords (Accompany, chord track);
 - an explaining mix/master assistant;
-- an engine whose output is bit-identical at any buffer size and thread
-  count, enforced by tests;
+- an engine designed for deterministic rendering across buffer sizes and
+  thread counts, with automated tests covering it;
 - free software with no accounts.
 
 ### Main limitations

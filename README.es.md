@@ -45,7 +45,7 @@ stems y análisis de la mezcla. Todo corre en tu ordenador, sin conexión y sin 
 | | macOS 13.4+ (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
 | Descarga | [`Pulse-<versión>.zip`](https://github.com/davidfdzmorilla/pulse/releases/latest) | Aún no se publica: [compílalo](docs/BUILD_WINDOWS.md) o usa un artefacto de la CI | — |
-| Estado | **Soportado**: cada versión pasa todas las pruebas y se prueba a mano antes de publicarse | **Experimental**: compila en el Windows de la CI, donde aún fallan algunas pruebas. Se instaló y arrancó allí por última vez el 29-10-2026; sin probar con audio/MIDI reales ni plugins de terceros | No soportado |
+| Estado | **Soportado**: cada versión pasa todas las pruebas y se prueba a mano antes de publicarse | **Experimental**: en el Windows de la CI compila, se empaqueta, renderiza y se instala (4-11-2026); aún falla una prueba y el arranque de la ventana con guion; sin probar con audio/MIDI reales ni plugins de terceros | No soportado |
 | Firma | Certificado propio, **sin notarizar** por Apple (un paso de Gatekeeper la primera vez) | Sin firma (aviso de SmartScreen); las actualizaciones se comprueban con la firma Ed25519 de Pulse | — |
 
 Detalle por función: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md). Los Mac con Intel aún no están soportados.

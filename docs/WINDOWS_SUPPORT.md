@@ -13,8 +13,10 @@ commit `90bfbae`), compiló de forma nativa con MSVC y pasó todas las pruebas.
 También renderizó un proyecto con `pulse.exe --render`, arrancó la ventana con
 un guion, e instaló, asoció `.pulse` y desinstaló. Desde ese día la CI de Windows
 está en rojo: en `main` **3 pruebas fallan en cada ejecución** y otras 3 solo
-en algunas. La rama `funcion/preparar-lanzamiento` corrige 3 (2 confirmadas en la CI
-de Windows, 1 solo en macOS); quedan 1 reproducible y 2 intermitentes. Tabla en
+en algunas. La rama `funcion/preparar-lanzamiento` corrige 3, confirmadas en la CI de
+Windows; además vuelve a empaquetar, renderizar e instalar en la CI (pasan),
+mientras que el arranque de la ventana con guion falla. Quedan pendientes 1
+prueba reproducible y 2 intermitentes. Tabla en
 [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-que-fallan-en-windows).
 Sigue sin probarse en un equipo Windows real: audio por WASAPI, MIDI, plugins
 de terceros, escala de pantalla y actualizador. Pulse **no está listo para

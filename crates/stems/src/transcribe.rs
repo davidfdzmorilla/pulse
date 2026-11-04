@@ -312,10 +312,16 @@ mod tests {
         numbers.chunks(4).map(|c| (c[0], c[1], c[2] as u8, c[3] as f32)).collect()
     }
 
-    /// On four threads, as on the two it ran on before: the very same
-    /// activations, so the same notes; and the shared model, the same again,
-    /// from memory the second time. On the reference melody and on chords
-    /// with noise over several windows.
+    /// On four threads, as on the two it ran on before: the same notes; and
+    /// the shared model, the same again, from memory the second time. On the
+    /// reference melody and on chords with noise over several windows.
+    ///
+    /// The activations agree to within rounding, not bit for bit. On Apple
+    /// Silicon they come out identical, but ONNX Runtime's x64 kernels (Windows
+    /// CI) split the sums per thread count. The largest difference is printed,
+    /// so a CI log says how far apart they are. The notes, which are what
+    /// Pulse gives the user, must match exactly (and amplitudes as near as
+    /// the sums allow).
     #[test]
     fn more_threads_give_the_same_notes() {
         let (melody, rate) = melody();
@@ -331,10 +337,24 @@ mod tests {
         let (mut before, mut now) = (Transcriber::load_on(2).unwrap(), Transcriber::load().unwrap());
         for (audio, rate) in [(melody, rate), (chords, RATE)] {
             let resampled = resample(&audio, rate, RATE);
-            let (a, b) = (before.activations(&resampled, &mut |_| true).unwrap(), now.activations(&resampled, &mut |_| true).unwrap());
-            assert!(a == b);
+            let ((frames_a, onsets_a), (frames_b, onsets_b)) = (before.activations(&resampled, &mut |_| true).unwrap(), now.activations(&resampled, &mut |_| true).unwrap());
+            assert_eq!((frames_a.len(), onsets_a.len()), (frames_b.len(), onsets_b.len()));
+            let largest = frames_a.iter().chain(&onsets_a).zip(frames_b.iter().chain(&onsets_b)).flat_map(|(x, y)| x.iter().zip(y).map(|(x, y)| (x - y).abs())).fold(0.0f32, f32::max);
+            eprintln!("activations on 2 and {} threads: largest difference {largest:e}", threads());
+            if cfg!(all(target_os = "macos", target_arch = "aarch64")) {
+                assert_eq!(largest, 0.0, "Apple Silicon gave identical activations");
+            } else {
+                // Ten times what one thread against several was measured at (3e-5, see `threads`).
+                assert!(largest < 3e-4, "activations differ by {largest:e}");
+            }
             let notes = now.notes(&audio, rate, |_| true).unwrap();
             assert!(!notes.is_empty());
+            let theirs = before.notes(&audio, rate, |_| true).unwrap();
+            let timing = |notes: &[NoteEvent]| notes.iter().map(|n| (n.start, n.end, n.pitch)).collect::<Vec<_>>();
+            assert_eq!(timing(&theirs), timing(&notes), "the notes depend on the thread count");
+            for (x, y) in theirs.iter().zip(&notes) {
+                assert!((x.amplitude - y.amplitude).abs() < 1e-4, "{x:?} vs {y:?}");
+            }
             assert_eq!(transcribe(&audio, rate, |_| true).unwrap(), notes);
             // From memory: nothing is analysed, so there is no progress to tell.
             let mut told = 0;

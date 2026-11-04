@@ -93,7 +93,10 @@ jobs:
         if: ${{ !cancelled() && steps.paquete.outcome == 'success' }}
         run: |
           Push-Location dist
-          Get-ChildItem -File | Where-Object { $_.Name -like '*.zip' -or $_.Name -like '*-setup.exe' } | ForEach-Object { "$((Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -Encoding ascii SHA256SUMS.txt
+          # With "\n" line ends (not Set-Content's CRLF), so `shasum -c` and
+          # `sha256sum -c` read it on macOS and Linux too.
+          $lines = Get-ChildItem -File | Where-Object { $_.Name -like '*.zip' -or $_.Name -like '*-setup.exe' } | ForEach-Object { "$((Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower())  $($_.Name)" }
+          [IO.File]::WriteAllText((Join-Path (Get-Location) 'SHA256SUMS.txt'), (($lines -join "`n") + "`n"))
           Get-Content SHA256SUMS.txt
           Pop-Location
 
@@ -124,11 +127,14 @@ jobs:
           $env:PULSE_SCRIPT_OUT = $out
           $p = Start-Process -FilePath 'dist\Pulse\pulse.exe' -PassThru
           if (-not $p.WaitForExit(180000)) { Stop-Process -Id $p.Id -Force; throw 'Pulse no terminó el guion en 3 minutos' }
+          Write-Host "pulse.exe salió con $($p.ExitCode)"
+          # Pulse's own log first, and kept with the artifacts: if the script
+          # didn't run, it says why (it used to be printed only on success).
+          Get-ChildItem "$env:LOCALAPPDATA\Pulse\Logs" -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName; Copy-Item $_.FullName $out }
           Get-Content (Join-Path $out 'log.txt')
           Get-ChildItem $out -Filter *.ppm | ForEach-Object { python scripts\ppm.py $_.FullName ($_.FullName -replace '\.ppm$', '.png') }
           if (Select-String -Path (Join-Path $out 'log.txt') -Pattern 'ERROR' -Quiet) { throw 'El guion tuvo errores' }
           if (-not (Test-Path (Join-Path $out 'proyecto.json'))) { throw 'El guion no llegó al final' }
-          Get-ChildItem "$env:LOCALAPPDATA\Pulse\Logs" -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName }
 
       - name: Aviso si la ventana no arrancó
         # (!cancelled(): without a status function GitHub adds success(), and

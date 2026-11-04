@@ -45,7 +45,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
 | | macOS 13.4+ (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
 | Download | [`Pulse-<version>.zip`](https://github.com/davidfdzmorilla/pulse/releases/latest) | Not published yet: [build it](docs/BUILD_WINDOWS.md) or use a CI artifact | — |
-| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: builds on CI's Windows, where some tests still fail. It last installed and started there on 2026-10-29; not tested with real audio/MIDI hardware or third-party plugins | Not supported |
+| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: on CI's Windows it builds, packages, renders and installs (2026-11-04); one test still fails there, and the scripted window start fails; not tested with real audio/MIDI hardware or third-party plugins | Not supported |
 | Signing | Self-signed, **not notarized** by Apple (one-time Gatekeeper step) | Unsigned (SmartScreen warning); updates are checked with Pulse's own Ed25519 signature | — |
 
 Details per feature: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) · Intel Macs are not supported yet.

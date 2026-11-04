@@ -298,3 +298,33 @@ after it, all four give 0.9752 s. A new test,
   - The no-allocation test passed this time.
   - Packaging, SHA-256, render, GUI start and installer were skipped. That
     run used the old workflow, so the new conditions remain to be seen.
+
+### CI on `2447620` (2026-11-04)
+
+- **macOS** ([run 41814275371](https://github.com/davidfdzmorilla/pulse/actions/runs/41814275371), Apple M1 runner): ✅.
+  - Build ✅ and all tests ✅ (1,197 passed, 0 failed), including
+    `finds_the_notes_basic_pitch_finds` and the new
+    `one_thread_finds_the_same_notes`.
+  - Packaging and render were skipped, by design: they run only on `main`.
+- **Windows** ([run 41814275373](https://github.com/davidfdzmorilla/pulse/actions/runs/41814275373)): ❌, as expected.
+  - Build ✅.
+  - Tests ❌: only `more_threads_give_the_same_notes` failed (1,188
+    passed). The two path tests and `finds_the_notes_basic_pitch_finds` pass.
+    The sidechain and no-allocation tests passed that time.
+  - **The steps after the tests ran again, for the first time since
+    2026-10-29:**
+    - packaging (zip + installer) ✅;
+    - `SHA256SUMS.txt` ✅ (both hashes check out);
+    - `--render` ✅ (42 MB WAV);
+    - install, `.pulse` association and uninstall ✅, with the real version
+      `0.1.121-5-g80d37ef` instead of `0.1.3`.
+  - **Scripted window start ❌.** Pulse exited within the 3 minutes without
+    running the script: `log.txt` is empty and there are no screenshots. The
+    warning showed on the run's page as intended. The cause is unknown.
+    `pulse.log` wasn't kept, because it was printed only on success.
+- **Follow-up (uncommitted, needs approval):**
+  - `SHA256SUMS.txt` is now written with LF line ends. The CRLF version
+    didn't pass `shasum -c` on macOS until the `\r` was stripped.
+  - The window-start step prints Pulse's exit code and its `pulse.log`
+    before checking, and keeps the log in the `registros-windows` artifact.
+  - The docs are updated with these results.

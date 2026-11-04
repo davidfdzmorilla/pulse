@@ -3,8 +3,13 @@
 # (only from Windows 10 1903). Pulse runs its models on the CPU, so they are
 # delay-loaded: pulse.exe and the tests start without them, and they would only
 # load if a DirectML session were ever created.
+#
+# The main thread's stack: 8 MB, as on macOS, not Windows' 1 MB. The interface
+# runs on that thread, and drawing the welcome screen alone takes 1.25-1.5 MB
+# (measured with a headless test and RUST_MIN_STACK): with 1 MB, pulse.exe died
+# of a stack overflow (0xC00000FD) as soon as its window opened.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "link-arg=/DELAYLOAD:DirectML.dll", "-C", "link-arg=/DELAYLOAD:DXCORE.dll", "-C", "link-arg=delayimp.lib"]
+rustflags = ["-C", "link-arg=/DELAYLOAD:DirectML.dll", "-C", "link-arg=/DELAYLOAD:DXCORE.dll", "-C", "link-arg=delayimp.lib", "-C", "link-arg=/STACK:8388608"]
 
 # macOS: the ONNX Runtime linked in (for stems and audio to MIDI) is built for
 # macOS 13.4 and later, so Pulse says so (Info.plist's LSMinimumSystemVersion

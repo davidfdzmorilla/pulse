@@ -1,5 +1,8 @@
 blank_issues_enabled: true
 contact_links:
+  - name: Questions and help
+    url: https://github.com/davidfdzmorilla/pulse/discussions/categories/support
+    about: How do I...? Ask in Discussions → Support. Issues are for bugs and concrete proposals.
   - name: Security vulnerability
     url: https://github.com/davidfdzmorilla/pulse/blob/main/SECURITY.md
     about: Please don't report vulnerabilities in public issues. Follow SECURITY.md instead.

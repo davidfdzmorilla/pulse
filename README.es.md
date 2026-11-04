@@ -26,9 +26,8 @@ stems y análisis de la mezcla. Todo corre en tu ordenador, sin conexión y sin 
   <a href="docs/guia.md">Guía</a> ·
   <a href="docs/ROADMAP.md">Hoja de ruta</a> ·
   <a href="CONTRIBUTING.es.md">Contribuir</a> ·
-  <a href="CHANGELOG.md">Cambios</a>
-  <!-- Añadir cuando GitHub Discussions esté activado (docs/GITHUB_COMMUNITY_SETUP.md):
-  · <a href="https://github.com/davidfdzmorilla/pulse/discussions">Conversaciones</a> -->
+  <a href="CHANGELOG.md">Cambios</a> ·
+  <a href="https://github.com/davidfdzmorilla/pulse/discussions">Conversaciones</a>
 </p>
 
 <p align="center"><a href="README.md">English</a> · <strong>Español</strong></p>

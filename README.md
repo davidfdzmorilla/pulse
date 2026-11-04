@@ -26,9 +26,8 @@ mix analysis. They all run on your computer, offline and with no accounts.
   <a href="docs/guia.md">Documentation</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
   <a href="CONTRIBUTING.md">Contributing</a> ·
-  <a href="CHANGELOG.md">Changelog</a>
-  <!-- Add once GitHub Discussions is enabled (docs/GITHUB_COMMUNITY_SETUP.md):
-  · <a href="https://github.com/davidfdzmorilla/pulse/discussions">Discussions</a> -->
+  <a href="CHANGELOG.md">Changelog</a> ·
+  <a href="https://github.com/davidfdzmorilla/pulse/discussions">Discussions</a>
 </p>
 
 <p align="center"><strong>English</strong> · <a href="README.es.md">Español</a></p>

@@ -40,23 +40,13 @@ For crashes or misbehaviour with no security impact, open a normal
 
 **Please don't open a public issue for a vulnerability.**
 
-> **Status:** GitHub's private vulnerability reporting is **not enabled yet**
-> on this repository (checked 2026-11-04). Until the maintainer enables it,
-> use the fallback below.
+Use GitHub's private reporting: the repository's **Security** tab →
+**Report a vulnerability**
+(<https://github.com/davidfdzmorilla/pulse/security/advisories/new>). Only the
+maintainer sees the report.
 
-Once enabled: go to the repository's **Security** tab → **Report a
-vulnerability** (<https://github.com/davidfdzmorilla/pulse/security/advisories/new>).
-Only the maintainer sees the report.
-
-<!-- MAINTAINER ACTION REQUIRED: private vulnerability reporting is currently
-     disabled on the repository (checked 2026-11-04 with
-     `gh api repos/davidfdzmorilla/pulse/private-vulnerability-reporting`).
-     Enable it in Settings → Code security → Private vulnerability reporting,
-     or replace this section with another private contact.
-     See docs/GITHUB_COMMUNITY_SETUP.md. -->
-
-**Meanwhile, or if you prefer e-mail:** write to
-[correo@davidfdzmorilla.dev](mailto:correo@davidfdzmorilla.dev) with "Security" in the subject.
+If you prefer e-mail, write to [correo@davidfdzmorilla.dev](mailto:correo@davidfdzmorilla.dev) with "Security" in the
+subject.
 
 Please include:
 

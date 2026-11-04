@@ -76,8 +76,9 @@ Task IDs (A1–A22) refer to that document's last table.
   (matches `LICENSE`), platforms (matches the platform table). There is no CI
   badge while Windows CI is red. Add one when both workflows are green.
 - **Quick links.** Download, Getting started, Features, Documentation,
-  Roadmap, Contributing, Changelog. Discussions is left as an HTML comment
-  until it's enabled, so there are no broken links.
+  Roadmap, Contributing, Changelog and Discussions. The Discussions link was
+  an HTML comment until Discussions was enabled (2026-11-04), so there was
+  never a broken link.
 - **Video.** None exists, so none is linked. There is a plan instead.
 - **Languages.** English is the default (`README.md`, `CONTRIBUTING.md`).
   Spanish is kept and cross-linked (`README.es.md`, `CONTRIBUTING.es.md`).
@@ -103,10 +104,10 @@ Not claimed: notarization, Developer ID, Authenticode, or Windows stability.
 **Needs the maintainer on github.com** (steps in
 [GITHUB_COMMUNITY_SETUP.md](GITHUB_COMMUNITY_SETUP.md)):
 1. ~~the Code of Conduct contact~~: done, `correo@davidfdzmorilla.dev`;
-2. private vulnerability reporting (P0);
-3. Discussions and its 8 categories;
+2. ~~private vulnerability reporting~~: enabled;
+3. ~~Discussions and its 8 categories~~: enabled;
 4. ~~8 new labels~~: created on 2026-11-04;
-5. topics, social preview and a shorter description;
+5. ~~topics, social preview and a shorter description~~: done;
 6. optionally `FUNDING.yml` (no account defined) and a ruleset on `main`.
 
 ## F. Contribution
@@ -152,12 +153,11 @@ None has been published.
    the release notes require: *"Pulse listo para recibir usuarios y
    colaboradores: README en inglés, guías y plantillas"*. Open the PR and
    watch the first `macOS` workflow run.
-2. **P0** Enable private vulnerability reporting. (The Code of Conduct
-   contact is set: `correo@davidfdzmorilla.dev`.)
+2. ~~**P0** Enable private vulnerability reporting~~: done, and the Code
+   of Conduct contact is set (`correo@davidfdzmorilla.dev`).
 3. **P0** Get legal advice on the contribution licence clause before the
    first external merge.
-4. **P1** Enable Discussions, create the labels, publish the five first
-   issues.
+4. **P1** Publish the five first issues (Discussions and labels: done).
 5. **P1** Open the PR so Windows CI checks the two path-test fixes. Then
    fix the remaining Windows failures (issue #3 for the ONNX one; the
    intermittent engine ones need the maintainer). Then add CI badges.
@@ -224,3 +224,16 @@ Checks: `cargo test --release --locked -p app -p stems` ✅ (725 + 1 + 48
 passed, 0 failed); `cargo check --release --target x86_64-pc-windows-msvc -p
 app --tests` ✅; YAML ✅; local links/anchors ✅ (0 problems);
 `scripts/changelog.py --check` ✅; `git diff --check` ✅.
+
+### First macOS CI run (PR #209)
+
+[Run 41805367312](https://github.com/davidfdzmorilla/pulse/actions/runs/41805367312)
+built everything and passed every test but one:
+`transcribe::tests::finds_the_notes_basic_pitch_finds` (`crates/stems/src/transcribe.rs:291`).
+On GitHub's `macos-15` runner (Apple M1, 3 cores) the note 67 of the
+reference melody starts at 0.9868 s instead of 0.9752 s, one frame
+(≈11.6 ms) early. The test allows 1 ms. It passes on the maintainer's Mac.
+It also fails intermittently on Windows with the same note (0.9984 s).
+This is a pre-existing sensitivity of the test (or of the port) to the CPU
+running ONNX Runtime, and this branch doesn't cause it. It is left visible,
+not skipped, pending the maintainer's decision.

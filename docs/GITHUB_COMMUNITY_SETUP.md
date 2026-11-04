@@ -3,44 +3,41 @@
 The files in the repository (issue forms, PR template, Code of Conduct,
 security policy) work as soon as they are on `main`. The items below are
 **repository settings on github.com**, which only the maintainer can change.
-None of them has been changed.
-
-State checked on 2026-11-04 with the GitHub CLI:
+They were set up on 2026-11-04, together with the maintainer, and checked
+with the GitHub CLI:
 
 | Setting | State | Command used |
 |---|---|---|
 | Visibility | Public | `gh repo view --json visibility` |
 | Issues | Enabled | `gh repo view --json hasIssuesEnabled` |
-| Discussions | **Disabled** | `gh repo view --json hasDiscussionsEnabled` |
-| Private vulnerability reporting | **Disabled** | `gh api repos/davidfdzmorilla/pulse/private-vulnerability-reporting` |
-| Topics | **None** | `gh repo view --json repositoryTopics` |
+| Discussions | Enabled, 8 categories (see section 2) | `gh repo view --json hasDiscussionsEnabled` |
+| Private vulnerability reporting | Enabled | `gh api repos/davidfdzmorilla/pulse/private-vulnerability-reporting` |
+| Topics | `daw`, `music-production`, `audio`, `rust`, `egui`, `vst3`, `clap`, `midi`, `audio-to-midi`, `music` | `gh repo view --json repositoryTopics` |
+| Description, social preview | Short description; custom image (logo + Arrangement) | `gh repo view --json description`; GraphQL `usesCustomOpenGraphImage` |
 | Website | Empty | `gh repo view --json homepageUrl` |
-| Community profile | 57 % (before this branch: README, CONTRIBUTING, LICENSE) | `gh api repos/davidfdzmorilla/pulse/community/profile` |
-| Labels | GitHub's defaults plus `accessibility`; the 8 labels of section 3 created on 2026-11-04 | `gh label list` |
+| Community profile | 57 % before this branch (README, CONTRIBUTING, LICENSE); the rest arrives when it is merged | `gh api repos/davidfdzmorilla/pulse/community/profile` |
+| Labels | GitHub's defaults, `accessibility` and the 8 labels of section 3 | `gh label list` |
 
 ## Owner actions at a glance
 
-Only the repository owner can do these. Until they are done, the docs say
-so openly (a visible note in `SECURITY.md`):
+Only the repository owner can do these.
 
 | # | Action | Where | Blocks |
 |---|---|---|---|
 | 1 | ~~Code of Conduct contact~~ **Done:** `correo@davidfdzmorilla.dev` (also the e-mail fallback in `SECURITY.md`) | — | — |
-| 2 | Enable **Private vulnerability reporting** | Settings → Code security | The reporting path in `SECURITY.md` |
+| 2 | ~~Private vulnerability reporting~~ **Done** | — | — |
 | 3 | Legal review of the extra license clause (point 3) in `CONTRIBUTING.md` | a lawyer; questions in [PROJECT_MODEL.md](PROJECT_MODEL.md#open-questions-for-the-maintainer-not-legal-advice) | Merging the first outside contribution |
-| 4 | Enable Discussions and add topics (labels: **done** on 2026-11-04) | sections 2 and 4 below | Community |
+| 4 | ~~Discussions, labels, topics, description, social preview~~ **Done** | — | — |
 
 ## 1. Before announcing anything
 
 - [x] **Code of Conduct contact:** `correo@davidfdzmorilla.dev`.
-- [ ] **Private vulnerability reporting.** Settings → *Code security* →
-  *Private vulnerability reporting* → **Enable**. `SECURITY.md` points to
-  it. Then remove the `MAINTAINER ACTION REQUIRED` comment in `SECURITY.md`.
+- [x] **Private vulnerability reporting:** enabled.
 
 ## 2. Discussions
 
-Settings → *General* → *Features* → tick **Discussions**. Then, in the
-Discussions tab → ✏️ next to *Categories*, create:
+**Done.** Enabled with `gh repo edit --enable-discussions`. The categories
+(edited in the web, Discussions tab → ✏️ next to *Categories*) are:
 
 | Category | Format | Purpose |
 |---|---|---|
@@ -53,13 +50,9 @@ Discussions tab → ✏️ next to *Categories*, create:
 | 🎧 Show & Tell | Open-ended discussion | Share what you made |
 | 🙋 Support | Question / Answer | How do I…? (answers can be marked) |
 
-Afterwards:
-- Add the Discussions link in `README.md` and `README.es.md` (an HTML comment
-  marks the spot in the quick links).
-- In `.github/ISSUE_TEMPLATE/config.yml`, add a contact link
-  `https://github.com/davidfdzmorilla/pulse/discussions/categories/support`
-  for questions. You can also set `blank_issues_enabled: false` to send
-  everything through the forms.
+The README quick links point to Discussions, and the issue chooser
+(`.github/ISSUE_TEMPLATE/config.yml`) sends questions to Support. Optional
+later: `blank_issues_enabled: false` to send everything through the forms.
 
 ## 3. Labels
 
@@ -82,15 +75,12 @@ gh label create "needs reproduction" --color d4c5f9 --description "Can't be repr
 
 ## 4. Repository details
 
-- [ ] **Topics** (Settings → General, or the ⚙️ next to *About*): `daw`,
-  `music-production`, `audio`, `rust`, `egui`, `vst3`, `clap`, `midi`,
-  `audio-to-midi`, `music`.
-- [ ] **Social preview image** (Settings → General → *Social preview*):
-  1280×640. `docs/capturas/arrangement.png` with the logo works well.
-- [ ] **Description.** The current one is long. A shorter alternative that
-  matches the README: *"An independent DAW for creative music production,
-  written in Rust. Own audio engine, VST3/CLAP, local audio-to-MIDI, stems
-  and mix tools."*
+- [x] **Topics:** `daw`, `music-production`, `audio`, `rust`, `egui`, `vst3`,
+  `clap`, `midi`, `audio-to-midi`, `music`.
+- [x] **Social preview image:** 1280×640, logo and Arrangement screenshot.
+- [x] **Description:** *"An independent DAW for creative music production,
+  written in Rust. Own audio engine, VST3/CLAP plugins, and local
+  audio-to-MIDI, stems and mixing tools. Free and open source."*
 
 ## 5. Funding
 

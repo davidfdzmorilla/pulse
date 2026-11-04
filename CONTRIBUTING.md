@@ -12,7 +12,9 @@ documentation, translations and sound design.
 - **For big changes, open an issue first**, so we can agree on the idea
   before you invest time in it.
 
-Everyone taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
+Questions, ideas and things you made with Pulse go to
+[Discussions](https://github.com/davidfdzmorilla/pulse/discussions). Everyone
+taking part follows the [Code of Conduct](CODE_OF_CONDUCT.md).
 Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
 ## Project philosophy

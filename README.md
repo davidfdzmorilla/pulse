@@ -45,7 +45,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
 | | macOS 13.4+ (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
 | Download | [`Pulse-<version>.zip`](https://github.com/davidfdzmorilla/pulse/releases/latest) | Not published yet: [build it](docs/BUILD_WINDOWS.md) or use a CI artifact | — |
-| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: builds, installs and starts on CI's Windows, where some tests still fail; not tested with real audio/MIDI hardware or third-party plugins | Not supported |
+| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: builds on CI's Windows, where some tests still fail. It last installed and started there on 2026-10-29; not tested with real audio/MIDI hardware or third-party plugins | Not supported |
 | Signing | Self-signed, **not notarized** by Apple (one-time Gatekeeper step) | Unsigned (SmartScreen warning); updates are checked with Pulse's own Ed25519 signature | — |
 
 Details per feature: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) · Intel Macs are not supported yet.
@@ -119,10 +119,10 @@ Details per feature: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) · Int
 - Project versions, autosave and recovery after an unexpected quit.
 
 **Engine**
-- Real-time audio with no locks or memory allocation on the audio thread,
-  spread across several cores. The audio engine is designed for
-  deterministic rendering across buffer sizes and thread counts, with
-  automated tests covering this behavior.
+- Real-time audio designed with no locks or memory allocation on the audio
+  thread, spread across several cores. The audio engine is designed for
+  deterministic rendering across buffer sizes and thread counts. Automated
+  tests cover this behavior, including repeatability of offline renders.
 
 Everything is explained in the **guide** (in Spanish),
 [`docs/guia.md`](docs/guia.md), which the app shows under Ayuda → Guía de Pulse

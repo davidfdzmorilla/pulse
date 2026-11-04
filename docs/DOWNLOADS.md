@@ -76,10 +76,10 @@ so far (details in [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md)):
 |---|---|
 | Source available | Yes |
 | Cross-compilation from macOS (`cargo check`, `cargo xwin build`) | Verified |
-| Native build (MSVC, GitHub's `windows-2022` runner) | Verified in CI |
-| Native execution: `pulse.exe --render`, window start driven by a script | Verified in CI (no audio device) |
-| Installer: silent install, `.pulse` association, uninstall keeps settings | Verified in CI |
-| Test suite on Windows | **Failing** on `main` since 2026-10-29: 3 tests fail on every run and 3 more on some runs ([details](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)). Two of the constant ones were test bugs. They are fixed on the launch branch but haven't run on Windows yet |
+| Native build (MSVC, GitHub's `windows-2022` runner) | Verified in CI (every run, latest 2026-11-04) |
+| Native execution: `pulse.exe --render`, window start driven by a script | Verified in CI on 2026-10-29 (commit `90bfbae`, no audio device). The window start ran on a runner without a GPU: it shows Pulse can open its window there, not that it works with real graphics cards. **Not run since**: the failing tests stopped the job before these steps. The launch branch's workflow runs them even when a test fails |
+| Installer: silent install, `.pulse` association, uninstall keeps settings | Verified in CI on 2026-10-29; not run since (same reason) |
+| Test suite on Windows | **Failing** on `main` since 2026-10-29: 3 tests fail on every run and 3 more on some runs. The launch branch fixes 3 of them (2 confirmed on Windows CI, 1 on macOS only), leaving 1 reproducible and 2 intermittent ([details](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)) |
 | Real audio (WASAPI), MIDI hardware, third-party plugins, display scaling | **Not verified**: no Windows machine has tried them yet |
 
 If you want to help test it:

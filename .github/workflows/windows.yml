@@ -58,6 +58,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Compilar (todo el workspace)
+        id: compilar
         run: cargo build --release --locked --workspace --all-targets 2>&1 | Tee-Object -FilePath build.log; if ($LASTEXITCODE) { exit $LASTEXITCODE }
 
       # Lint for information only: the code keeps its own hand style (no rustfmt,
@@ -73,15 +74,23 @@ jobs:
           Select-String -Path tests.log -Pattern '^test result|FAILED|panicked' | ForEach-Object { $_.Line }
           exit $code
 
+      # From here on, the steps also run when a test failed (the job still
+      # fails, because of the Tests step): a red test must not hide whether
+      # Pulse packages, renders, starts and installs. They need the build, and
+      # the ones after packaging need the package.
       - name: Instalar Inno Setup
+        if: ${{ !cancelled() && steps.compilar.outcome == 'success' }}
         run: choco install innosetup -y --no-progress
 
       - name: Empaquetar
+        id: paquete
+        if: ${{ !cancelled() && steps.compilar.outcome == 'success' }}
         run: |
           $version = '${{ github.event.inputs.version }}'
           if ($version) { pwsh scripts/package-windows.ps1 -Version $version } else { pwsh scripts/package-windows.ps1 }
 
       - name: Sumas SHA-256
+        if: ${{ !cancelled() && steps.paquete.outcome == 'success' }}
         run: |
           Push-Location dist
           Get-ChildItem -File | Where-Object { $_.Name -like '*.zip' -or $_.Name -like '*-setup.exe' } | ForEach-Object { "$((Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -Encoding ascii SHA256SUMS.txt
@@ -89,6 +98,7 @@ jobs:
           Pop-Location
 
       - name: pulse.exe renderiza un proyecto
+        if: ${{ !cancelled() && steps.paquete.outcome == 'success' }}
         run: |
           $exe = 'dist\Pulse\pulse.exe'
           $out = Join-Path $env:RUNNER_TEMP 'demo con espacios ñ.wav'
@@ -99,7 +109,13 @@ jobs:
           if ($size -lt 100000) { throw "WAV demasiado pequeño" }
           Copy-Item $out dist\render-demo.wav
 
+      # continue-on-error: GitHub's runner has no GPU, and wgpu may need the
+      # WARP software adapter there (docs/WINDOWS_SUPPORT.md, item 5), which
+      # says nothing about real machines. A failure isn't hidden: the next
+      # step turns it into a warning on the run's summary page.
       - name: pulse.exe arranca su ventana (guion)
+        id: ventana
+        if: ${{ !cancelled() && steps.paquete.outcome == 'success' }}
         continue-on-error: true
         run: |
           $out = Join-Path (Get-Location) 'dist\arranque'
@@ -114,7 +130,14 @@ jobs:
           if (-not (Test-Path (Join-Path $out 'proyecto.json'))) { throw 'El guion no llegó al final' }
           Get-ChildItem "$env:LOCALAPPDATA\Pulse\Logs" -ErrorAction SilentlyContinue | ForEach-Object { Get-Content $_.FullName }
 
+      - name: Aviso si la ventana no arrancó
+        # (!cancelled(): without a status function GitHub adds success(), and
+        # after a failed test the warning would never show.)
+        if: ${{ !cancelled() && steps.ventana.outcome == 'failure' }}
+        run: Write-Host "::warning title=La ventana de Pulse no arrancó::El paso «pulse.exe arranca su ventana (guion)» falló; el trabajo sigue por continue-on-error. Mira su registro y el artefacto registros-windows (dist/arranque)."
+
       - name: El instalador instala, asocia .pulse y desinstala
+        if: ${{ !cancelled() && steps.paquete.outcome == 'success' }}
         run: |
           $setup = Get-ChildItem dist -Filter 'Pulse-*-windows-x64-setup.exe' | Select-Object -First 1
           if (-not $setup) { throw 'No hay instalador' }

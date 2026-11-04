@@ -232,8 +232,69 @@ built everything and passed every test but one:
 `transcribe::tests::finds_the_notes_basic_pitch_finds` (`crates/stems/src/transcribe.rs:291`).
 On GitHub's `macos-15` runner (Apple M1, 3 cores) the note 67 of the
 reference melody starts at 0.9868 s instead of 0.9752 s, one frame
-(≈11.6 ms) early. The test allows 1 ms. It passes on the maintainer's Mac.
-It also fails intermittently on Windows with the same note (0.9984 s).
-This is a pre-existing sensitivity of the test (or of the port) to the CPU
-running ONNX Runtime, and this branch doesn't cause it. It is left visible,
-not skipped, pending the maintainer's decision.
+(≈11.6 ms) late. The test allows 1 ms. It passes on the maintainer's Mac.
+It also failed intermittently on Windows with the same note, two frames late
+(0.9984 s).
+
+**Cause (found and fixed).** `inferred_onsets` rescales the frame-to-frame
+jumps so that the largest equals the largest onset. For this note the largest
+jump (frame 85) and the onset peak (frame 86) are neighbours, so they should
+tie and neither is a peak. The note is then found by the "melodia" pass,
+starting at frame 84 as in Basic Pitch's reference. But the rescaling
+went through a division, `d * (max_onset / max_diff)`, which left frame 85
+one ulp above or below depending on the CPU and the thread count. Measured
+here with 1 thread: `3f746e98` against `3f746e97`, so the start moved to
+frame 85. Python's own order of operations gave `3f746e96`, frame 86, the
+Windows value. The largest jump now takes the largest onset exactly, so the
+tie holds everywhere. Before the fix, 2–4 threads gave 0.9752 s and 1 thread gave 0.9868 s;
+after it, all four give 0.9752 s. A new test,
+`one_thread_finds_the_same_notes`, failed without the fix and passes with it.
+`cargo test --release -p stems -p app` passes (49 + 725 + 1).
+
+### Second pre-merge review (2026-11-04)
+
+- **Windows CI skipped half its checks.** On every run since 2026-10-29,
+  the failing `Tests` step stopped the job. So packaging, checksums,
+  `--render`, the window start and the installer **haven't run since commit
+  `90bfbae`**. Both workflows now run those steps whenever the build
+  succeeded. The job stays red because of the tests, and no test is skipped.
+  The window start keeps `continue-on-error` (the runner has no GPU, see
+  `docs/WINDOWS_SUPPORT.md` item 5). That is now explained in the workflow,
+  and a failure raises a warning annotation. The docs now date these
+  checks to 2026-10-29.
+- **Windows docs unified.** One reference table in
+  [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)
+  (English) and [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-que-fallan-en-windows)
+  (Spanish). ROADMAP, DOWNLOADS and WINDOWS_SUPPORT use the same summary: on
+  `main` 3 tests fail on every Windows run and 3 on some runs; this branch
+  fixes 3 (checked on macOS only).
+- **Wording.** Determinism ("designed for deterministic rendering…
+  including repeatability of offline renders") and real-time safety ("must
+  never allocate"; the Windows stress failure is mentioned) are aligned in
+  README EN/ES, CONTRIBUTING and DEVELOPMENT.
+- **Licence note** added to CONTRIBUTING, outside the translated clause, and
+  without changing it. It separates DCO / GPL / the additional license, says
+  a sign-off is not a signed agreement to point 3, and says a separate
+  agreement may be asked for until the legal review is done.
+- **CI status of PR #209.** The rerun of the old macOS run (attempt 2,
+  failed again on `finds_the_notes_basic_pitch_finds`) cancelled, through
+  the workflow's concurrency group, the macOS run of commit `00d22e3`. No
+  macOS result exists for the branch's latest commit yet. The fix for that
+  test is in the working tree, not yet pushed.
+- **Checks (macOS 15, Apple Silicon):**
+  - `cargo test --release --locked --workspace`: 1,197 passed, 0 failed.
+  - `cargo check --release --workspace --all-targets`: passes.
+  - `cargo clippy`: same warning counts as before.
+  - `cargo fmt --check`: the same 188 files as on `main`, none new.
+  - YAML: parsed.
+  - Links: 0 problems.
+  - Private vulnerability reporting and Discussions: confirmed enabled via the API.
+- **Windows CI on `00d22e3`** ([run 41808950553](https://github.com/davidfdzmorilla/pulse/actions/runs/41808950553)):
+  - Build ✅.
+  - **The two path tests pass on Windows.**
+  - Tests ❌: `more_threads_give_the_same_notes`;
+    `finds_the_notes_basic_pitch_finds`, whose fix wasn't pushed yet;
+    `with_threads_a_sidechain_waits_for_its_source`.
+  - The no-allocation test passed this time.
+  - Packaging, SHA-256, render, GUI start and installer were skipped. That
+    run used the old workflow, so the new conditions remain to be seen.

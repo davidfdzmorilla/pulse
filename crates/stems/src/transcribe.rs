@@ -170,7 +170,13 @@ fn inferred_onsets(onsets: &Activations, frames: &Activations) -> Activations {
     let max_onset = onsets.iter().flatten().copied().fold(0.0f32, f32::max);
     let max_diff = diff.iter().flatten().copied().fold(0.0f32, f32::max);
     let scale = if max_diff > 0.0 { max_onset / max_diff } else { 0.0 };
-    onsets.iter().zip(&diff).map(|(o, d)| std::array::from_fn(|k| o[k].max(d[k] * scale))).collect()
+    // The largest jump becomes the largest onset exactly, not through the
+    // division: when they sit on neighbouring frames (often: the jump comes
+    // just before the peak) they tie, and so neither is a peak, on every CPU
+    // and thread count. Rounded, the tie went either way by one ulp, and the
+    // note's start moved by a frame.
+    let scaled = |d: f32| if max_diff > 0.0 && d == max_diff { max_onset } else { d * scale };
+    onsets.iter().zip(&diff).map(|(o, d)| std::array::from_fn(|k| o[k].max(scaled(d[k])))).collect()
 }
 
 /// Notes from the activations (`output_to_notes_polyphonic`, melodia trick included).
@@ -468,5 +474,21 @@ mod tests {
         assert!((frame_time(86) - 86.0 * 256.0 / 22050.0).abs() < 1e-12);
         // From frame 172 on, the window offset is taken off.
         assert!(frame_time(172) < 172.0 * 256.0 / 22050.0);
+    }
+
+    /// On one thread the network's sums round another way (see `threads`),
+    /// as they do on other CPUs: the notes must not move. The reference
+    /// melody's G, whose largest jump and onset peak are neighbours, started
+    /// a frame late here (and on GitHub's M1 runner) before their tie was made exact.
+    #[test]
+    fn one_thread_finds_the_same_notes() {
+        let (audio, rate) = melody();
+        let (one, usual) = (Transcriber::load_on(1).unwrap().notes(&audio, rate, |_| true).unwrap(), Transcriber::load().unwrap().notes(&audio, rate, |_| true).unwrap());
+        // Where and which notes, exactly; how strong, as near as the sums allow.
+        let timing = |notes: &[NoteEvent]| notes.iter().map(|n| (n.start, n.end, n.pitch)).collect::<Vec<_>>();
+        assert_eq!(timing(&one), timing(&usual));
+        for (a, b) in one.iter().zip(&usual) {
+            assert!((a.amplitude - b.amplitude).abs() < 1e-4, "{a:?} vs {b:?}");
+        }
     }
 }

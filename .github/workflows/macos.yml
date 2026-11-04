@@ -49,6 +49,7 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
 
       - name: Compilar (todo el workspace)
+        id: compilar
         run: |
           set -o pipefail
           cargo build --release --locked --workspace --all-targets 2>&1 | tee build.log
@@ -72,7 +73,9 @@ jobs:
       # The test package: only for main and manual runs (a second build, with
       # the dist profile), not for every pull request.
       - name: Empaquetar Pulse.app (firma ad hoc)
-        if: github.event_name != 'pull_request'
+        id: paquete
+        # Also after a failed test (the job still fails), as on Windows.
+        if: ${{ !cancelled() && github.event_name != 'pull_request' && steps.compilar.outcome == 'success' }}
         env:
           PULSE_BUNDLE_DIR: ${{ runner.temp }}/bundle
         run: |
@@ -84,7 +87,7 @@ jobs:
           (cd dist && shasum -a 256 *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
 
       - name: Pulse.app renderiza la canción de ejemplo
-        if: github.event_name != 'pull_request'
+        if: ${{ !cancelled() && steps.paquete.outcome == 'success' }}
         run: |
           "${{ runner.temp }}/bundle/Pulse.app/Contents/MacOS/pulse" --render "$RUNNER_TEMP/demo con espacios ñ.wav"
           size=$(stat -f %z "$RUNNER_TEMP/demo con espacios ñ.wav")

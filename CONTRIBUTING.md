@@ -21,13 +21,15 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
 - **Sound first.** A change that alters how Pulse sounds must show it doesn't
   make it worse. Most of the engine's tests check the sound itself.
-- **The audio thread is sacred.** `Engine::process` never allocates, never
-  locks and never waits for the OS. A stress test checks this
-  (`crates/engine/tests/stress.rs`).
-- **Determinism.** The engine is designed so a project renders the same at
-  any buffer size and thread count, and an offline render repeats exactly.
-  Automated tests cover both. A change that breaks them needs a very good
-  reason.
+- **The audio thread is sacred.** `Engine::process` must never allocate,
+  lock or wait for the OS. A stress test checks this
+  (`crates/engine/tests/stress.rs`). It passes on macOS. On Windows CI it has
+  failed intermittently with "the workers allocate", which is still under
+  investigation ([details](docs/FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)).
+- **Determinism.** The audio engine is designed for deterministic rendering
+  across buffer sizes and thread counts. Automated tests cover this
+  behavior, including repeatability of offline renders. A change that breaks
+  them needs a very good reason.
 - **Local and offline.** The analysis tools (audio to MIDI, stems, lyrics,
   tempo, chords) run on your machine. No accounts, no telemetry.
 - **Honest status.** We don't call something supported until it has been
@@ -188,6 +190,17 @@ example, a commercial license) without having to find every person who
 contributed. If you don't agree with it, say so in the pull request before it
 is merged. What this means for the project is explained in
 [docs/PROJECT_MODEL.md](docs/PROJECT_MODEL.md).
+
+> **Note (not part of the terms above).** These are three separate things:
+> the **DCO 1.1** sign-off (`git commit -s`) certifies point 1, where the
+> code comes from; **GPL-3.0-or-later** (point 2) is the project's license;
+> the **additional license** of point 3 is a separate permission. Signing off
+> a commit is **not** by itself a signed agreement to point 3. Whether point 3
+> needs a separate Contributor License Agreement is under legal review (see
+> [docs/PROJECT_MODEL.md](docs/PROJECT_MODEL.md#open-questions-for-the-maintainer-not-legal-advice)).
+> Until that review is done, the maintainer may ask you to confirm point 3
+> explicitly, or to sign a separate agreement, before merging an outside
+> contribution.
 
 Don't send code, samples, presets, models or images from other products
 (commercial or not) unless their license allows it and you say which it is. If

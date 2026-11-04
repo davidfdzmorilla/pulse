@@ -64,23 +64,25 @@ sequenceDiagram
 - **The UI talks to the engine only through a lock-free queue** (`rtrb`). It
   reads transport and clip state back through atomics in `SharedState`.
   `EngineHandle` (`crates/engine/src/audio.rs`) is the UI's end.
-- **The audio thread never allocates, locks or waits for the OS.** Anything
+- **The audio thread must never allocate, lock or wait for the OS.** Anything
   the engine replaces (an instrument, an effect, a plugin) goes back to the
   UI thread as `Garbage`, and the UI thread frees it there.
   `crates/engine/tests/stress.rs` installs a counting global allocator and
-  fails if the audio thread or its workers allocate.
+  fails if the audio thread or its workers allocate. It passes on macOS. On
+  Windows CI, `the_audio_threads_do_not_allocate_with_workers` has failed
+  intermittently ("the workers allocate"), and the cause is not known yet.
 - **Multi-core.** `crates/engine/src/workers.rs` is a fixed pool of threads,
   started off the audio thread, that help render each block's tracks
   following their dependencies (sidechains, groups, returns). A late worker
   only means less help, never a late block.
-- **Determinism.** The engine is designed so its output doesn't depend on
-  buffer size or thread count, and so a render repeats exactly. Automated
-  tests cover this (for example
+- **Determinism.** The audio engine is designed for deterministic rendering
+  across buffer sizes and thread counts. Automated tests cover this
+  behavior, including repeatability of offline renders (for example
   `threads_play_the_same_samples` and `any_callback_size_plays_the_same` in
   `stress.rs`, `what_plays_does_not_depend_on_the_buffer_size` in
   `crates/app/src/fidelity_tests.rs`). They cover the engine's own
   instruments and effects. Third-party plugins and the ML models (ONNX
-  Runtime) are outside that guarantee: see the Windows thread-count test in
+  Runtime) are outside what these tests cover: see the Windows thread-count test in
   [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads).
 - **Offline rendering** (`crates/engine/src/offline.rs`, used by
   `crates/app/src/export.rs`) runs the same `Engine` without an audio device,

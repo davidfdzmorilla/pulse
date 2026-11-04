@@ -159,23 +159,33 @@ the Windows log.
 **Knowledge.** Rust, basic floating point. ONNX Runtime experience helps.
 No Windows machine needed: CI is the Windows test.
 
-**Already fixed, for reference.** Two other tests failed on Windows because
-they built an expected path with `/` inside one `Path::join` (`dir.join("Bombos/Bombo house.wav")`).
-Pulse itself returns clean Windows paths there. They are fixed on the
-`funcion/preparar-lanzamiento` branch and pass on macOS:
+**Status of every test that has failed on Windows CI.** This is the reference
+table; other documents link here. Evidence: Windows CI runs 41627764299,
+41654073501, 41697364751, 41789816848 and 41794967564 (2026-11-03/04, on
+`main` or branches identical to it), Windows CI run 41808950553 (this branch at
+`00d22e3`, 2026-11-04) and macOS CI run 41805367312 (2 attempts).
+
+| Test | On Windows CI (`main`) | Cause | State on `funcion/preparar-lanzamiento` |
+|---|---|---|---|
+| `factory_sounds_tests::a_kit_dragged_from_the_browser_onto_a_midi_track_loads_there` | Fails on every run | The test expected `…\Bombos/Bombo house.wav`; Pulse returns `…\Bombos\Bombo house.wav` (CI log). A test bug | **Fixed. Passes on Windows CI** (run [41808950553](https://github.com/davidfdzmorilla/pulse/actions/runs/41808950553), 2026-11-04) and on macOS |
+| `lyrics::tests::lyrics_are_saved_and_opened_with_the_project` | Fails on every run | Same: a `/` inside one `Path::join` in the expected value | **Fixed. Passes on Windows CI** (run [41808950553](https://github.com/davidfdzmorilla/pulse/actions/runs/41808950553), 2026-11-04) and on macOS |
+| `transcribe::tests::more_threads_give_the_same_notes` | Fails on every run | Requires bit-identical ONNX activations with 2 and 3 threads. The size of the difference hasn't been measured | **Pending**: this task (#3) |
+| `transcribe::tests::finds_the_notes_basic_pitch_finds` | Fails on some runs. Also fails **on every run of GitHub's macOS (M1) runner** (2 of 2) | Two onset frames meant to tie; the tie was broken by one-ulp rounding, so a note started 1–2 frames late. Reproduced locally with 1 thread | **Fixed** in `inferred_onsets`, and the new test `one_thread_finds_the_same_notes` reproduces it. Passes on macOS (1–4 threads). **Not yet run on the M1 runner or Windows** |
+| `engine::tests::with_threads_a_sidechain_waits_for_its_source` | Fails on some runs ("the other threads did nothing") | Not established. Likely the test needs worker threads to win a race | **Pending**. Not reproduced on macOS |
+| `the_audio_threads_do_not_allocate_with_workers` (`crates/engine/tests/stress.rs:669`) | Fails on some runs ("the workers allocate") | **Unknown**. It is a real-time-safety check | **Pending, needs the maintainer**. Not reproduced on macOS |
+
+Summary: on `main`, 3 tests fail on every Windows run and 3 more on some runs.
+This branch fixes 3 of the 6: the 2 path tests (passing on Windows CI) and
+`finds_the_notes_basic_pitch_finds` (checked on macOS only so far). It leaves 1
+reproducible failure (`more_threads_give_the_same_notes`) and 2 intermittent
+ones pending.
+
+To check the two path fixes on macOS:
 
 ```bash
 cargo test --release -p app factory_sounds_tests
 cargo test --release -p app lyrics
 ```
-
-**Other Windows failures, not for a first PR.** These fail only on some runs:
-- `engine::tests::with_threads_a_sidechain_waits_for_its_source`
-  (`crates/engine/src/engine.rs:6380`, "the other threads did nothing").
-- `the_audio_threads_do_not_allocate_with_workers` in
-  `crates/engine/tests/stress.rs:669` ("the workers allocate"). It is a
-  real-time-safety check, so it needs the maintainer's attention.
-- `transcribe::tests::finds_the_notes_basic_pitch_finds`.
 
 ---
 

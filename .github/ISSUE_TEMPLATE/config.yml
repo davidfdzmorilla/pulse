@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/davidfdzmorilla/pulse/blob/main/SECURITY.md
+    about: Please don't report vulnerabilities in public issues. Follow SECURITY.md instead.
+  - name: User guide (Spanish)
+    url: https://github.com/davidfdzmorilla/pulse/blob/main/docs/guia.md
+    about: How each part of Pulse works. The app shows it under Ayuda → Guía de Pulse.

@@ -42,6 +42,10 @@ jobs:
       # Actions pinned to a commit (their tag in the comment): a moved tag can't
       # change what runs here.
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The tags too: the package's version comes from the last one
+          # (git describe), not from Cargo.toml's placeholder.
+          fetch-depth: 0
 
       # The Rust of rust-toolchain.toml (rustup installs it on first use), as in
       # every other build.
@@ -76,6 +80,13 @@ jobs:
         run: |
           $version = '${{ github.event.inputs.version }}'
           if ($version) { pwsh scripts/package-windows.ps1 -Version $version } else { pwsh scripts/package-windows.ps1 }
+
+      - name: Sumas SHA-256
+        run: |
+          Push-Location dist
+          Get-ChildItem -File | Where-Object { $_.Name -like '*.zip' -or $_.Name -like '*-setup.exe' } | ForEach-Object { "$((Get-FileHash $_.Name -Algorithm SHA256).Hash.ToLower())  $($_.Name)" } | Set-Content -Encoding ascii SHA256SUMS.txt
+          Get-Content SHA256SUMS.txt
+          Pop-Location
 
       - name: pulse.exe renderiza un proyecto
         run: |
@@ -136,6 +147,7 @@ jobs:
           path: |
             dist/*.zip
             dist/*-setup.exe
+            dist/SHA256SUMS.txt
           if-no-files-found: warn
 
       - name: Guardar registros y capturas

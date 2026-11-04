@@ -1,0 +1,87 @@
+name: Plugin compatibility report
+description: A VST3 or CLAP plugin that fails, crashes or sounds wrong in Pulse (or a report that one works well).
+title: "[Plugin]: "
+labels: ["plugins"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Pulse hosts 64-bit VST3 and CLAP plugins. Reports that a plugin **works** are welcome too: they help others.
+  - type: input
+    id: plugin
+    attributes:
+      label: Plugin name
+      placeholder: "Surge XT"
+    validations:
+      required: true
+  - type: input
+    id: vendor
+    attributes:
+      label: Developer / vendor
+    validations:
+      required: true
+  - type: input
+    id: plugin-version
+    attributes:
+      label: Plugin version
+    validations:
+      required: true
+  - type: dropdown
+    id: format
+    attributes:
+      label: Format
+      options:
+        - VST3
+        - CLAP
+        - Both
+    validations:
+      required: true
+  - type: dropdown
+    id: kind
+    attributes:
+      label: Instrument or effect
+      options:
+        - Instrument
+        - Effect
+  - type: input
+    id: version
+    attributes:
+      label: Pulse version
+      placeholder: "0.1.121"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - Windows 10 x64
+        - Windows 11 x64
+    validations:
+      required: true
+  - type: dropdown
+    id: result
+    attributes:
+      label: Result
+      options:
+        - Works
+        - Not found by the plugin scan
+        - Crashes Pulse or the scan
+        - Loads but no sound / wrong sound
+        - Editor doesn't open or looks wrong
+        - State not restored after reopening the project
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: What happened
+      description: Steps, and what you heard or saw.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: From `pulse.log` (`~/Library/Logs/Pulse/` on macOS, `%LOCALAPPDATA%\Pulse\Logs` on Windows), and the crash report if there is one.
+      render: text

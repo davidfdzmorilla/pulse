@@ -6,12 +6,22 @@ qué se ha cambiado y qué está comprobado. Documentos relacionados:
 [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md) (instalar y usar) y
 [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) (matriz por sistema).
 
-**Resumen (20 de octubre de 2026).** El workspace pasa la comprobación de tipos para
-Windows x64 desde macOS. Todo lo que bloqueaba Windows está implementado. Pero
-**nada se ha ejecutado aún en Windows**: la CI de Windows está escrita y no ha
-podido correr (GitHub no inicia trabajos en esta cuenta por facturación), y no
-hay ningún equipo Windows disponible. Pulse **no está listo para publicarse en
-Windows** hasta que la CI o una prueba manual lo demuestren.
+**Resumen (4 de noviembre de 2026).** La CI de Windows ya corre en GitHub
+(`windows-2022`). La última ejecución completa en verde, el 29 de octubre de 2026
+([ejecución 40853681048](https://github.com/davidfdzmorilla/pulse/actions/runs/40853681048),
+commit `90bfbae`), compiló de forma nativa con MSVC y pasó todas las pruebas.
+También renderizó un proyecto con `pulse.exe --render`, arrancó la ventana con
+un guion, e instaló, asoció `.pulse` y desinstaló. Desde ese día **4 pruebas
+fallan en Windows** (ver [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-make-the-windows-test-suite-pass-path-separator-bugs)).
+Sigue sin probarse en un equipo Windows real: audio por WASAPI, MIDI, plugins
+de terceros, escala de pantalla y actualizador. Pulse **no está listo para
+publicarse en Windows** hasta que las pruebas vuelvan a pasar y se haga esa
+prueba manual.
+
+*El resto del documento se escribió el 20 de octubre, antes de que corriera la
+CI: donde dice «pendiente de Windows», los puntos 1 a 6 de
+[Pendiente de verificar](#pendiente-de-verificar-en-windows) ya los ha
+comprobado la CI.*
 
 ## Qué significa cada estado
 
@@ -57,7 +67,7 @@ Windows** hasta que la CI o una prueba manual lo demuestren.
 | 15 | Ventana de consola, icono y versión | `app/src/main.rs`, `app/build.rs` | Programa de consola, sin recursos | Al abrir Pulse salía una consola; icono de egui | `windows_subsystem = "windows"` en release (las opciones de línea de órdenes se enganchan a la consola que las lanzó), recurso de icono y versión con `embed-resource`, icono de la ventana | Implementado, pendiente de Windows |
 | 16 | Sin registro de fallos | `app/src/logs.rs` | Un cierre inesperado no dejaba rastro (también en macOS) | No se podía diagnosticar | `pulse.log` en la carpeta de logs, con la traza de cada pánico | Verificado en macOS (escritura y rotación) |
 | 17 | Sin empaquetado de Windows | `scripts/package-windows.ps1`, `packaging/windows/` | Solo `bundle.sh` (Pulse.app) | No había nada que instalar | Zip portable + instalador Inno Setup por usuario, sin administrador | Implementado, pendiente de Windows |
-| 18 | Sin CI | `.github/workflows/windows.yml` | — | Nada comprobaba Windows | Workflow de Windows: compila, prueba, empaqueta, renderiza, arranca la ventana con un guion e instala y desinstala | **Bloqueado**: GitHub no inicia trabajos («recent account payments have failed or your spending limit needs to be increased») |
+| 18 | Sin CI | `.github/workflows/windows.yml` | — | Nada comprobaba Windows | Workflow de Windows: compila, prueba, empaqueta, renderiza, arranca la ventana con un guion e instala y desinstala | Verificado en la CI (verde el 29-10-2026; antes estuvo bloqueada por la facturación de GitHub). 4 pruebas fallan desde entonces |
 
 ## Comprobaciones hechas
 

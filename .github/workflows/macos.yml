@@ -1,0 +1,113 @@
+# Pulse on macOS (Apple Silicon): builds the workspace, runs the tests and,
+# outside pull requests, packs a test Pulse.app (scripts/bundle.sh) with an
+# ad hoc signature, renders the example song with it and keeps the zip and its
+# SHA-256 as artifacts.
+#
+# These are CI build artifacts, not releases: they are not signed with the
+# "Pulse Local Signing" certificate, so an installed Pulse never takes them as
+# an update. Releases are made by hand with scripts/release.sh (docs/PUBLICAR.md).
+# Nothing is published from here.
+
+name: macOS
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+# It only reads the repository (and keeps its artifacts).
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  RUST_BACKTRACE: 1
+
+jobs:
+  macos:
+    runs-on: macos-15
+    timeout-minutes: 120
+    steps:
+      # Actions pinned to a commit (their tag in the comment), as in windows.yml.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          # The tags too: the version comes from the last one (git describe).
+          fetch-depth: 0
+
+      # The Rust of rust-toolchain.toml (rustup installs it on first use).
+      - name: Rust
+        run: |
+          rustup show active-toolchain
+          rustc -Vv
+          cargo -V
+
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2.9.3
+
+      - name: Compilar (todo el workspace)
+        run: |
+          set -o pipefail
+          cargo build --release --locked --workspace --all-targets 2>&1 | tee build.log
+
+      # For information only, as on Windows: the code keeps its own hand style
+      # (no rustfmt) and clippy's suggestions aren't gates yet.
+      - name: Clippy (informativo)
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          cargo clippy --release --locked --workspace --all-targets 2>&1 | tee clippy.log
+
+      - name: Tests
+        run: |
+          set -o pipefail
+          code=0
+          cargo test --release --locked --workspace --no-fail-fast 2>&1 | tee tests.log || code=$?
+          grep -E '^test result|FAILED|panicked' tests.log || true
+          exit $code
+
+      # The test package: only for main and manual runs (a second build, with
+      # the dist profile), not for every pull request.
+      - name: Empaquetar Pulse.app (firma ad hoc)
+        if: github.event_name != 'pull_request'
+        env:
+          PULSE_BUNDLE_DIR: ${{ runner.temp }}/bundle
+        run: |
+          scripts/bundle.sh
+          mkdir -p dist
+          version=$("$PULSE_BUNDLE_DIR/Pulse.app/Contents/MacOS/pulse" --version)
+          echo "Pulse $version"
+          ditto -c -k --norsrc --noextattr --keepParent "$PULSE_BUNDLE_DIR/Pulse.app" "dist/Pulse-$version-macos-arm64-ci.zip"
+          (cd dist && shasum -a 256 *.zip > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Pulse.app renderiza la canción de ejemplo
+        if: github.event_name != 'pull_request'
+        run: |
+          "${{ runner.temp }}/bundle/Pulse.app/Contents/MacOS/pulse" --render "$RUNNER_TEMP/demo con espacios ñ.wav"
+          size=$(stat -f %z "$RUNNER_TEMP/demo con espacios ñ.wav")
+          echo "WAV de $size bytes"
+          [ "$size" -gt 100000 ]
+
+      - name: Guardar paquete
+        if: always() && github.event_name != 'pull_request'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: pulse-macos-arm64
+          path: |
+            dist/*.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: warn
+
+      - name: Guardar registros
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: registros-macos
+          path: |
+            build.log
+            clippy.log
+            tests.log
+          if-no-files-found: warn

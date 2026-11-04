@@ -2,8 +2,9 @@
 
 Instrucciones para compilar, probar y empaquetar Pulse en Windows x64 desde
 cero. Estado del soporte: [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md). Estas
-instrucciones siguen lo que hace la CI (`.github/workflows/windows.yml`); aún no
-se han ejecutado en un equipo Windows.
+instrucciones siguen lo que hace la CI (`.github/workflows/windows.yml`), que las
+ejecuta en el Windows de GitHub (`windows-2022`). Aún no se han seguido a mano
+en un equipo Windows.
 
 ## Requisitos
 

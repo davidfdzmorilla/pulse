@@ -1,0 +1,70 @@
+name: Installation or platform issue
+description: Pulse doesn't install, doesn't start, doesn't update, or behaves differently on your system.
+title: "[Platform]: "
+labels: ["needs reproduction"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Before reporting, check [docs/DOWNLOADS.md](https://github.com/davidfdzmorilla/pulse/blob/main/docs/DOWNLOADS.md):
+        macOS Gatekeeper and Windows SmartScreen warnings are expected (Pulse is not notarized by Apple nor signed with a Windows certificate).
+        **Windows support is experimental**: reports from real Windows machines are especially valuable.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel) — not supported yet
+        - Windows 10 x64
+        - Windows 11 x64
+        - Windows on ARM — not supported yet
+        - Linux — not supported yet
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: "macOS 14.6 / Windows 10 22H2"
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Pulse version or file you downloaded
+      placeholder: "Pulse-0.1.121.zip"
+    validations:
+      required: true
+  - type: dropdown
+    id: stage
+    attributes:
+      label: Where it fails
+      options:
+        - Download / unzip
+        - Install
+        - First start
+        - Audio or MIDI device
+        - Update
+        - Building from source
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened
+      description: Exact error messages help most (copy the text, or add a screenshot).
+    validations:
+      required: true
+  - type: textarea
+    id: hardware
+    attributes:
+      label: Hardware
+      description: CPU, GPU, audio interface. Optional, but useful for start-up and audio issues.
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: "`pulse.log` (`~/Library/Logs/Pulse/` or `%LOCALAPPDATA%\\Pulse\\Logs`), or the build output if building from source."
+      render: text

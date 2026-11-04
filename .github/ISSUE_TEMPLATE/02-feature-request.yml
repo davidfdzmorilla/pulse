@@ -1,0 +1,48 @@
+name: Feature request
+description: An idea that would make Pulse better for making music.
+title: "[Feature]: "
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        You can write in English or Spanish. Please search existing issues first.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What are you trying to do?
+      description: Describe the musical or workflow problem, not only the solution. "When I finish a drop I want to..." is more useful than "add button X".
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: What would you like Pulse to do?
+    validations:
+      required: true
+  - type: textarea
+    id: today
+    attributes:
+      label: How do you do it today?
+      description: In Pulse, or in another tool you use.
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Session / Arrangement
+        - MIDI editing
+        - Instruments and sounds
+        - Effects and mixing
+        - Plugins (VST3 / CLAP)
+        - Recording and audio editing
+        - Analysis tools (audio to MIDI, stems, chords, lyrics...)
+        - Interface and accessibility
+        - Platform / installation
+        - Other
+  - type: checkboxes
+    id: contribute
+    attributes:
+      label: Contributing
+      options:
+        - label: I'd like to help build this.

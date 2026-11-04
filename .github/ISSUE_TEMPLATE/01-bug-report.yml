@@ -1,0 +1,77 @@
+name: Bug report
+description: Something in Pulse doesn't work as it should.
+title: "[Bug]: "
+labels: ["bug", "needs reproduction"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report this. You can write in English or Spanish.
+        For problems installing or starting Pulse, use **Installation or platform issue** instead.
+        For a plugin that misbehaves, use **Plugin compatibility report**.
+  - type: input
+    id: version
+    attributes:
+      label: Pulse version
+      description: From Pulse → Acerca de Pulse, or `pulse --version`.
+      placeholder: "0.1.121"
+    validations:
+      required: true
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - Windows 10 x64
+        - Windows 11 x64
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: os-version
+    attributes:
+      label: OS version
+      placeholder: "macOS 15.4 / Windows 11 24H2"
+    validations:
+      required: true
+  - type: input
+    id: audio
+    attributes:
+      label: Audio interface and buffer size (if it's about sound)
+      placeholder: "Built-in output, 256 samples, 48 kHz"
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: The shortest sequence that shows the problem. A small `.pulse` project helps a lot.
+      placeholder: |
+        1. Create a MIDI track with Pulse Synth
+        2. ...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: What you expected
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: What happened instead
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: |
+        `pulse.log` is in `~/Library/Logs/Pulse/` (macOS) or `%LOCALAPPDATA%\Pulse\Logs` (Windows).
+        If Pulse quit suddenly on macOS, attach the `pulse-*.ips` report from Console → Crash Reports.
+      render: text
+  - type: textarea
+    id: extra
+    attributes:
+      label: Screenshots, recordings or project files
+      description: Optional. Drag files here.

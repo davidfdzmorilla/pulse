@@ -6335,6 +6335,11 @@ mod tests {
     /// Shared among threads, a track still hears its sidechain source's sound of
     /// this block, also when that source takes long (it waits for it): the
     /// same samples as on one thread.
+    ///
+    /// A heavy track of its own comes first, so the audio thread (which takes
+    /// tasks in order) is busy with it while a worker takes the source: with
+    /// only the source and the track that waits for it, the audio thread could
+    /// take both before a worker woke (on Windows CI, every time).
     #[test]
     fn with_threads_a_sidechain_waits_for_its_source() {
         let run = |threads: usize| {
@@ -6343,25 +6348,35 @@ mod tests {
             // Shared however light.
             h.engine.share_above = std::time::Duration::ZERO;
             let mut ids = [0u32; MAX_TRACKS];
-            ids[0] = 7;
-            ids[1] = 8;
+            ids[0] = 6;
+            ids[1] = 7;
+            ids[2] = 8;
             h.send(Command::SetTrackIds(ids));
-            let mut held = MidiClip::new("pad", 4.0, [0, 0, 0]);
-            held.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
-            h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(held))) });
-            let mut hits = MidiClip::new("hits", 4.0, [0, 0, 0]);
-            for k in 0..8 {
-                hits.notes.push(Note { start: k as f64 * 0.5, length: 0.1, pitch: 60, velocity: 1.0, chance: 1.0 });
-            }
-            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(hits))) });
-            h.send(Command::SetMute { target: Target::Track(0), mute: true });
-            // A slow source: whoever processes it takes a while.
+            let held = |name: &str| {
+                let mut clip = MidiClip::new(name, 4.0, [0, 0, 0]);
+                clip.notes.push(Note { start: 0.0, length: 4.0, pitch: 48, velocity: 1.0, chance: 1.0 });
+                clip
+            };
+            // Busy work for whoever takes track 0 first (the audio thread).
+            h.send(Command::SetClip { track: 0, slot: 0, clip: Some(Box::new(PlayClip::Midi(held("busy")))) });
             for _ in 0..6 {
                 let reverb = Device::new(Effect::Reverb(Default::default()));
                 h.send(Command::InsertDevice { target: Target::Track(0), index: 0, slot: ChainSlot::new(&reverb, SR) });
             }
+            h.send(Command::SetClip { track: 2, slot: 0, clip: Some(Box::new(PlayClip::Midi(held("pad")))) });
+            let mut hits = MidiClip::new("hits", 4.0, [0, 0, 0]);
+            for k in 0..8 {
+                hits.notes.push(Note { start: k as f64 * 0.5, length: 0.1, pitch: 60, velocity: 1.0, chance: 1.0 });
+            }
+            h.send(Command::SetClip { track: 1, slot: 0, clip: Some(Box::new(PlayClip::Midi(hits))) });
+            h.send(Command::SetMute { target: Target::Track(1), mute: true });
+            // A slow source: whoever processes it takes a while.
+            for _ in 0..6 {
+                let reverb = Device::new(Effect::Reverb(Default::default()));
+                h.send(Command::InsertDevice { target: Target::Track(1), index: 0, slot: ChainSlot::new(&reverb, SR) });
+            }
             let params = crate::model::DuckerParams { depth: 1.0, release: 0.2, sidechain: Some(7), ..Default::default() };
-            h.send(Command::InsertDevice { target: Target::Track(1), index: 0, slot: ChainSlot::new(&Device::new(Effect::Ducker(params)), SR) });
+            h.send(Command::InsertDevice { target: Target::Track(2), index: 0, slot: ChainSlot::new(&Device::new(Effect::Ducker(params)), SR) });
             h.send(Command::LaunchScene(0));
             let out = h.run_beats(4.0);
             (out, h.engine.helped())

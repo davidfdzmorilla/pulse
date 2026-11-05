@@ -76,11 +76,11 @@ so far (details in [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md)):
 |---|---|
 | Source available | Yes |
 | Cross-compilation from macOS (`cargo check`, `cargo xwin build`) | Verified |
-| Native build (MSVC, GitHub's `windows-2022` runner) | Verified in CI (every run, latest 2026-11-04) |
-| Native execution: `pulse.exe --render` | Verified in CI on 2026-11-04 (run [41814275373](https://github.com/davidfdzmorilla/pulse/actions/runs/41814275373), no audio device) |
-| Window start driven by a script | **Failing in CI** since it ran again on 2026-11-04 (run [41814275373](https://github.com/davidfdzmorilla/pulse/actions/runs/41814275373)): Pulse exits without running the script, cause not known yet. It last passed on 2026-10-29. The runner has no GPU, so even a pass shows only that the window opens there, not that it works with real graphics cards |
-| Installer: silent install, `.pulse` association, uninstall keeps settings | Verified in CI on 2026-11-04 (run [41814275373](https://github.com/davidfdzmorilla/pulse/actions/runs/41814275373)) |
-| Test suite on Windows | **Failing** on `main` since 2026-10-29: 3 tests fail on every run and 3 more on some runs. With the launch branch (run 41814275373, 2026-11-04) only `more_threads_give_the_same_notes` failed; the 2 intermittent ones passed that time ([details](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)) |
+| Native build (MSVC, GitHub's `windows-2022` runner) | Verified in CI (every run, latest 2026-11-05) |
+| Native execution: `pulse.exe --render` | Verified in CI on 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404), no audio device) |
+| Window start driven by a script | Verified in CI on 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404)). The runner has no GPU, so this shows only that the window opens there, not that it works with real graphics cards |
+| Installer: silent install, `.pulse` association, uninstall keeps settings | Verified in CI on 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404)) |
+| Test suite on Windows | **Passing** on `main` since 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404)). It was red from 2026-10-29 to 2026-11-05 ([causes and fixes](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci), Spanish) |
 | Real audio (WASAPI), MIDI hardware, third-party plugins, display scaling | **Not verified**: no Windows machine has tried them yet |
 
 If you want to help test it:

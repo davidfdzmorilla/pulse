@@ -2,7 +2,7 @@
 
 Five scoped tasks that are ready to be picked up. Each one was found by
 reading the code (file and line references are from 2026-11-04, commit
-`5347594`). **They are proposals and not yet GitHub issues.** The maintainer
+`5347594`; task 3 is from 2026-11-05). **They are proposals and not yet GitHub issues.** The maintainer
 publishes them as issues (see [GITHUB_COMMUNITY_SETUP.md](GITHUB_COMMUNITY_SETUP.md#publishing-the-first-issues)).
 Once they exist, comment on the issue you want so two people don't do the
 same work.
@@ -11,7 +11,7 @@ same work.
 |---|---|---|---|---|
 | 1 | [English versions of the install and platform docs](#1-english-versions-of-the-install-and-platform-docs) | Documentation | Easy | ✅ |
 | 2 | [Readable dim text: fix `TEXT_DIM` contrast](#2-readable-dim-text-fix-text_dim-contrast) | UX / accessibility | Easy | ✅ |
-| 3 | [Windows: audio to MIDI with any number of threads](#3-windows-audio-to-midi-with-any-number-of-threads) | Tests / quality | Medium | |
+| 3 | [Windows CI: make the engine stress tests fast again](#3-windows-ci-make-the-engine-stress-tests-fast-again) | Tests / CI | Medium | |
 | 4 | [`cargo check` on Linux](#4-cargo-check-on-linux) | Platform | Medium | |
 | 5 | [`pulse --help` and errors for unknown flags](#5-pulse---help-and-errors-for-unknown-flags) | App / CLI | Easy | ✅ |
 
@@ -105,87 +105,58 @@ passes. The screenshots show the change.
 
 ---
 
-## 3. Windows: audio to MIDI with any number of threads
+## 3. Windows CI: make the engine stress tests fast again
 
-**Labels:** `windows`, `bug`, `help wanted`
+**Labels:** `windows`, `performance`, `help wanted`
 
-**Problem.** One test fails on every run of the Windows CI
-(`.github/workflows/windows.yml`), and passes on macOS:
-`transcribe::tests::more_threads_give_the_same_notes`
-(`crates/stems/src/transcribe.rs`, the `assert!(a == b)` at line 329).
+**Problem.** The Windows CI (`.github/workflows/windows.yml`) is green, but
+it takes about an hour, and most of that is one test binary:
+`crates/engine/tests/stress.rs`. Its 9 tests (7 more are ignored) take
+**1,328–1,631 seconds** on Windows CI, against **82 seconds** on an
+Apple Silicon Mac. Run alone on the same Windows runner,
+`the_audio_threads_do_not_allocate_with_workers` takes 34 seconds. Measured
+on 2026-11-05 (runs
+[42019354460](https://github.com/davidfdzmorilla/pulse/actions/runs/42019354460)
+and [42023990962](https://github.com/davidfdzmorilla/pulse/actions/runs/42023990962)).
 
-The test runs the Basic Pitch model on 2 threads and on the default count
-(`threads()`: the cores minus one, between 1 and 4, so 3 on CI's 4-core
-runner). It then requires the two sets of activations to be **bit-identical**.
-On macOS (Apple Silicon) they are. On Windows x64, ONNX Runtime's CPU
-kernels may split and sum the work differently per thread count, so the
-floats can differ in the last bits. The failure message is just
-`assertion failed: a == b`, so nobody knows yet by how much they differ, or
-whether the **notes** (which are what the user gets) differ too.
+What is known. The runner has 4 logical processors. The engine's worker
+threads (`crates/engine/src/workers.rs`) run at Windows' time-critical
+priority, as Pulse's real audio thread does (cpal raises it). In the tests,
+the thread that plays the audio thread's role is a plain test thread at
+normal priority, and several tests run at once, each with its own pool of
+time-critical workers that spin between blocks. A likely explanation, **not
+yet proven**, is that those workers keep the normal-priority test threads
+off the processors. The same effect stopped workers from starting at all
+until 2026-11-05 ([background](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci),
+Spanish).
 
-Failing runs, for example
-<https://github.com/davidfdzmorilla/pulse/actions/runs/41794967564> (2026-11-04).
+**Goal.** The stress tests take a few minutes on Windows CI and check
+exactly what they check today.
 
-**Goal.** Know how far apart the two results are on Windows, and make the
-test check what matters: that audio to MIDI gives the same notes whatever
-the thread count.
+**Scope.** The tests and, if the cause is in the engine, the smallest change
+there that fixes it. Don't skip, ignore or loosen a test, and don't remove
+the real-time checks. Changing how Pulse itself schedules its threads needs a
+measured reason, because it affects real users.
 
-**Scope.** This test, and only if needed the thread setup in
-`Transcriber::load_on`. Don't weaken the test to make it pass. The notes
-must stay identical. If they differ on Windows, that's a real bug to report,
-not something to hide.
-
-**Files.** `crates/stems/src/transcribe.rs`.
+**Files.** `crates/engine/tests/stress.rs`, possibly
+`crates/engine/src/workers.rs` and `.github/workflows/windows.yml`.
 
 **Steps.**
-1. Replace `assert!(a == b)` with a check that reports the largest absolute
-   difference between the two activations, and how many values differ.
-2. Push a branch and open a draft PR so the Windows CI runs. Read the numbers
-   in its log.
-3. If only the activations differ (by a tiny amount) and the notes are
-   identical: compare activations within a stated tolerance, keep
-   `assert_eq!` on the notes, and explain the tolerance in a comment.
-4. If the notes differ too: don't loosen anything. Report it in the issue,
-   with the numbers, so the fix can be chosen. One option is fixing the
-   thread count for transcription.
-5. Run it on macOS: `cargo test --release -p stems more_threads_give_the_same_notes`.
+1. Measure first. Run the binary on Windows CI with `--nocapture` and
+   `--test-threads=1`, and note the time of each test. A draft PR runs the
+   Windows workflow.
+2. Check the explanation: for example, give the stress tests' "audio
+   thread" the same priority as the real one, and compare.
+3. Propose the fix with the numbers from the CI log.
 
-**Acceptance criteria.** The test passes on both CI jobs. Notes are still
-compared exactly. Any tolerance on activations is justified by numbers from
-the Windows log.
+**Acceptance criteria.** All 9 tests still pass on both CI jobs, with no
+assertion changed. The stress binary takes under 5 minutes on Windows CI.
+The PR explains the cause with measurements.
 
-**Tests.** The test itself on both CI jobs, plus `cargo test --release -p stems`.
+**Tests.** `cargo test --release -p engine --test stress` on both CI jobs.
 
-**Knowledge.** Rust, basic floating point. ONNX Runtime experience helps.
-No Windows machine needed: CI is the Windows test.
-
-**Status of every test that has failed on Windows CI.** This is the reference
-table; other documents link here. Evidence: Windows CI runs 41627764299,
-41654073501, 41697364751, 41789816848 and 41794967564 (2026-11-03/04, on
-`main` or branches identical to it), Windows CI run 41808950553 (this branch at
-`00d22e3`, 2026-11-04) and macOS CI run 41805367312 (2 attempts).
-
-| Test | On Windows CI (`main`) | Cause | State on `funcion/preparar-lanzamiento` |
-|---|---|---|---|
-| `factory_sounds_tests::a_kit_dragged_from_the_browser_onto_a_midi_track_loads_there` | Fails on every run | The test expected `…\Bombos/Bombo house.wav`; Pulse returns `…\Bombos\Bombo house.wav` (CI log). A test bug | **Fixed. Passes on Windows CI** (run [41808950553](https://github.com/davidfdzmorilla/pulse/actions/runs/41808950553), 2026-11-04) and on macOS |
-| `lyrics::tests::lyrics_are_saved_and_opened_with_the_project` | Fails on every run | Same: a `/` inside one `Path::join` in the expected value | **Fixed. Passes on Windows CI** (run [41808950553](https://github.com/davidfdzmorilla/pulse/actions/runs/41808950553), 2026-11-04) and on macOS |
-| `transcribe::tests::more_threads_give_the_same_notes` | Fails on every run | Requires bit-identical ONNX activations with 2 and 3 threads. The size of the difference hasn't been measured | **Pending**: this task (#3) |
-| `transcribe::tests::finds_the_notes_basic_pitch_finds` | Fails on some runs. Also fails **on every run of GitHub's macOS (M1) runner** (2 of 2) | Two onset frames meant to tie; the tie was broken by one-ulp rounding, so a note started 1–2 frames late. Reproduced locally with 1 thread | **Fixed** in `inferred_onsets`, with the new test `one_thread_finds_the_same_notes`. **Passes on macOS CI (M1) and Windows CI** (runs 41814275371 and 41814275373, 2026-11-04) |
-| `engine::tests::with_threads_a_sidechain_waits_for_its_source` | Fails on some runs ("the other threads did nothing") | Not established. Likely the test needs worker threads to win a race | **Pending**. Not reproduced on macOS |
-| `the_audio_threads_do_not_allocate_with_workers` (`crates/engine/tests/stress.rs:669`) | Fails on some runs ("the workers allocate") | **Unknown**. It is a real-time-safety check | **Pending, needs the maintainer**. Not reproduced on macOS |
-
-Summary: on `main`, 3 tests fail on every Windows run and 3 more on some runs.
-On this branch's run 41814275373, only `more_threads_give_the_same_notes` failed.
-This branch fixes 3 of the 6, all three passing on Windows CI. It leaves 1
-reproducible failure (`more_threads_give_the_same_notes`) and 2 intermittent
-ones pending.
-
-To check the two path fixes on macOS:
-
-```bash
-cargo test --release -p app factory_sounds_tests
-cargo test --release -p app lyrics
-```
+**Knowledge.** Rust, threads. Knowing Windows scheduling helps. No Windows
+machine needed: CI is the Windows test.
 
 ---
 

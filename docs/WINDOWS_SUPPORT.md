@@ -6,22 +6,18 @@ qué se ha cambiado y qué está comprobado. Documentos relacionados:
 [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md) (instalar y usar) y
 [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md) (matriz por sistema).
 
-**Resumen (4 de noviembre de 2026).** La CI de Windows ya corre en GitHub
-(`windows-2022`). La última ejecución completa en verde, el 29 de octubre de 2026
-([ejecución 40853681048](https://github.com/davidfdzmorilla/pulse/actions/runs/40853681048),
-commit `90bfbae`), compiló de forma nativa con MSVC y pasó todas las pruebas.
-También renderizó un proyecto con `pulse.exe --render`, arrancó la ventana con
-un guion, e instaló, asoció `.pulse` y desinstaló. Desde ese día la CI de Windows
-está en rojo: en `main` **3 pruebas fallan en cada ejecución** y otras 3 solo
-en algunas. La rama `funcion/preparar-lanzamiento` corrige 3, confirmadas en la CI de
-Windows; además vuelve a empaquetar, renderizar e instalar en la CI (pasan),
-mientras que el arranque de la ventana con guion falla. Quedan pendientes 1
-prueba reproducible y 2 intermitentes. Tabla en
-[PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-que-fallan-en-windows).
+**Resumen (5 de noviembre de 2026).** La CI de Windows corre en GitHub
+(`windows-2022`) y vuelve a estar en verde en `main`
+([ejecución 42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404),
+commit `518120e`). Compila de forma nativa con MSVC y pasa todas las pruebas.
+Además empaqueta el zip y el instalador, renderiza un proyecto con
+`pulse.exe --render` y arranca la ventana con un guion. También instala,
+asocia `.pulse` y desinstala. Entre el 29 de octubre y el 5 de noviembre
+estuvo en rojo. Las causas y los arreglos están en
+[PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci).
 Sigue sin probarse en un equipo Windows real: audio por WASAPI, MIDI, plugins
 de terceros, escala de pantalla y actualizador. Pulse **no está listo para
-publicarse en Windows** hasta que las pruebas vuelvan a pasar y se haga esa
-prueba manual.
+publicarse en Windows** hasta que se haga esa prueba manual.
 
 *El resto del documento se escribió el 20 de octubre, antes de que corriera la
 CI: donde dice «pendiente de Windows», los puntos 1 a 6 de
@@ -111,7 +107,8 @@ cargo build --release                                                           
 
 ## Pendiente de verificar en Windows
 
-En orden de prioridad (la CI hace del 1 al 5 en cuanto pueda correr):
+En orden de prioridad. Los puntos 1 a 6 los comprueba la CI en cada cambio
+(en verde desde el 5-11-2026); queda el 7:
 
 1. Compilación y enlace nativos con Visual Studio (`cargo build --release --workspace --all-targets`); con `lld-link` desde macOS ya enlaza.
 2. `cargo test --release --workspace`: incluye el motor, ONNX Runtime con los tres

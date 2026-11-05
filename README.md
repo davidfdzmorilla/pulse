@@ -15,6 +15,8 @@ mix analysis. They all run on your computer, offline and with no accounts.
 
 <p align="center">
   <a href="https://github.com/davidfdzmorilla/pulse/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/davidfdzmorilla/pulse?label=release"></a>
+  <a href="https://github.com/davidfdzmorilla/pulse/actions/workflows/macos.yml"><img alt="macOS CI" src="https://github.com/davidfdzmorilla/pulse/actions/workflows/macos.yml/badge.svg?branch=main"></a>
+  <a href="https://github.com/davidfdzmorilla/pulse/actions/workflows/windows.yml"><img alt="Windows CI" src="https://github.com/davidfdzmorilla/pulse/actions/workflows/windows.yml/badge.svg?branch=main"></a>
   <a href="LICENSE"><img alt="License: GPL-3.0-or-later" src="https://img.shields.io/badge/license-GPL--3.0--or--later-blue"></a>
   <img alt="Platforms: macOS Apple Silicon, Windows x64 experimental" src="https://img.shields.io/badge/platforms-macOS%20(Apple%20Silicon)%20%C2%B7%20Windows%20x64%20(experimental)-555">
 </p>
@@ -45,7 +47,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
 | | macOS 13.4+ (Apple Silicon) | Windows 10/11 x64 | Linux |
 |---|---|---|---|
 | Download | [`Pulse-<version>.zip`](https://github.com/davidfdzmorilla/pulse/releases/latest) | Not published yet: [build it](docs/BUILD_WINDOWS.md) or use a CI artifact | — |
-| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: on CI's Windows it builds, packages, renders and installs (2026-11-04); one test still fails there, and the scripted window start fails; not tested with real audio/MIDI hardware or third-party plugins | Not supported |
+| Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: on CI's Windows it builds, passes the full test suite, packages, renders, opens its window and installs (2026-11-05); not tested with real audio/MIDI hardware or third-party plugins | Not supported |
 | Signing | Self-signed, **not notarized** by Apple (one-time Gatekeeper step) | Unsigned (SmartScreen warning); updates are checked with Pulse's own Ed25519 signature | — |
 
 Details per feature: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) · Intel Macs are not supported yet.

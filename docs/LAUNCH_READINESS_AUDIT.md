@@ -4,6 +4,16 @@
 v0.1.121) · **Auditor:** Claude Code, working on branch
 `funcion/preparar-lanzamiento`.
 
+> **Update, 2026-11-05.** This is a dated record and is not kept up to date.
+> Since it was written, the launch work was merged (#209, #211), and both CI
+> workflows are green on `main` (Windows run
+> [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404),
+> macOS run [42045040332](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040332)).
+> All the Windows test failures and the scripted window start are fixed. The
+> code of conduct contact, private vulnerability reporting and Discussions
+> are set up. Current state: [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci)
+> and [ROADMAP.md](ROADMAP.md).
+
 This audit describes the repository **as it was before** the launch
 preparation work. What was changed in response is in
 [LAUNCH_PREPARATION_REPORT.md](LAUNCH_PREPARATION_REPORT.md). Every claim

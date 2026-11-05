@@ -68,13 +68,14 @@ sequenceDiagram
   the engine replaces (an instrument, an effect, a plugin) goes back to the
   UI thread as `Garbage`, and the UI thread frees it there.
   `crates/engine/tests/stress.rs` installs a counting global allocator and
-  fails if the audio thread or its workers allocate. It passes on macOS. On
-  Windows CI, `the_audio_threads_do_not_allocate_with_workers` has failed
-  intermittently ("the workers allocate"), and the cause is not known yet.
+  fails if the audio thread or its workers allocate. It passes on macOS and
+  on Windows CI.
 - **Multi-core.** `crates/engine/src/workers.rs` is a fixed pool of threads,
   started off the audio thread, that help render each block's tracks
   following their dependencies (sidechains, groups, returns). A late worker
-  only means less help, never a late block.
+  only means less help, never a late block. On Windows the pool raises each
+  worker to the audio thread's priority as it creates it (a thread that had
+  to raise itself might not run for seconds on a busy machine).
 - **Determinism.** The audio engine is designed for deterministic rendering
   across buffer sizes and thread counts. Automated tests cover this
   behavior, including repeatability of offline renders (for example
@@ -82,8 +83,9 @@ sequenceDiagram
   `stress.rs`, `what_plays_does_not_depend_on_the_buffer_size` in
   `crates/app/src/fidelity_tests.rs`). They cover the engine's own
   instruments and effects. Third-party plugins and the ML models (ONNX
-  Runtime) are outside what these tests cover: see the Windows thread-count test in
-  [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads).
+  Runtime) are outside what these tests cover. On Windows x64, ONNX Runtime's
+  activations differ in the last bits between thread counts; the notes are the
+  same (`more_threads_give_the_same_notes` in `crates/stems/src/transcribe.rs`).
 - **Offline rendering** (`crates/engine/src/offline.rs`, used by
   `crates/app/src/export.rs`) runs the same `Engine` without an audio device,
   faster than real time, on a background thread. `pulse --render out.wav

@@ -23,9 +23,7 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
   make it worse. Most of the engine's tests check the sound itself.
 - **The audio thread is sacred.** `Engine::process` must never allocate,
   lock or wait for the OS. A stress test checks this
-  (`crates/engine/tests/stress.rs`). It passes on macOS. On Windows CI it has
-  failed intermittently with "the workers allocate", which is still under
-  investigation ([details](docs/FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)).
+  (`crates/engine/tests/stress.rs`), on macOS and on Windows CI.
 - **Determinism.** The audio engine is designed for deterministic rendering
   across buffer sizes and thread counts. Automated tests cover this
   behavior, including repeatability of offline renders. A change that breaks
@@ -104,9 +102,9 @@ cargo check --release --target x86_64-pc-windows-msvc --workspace --all-targets
 
 For every pull request, CI builds and tests Pulse natively on Windows
 (`.github/workflows/windows.yml`, which also packages and installs it) and on
-Apple Silicon (`.github/workflows/macos.yml`, new: it packages only on
-`main`). The Windows job is currently red for reasons unrelated to most
-changes: see [docs/FIRST_CONTRIBUTIONS.md](docs/FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads).
+Apple Silicon (`.github/workflows/macos.yml`, which packages only on
+`main`). Both are green on `main`. The Windows job takes about an hour,
+most of it in the engine's stress tests.
 
 ## Formatting and lints
 

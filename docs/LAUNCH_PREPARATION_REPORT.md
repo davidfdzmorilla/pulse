@@ -4,6 +4,16 @@
 at `5347594`). **No commits, pushes or GitHub changes were made.** All the
 work is uncommitted in the working tree for the maintainer to review.
 
+> **Update, 2026-11-05.** This is a dated record and is not kept up to date.
+> Since it was written, the launch work was merged (#209, #211), and both CI
+> workflows are green on `main` (Windows run
+> [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404),
+> macOS run [42045040332](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040332)).
+> All the Windows test failures and the scripted window start are fixed. The
+> code of conduct contact, private vulnerability reporting and Discussions
+> are set up. Current state: [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci)
+> and [ROADMAP.md](ROADMAP.md).
+
 The findings this work responds to: [LAUNCH_READINESS_AUDIT.md](LAUNCH_READINESS_AUDIT.md).
 Task IDs (A1–A22) refer to that document's last table.
 
@@ -263,8 +273,8 @@ after it, all four give 0.9752 s. A new test,
   and a failure raises a warning annotation. The docs now date these
   checks to 2026-10-29.
 - **Windows docs unified.** One reference table in
-  [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads)
-  (English) and [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-que-fallan-en-windows)
+  [FIRST_CONTRIBUTIONS.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci)
+  (English) and [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci)
   (Spanish). ROADMAP, DOWNLOADS and WINDOWS_SUPPORT use the same summary: on
   `main` 3 tests fail on every Windows run and 3 on some runs; this branch
   fixes 3 (checked on macOS only).

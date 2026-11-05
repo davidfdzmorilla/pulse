@@ -12,8 +12,8 @@ each version: [CHANGELOG](../CHANGELOG.md).
 
 | Item | State | Source |
 |---|---|---|
-| Windows test suite green on CI | Red since 2026-10-29. On `main`: 3 tests fail on every run, 3 on some runs. The launch branch fixes 3, confirmed on Windows CI. It leaves 1 reproducible and 2 intermittent |
-| Scripted window start on Windows CI | Fails since it ran again on 2026-11-04 (Pulse exits without running the script; cause unknown) | [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-que-fallan-en-windows) | [FIRST_CONTRIBUTIONS.md #3](FIRST_CONTRIBUTIONS.md#3-windows-audio-to-midi-with-any-number-of-threads) |
+| Windows test suite green on CI | ✅ Green on `main` since 2026-11-05 (red from 2026-10-29). The engine's stress tests still take about 27 minutes there | [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci), [FIRST_CONTRIBUTIONS.md #3](FIRST_CONTRIBUTIONS.md#3-windows-ci-make-the-engine-stress-tests-fast-again) |
+| Scripted window start on Windows CI | ✅ Passes since 2026-11-05 (it overflowed the 1 MB main-thread stack; Pulse now links with 8 MB) | [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci) |
 | Windows tested on real hardware (audio, MIDI, plugins, display scaling) | Not done | [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md#pendiente-de-verificar-en-windows) |
 | Windows packages attached to releases | Not yet | [BUILD_WINDOWS.md](BUILD_WINDOWS.md) |
 | Windows code signing (Authenticode) | No certificate | [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md#limitaciones-conocidas) |

@@ -226,7 +226,18 @@ impl Workers {
                     .name(format!("pulse-audio-{}", me + 1))
                     .spawn(move || worker(shared, me, init))
                     .ok()
-                    .map(|handle| handle.thread().clone())
+                    .map(|handle| {
+                        // On Windows a new thread starts at normal priority and
+                        // only raises itself once it first runs, which on a busy
+                        // machine (time-critical threads spinning on every core)
+                        // may take seconds: raised from here, it starts as it will run.
+                        #[cfg(windows)]
+                        {
+                            use std::os::windows::io::AsRawHandle;
+                            raise_priority_of(handle.as_raw_handle());
+                        }
+                        handle.thread().clone()
+                    })
             })
             .collect();
         // A worker that failed to start is never woken nor waited for.
@@ -318,11 +329,19 @@ fn raise_priority() {
     {
         unsafe extern "system" {
             fn GetCurrentThread() -> *mut std::ffi::c_void;
-            fn SetThreadPriority(thread: *mut std::ffi::c_void, priority: i32) -> i32;
         }
-        const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
-        unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_TIME_CRITICAL) };
+        raise_priority_of(unsafe { GetCurrentThread() });
     }
+}
+
+/// Windows: runs `thread` at the priority of the audio thread.
+#[cfg(windows)]
+fn raise_priority_of(thread: *mut std::ffi::c_void) {
+    unsafe extern "system" {
+        fn SetThreadPriority(thread: *mut std::ffi::c_void, priority: i32) -> i32;
+    }
+    const THREAD_PRIORITY_TIME_CRITICAL: i32 = 15;
+    unsafe { SetThreadPriority(thread, THREAD_PRIORITY_TIME_CRITICAL) };
 }
 
 /// Threads to share blocks among by default: half the cores, up to 6. A

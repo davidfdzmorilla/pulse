@@ -6383,18 +6383,19 @@ mod tests {
         };
         let (one, _) = run(1);
         // A busy machine may keep the workers asleep through a whole run: it
-        // is made again until they take part.
-        let mut tries = 0;
-        let (four, helped) = loop {
-            let made = run(4);
-            tries += 1;
-            if made.1 > 0 || tries == 20 {
-                break made;
-            }
-        };
-        assert!(helped > 0, "the other threads did nothing");
+        // is made again until they take part, for up to a minute (as the
+        // stress test waits for them; on Windows CI they join in slowly). Every
+        // run is checked, the ones they took part in or not.
+        let started = std::time::Instant::now();
+        let (mut helped, mut runs) = (0, 0);
+        while helped == 0 && (runs == 0 || started.elapsed() < std::time::Duration::from_secs(60)) {
+            let (four, by_workers) = run(4);
+            assert!(one.iter().zip(&four).all(|(a, b)| a.to_bits() == b.to_bits()), "the sidechain heard something else");
+            helped = by_workers;
+            runs += 1;
+        }
+        assert!(helped > 0, "the other threads did nothing in {runs} runs ({:.0?})", started.elapsed());
         assert!(energy(&one) > 0.1);
-        assert!(one.iter().zip(&four).all(|(a, b)| a.to_bits() == b.to_bits()), "the sidechain heard something else");
     }
 
     /// Every instrument (the Polychrome too) with effects, a group,

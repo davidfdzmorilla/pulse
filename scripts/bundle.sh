@@ -48,9 +48,13 @@ fi
 # Without its debugging symbols (they are in the dSYM): smaller, and none of
 # the paths the object files had. The UUID stays, so the dSYM still fits.
 strip -S "$app/Contents/MacOS/pulse"
-if strings "$app/Contents/MacOS/pulse" | grep -F "$HOME/" >/dev/null; then
+# (Except the prebuilt ONNX Runtime's own source paths, from the machine `ort`
+# built it on: on GitHub's macOS runners that machine's home is also
+# /Users/runner, so they look like ours but aren't. Nothing of this Mac is in them.)
+leaks() { strings "$app/Contents/MacOS/pulse" | grep -F "$HOME/" | grep -v -F "/ort-artifacts/"; }
+if leaks >/dev/null; then
     echo "El binario aún lleva rutas de $HOME:" >&2
-    strings "$app/Contents/MacOS/pulse" | grep -F "$HOME/" | head -5 >&2
+    leaks | head -5 >&2
     exit 1
 fi
 cp "$root/packaging/Pulse.icns" "$app/Contents/Resources/Pulse.icns"

@@ -26,7 +26,7 @@ Only the repository owner can do these.
 |---|---|---|---|
 | 1 | ~~Code of Conduct contact~~ **Done:** `correo@davidfdzmorilla.dev` (also the e-mail fallback in `SECURITY.md`) | — | — |
 | 2 | ~~Private vulnerability reporting~~ **Done** | — | — |
-| 3 | Legal review of the extra license clause (point 3) in `CONTRIBUTING.md` | a lawyer; questions in [PROJECT_MODEL.md](PROJECT_MODEL.md#open-questions-for-the-maintainer-not-legal-advice) | Merging the first outside contribution |
+| 3 | ~~Legal review of the extra license clause~~ **Not needed:** the clause (point 3) was removed on 2026-11-06; contributions are DCO + GPL only | — | — |
 | 4 | ~~Discussions, labels, topics, description, social preview~~ **Done** | — | — |
 
 ## 1. Before announcing anything

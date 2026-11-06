@@ -14,6 +14,11 @@ v0.1.121) · **Auditor:** Claude Code, working on branch
 > are set up. Current state: [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci)
 > and [ROADMAP.md](ROADMAP.md).
 
+> **Update, 2026-11-06.** The extra license to the author ("point 3" of
+> CONTRIBUTING) was removed before any outside contribution was merged:
+> contributions are DCO + GPL only, and the legal review this record asks for
+> no longer applies ([PROJECT_MODEL.md](PROJECT_MODEL.md#how-contributions-are-licensed)).
+
 This audit describes the repository **as it was before** the launch
 preparation work. What was changed in response is in
 [LAUNCH_PREPARATION_REPORT.md](LAUNCH_PREPARATION_REPORT.md). Every claim

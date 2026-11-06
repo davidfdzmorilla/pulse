@@ -14,6 +14,11 @@ work is uncommitted in the working tree for the maintainer to review.
 > are set up. Current state: [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci)
 > and [ROADMAP.md](ROADMAP.md).
 
+> **Update, 2026-11-06.** The extra license to the author ("point 3" of
+> CONTRIBUTING) was removed before any outside contribution was merged:
+> contributions are DCO + GPL only, and the legal review this record asks for
+> no longer applies ([PROJECT_MODEL.md](PROJECT_MODEL.md#how-contributions-are-licensed)).
+
 The findings this work responds to: [LAUNCH_READINESS_AUDIT.md](LAUNCH_READINESS_AUDIT.md).
 Task IDs (A1–A22) refer to that document's last table.
 

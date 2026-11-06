@@ -149,6 +149,28 @@ More detail, with the audio flow and threading rules: [docs/DEVELOPMENT.md](docs
 Releases are made by the maintainer from `main` with `scripts/release.sh` (see
 [docs/PUBLICAR.md](docs/PUBLICAR.md)). Contributors never need to run it.
 
+## AI-assisted contributions
+
+You may use AI tools (code assistants, chat models, translators) to help with a
+contribution. What matters is that **a person** stands behind it:
+
+- **You open the pull request yourself and answer the review yourself.** You
+  understand every line you send and can explain why it is there.
+- **Say what you used.** One line in the pull request is enough, for example
+  "Translated with an AI tool, then checked against the Spanish source" or
+  "No AI used".
+- **Only claim what you did.** If you couldn't build or run something, say so:
+  "untested" is fine, "tested" when it wasn't is not.
+- **The sign-off is yours.** `Signed-off-by` certifies, as a person, where the
+  code comes from (see [Licensing of contributions](#licensing-of-contributions)).
+  A program can't make that statement for you.
+- **Comment on the issue before starting** and wait for a reply, so two people
+  don't do the same work.
+
+Pull requests opened by autonomous agents, or sent in bulk to many projects,
+are closed without a detailed review. If a person is behind one of them, reply
+in the pull request and it can be reopened.
+
 ## Reporting bugs
 
 Use the [issue forms](https://github.com/davidfdzmorilla/pulse/issues/new/choose):

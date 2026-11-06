@@ -50,6 +50,14 @@ Delete this section if it doesn't apply.
 - [ ] This PR does not touch the audio thread
 - [ ] It does, and it allocates nothing, takes no lock and the stress tests pass
 
+## AI use
+
+<!-- See "AI-assisted contributions" in CONTRIBUTING.md. One line is enough. -->
+
+- [ ] No AI tools used
+- [ ] AI tools used for: <!-- e.g. translation, a first draft of the tests -->
+- [ ] I have read every line of this change and will answer the review myself
+
 ## Checklist
 
 - [ ] Commits are signed off (`git commit -s`, see CONTRIBUTING.md)

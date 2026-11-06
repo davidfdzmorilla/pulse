@@ -1,5 +1,7 @@
 # Pulse por sistema
 
+**Español** · [English](PLATFORM_SUPPORT.en.md)
+
 - **Verificado**: probado en ese sistema.
 - **Implementado**: el código está y compila para ese sistema, pero no se ha
   ejecutado en él.

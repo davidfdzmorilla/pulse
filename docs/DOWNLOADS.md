@@ -65,7 +65,7 @@ trigger the Gatekeeper step again. The previous version is kept as
 3. Your projects, samples and exports are in `~/Music/Pulse` (or the folder you
    chose in Settings). Uninstalling never deletes them.
 
-More detail, in Spanish: [INSTALL_MACOS.md](INSTALL_MACOS.md).
+Install and troubleshooting details: [English](INSTALL_MACOS.en.md) · [Español](INSTALL_MACOS.md).
 
 ## Windows (experimental)
 
@@ -80,7 +80,7 @@ so far (details in [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md)):
 | Native execution: `pulse.exe --render` | Verified in CI on 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404), no audio device) |
 | Window start driven by a script | Verified in CI on 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404)). The runner has no GPU, so this shows only that the window opens there, not that it works with real graphics cards |
 | Installer: silent install, `.pulse` association, uninstall keeps settings | Verified in CI on 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404)) |
-| Test suite on Windows | **Passing** on `main` since 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404)). It was red from 2026-10-29 to 2026-11-05 ([causes and fixes](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci), Spanish) |
+| Test suite on Windows | **Passing** on `main` since 2026-11-05 (run [42045040404](https://github.com/davidfdzmorilla/pulse/actions/runs/42045040404)). It was red from 2026-10-29 to 2026-11-05 ([causes and fixes](PLATFORM_SUPPORT.en.md#windows-ci-tests), English · [Español](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci)) |
 | Real audio (WASAPI), MIDI hardware, third-party plugins, display scaling | **Not verified**: no Windows machine has tried them yet |
 
 If you want to help test it:
@@ -92,8 +92,7 @@ If you want to help test it:
   GitHub. CI builds are test builds: they are not signed with Pulse's update
   key and may not report the right version number.
 
-Install and uninstall steps: [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)
-(Spanish). Windows SmartScreen warns because Pulse has no code-signing
+Install and uninstall steps: [English](INSTALL_WINDOWS.en.md) · [Español](INSTALL_WINDOWS.md). Windows SmartScreen warns because Pulse has no code-signing
 certificate: **More info → Run anyway**.
 
 Please report what you find with the

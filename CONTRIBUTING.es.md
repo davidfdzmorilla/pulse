@@ -15,16 +15,10 @@ Pulse es GPL-3.0-or-later (ver [LICENSE](LICENSE)). Al enviar una contribución
    Lo confirmas firmando cada commit con `git commit -s`, que añade la línea
    `Signed-off-by: Tu Nombre <tu@correo>`.
 2. **Se publica con la licencia de Pulse**, GPL-3.0-or-later.
-3. **Concedes además al autor de Pulse, David Fernández Morilla, una licencia
-   mundial, gratuita, no exclusiva, perpetua e irrevocable** para usar, copiar,
-   modificar, sublicenciar y distribuir tu contribución, también con otras
-   licencias, incluidas las comerciales. Tú conservas los derechos de autor de
-   lo que aportas y puedes usarlo como quieras.
 
-El punto 3 permite ofrecer Pulse con otras condiciones algún día (por ejemplo,
-una licencia comercial) sin tener que localizar a cada persona que haya
-contribuido. Si no estás de acuerdo con él, dilo en el pull request antes de que
-se fusione.
+No hay acuerdo de colaborador (CLA) ni ninguna licencia adicional: tu
+contribución tiene la misma licencia que el resto de Pulse, y conservas sus
+derechos de autor.
 
 No envíes código, muestras, presets, modelos ni imágenes de otros productos
 (comerciales o no) salvo que su licencia lo permita y esté indicada. Si añades

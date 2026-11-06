@@ -199,28 +199,10 @@ Pulse is GPL-3.0-or-later (see [LICENSE](LICENSE)). By sending a contribution
    You confirm this by signing off each commit with `git commit -s`, which
    adds the line `Signed-off-by: Your Name <you@example.com>`.
 2. **It is published under Pulse's license**, GPL-3.0-or-later.
-3. **You also grant the author of Pulse, David Fernández Morilla, a worldwide,
-   royalty-free, non-exclusive, perpetual and irrevocable license** to use,
-   copy, modify, sublicense and distribute your contribution, including under
-   other licenses, commercial ones included. You keep the copyright of what
-   you contribute and can use it however you want.
 
-Point 3 makes it possible to offer Pulse under other terms some day (for
-example, a commercial license) without having to find every person who
-contributed. If you don't agree with it, say so in the pull request before it
-is merged. What this means for the project is explained in
-[docs/PROJECT_MODEL.md](docs/PROJECT_MODEL.md).
-
-> **Note (not part of the terms above).** These are three separate things:
-> the **DCO 1.1** sign-off (`git commit -s`) certifies point 1, where the
-> code comes from; **GPL-3.0-or-later** (point 2) is the project's license;
-> the **additional license** of point 3 is a separate permission. Signing off
-> a commit is **not** by itself a signed agreement to point 3. Whether point 3
-> needs a separate Contributor License Agreement is under legal review (see
-> [docs/PROJECT_MODEL.md](docs/PROJECT_MODEL.md#open-questions-for-the-maintainer-not-legal-advice)).
-> Until that review is done, the maintainer may ask you to confirm point 3
-> explicitly, or to sign a separate agreement, before merging an outside
-> contribution.
+There is no Contributor License Agreement (CLA) and no additional license: your
+contribution has the same license as the rest of Pulse, and you keep its
+copyright.
 
 Don't send code, samples, presets, models or images from other products
 (commercial or not) unless their license allows it and you say which it is. If

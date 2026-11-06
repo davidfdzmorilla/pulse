@@ -44,3 +44,25 @@ una dependencia, ejecuta `python3 scripts/notices.py` para actualizar
 - Si cambias algo que se ve o se usa en la app, actualiza también la guía
   (`docs/guia.md`), que la app muestra en Ayuda → Guía de Pulse.
 - Compilar en Windows: [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md).
+
+## Contribuciones con ayuda de IA
+
+Puedes usar herramientas de IA (asistentes de código, modelos de chat,
+traductores) para preparar una contribución, siempre que **una persona**
+responda de ella:
+
+- **Abres tú el pull request y respondes tú a la revisión.** Entiendes cada
+  línea que envías y puedes explicar por qué está.
+- **Di qué has usado.** Basta una línea en el pull request, por ejemplo
+  «Traducido con una herramienta de IA y revisado frente al original» o «Sin IA».
+- **Afirma solo lo que hiciste.** Si no pudiste compilar o probar algo, dilo:
+  «sin probar» está bien; «probado» sin haberlo probado, no.
+- **La firma es tuya.** `Signed-off-by` certifica, como persona, de dónde viene
+  el código (ver [Licencia de las contribuciones](#licencia-de-las-contribuciones)).
+  Un programa no puede hacer esa declaración por ti.
+- **Comenta en el issue antes de empezar** y espera respuesta, para que dos
+  personas no hagan el mismo trabajo.
+
+Los pull requests abiertos por agentes autónomos, o enviados en serie a muchos
+proyectos, se cierran sin revisión detallada. Si detrás de uno hay una persona,
+que responda en el pull request y se puede reabrir.

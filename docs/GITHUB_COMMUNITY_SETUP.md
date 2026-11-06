@@ -94,6 +94,9 @@ github: [your-github-username]
 
 ## Publishing the first issues
 
+**Done on 2026-11-06:** issues #213 to #217, linked from the table in
+`docs/FIRST_CONTRIBUTIONS.md`. The steps stay here for new tasks.
+
 `docs/FIRST_CONTRIBUTIONS.md` has five ready-to-publish issues. After
 creating the labels (section 3), publish each one with its title, its body
 copied from the document, and the labels listed under its heading. For

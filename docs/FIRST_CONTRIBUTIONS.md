@@ -2,18 +2,17 @@
 
 Five scoped tasks that are ready to be picked up. Each one was found by
 reading the code (file and line references are from 2026-11-04, commit
-`5347594`; task 3 is from 2026-11-05). **They are proposals and not yet GitHub issues.** The maintainer
-publishes them as issues (see [GITHUB_COMMUNITY_SETUP.md](GITHUB_COMMUNITY_SETUP.md#publishing-the-first-issues)).
-Once they exist, comment on the issue you want so two people don't do the
-same work.
+`5347594`; task 3 is from 2026-11-05). Each one is also a GitHub issue,
+published on 2026-11-06: comment on the issue you want before starting, so
+two people don't do the same work.
 
-| # | Task | Area | Difficulty | Good first issue |
-|---|---|---|---|---|
-| 1 | [English versions of the install and platform docs](#1-english-versions-of-the-install-and-platform-docs) | Documentation | Easy | ✅ |
-| 2 | [Readable dim text: fix `TEXT_DIM` contrast](#2-readable-dim-text-fix-text_dim-contrast) | UX / accessibility | Easy | ✅ |
-| 3 | [Windows CI: make the engine stress tests fast again](#3-windows-ci-make-the-engine-stress-tests-fast-again) | Tests / CI | Medium | |
-| 4 | [`cargo check` on Linux](#4-cargo-check-on-linux) | Platform | Medium | |
-| 5 | [`pulse --help` and errors for unknown flags](#5-pulse---help-and-errors-for-unknown-flags) | App / CLI | Easy | ✅ |
+| # | Task | Issue | Area | Difficulty | Good first issue |
+|---|---|---|---|---|---|
+| 1 | [English versions of the install and platform docs](#1-english-versions-of-the-install-and-platform-docs) | [#214](https://github.com/davidfdzmorilla/pulse/issues/214) | Documentation | Easy | ✅ |
+| 2 | [Readable dim text: fix `TEXT_DIM` contrast](#2-readable-dim-text-fix-text_dim-contrast) | [#215](https://github.com/davidfdzmorilla/pulse/issues/215) | UX / accessibility | Easy | ✅ |
+| 3 | [Windows CI: make the engine stress tests fast again](#3-windows-ci-make-the-engine-stress-tests-fast-again) | [#213](https://github.com/davidfdzmorilla/pulse/issues/213) | Tests / CI | Medium | |
+| 4 | [`cargo check` on Linux](#4-cargo-check-on-linux) | [#216](https://github.com/davidfdzmorilla/pulse/issues/216) | Platform | Medium | |
+| 5 | [`pulse --help` and errors for unknown flags](#5-pulse---help-and-errors-for-unknown-flags) | [#217](https://github.com/davidfdzmorilla/pulse/issues/217) | App / CLI | Easy | ✅ |
 
 Set-up for all of them: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
@@ -25,8 +24,8 @@ Set-up for all of them: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 **Problem.** The README is in English, but the documents it sends people to
 are only in Spanish: [`INSTALL_MACOS.md`](INSTALL_MACOS.md) (44 lines),
-[`INSTALL_WINDOWS.md`](INSTALL_WINDOWS.md) (111 lines) and
-[`PLATFORM_SUPPORT.md`](PLATFORM_SUPPORT.md) (37 lines). An English-speaking
+[`INSTALL_WINDOWS.md`](INSTALL_WINDOWS.md) (112 lines) and
+[`PLATFORM_SUPPORT.md`](PLATFORM_SUPPORT.md) (74 lines). An English-speaking
 user who hits a Gatekeeper or SmartScreen problem finds no help in their
 language beyond the summary in [`DOWNLOADS.md`](DOWNLOADS.md).
 

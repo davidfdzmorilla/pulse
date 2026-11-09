@@ -3,6 +3,7 @@
 use crate::app::{ClipRef, Placement, PulseApp};
 use crate::project::PALETTE;
 use crate::theme::{self, ACCENT, PLAY, SLOT, SLOT_HOVER, SOLO, TEXT, TEXT_DIM};
+use crate::i18n::{fill, tr};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense};
 use engine::model::{Clip, Param, PAN_PARAM, SEND_PARAM};
@@ -212,7 +213,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                         }
                     }
                     let stop_queued = play.queued == QUEUED_STOP && blink;
-                    if stop_cell(ui, stop_queued, if is_group { "Parar las pistas del grupo" } else { "Parar pista" }).clicked() {
+                    if stop_cell(ui, stop_queued, if is_group { "Parar las pistas del grupo" } else { "Parar pista" }, if is_group { tr("Parar las pistas del grupo") } else { tr("Parar pista") }).clicked() {
                         actions.push(if is_group { Action::StopGroup(t) } else { Action::StopTrack(t) });
                     }
                 });
@@ -224,7 +225,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
                 ui.painter().rect_filled(rect, 2.0, fill);
                 ui.painter().text(rect.center(), Align2::CENTER_CENTER, "+", theme::body(), TEXT);
-                if response.on_hover_text(crate::theme::keys("Nueva pista MIDI (⌘T)")).clicked() {
+                if response.on_hover_text(crate::theme::keys(tr("Nueva pista MIDI (⌘T)"))).clicked() {
                     actions.push(Action::AddTrack);
                 }
             });
@@ -250,7 +251,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     if response.clicked() {
                         actions.push(Action::SelectTarget(target));
                     }
-                    let response = response.on_hover_text(format!("{name} · clic: seleccionar · clic derecho: nombre, color y eliminar"));
+                    let response = response.on_hover_text(fill(tr("{} · clic: seleccionar · clic derecho: nombre, color y eliminar"), &[&name]));
                     widgets::edit_menu(&response, |ui| {
                         if crate::returns::header_menu(ui, &mut app.project.returns[r], r) {
                             actions.push(Action::DeleteReturn(r));
@@ -267,7 +268,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     let fill = if response.hovered() { theme::CONTROL_HOVER } else { theme::CONTROL };
                     ui.painter().rect_filled(rect, 2.0, fill);
                     ui.painter().text(rect.center(), Align2::CENTER_CENTER, "+", theme::body(), TEXT);
-                    if response.on_hover_text(crate::theme::keys("Nuevo retorno (⌥⌘T)")).clicked() {
+                    if response.on_hover_text(crate::theme::keys(tr("Nuevo retorno (⌥⌘T)"))).clicked() {
                         actions.push(Action::AddReturn);
                     }
                 });
@@ -283,7 +284,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 for slot in 0..rows {
                     scene_cell(app, ui, slot, &mut actions);
                 }
-                if stop_cell(ui, false, "Parar todos los clips").clicked() {
+                if stop_cell(ui, false, "Parar todos los clips", tr("Parar todos los clips")).clicked() {
                     actions.push(Action::StopAll);
                 }
             });
@@ -437,16 +438,16 @@ pub(crate) fn group_marks(app: &PulseApp, painter: &egui::Painter, t: usize, rec
 /// Grouping in a track's menu.
 pub(crate) fn group_items(ui: &mut egui::Ui, group: bool, in_group: bool, selected: usize, mut act: impl FnMut(Action), t: usize) {
     ui.separator();
-    let label = crate::theme::keys(&if selected > 1 { format!("Agrupar {selected} pistas  ⌘G") } else { "Agrupar pista  ⌘G".to_string() });
-    if ui.button(label).on_hover_text("Las pone en un grupo nuevo: suenan juntas por su fader y sus efectos").clicked() {
+    let label = crate::theme::keys(&if selected > 1 { fill(tr("Agrupar {} pistas  ⌘G"), &[&selected]) } else { tr("Agrupar pista  ⌘G").to_string() });
+    if ui.button(label).on_hover_text(tr("Las pone en un grupo nuevo: suenan juntas por su fader y sus efectos")).clicked() {
         act(Action::GroupTracks);
         ui.close();
     }
-    if group && ui.button(crate::theme::keys("Desagrupar  ⇧⌘G")).on_hover_text("Quita el grupo; sus pistas se quedan").clicked() {
+    if group && ui.button(crate::theme::keys(tr("Desagrupar  ⇧⌘G"))).on_hover_text(tr("Quita el grupo; sus pistas se quedan")).clicked() {
         act(Action::Ungroup(t));
         ui.close();
     }
-    if in_group && ui.button("Sacar del grupo").clicked() {
+    if in_group && ui.button(tr("Sacar del grupo")).clicked() {
         act(Action::LeaveGroup(t));
         ui.close();
     }
@@ -467,7 +468,7 @@ fn group_slot(app: &PulseApp, ui: &mut egui::Ui, g: usize, slot: usize, state: O
         let bar = Rect::from_min_size(rect.left_top() + vec2(LAUNCH_W, 4.0), vec2(COL_W - LAUNCH_W - 4.0, SLOT_H - 8.0));
         painter.rect_filled(bar, 2.0, theme::shade(color, if playing { 1.0 } else { 0.55 }));
         widgets::play_triangle(painter, pos2(rect.left() + LAUNCH_W / 2.0, rect.center().y), 8.0, if playing { theme::PLAY } else { TEXT });
-        if response.on_hover_text(format!("Lanza los {with_clips} clips de sus pistas en esta escena")).clicked() {
+        if response.on_hover_text(fill(tr("Lanza los {} clips de sus pistas en esta escena"), &[&with_clips])).clicked() {
             actions.push(Action::LaunchGroup(g, slot));
         }
     }
@@ -478,23 +479,23 @@ fn group_slot(app: &PulseApp, ui: &mut egui::Ui, g: usize, slot: usize, state: O
 pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut act: impl FnMut(Action), t: usize) {
     ui.separator();
     if frozen {
-        if ui.button("Descongelar pista").on_hover_text("Vuelven a sonar su instrumento y sus efectos").clicked() {
+        if ui.button(tr("Descongelar pista")).on_hover_text(tr("Vuelven a sonar su instrumento y sus efectos")).clicked() {
             act(Action::Unfreeze(t));
             ui.close();
         }
-        if ui.button("Convertir en audio").on_hover_text("Pasa a ser una pista de audio con lo congelado (su instrumento y efectos se quitan)").clicked() {
+        if ui.button(tr("Convertir en audio")).on_hover_text(tr("Pasa a ser una pista de audio con lo congelado (su instrumento y efectos se quitan)")).clicked() {
             act(Action::Flatten(t));
             ui.close();
         }
     } else if ui
-        .add_enabled(!freezing, egui::Button::new("Congelar pista"))
-        .on_hover_text("Renderiza su instrumento y efectos a audio y suena eso: deja de gastar CPU. El volumen, el paneo y los envíos siguen en vivo")
+        .add_enabled(!freezing, egui::Button::new(tr("Congelar pista")))
+        .on_hover_text(tr("Renderiza su instrumento y efectos a audio y suena eso: deja de gastar CPU. El volumen, el paneo y los envíos siguen en vivo"))
         .clicked()
     {
         act(Action::Freeze(t));
         ui.close();
     }
-    if ui.button("Crear rumble").on_hover_text("Una pista nueva con esta tocando por reverb, saturación y un filtro de graves, que se aparta cuando suena esta: el rumble del techno a partir del bombo").clicked() {
+    if ui.button(tr("Crear rumble")).on_hover_text(tr("Una pista nueva con esta tocando por reverb, saturación y un filtro de graves, que se aparta cuando suena esta: el rumble del techno a partir del bombo")).clicked() {
         act(Action::Rumble(t));
         ui.close();
     }
@@ -504,12 +505,12 @@ pub(crate) fn freeze_items(ui: &mut egui::Ui, frozen: bool, freezing: bool, mut 
 pub(crate) fn sidechain_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl FnMut(Action), t: usize) {
     let kick = app.kick_for(t);
     let hint = match kick {
-        Some(crate::sidechain::Kick::Track(k)) => format!("Un Ducker que la aparta con cada golpe de «{}» y la devuelve en una corchea: el bombeo de club", app.project.tracks[k].name),
-        Some(crate::sidechain::Kick::Machine(d)) => format!("Saca el bombo de «{}» a su propia pista y pone aquí un Ducker que se aparta con cada golpe y vuelve en una corchea", app.project.tracks[d].name),
-        Some(crate::sidechain::Kick::Drums(d)) => format!("Un Ducker que escucha los graves de «{}» (casi solo el bombo) y vuelve en una corchea", app.project.tracks[d].name),
+        Some(crate::sidechain::Kick::Track(k)) => fill(tr("Un Ducker que la aparta con cada golpe de «{}» y la devuelve en una corchea: el bombeo de club"), &[&app.project.tracks[k].name]),
+        Some(crate::sidechain::Kick::Machine(d)) => fill(tr("Saca el bombo de «{}» a su propia pista y pone aquí un Ducker que se aparta con cada golpe y vuelve en una corchea"), &[&app.project.tracks[d].name]),
+        Some(crate::sidechain::Kick::Drums(d)) => fill(tr("Un Ducker que escucha los graves de «{}» (casi solo el bombo) y vuelve en una corchea"), &[&app.project.tracks[d].name]),
         None => String::new(),
     };
-    let button = ui.add_enabled(kick.is_some(), egui::Button::new("Sidechain desde el bombo")).on_hover_text(hint).on_disabled_hover_text("No hay otra pista con un bombo: añade un Kick Designer o una batería");
+    let button = ui.add_enabled(kick.is_some(), egui::Button::new(tr("Sidechain desde el bombo"))).on_hover_text(hint).on_disabled_hover_text(tr("No hay otra pista con un bombo: añade un Kick Designer o una batería"));
     if button.clicked() {
         act(Action::SidechainFromKick(t));
         ui.close();
@@ -526,16 +527,16 @@ pub(crate) fn sound_items(app: &PulseApp, ui: &mut egui::Ui, mut act: impl FnMut
         None => return,
     };
     let taken = app.sounds_taken(t);
-    crate::widgets::menu_button(ui, "Sacar a su pista", |ui| {
+    crate::widgets::menu_button(ui, tr("Sacar a su pista"), |ui| {
         for voice in sounds.clone() {
             let name = app.sound_name(t, voice);
             let name = name.as_str();
             let hint = match app.sound_track(t, voice) {
-                Some(track) => format!("Ya suena en «{track}»"),
-                None if plugin => format!("Una pista nueva con la salida «{name}» del plugin, con sus efectos, envíos y fader (lo que el plugin mande a esa salida: en su editor eliges qué sonido va a cada una)"),
-                None => format!("Una pista nueva que toca solo «{name}», con sus efectos y su fader: esta deja de tocarlo y los clips siguen aquí"),
+                Some(track) => fill(tr("Ya suena en «{}»"), &[&track]),
+                None if plugin => fill(tr("Una pista nueva con la salida «{}» del plugin, con sus efectos, envíos y fader (lo que el plugin mande a esa salida: en su editor eliges qué sonido va a cada una)"), &[&name]),
+                None => fill(tr("Una pista nueva que toca solo «{}», con sus efectos y su fader: esta deja de tocarlo y los clips siguen aquí"), &[&name]),
             };
-            if ui.add_enabled(taken >> voice & 1 == 0, egui::Button::new(name)).on_hover_text(hint).on_disabled_hover_text("Ya está en su pista").clicked() {
+            if ui.add_enabled(taken >> voice & 1 == 0, egui::Button::new(name)).on_hover_text(hint).on_disabled_hover_text(tr("Ya está en su pista")).clicked() {
                 act(Action::SoundApart(t, voice));
                 ui.close();
             }
@@ -549,9 +550,9 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     let group = track.is_group();
     let name = if group { format!("{} {}", if track.folded { "▸" } else { "▾" }, track.name) } else { track.name.clone() };
     let hint = if group {
-        "Grupo: sus pistas suenan por su fader y sus efectos · clic en ▾: plegar o desplegar · clic: seleccionar · arrastrar: mover con sus pistas"
+        tr("Grupo: sus pistas suenan por su fader y sus efectos · clic en ▾: plegar o desplegar · clic: seleccionar · arrastrar: mover con sus pistas")
     } else {
-        "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover"
+        tr("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover")
     };
     let hint = match app.follows_hint(t) {
         Some(follows) => format!("{follows} · {hint}"),
@@ -571,17 +572,17 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut V
     let (frozen, freezing) = (app.is_frozen(t), app.freeze_job.is_some());
     widgets::edit_menu(&response, |ui| {
         let track = &mut app.project.tracks[t];
-        ui.label("Nombre");
+        ui.label(tr("Nombre"));
         ui.text_edit_singleline(&mut track.name);
-        ui.label("Color");
+        ui.label(tr("Color"));
         color_picker(ui, &mut track.color);
         ui.separator();
-        let label = |verb: &str| if several { format!("{verb} {count} pistas") } else { format!("{verb} pista") };
-        if ui.button(label("Duplicar")).clicked() {
+        let label = |one: &str, many: &str| if several { fill(many, &[&count]) } else { one.to_string() };
+        if ui.button(label(tr("Duplicar pista"), tr("Duplicar {} pistas"))).clicked() {
             actions.push(Action::DuplicateTrack(t));
             ui.close();
         }
-        if ui.button(label("Eliminar")).clicked() {
+        if ui.button(label(tr("Eliminar pista"), tr("Eliminar {} pistas"))).clicked() {
             actions.push(Action::DeleteTrack(t));
             ui.close();
         }
@@ -684,7 +685,7 @@ fn clip_slot(
             painter.text(
                 pos2(launch.right() + 2.0, rect.center().y),
                 Align2::LEFT_CENTER,
-                format!("Grabando · compás {bar}"),
+                fill(tr("Grabando · compás {}"), &[&bar]),
                 theme::small(),
                 Color32::WHITE,
             );
@@ -732,10 +733,10 @@ fn clip_slot(
     }
 
     let hint = match (clip.is_some(), app.project.tracks[t].is_audio()) {
-        (true, _) => "► lanza · clic: editar · ⌘ clic: añadir a la selección · arrastrar: mover (⌥ copia) · clic derecho: más opciones",
-        (false, false) if armed => "● graba un clip nuevo · doble clic: clip MIDI vacío",
-        (false, false) => "Doble clic: nuevo clip MIDI · arrastrar: seleccionar con un recuadro",
-        (false, true) => "Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)",
+        (true, _) => tr("► lanza · clic: editar · ⌘ clic: añadir a la selección · arrastrar: mover (⌥ copia) · clic derecho: más opciones"),
+        (false, false) if armed => tr("● graba un clip nuevo · doble clic: clip MIDI vacío"),
+        (false, false) => tr("Doble clic: nuevo clip MIDI · arrastrar: seleccionar con un recuadro"),
+        (false, true) => tr("Doble clic: elegir una muestra (o arrastra archivos de audio a la ventana)"),
     };
     let response = response.on_hover_text(crate::theme::keys(hint));
     // Drums have no chords to accompany.
@@ -751,15 +752,15 @@ fn clip_slot(
     if let Some(clip) = clip {
         let mut color = clip.color();
         response.context_menu(|ui| {
-            if ui.button("Lanzar").clicked() {
+            if ui.button(tr("Lanzar")).clicked() {
                 actions.push(Action::Launch(t, slot));
                 ui.close();
             }
-            if ui.button("Copiar al Arrangement").clicked() {
+            if ui.button(tr("Copiar al Arrangement")).clicked() {
                 actions.push(Action::ToArrangement(t, slot));
                 ui.close();
             }
-            if matches!(clip, Clip::Audio(_)) && ui.button("Separar en stems…").on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
+            if matches!(clip, Clip::Audio(_)) && ui.button(tr("Separar en stems…")).on_hover_text(tr("Batería, bajo, resto y voz, cada uno en una pista nueva")).clicked() {
                 actions.push(Action::SeparateStems(t, slot));
                 ui.close();
             }
@@ -771,16 +772,16 @@ fn clip_slot(
                     actions.push(Action::Lyrics(t, slot, command));
                 }
             }
-            if matches!(clip, Clip::Midi(_)) && ui.button("Exportar MIDI…").on_hover_text("Sus notas a un archivo .mid, para llevarlas a otro programa").clicked() {
+            if matches!(clip, Clip::Midi(_)) && ui.button(tr("Exportar MIDI…")).on_hover_text(tr("Sus notas a un archivo .mid, para llevarlas a otro programa")).clicked() {
                 actions.push(Action::ExportMidi(t, slot));
                 ui.close();
             }
-            if matches!(clip, Clip::Audio(_)) && ui.button("Sacar groove").on_hover_text(crate::arrangement::GROOVE_HINT).clicked() {
+            if matches!(clip, Clip::Audio(_)) && ui.button(tr("Sacar groove")).on_hover_text(crate::arrangement::GROOVE_HINT).clicked() {
                 actions.push(Action::TakeGroove(t, slot));
                 ui.close();
             }
             if matches!(clip, Clip::Audio(_)) {
-                crate::widgets::menu_button(ui, "Convertir a MIDI", |ui| {
+                crate::widgets::menu_button(ui, tr("Convertir a MIDI"), |ui| {
                     for mode in crate::to_midi::ToMidi::ALL {
                         if ui.button(mode.label()).on_hover_text(mode.hint()).clicked() {
                             actions.push(Action::ToMidi(t, slot, mode));
@@ -790,7 +791,7 @@ fn clip_slot(
                 });
             }
             if !app_drums {
-                crate::widgets::menu_button(ui, "Acompañar", |ui| {
+                crate::widgets::menu_button(ui, tr("Acompañar"), |ui| {
                     for part in crate::accompany::Part::ALL {
                         if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
                             actions.push(Action::Accompany(t, slot, part));
@@ -805,49 +806,49 @@ fn clip_slot(
                         }
                     }
                 });
-                crate::widgets::menu_button(ui, "De tarareo a canción", |ui| {
-                    ui.label(egui::RichText::new("La melodía, sus acordes, un bajo y una batería, en pistas nuevas").color(crate::theme::TEXT_DIM).size(10.5));
+                crate::widgets::menu_button(ui, tr("De tarareo a canción"), |ui| {
+                    ui.label(egui::RichText::new(tr("La melodía, sus acordes, un bajo y una batería, en pistas nuevas")).color(crate::theme::TEXT_DIM).size(10.5));
                     for style in crate::drum_gen::Style::ALL {
-                        if ui.add_enabled(!hearing, egui::Button::new(style.label())).on_hover_text("Saca la melodía que tarareas, cantas o silbas (con el metrónomo, al tempo del proyecto), la ajusta a la rejilla, le pone acordes de su escala y añade bajo y batería de este estilo").clicked() {
+                        if ui.add_enabled(!hearing, egui::Button::new(style.label())).on_hover_text(tr("Saca la melodía que tarareas, cantas o silbas (con el metrónomo, al tempo del proyecto), la ajusta a la rejilla, le pone acordes de su escala y añade bajo y batería de este estilo")).clicked() {
                             actions.push(Action::HumSong(t, slot, style));
                             ui.close();
                         }
                     }
                 });
             }
-            if ui.button(if clip.muted() { "Activar clip   0" } else { "Desactivar clip   0" }).on_hover_text("Desactivado, el clip se queda donde está pero no suena").clicked() {
+            if ui.button(if clip.muted() { tr("Activar clip   0") } else { tr("Desactivar clip   0") }).on_hover_text(tr("Desactivado, el clip se queda donde está pero no suena")).clicked() {
                 actions.push(Action::ToggleClipMuted(t, slot));
                 ui.close();
             }
-            if matches!(clip, Clip::Audio(_)) && ui.button("Consolidar").on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
+            if matches!(clip, Clip::Audio(_)) && ui.button(tr("Consolidar")).on_hover_text(tr("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)")).clicked() {
                 actions.push(Action::Consolidate(t, slot));
             }
-            if matches!(clip, Clip::Audio(_)) && ui.button("Invertir").on_hover_text("Lo que suena el clip, del final al principio, en un archivo nuevo (otra vez lo devuelve)").clicked() {
+            if matches!(clip, Clip::Audio(_)) && ui.button(tr("Invertir")).on_hover_text(tr("Lo que suena el clip, del final al principio, en un archivo nuevo (otra vez lo devuelve)")).clicked() {
                 actions.push(Action::Reverse(t, slot));
                 ui.close();
             }
             if matches!(clip, Clip::Audio(_)) {
-                if ui.button("Detectar tempo").on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
+                if ui.button(tr("Detectar tempo")).on_hover_text(tr("Busca el tempo y los compases del audio para que siga el del proyecto")).clicked() {
                     actions.push(Action::DetectTempo(t, slot));
                     ui.close();
                 }
-                if ui.button("Usar el tempo de este clip en el proyecto").clicked() {
+                if ui.button(tr("Usar el tempo de este clip en el proyecto")).clicked() {
                     actions.push(Action::UseClipTempo(t, slot));
                     ui.close();
                 }
             }
             let several = app.is_clip_selected(ClipRef::Session { track: t, slot }) && app.clip_selection().len() > 1;
             let count = app.clip_selection().len();
-            if ui.button(crate::theme::keys(&if several { format!("Duplicar {count} clips   ⌘D") } else { "Duplicar   ⌘D".into() })).clicked() {
+            if ui.button(crate::theme::keys(&if several { fill(tr("Duplicar {} clips   ⌘D"), &[&count]) } else { tr("Duplicar   ⌘D").into() })).clicked() {
                 actions.push(Action::Duplicate(t, slot));
                 ui.close();
             }
-            if ui.button(if several { format!("Eliminar {count} clips   Supr") } else { "Eliminar   Supr".into() }).clicked() {
+            if ui.button(if several { fill(tr("Eliminar {} clips   Supr"), &[&count]) } else { tr("Eliminar   Supr").to_string() }).clicked() {
                 actions.push(Action::Delete(t, slot));
                 ui.close();
             }
             let mut follow = follow;
-            if crate::widgets::field_menu_button(ui, "Acción al acabar", |ui| crate::follow_ui::editor(ui, &mut follow, false)) == Some(true) {
+            if crate::widgets::field_menu_button(ui, tr("Acción al acabar"), |ui| crate::follow_ui::editor(ui, &mut follow, false)) == Some(true) {
                 actions.push(Action::SetFollow(t, slot, follow));
             }
             ui.separator();
@@ -859,9 +860,9 @@ fn clip_slot(
     rect
 }
 
-fn stop_cell(ui: &mut egui::Ui, highlighted: bool, hint: &str) -> egui::Response {
+fn stop_cell(ui: &mut egui::Ui, highlighted: bool, name: &str, hint: &str) -> egui::Response {
     let (rect, response) = ui.allocate_exact_size(vec2(COL_W, SLOT_H), Sense::click());
-    widgets::name(&response, egui::WidgetType::Button, hint);
+    widgets::name(&response, egui::WidgetType::Button, name);
     let painter = ui.painter();
     painter.rect_filled(rect, 2.0, theme::shade(SLOT, 0.85));
     let square = Rect::from_center_size(rect.center(), vec2(9.0, 9.0));
@@ -897,9 +898,9 @@ fn scene_cell(app: &mut PulseApp, ui: &mut egui::Ui, slot: usize, actions: &mut 
     if response.clicked() {
         actions.push(Action::LaunchScene(slot));
     }
-    let hint = if follow.is_active() { format!("Lanzar escena · {} · clic derecho: renombrar y acción al acabar", crate::follow_ui::summary(&follow)) } else { "Lanzar escena · clic derecho: renombrar y acción al acabar".into() };
+    let hint = if follow.is_active() { fill(tr("Lanzar escena · {} · clic derecho: renombrar y acción al acabar"), &[&crate::follow_ui::summary(&follow)]) } else { tr("Lanzar escena · clic derecho: renombrar y acción al acabar").into() };
     widgets::edit_menu(&response.on_hover_text(hint), |ui| {
-        ui.label("Nombre de la escena");
+        ui.label(tr("Nombre de la escena"));
         ui.text_edit_singleline(&mut app.project.scene_names[slot]);
         ui.separator();
         if crate::follow_ui::editor(ui, &mut follow, true) {
@@ -1004,7 +1005,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target, width: f32
         let active = app.mixer(target).active;
         let width = if matches!(target, Target::Track(_)) { (width - 4.0) / 3.0 } else { width };
         if widgets::toggle(ui, active, &label, ACCENT, vec2(width, 18.0))
-            .on_hover_text("Activador de pista (silenciar)")
+            .on_hover_text(tr("Activador de pista (silenciar)"))
             .clicked()
         {
             let mixer = app.mixer_mut(target);
@@ -1019,7 +1020,7 @@ fn mixer_strip(app: &mut PulseApp, ui: &mut egui::Ui, target: Target, width: f32
             }
             let armed = app.project.tracks[t].armed;
             if widgets::toggle(ui, armed, "●", theme::METER_RED, vec2(width, 18.0))
-                .on_hover_text("Armar para grabar: recibe la entrada MIDI y graba")
+                .on_hover_text(tr("Armar para grabar: recibe la entrada MIDI y graba"))
                 .clicked()
             {
                 arm = Some(t);

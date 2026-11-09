@@ -5,6 +5,7 @@
 //! open, presets to apply.
 
 use crate::app::{Placement, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::search::{Favorites, Item, What};
 use crate::theme::{self, ACCENT, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, RichText, Sense};
@@ -181,7 +182,7 @@ impl Favs {
     /// The row's right-click menu: star or unstar it, and `more`.
     fn menu(&self, response: &egui::Response, key: &str, more: impl FnOnce(&mut egui::Ui)) {
         response.context_menu(|ui| {
-            let label = if self.has(key) { "Quitar de favoritos" } else { "Añadir a favoritos" };
+            let label = if self.has(key) { tr("Quitar de favoritos") } else { tr("Añadir a favoritos") };
             if ui.button(label).clicked() {
                 self.toggled.borrow_mut().push(key.to_string());
                 ui.close();
@@ -200,7 +201,7 @@ impl Favs {
             let color = if on { ACCENT } else if star.hovered() { TEXT } else { TEXT_DIM };
             ui.painter().text(rect.center(), Align2::CENTER_CENTER, if on { "★" } else { "☆" }, theme::small(), color);
         }
-        let tip = if on { "Quitar de favoritos" } else { "Añadir a favoritos" };
+        let tip = if on { tr("Quitar de favoritos") } else { tr("Añadir a favoritos") };
         if star.on_hover_text(tip).clicked() {
             self.toggled.borrow_mut().push(key.to_string());
         }
@@ -289,10 +290,10 @@ fn search_field(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.memory_mut(|m| m.surrender_focus(id));
         }
     }
-    let hint = format!("Buscar  {}", theme::keys("⌘F"));
+    let hint = fill(tr("Buscar  {}"), &[&theme::keys("⌘F")]);
     let response = ui.add(egui::TextEdit::singleline(&mut app.browser.search).id(id).hint_text(hint).desired_width(f32::INFINITY).event_filter(KEEPS_ESCAPE));
     crate::widgets::name(&response, egui::WidgetType::TextEdit, "Buscar en el navegador");
-    let response = response.on_hover_text("Instrumentos, efectos, presets, cadenas, sonidos, muestras y plugins. ↑ ↓ eligen, Enter lo pone en el destino, Esc borra");
+    let response = response.on_hover_text(tr("Instrumentos, efectos, presets, cadenas, sonidos, muestras y plugins. ↑ ↓ eligen, Enter lo pone en el destino, Esc borra"));
     if std::mem::take(&mut app.browser.focus_search) {
         response.request_focus();
     }
@@ -324,10 +325,10 @@ fn search_field(app: &mut PulseApp, ui: &mut egui::Ui) {
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let panel = ui.max_rect();
     app.browser.shown.clear();
-    ui.label(RichText::new("Navegador").strong());
+    ui.label(RichText::new(tr("Navegador")).strong());
     let target = app.selected_target;
     ui.label(
-        RichText::new(format!("Destino: {}", app.target_name(target)))
+        RichText::new(fill(tr("Destino: {}"), &[&app.target_name(target)]))
             .color(TEXT_DIM)
             .size(10.5),
     );
@@ -342,17 +343,17 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             return;
         }
         if !favs.keys.is_empty() {
-            section(ui, "FAVORITOS", |ui| favorites(app, ui, &favs));
+            section(ui, tr("FAVORITOS"), |ui| favorites(app, ui, &favs));
         }
-        section(ui, "INSTRUMENTOS", |ui| {
+        section(ui, tr("INSTRUMENTOS"), |ui| {
             let track = match target {
                 Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
                 _ => None,
             };
             let hint = if track.is_some() {
-                "Clic: reemplaza el instrumento de la pista seleccionada"
+                tr("Clic: reemplaza el instrumento de la pista seleccionada")
             } else {
-                "Selecciona una pista MIDI para cambiar su instrumento"
+                tr("Selecciona una pista MIDI para cambiar su instrumento")
             };
             for kind in InstrumentKind::catalog() {
                 let icon = if kind.is_drums() { "◉" } else { "♫" };
@@ -362,53 +363,53 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         });
 
-        section(ui, "EFECTOS MIDI", |ui| {
+        section(ui, tr("EFECTOS MIDI"), |ui| {
             let track = match app.selected_target {
                 Target::Track(t) if !app.project.tracks[t].is_audio() && !app.project.tracks[t].is_group() => Some(t),
                 _ => None,
             };
-            let hint = if track.is_some() { "Clic: lo pone antes del instrumento de la pista seleccionada" } else { "Selecciona una pista MIDI" };
+            let hint = if track.is_some() { tr("Clic: lo pone antes del instrumento de la pista seleccionada") } else { tr("Selecciona una pista MIDI") };
             for effect in engine::model::MidiEffect::catalog() {
-                if item(ui, &favs, &format!("efecto-midi:{}", effect.label()), "♪", effect.label(), hint) && track.is_some() {
+                if item(ui, &favs, &format!("efecto-midi:{}", effect.label()), "♪", tr(effect.label()), hint) && track.is_some() {
                     activate(app, &What::MidiEffect(effect), false);
                 }
             }
         });
 
-        section(ui, "EFECTOS DE AUDIO", |ui| {
+        section(ui, tr("EFECTOS DE AUDIO"), |ui| {
             for effect in Effect::catalog() {
-                if item(ui, &favs, &format!("efecto:{}", effect.label()), "≈", effect.label(), "Clic: añade el efecto al final de la cadena seleccionada") {
+                if item(ui, &favs, &format!("efecto:{}", effect.label()), "≈", tr(effect.label()), tr("Clic: añade el efecto al final de la cadena seleccionada")) {
                     activate(app, &What::Effect(effect), false);
                 }
             }
         });
 
-        section(ui, "CADENAS", |ui| chains(app, ui, &favs));
+        section(ui, tr("CADENAS"), |ui| chains(app, ui, &favs));
 
         section(ui, "PLUGINS (VST3 · CLAP)", |ui| {
             crate::plugins::browser(app, ui, |ui, key, icon, label, hint| item(ui, &favs, key, icon, label, hint));
         });
 
-        section(ui, "MUESTRAS", |ui| {
-            if item(ui, &favs, "muestras:añadir", "♪", "Añadir muestra…", "Elige archivos de audio (WAV, AIFF, FLAC, MP3…). También puedes arrastrarlos a la ventana") {
+        section(ui, tr("MUESTRAS"), |ui| {
+            if item(ui, &favs, "muestras:añadir", "♪", tr("Añadir muestra…"), tr("Elige archivos de audio (WAV, AIFF, FLAC, MP3…). También puedes arrastrarlos a la ventana")) {
                 app.choose_samples(crate::app::Placement::Auto);
             }
         });
 
-        section(ui, "BIBLIOTECA", |ui| library(app, ui, &favs));
+        section(ui, tr("BIBLIOTECA"), |ui| library(app, ui, &favs));
 
-        section(ui, "PISTAS", |ui| {
-            if item(ui, &favs, "pistas:midi", "+", "Nueva pista MIDI", &crate::theme::keys("⌘T")) {
+        section(ui, tr("PISTAS"), |ui| {
+            if item(ui, &favs, "pistas:midi", "+", tr("Nueva pista MIDI"), &crate::theme::keys("⌘T")) {
                 app.add_track();
             }
-            if item(ui, &favs, "pistas:audio", "+", "Nueva pista de audio", &crate::theme::keys("⇧⌘T")) {
+            if item(ui, &favs, "pistas:audio", "+", tr("Nueva pista de audio"), &crate::theme::keys("⇧⌘T")) {
                 app.add_audio_track();
             }
         });
     });
     for key in favs.toggled.take() {
         let on = app.browser.toggle_favorite(&key);
-        app.status = Some(if on { "Añadido a favoritos".into() } else { "Quitado de favoritos".into() });
+        app.status = Some(if on { tr("Añadido a favoritos").into() } else { tr("Quitado de favoritos").into() });
     }
     if searching {
         if ui.ctx().input(|i| i.pointer.any_pressed() && i.pointer.interact_pos().is_some_and(|p| !panel.contains(p))) {
@@ -428,9 +429,9 @@ fn chains(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
     for found in catalog.iter() {
         let What::Chain(chain) = &found.what else { continue };
         let key = &found.key;
-        let hint = format!("{}\nClic: añade sus efectos al final de la cadena del destino · ⌥ clic: sustituye los que hay", chain.summary());
+        let hint = fill(tr("{}\nClic: añade sus efectos al final de la cadena del destino · ⌥ clic: sustituye los que hay"), &[&chain.summary()]);
         let response = item_with(ui, favs, key, "⛓", &chain.name, &hint, |ui| {
-            if !chain.factory && ui.button("Borrar la cadena").clicked() {
+            if !chain.factory && ui.button(tr("Borrar la cadena")).clicked() {
                 delete = Some(chain.name.clone());
                 ui.close();
             }
@@ -443,7 +444,7 @@ fn chains(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
     if let Some(name) = delete {
         app.delete_chain(&name);
     }
-    ui.label(RichText::new("Guarda las tuyas en Dispositivos › Guardar cadena…").color(TEXT_DIM).size(10.0));
+    ui.label(RichText::new(tr("Guarda las tuyas en Dispositivos › Guardar cadena…")).color(TEXT_DIM).size(10.0));
 }
 
 /// The starred entries, in the order they were starred. They load with a click
@@ -479,7 +480,7 @@ fn results(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
         app.browser.result = app.browser.result.min(app.browser.results.len().saturating_sub(1));
     }
     if app.browser.results.is_empty() {
-        ui.label(RichText::new("Nada con ese nombre").color(TEXT_DIM).size(10.5));
+        ui.label(RichText::new(tr("Nada con ese nombre")).color(TEXT_DIM).size(10.5));
         return;
     }
     let shown = app.browser.results.clone();
@@ -548,10 +549,10 @@ fn result_row(app: &mut PulseApp, ui: &mut egui::Ui, found: &Item, selected: boo
         _ => found.detail.clone(),
     };
     let hint = match &found.what {
-        What::File(_) => "Clic: escuchar · doble clic o Enter: a la pista seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
-        What::Chain(_) => "Doble clic o Enter: añade sus efectos al destino · con ⌥: sustituye los que hay",
-        What::Instrument(_) | What::Preset(_) | What::Kit(_) => "Doble clic o Enter: en la pista MIDI seleccionada",
-        _ => "Doble clic o Enter: al final de la cadena del destino",
+        What::File(_) => tr("Clic: escuchar · doble clic o Enter: a la pista seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler"),
+        What::Chain(_) => tr("Doble clic o Enter: añade sus efectos al destino · con ⌥: sustituye los que hay"),
+        What::Instrument(_) | What::Preset(_) | What::Kit(_) => tr("Doble clic o Enter: en la pista MIDI seleccionada"),
+        _ => tr("Doble clic o Enter: al final de la cadena del destino"),
     };
     favs.menu(&response, &found.key, |_| {});
     let response = response.on_hover_text(format!("{}\n{what}\n{hint}", found.name));
@@ -580,7 +581,7 @@ pub fn activate(app: &mut PulseApp, what: &What, alt: bool) {
         Target::Track(t) if !app.project.tracks[t].is_audio() => Some(t),
         _ => None,
     };
-    let need_midi = |app: &mut PulseApp| app.status = Some("Selecciona una pista MIDI".into());
+    let need_midi = |app: &mut PulseApp| app.status = Some(tr("Selecciona una pista MIDI").into());
     match what {
         What::Instrument(kind) => match instrument_track {
             Some(t) => {
@@ -683,8 +684,8 @@ fn places(app: &PulseApp) -> Vec<(String, PathBuf)> {
     let root = crate::library::root();
     let mut places: Vec<(String, PathBuf)> = [
         ("Samples", crate::library::SAMPLES),
-        ("Proyectos", crate::library::PROJECTS),
-        ("Exportaciones", crate::library::EXPORTS),
+        (tr("Proyectos"), crate::library::PROJECTS),
+        (tr("Exportaciones"), crate::library::EXPORTS),
         ("Presets", crate::library::PRESETS),
     ]
     .into_iter()
@@ -732,7 +733,7 @@ impl PulseApp {
 fn library(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
     ui.horizontal(|ui| {
         let mut on = app.settings.preview_in_tempo;
-        let response = ui.checkbox(&mut on, RichText::new("A tempo").size(10.5)).on_hover_text("Los loops se escuchan al tempo del proyecto, en bucle y, si la canción suena, a tiempo con ella. Sin marcar, cada archivo suena una vez a su velocidad");
+        let response = ui.checkbox(&mut on, RichText::new(tr("A tempo")).size(10.5)).on_hover_text(tr("Los loops se escuchan al tempo del proyecto, en bucle y, si la canción suena, a tiempo con ella. Sin marcar, cada archivo suena una vez a su velocidad"));
         if response.changed() {
             let mut next = app.settings.clone();
             next.preview_in_tempo = on;
@@ -742,7 +743,7 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
             }
         }
         if let Some(bpm) = app.browser.in_tempo {
-            ui.label(RichText::new(format!("loop a {} BPM", crate::tempo_ui::bpm_text(bpm))).color(TEXT_DIM).size(10.5));
+            ui.label(RichText::new(fill(tr("loop a {} BPM"), &[&crate::tempo_ui::bpm_text(bpm)])).color(TEXT_DIM).size(10.5));
         }
     });
     app.hear_analysed();
@@ -770,7 +771,7 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
         let response = response.on_hover_text(dir.display().to_string());
         if own {
             response.context_menu(|ui| {
-                if ui.button("Quitar del navegador").clicked() {
+                if ui.button(tr("Quitar del navegador")).clicked() {
                     remove = Some(i - BUILTIN_PLACES);
                     ui.close();
                 }
@@ -782,7 +783,7 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
         next.browser_folders.remove(i);
         app.set_settings(next);
     }
-    if item(ui, favs, "biblioteca:añadir-carpeta", "+", "Añadir carpeta…", "Una carpeta tuya (de muestras, por ejemplo) en el navegador") {
+    if item(ui, favs, "biblioteca:añadir-carpeta", "+", tr("Añadir carpeta…"), tr("Una carpeta tuya (de muestras, por ejemplo) en el navegador")) {
         if let Some(dir) = crate::files::pick_folder(rfd::FileDialog::new()) {
             let mut next = app.settings.clone();
             if !next.browser_folders.contains(&dir) {
@@ -797,11 +798,11 @@ fn library(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
 fn factory_status(app: &mut PulseApp, ui: &mut egui::Ui) {
     app.make_factory_sounds();
     if let Some((done, of)) = app.factory.progress() {
-        ui.add(egui::ProgressBar::new(done as f32 / of.max(1) as f32).text(RichText::new(format!("Pulse está creando sus sonidos… {done} de {of}")).size(10.5)));
+        ui.add(egui::ProgressBar::new(done as f32 / of.max(1) as f32).text(RichText::new(fill(tr("Pulse está creando sus sonidos… {} de {}"), &[&done, &of])).size(10.5)));
         ui.ctx().request_repaint_after(Duration::from_millis(250));
     }
     if let Some(error) = &app.factory.error {
-        ui.label(RichText::new(format!("No se pudieron crear todos los sonidos: {error}")).color(TEXT_DIM).size(10.5));
+        ui.label(RichText::new(fill(tr("No se pudieron crear todos los sonidos: {}"), &[error])).color(TEXT_DIM).size(10.5));
     }
 }
 
@@ -809,7 +810,7 @@ fn factory_status(app: &mut PulseApp, ui: &mut egui::Ui) {
 fn folder(app: &mut PulseApp, ui: &mut egui::Ui, dir: &Path, depth: usize, favs: &Favs) {
     let entries = app.browser.list(dir);
     if entries.is_empty() {
-        ui.label(RichText::new("Vacía").color(TEXT_DIM).size(10.5));
+        ui.label(RichText::new(tr("Vacía")).color(TEXT_DIM).size(10.5));
     }
     for entry in entries {
         if entry.dir {
@@ -850,10 +851,10 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path, favs: &Favs) {
     let star = favs.star(ui, &response, &key);
     paint_row(ui, rect, icon, &name, "", star);
     let hint = match kind {
-        Kind::Audio => "Clic: escuchar (otra vez: parar) · ↑ ↓: el anterior o el siguiente · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler",
-        Kind::Midi => "Doble clic: sus partes en pistas nuevas · arrastrar: a una pista MIDI (todo en un clip) o a un hueco vacío (pistas nuevas)",
-        Kind::Project => "Doble clic: abrir el proyecto",
-        Kind::Preset => "Doble clic: aplicar el preset, el kit o la cadena a la pista seleccionada · arrastrar: a una pista",
+        Kind::Audio => tr("Clic: escuchar (otra vez: parar) · ↑ ↓: el anterior o el siguiente · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler"),
+        Kind::Midi => tr("Doble clic: sus partes en pistas nuevas · arrastrar: a una pista MIDI (todo en un clip) o a un hueco vacío (pistas nuevas)"),
+        Kind::Project => tr("Doble clic: abrir el proyecto"),
+        Kind::Preset => tr("Doble clic: aplicar el preset, el kit o la cadena a la pista seleccionada · arrastrar: a una pista"),
     };
     favs.menu(&response, &key, |_| {});
     let response = response.on_hover_text(format!("{}\n{hint}", path.display()));
@@ -887,7 +888,7 @@ impl PulseApp {
         let sample = path.map(|p| self.sample(&p.to_string_lossy())).filter(|s| s.frames() > 0);
         let (Some(path), Some(sample)) = (path, sample) else {
             if path.is_some() {
-                self.status = Some("No se pudo leer el archivo".into());
+                self.status = Some(tr("No se pudo leer el archivo").into());
             }
             self.browser.previewing = None;
             self.audio.send(engine::Command::PreviewSample(None));
@@ -974,8 +975,8 @@ impl PulseApp {
                 self.apply_preset(t, preset);
                 self.detail = crate::app::Detail::Devices;
             }
-            (Some(_), _) => self.status = Some("Selecciona una pista MIDI para aplicarle el preset".into()),
-            (None, _) => self.status = Some(format!("No se pudo leer el preset {}", path.display())),
+            (Some(_), _) => self.status = Some(tr("Selecciona una pista MIDI para aplicarle el preset").into()),
+            (None, _) => self.status = Some(fill(tr("No se pudo leer el preset {}"), &[&path.display()])),
         }
     }
 
@@ -1004,7 +1005,7 @@ impl PulseApp {
             }
         }
         if self.project.tracks[t].is_audio() || self.project.tracks[t].is_group() {
-            self.status = Some("Suelta el preset en una pista MIDI".into());
+            self.status = Some(tr("Suelta el preset en una pista MIDI").into());
             return;
         }
         match std::fs::read_to_string(path).ok().and_then(|t| serde_json::from_str::<crate::presets::Preset>(&t).ok()) {
@@ -1012,7 +1013,7 @@ impl PulseApp {
                 self.apply_preset(t, preset);
                 self.detail = crate::app::Detail::Devices;
             }
-            None => self.status = Some(format!("No se pudo leer el preset {}", path.display())),
+            None => self.status = Some(fill(tr("No se pudo leer el preset {}"), &[&path.display()])),
         }
     }
 
@@ -1043,7 +1044,7 @@ impl PulseApp {
             Some((track, placement)) if self.project.tracks[track].is_audio() => {
                 if let Placement::Session { slot, .. } = placement {
                     if self.project.tracks[track].clips[slot].is_some() {
-                        self.status = Some("Ese slot ya tiene un clip".into());
+                        self.status = Some(tr("Ese slot ya tiene un clip").into());
                         return true;
                     }
                 }
@@ -1051,7 +1052,7 @@ impl PulseApp {
                 true
             }
             Some(_) => {
-                self.status = Some("Suelta el audio en una pista de audio, o en un hueco vacío para crear una".into());
+                self.status = Some(tr("Suelta el audio en una pista de audio, o en un hueco vacío para crear una").into());
                 true
             }
             None if targets.view.is_some_and(|v| v.contains(pos)) => {
@@ -1086,12 +1087,12 @@ impl PulseApp {
             Some((track, placement)) => {
                 let t = &self.project.tracks[track];
                 if t.is_audio() || t.is_group() {
-                    self.status = Some("Suelta el MIDI en una pista MIDI, o en un hueco vacío para crear pistas".into());
+                    self.status = Some(tr("Suelta el MIDI en una pista MIDI, o en un hueco vacío para crear pistas").into());
                     return true;
                 }
                 if let Placement::Session { slot, .. } = placement {
                     if t.clips[slot].is_some() {
-                        self.status = Some("Ese slot ya tiene un clip".into());
+                        self.status = Some(tr("Ese slot ya tiene un clip").into());
                         return true;
                     }
                 }

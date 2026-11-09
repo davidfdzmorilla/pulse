@@ -1,6 +1,7 @@
 //! Top control bar and bottom status bar.
 
 use crate::app::{PulseApp, View};
+use crate::i18n::{fill, tr};
 use crate::midi_map::{Control, Transport};
 use crate::theme::{self, ACCENT, PLAY, TEXT, TEXT_DIM};
 use crate::widgets;
@@ -8,15 +9,9 @@ use eframe::egui::{self, vec2, Align2, Color32, RichText, Sense};
 use engine::meter::{Meter, TimeSig};
 use engine::Command;
 
-const QUANTIZE_OPTIONS: [(f64, &str); 7] = [
-    (0.0, "Ninguna"),
-    (0.25, "1/16"),
-    (0.5, "1/8"),
-    (1.0, "1/4"),
-    (2.0, "1/2"),
-    (4.0, "1 Compás"),
-    (8.0, "2 Compases"),
-];
+fn quantize_options() -> [(f64, &'static str); 7] {
+    [(0.0, tr("Ninguna")), (0.25, "1/16"), (0.5, "1/8"), (1.0, "1/4"), (2.0, "1/2"), (4.0, tr("1 Compás")), (8.0, tr("2 Compases"))]
+}
 
 /// Formats a beat position as bar.count.sixteenth, 1-based like most DAWs, in the
 /// song's time signatures (a count is a beat of 4/4, a dotted quarter of 6/8…).
@@ -59,7 +54,7 @@ fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui) {
             // Any other: beats and note.
             let (mut beats, mut unit) = (first.beats as u32, first.unit as u32);
             ui.horizontal(|ui| {
-                ui.label(RichText::new("Otro").color(TEXT_DIM).size(10.5));
+                ui.label(RichText::new(tr("Otro")).color(TEXT_DIM).size(10.5));
                 let a = ui.add(egui::DragValue::new(&mut beats).range(1..=32).speed(0.1));
                 ui.label("/");
                 let b = ui.add(egui::DragValue::new(&mut unit).range(1..=32).speed(0.05));
@@ -70,9 +65,9 @@ fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui) {
         })
         .response;
     let hint = if changes {
-        "Compás del principio de la canción. Cambia más adelante: clic derecho en la regla del Arrangement para ver o quitar los cambios"
+        tr("Compás del principio de la canción. Cambia más adelante: clic derecho en la regla del Arrangement para ver o quitar los cambios")
     } else {
-        "Compás de la canción (clic derecho en la regla del Arrangement para cambiarlo a partir de un compás)"
+        tr("Compás de la canción (clic derecho en la regla del Arrangement para cambiarlo a partir de un compás)")
     };
     response.on_hover_text(hint);
     if let Some(sig) = chosen.filter(|&s| s != first) {
@@ -142,9 +137,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let automated = app.automation_state(engine::Target::Master, engine::model::Param::Tempo);
         let mut bpm = app.display_value(engine::Target::Master, engine::model::Param::Tempo) as f64;
         let hint = match automated {
-            Some(false) => "Tempo: lo marca la automatización del Master. Moverlo a mano la anula hasta «► Arrangement»",
-            Some(true) => "Tempo puesto a mano: la automatización está anulada («► Arrangement» la reactiva)",
-            None => "Tempo (arrastra o escribe)",
+            Some(false) => tr("Tempo: lo marca la automatización del Master. Moverlo a mano la anula hasta «► Arrangement»"),
+            Some(true) => tr("Tempo puesto a mano: la automatización está anulada («► Arrangement» la reactiva)"),
+            None => tr("Tempo (arrastra o escribe)"),
         };
         let tempo = ui
             .add_sized([74.0, 22.0], egui::DragValue::new(&mut bpm).range(20.0..=999.0).speed(0.2).fixed_decimals(2))
@@ -157,10 +152,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         ui.label(RichText::new("BPM").color(TEXT_DIM).size(10.5));
         meter_menu(app, ui);
-        if icon_button(ui, "●", app.project.metronome, ACCENT, "Metrónomo").clicked() {
+        if icon_button(ui, "●", app.project.metronome, ACCENT, tr("Metrónomo")).clicked() {
             press(app, Transport::Metronome);
         }
-        let current = QUANTIZE_OPTIONS
+        let options = quantize_options();
+        let current = options
             .iter()
             .find(|(v, _)| *v == app.project.quantize)
             .map_or("?", |(_, l)| *l);
@@ -169,12 +165,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             .selected_text(current)
             .width(82.0)
             .show_ui(ui, |ui| {
-                for (value, label) in QUANTIZE_OPTIONS {
+                for (value, label) in options {
                     ui.selectable_value(&mut quantize, value, label);
                 }
             })
             .response
-            .on_hover_text("Cuantización de lanzamiento");
+            .on_hover_text(tr("Cuantización de lanzamiento"));
         if quantize != app.project.quantize {
             app.project.quantize = quantize;
             app.audio.send(Command::SetQuantize(quantize));
@@ -186,30 +182,30 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         // While counting in, the beats left instead of the position.
         let count_in = app.audio.state().map_or(0.0, |s| s.count_in());
         let count = app.project.meter.sig_at(position).count();
-        let shown = if count_in > 0.0 { format!("Cuenta {}", (count_in / count - 1e-9).ceil().max(1.0) as u32) } else { format_position(&app.project.meter, position) };
+        let shown = if count_in > 0.0 { fill(tr("Cuenta {}"), &[&((count_in / count - 1e-9).ceil().max(1.0) as u32)]) } else { format_position(&app.project.meter, position) };
         readout(ui, &shown, 84.0);
-        if icon_button(ui, "play", playing, PLAY, "Reproducir (Espacio)").clicked() {
+        if icon_button(ui, "play", playing, PLAY, tr("Reproducir (Espacio)")).clicked() {
             if app.learn.on {
                 app.touched(Control::Transport(Transport::Play));
             } else {
                 app.audio.send(Command::Play);
             }
         }
-        if icon_button(ui, "stop", false, ACCENT, "Parar (Espacio)").clicked() {
+        if icon_button(ui, "stop", false, ACCENT, tr("Parar (Espacio)")).clicked() {
             press(app, Transport::Stop);
         }
         let recording = app.is_arrangement_recording();
-        if icon_button(ui, "●", recording, theme::METER_RED, "Grabar en el Arrangement las pistas armadas (si no hay ninguna, arma las seleccionadas) y, con «A» encendido, los controles que muevas como automatización (F9)").clicked() {
+        if icon_button(ui, "●", recording, theme::METER_RED, tr("Grabar en el Arrangement las pistas armadas (si no hay ninguna, arma las seleccionadas) y, con «A» encendido, los controles que muevas como automatización (F9)")).clicked() {
             press(app, Transport::Record);
         }
         // Lit while there is something played to capture.
         let can = app.can_capture();
-        let hint = if can { "Capturar MIDI: un clip con lo último que has tocado en la pista armada o seleccionada, aunque no grabaras (⇧⌘C)" } else { "Capturar MIDI: toca algo en la pista armada o seleccionada y luego pulsa aquí para quedártelo en un clip, aunque no grabaras (⇧⌘C)" };
+        let hint = if can { tr("Capturar MIDI: un clip con lo último que has tocado en la pista armada o seleccionada, aunque no grabaras (⇧⌘C)") } else { tr("Capturar MIDI: toca algo en la pista armada o seleccionada y luego pulsa aquí para quedártelo en un clip, aunque no grabaras (⇧⌘C)") };
         if icon_button(ui, "capture", can, theme::ACCENT, hint).clicked() {
             app.capture_midi();
         }
         let bars = app.settings.count_in_bars;
-        let label = |b: u32| if b == 0 { "Sin cuenta".to_string() } else { format!("Cuenta {b} c.") };
+        let label = |b: u32| if b == 0 { tr("Sin cuenta").to_string() } else { fill(tr("Cuenta {} c."), &[&b]) };
         let mut chosen = bars;
         egui::ComboBox::from_id_salt("count_in")
             .selected_text(label(bars))
@@ -220,7 +216,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             })
             .response
-            .on_hover_text("Cuenta atrás: compases que suena el metrónomo antes de empezar a grabar");
+            .on_hover_text(tr("Cuenta atrás: compases que suena el metrónomo antes de empezar a grabar"));
         if chosen != bars {
             let mut next = app.settings.clone();
             next.count_in_bars = chosen;
@@ -228,22 +224,23 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         let armed = app.settings.automation_arm;
         let hint = if armed {
-            "Armar automatización: encendido, al grabar se graban los controles que muevas. Clic para apagarlo"
+            tr("Armar automatización: encendido, al grabar se graban los controles que muevas. Clic para apagarlo")
         } else {
-            "Armar automatización: apagado, al grabar no se graban los controles. Clic para encenderlo"
+            tr("Armar automatización: apagado, al grabar no se graban los controles. Clic para encenderlo")
         };
         if icon_button(ui, "A", armed, theme::METER_RED, hint).clicked() {
             press(app, Transport::AutomationArm);
         }
-        if icon_button(ui, "⟲", app.project.loop_enabled, ACCENT, "Loop del Arrangement").clicked() {
+        if icon_button(ui, "⟲", app.project.loop_enabled, ACCENT, tr("Loop del Arrangement")).clicked() {
             press(app, Transport::Loop);
         }
         readout(ui, &format_position(&app.project.meter, app.project.loop_start), 84.0);
-        readout(ui, &bars_label(bars_between(&app.project.meter, app.project.loop_start, app.project.loop_end)), 54.0);
-        if icon_button(ui, "punch in", app.project.punch_in, theme::METER_RED, "Punch in: al grabar en el Arrangement, empieza a grabar en el inicio del loop (lo de antes solo suena)").clicked() {
+        let loop_bars = bars_label(bars_between(&app.project.meter, app.project.loop_start, app.project.loop_end));
+        readout(ui, &fill(tr("{} c."), &[&loop_bars.trim_end_matches(" c.")]), 54.0);
+        if icon_button(ui, "punch in", app.project.punch_in, theme::METER_RED, tr("Punch in: al grabar en el Arrangement, empieza a grabar en el inicio del loop (lo de antes solo suena)")).clicked() {
             app.project.punch_in = !app.project.punch_in;
         }
-        if icon_button(ui, "punch out", app.project.punch_out, theme::METER_RED, "Punch out: al grabar en el Arrangement, deja de grabar en el final del loop (y sigue sonando)").clicked() {
+        if icon_button(ui, "punch out", app.project.punch_out, theme::METER_RED, tr("Punch out: al grabar en el Arrangement, deja de grabar en el final del loop (y sigue sonando)")).clicked() {
             app.project.punch_out = !app.project.punch_out;
         }
 
@@ -254,7 +251,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.add_space(12.0);
         let needed = app.back_to_arrangement_needed();
         if widgets::flat_button(ui, "► Arrangement", needed, vec2(104.0, 22.0))
-            .on_hover_text("Volver al Arrangement: las pistas dejan los clips de sesión y la automatización que hayas\nmovido a mano vuelve a funcionar")
+            .on_hover_text(tr("Volver al Arrangement: las pistas dejan los clips de sesión y la automatización que hayas\nmovido a mano vuelve a funcionar"))
             .clicked()
         {
             app.back_to_arrangement();
@@ -263,87 +260,87 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.add_space(12.0);
         let keyboard = &app.keyboard;
         let label = if keyboard.enabled {
-            format!("Teclado {} · {}", crate::project::note_name(keyboard.base_note()), keyboard.velocity)
+            fill(tr("Teclado {} · {}"), &[&crate::project::note_name(keyboard.base_note()), &keyboard.velocity])
         } else {
-            "Teclado".to_string()
+            tr("Teclado").to_string()
         };
         if widgets::flat_button(ui, &label, keyboard.enabled, vec2(if keyboard.enabled { 118.0 } else { 64.0 }, 22.0))
-            .on_hover_text("Teclado del ordenador como teclado MIDI (M)\nA S D F G H J K L: teclas blancas · W E T Y U O P: negras\nZ / X: octava · C / V: velocidad")
+            .on_hover_text(tr("Teclado del ordenador como teclado MIDI (M)\nA S D F G H J K L: teclas blancas · W E T Y U O P: negras\nZ / X: octava · C / V: velocidad"))
             .clicked()
         {
             app.toggle_keyboard();
         }
         let voice_label = match (app.voice.enabled, app.voice.drums, app.voice.playing()) {
-            (false, _, _) => "Voz".to_string(),
+            (false, _, _) => tr("Voz").to_string(),
             (true, true, _) => match app.voice.last_hit() {
-                Some(drum) => format!("Voz · {}", drum.name()),
-                None => "Voz · …".to_string(),
+                Some(drum) => fill(tr("Voz · {}"), &[&drum.name()]),
+                None => tr("Voz · …").to_string(),
             },
-            (true, false, Some(pitch)) => format!("Voz · {}", crate::project::note_name(pitch)),
-            (true, false, None) => "Voz · …".to_string(),
+            (true, false, Some(pitch)) => fill(tr("Voz · {}"), &[&crate::project::note_name(pitch)]),
+            (true, false, None) => tr("Voz · …").to_string(),
         };
         let voice = widgets::flat_button(ui, &voice_label, app.voice.enabled, vec2(if app.voice.enabled { 84.0 } else { 40.0 }, 22.0))
-            .on_hover_text("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. O haz beatbox y toca una batería. Usa auriculares.\nClic derecho: notas o batería, octava, acordes, seguir el tono y enseñar tus sonidos");
+            .on_hover_text(tr("Tocar con la voz: canta, tararea o silba al micrófono y suena la pista seleccionada (o las armadas), nota a nota; graba como un teclado MIDI. Con escala en el proyecto, las notas desafinadas van a la escala. O haz beatbox y toca una batería. Usa auriculares.\nClic derecho: notas o batería, octava, acordes, seguir el tono y enseñar tus sonidos"));
         if voice.clicked() {
             app.toggle_voice();
         }
         voice.context_menu(|ui| {
-            if ui.radio(!app.voice.drums, "Notas (cantar)").clicked() {
+            if ui.radio(!app.voice.drums, tr("Notas (cantar)")).clicked() {
                 app.voice.drums = false;
                 ui.close();
             }
-            if ui.radio(app.voice.drums, "Batería (beatbox)").on_hover_text("«pum»: bombo · «pf» o «ka»: caja · «ts»: charles, en la pista seleccionada (una Drum Machine)").clicked() {
+            if ui.radio(app.voice.drums, tr("Batería (beatbox)")).on_hover_text(tr("«pum»: bombo · «pf» o «ka»: caja · «ts»: charles, en la pista seleccionada (una Drum Machine)")).clicked() {
                 app.voice.drums = true;
                 ui.close();
             }
             ui.separator();
             if app.voice.drums {
                 use crate::beatbox::{Drum, TEACH};
-                ui.label("Enseñar tus sonidos");
+                ui.label(tr("Enseñar tus sonidos"));
                 for drum in Drum::ALL {
                     let taught = app.settings.beatbox.count(drum);
                     let label = format!("{} {}{}", drum.name(), drum.sound(), if taught > 0 { " ✓" } else { "" });
-                    if ui.button(label).on_hover_text(format!("Haz el sonido {TEACH} veces: desde entonces, ese sonido tuyo toca el {}", drum.name().to_lowercase())).clicked() {
+                    if ui.button(label).on_hover_text(fill(tr("Haz el sonido {} veces: desde entonces, ese sonido tuyo toca el {}"), &[&TEACH, &drum.name().to_lowercase()])).clicked() {
                         app.teach_drum(drum);
                         ui.close();
                     }
                 }
-                if !app.settings.beatbox.is_empty() && ui.button("Olvidar lo enseñado").clicked() {
+                if !app.settings.beatbox.is_empty() && ui.button(tr("Olvidar lo enseñado")).clicked() {
                     app.forget_drums();
                     ui.close();
                 }
                 return;
             }
-            ui.label("Octava");
-            for (octave, label) in [(-2, "−2 (voz aguda → bajo)"), (-1, "−1"), (0, "Como suena"), (1, "+1"), (2, "+2 (voz grave → agudo)")] {
+            ui.label(tr("Octava"));
+            for (octave, label) in [(-2, tr("−2 (voz aguda → bajo)")), (-1, "−1"), (0, tr("Como suena")), (1, "+1"), (2, tr("+2 (voz grave → agudo)"))] {
                 if ui.radio(app.voice.octave == octave, label).clicked() {
                     app.voice.octave = octave;
                     ui.close();
                 }
             }
             ui.separator();
-            ui.label("Acordes");
+            ui.label(tr("Acordes"));
             use crate::voice_play::Chords;
-            for (chords, label) in [(Chords::Off, "No (una nota)"), (Chords::Triads, "Tríadas"), (Chords::Sevenths, "Con séptima")] {
-                if ui.radio(app.voice.chords == chords, label).on_hover_text("La nota que cantas es la raíz de su acorde en la escala del proyecto (sin escala, o fuera de ella, un acorde mayor)").clicked() {
+            for (chords, label) in [(Chords::Off, tr("No (una nota)")), (Chords::Triads, tr("Tríadas")), (Chords::Sevenths, tr("Con séptima"))] {
+                if ui.radio(app.voice.chords == chords, label).on_hover_text(tr("La nota que cantas es la raíz de su acorde en la escala del proyecto (sin escala, o fuera de ella, un acorde mayor)")).clicked() {
                     app.voice.chords = chords;
                     ui.close();
                 }
             }
             ui.separator();
-            ui.checkbox(&mut app.voice.bend, "Seguir el tono").on_hover_text("El vibrato y los deslizamientos de la voz mueven el pitch bend de la nota (hasta ±2 semitonos). Se oye en vivo; lo que se graba son las notas");
+            ui.checkbox(&mut app.voice.bend, tr("Seguir el tono")).on_hover_text(tr("El vibrato y los deslizamientos de la voz mueven el pitch bend de la nota (hasta ±2 semitonos). Se oye en vivo; lo que se graba son las notas"));
         });
         let devices = app.midi.names.len();
         let midi_hint = if devices == 0 {
-            "Ningún dispositivo MIDI conectado. Clic para volver a buscar.".to_string()
+            tr("Ningún dispositivo MIDI conectado. Clic para volver a buscar.").to_string()
         } else {
-            format!("Entradas MIDI:\n{}\nClic para volver a buscar.", app.midi.names.join("\n"))
+            fill(tr("Entradas MIDI:\n{}\nClic para volver a buscar."), &[&app.midi.names.join("\n")])
         };
         if widgets::toggle(ui, devices > 0, "MIDI", theme::PLAY, vec2(40.0, 22.0)).on_hover_text(midi_hint).clicked() {
             app.rescan_midi();
         }
-        let learn_hint = "Asignar controles MIDI: toca un control de Pulse y mueve un knob o pulsa un botón del teclado MIDI";
-        if widgets::toggle(ui, app.learn.on, "Asignar", ACCENT, vec2(60.0, 22.0)).on_hover_text(learn_hint).clicked() {
+        let learn_hint = tr("Asignar controles MIDI: toca un control de Pulse y mueve un knob o pulsa un botón del teclado MIDI");
+        if widgets::toggle(ui, app.learn.on, tr("Asignar"), ACCENT, vec2(60.0, 22.0)).on_hover_text(learn_hint).clicked() {
             app.toggle_learn();
         }
 
@@ -373,7 +370,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 in_app_menus(app, ui);
             }
             if widgets::toggle(ui, app.show_browser, "☰", theme::CONTROL_HOVER, vec2(24.0, 22.0))
-                .on_hover_text("Mostrar u ocultar el navegador")
+                .on_hover_text(tr("Mostrar u ocultar el navegador"))
                 .clicked()
             {
                 app.show_browser = !app.show_browser;
@@ -394,7 +391,7 @@ pub fn master_meter(ui: &mut egui::Ui, meters: &mut crate::app::Meters) {
         None => "— LUFS".to_string(),
     };
     // Right to left: the loudness, the peak, the meter.
-    ui.label(RichText::new(lufs.clone()).size(10.5).color(TEXT)).on_hover_text("Sonoridad a corto plazo: los últimos 3 s del master, en LUFS (como la mide el Asistente de mezcla y master)");
+    ui.label(RichText::new(lufs.clone()).size(10.5).color(TEXT)).on_hover_text(tr("Sonoridad a corto plazo: los últimos 3 s del master, en LUFS (como la mide el Asistente de mezcla y master)"));
     let peak_text = if hold <= 1e-6 { "—".to_string() } else { format!("{hold_db:+.1}").replace('.', ",") };
     let peak = ui.add(egui::Label::new(RichText::new(peak_text.clone()).size(10.5).strong().color(if over { theme::METER_RED } else { TEXT_DIM })).sense(Sense::click()));
     let (rect, meter) = ui.allocate_exact_size(vec2(70.0, 8.0), Sense::click());
@@ -410,11 +407,11 @@ pub fn master_meter(ui: &mut egui::Ui, meters: &mut crate::app::Meters) {
         }
     }
     let hint = if over {
-        format!("Pico del master: {peak_text} dBFS. ¡Ha pasado de 0 dB: la mezcla satura! Baja los faders o pon un limitador en el master. Clic para limpiarlo")
+        fill(tr("Pico del master: {} dBFS. ¡Ha pasado de 0 dB: la mezcla satura! Baja los faders o pon un limitador en el master. Clic para limpiarlo"), &[&peak_text])
     } else if hold > 1e-6 {
-        format!("Pico del master: {peak_text} dBFS (el más alto desde que lo limpiaste). Clic para limpiarlo")
+        fill(tr("Pico del master: {} dBFS (el más alto desde que lo limpiaste). Clic para limpiarlo"), &[&peak_text])
     } else {
-        "Pico del master: se queda marcado el más alto, en rojo si pasa de 0 dBFS".to_string()
+        tr("Pico del master: se queda marcado el más alto, en rojo si pasa de 0 dBFS").to_string()
     };
     let label = format!("Medidor del master · pico {peak_text} dBFS · {lufs}");
     meter.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ProgressIndicator, true, label.clone()));
@@ -448,12 +445,12 @@ fn groove(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
         })
         .response
-        .on_hover_text("Cuantización al grabar: ajusta el inicio de las notas grabadas a esta rejilla");
+        .on_hover_text(tr("Cuantización al grabar: ajusta el inicio de las notas grabadas a esta rejilla"));
 
     let mut percent = app.project.swing * 100.0;
     let swing = ui
         .add_sized([62.0, 22.0], egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5).prefix("Swing ").suffix("%").fixed_decimals(0))
-        .on_hover_text("Swing al reproducir: retrasa los contratiempos. 100 % = shuffle de tresillo. No cambia las notas.");
+        .on_hover_text(tr("Swing al reproducir: retrasa los contratiempos. 100 % = shuffle de tresillo. No cambia las notas."));
     let mut grid = app.project.swing_grid;
     egui::ComboBox::from_id_salt("swing_grid")
         .selected_text(if grid == 0.5 { "1/8" } else { "1/16" })
@@ -472,30 +469,30 @@ fn groove(app: &mut PulseApp, ui: &mut egui::Ui) {
 /// The project's key: chosen by hand, detected from its clips, or none.
 fn scale(app: &mut PulseApp, ui: &mut egui::Ui) {
     use stems::key::Key;
-    let label = app.project.key.map_or("Escala".to_string(), |k| k.name());
+    let label = app.project.key.map_or(tr("Escala").to_string(), |k| k.name());
     widgets::field_menu_button(ui, &label, |ui| {
         ui.set_min_width(230.0);
-        if ui.button("Detectar en la canción").on_hover_text("Escucha las notas MIDI y el audio con una tonalidad clara").clicked() {
+        if ui.button(tr("Detectar en la canción")).on_hover_text(tr("Escucha las notas MIDI y el audio con una tonalidad clara")).clicked() {
             app.detect_key();
             ui.close();
         }
         let mut follow = app.settings.loops_follow_key;
         if ui
-            .checkbox(&mut follow, "Ajustar los loops nuevos a la escala")
-            .on_hover_text("Los audios que añadas se transponen a la escala del proyecto (su tonalidad sale del nombre, como «Pad_Am», o del sonido); las baterías no. Si el proyecto no tiene escala, toma la del primero")
+            .checkbox(&mut follow, tr("Ajustar los loops nuevos a la escala"))
+            .on_hover_text(tr("Los audios que añadas se transponen a la escala del proyecto (su tonalidad sale del nombre, como «Pad_Am», o del sonido); las baterías no. Si el proyecto no tiene escala, toma la del primero"))
             .changed()
         {
             let settings = crate::settings::Settings { loops_follow_key: follow, ..app.settings.clone() };
             app.set_settings(settings);
         }
         ui.separator();
-        if ui.selectable_label(app.project.key.is_none(), "Sin escala").clicked() {
+        if ui.selectable_label(app.project.key.is_none(), tr("Sin escala")).clicked() {
             app.set_key(None);
             ui.close();
         }
         ui.separator();
         for minor in [false, true] {
-            ui.label(RichText::new(if minor { "Menores" } else { "Mayores" }).color(TEXT_DIM).size(10.5));
+            ui.label(RichText::new(if minor { tr("Menores") } else { tr("Mayores") }).color(TEXT_DIM).size(10.5));
             egui::Grid::new(("keys", minor)).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
                 for (i, key) in Key::all().filter(|k| k.minor == minor).enumerate() {
                     let name = key.name();
@@ -516,10 +513,10 @@ fn scale(app: &mut PulseApp, ui: &mut egui::Ui) {
 pub fn status_bar(app: &mut PulseApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         let text = match (&app.audio.error, &app.status) {
-            (Some(error), _) => RichText::new(format!("Sin audio: {error}")).color(theme::METER_RED),
+            (Some(error), _) => RichText::new(fill(tr("Sin audio: {}"), &[error])).color(theme::METER_RED),
             (None, Some(status)) => RichText::new(status).color(TEXT),
             (None, None) => RichText::new(crate::theme::keys(
-                "Espacio: play/stop · Tab: Session/Arrangement · ⇧Tab: Clip/Dispositivos · M: teclado MIDI · F9: grabar · ⌘Z: deshacer · ⌘D: duplicar · Supr: borrar",
+                tr("Espacio: play/stop · Tab: Session/Arrangement · ⇧Tab: Clip/Dispositivos · M: teclado MIDI · F9: grabar · ⌘Z: deshacer · ⌘D: duplicar · Supr: borrar"),
             ))
             .color(TEXT_DIM),
         };

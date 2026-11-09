@@ -4,6 +4,7 @@
 //! knob shows and overrides automation the same way the mixer does.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::presets::Preset;
 use crate::theme::{self, ACCENT, CONTROL, SURFACE, TEXT_DIM};
 use crate::widgets;
@@ -24,9 +25,9 @@ fn beats_label(beats: f64) -> String {
         b if b == 1.0 => "1/4".into(),
         b if b == 1.5 => "3/8".into(),
         b if b == 2.0 => "1/2".into(),
-        b if b == 4.0 => "1 Compás".into(),
-        b if b == 8.0 => "2 Compases".into(),
-        b if b == 16.0 => "4 Compases".into(),
+        b if b == 4.0 => tr("1 Compás").into(),
+        b if b == 8.0 => tr("2 Compases").into(),
+        b if b == 16.0 => tr("4 Compases").into(),
         b => format!("{b} beats"),
     }
 }
@@ -112,7 +113,7 @@ pub(crate) fn device_frame<R>(
         response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Checkbox, true, on, "Activar"));
         child.painter().circle_filled(dot.center(), 5.0, if *enabled { ACCENT } else { theme::BG });
         child.painter().circle_stroke(dot.center(), 5.0, Stroke::new(1.0, TEXT_DIM));
-        if response.on_hover_text("Activar / desactivar").clicked() {
+        if response.on_hover_text(tr("Activar / desactivar")).clicked() {
             *enabled = !*enabled;
         }
     }
@@ -155,7 +156,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 .enumerate()
                 .filter(|&(t, track)| target != Target::Track(t) && track.id != 0)
                 .map(|(_, track)| match target {
-                    Target::Track(t) if crate::sidechain::closes_loop_with(tracks, &app.project.plugins, t, track.id) => (track.id, format!("{} {LOOP_MARK}", track.name)),
+                    Target::Track(t) if crate::sidechain::closes_loop_with(tracks, &app.project.plugins, t, track.id) => (track.id, format!("{} {}", track.name, loop_mark())),
                     _ => (track.id, track.name.clone()),
                 })
                 .collect();
@@ -178,7 +179,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     Effect::Plugin(id) => Some(app.plugin_name(id)),
                     _ => None,
                 };
-                let title = plugin_title.as_deref().unwrap_or(device.effect.label());
+                let title = plugin_title.as_deref().unwrap_or(tr(device.effect.label()));
                 let width = effect_width(&device.effect);
                 let presets = device.effect.factory_presets();
                 // What its meter shows (a compressor's gain reduction), if it has one.
@@ -194,13 +195,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     width,
                     Some(enabled),
                     |ui| {
-                        if ui.small_button("×").on_hover_text("Eliminar").clicked() {
+                        if ui.small_button("×").on_hover_text(tr("Eliminar")).clicked() {
                             header_actions.push(Action::Remove(index));
                         }
-                        if index + 1 < count && ui.small_button("►").on_hover_text("Mover a la derecha").clicked() {
+                        if index + 1 < count && ui.small_button("►").on_hover_text(tr("Mover a la derecha")).clicked() {
                             header_actions.push(Action::Move(index, index + 1));
                         }
-                        if index > 0 && ui.small_button("◄").on_hover_text("Mover a la izquierda").clicked() {
+                        if index > 0 && ui.small_button("◄").on_hover_text(tr("Mover a la izquierda")).clicked() {
                             header_actions.push(Action::Move(index, index - 1));
                         }
                         if !presets.is_empty() {
@@ -213,7 +214,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                             if app.samples.plugins.get(&id).is_some_and(|h| h.io.sidechain) {
                                 let mut source = app.project.plugin(id).and_then(|p| p.sidechain);
                                 let before = source;
-                                ui.vertical(|ui| sidechain_combo(ui, &format!("plugin_sc{index}"), &mut source, &sources, "El plugin la oye por su entrada lateral (sidechain): un compresor que aparta el bajo con el bombo, un Trackspacer que hace hueco a la voz"));
+                                ui.vertical(|ui| sidechain_combo(ui, &format!("plugin_sc{index}"), &mut source, &sources, tr("El plugin la oye por su entrada lateral (sidechain): un compresor que aparta el bajo con el bombo, un Trackspacer que hace hueco a la voz")));
                                 if source != before {
                                     actions.push(Action::PluginSidechain(id, source));
                                 }
@@ -262,7 +263,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
 
             let (rect, _) = ui.allocate_exact_size(vec2(170.0, DEVICE_HEIGHT), Sense::hover());
             ui.painter().rect_stroke(rect, 3.0, Stroke::new(1.0, theme::CONTROL), egui::StrokeKind::Inside);
-            ui.painter().text(rect.center(), Align2::CENTER_CENTER, "Añade efectos\ndesde el navegador", theme::small(), TEXT_DIM);
+            ui.painter().text(rect.center(), Align2::CENTER_CENTER, tr("Añade efectos\ndesde el navegador"), theme::small(), TEXT_DIM);
         });
     });
 
@@ -467,7 +468,7 @@ const METER_RANGE_DB: f32 = 24.0;
 /// A gain reduction meter: a bar that grows down from the top, and its value.
 fn reduction_meter(ui: &mut egui::Ui, reduction_db: f32) {
     let (rect, response) = ui.allocate_exact_size(vec2(METER_WIDTH, DEVICE_HEIGHT - 32.0), Sense::hover());
-    response.on_hover_text("Reducción de ganancia: cuánto baja el volumen ahora mismo");
+    response.on_hover_text(tr("Reducción de ganancia: cuánto baja el volumen ahora mismo"));
     let painter = ui.painter();
     painter.text(pos2(rect.center().x, rect.top()), Align2::CENTER_TOP, "GR", theme::small(), TEXT_DIM);
     let bar = Rect::from_min_max(pos2(rect.center().x - 5.0, rect.top() + 14.0), pos2(rect.center().x + 5.0, rect.bottom() - 16.0));
@@ -488,7 +489,7 @@ fn reduction_meter(ui: &mut egui::Ui, reduction_db: f32) {
 /// the band up, down when it pushes it down.
 fn band_meters(ui: &mut egui::Ui, bands: [f32; 3]) {
     let (rect, response) = ui.allocate_exact_size(vec2(BAND_METERS_WIDTH, DEVICE_HEIGHT - 32.0), Sense::hover());
-    response.on_hover_text("Lo que hace cada banda ahora mismo: hacia arriba, sube lo flojo; hacia abajo, baja lo fuerte");
+    response.on_hover_text(tr("Lo que hace cada banda ahora mismo: hacia arriba, sube lo flojo; hacia abajo, baja lo fuerte"));
     let painter = ui.painter();
     let column = rect.width() / 3.0;
     let (top, bottom) = (rect.top() + 14.0, rect.bottom() - 16.0);
@@ -514,7 +515,7 @@ fn effect_knob(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usize, 
     let Some(info) = effect.params().get(param) else { return };
     let id = Param::Device { device: index, param };
     let value = app.display_value(target, id);
-    if let Some(v) = widgets::param_knob(ui, info, value, info.name, 30.0, app.automation_state(target, id)) {
+    if let Some(v) = widgets::param_knob(ui, info, value, tr(info.name), 30.0, app.automation_state(target, id)) {
         actions.push(Action::Param(id, v));
     }
 }
@@ -586,24 +587,24 @@ fn transition_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usi
     let on = app.display_value(target, id) >= 0.5;
     ui.vertical(|ui| {
         ui.set_width(96.0);
-        let text = egui::RichText::new(if on { "● Activo" } else { "○ Activo" }).color(if on { ACCENT } else { theme::TEXT });
+        let text = egui::RichText::new(if on { tr("● Activo") } else { tr("○ Activo") }).color(if on { ACCENT } else { theme::TEXT });
         let hint = match app.automation_state(target, id) {
-            Some(false) => "Lo enciende y apaga su carril de automatización («Active»), a tempo. Pulsarlo toma el control a mano",
-            _ => "Enciéndelo para que actúe ya. Para que suene en su sitio, dibuja en el Arrangement un carril de automatización en «Active»: actúa desde que se enciende, a tempo, hasta que se apaga",
+            Some(false) => tr("Lo enciende y apaga su carril de automatización («Active»), a tempo. Pulsarlo toma el control a mano"),
+            _ => tr("Enciéndelo para que actúe ya. Para que suene en su sitio, dibuja en el Arrangement un carril de automatización en «Active»: actúa desde que se enciende, a tempo, hasta que se apaga"),
         };
         if ui.add(egui::Button::new(text).min_size(vec2(92.0, 26.0)).selected(on)).on_hover_text(hint).clicked() {
             actions.push(Action::Param(id, if on { 0.0 } else { 1.0 }));
         }
-        ui.label(egui::RichText::new("Modo").color(TEXT_DIM).size(10.5));
-        egui::ComboBox::from_id_salt(format!("transition_mode{index}")).selected_text(p.mode.label()).width(92.0).show_ui(ui, |ui| {
+        ui.label(egui::RichText::new(tr("Modo")).color(TEXT_DIM).size(10.5));
+        egui::ComboBox::from_id_salt(format!("transition_mode{index}")).selected_text(tr(p.mode.label())).width(92.0).show_ui(ui, |ui| {
             for mode in TransitionMode::ALL {
                 let hint = match mode {
-                    TransitionMode::TapeStop => "La cinta frena hasta pararse: el tono y la velocidad caen juntos. Luego, silencio hasta que lo apagas",
-                    TransitionMode::TapeStart => "La cinta arranca desde parada hasta su velocidad y luego vuelve al sonido en directo",
-                    TransitionMode::Repeat => "Repite el trozo de la rejilla en que lo enciendes (stutter): cada repetición puede bajar, subir, apagarse o filtrarse más",
-                    TransitionMode::Cut => "Silencia el sonido o lo deja pasar por un filtro: el hueco antes del drop",
+                    TransitionMode::TapeStop => tr("La cinta frena hasta pararse: el tono y la velocidad caen juntos. Luego, silencio hasta que lo apagas"),
+                    TransitionMode::TapeStart => tr("La cinta arranca desde parada hasta su velocidad y luego vuelve al sonido en directo"),
+                    TransitionMode::Repeat => tr("Repite el trozo de la rejilla en que lo enciendes (stutter): cada repetición puede bajar, subir, apagarse o filtrarse más"),
+                    TransitionMode::Cut => tr("Silencia el sonido o lo deja pasar por un filtro: el hueco antes del drop"),
                 };
-                ui.selectable_value(&mut p.mode, mode, mode.label()).on_hover_text(hint);
+                ui.selectable_value(&mut p.mode, mode, tr(mode.label())).on_hover_text(hint);
             }
         });
     });
@@ -611,13 +612,13 @@ fn transition_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usi
         ui.set_width(96.0);
         match p.mode {
             TransitionMode::TapeStop | TransitionMode::TapeStart => {
-                let hint = "Lo que tarda la cinta en pararse (o en arrancar), a tempo";
-                ui.label(egui::RichText::new("Duración").color(TEXT_DIM).size(10.5)).on_hover_text(hint);
+                let hint = tr("Lo que tarda la cinta en pararse (o en arrancar), a tempo");
+                ui.label(egui::RichText::new(tr("Duración")).color(TEXT_DIM).size(10.5)).on_hover_text(hint);
                 beats_combo(ui, &format!("transition_len{index}"), &mut p.length_beats, &TRANSITION_LENGTHS).on_hover_text(hint);
             }
             TransitionMode::Repeat => {
-                let hint = "El trozo que repite: el de la rejilla en que lo enciendes, desde su línea. «T»: tresillo. Cambiarlo mientras repite acorta las repeticiones (un redoble que se acelera)";
-                ui.label(egui::RichText::new("Rejilla").color(TEXT_DIM).size(10.5)).on_hover_text(hint);
+                let hint = tr("El trozo que repite: el de la rejilla en que lo enciendes, desde su línea. «T»: tresillo. Cambiarlo mientras repite acorta las repeticiones (un redoble que se acelera)");
+                ui.label(egui::RichText::new(tr("Rejilla")).color(TEXT_DIM).size(10.5)).on_hover_text(hint);
                 egui::ComboBox::from_id_salt(format!("transition_grid{index}"))
                     .selected_text(grid_label(p.grid_beats))
                     .width(84.0)
@@ -634,12 +635,12 @@ fn transition_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usi
         if matches!(p.mode, TransitionMode::Repeat | TransitionMode::Cut) {
             let cut = p.mode == TransitionMode::Cut;
             let hint = if cut {
-                "Sin filtro, el corte es silencio. Con él, deja pasar solo lo que el filtro deja: «High-pass» quita los graves (el 808), «Low-pass» deja solo ellos"
+                tr("Sin filtro, el corte es silencio. Con él, deja pasar solo lo que el filtro deja: «High-pass» quita los graves (el 808), «Low-pass» deja solo ellos")
             } else {
-                "El filtro de las repeticiones: «Sweep» lo mueve en cada una"
+                tr("El filtro de las repeticiones: «Sweep» lo mueve en cada una")
             };
-            ui.label(egui::RichText::new("Filtro").color(TEXT_DIM).size(10.5)).on_hover_text(hint);
-            let name = |f: Option<FilterMode>| f.map_or(if cut { "Silencio" } else { "Sin filtro" }, |m| m.label());
+            ui.label(egui::RichText::new(tr("Filtro")).color(TEXT_DIM).size(10.5)).on_hover_text(hint);
+            let name = |f: Option<FilterMode>| f.map_or(if cut { tr("Silencio") } else { tr("Sin filtro") }, |m| m.label());
             egui::ComboBox::from_id_salt(format!("transition_filter{index}"))
                 .selected_text(name(p.filter))
                 .width(84.0)
@@ -652,7 +653,7 @@ fn transition_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, index: usi
                 .response
                 .on_hover_text(hint);
         }
-        ui.label(egui::RichText::new("Retraso 2,7 ms").color(TEXT_DIM).size(9.5)).on_hover_text("Suena 128 muestras tarde (2,7 ms a 48 kHz) para saber de antemano cuándo lo enciende el carril: así empieza y acaba justo en el tiempo. Pulse retrasa lo mismo las demás pistas");
+        ui.label(egui::RichText::new(tr("Retraso 2,7 ms")).color(TEXT_DIM).size(9.5)).on_hover_text(tr("Suena 128 muestras tarde (2,7 ms a 48 kHz) para saber de antemano cuándo lo enciende el carril: así empieza y acaba justo en el tiempo. Pulse retrasa lo mismo las demás pistas"));
     });
     let shown = *effect;
     let Effect::Transition(p) = &shown else { return };
@@ -675,7 +676,7 @@ enum CarrierChoice {
 /// A Vocoder's carrier: its own oscillator (at its note, or playing the MIDI
 /// notes), or the track whose sound it uses.
 fn carrier_combo(ui: &mut egui::Ui, index: usize, p: &mut engine::model::VocoderParams, sources: &[(u32, String)]) {
-    ui.label(egui::RichText::new("Portadora").color(TEXT_DIM).size(10.5)).on_hover_text("El sonido al que el vocoder pone la voz: su oscilador propio, en una nota o con las notas MIDI, o el de otra pista");
+    ui.label(egui::RichText::new(tr("Portadora")).color(TEXT_DIM).size(10.5)).on_hover_text(tr("El sonido al que el vocoder pone la voz: su oscilador propio, en una nota o con las notas MIDI, o el de otra pista"));
     let before = match (p.midi, p.sidechain) {
         (true, _) => CarrierChoice::Midi,
         (false, None) => CarrierChoice::Own,
@@ -683,22 +684,22 @@ fn carrier_combo(ui: &mut egui::Ui, index: usize, p: &mut engine::model::Vocoder
     };
     let mut choice = before;
     let current = match choice {
-        CarrierChoice::Own => "Propia",
-        CarrierChoice::Midi => "Notas MIDI",
-        CarrierChoice::Track(id) => sources.iter().find(|(s, _)| *s == id).map_or("Propia", |(_, name)| name.as_str()),
+        CarrierChoice::Own => tr("Propia"),
+        CarrierChoice::Midi => tr("Notas MIDI"),
+        CarrierChoice::Track(id) => sources.iter().find(|(s, _)| *s == id).map_or(tr("Propia"), |(_, name)| name.as_str()),
     };
     egui::ComboBox::from_id_salt(format!("vocoder_sc{index}"))
         .selected_text(current)
         .width(96.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(&mut choice, CarrierChoice::Own, "Propia").on_hover_text("Su oscilador: sierra, súper sierra o ruido, en la nota y el acorde que elijas");
-            ui.selectable_value(&mut choice, CarrierChoice::Midi, "Notas MIDI").on_hover_text("Su oscilador toca las notas MIDI que llegan a esta pista u otra (sus clips, lo que tocas en vivo): hasta 8 a la vez. Sin notas, calla");
+            ui.selectable_value(&mut choice, CarrierChoice::Own, tr("Propia")).on_hover_text(tr("Su oscilador: sierra, súper sierra o ruido, en la nota y el acorde que elijas"));
+            ui.selectable_value(&mut choice, CarrierChoice::Midi, tr("Notas MIDI")).on_hover_text(tr("Su oscilador toca las notas MIDI que llegan a esta pista u otra (sus clips, lo que tocas en vivo): hasta 8 a la vez. Sin notas, calla"));
             for (track, name) in sources {
                 ui.selectable_value(&mut choice, CarrierChoice::Track(*track), name);
             }
         })
         .response
-        .on_hover_text("Con otra pista (un synth tocando acordes), la voz canta sus notas: escucha su sonido tras sus efectos, aunque esté silenciada. Con «Notas MIDI», las toca su propio oscilador");
+        .on_hover_text(tr("Con otra pista (un synth tocando acordes), la voz canta sus notas: escucha su sonido tras sus efectos, aunque esté silenciada. Con «Notas MIDI», las toca su propio oscilador"));
     if choice != before {
         (p.midi, p.sidechain) = match choice {
             CarrierChoice::Own => (false, None),
@@ -710,18 +711,18 @@ fn carrier_combo(ui: &mut egui::Ui, index: usize, p: &mut engine::model::Vocoder
 
 /// Whose notes a Vocoder following MIDI plays: its own track's, or another's.
 fn notes_from_combo(ui: &mut egui::Ui, index: usize, value: &mut Option<u32>, sources: &[(u32, String)]) {
-    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Esta pista", |(_, name)| name.as_str());
+    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or(tr("Esta pista"), |(_, name)| name.as_str());
     egui::ComboBox::from_id_salt(format!("vocoder_notes{index}"))
         .selected_text(current)
         .width(96.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(value, None, "Esta pista").on_hover_text("Las notas de sus clips MIDI y las que tocas en ella en vivo (armada o elegida para tocar)");
+            ui.selectable_value(value, None, tr("Esta pista")).on_hover_text(tr("Las notas de sus clips MIDI y las que tocas en ella en vivo (armada o elegida para tocar)"));
             for (track, name) in sources {
                 ui.selectable_value(value, Some(*track), name);
             }
         })
         .response
-        .on_hover_text(format!("De dónde vienen las notas: con la voz en una pista de audio, elige la pista MIDI con los acordes (sus notas llegan aunque esté silenciada). Las marcadas «{LOOP_MARK}» no le dan notas"));
+        .on_hover_text(fill(tr("De dónde vienen las notas: con la voz en una pista de audio, elige la pista MIDI con los acordes (sus notas llegan aunque esté silenciada). Las marcadas «{}» no le dan notas"), &[&loop_mark()]));
 }
 
 /// The factory settings of an effect that has them (keeping its sidechain).
@@ -752,7 +753,7 @@ fn effect_presets(ui: &mut egui::Ui, index: usize, device: Device, presets: Vec<
 /// What a factory preset sets, for its tooltip (empty when its name says it).
 fn preset_hint(effect: &Effect) -> String {
     match effect {
-        Effect::Tuner(p) => format!("Speed {:.0} ms · Humanize {:.0} % · Amount {:.0} %. Mantiene la escala elegida", p.speed_ms, p.humanize * 100.0, p.amount * 100.0),
+        Effect::Tuner(p) => fill(tr("Speed {} ms · Humanize {} % · Amount {} %. Mantiene la escala elegida"), &[&format!("{:.0}", p.speed_ms), &format!("{:.0}", p.humanize * 100.0), &format!("{:.0}", p.amount * 100.0)]),
         _ => String::new(),
     }
 }
@@ -789,33 +790,37 @@ fn beats_combo(ui: &mut egui::Ui, id: &str, value: &mut f64, options: &[f64]) ->
 }
 
 /// What a compressor's or ducker's sidechain does.
-const DUCKS: &str = "Con el bombo, el bajo o el pad se apartan cuando suena";
+fn ducks() -> &'static str {
+    tr("Con el bombo, el bajo o el pad se apartan cuando suena")
+}
 
 /// After a sidechain source's name, when listening to it closes a loop.
-const LOOP_MARK: &str = "(bucle)";
+fn loop_mark() -> &'static str {
+    tr("(bucle)")
+}
 
 /// A compressor's, gate's or ducker's sidechain: none, or the track it listens to.
 fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources: &[(u32, String)], hint: &str) {
-    let looped = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).is_some_and(|(_, name)| name.ends_with(LOOP_MARK));
-    ui.label(egui::RichText::new(if looped { "Sidechain · bucle" } else { "Sidechain" }).color(if looped { crate::theme::ACCENT } else { TEXT_DIM }).size(10.5));
-    let hint = if sources.iter().any(|(_, name)| name.ends_with(LOOP_MARK)) {
-        format!("{hint}. Las marcadas «{LOOP_MARK}» suenan con esta pista dentro (su grupo) o la escuchan a su vez: se oyen 64 muestras tarde (1,3 ms a 48 kHz), siempre las mismas, sea cual sea el búfer")
+    let looped = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).is_some_and(|(_, name)| name.ends_with(loop_mark()));
+    ui.label(egui::RichText::new(if looped { tr("Sidechain · bucle") } else { "Sidechain" }).color(if looped { crate::theme::ACCENT } else { TEXT_DIM }).size(10.5));
+    let hint = if sources.iter().any(|(_, name)| name.ends_with(loop_mark())) {
+        fill(tr("{}. Las marcadas «{}» suenan con esta pista dentro (su grupo) o la escuchan a su vez: se oyen 64 muestras tarde (1,3 ms a 48 kHz), siempre las mismas, sea cual sea el búfer"), &[&hint, &loop_mark()])
     } else {
         hint.to_string()
     };
     let hint = hint.as_str();
-    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or("Ninguno", |(_, name)| name.as_str());
+    let current = value.and_then(|v| sources.iter().find(|(s, _)| *s == v)).map_or(tr("Ninguno"), |(_, name)| name.as_str());
     egui::ComboBox::from_id_salt(id)
         .selected_text(current)
         .width(84.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(value, None, "Ninguno");
+            ui.selectable_value(value, None, tr("Ninguno"));
             for (track, name) in sources {
                 ui.selectable_value(value, Some(*track), name);
             }
         })
         .response
-        .on_hover_text(format!("La pista que lo dispara: escucha su sonido (tras sus efectos, aunque esté silenciada) en vez del propio. {hint}"));
+        .on_hover_text(fill(tr("La pista que lo dispara: escucha su sonido (tras sus efectos, aunque esté silenciada) en vez del propio. {}"), &[&hint]));
 }
 
 /// Settings that are choices rather than knobs: time divisions, modes, switches.
@@ -823,29 +828,29 @@ fn sidechain_combo(ui: &mut egui::Ui, id: &str, value: &mut Option<u32>, sources
 pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: usize, sources: &[(u32, String)]) {
     match effect {
         Effect::Compressor(p) if !sources.is_empty() => {
-            ui.vertical(|ui| sidechain_combo(ui, &format!("comp_sc{index}"), &mut p.sidechain, sources, DUCKS));
+            ui.vertical(|ui| sidechain_combo(ui, &format!("comp_sc{index}"), &mut p.sidechain, sources, ducks()));
         }
         Effect::Gate(p) if !sources.is_empty() => {
-            ui.vertical(|ui| sidechain_combo(ui, &format!("gate_sc{index}"), &mut p.sidechain, sources, "Se abre solo cuando suena esa pista: un pad que corta al ritmo de los charles, o un bajo que suena solo con el bombo"));
+            ui.vertical(|ui| sidechain_combo(ui, &format!("gate_sc{index}"), &mut p.sidechain, sources, tr("Se abre solo cuando suena esa pista: un pad que corta al ritmo de los charles, o un bajo que suena solo con el bombo")));
         }
         Effect::Utility(p) => {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Fase").color(TEXT_DIM).size(10.5));
-                ui.checkbox(&mut p.flip_right, "Invertir R").on_hover_text("Da la vuelta al canal derecho: arregla una pista grabada con un canal al revés, que en mono casi desaparece");
+                ui.label(egui::RichText::new(tr("Fase")).color(TEXT_DIM).size(10.5));
+                ui.checkbox(&mut p.flip_right, tr("Invertir R")).on_hover_text(tr("Da la vuelta al canal derecho: arregla una pista grabada con un canal al revés, que en mono casi desaparece"));
             });
         }
         Effect::Tuner(p) => {
             use engine::model::TunerScale;
             let name = |scale: TunerScale| match scale {
-                TunerScale::Project => "Del proyecto".to_string(),
-                TunerScale::Chromatic => "Cromática".to_string(),
+                TunerScale::Project => tr("Del proyecto").to_string(),
+                TunerScale::Chromatic => tr("Cromática").to_string(),
                 TunerScale::Key { tonic, minor } => stems::key::Key { tonic, minor }.name(),
             };
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Escala").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Escala")).color(TEXT_DIM).size(10.5));
                 egui::ComboBox::from_id_salt(format!("tuner_scale{index}")).selected_text(name(p.scale)).width(84.0).show_ui(ui, |ui| {
-                    ui.selectable_value(&mut p.scale, TunerScale::Project, name(TunerScale::Project)).on_hover_text("La escala del proyecto (Tonalidad y escala); sin escala, todas las notas");
-                    ui.selectable_value(&mut p.scale, TunerScale::Chromatic, name(TunerScale::Chromatic)).on_hover_text("Todas las notas: la más cercana");
+                    ui.selectable_value(&mut p.scale, TunerScale::Project, name(TunerScale::Project)).on_hover_text(tr("La escala del proyecto (Tonalidad y escala); sin escala, todas las notas"));
+                    ui.selectable_value(&mut p.scale, TunerScale::Chromatic, name(TunerScale::Chromatic)).on_hover_text(tr("Todas las notas: la más cercana"));
                     ui.separator();
                     for key in stems::key::Key::all() {
                         let scale = TunerScale::Key { tonic: key.tonic, minor: key.minor };
@@ -856,14 +861,14 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         }
         Effect::Delay(p) => {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Tiempo").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Tiempo")).color(TEXT_DIM).size(10.5));
                 beats_combo(ui, &format!("delay{index}"), &mut p.time_beats, &[0.25, 0.5, 0.75, 1.0, 1.5, 2.0, 4.0]);
                 ui.checkbox(&mut p.ping_pong, "Ping Pong");
             });
         }
         Effect::AutoFilter(p) => {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Tipo").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Tipo")).color(TEXT_DIM).size(10.5));
                 for mode in FilterMode::ALL {
                     ui.radio_value(&mut p.mode, mode, mode.label());
                 }
@@ -871,18 +876,18 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("LFO").color(TEXT_DIM).size(10.5));
                 beats_combo(ui, &format!("lfo{index}"), &mut p.lfo_beats, &[0.5, 1.0, 2.0, 4.0, 8.0, 16.0]);
-                ui.checkbox(&mut p.steep, "24 dB").on_hover_text("Corta el doble por octava (24 dB en vez de 12): más grave y oscuro. Res por encima del 95 % hace que el filtro suene solo");
+                ui.checkbox(&mut p.steep, "24 dB").on_hover_text(tr("Corta el doble por octava (24 dB en vez de 12): más grave y oscuro. Res por encima del 95 % hace que el filtro suene solo"));
             });
         }
         Effect::Saturator(p) => {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Tipo").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Tipo")).color(TEXT_DIM).size(10.5));
                 egui::ComboBox::from_id_salt(format!("sat_kind{index}")).selected_text(p.kind.label()).width(64.0).show_ui(ui, |ui| {
                     for kind in KickDrive::ALL {
                         ui.selectable_value(&mut p.kind, kind, kind.label());
                     }
                 });
-                ui.checkbox(&mut p.oversample, "4×").on_hover_text("Trabaja a cuatro veces la frecuencia de muestreo: sin el aliasing (agudos sucios) de mucho drive. Gasta algo más de CPU (menos de un 1 % de un núcleo) y retrasa 36 muestras");
+                ui.checkbox(&mut p.oversample, "4×").on_hover_text(tr("Trabaja a cuatro veces la frecuencia de muestreo: sin el aliasing (agudos sucios) de mucho drive. Gasta algo más de CPU (menos de un 1 % de un núcleo) y retrasa 36 muestras"));
             });
         }
         Effect::Ducker(p) => {
@@ -890,17 +895,17 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 // With a sidechain the period is the time it takes to come back, and
                 // the «Release» knob the part of it spent coming back: two names.
                 let (name, hint) = if p.sidechain.is_some() {
-                    ("Vuelve en", "Tras cada golpe del sidechain, el tiempo en que el sonido vuelve a su volumen. El knob «Release» dice qué parte de este tiempo tarda en subir (100 %: todo)")
+                    (tr("Vuelve en"), tr("Tras cada golpe del sidechain, el tiempo en que el sonido vuelve a su volumen. El knob «Release» dice qué parte de este tiempo tarda en subir (100 %: todo)"))
                 } else {
-                    ("Ritmo", "Cada cuánto baja el volumen, a tempo. El knob «Release» dice qué parte de este tiempo tarda en volver (100 %: todo)")
+                    (tr("Ritmo"), tr("Cada cuánto baja el volumen, a tempo. El knob «Release» dice qué parte de este tiempo tarda en volver (100 %: todo)"))
                 };
                 ui.label(egui::RichText::new(name).color(TEXT_DIM).size(10.5)).on_hover_text(hint);
                 beats_combo(ui, &format!("ducker{index}"), &mut p.rate_beats, &[0.25, 0.5, 1.0, 2.0, 4.0]).on_hover_text(hint);
                 if !sources.is_empty() {
-                    sidechain_combo(ui, &format!("duck_sc{index}"), &mut p.sidechain, sources, DUCKS);
+                    sidechain_combo(ui, &format!("duck_sc{index}"), &mut p.sidechain, sources, ducks());
                 }
                 if p.sidechain.is_some() {
-                    ui.checkbox(&mut p.lows, "Solo graves").on_hover_text("Escucha solo por debajo de 600 Hz: bombea con el bombo y no con los charles o las palmas de la misma pista. Quítalo con un bombo de hardstyle");
+                    ui.checkbox(&mut p.lows, tr("Solo graves")).on_hover_text(tr("Escucha solo por debajo de 600 Hz: bombea con el bombo y no con los charles o las palmas de la misma pista. Quítalo con un bombo de hardstyle"));
                 }
             });
         }
@@ -912,17 +917,17 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                     ui.spacing_mut().item_spacing.x = 2.0;
                     for ratio in GlueRatio::ALL {
                         let hint = match ratio {
-                            GlueRatio::Two => "Suave: pega sin que se note. Para el master y los grupos",
-                            GlueRatio::Four => "El de siempre en el bus de batería",
-                            GlueRatio::Ten => "Casi un limitador: para aplastar en paralelo",
+                            GlueRatio::Two => tr("Suave: pega sin que se note. Para el master y los grupos"),
+                            GlueRatio::Four => tr("El de siempre en el bus de batería"),
+                            GlueRatio::Ten => tr("Casi un limitador: para aplastar en paralelo"),
                         };
                         ui.selectable_value(&mut p.ratio, ratio, ratio.label()).on_hover_text(hint);
                     }
                 });
-                ui.checkbox(&mut p.auto_release, "Auto").on_hover_text("Release automático: rápido tras un golpe suelto, lento cuando comprime mucho rato. Con él, el knob «Release» no hace nada");
-                ui.checkbox(&mut p.soft_clip, "Clip").on_hover_text("Recorta suave los picos a la salida, por debajo de 0 dBFS: más volumen sin que pase de rojo");
+                ui.checkbox(&mut p.auto_release, "Auto").on_hover_text(tr("Release automático: rápido tras un golpe suelto, lento cuando comprime mucho rato. Con él, el knob «Release» no hace nada"));
+                ui.checkbox(&mut p.soft_clip, "Clip").on_hover_text(tr("Recorta suave los picos a la salida, por debajo de 0 dBFS: más volumen sin que pase de rojo"));
                 if !sources.is_empty() {
-                    sidechain_combo(ui, &format!("glue_sc{index}"), &mut p.sidechain, sources, DUCKS);
+                    sidechain_combo(ui, &format!("glue_sc{index}"), &mut p.sidechain, sources, ducks());
                 }
             });
         }
@@ -933,25 +938,25 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 ui.set_width(100.0);
                 carrier_combo(ui, index, p, sources);
                 ui.add_enabled_ui(p.sidechain.is_none() || p.midi, |ui| {
-                    egui::ComboBox::from_id_salt(format!("vocoder_osc{index}")).selected_text(p.carrier.label()).width(96.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(format!("vocoder_osc{index}")).selected_text(tr(p.carrier.label())).width(96.0).show_ui(ui, |ui| {
                         for carrier in VocoderCarrier::ALL {
                             let hint = match carrier {
-                                VocoderCarrier::Saw => "Una sierra: el robot clásico, con todos los armónicos",
-                                VocoderCarrier::SuperSaw => "Siete sierras desafinadas por nota («Detune»): un coro ancho",
-                                VocoderCarrier::Noise => "Ruido: la voz susurrada, sin nota",
+                                VocoderCarrier::Saw => tr("Una sierra: el robot clásico, con todos los armónicos"),
+                                VocoderCarrier::SuperSaw => tr("Siete sierras desafinadas por nota («Detune»): un coro ancho"),
+                                VocoderCarrier::Noise => tr("Ruido: la voz susurrada, sin nota"),
                             };
-                            ui.selectable_value(&mut p.carrier, carrier, carrier.label()).on_hover_text(hint);
+                            ui.selectable_value(&mut p.carrier, carrier, tr(carrier.label())).on_hover_text(hint);
                         }
                     });
                     if p.midi {
                         notes_from_combo(ui, index, &mut p.sidechain, sources);
                         return;
                     }
-                    egui::ComboBox::from_id_salt(format!("vocoder_chord{index}")).selected_text(p.chord.label()).width(96.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(format!("vocoder_chord{index}")).selected_text(tr(p.chord.label())).width(96.0).show_ui(ui, |ui| {
                         for chord in VocoderChord::ALL {
-                            ui.selectable_value(&mut p.chord, chord, chord.label());
+                            ui.selectable_value(&mut p.chord, chord, tr(chord.label()));
                         }
-                    }).response.on_hover_text("Las notas que toca su oscilador, desde «Note». Para que siga una melodía, elige «Notas MIDI» en la portadora");
+                    }).response.on_hover_text(tr("Las notas que toca su oscilador, desde «Note». Para que siga una melodía, elige «Notas MIDI» en la portadora"));
                 });
             });
         }
@@ -959,8 +964,8 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
         Effect::Transition(_) => {}
         Effect::VoiceShift(_) => {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Retraso").color(TEXT_DIM).size(10.5));
-                ui.label("32 ms").on_hover_text("Lo que tarda en sonar, con cualquier ajuste: Pulse retrasa lo mismo las demás pistas para que todo siga a tiempo");
+                ui.label(egui::RichText::new(tr("Retraso")).color(TEXT_DIM).size(10.5));
+                ui.label("32 ms").on_hover_text(tr("Lo que tarda en sonar, con cualquier ajuste: Pulse retrasa lo mismo las demás pistas para que todo siga a tiempo"));
             });
         }
         Effect::Eq3(_)
@@ -987,17 +992,17 @@ const SKETCH: egui::Vec2 = egui::vec2(150.0, 112.0);
 fn convolution_controls(ui: &mut egui::Ui, p: &mut engine::model::ConvolutionParams, index: usize) {
     use engine::model::{ConvolutionParams, ReverbSpace};
     ui.vertical(|ui| {
-        ui.label(egui::RichText::new("Espacio").color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(tr("Espacio")).color(TEXT_DIM).size(10.5));
         egui::ComboBox::from_id_salt(format!("space{index}"))
-            .selected_text(p.space.label())
+            .selected_text(tr(p.space.label()))
             .width(92.0)
             .show_ui(ui, |ui| {
                 for space in ReverbSpace::ALL {
-                    ui.selectable_value(&mut p.space, space, space.label()).on_hover_text(space.hint());
+                    ui.selectable_value(&mut p.space, space, tr(space.label())).on_hover_text(tr(space.hint()));
                 }
             })
             .response
-            .on_hover_text(p.space.hint());
+            .on_hover_text(tr(p.space.hint()));
     });
     space_sketch(ui, p);
     let base = *p;
@@ -1006,11 +1011,11 @@ fn convolution_controls(ui: &mut egui::Ui, p: &mut engine::model::ConvolutionPar
         .taper(widgets::Taper::Log)
         .format(move |v| format!("{:.1} s", seconds(v)))
         .show(ui)
-        .on_hover_text("Lo que dura la cola (lo que tarda en caer 60 dB en los medios). Al cambiarlo, Pulse calcula el espacio de nuevo y pasa a él sin cortes en menos de medio segundo; por eso no se automatiza");
+        .on_hover_text(tr("Lo que dura la cola (lo que tarda en caer 60 dB en los medios). Al cambiarlo, Pulse calcula el espacio de nuevo y pasa a él sin cortes en menos de medio segundo; por eso no se automatiza"));
     widgets::Knob::new(&mut p.size, ConvolutionParams::SIZE, 1.0, "Size")
         .format(|v| format!("{:.0} %", v * 100.0))
         .show(ui)
-        .on_hover_text("El tamaño del espacio: más grande, las primeras reflexiones llegan más tarde y más separadas. No se automatiza");
+        .on_hover_text(tr("El tamaño del espacio: más grande, las primeras reflexiones llegan más tarde y más separadas. No se automatiza"));
 }
 
 /// The response at a glance: the early reflections as lines, and how the tail
@@ -1050,9 +1055,9 @@ fn space_sketch(ui: &mut egui::Ui, p: &engine::model::ConvolutionParams) {
         painter.text(pos2(x(pre), plot.top()), Align2::CENTER_TOP, "▾", theme::small(), TEXT_DIM);
     }
     painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, format!("{:.1} s", span), theme::small(), TEXT_DIM);
-    response.on_hover_text(format!(
-        "Las primeras reflexiones (rayas) y cómo cae la cola: graves (azul) {:.1} s, medios {:.1} s, agudos (amarillo) {:.1} s",
-        sketch.t60[0], sketch.t60[1], sketch.t60[2]
+    response.on_hover_text(fill(
+        tr("Las primeras reflexiones (rayas) y cómo cae la cola: graves (azul) {} s, medios {} s, agudos (amarillo) {} s"),
+        &[&format!("{:.1}", sketch.t60[0]), &format!("{:.1}", sketch.t60[1]), &format!("{:.1}", sketch.t60[2])],
     ));
 }
 
@@ -1085,7 +1090,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             device_frame(ui, kind.label(), 470.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 let mut waveform = base.waveform;
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("Oscilador").color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(tr("Oscilador")).color(TEXT_DIM).size(10.5));
                     for w in Waveform::ALL {
                         ui.selectable_value(&mut waveform, w, w.label());
                     }
@@ -1119,14 +1124,14 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 // Which machine it sounds like.
                 if let InstrumentKind::DrumMachine(params) = kind {
                     ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new("Máquina").color(TEXT_DIM).size(10.5));
+                        ui.label(egui::RichText::new(tr("Máquina")).color(TEXT_DIM).size(10.5));
                         for model in engine::model::DrumModel::ALL {
                             let hint = match model {
-                                engine::model::DrumModel::Tr808 => "Como la Roland TR-808: bombo largo y redondo, palma, cencerro (hip hop, trap, reggaetón)",
-                                engine::model::DrumModel::Tr909 => "Como la Roland TR-909: bombo con pegada, charles brillantes (house, techno)",
-                                engine::model::DrumModel::Classic => "Los sonidos primeros de Pulse",
+                                engine::model::DrumModel::Tr808 => tr("Como la Roland TR-808: bombo largo y redondo, palma, cencerro (hip hop, trap, reggaetón)"),
+                                engine::model::DrumModel::Tr909 => tr("Como la Roland TR-909: bombo con pegada, charles brillantes (house, techno)"),
+                                engine::model::DrumModel::Classic => tr("Los sonidos primeros de Pulse"),
                             };
-                            if ui.selectable_label(params.model == model, model.label()).on_hover_text(hint).clicked() && params.model != model {
+                            if ui.selectable_label(params.model == model, tr(model.label())).on_hover_text(hint).clicked() && params.model != model {
                                 actions.push(Action::Instrument(InstrumentKind::DrumMachine(engine::model::DrumParams { model, ..params })));
                             }
                         }
@@ -1134,15 +1139,15 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 }
                 egui::Grid::new("drum_machine").spacing([8.0, 2.0]).show(ui, |ui| {
                     for (voice, (pitch, _)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
-                        let name = crate::project::voice_name(voice);
+                        let name = tr(crate::project::voice_name(voice));
                         ui.vertical(|ui| {
                             // A sound on a track of its own (see `drum_split`): marked, and where.
                             let elsewhere = app.sound_track(t, voice);
                             let label = if elsewhere.is_some() { format!("{name} →") } else { name.to_string() };
                             let pad = egui::Button::new(egui::RichText::new(label).size(10.5)).min_size(vec2(136.0, 16.0));
                             let hint = match elsewhere {
-                                Some(track) => format!("{} · clic para escuchar · suena en «{track}», con sus efectos", crate::project::note_name(pitch)),
-                                None => format!("{} · clic para escuchar", crate::project::note_name(pitch)),
+                                Some(track) => fill(tr("{} · clic para escuchar · suena en «{}», con sus efectos"), &[&crate::project::note_name(pitch), &track]),
+                                None => fill(tr("{} · clic para escuchar"), &[&crate::project::note_name(pitch)]),
                             };
                             if ui.add(pad).on_hover_text(hint).clicked() {
                                 actions.push(Action::Preview(pitch));
@@ -1168,7 +1173,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             device_frame(ui, kind.label(), width, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 let mut square = base.square;
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("Oscilador").color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(tr("Oscilador")).color(TEXT_DIM).size(10.5));
                     ui.selectable_value(&mut square, false, "Saw");
                     ui.selectable_value(&mut square, true, "Square");
                 });
@@ -1176,7 +1181,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                     actions.push(Action::Instrument(InstrumentKind::Acid(engine::model::AcidParams { square, ..base })));
                 }
                 for (i, info) in kind.params().iter().enumerate() {
-                    knob(ui, actions, i, info.name, 30.0);
+                    knob(ui, actions, i, tr(info.name), 30.0);
                 }
             });
         }
@@ -1193,32 +1198,32 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         waveform(app, ui, t, 0, rect, app.display_value(target, Param::Instrument(2)));
                     }
                     ui.horizontal(|ui| {
-                        if ui.small_button("Cargar…").on_hover_text("Una muestra, o varias para repartirlas por el teclado según la nota de su nombre (Piano C3, Piano F#3…). También puedes arrastrarlas aquí").clicked() {
+                        if ui.small_button(tr("Cargar…")).on_hover_text(tr("Una muestra, o varias para repartirlas por el teclado según la nota de su nombre (Piano C3, Piano F#3…). También puedes arrastrarlas aquí")).clicked() {
                             actions.push(Action::LoadSamples(0));
                         }
-                        if app.project.tracks[t].sample(0).is_some() && ui.small_button("×").on_hover_text(if multi { "Quitar las muestras" } else { "Quitar la muestra" }).clicked() {
+                        if app.project.tracks[t].sample(0).is_some() && ui.small_button("×").on_hover_text(if multi { tr("Quitar las muestras") } else { tr("Quitar la muestra") }).clicked() {
                             actions.push(Action::ClearSampler);
                         }
                         if multi {
-                            if ui.small_button("−12").on_hover_text("Mover el mapa una octava abajo (si los nombres van una octava desplazados)").clicked() {
+                            if ui.small_button("−12").on_hover_text(tr("Mover el mapa una octava abajo (si los nombres van una octava desplazados)")).clicked() {
                                 actions.push(Action::ShiftZones(-12));
                             }
-                            if ui.small_button("+12").on_hover_text("Mover el mapa una octava arriba").clicked() {
+                            if ui.small_button("+12").on_hover_text(tr("Mover el mapa una octava arriba")).clicked() {
                                 actions.push(Action::ShiftZones(12));
                             }
                             if let Some(params) = zone_menu(app, ui, t, &base) {
                                 actions.push(Action::Instrument(InstrumentKind::Sampler(params)));
                             }
-                        } else if ui.small_button("►").on_hover_text("Escuchar en la nota raíz").clicked() {
+                        } else if ui.small_button("►").on_hover_text(tr("Escuchar en la nota raíz")).clicked() {
                             actions.push(Action::Preview(base.root.round() as u8));
                         }
                     });
                     let mut mode = (base.one_shot, base.looping);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        ui.selectable_value(&mut mode, (false, false), "Clásico").on_hover_text("Suena mientras se mantiene la nota");
-                        ui.selectable_value(&mut mode, (true, false), "One-shot").on_hover_text("Suena entera, sin importar la duración de la nota");
-                        ui.selectable_value(&mut mode, (false, true), "Loop").on_hover_text("Repite desde Start mientras se mantiene la nota");
+                        ui.selectable_value(&mut mode, (false, false), tr("Clásico")).on_hover_text(tr("Suena mientras se mantiene la nota"));
+                        ui.selectable_value(&mut mode, (true, false), "One-shot").on_hover_text(tr("Suena entera, sin importar la duración de la nota"));
+                        ui.selectable_value(&mut mode, (false, true), "Loop").on_hover_text(tr("Repite desde Start mientras se mantiene la nota"));
                     });
                     if mode != (base.one_shot, base.looping) {
                         let (one_shot, looping) = mode;
@@ -1227,9 +1232,9 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                     let mut voices = (base.mono, base.legato && base.mono);
                     ui.horizontal(|ui| {
                         ui.spacing_mut().item_spacing.x = 2.0;
-                        ui.selectable_value(&mut voices, (false, false), "Poly").on_hover_text("Varias notas a la vez");
-                        ui.selectable_value(&mut voices, (true, false), "Mono").on_hover_text("Una nota a la vez: cada nota corta la anterior (con Glide, desliza desde ella)");
-                        ui.selectable_value(&mut voices, (true, true), "Legato").on_hover_text("Una nota a la vez: la que se solapa con la anterior desliza a su tono sin volver a empezar la muestra (el slide del 808); tras un silencio empieza en su tono");
+                        ui.selectable_value(&mut voices, (false, false), "Poly").on_hover_text(tr("Varias notas a la vez"));
+                        ui.selectable_value(&mut voices, (true, false), "Mono").on_hover_text(tr("Una nota a la vez: cada nota corta la anterior (con Glide, desliza desde ella)"));
+                        ui.selectable_value(&mut voices, (true, true), "Legato").on_hover_text(tr("Una nota a la vez: la que se solapa con la anterior desliza a su tono sin volver a empezar la muestra (el slide del 808); tras un silencio empieza en su tono"));
                     });
                     if voices != (base.mono, base.legato && base.mono) {
                         let (mono, legato) = voices;
@@ -1242,7 +1247,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                             ui.spacing_mut().item_spacing.x = 0.0;
                             // With zones, each has its own root.
                             for &i in row.iter().filter(|&&i| i != 0 || base.zone_count == 0) {
-                                knob(ui, actions, i, kind.params()[i].name, 26.0);
+                                knob(ui, actions, i, tr(kind.params()[i].name), 26.0);
                             }
                         });
                     }
@@ -1255,11 +1260,11 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 preset_menu(app, ui, t, &mut head);
                 widgets::field_menu_button(ui, "Kits", |ui| {
                     ui.set_min_width(150.0);
-                    if ui.button("Kit básico").on_hover_text("Los sonidos de la Drum Machine en los pads").clicked() {
+                    if ui.button(tr("Kit básico")).on_hover_text(tr("Los sonidos de la Drum Machine en los pads")).clicked() {
                         head.push(Action::BasicKit);
                         ui.close();
                     }
-                    ui.label(egui::RichText::new("SONIDOS DE PULSE").color(TEXT_DIM).size(10.0));
+                    ui.label(egui::RichText::new(tr("SONIDOS DE PULSE")).color(TEXT_DIM).size(10.0));
                     for (i, kit) in crate::factory_sounds::kits().iter().enumerate() {
                         if ui.button(kit.name).on_hover_text(kit.about).clicked() {
                             head.push(Action::FactoryKit(i));
@@ -1267,7 +1272,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         }
                     }
                 });
-                if ui.small_button("Trocear archivo…").on_hover_text("Corta un loop en golpes, uno por pad, y crea el clip que lo toca").clicked() {
+                if ui.small_button(tr("Trocear archivo…")).on_hover_text(tr("Corta un loop en golpes, uno por pad, y crea el clip que lo toca")).clicked() {
                     head.push(Action::SliceFile);
                 }
             };
@@ -1278,18 +1283,18 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 ui.vertical(|ui| {
                     let track = &app.project.tracks[t];
                     let note = RACK_FIRST_NOTE + pad as u8;
-                    let name = track.sample_name(pad).unwrap_or_else(|| "Vacío".into());
+                    let name = track.sample_name(pad).unwrap_or_else(|| tr("Vacío").into());
                     ui.label(egui::RichText::new(format!("Pad {} · {}", pad + 1, crate::project::note_name(note))).color(TEXT_DIM).size(10.5));
                     ui.label(egui::RichText::new(name).strong());
                     ui.horizontal(|ui| {
-                        if ui.small_button("Cargar…").on_hover_text("Varios archivos llenan los pads siguientes").clicked() {
+                        if ui.small_button(tr("Cargar…")).on_hover_text(tr("Varios archivos llenan los pads siguientes")).clicked() {
                             body_actions.push(Action::LoadSamples(pad));
                         }
-                        if track.sample(pad).is_some() && ui.small_button("×").on_hover_text("Vaciar el pad").clicked() {
+                        if track.sample(pad).is_some() && ui.small_button("×").on_hover_text(tr("Vaciar el pad")).clicked() {
                             body_actions.push(Action::ClearSample(pad));
                         }
                         let mut choke = base.choke[pad];
-                        let label = |g: u8| if g == 0 { "Sin choke".to_string() } else { format!("Choke {g}") };
+                        let label = |g: u8| if g == 0 { tr("Sin choke").to_string() } else { format!("Choke {g}") };
                         egui::ComboBox::from_id_salt(("choke", t))
                             .selected_text(label(choke))
                             .width(80.0)
@@ -1299,7 +1304,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                                 }
                             })
                             .response
-                            .on_hover_text("Los pads del mismo grupo se cortan entre sí (como el hi-hat abierto y cerrado)");
+                            .on_hover_text(tr("Los pads del mismo grupo se cortan entre sí (como el hi-hat abierto y cerrado)"));
                         if choke != base.choke[pad] {
                             let mut params: RackParams = base;
                             params.choke[pad] = choke;
@@ -1315,7 +1320,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                     });
                     let chromatic = base.chromatic as usize == pad + 1;
                     let mut on = chromatic;
-                    ui.checkbox(&mut on, "Cromático").on_hover_text("Las notas fuera de los pads (de E2 hacia arriba y bajo C1) tocan este pad, cada una un semitono: C3 en su tono. Cada nota corta la anterior, como un 808");
+                    ui.checkbox(&mut on, tr("Cromático")).on_hover_text(tr("Las notas fuera de los pads (de E2 hacia arriba y bajo C1) tocan este pad, cada una un semitono: C3 en su tono. Cada nota corta la anterior, como un 808"));
                     if on != chromatic {
                         let mut params: RackParams = base;
                         params.chromatic = if on { pad as u8 + 1 } else { 0 };
@@ -1328,7 +1333,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         InstrumentKind::Modular(base) => {
             let header = |ui: &mut egui::Ui| {
                 preset_menu(app, ui, t, &mut head);
-                if ui.small_button("Editor ⤢").on_hover_text("Abre el editor: generadores, modificadores, carriles y moduladores").clicked() {
+                if ui.small_button("Editor ⤢").on_hover_text(tr("Abre el editor: generadores, modificadores, carriles y moduladores")).clicked() {
                     head.push(Action::OpenModularWindow);
                 }
             };
@@ -1340,7 +1345,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             let poly = matches!(kind, InstrumentKind::Polychrome(_));
             let header = |ui: &mut egui::Ui| {
                 preset_menu(app, ui, t, &mut head);
-                if ui.small_button("Editor ⤢").on_hover_text("Abre el editor completo").clicked() {
+                if ui.small_button("Editor ⤢").on_hover_text(tr("Abre el editor completo")).clicked() {
                     head.push(if poly { Action::OpenPolyWindow } else { Action::OpenWaveWindow });
                 }
             };
@@ -1351,7 +1356,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         InstrumentKind::Kick(base) => {
             let header = |ui: &mut egui::Ui| {
                 preset_menu(app, ui, t, &mut head);
-                if ui.small_button("Editor ⤢").on_hover_text("Abre el editor completo: capas, envolventes, EQ, compresión y espectro").clicked() {
+                if ui.small_button("Editor ⤢").on_hover_text(tr("Abre el editor completo: capas, envolventes, EQ, compresión y espectro")).clicked() {
                     head.push(Action::OpenKickWindow);
                 }
             };
@@ -1371,11 +1376,11 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                             }
                         });
                         let mut follow = base.key_follow;
-                        ui.checkbox(&mut follow, "Key").on_hover_text("La nota tocada afina el cuerpo (dos octavas por debajo) en lugar de Tune");
+                        ui.checkbox(&mut follow, "Key").on_hover_text(tr("La nota tocada afina el cuerpo (dos octavas por debajo) en lugar de Tune"));
                         if mode != base.drive_mode || follow != base.key_follow {
                             body_actions.push(Action::Instrument(InstrumentKind::Kick(KickParams { drive_mode: mode, key_follow: follow, ..base })));
                         }
-                        if ui.small_button("►").on_hover_text("Escuchar").clicked() {
+                        if ui.small_button("►").on_hover_text(tr("Escuchar")).clicked() {
                             body_actions.push(Action::Preview(60));
                         }
                     });
@@ -1386,7 +1391,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             for i in row {
-                                knob(ui, &mut body_actions, i, kind.params()[i].name, 26.0);
+                                knob(ui, &mut body_actions, i, tr(kind.params()[i].name), 26.0);
                             }
                         });
                     }
@@ -1400,16 +1405,16 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             device_frame(ui, kind.label(), width, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 ui.vertical(|ui| {
                     ui.spacing_mut().item_spacing.y = 2.0;
-                    ui.label(egui::RichText::new("Modelo").color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(tr("Modelo")).color(TEXT_DIM).size(10.5));
                     let mut model = base.model;
                     for m in KeysModel::ALL {
-                        ui.selectable_value(&mut model, m, m.label()).on_hover_text(m.hint());
+                        ui.selectable_value(&mut model, m, tr(m.label())).on_hover_text(tr(m.hint()));
                     }
                     if model != base.model {
                         // Each model starts from its own sound; the volume stays.
                         actions.push(Action::Instrument(InstrumentKind::Keys(KeysParams { gain: base.gain, ..KeysParams::model_default(model) })));
                     }
-                    if ui.small_button("►").on_hover_text("Escuchar").clicked() {
+                    if ui.small_button("►").on_hover_text(tr("Escuchar")).clicked() {
                         actions.push(Action::Preview(60));
                     }
                 });
@@ -1429,7 +1434,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 0.0;
                             for &i in *row {
-                                ui.scope(|ui| knob(ui, actions, i, kind.params()[i].name, 26.0)).response.on_hover_text(crate::keys_ui::hint(i, base.model));
+                                ui.scope(|ui| knob(ui, actions, i, tr(kind.params()[i].name), 26.0)).response.on_hover_text(crate::keys_ui::hint(i, base.model));
                             }
                         });
                     }
@@ -1437,16 +1442,16 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         ui.horizontal(|ui| {
                             ui.spacing_mut().item_spacing.x = 2.0;
                             let mut third = base.perc_third;
-                            ui.selectable_value(&mut third, false, "2ª").on_hover_text("La percusión suena una octava por encima");
-                            ui.selectable_value(&mut third, true, "3ª").on_hover_text("La percusión suena una octava y una quinta por encima");
+                            ui.selectable_value(&mut third, false, tr("2ª")).on_hover_text(tr("La percusión suena una octava por encima"));
+                            ui.selectable_value(&mut third, true, tr("3ª")).on_hover_text(tr("La percusión suena una octava y una quinta por encima"));
                             if third != base.perc_third {
                                 actions.push(Action::Instrument(InstrumentKind::Keys(KeysParams { perc_third: third, ..base })));
                             }
                             ui.add_space(8.0);
                             let fast = app.display_value(target, Param::Instrument(KEYS_LESLIE_FAST)) >= 0.5;
                             let mut want = fast;
-                            ui.selectable_value(&mut want, false, "Lento").on_hover_text("El altavoz giratorio despacio (coral)");
-                            ui.selectable_value(&mut want, true, "Rápido").on_hover_text("El altavoz giratorio deprisa (trémolo); tarda un momento en llegar");
+                            ui.selectable_value(&mut want, false, tr("Lento")).on_hover_text(tr("El altavoz giratorio despacio (coral)"));
+                            ui.selectable_value(&mut want, true, tr("Rápido")).on_hover_text(tr("El altavoz giratorio deprisa (trémolo); tarda un momento en llegar"));
                             if want != fast {
                                 actions.push(Action::Param(Param::Instrument(KEYS_LESLIE_FAST), if want { 1.0 } else { 0.0 }));
                             }
@@ -1459,7 +1464,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
             let width = kind.params().len() as f32 * 52.0 + 24.0;
             device_frame(ui, kind.label(), width, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
                 for (i, info) in kind.params().iter().enumerate() {
-                    knob(ui, actions, i, info.name, 30.0);
+                    knob(ui, actions, i, tr(info.name), 30.0);
                 }
             });
         }
@@ -1501,7 +1506,7 @@ fn sample_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, slot: usize, size: e
         painter.rect_stroke(rect, 2.0, Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
     }
     if app.project.tracks[t].sample(slot).is_none() {
-        painter.text(rect.center(), Align2::CENTER_CENTER, "Arrastra una muestra aquí", theme::small(), TEXT_DIM);
+        painter.text(rect.center(), Align2::CENTER_CENTER, tr("Arrastra una muestra aquí"), theme::small(), TEXT_DIM);
     }
     rect
 }
@@ -1531,13 +1536,13 @@ fn keymap(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams, r
         painter.line_segment([pos2(root, keys.top()), pos2(root, keys.bottom())], Stroke::new(2.0, ACCENT));
     }
     let count = params.zone_count;
-    painter.text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, format!("{count} zonas"), theme::small(), TEXT_DIM);
+    painter.text(rect.left_top() + vec2(4.0, 2.0), Align2::LEFT_TOP, fill(tr("{} zonas"), &[&count]), theme::small(), TEXT_DIM);
     let response = ui.interact(rect, ui.id().with(("keymap", t)), Sense::click());
     let pitch = response.hover_pos().map(|p| ((p.x - rect.left()) / key_w).clamp(0.0, 127.0) as u8);
     if let Some(pitch) = pitch {
         let track = &app.project.tracks[t];
         let names: Vec<String> = params.zones().iter().enumerate().filter(|(_, z)| (z.lo..=z.hi).contains(&pitch)).map(|(i, z)| format!("{} ({}–{} · vel {}–{})", track.sample_name(i).unwrap_or_default(), crate::project::note_name(z.lo), crate::project::note_name(z.hi), z.vel_lo, z.vel_hi)).collect();
-        let text = format!("{}: {}\nClic: escucharla", crate::project::note_name(pitch), if names.is_empty() { "nada".to_string() } else { names.join(", ") });
+        let text = fill(tr("{}: {}\nClic: escucharla"), &[&crate::project::note_name(pitch), &if names.is_empty() { tr("nada").to_string() } else { names.join(", ") }]);
         response.clone().on_hover_text(text);
     }
     if response.clicked() { pitch } else { None }
@@ -1547,7 +1552,7 @@ fn keymap(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams, r
 /// new settings if something changed.
 fn zone_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams) -> Option<SamplerParams> {
     let mut edited = *params;
-    widgets::field_menu_button(ui, "Zonas…", |ui| {
+    widgets::field_menu_button(ui, tr("Zonas…"), |ui| {
         let note = |ui: &mut egui::Ui, value: &mut u8| {
             ui.add(egui::DragValue::new(value).range(0..=127).speed(0.2).custom_formatter(|n, _| crate::project::note_name(n as u8)).custom_parser(|text| crate::multisample::note_in_name(text).map(|n| n as f64)));
         };
@@ -1556,14 +1561,14 @@ fn zone_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams
         };
         egui::ScrollArea::vertical().max_height(320.0).show(ui, |ui| {
             egui::Grid::new(("zones", t)).striped(true).show(ui, |ui| {
-                for header in ["Muestra", "Desde", "Hasta", "Raíz", "Vel. mín.", "Vel. máx."] {
+                for header in [tr("Muestra"), tr("Desde"), tr("Hasta"), tr("Raíz"), tr("Vel. mín."), tr("Vel. máx.")] {
                     ui.label(egui::RichText::new(header).color(TEXT_DIM).size(10.5));
                 }
                 ui.end_row();
                 let count = edited.zone_count as usize;
                 for (i, zone) in edited.zones[..count].iter_mut().enumerate() {
                     let name = app.project.tracks[t].sample_name(i).unwrap_or_default();
-                    ui.add_sized([170.0, 18.0], egui::Label::new(name).truncate()).on_hover_text("Las notas desde-hasta y las velocidades que la tocan; Raíz es la nota a la que suena tal cual");
+                    ui.add_sized([170.0, 18.0], egui::Label::new(name).truncate()).on_hover_text(tr("Las notas desde-hasta y las velocidades que la tocan; Raíz es la nota a la que suena tal cual"));
                     note(ui, &mut zone.lo);
                     note(ui, &mut zone.hi);
                     note(ui, &mut zone.root);
@@ -1634,7 +1639,7 @@ fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, action
             let short: String = name.chars().take(11).collect();
             painter.text(rect.left_bottom() + vec2(4.0, -3.0), Align2::LEFT_BOTTOM, short, theme::small(), theme::TEXT);
         }
-        let response = response.on_hover_text(track.sample_name(pad).unwrap_or_else(|| "Pad vacío: arrastra una muestra".into()));
+        let response = response.on_hover_text(track.sample_name(pad).unwrap_or_else(|| tr("Pad vacío: arrastra una muestra").into()));
         if response.clicked() {
             actions.push(Action::SelectPad(pad));
             actions.push(Action::Preview(note));
@@ -1649,7 +1654,7 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
         ui.set_min_width(190.0);
         let factory = crate::presets::factory(&kind);
         if !factory.is_empty() {
-            ui.label(egui::RichText::new("DE FÁBRICA").color(TEXT_DIM).size(10.0));
+            ui.label(egui::RichText::new(tr("DE FÁBRICA")).color(TEXT_DIM).size(10.0));
             let groups = crate::presets::grouped(factory);
             if groups.len() > 1 && groups.iter().map(|g| g.1.len()).sum::<usize>() > 12 {
                 // Many sounds: one submenu a category («Bajos · …»).
@@ -1678,10 +1683,10 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
             }
             ui.separator();
         }
-        ui.label(egui::RichText::new("MIS PRESETS").color(TEXT_DIM).size(10.0));
+        ui.label(egui::RichText::new(tr("MIS PRESETS")).color(TEXT_DIM).size(10.0));
         let mine = crate::presets::list(&crate::presets::user_root(), &kind);
         if mine.is_empty() {
-            ui.label(egui::RichText::new("Todavía no hay ninguno").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Todavía no hay ninguno")).color(TEXT_DIM).size(10.5));
         }
         for preset in mine {
             ui.horizontal(|ui| {
@@ -1689,7 +1694,7 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
                     actions.push(Action::ApplyPreset(preset.clone()));
                     ui.close();
                 }
-                if ui.small_button("×").on_hover_text("Borrar el preset").clicked() {
+                if ui.small_button("×").on_hover_text(tr("Borrar el preset")).clicked() {
                     actions.push(Action::DeletePreset(preset.clone()));
                 }
             });
@@ -1698,9 +1703,9 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
         let name_id = ui.id().with(("preset_name", t));
         let mut name: String = ui.ctx().memory(|m| m.data.get_temp(name_id)).unwrap_or_default();
         ui.horizontal(|ui| {
-            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Nombre").desired_width(110.0));
+            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr("Nombre")).desired_width(110.0));
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui.button("Guardar").clicked() || enter) && !name.trim().is_empty() {
+            if (ui.button(tr("Guardar")).clicked() || enter) && !name.trim().is_empty() {
                 actions.push(Action::SavePreset(name.trim().to_string()));
                 name.clear();
                 ui.close();
@@ -1723,13 +1728,13 @@ pub(crate) fn click_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &
         }
         let text = match track.sample_name(0) {
             Some(name) => format!("Click: {name}"),
-            None => "Click: sintetizado".into(),
+            None => tr("Click: sintetizado").into(),
         };
         painter.text(rect.left_center() + vec2(4.0, 0.0), Align2::LEFT_CENTER, text, theme::small(), theme::TEXT);
-        if response.on_hover_text("Clic o arrastra una muestra para usarla como click").clicked() {
+        if response.on_hover_text(tr("Clic o arrastra una muestra para usarla como click")).clicked() {
             actions.push(Action::LoadSamples(0));
         }
-        if track.sample(0).is_some() && ui.small_button("×").on_hover_text("Volver al click sintetizado").clicked() {
+        if track.sample(0).is_some() && ui.small_button("×").on_hover_text(tr("Volver al click sintetizado")).clicked() {
             actions.push(Action::ClearSample(0));
         }
     });

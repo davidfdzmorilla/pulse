@@ -3512,7 +3512,7 @@ Dónde elegir el idioma, la tarjeta de sonido, los dispositivos MIDI, las carpet
 
 **Idioma · Language** elige entre castellano e inglés. Por defecto, **Como el sistema**: castellano si tu sistema está en castellano, inglés si está en cualquier otro idioma. El cambio se ve al momento, también en la barra de menús.
 
-La traducción al inglés está en marcha: por ahora están traducidos los menús, los Ajustes y la ventana «¿Qué quieres hacer?», y lo demás sale en castellano. Esta guía sigue en castellano.
+La traducción al inglés está en marcha: por ahora están traducidos los menús, los Ajustes, la ventana «¿Qué quieres hacer?», la barra de transporte, el navegador, el Arrangement, la Session y los dispositivos (con los nombres de sus parámetros). Lo demás sale en castellano: el Asistente de mezcla, las lecciones, las plantillas, los nombres de los sonidos de fábrica y de los presets, la búsqueda y los favoritos del navegador, y algunos mensajes. Esta guía sigue en castellano.
 
 ### Audio
 

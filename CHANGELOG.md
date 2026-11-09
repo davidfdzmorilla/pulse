@@ -35,9 +35,10 @@ still in `0.x`, so any release may change things.
   request and packages an ad hoc-signed test build on `main`. Windows and
   macOS CI artifacts now include `SHA256SUMS.txt`.
 - Interface language: **Ajustes › Idioma · Language** chooses Spanish or
-  English, following the system's language by default. The menus, Settings
-  and the "What would you like to do?" window are translated so far; the
-  rest still shows in Spanish.
+  English, following the system's language by default. Translated so far:
+  the menus, Settings, the "What would you like to do?" window, the
+  transport bar, the browser, the Arrangement, the Session and the devices
+  (with their parameter names); the rest still shows in Spanish.
 
 ### Changed
 

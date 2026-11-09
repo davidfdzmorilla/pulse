@@ -346,6 +346,42 @@ mod tests {
         });
     }
 
+    /// The main window in English, with the example song: the transport, the
+    /// browser, the Arrangement, the Session and a track's devices. Pictures
+    /// with `PULSE_SHOTS=dir`.
+    #[test]
+    fn the_main_window_shows_in_english() {
+        let dir = shots();
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let mut app = PulseApp::headless(Project::empty());
+            app.templates = crate::templates::all();
+            app.start_fresh();
+            app.welcome.open = false;
+            app.view = View::Arrangement;
+            app.show_browser = true;
+            let mut s = Studio::new(app, dir.clone());
+            s.frames(6);
+            for text in ["Browser", "INSTRUMENTS", "AUDIO EFFECTS", "Keyboard", "Voice", "Map"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            assert!(!s.has("Navegador") && !s.has("INSTRUMENTOS"));
+            let shot = s.shot("arrangement-en");
+            std::fs::copy(&shot, dir.join("arrangement-en.png")).unwrap();
+            s.app.view = View::Session;
+            s.frames(6);
+            for text in ["Browser", "Devices", "Maximize", "Save Chain…"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            let shot = s.shot("session-en");
+            std::fs::copy(&shot, dir.join("session-en.png")).unwrap();
+            s.app.selected_target = engine::Target::Track(0);
+            s.app.detail = crate::app::Detail::Devices;
+            s.frames(6);
+            let shot = s.shot("dispositivos-en");
+            std::fs::copy(&shot, dir.join("dispositivos-en.png")).unwrap();
+        });
+    }
+
     /// Starting without a project: the example behind the window, unless it
     /// is turned off. Its box changes the setting. Pictures of the window
     /// (`PULSE_SHOTS=dir`), wide and narrow.

@@ -11,6 +11,7 @@
 use crate::app::{ClipRef, Placement, PulseApp};
 use crate::theme::{self, ACCENT, SOLO, TEXT, TEXT_DIM};
 use crate::widgets;
+use crate::i18n::{fill, tr};
 use engine::meter::Meter;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::{ArrangementClip, AutomationPoint, Clip, Param};
@@ -272,7 +273,7 @@ fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64) {
     let bar = meter.bar_at(meter.round_to_bar(beat).max(0.0)).0.max(0) as u32;
     let current = meter.sig_at_bar(bar as i64);
     let here = meter.changes().iter().any(|c| c.bar == bar && bar > 0);
-    crate::widgets::menu_button(ui, format!("Compás desde el {} ({})", bar + 1, current.label()), |ui| {
+    crate::widgets::menu_button(ui, fill(tr("Compás desde el {} ({})"), &[&(bar + 1), &current.label()]), |ui| {
         for sig in engine::meter::TimeSig::PRESETS {
             if ui.selectable_label(sig == current, sig.label()).clicked() {
                 app.set_meter(meter.with_change(bar, sig));
@@ -280,7 +281,7 @@ fn meter_menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64) {
             }
         }
     });
-    if here && ui.button(format!("Quitar el cambio de compás del {}", bar + 1)).clicked() {
+    if here && ui.button(fill(tr("Quitar el cambio de compás del {}"), &[&(bar + 1)])).clicked() {
         app.set_meter(meter.without_change(bar));
         ui.close();
     }
@@ -403,12 +404,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         ui.label(egui::RichText::new("Zoom").color(TEXT_DIM).size(10.5));
         ui.add(egui::Slider::new(&mut app.arrangement.pixels_per_beat, ZOOM_MIN..=ZOOM_MAX).logarithmic(true).show_value(false));
         let width = if app.arrangement.view.is_positive() { app.arrangement.view.width() } else { ui.available_width() - HEADER_W };
-        if ui.add_enabled(song_end > 0.0, egui::Button::new("Ver todo")).on_hover_text("Ajusta el zoom para ver la canción entera").clicked() {
+        if ui.add_enabled(song_end > 0.0, egui::Button::new(tr("Ver todo"))).on_hover_text(tr("Ajusta el zoom para ver la canción entera")).clicked() {
             app.arrangement.pixels_per_beat = fit_zoom(song_end, width);
             to_start = true;
         }
-        ui.checkbox(&mut app.arrangement.follow, "Seguir cursor");
-        let hint = crate::theme::keys("Doble clic: nuevo clip · clic en un clip: punto de corte (⌘E corta ahí) · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop");
+        ui.checkbox(&mut app.arrangement.follow, tr("Seguir cursor"));
+        let hint = crate::theme::keys(tr("Doble clic: nuevo clip · clic en un clip: punto de corte (⌘E corta ahí) · arrastra: mover (⌥ copia) · ⌘ clic: varios · arrastrar en vacío: recuadro · borde derecho: longitud · franja superior: loop"));
         // Cut with "…" in a narrow window; the tooltip has all of it.
         ui.add(egui::Label::new(egui::RichText::new(&hint).color(TEXT_DIM).size(10.5)).truncate()).on_hover_text(hint);
     });
@@ -649,7 +650,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                     // A track that follows the chord track says so on its clips.
                     if follows && matches!(placed.clip, Clip::Midi(_)) && clip_rect.width() > 70.0 {
                         let clipped = tracks_painter.with_clip_rect(clip_rect.intersect(tracks_painter.clip_rect()));
-                        clipped.text(clip_rect.right_bottom() + vec2(-4.0, -3.0), Align2::RIGHT_BOTTOM, "sigue los acordes", theme::small(), TEXT_DIM);
+                        clipped.text(clip_rect.right_bottom() + vec2(-4.0, -3.0), Align2::RIGHT_BOTTOM, tr("sigue los acordes"), theme::small(), TEXT_DIM);
                     }
                 }
             }
@@ -751,8 +752,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let strip = chord_strip(column);
         ui.painter().rect_filled(strip, 0.0, theme::shade(theme::SLOT, 0.7));
         let label = match app.project.key {
-            Some(key) => format!("Acordes · {}", key.name()),
-            None => "Acordes".to_string(),
+            Some(key) => fill(tr("Acordes · {}"), &[&key.name()]),
+            None => tr("Acordes").to_string(),
         };
         ui.painter().text(pos2(strip.left() + 8.0, strip.center().y), Align2::LEFT_CENTER, label, theme::small(), TEXT_DIM);
 
@@ -895,7 +896,7 @@ fn paint_clip(
         }
         Clip::Audio(audio) => {
             let Some(sample) = sample.filter(|s| s.frames() > 0) else {
-                clipped.text(body.center(), Align2::CENTER_CENTER, "Muestra no encontrada", theme::small(), TEXT);
+                clipped.text(body.center(), Align2::CENTER_CENTER, tr("Muestra no encontrada"), theme::small(), TEXT);
                 return;
             };
             paint_wave(&clipped, rect, body, audio, sample, ppb, tempo, theme::shade(color, 1.25));
@@ -1004,9 +1005,9 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     let (rect, response) = ui.allocate_exact_size(vec2(HEADER_W, row_height(lane_h, shown.is_some(), takes)), Sense::click_and_drag());
     let group = app.project.tracks[t].is_group();
     let hint = if group {
-        "Grupo: sus pistas suenan por su fader y sus efectos · clic en ▾: plegar o desplegar · arrastrar: mover con sus pistas"
+        tr("Grupo: sus pistas suenan por su fader y sus efectos · clic en ▾: plegar o desplegar · arrastrar: mover con sus pistas")
     } else {
-        "Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover · borde de abajo: altura"
+        tr("Clic: seleccionar · ⌘ clic: añadir o quitar · ⇧ clic: rango · arrastrar: mover · borde de abajo: altura")
     };
     let hint = match app.follows_hint(t) {
         Some(follows) => format!("{follows} · {hint}"),
@@ -1035,7 +1036,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     if grip.double_clicked() {
         app.project.tracks[t].height = crate::project::LaneHeight(None);
     }
-    grip.on_hover_text(crate::theme::keys("Arrastra: altura de la pista · doble clic: la de las demás · ⌥ + rueda: la de todas"));
+    grip.on_hover_text(crate::theme::keys(tr("Arrastra: altura de la pista · doble clic: la de las demás · ⌥ + rueda: la de todas")));
     let selected = app.is_track_selected(t);
     let track = &app.project.tracks[t];
     let color = theme::rgb(track.color);
@@ -1064,7 +1065,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     }
     let armed = app.project.tracks[t].armed;
     if !group && widgets::toggle(&mut child, armed, "●", theme::METER_RED, vec2(24.0, 16.0))
-        .on_hover_text("Armar para grabar")
+        .on_hover_text(tr("Armar para grabar"))
         .clicked()
     {
         app.toggle_arm(t);
@@ -1072,7 +1073,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     if app.project.tracks[t].is_audio() {
         // One button that steps through the modes (the header has no room for three).
         let mode = app.project.tracks[t].monitor;
-        let hint = format!("{}\nClic: cambiar (In · Auto · Off)", mode.hint());
+        let hint = fill(tr("{}\nClic: cambiar (In · Auto · Off)"), &[&mode.hint()]);
         if widgets::toggle(&mut child, mode != crate::project::Monitor::Off, mode.label(), theme::MONITOR, vec2(34.0, 16.0)).on_hover_text(hint).clicked() {
             let all = crate::project::Monitor::ALL;
             let next = all[(all.iter().position(|&m| m == mode).unwrap_or(0) + 1) % all.len()];
@@ -1081,7 +1082,7 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
     }
     let target = Target::Track(t);
     if widgets::toggle(&mut child, shown.is_some(), "A", theme::METER_RED, vec2(24.0, 16.0))
-        .on_hover_text("Mostrar la automatización de la pista")
+        .on_hover_text(tr("Mostrar la automatización de la pista"))
         .clicked()
     {
         if shown.is_some() {
@@ -1105,10 +1106,10 @@ fn track_header(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, shown: Option<P
             Clip::Midi(_) => false,
         });
         let response = ui.interact(lane, ui.id().with(("take", t, k)), Sense::hover());
-        response.on_hover_text("Arrastra en esta fila para que suene esta toma en ese trozo · clic: en todo el clip");
+        response.on_hover_text(tr("Arrastra en esta fila para que suene esta toma en ese trozo · clic: en todo el clip"));
         ui.painter().rect_filled(lane, 2.0, theme::shade(theme::SURFACE, 0.8));
         let mark = if playing { "✓ " } else { "" };
-        ui.painter().text(lane.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, format!("{mark}Toma {}", k + 1), theme::small(), if playing { TEXT } else { TEXT_DIM });
+        ui.painter().text(lane.left_center() + vec2(14.0, 0.0), Align2::LEFT_CENTER, format!("{mark}{}", fill(tr("Toma {}"), &[&(k + 1)])), theme::small(), if playing { TEXT } else { TEXT_DIM });
     }
 
     if let Some(param) = shown {
@@ -1146,7 +1147,7 @@ fn master_header(app: &mut PulseApp, ui: &mut egui::Ui, row: usize, shown: Optio
     let buttons = Rect::from_min_size(body.left_bottom() + vec2(10.0, -22.0), vec2(150.0, 18.0));
     let mut child = ui.new_child(egui::UiBuilder::new().max_rect(buttons).layout(egui::Layout::left_to_right(egui::Align::Center)));
     if widgets::toggle(&mut child, shown.is_some(), "A", theme::METER_RED, vec2(24.0, 16.0))
-        .on_hover_text("Mostrar la automatización del Master: tempo, volumen y efectos")
+        .on_hover_text(tr("Mostrar la automatización del Master: tempo, volumen y efectos"))
         .clicked()
     {
         app.arrangement.master_automation = match shown {
@@ -1161,8 +1162,8 @@ fn master_header(app: &mut PulseApp, ui: &mut egui::Ui, row: usize, shown: Optio
     crate::widgets::edit_menu(&response, |ui| {
         let range = app.bounce_range();
         let span = app.range_label(range);
-        let button = ui.add_enabled(app.bounce_job.is_none(), egui::Button::new(format!("Remuestrear el Master ({span})")));
-        if button.on_hover_text(format!("Toda la canción en {span} (los clips seleccionados o, si no hay, el loop), como al exportarla, en una pista de audio nueva silenciada")).clicked() {
+        let button = ui.add_enabled(app.bounce_job.is_none(), egui::Button::new(fill(tr("Remuestrear el Master ({})"), &[&span])));
+        if button.on_hover_text(fill(tr("Toda la canción en {} (los clips seleccionados o, si no hay, el loop), como al exportarla, en una pista de audio nueva silenciada"), &[&span])).clicked() {
             app.bounce(vec![crate::bounce::Source::Master], range, true);
             ui.close();
         }
@@ -1185,7 +1186,7 @@ fn automation_picker(app: &mut PulseApp, ui: &mut egui::Ui, rect: Rect, t: usize
             let long = candidates.len() > 60;
             let mut filter = app.arrangement.automation_filter.clone();
             if long {
-                ui.add(egui::TextEdit::singleline(&mut filter).hint_text("Buscar parámetro…").desired_width(HEADER_W - 40.0)).request_focus();
+                ui.add(egui::TextEdit::singleline(&mut filter).hint_text(tr("Buscar parámetro…")).desired_width(HEADER_W - 40.0)).request_focus();
             }
             let wanted = filter.to_lowercase();
             let mut shown = 0;
@@ -1197,7 +1198,7 @@ fn automation_picker(app: &mut PulseApp, ui: &mut egui::Ui, rect: Rect, t: usize
                     continue;
                 }
                 if long && shown >= 300 {
-                    ui.label(egui::RichText::new("…escribe para ver más").color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(tr("…escribe para ver más")).color(TEXT_DIM).size(10.5));
                     break;
                 }
                 shown += 1;
@@ -1211,7 +1212,7 @@ fn automation_picker(app: &mut PulseApp, ui: &mut egui::Ui, rect: Rect, t: usize
     if chosen != param {
         set_row_param(app, t, chosen);
     }
-    if app.automation_state(target, param).is_some() && child.small_button("Borrar automatización").clicked() {
+    if app.automation_state(target, param).is_some() && child.small_button(tr("Borrar automatización")).clicked() {
         app.automation_mut(target).retain(|l| l.param != param);
         app.overridden.remove(&(target, param));
         app.sync_automation(target);
@@ -1227,7 +1228,7 @@ fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usiz
     painter.rect_filled(rect, 0.0, theme::shade(theme::SLOT, 0.8));
     let target = row_target(app, t);
     let Some(info) = app.param_info(target, param) else {
-        painter.text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, "Parámetro no disponible", theme::small(), TEXT_DIM);
+        painter.text(rect.left_center() + vec2(8.0, 0.0), Align2::LEFT_CENTER, tr("Parámetro no disponible"), theme::small(), TEXT_DIM);
         return;
     };
     let overridden = app.overridden.contains(&(target, param));
@@ -1237,7 +1238,7 @@ fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usiz
         None => {
             let y = value_y(rect, info.normalize(app.param_value(target, param)));
             painter.line_segment([pos2(rect.left(), y), pos2(rect.right(), y)], Stroke::new(1.0, Color32::from_gray(100)));
-            painter.text(rect.left_top() + vec2(8.0, 4.0), Align2::LEFT_TOP, "Clic para añadir puntos", theme::small(), TEXT_DIM);
+            painter.text(rect.left_top() + vec2(8.0, 4.0), Align2::LEFT_TOP, tr("Clic para añadir puntos"), theme::small(), TEXT_DIM);
         }
         Some(lane) => {
             let y = |v: f32| value_y(rect, info.normalize(v));
@@ -1250,7 +1251,7 @@ fn paint_automation(app: &PulseApp, painter: &egui::Painter, rect: Rect, t: usiz
                 painter.text(
                     rect.left_top() + vec2(8.0, 4.0),
                     Align2::LEFT_TOP,
-                    "Anulada a mano · ► Arrangement la reactiva",
+                    tr("Anulada a mano · ► Arrangement la reactiva"),
                     theme::small(),
                     TEXT_DIM,
                 );
@@ -1293,12 +1294,12 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
         let several = app.is_track_selected(t) && app.track_selection().len() > 1;
         let count = app.track_selection().len();
         let track = &mut app.project.tracks[t];
-        ui.label("Nombre");
+        ui.label(tr("Nombre"));
         ui.text_edit_singleline(&mut track.name);
-        ui.label("Color");
+        ui.label(tr("Color"));
         crate::session::color_picker(ui, &mut track.color);
         ui.separator();
-        if ui.button(if automation_shown { "Ocultar automatización" } else { "Mostrar automatización" }).clicked() {
+        if ui.button(if automation_shown { tr("Ocultar automatización") } else { tr("Mostrar automatización") }).clicked() {
             if automation_shown {
                 app.arrangement.automation.remove(&t);
             } else {
@@ -1309,18 +1310,18 @@ fn track_menu(app: &mut PulseApp, response: &egui::Response, t: usize, automatio
         }
         if crate::comping::take_count(app, t) > 1 {
             let shown = app.arrangement.takes.contains(&t);
-            if ui.button(if shown { "Ocultar tomas" } else { "Mostrar tomas" }).on_hover_text("Una fila por toma de las grabaciones en bucle, para quedarte con lo mejor de cada una").clicked() {
+            if ui.button(if shown { tr("Ocultar tomas") } else { tr("Mostrar tomas") }).on_hover_text(tr("Una fila por toma de las grabaciones en bucle, para quedarte con lo mejor de cada una")).clicked() {
                 app.toggle_take_lanes(t);
                 ui.close();
             }
         }
-        let label = |verb: &str| if several { format!("{verb} {count} pistas") } else { format!("{verb} pista") };
+        let label = |one: &str, many: &str| if several { fill(many, &[&count]) } else { one.to_string() };
         // After the view is drawn: the rest of it still reads this track.
-        if ui.button(label("Duplicar")).clicked() {
+        if ui.button(label(tr("Duplicar pista"), tr("Duplicar {} pistas"))).clicked() {
             app.arrangement.track_action = Some((TrackAction::Duplicate, t, several));
             ui.close();
         }
-        if ui.button(label("Eliminar")).clicked() {
+        if ui.button(label(tr("Eliminar pista"), tr("Eliminar {} pistas"))).clicked() {
             app.arrangement.track_action = Some((TrackAction::Delete, t, several));
             ui.close();
         }
@@ -1367,14 +1368,14 @@ fn bounce_items(app: &mut PulseApp, ui: &mut egui::Ui, t: usize, several: bool) 
     let tracks = if several { app.track_selection() } else { vec![t] };
     let sources: Vec<crate::bounce::Source> = tracks.iter().map(|&t| crate::bounce::Source::Track(t)).collect();
     let busy = app.bounce_job.is_some();
-    let what = if several { format!("{} pistas", tracks.len()) } else if app.project.tracks[t].is_group() { "el grupo".to_string() } else { "la pista".to_string() };
-    let button = ui.add_enabled(!busy, egui::Button::new(format!("Convertir el tramo en audio ({span})")));
-    if button.on_hover_text(format!("Lo que suena {what} en {span} (los clips seleccionados o, si no hay, el loop) pasa a una pista de audio nueva debajo, con su volumen, paneo y envíos; sus clips de ahí se desactivan y la canción suena igual")).clicked() {
+    let what = if several { fill(tr("{} pistas"), &[&tracks.len()]) } else if app.project.tracks[t].is_group() { tr("el grupo").to_string() } else { tr("la pista").to_string() };
+    let button = ui.add_enabled(!busy, egui::Button::new(fill(tr("Convertir el tramo en audio ({})"), &[&span])));
+    if button.on_hover_text(fill(tr("Lo que suena {} en {} (los clips seleccionados o, si no hay, el loop) pasa a una pista de audio nueva debajo, con su volumen, paneo y envíos; sus clips de ahí se desactivan y la canción suena igual"), &[&what, &span])).clicked() {
         app.bounce(sources.clone(), range, false);
         ui.close();
     }
-    let button = ui.add_enabled(!busy, egui::Button::new(format!("Remuestrear en una pista nueva ({span})")));
-    if button.on_hover_text(format!("Lo que suena {what} en {span}, en una pista de audio nueva silenciada; la original sigue igual. Para trocearlo, darle la vuelta o procesarlo como audio")).clicked() {
+    let button = ui.add_enabled(!busy, egui::Button::new(fill(tr("Remuestrear en una pista nueva ({})"), &[&span])));
+    if button.on_hover_text(fill(tr("Lo que suena {} en {}, en una pista de audio nueva silenciada; la original sigue igual. Para trocearlo, darle la vuelta o procesarlo como audio"), &[&what, &span])).clicked() {
         app.bounce(sources, range, true);
         ui.close();
     }
@@ -1458,7 +1459,7 @@ fn handle_markers(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, 
 impl PulseApp {
     /// A new marker at `beat`, named after how many there are.
     pub fn add_marker(&mut self, beat: f64) {
-        let name = format!("Marcador {}", self.project.markers.len() + 1);
+        let name = fill(tr("Marcador {}"), &[&(self.project.markers.len() + 1)]);
         self.project.markers.push(crate::project::SongMarker { beat, name });
         self.project.markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
     }
@@ -1475,21 +1476,21 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
         match menu {
             Menu::Marker(i) => {
                 let Some(marker) = app.project.markers.get_mut(i) else { return ui.close() };
-                ui.label("Nombre");
+                ui.label(tr("Nombre"));
                 ui.text_edit_singleline(&mut marker.name);
                 let beat = marker.beat;
-                if ui.button("Ir aquí").clicked() {
+                if ui.button(tr("Ir aquí")).clicked() {
                     app.audio.send(Command::SetPosition(beat));
                     ui.close();
                 }
-                if ui.button("Eliminar marcador").clicked() {
+                if ui.button(tr("Eliminar marcador")).clicked() {
                     app.project.markers.remove(i);
                     ui.close();
                 }
                 crate::transitions::menu(app, ui, beat);
             }
             Menu::Markers(beat) => {
-                if ui.button("Añadir marcador aquí").clicked() {
+                if ui.button(tr("Añadir marcador aquí")).clicked() {
                     app.add_marker(beat);
                     ui.close();
                 }
@@ -1502,17 +1503,17 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                 let Some(t) = app.project.tracks.get(track) else { return ui.close() };
                 let audio = t.is_audio();
                 let bar = app.project.meter.prev_bar(beat);
-                if app.clip_clipboard.is_some() && ui.button("Pegar aquí").clicked() {
+                if app.clip_clipboard.is_some() && ui.button(tr("Pegar aquí")).clicked() {
                     app.paste_clips_at(track, beat);
                     ui.close();
                 }
                 if audio {
-                    if ui.button("Añadir muestra aquí…").clicked() {
+                    if ui.button(tr("Añadir muestra aquí…")).clicked() {
                         app.choose_samples(Placement::Arrangement { track, start: bar });
                         ui.close();
                     }
                 }
-                if !audio && ui.button("Nuevo clip MIDI aquí").clicked() {
+                if !audio && ui.button(tr("Nuevo clip MIDI aquí")).clicked() {
                     let clip = app.new_midi_clip(track, Some(bar));
                     app.project.tracks[track].arrangement.push(ArrangementClip { start: bar, length: clip.length, clip: Clip::Midi(clip) });
                     let index = app.project.tracks[track].arrangement.len() - 1;
@@ -1525,13 +1526,13 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
             Menu::Automation { track, param } => {
                 let target = row_target(app, track);
                 ui.label(egui::RichText::new(app.param_name(target, param)).color(TEXT_DIM).size(10.5));
-                if app.automation_state(target, param).is_some() && ui.button("Borrar automatización").clicked() {
+                if app.automation_state(target, param).is_some() && ui.button(tr("Borrar automatización")).clicked() {
                     app.automation_mut(target).retain(|l| l.param != param);
                     app.overridden.remove(&(target, param));
                     app.sync_automation(target);
                     ui.close();
                 }
-                if ui.button("Ocultar carril").clicked() {
+                if ui.button(tr("Ocultar carril")).clicked() {
                     if track < app.project.tracks.len() {
                         app.arrangement.automation.remove(&track);
                     } else {
@@ -1550,16 +1551,16 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     let Some(placed) = app.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) else { return ui.close() };
     let audio = matches!(placed.clip, Clip::Audio(_));
     let count = app.clip_selection().len();
-    let label = |verb: &str| if count > 1 { format!("{verb} {count} clips") } else { verb.to_string() };
+    let label = |one: &str, many: &str| if count > 1 { fill(many, &[&count]) } else { one.to_string() };
     // The takes of a loop recording: the one that plays is ticked.
     if let (Clip::Audio(a), 1) = (&placed.clip, count) {
         if a.takes.len() > 1 {
-            ui.label(egui::RichText::new("Tomas").color(theme::TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Tomas")).color(theme::TEXT_DIM).size(10.5));
             let playing = a.takes.iter().position(|t| *t == a.sample);
             let mut chosen = None;
             for k in 0..a.takes.len() {
                 let mark = if playing == Some(k) { "✓ " } else { "    " };
-                if ui.button(format!("{mark}Toma {}", k + 1)).clicked() {
+                if ui.button(format!("{mark}{}", fill(tr("Toma {}"), &[&(k + 1)]))).clicked() {
                     chosen = Some(k);
                 }
             }
@@ -1568,7 +1569,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
                 ui.close();
             }
             let shown = app.arrangement.takes.contains(&track);
-            if ui.button(if shown { "Ocultar las filas de tomas" } else { "Mostrar las tomas en filas…" }).on_hover_text("Arrastra en una fila para que suene esa toma en ese trozo").clicked() {
+            if ui.button(if shown { tr("Ocultar las filas de tomas") } else { tr("Mostrar las tomas en filas…") }).on_hover_text(tr("Arrastra en una fila para que suene esa toma en ese trozo")).clicked() {
                 app.toggle_take_lanes(track);
                 ui.close();
             }
@@ -1576,7 +1577,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         }
     }
     if count == 1 && !app.project.tracks[track].is_drums() {
-        crate::widgets::menu_button(ui, "Acompañar", |ui| {
+        crate::widgets::menu_button(ui, tr("Acompañar"), |ui| {
             for part in crate::accompany::Part::ALL {
                 if ui.button(part.label()).on_hover_text(part.hint()).clicked() {
                     app.accompany(clip, part);
@@ -1594,7 +1595,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     }
     if count == 1 && !app.project.tracks[track].is_drums() {
         song_menu(ui, app, |app, style| app.hum_to_song(clip, style));
-        if ui.button("Sus acordes a la pista de acordes").on_hover_text("Lee los acordes del clip (un audio, oyéndolo) y los escribe en la pista de acordes, en su sitio").clicked() {
+        if ui.button(tr("Sus acordes a la pista de acordes")).on_hover_text(tr("Lee los acordes del clip (un audio, oyéndolo) y los escribe en la pista de acordes, en su sitio")).clicked() {
             app.chords_from_clip(clip);
             ui.close();
         }
@@ -1603,7 +1604,7 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         }
     }
     if audio && count == 1 {
-        crate::widgets::menu_button(ui, "Convertir a MIDI", |ui| {
+        crate::widgets::menu_button(ui, tr("Convertir a MIDI"), |ui| {
             for mode in crate::to_midi::ToMidi::ALL {
                 if ui.add_enabled(app.to_midi.is_none(), egui::Button::new(mode.label())).on_hover_text(mode.hint()).clicked() {
                     app.convert_to_midi(clip, mode);
@@ -1612,15 +1613,15 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
             }
         });
     }
-    if !audio && count == 1 && ui.button("Exportar MIDI…").on_hover_text("Sus notas a un archivo .mid, para llevarlas a otro programa").clicked() {
+    if !audio && count == 1 && ui.button(tr("Exportar MIDI…")).on_hover_text(tr("Sus notas a un archivo .mid, para llevarlas a otro programa")).clicked() {
         app.export_clip_midi(clip);
         ui.close();
     }
-    if audio && count == 1 && ui.button("Sacar groove").on_hover_text(GROOVE_HINT).clicked() {
+    if audio && count == 1 && ui.button(tr("Sacar groove")).on_hover_text(tr("Guarda cómo caen y con qué fuerza los golpes de este loop (su swing, golpe a golpe) para que cualquier clip MIDI suene con ese pulso: elígelo en el Groove del clip")).clicked() {
         app.take_groove(clip);
         ui.close();
     }
-    if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems…")).on_hover_text("Batería, bajo, resto y voz, cada uno en una pista nueva").clicked() {
+    if audio && count == 1 && ui.add_enabled(app.stems.is_none(), egui::Button::new(tr("Separar en stems…"))).on_hover_text(tr("Batería, bajo, resto y voz, cada uno en una pista nueva")).clicked() {
         app.separate_stems(clip);
         ui.close();
     }
@@ -1631,68 +1632,68 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
         }
     }
     if audio && count == 1 {
-        if ui.button("Detectar tempo").on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
+        if ui.button(tr("Detectar tempo")).on_hover_text(tr("Busca el tempo y los compases del audio para que siga el del proyecto")).clicked() {
             app.detect_tempo(vec![clip], true);
             ui.close();
         }
-        if ui.button("Usar el tempo de este clip en el proyecto").clicked() {
+        if ui.button(tr("Usar el tempo de este clip en el proyecto")).clicked() {
             app.use_clip_tempo(clip);
             ui.close();
         }
     }
     let muted = app.clip(clip).is_some_and(|c| c.muted());
-    if ui.button(label(if muted { "Activar" } else { "Desactivar" }) + "   0").on_hover_text("Desactivado, el clip se queda donde está pero no suena").clicked() {
+    if ui.button(if muted { label(tr("Activar"), tr("Activar {} clips")) } else { label(tr("Desactivar"), tr("Desactivar {} clips")) } + "   0").on_hover_text(tr("Desactivado, el clip se queda donde está pero no suena")).clicked() {
         app.toggle_clips_muted();
         ui.close();
     }
     if !app.project.tracks[track].is_group() {
         let range = app.bounce_range();
         let tracks = app.selected_clip_tracks();
-        let hint = format!("Lo que suenan {} en {} pasa a una pista de audio nueva debajo de la suya; los clips se desactivan y la canción suena igual", if count > 1 { "estos clips" } else { "este clip" }, app.range_label(range));
-        if ui.add_enabled(app.bounce_job.is_none(), egui::Button::new(label("Convertir en audio en una pista nueva"))).on_hover_text(hint).clicked() {
+        let hint = fill(if count > 1 { tr("Lo que suenan estos clips en {} pasa a una pista de audio nueva debajo de la suya; los clips se desactivan y la canción suena igual") } else { tr("Lo que suena este clip en {} pasa a una pista de audio nueva debajo de la suya; el clip se desactiva y la canción suena igual") }, &[&app.range_label(range)]);
+        if ui.add_enabled(app.bounce_job.is_none(), egui::Button::new(label(tr("Convertir en audio en una pista nueva"), tr("Convertir {} clips en audio en una pista nueva")))).on_hover_text(hint).clicked() {
             app.bounce(tracks.into_iter().map(crate::bounce::Source::Track).collect(), range, false);
             ui.close();
         }
     }
     let all_audio = app.clip_selection().iter().all(|&c| matches!(app.clip(c), Some(Clip::Audio(_))));
-    if audio && all_audio && ui.button(label("Consolidar")).on_hover_text("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)").clicked() {
+    if audio && all_audio && ui.button(label(tr("Consolidar"), tr("Consolidar {} clips"))).on_hover_text(tr("Lo que suena el clip, a un archivo de audio nuevo solo con su trozo (con su warp, transposición y ganancia)")).clicked() {
         app.consolidate(app.clip_selection());
         ui.close();
     }
-    if audio && all_audio && ui.button(label("Invertir")).on_hover_text("Lo que suena el clip, del final al principio, en un archivo nuevo (otra vez lo devuelve)").clicked() {
+    if audio && all_audio && ui.button(label(tr("Invertir"), tr("Invertir {} clips"))).on_hover_text(tr("Lo que suena el clip, del final al principio, en un archivo nuevo (otra vez lo devuelve)")).clicked() {
         app.reverse_clips(app.clip_selection());
         ui.close();
     }
-    if count == 1 && ui.button(crate::theme::keys("Dividir aquí   ⌘E")).on_hover_text(crate::theme::keys("Corta el clip en dos donde hiciste clic derecho (⌘E corta donde hiciste clic en el clip)")).clicked() {
+    if count == 1 && ui.button(crate::theme::keys(tr("Dividir aquí   ⌘E"))).on_hover_text(crate::theme::keys(tr("Corta el clip en dos donde hiciste clic derecho (⌘E corta donde hiciste clic en el clip)"))).clicked() {
         app.split_clip_at(track, index, beat);
         ui.close();
     }
-    crate::widgets::menu_button(ui, label("Trocear"), |ui| {
-        for (name, every) in [("Cada tiempo", 1.0), ("Cada 2 tiempos", 2.0), ("Cada compás", 4.0), ("Cada 2 compases", 8.0), ("Cada 4 compases", 16.0)] {
-            if ui.button(name).on_hover_text("Corta los clips en trozos iguales, en las líneas de la rejilla").clicked() {
+    crate::widgets::menu_button(ui, label(tr("Trocear"), tr("Trocear {} clips")), |ui| {
+        for (name, every) in [(tr("Cada tiempo"), 1.0), (tr("Cada 2 tiempos"), 2.0), (tr("Cada compás"), 4.0), (tr("Cada 2 compases"), 8.0), (tr("Cada 4 compases"), 16.0)] {
+            if ui.button(name).on_hover_text(tr("Corta los clips en trozos iguales, en las líneas de la rejilla")).clicked() {
                 app.slice_selected(every);
                 ui.close();
             }
         }
     });
-    if count > 1 && ui.button(crate::theme::keys(&format!("Unir {count} clips   ⌘J"))).on_hover_text("Clips de una pista en uno solo, de principio a fin (los de audio, en un archivo nuevo)").clicked() {
+    if count > 1 && ui.button(crate::theme::keys(&fill(tr("Unir {} clips   ⌘J"), &[&count]))).on_hover_text(tr("Clips de una pista en uno solo, de principio a fin (los de audio, en un archivo nuevo)")).clicked() {
         app.join_selected();
         ui.close();
     }
-    if ui.button(label("Copiar")).clicked() {
+    if ui.button(label(tr("Copiar"), tr("Copiar {} clips"))).clicked() {
         app.copy_clips();
         ui.close();
     }
-    if ui.button(label("Cortar")).clicked() {
+    if ui.button(label(tr("Cortar"), tr("Cortar {} clips"))).clicked() {
         app.copy_clips();
         app.delete_selected_clip();
         ui.close();
     }
-    if ui.button(crate::theme::keys(&format!("{}   ⌘D", label("Duplicar")))).clicked() {
+    if ui.button(crate::theme::keys(&format!("{}   ⌘D", label(tr("Duplicar"), tr("Duplicar {} clips"))))).clicked() {
         app.duplicate_selected_clip();
         ui.close();
     }
-    if ui.button(format!("{}   ⌫", label("Eliminar"))).clicked() {
+    if ui.button(format!("{}   ⌫", label(tr("Eliminar"), tr("Eliminar {} clips")))).clicked() {
         app.delete_selected_clip();
         ui.close();
     }
@@ -1705,9 +1706,9 @@ fn clip_menu(app: &mut PulseApp, ui: &mut egui::Ui, clip: ClipRef, beat: f64) {
     ui.separator();
     let clip = &mut placed.clip;
     let before = clip.clone();
-    ui.label("Nombre");
+    ui.label(tr("Nombre"));
     ui.text_edit_singleline(clip.name_mut());
-    ui.label("Color");
+    ui.label(tr("Color"));
     crate::session::color_picker(ui, clip.color_mut());
     if *clip != before {
         app.sync_arrangement(track);
@@ -1804,7 +1805,7 @@ fn handle_pointer(
         }
     }
     if let Some((t, index, _)) = fade.filter(|_| app.arrangement.drag.is_none()) {
-        let hint = "Arrastrar: fundido (entrada o salida) · doble clic: quitarlo";
+        let hint = tr("Arrastrar: fundido (entrada o salida) · doble clic: quitarlo");
         response.clone().on_hover_text_at_pointer(hint);
         if response.double_clicked() {
             if let Some(Clip::Audio(audio)) = app.project.tracks[t].arrangement.get_mut(index).map(|p| &mut p.clip) {

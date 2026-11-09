@@ -8,6 +8,7 @@
 //! and a line saying how to open one: the Session or the Arrangement get the rest.
 
 use crate::app::{Detail, PulseApp};
+use crate::i18n::tr;
 use crate::theme::{self, TEXT_DIM};
 use crate::{devices, piano_roll, widgets};
 use eframe::egui::{self, vec2, RichText};
@@ -115,7 +116,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         if widgets::flat_button(ui, "Clip", app.detail == Detail::Clip, vec2(60.0, 20.0)).clicked() {
             app.detail = Detail::Clip;
         }
-        if widgets::flat_button(ui, "Dispositivos", app.detail == Detail::Devices, vec2(92.0, 20.0)).clicked() {
+        if widgets::flat_button(ui, tr("Dispositivos"), app.detail == Detail::Devices, vec2(92.0, 20.0)).clicked() {
             app.detail = Detail::Devices;
         }
         ui.add_space(10.0);
@@ -123,13 +124,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let (rect, _) = ui.allocate_exact_size(vec2(10.0, 10.0), egui::Sense::hover());
         ui.painter().rect_filled(rect, 2.0, app.target_color(target));
         ui.label(RichText::new(app.target_name(target)).strong());
-        ui.label(RichText::new("⇧Tab cambia de vista").color(TEXT_DIM).size(10.5));
+        ui.label(RichText::new(tr("⇧Tab cambia de vista")).color(TEXT_DIM).size(10.5));
         // A frozen track's instrument, effects and clips can't be edited.
         if let engine::Target::Track(t) = target {
             if app.is_frozen(t) {
                 ui.add_space(12.0);
-                ui.label(RichText::new("✱ Pista congelada: suena su audio renderizado").color(theme::FROZEN));
-                if ui.button("Descongelar").on_hover_text("Vuelve a sonar su instrumento y sus efectos, y se pueden editar").clicked() {
+                ui.label(RichText::new(tr("✱ Pista congelada: suena su audio renderizado")).color(theme::FROZEN));
+                if ui.button(tr("Descongelar")).on_hover_text(tr("Vuelve a sonar su instrumento y sus efectos, y se pueden editar")).clicked() {
                     app.unfreeze(t);
                 }
             }
@@ -140,9 +141,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let (text, hint) = if app.editor_max {
-                ("Restaurar", "Devuelve el panel a su altura (⇧⌘E o doble clic en su borde)")
+                (tr("Restaurar"), tr("Devuelve el panel a su altura (⇧⌘E o doble clic en su borde)"))
             } else {
-                ("Maximizar", "El editor ocupa casi toda la ventana; vuelve con lo mismo (⇧⌘E o doble clic en el borde del panel)")
+                (tr("Maximizar"), tr("El editor ocupa casi toda la ventana; vuelve con lo mismo (⇧⌘E o doble clic en el borde del panel)"))
             };
             maximize = widgets::flat_button(ui, text, app.editor_max, vec2(78.0, 20.0)).on_hover_text(theme::keys(hint)).clicked();
             // Here, not at the end of the chain: a long one would hide it.

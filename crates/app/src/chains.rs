@@ -8,6 +8,7 @@
 //! the rest of the chain still loads. Plugins go with their saved state.
 
 use crate::app::PulseApp;
+use crate::i18n::tr;
 use crate::project::PluginRef;
 use crate::theme::TEXT_DIM;
 use eframe::egui;
@@ -255,20 +256,20 @@ pub fn save_menu(app: &PulseApp, ui: &mut egui::Ui, target: Target) -> Option<(S
     let empty = app.devices(target).is_empty() && !midi;
     let mut chosen = None;
     ui.add_enabled_ui(!empty, |ui| {
-        let response = crate::widgets::field_menu_button(ui, "Guardar cadena…", |ui| {
+        let response = crate::widgets::field_menu_button(ui, tr("Guardar cadena…"), |ui| {
             ui.set_min_width(210.0);
-            ui.label(egui::RichText::new("GUARDAR LA CADENA").color(TEXT_DIM).size(10.0));
+            ui.label(egui::RichText::new(tr("GUARDAR LA CADENA")).color(TEXT_DIM).size(10.0));
             let name_id = egui::Id::new(("chain_name", target));
             let with_id = egui::Id::new(("chain_with_instrument", target));
             let mut name: String = ui.ctx().memory(|m| m.data.get_temp(name_id)).unwrap_or_default();
             let mut with: bool = ui.ctx().memory(|m| m.data.get_temp(with_id)).unwrap_or(false);
-            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text("Mi cadena de voz").desired_width(190.0));
+            let edit = ui.add(egui::TextEdit::singleline(&mut name).hint_text(tr("Mi cadena de voz")).desired_width(190.0));
             crate::widgets::name(&edit, egui::WidgetType::TextEdit, "Nombre de la cadena");
             if midi {
-                ui.checkbox(&mut with, "Con el instrumento").on_hover_text("Guarda también el instrumento de la pista y sus efectos MIDI");
+                ui.checkbox(&mut with, tr("Con el instrumento")).on_hover_text(tr("Guarda también el instrumento de la pista y sus efectos MIDI"));
             }
             let enter = edit.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            let save = ui.add_enabled(!name.trim().is_empty(), egui::Button::new("Guardar")).on_hover_text("Aparece en el navegador, en CADENAS");
+            let save = ui.add_enabled(!name.trim().is_empty(), egui::Button::new(tr("Guardar"))).on_hover_text(tr("Aparece en el navegador, en CADENAS"));
             if (save.clicked() || enter) && !name.trim().is_empty() {
                 chosen = Some((name.trim().to_string(), with && midi));
                 name.clear();

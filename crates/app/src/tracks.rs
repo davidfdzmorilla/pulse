@@ -4,6 +4,7 @@
 use crate::app::{ClipRef, PulseApp};
 use crate::midi_map::Control;
 use crate::theme;
+use crate::i18n::{fill, tr};
 use eframe::egui::{self, pos2, Rect, Stroke};
 use engine::{Command, Target, MAX_TRACKS};
 
@@ -75,7 +76,7 @@ impl PulseApp {
             return false;
         }
         if self.recording_anything() {
-            self.status = Some("No se pueden mover pistas mientras se graba".into());
+            self.status = Some(tr("No se pueden mover pistas mientras se graba").into());
             return false;
         }
         let rest: Vec<usize> = (0..n).filter(|t| !moving.contains(t)).collect();
@@ -116,8 +117,8 @@ impl PulseApp {
         crate::groups::normalize(tracks);
         self.sync_groups();
         self.status = Some(match moving.len() {
-            1 => "Pista movida".to_string(),
-            k => format!("{k} pistas movidas"),
+            1 => tr("Pista movida").to_string(),
+            k => fill(tr("{} pistas movidas"), &[&k]),
         });
         true
     }

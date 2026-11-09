@@ -1,8 +1,10 @@
-//! Preferences (⌘,): the audio devices, sample rate and buffer, the MIDI inputs,
-//! extra plugin folders, and whether to reopen the last project at start. Kept for
+//! Preferences (⌘,): the interface's language, the audio devices, sample rate and
+//! buffer, the MIDI inputs, extra plugin folders, and whether to reopen the last
+//! project at start. Kept for
 //! the next time Pulse starts (Application Support/Pulse/settings.json).
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
 use engine::{AudioSettings, DeviceInfo};
@@ -77,6 +79,9 @@ pub struct Settings {
     /// Plugins that don't load (one closed Pulse, see `plugin_guard`).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub blocked_plugins: Vec<crate::plugin_guard::PluginKey>,
+    /// The interface's language; none: the system's (see `i18n`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<crate::i18n::Language>,
     /// Settings this Pulse doesn't know (a newer one wrote them): kept, so going
     /// back to an older version and forward again loses none.
     #[serde(flatten)]
@@ -93,7 +98,7 @@ fn four() -> u32 {
 
 impl Default for Settings {
     fn default() -> Self {
-        Self { audio: AudioSettings::default(), reopen_last: true, welcome_at_start: true, lessons_done: Vec::new(), plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, detail_share: None, blocked_plugins: Vec::new(), unknown: Default::default() }
+        Self { audio: AudioSettings::default(), reopen_last: true, welcome_at_start: true, lessons_done: Vec::new(), plugin_folders: Vec::new(), check_updates: true, skipped_version: None, last_version: None, automation_arm: true, browser_folders: Vec::new(), library: None, count_in_bars: 0, record_offset_ms: 0.0, loops_follow_key: true, preview_in_tempo: true, new_from: None, export: Default::default(), beatbox: Default::default(), compensate: true, new_clip_bars: 4, detail_share: None, blocked_plugins: Vec::new(), language: None, unknown: Default::default() }
     }
 }
 
@@ -151,7 +156,15 @@ impl PulseApp {
         let compensate = settings.compensate != self.settings.compensate;
         let plugin_folders = settings.plugin_folders != self.settings.plugin_folders;
         let blocked = settings.blocked_plugins != self.settings.blocked_plugins;
+        let language = settings.language != self.settings.language;
         self.settings = settings;
+        if language && self.interactive {
+            crate::i18n::set(crate::i18n::resolve(self.settings.language));
+            // The menu bar's titles are set when it's built.
+            if self.menu_bar.is_some() {
+                self.menu_bar = crate::native_menu::MenuBar::install();
+            }
+        }
         if blocked {
             self.samples.blocked = self.settings.blocked_plugins.clone();
             // Unblocked: it may load now; blocked: it goes.
@@ -194,7 +207,7 @@ impl PulseApp {
         self.sync_all();
         self.rescan_midi();
         self.status = Some(match &self.audio.error {
-            Some(error) => format!("Audio: {error}"),
+            Some(error) => fill(tr("Audio: {}"), &[error]),
             None => self.audio_summary(),
         });
     }
@@ -202,7 +215,7 @@ impl PulseApp {
     /// The device, rate and buffer in use, e.g. "Altavoces · 48 kHz · 256 (5,3 ms)".
     pub fn audio_summary(&self) -> String {
         let (device, rate, buffer) = self.audio.info();
-        let buffer = buffer.map_or_else(|| "búfer por defecto".to_string(), |b| format!("{b} muestras ({:.1} ms)", b as f32 / rate * 1000.0));
+        let buffer = buffer.map_or_else(|| tr("búfer por defecto").to_string(), |b| fill(tr("{} muestras ({} ms)"), &[&b, &format!("{:.1}", b as f32 / rate * 1000.0)]));
         format!("{device} · {:.1} kHz · {buffer}", rate / 1000.0)
     }
 }
@@ -219,25 +232,43 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut search_plugins = false;
     let mut show_folder = false;
     let mut unblock = None;
-    egui::Window::new("Ajustes").open(&mut open).resizable(false).collapsible(false).default_width(460.0).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
+    egui::Window::new(tr("Ajustes")).id(egui::Id::new("ajustes")).open(&mut open).resizable(false).collapsible(false).default_width(460.0).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
+        // In both languages, so it can be found in whichever is showing.
+        ui.heading("Idioma · Language");
+        ui.horizontal(|ui| {
+            let system = crate::i18n::system();
+            let shown = |l: Option<crate::i18n::Language>| match l {
+                Some(l) => l.name().to_string(),
+                None => fill(tr("Como el sistema ({})"), &[&system.name()]),
+            };
+            egui::ComboBox::from_id_salt("language").selected_text(shown(next.language)).width(200.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut next.language, None, shown(None));
+                for language in crate::i18n::Language::ALL {
+                    ui.selectable_value(&mut next.language, Some(language), language.name());
+                }
+            });
+        });
+        ui.label(egui::RichText::new(tr("La traducción al inglés está en marcha: lo que aún no está traducido sale en castellano.")).color(TEXT_DIM).size(10.5));
+
+        ui.separator();
         ui.heading("Audio");
-        ui.label(egui::RichText::new(format!("En uso: {}", app.audio_summary())).color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(fill(tr("En uso: {}"), &[&app.audio_summary()])).color(TEXT_DIM).size(10.5));
         if let Some(error) = &app.audio.error {
             ui.colored_label(egui::Color32::LIGHT_RED, error);
         }
-        let default = "Predeterminado del sistema";
+        let default = tr("Predeterminado del sistema");
         egui::Grid::new("audio_settings").num_columns(2).spacing([12.0, 6.0]).show(ui, |ui| {
-            ui.label("Salida");
+            ui.label(tr("Salida"));
             device_combo(ui, "audio_output", &mut next.audio.output, &app.devices.outputs, default);
             ui.end_row();
-            ui.label("Entrada (grabar audio)");
+            ui.label(tr("Entrada (grabar audio)"));
             device_combo(ui, "audio_input", &mut next.audio.input, &app.devices.inputs, default);
             ui.end_row();
             let output = app.devices.outputs.iter().find(|d| Some(&d.name) == next.audio.output.as_ref()).or(app.devices.outputs.first());
             let rates = output.map(|d| d.rates.clone()).unwrap_or_default();
             let buffers = output.map(|d| d.buffers.clone()).unwrap_or_default();
-            ui.label("Frecuencia de muestreo");
-            let label = |r: Option<u32>| r.map_or("Predeterminada".to_string(), |r| format!("{:.1} kHz", r as f32 / 1000.0));
+            ui.label(tr("Frecuencia de muestreo"));
+            let label = |r: Option<u32>| r.map_or(tr("Predeterminada").to_string(), |r| format!("{:.1} kHz", r as f32 / 1000.0));
             egui::ComboBox::from_id_salt("audio_rate").selected_text(label(next.audio.sample_rate)).width(200.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut next.audio.sample_rate, None, label(None));
                 for r in &rates {
@@ -245,9 +276,9 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 }
             });
             ui.end_row();
-            ui.label("Tamaño del búfer");
+            ui.label(tr("Tamaño del búfer"));
             let rate = next.audio.sample_rate.unwrap_or(48_000) as f32;
-            let label = |b: Option<u32>| b.map_or("Predeterminado".to_string(), |b| format!("{b} muestras · {:.1} ms", b as f32 / rate * 1000.0));
+            let label = |b: Option<u32>| b.map_or(tr("Predeterminado").to_string(), |b| fill(tr("{} muestras · {} ms"), &[&b, &format!("{:.1}", b as f32 / rate * 1000.0)]));
             egui::ComboBox::from_id_salt("audio_buffer").selected_text(label(next.audio.buffer)).width(200.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut next.audio.buffer, None, label(None));
                 for b in &buffers {
@@ -256,34 +287,36 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             });
             ui.end_row();
         });
-        ui.label(egui::RichText::new("Un búfer menor responde antes al tocar; si oyes cortes, súbelo.").color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(tr("Un búfer menor responde antes al tocar; si oyes cortes, súbelo.")).color(TEXT_DIM).size(10.5));
         ui.add_space(4.0);
         let (input, output, effects) = app.latencies();
-        ui.label(format!(
-            "Latencia: entrada {} · salida {:.1} ms{}. Pulse la descuenta al grabar para que las tomas caigan a tempo.",
-            input.map_or("— (sin abrir)".to_string(), |s| format!("{:.1} ms", s * 1000.0)),
-            output * 1000.0,
-            if effects > 0.0 { format!(" · efectos {:.1} ms", effects * 1000.0) } else { String::new() }
+        ui.label(fill(
+            tr("Latencia: entrada {} · salida {} ms{}. Pulse la descuenta al grabar para que las tomas caigan a tempo."),
+            &[
+                &input.map_or(tr("— (sin abrir)").to_string(), |s| format!("{:.1} ms", s * 1000.0)),
+                &format!("{:.1}", output * 1000.0),
+                &if effects > 0.0 { fill(tr(" · efectos {} ms"), &[&format!("{:.1}", effects * 1000.0)]) } else { String::new() },
+            ],
         ));
-        ui.checkbox(&mut next.compensate, "Compensar la latencia de los efectos").on_hover_text(
+        ui.checkbox(&mut next.compensate, tr("Compensar la latencia de los efectos")).on_hover_text(tr(
             "Algunos efectos sacan el sonido un poco tarde: el Limiter (1,5 ms), el Saturator con sobremuestreo, el Tuner y muchos plugins. Con esto, las demás pistas los esperan y todo suena a la vez, y el metrónomo con ellas. Quítalo para tocar o cantar en directo a través de un efecto así sin que el resto se retrase",
-        );
+        ));
         ui.horizontal(|ui| {
-            ui.label("Ajuste fino de la grabación");
+            ui.label(tr("Ajuste fino de la grabación"));
             ui.add(egui::DragValue::new(&mut next.record_offset_ms).range(-200.0..=200.0).speed(0.2).fixed_decimals(1).suffix(" ms"))
-                .on_hover_text("Si las tomas de audio quedan tarde, súbelo (las adelanta); si quedan pronto, bájalo");
+                .on_hover_text(tr("Si las tomas de audio quedan tarde, súbelo (las adelanta); si quedan pronto, bájalo"));
         });
-        refresh = ui.small_button("Volver a buscar dispositivos").clicked();
+        refresh = ui.small_button(tr("Volver a buscar dispositivos")).clicked();
 
         ui.separator();
         ui.heading("MIDI");
         if app.midi.names.is_empty() {
-            ui.label(egui::RichText::new("Ningún dispositivo MIDI conectado").color(TEXT_DIM));
+            ui.label(egui::RichText::new(tr("Ningún dispositivo MIDI conectado")).color(TEXT_DIM));
         }
         for name in &app.midi.names {
             ui.label(format!("● {name}"));
         }
-        rescan_midi = ui.small_button("Volver a buscar dispositivos MIDI").clicked();
+        rescan_midi = ui.small_button(tr("Volver a buscar dispositivos MIDI")).clicked();
         crate::grid_io::settings(app, ui);
 
         ui.separator();
@@ -295,7 +328,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         for (i, folder) in next.plugin_folders.iter().enumerate() {
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(folder.display().to_string()).size(10.5));
-                if ui.small_button("×").on_hover_text("Quitar").clicked() {
+                if ui.small_button("×").on_hover_text(tr("Quitar")).clicked() {
                     remove = Some(i);
                 }
             });
@@ -304,19 +337,19 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             next.plugin_folders.remove(i);
         }
         ui.horizontal(|ui| {
-            if ui.button("Añadir carpeta…").clicked() {
+            if ui.button(tr("Añadir carpeta…")).clicked() {
                 if let Some(folder) = crate::files::pick_folder(rfd::FileDialog::new()) {
                     next.plugin_folders.push(folder);
                 }
             }
-            search_plugins = ui.button("Buscar plugins").clicked();
+            search_plugins = ui.button(tr("Buscar plugins")).clicked();
         });
         if !next.blocked_plugins.is_empty() {
-            ui.label(egui::RichText::new("Bloqueados: no se cargan (cerraron Pulse). Sus pistas quedan en silencio, con sus ajustes guardados").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Bloqueados: no se cargan (cerraron Pulse). Sus pistas quedan en silencio, con sus ajustes guardados")).color(TEXT_DIM).size(10.5));
             for (i, plugin) in next.blocked_plugins.iter().enumerate() {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(format!("⊘ {}", plugin.name)).size(10.5)).on_hover_text(&plugin.path);
-                    if ui.small_button("Desbloquear").on_hover_text("Vuelve a cargarse en los proyectos que lo usan. Si cierra Pulse otra vez, Pulse te lo volverá a preguntar").clicked() {
+                    if ui.small_button(tr("Desbloquear")).on_hover_text(tr("Vuelve a cargarse en los proyectos que lo usan. Si cierra Pulse otra vez, Pulse te lo volverá a preguntar")).clicked() {
                         unblock = Some(i);
                     }
                 });
@@ -324,32 +357,32 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         }
 
         ui.separator();
-        ui.heading("Carpeta de Pulse");
-        ui.label(egui::RichText::new("Proyectos (cada uno en su carpeta, con sus audios), exportaciones, presets, wavetables y muestras").color(TEXT_DIM).size(10.5));
+        ui.heading(tr("Carpeta de Pulse"));
+        ui.label(egui::RichText::new(tr("Proyectos (cada uno en su carpeta, con sus audios), exportaciones, presets, wavetables y muestras")).color(TEXT_DIM).size(10.5));
         // ~ for the home folder, and cut with "…" if long (the tooltip has it all).
         let root = crate::library::root().display().to_string();
         let shown = paths::shorten(&crate::library::root());
         ui.add(egui::Label::new(shown).truncate()).on_hover_text(root);
         ui.horizontal(|ui| {
-            if ui.button("Cambiar…").on_hover_text("Lo que ya hay no se mueve: los proyectos se abren desde donde estén").clicked() {
+            if ui.button(tr("Cambiar…")).on_hover_text(tr("Lo que ya hay no se mueve: los proyectos se abren desde donde estén")).clicked() {
                 if let Some(folder) = crate::files::pick_folder(rfd::FileDialog::new().set_directory(crate::library::root())) {
                     next.library = (folder != crate::library::default_root()).then_some(folder);
                 }
             }
-            if next.library.is_some() && ui.button("Volver a Música/Pulse").clicked() {
+            if next.library.is_some() && ui.button(tr("Volver a Música/Pulse")).clicked() {
                 next.library = None;
             }
-            if ui.button(if cfg!(windows) { "Mostrar en el Explorador" } else { "Mostrar en Finder" }).clicked() {
+            if ui.button(if cfg!(windows) { tr("Mostrar en el Explorador") } else { tr("Mostrar en Finder") }).clicked() {
                 show_folder = true;
             }
         });
 
         ui.separator();
-        ui.heading("Proyectos");
-        ui.checkbox(&mut next.reopen_last, "Abrir el último proyecto al arrancar");
-        ui.checkbox(&mut next.welcome_at_start, "Mostrar «¿Qué quieres hacer?» al arrancar sin proyecto").on_hover_text("La ventana con la canción de ejemplo, las plantillas, las lecciones y los recientes. Siempre está en Archivo › ¿Qué quieres hacer?…");
+        ui.heading(tr("Proyectos"));
+        ui.checkbox(&mut next.reopen_last, tr("Abrir el último proyecto al arrancar"));
+        ui.checkbox(&mut next.welcome_at_start, tr("Mostrar «¿Qué quieres hacer?» al arrancar sin proyecto")).on_hover_text(tr("La ventana con la canción de ejemplo, las plantillas, las lecciones y los recientes. Siempre está en Archivo › ¿Qué quieres hacer?…"));
         ui.horizontal(|ui| {
-            ui.label("Proyecto nuevo (⌘N)");
+            ui.label(tr("Proyecto nuevo (⌘N)"));
             let shown = next.new_from.clone().unwrap_or(crate::templates::EMPTY.into());
             egui::ComboBox::from_id_salt("new_from").selected_text(shown).show_ui(ui, |ui| {
                 ui.selectable_value(&mut next.new_from, None, crate::templates::EMPTY);
@@ -359,13 +392,13 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             });
         });
         ui.horizontal(|ui| {
-            ui.label("Clips MIDI nuevos");
+            ui.label(tr("Clips MIDI nuevos"));
             for bars in [1, 2, 4, 8] {
-                ui.selectable_value(&mut next.new_clip_bars, bars, if bars == 1 { "1 compás".to_string() } else { format!("{bars} compases") })
-                    .on_hover_text("Lo que mide un clip MIDI al crearlo con doble clic (en la Session o en el Arrangement) o con «Nuevo clip MIDI aquí». Luego cambias el de cada uno en «Loop», en el editor");
+                ui.selectable_value(&mut next.new_clip_bars, bars, if bars == 1 { tr("1 compás").to_string() } else { fill(tr("{} compases"), &[&bars]) })
+                    .on_hover_text(tr("Lo que mide un clip MIDI al crearlo con doble clic (en la Session o en el Arrangement) o con «Nuevo clip MIDI aquí». Luego cambias el de cada uno en «Loop», en el editor"));
             }
         });
-        ui.checkbox(&mut next.check_updates, "Buscar actualizaciones al arrancar");
+        ui.checkbox(&mut next.check_updates, tr("Buscar actualizaciones al arrancar"));
     });
     if let Some(i) = unblock {
         let plugin = next.blocked_plugins.remove(i);
@@ -388,7 +421,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         let folders = app.plugin_folders();
         app.plugin_library.search(&folders);
         app.plugin_library.remember();
-        app.status = Some(format!("{} plugins encontrados", app.plugin_library.found.len()));
+        app.status = Some(fill(tr("{} plugins encontrados"), &[&app.plugin_library.found.len()]));
     }
     if !open {
         app.show_settings = false;
@@ -413,7 +446,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, welcome_at_start: false, lessons_done: vec!["ritmo".into()], plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), blocked_plugins: vec![crate::plugin_guard::PluginKey { name: "Roto".into(), path: "/x/Roto.vst3".into(), cid: "AB".into() }], unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, welcome_at_start: false, lessons_done: vec!["ritmo".into()], plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), blocked_plugins: vec![crate::plugin_guard::PluginKey { name: "Roto".into(), path: "/x/Roto.vst3".into(), cid: "AB".into() }], language: Some(crate::i18n::Language::English), unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

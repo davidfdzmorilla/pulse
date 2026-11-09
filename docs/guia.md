@@ -3506,7 +3506,13 @@ Si el proyecto tiene versiones con nombre (ver [[Versiones del proyecto]]), marc
 
 ## Ajustes
 
-Dónde elegir la tarjeta de sonido, los dispositivos MIDI, las carpetas de plugins y cómo arranca Pulse. Se abren con {⌘,} (**Pulse › Ajustes…**) y los cambios se aplican al momento.
+Dónde elegir el idioma, la tarjeta de sonido, los dispositivos MIDI, las carpetas de plugins y cómo arranca Pulse. Se abren con {⌘,} (**Pulse › Ajustes…**) y los cambios se aplican al momento.
+
+### Idioma
+
+**Idioma · Language** elige entre castellano e inglés. Por defecto, **Como el sistema**: castellano si tu sistema está en castellano, inglés si está en cualquier otro idioma. El cambio se ve al momento, también en la barra de menús.
+
+La traducción al inglés está en marcha: por ahora están traducidos los menús, los Ajustes y la ventana «¿Qué quieres hacer?», y lo demás sale en castellano. Esta guía sigue en castellano.
 
 ### Audio
 

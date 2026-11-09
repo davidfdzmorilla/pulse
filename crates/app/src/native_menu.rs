@@ -3,8 +3,12 @@
 //! they are greyed out when they cannot act. Shortcuts without ⌘ (space, tab, M, F9)
 //! stay with the app so they never steal keys from text fields. Elsewhere there is
 //! no menu bar: the in-app menu has the same commands.
+//!
+//! Titles are written in Spanish and shown through `i18n::tr`; the bar is built
+//! again when the language changes.
 
 use crate::commands::Command;
+use crate::i18n::tr;
 
 /// One entry of a menu: a command with its title and shortcut, a separator, a submenu
 /// of recent projects or of templates, or a system action (hide, minimize…).
@@ -278,17 +282,17 @@ mod mac {
             let target = MenuTarget::alloc(mtm).set_ivars(TargetState { chosen: chosen.clone(), disabled: disabled.clone() });
             let target: Retained<MenuTarget> = unsafe { msg_send![super(target), init] };
             let bar = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str(""));
-            let recent_menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str("Abrir recientes"));
-            let templates_menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str("Nuevo desde plantilla"));
+            let recent_menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str(tr("Abrir recientes")));
+            let templates_menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str(tr("Nuevo desde plantilla")));
             let commands = super::commands();
             let mut tag = 0;
             let app = NSApplication::sharedApplication(mtm);
             for (title, items) in MENUS {
-                let menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str(title));
+                let menu = NSMenu::initWithTitle(mtm.alloc(), &NSString::from_str(tr(title)));
                 for entry in items {
                     match *entry {
                         Run(_, title, shortcut) => {
-                            let item = item(mtm, title, Some(sel!(menuAction:)), shortcut);
+                            let item = item(mtm, tr(title), Some(sel!(menuAction:)), shortcut);
                             item.setTag(tag);
                             unsafe { item.setTarget(Some(&target)) };
                             menu.addItem(&item);
@@ -296,22 +300,22 @@ mod mac {
                         }
                         Separator => menu.addItem(&NSMenuItem::separatorItem(mtm)),
                         Recent => {
-                            let item = item(mtm, "Abrir recientes", None, "");
+                            let item = item(mtm, tr("Abrir recientes"), None, "");
                             item.setSubmenu(Some(&recent_menu));
                             menu.addItem(&item);
                         }
                         Templates => {
-                            let item = item(mtm, "Nuevo desde plantilla", None, "");
+                            let item = item(mtm, tr("Nuevo desde plantilla"), None, "");
                             item.setSubmenu(Some(&templates_menu));
                             menu.addItem(&item);
                         }
                         System(title, action, shortcut) => {
-                            let item = item(mtm, title, Some(Sel::register(&std::ffi::CString::new(action).unwrap())), shortcut);
+                            let item = item(mtm, tr(title), Some(Sel::register(&std::ffi::CString::new(action).unwrap())), shortcut);
                             menu.addItem(&item);
                         }
                     }
                 }
-                let holder = item(mtm, title, None, "");
+                let holder = item(mtm, tr(title), None, "");
                 holder.setSubmenu(Some(&menu));
                 bar.addItem(&holder);
                 if title == "Ventana" {
@@ -385,11 +389,11 @@ mod mac {
                 menu.addItem(&item);
             }
             if recent.is_empty() {
-                let none = item(self.mtm, "Ningún proyecto reciente", None, "");
+                let none = item(self.mtm, tr("Ningún proyecto reciente"), None, "");
                 menu.addItem(&none);
             }
             menu.addItem(&NSMenuItem::separatorItem(self.mtm));
-            let clear = item(self.mtm, "Borrar la lista", Some(sel!(menuAction:)), "");
+            let clear = item(self.mtm, tr("Borrar la lista"), Some(sel!(menuAction:)), "");
             clear.setTag(CLEAR_RECENT_TAG);
             unsafe { clear.setTarget(Some(&self.target)) };
             menu.addItem(&clear);

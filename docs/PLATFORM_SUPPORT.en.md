@@ -36,7 +36,7 @@ Windows details: [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md).
 | Keyboard shortcuts | Verified (menu bar) | Implemented (Ctrl; tested with simulated input) | — |
 | Open `.pulse` by double-click | Verified | Partial: CI checks the installer association; double-click is untested | — |
 | Crash log | Verified | Implemented | Implemented |
-| Package | Verified (Pulse.app, `bundle.sh`) | CI on 2026-11-05 (zip + Inno Setup: installs and uninstalls; `SHA256SUMS.txt`) | Not supported |
+| Package | Verified (Pulse.app, `bundle.sh`) | CI on 2026-11-05 (zip + Inno Setup: installs and uninstalls; `SHA256SUMS.txt`; not attached to releases yet) | Not supported |
 | Updates | Verified (code signing) | Implemented (SHA-256 and Pulse Ed25519 signature; untested) | Not supported |
 | Code signing | Partial (local certificate) | Not supported (no certificate) | — |
 

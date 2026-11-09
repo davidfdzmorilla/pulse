@@ -35,12 +35,15 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
 ## Language
 
-The app's interface and its user guide (`docs/guia.md`) are in **Spanish
-(Spain)**. There is no localization layer yet, and building one is welcome
-(see [docs/FIRST_CONTRIBUTIONS.md](docs/FIRST_CONTRIBUTIONS.md)).
+The app's interface and its user guide (`docs/guia.md`) are written in
+**Spanish (Spain)**. The interface is being translated into English a part at
+a time (**Ajustes › Idioma · Language**; see
+[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)): the menus, Settings and the
+welcome window so far.
 
 - **Code comments:** English, short and useful.
-- **UI text and the guide:** Spanish, informal (*tú*) and direct.
+- **UI text and the guide:** Spanish, informal (*tú*) and direct. New UI text
+  goes inside `tr("…")`, with its English pair in `crates/app/src/en.rs`.
 - **Issues and PR descriptions:** English or Spanish, whichever you prefer.
 - **PR titles:** they become one line of the in-app release notes, which are
   in Spanish. If you don't write Spanish, write the title in English and the

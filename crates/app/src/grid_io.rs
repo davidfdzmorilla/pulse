@@ -244,13 +244,14 @@ impl Grids {
 /// The settings' part on them: the ones in use, where their window is (and
 /// arrows to move it), and the other MIDI ports to learn as a grid.
 pub fn settings(app: &mut PulseApp, ui: &mut eframe::egui::Ui) {
+    use crate::i18n::{fill, tr};
     use crate::theme::TEXT_DIM;
     use eframe::egui::RichText;
     ui.separator();
-    ui.heading("Controladores de rejilla");
+    ui.heading(tr("Controladores de rejilla"));
     let columns = app.grid_columns().len();
     if app.grids.controllers.is_empty() {
-        ui.label(RichText::new("Ninguno conectado. Pulse reconoce solo los Launchpad Mini MK3, X y Pro MK3, los APC mini (y mk2) y el APC40 mkII; otro con pads, apréndelo abajo.").color(TEXT_DIM).size(10.5));
+        ui.label(RichText::new(tr("Ninguno conectado. Pulse reconoce solo los Launchpad Mini MK3, X y Pro MK3, los APC mini (y mk2) y el APC40 mkII; otro con pads, apréndelo abajo.")).color(TEXT_DIM).size(10.5));
     }
     for controller in &mut app.grids.controllers {
         let surface = &mut controller.surface;
@@ -258,9 +259,9 @@ pub fn settings(app: &mut PulseApp, ui: &mut eframe::egui::Ui) {
         let w = surface.window;
         ui.horizontal(|ui| {
             ui.label(format!("● {}", surface.model.label()));
-            ui.label(RichText::new(format!("pistas {}–{} · escenas {}–{}", w.column + 1, w.column + cols, w.scene + 1, w.scene + rows)).color(TEXT_DIM).size(10.5));
+            ui.label(RichText::new(fill(tr("pistas {}–{} · escenas {}–{}"), &[&(w.column + 1), &(w.column + cols), &(w.scene + 1), &(w.scene + rows)])).color(TEXT_DIM).size(10.5));
             for (text, dir) in [("←", grid::Dir::Left), ("→", grid::Dir::Right), ("↑", grid::Dir::Up), ("↓", grid::Dir::Down)] {
-                if ui.small_button(text).on_hover_text("Mueve la zona que controla (el recuadro de la Session)").clicked() {
+                if ui.small_button(text).on_hover_text(tr("Mueve la zona que controla (el recuadro de la Session)")).clicked() {
                     surface.window = w.moved(dir, false, columns, (cols, rows));
                 }
             }
@@ -272,7 +273,7 @@ pub fn settings(app: &mut PulseApp, ui: &mut eframe::egui::Ui) {
     if let Some(learning) = app.grids.learning.clone() {
         ui.horizontal(|ui| {
             ui.label(RichText::new(format!("{}: {}", learning.port, learning.prompt())).strong());
-            if ui.small_button("Cancelar").clicked() {
+            if ui.small_button(tr("Cancelar")).clicked() {
                 app.grids.stop_learning();
             }
         });
@@ -284,10 +285,10 @@ pub fn settings(app: &mut PulseApp, ui: &mut eframe::egui::Ui) {
         ui.horizontal(|ui| {
             ui.label(RichText::new(&name).size(10.5));
             if learned {
-                if ui.small_button("Olvidar la rejilla").on_hover_text("Sus notas vuelven a tocar los instrumentos").clicked() {
+                if ui.small_button(tr("Olvidar la rejilla")).on_hover_text(tr("Sus notas vuelven a tocar los instrumentos")).clicked() {
                     app.grids.forget(&name);
                 }
-            } else if ui.small_button("Aprender como rejilla").on_hover_text("Pulsa tres pads: el de arriba a la izquierda, el de su derecha y el de debajo. Desde entonces sus pads lanzan clips y no tocan notas").clicked() {
+            } else if ui.small_button(tr("Aprender como rejilla")).on_hover_text(tr("Pulsa tres pads: el de arriba a la izquierda, el de su derecha y el de debajo. Desde entonces sus pads lanzan clips y no tocan notas")).clicked() {
                 app.grids.start_learning(&name);
             }
         });

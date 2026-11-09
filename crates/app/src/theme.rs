@@ -65,7 +65,7 @@ pub fn keys(text: &str) -> String {
 
 /// [`keys`] off macOS.
 pub fn named_keys(text: &str) -> String {
-    let text = text.replace("⌃⌘F", "F11").replace('⌫', "Supr");
+    let text = text.replace("⌃⌘F", "F11").replace('⌫', crate::i18n::tr("Supr"));
     let modifier = |c: char| matches!(c, '⌘' | '⇧' | '⌥' | '⌃');
     let mut out = String::new();
     let mut chars = text.chars().peekable();
@@ -79,7 +79,7 @@ pub fn named_keys(text: &str) -> String {
             held.push(next);
         }
         // Windows' order: Ctrl, Mayús, Alt.
-        let names: Vec<&str> = [("Ctrl", '⌘'), ("Ctrl", '⌃'), ("Mayús", '⇧'), ("Alt", '⌥')]
+        let names: Vec<&str> = [("Ctrl", '⌘'), ("Ctrl", '⌃'), (crate::i18n::tr("Mayús"), '⇧'), ("Alt", '⌥')]
             .into_iter()
             .filter(|(_, glyph)| held.contains(glyph))
             .map(|(name, _)| name)

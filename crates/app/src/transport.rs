@@ -543,10 +543,11 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let mut chosen = None;
     for (title, items) in MENUS.iter() {
-        crate::widgets::menu_button(ui, *title, |ui| {
+        crate::widgets::menu_button(ui, crate::i18n::tr(*title), |ui| {
             for item in *items {
                 match *item {
                     Item::Run(command, label, shortcut) => {
+                        let label = crate::i18n::tr(label);
                         let label = if shortcut.is_empty() { label.to_string() } else { crate::theme::keys(&format!("{label}   ⌘{}", shortcut.to_uppercase().replace('⌃', "⌃⌘"))) };
                         if ui.add_enabled(app.command_enabled(command), egui::Button::new(label)).clicked() {
                             chosen = Some(command);
@@ -557,7 +558,7 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
                         ui.separator();
                     }
                     Item::Recent => {
-                        crate::widgets::menu_button(ui, "Abrir recientes", |ui| {
+                        crate::widgets::menu_button(ui, crate::i18n::tr("Abrir recientes"), |ui| {
                             for (i, path) in app.recent.iter().enumerate() {
                                 let name = path.file_stem().map_or_else(|| path.display().to_string(), |s| s.to_string_lossy().into_owned());
                                 if ui.button(name).on_hover_text(path.display().to_string()).clicked() {
@@ -566,12 +567,12 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
                                 }
                             }
                             if app.recent.is_empty() {
-                                ui.label("Ningún proyecto reciente");
+                                ui.label(crate::i18n::tr("Ningún proyecto reciente"));
                             }
                         });
                     }
                     Item::Templates => {
-                        crate::widgets::menu_button(ui, "Nuevo desde plantilla", |ui| {
+                        crate::widgets::menu_button(ui, crate::i18n::tr("Nuevo desde plantilla"), |ui| {
                             for (i, template) in app.templates.iter().enumerate() {
                                 if i == crate::templates::BUILT_IN.len() {
                                     ui.separator();

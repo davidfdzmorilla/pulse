@@ -135,8 +135,12 @@ plugin processing, worker tasks):
   `theme.rs` and `widgets.rs`.
 - On macOS, a native menu bar (`native_menu.rs`) handles ⌘ shortcuts. On
   Windows they're read from the keyboard (Ctrl).
-- **No localization layer yet.** UI strings are Spanish literals in the egui
-  calls.
+- **Interface language** (`i18n.rs`, `en.rs`). UI text is written in Spanish
+  inside `tr("…")`, and `en.rs` pairs each one with its English version;
+  `fill(tr("{} compases"), &[&bars])` fills templates. A text without a pair
+  shows in Spanish. A test fails if a `tr` text has no English pair or a pair
+  is left over. Test scripts and screenshots always run in Spanish. Tests that
+  draw in English use `i18n::with(Language::English, || …)`.
 - **UI tests without a window.** `PulseApp::headless(project)` plus
   `egui::Context::run_ui` with simulated input, and `crate::offscreen::Canvas`
   to render PNGs. `crates/app/src/readme_shots.rs` makes the README

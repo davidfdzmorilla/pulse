@@ -48,6 +48,8 @@ mod follow_ui;
 mod grid;
 mod grid_io;
 mod groups;
+mod i18n;
+mod en;
 mod guide;
 #[cfg(test)]
 mod offscreen;
@@ -214,6 +216,10 @@ fn main() -> eframe::Result {
     #[cfg(target_os = "macos")]
     if args.get(1).map(String::as_str) == Some("--check-menus") {
         // As for a fresh project: nothing to undo, revert or paste, no clip selected.
+        // `--check-menus en`: in English.
+        if args.get(2).map(String::as_str) == Some("en") {
+            i18n::set(i18n::Language::English);
+        }
         use commands::Command as C;
         let fresh = |c: C| !matches!(c, C::Undo | C::Redo | C::Revert | C::Cut | C::Copy | C::Paste | C::Duplicate | C::Delete | C::SelectAll);
         for line in native_menu::describe(fresh) {

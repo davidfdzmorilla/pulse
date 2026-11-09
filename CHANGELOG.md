@@ -34,6 +34,10 @@ still in `0.x`, so any release may change things.
 - CI: macOS (Apple Silicon) workflow that builds and tests every pull
   request and packages an ad hoc-signed test build on `main`. Windows and
   macOS CI artifacts now include `SHA256SUMS.txt`.
+- Interface language: **Ajustes › Idioma · Language** chooses Spanish or
+  English, following the system's language by default. The menus, Settings
+  and the "What would you like to do?" window are translated so far; the
+  rest still shows in Spanish.
 
 ### Changed
 

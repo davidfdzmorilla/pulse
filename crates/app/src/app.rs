@@ -427,7 +427,7 @@ pub struct PulseApp {
     /// A text field has the keyboard: editing shortcuts are its.
     pub text_focus: bool,
     /// The macOS menu bar.
-    menu_bar: Option<crate::native_menu::MenuBar>,
+    pub(crate) menu_bar: Option<crate::native_menu::MenuBar>,
     pub status: Option<String>,
     title: String,
     /// Debug aid: with `PULSE_SCREENSHOT=<file.ppm>` the app saves a screenshot of
@@ -464,6 +464,8 @@ impl PulseApp {
         app.script = crate::script::Script::from_env();
         let screenshot = std::env::var_os("PULSE_SCREENSHOT").is_some() || app.script.is_some();
         app.interactive = !screenshot;
+        // Scripts and screenshots find widgets by their Spanish text.
+        crate::i18n::set(if screenshot { crate::i18n::Language::Spanish } else { crate::i18n::resolve(app.settings.language) });
         app.recent = crate::commands::load_recent();
         if app.interactive {
             app.recovery = Some(crate::recovery::Recovery::standard());

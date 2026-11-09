@@ -35,11 +35,24 @@ pub fn about(name: &str) -> &'static str {
     }
 }
 
+/// A template's name as menus show it: Pulse's own in the interface's
+/// language, the user's as they named them. `name` stays the key.
+pub fn shown(name: &str) -> &str {
+    BUILT_IN.iter().chain([&EMPTY]).find(|n| **n == name).map_or(name, |n| crate::i18n::tr(n))
+}
+
 /// A template: one of Pulse's, or a file of the user's.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Template {
     pub name: String,
     pub file: Option<PathBuf>,
+}
+
+impl Template {
+    /// Its name as menus show it (see [`shown`]).
+    pub fn shown(&self) -> &str {
+        if self.file.is_some() { &self.name } else { shown(&self.name) }
+    }
 }
 
 /// Every template, Pulse's first, then the user's by name.

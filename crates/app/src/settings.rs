@@ -383,11 +383,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.checkbox(&mut next.welcome_at_start, tr("Mostrar «¿Qué quieres hacer?» al arrancar sin proyecto")).on_hover_text(tr("La ventana con la canción de ejemplo, las plantillas, las lecciones y los recientes. Siempre está en Archivo › ¿Qué quieres hacer?…"));
         ui.horizontal(|ui| {
             ui.label(tr("Proyecto nuevo (⌘N)"));
-            let shown = next.new_from.clone().unwrap_or(crate::templates::EMPTY.into());
+            let shown = next.new_from.as_deref().map_or(tr(crate::templates::EMPTY), crate::templates::shown).to_string();
             egui::ComboBox::from_id_salt("new_from").selected_text(shown).show_ui(ui, |ui| {
-                ui.selectable_value(&mut next.new_from, None, crate::templates::EMPTY);
+                ui.selectable_value(&mut next.new_from, None, tr(crate::templates::EMPTY));
                 for template in &app.templates {
-                    ui.selectable_value(&mut next.new_from, Some(template.name.clone()), &template.name);
+                    ui.selectable_value(&mut next.new_from, Some(template.name.clone()), template.shown());
                 }
             });
         });

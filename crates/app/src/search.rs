@@ -9,6 +9,7 @@
 //! Favourites are kept here too, by the key each entry has.
 
 use crate::chains::Chain;
+use crate::i18n::{fill, tr, tr_name};
 use crate::presets::Preset;
 use engine::model::{Effect, InstrumentKind, MidiEffect};
 use engine::plugin::PluginInfo;
@@ -30,16 +31,17 @@ pub enum Group {
 }
 
 impl Group {
+    /// Its heading, in the interface's language.
     pub fn label(self) -> &'static str {
         match self {
-            Group::Instruments => "INSTRUMENTOS",
-            Group::MidiEffects => "EFECTOS MIDI",
-            Group::Effects => "EFECTOS DE AUDIO",
-            Group::Chains => "CADENAS",
-            Group::Presets => "PRESETS",
-            Group::Plugins => "PLUGINS",
-            Group::Sounds => "SONIDOS DE PULSE",
-            Group::Files => "ARCHIVOS",
+            Group::Instruments => tr("INSTRUMENTOS"),
+            Group::MidiEffects => tr("EFECTOS MIDI"),
+            Group::Effects => tr("EFECTOS DE AUDIO"),
+            Group::Chains => tr("CADENAS"),
+            Group::Presets => tr("PRESETS"),
+            Group::Plugins => tr("PLUGINS"),
+            Group::Sounds => tr("SONIDOS DE PULSE"),
+            Group::Files => tr("ARCHIVOS"),
         }
     }
 
@@ -85,6 +87,9 @@ pub struct Item {
     words: Vec<String>,
     extra: Vec<String>,
     folded: String,
+    /// Its Spanish name's words, when it shows in English: both find it.
+    alt: Vec<String>,
+    alt_folded: String,
 }
 
 impl Item {
@@ -94,7 +99,20 @@ impl Item {
         let folded = fold(&name);
         let words = folded.split(' ').filter(|w| !w.is_empty()).map(String::from).collect();
         let extra = fold(&format!("{detail} {also}")).split(' ').filter(|w| !w.is_empty()).map(String::from).collect();
-        Item { key, name, detail, group, what, words, extra, folded }
+        Item { key, name, detail, group, what, words, extra, folded, alt: Vec::new(), alt_folded: String::new() }
+    }
+
+    /// The same entry shown as `shown` (its name in the interface's
+    /// language), still found by its Spanish name.
+    fn shown_as(mut self, shown: &str) -> Item {
+        if shown == self.name {
+            return self;
+        }
+        let folded = fold(shown);
+        self.alt = std::mem::replace(&mut self.words, folded.split(' ').filter(|w| !w.is_empty()).map(String::from).collect());
+        self.alt_folded = std::mem::replace(&mut self.folded, folded);
+        self.name = shown.to_string();
+        self
     }
 
     /// How well it answers `query` (folded words), or None if it doesn't.
@@ -102,7 +120,7 @@ impl Item {
         let mut total = 0.0;
         for q in words {
             let mut best: f32 = 0.0;
-            for (i, w) in self.words.iter().enumerate() {
+            for (i, w) in self.words.iter().enumerate().chain(self.alt.iter().enumerate()) {
                 let s = if w == q {
                     3.0
                 } else if w.starts_with(q) {
@@ -126,9 +144,9 @@ impl Item {
             }
             total += best;
         }
-        if self.folded == query {
+        if self.folded == query || self.alt_folded == query {
             total += 3.0;
-        } else if words.len() > 1 && self.folded.starts_with(query) {
+        } else if words.len() > 1 && (self.folded.starts_with(query) || (!self.alt_folded.is_empty() && self.alt_folded.starts_with(query))) {
             // All the words, in order, from the start (one word: as its first word).
             total += 1.5;
         }
@@ -281,35 +299,37 @@ pub struct Sources<'a> {
 pub fn catalog(sources: &Sources) -> Vec<Item> {
     let mut items = Vec::new();
     for kind in InstrumentKind::catalog() {
-        items.push(Item::new(format!("instrumento:{}", kind.label()), kind.label(), "Instrumento", Group::Instruments, What::Instrument(kind), instrument_words(&kind)));
+        items.push(Item::new(format!("instrumento:{}", kind.label()), kind.label(), tr("Instrumento"), Group::Instruments, What::Instrument(kind), instrument_words(&kind)).shown_as(tr(kind.label())));
         for preset in crate::presets::factory(&kind) {
             let words = format!("{}{}", instrument_words(&kind), preset_words(&preset.name));
-            items.push(Item::new(format!("preset:{}:{}", kind.label(), preset.name), preset.name.clone(), kind.label(), Group::Presets, What::Preset(Box::new(preset)), &words));
+            let shown = tr_name(&preset.name).into_owned();
+            items.push(Item::new(format!("preset:{}:{}", kind.label(), preset.name), preset.name.clone(), tr(kind.label()), Group::Presets, What::Preset(Box::new(preset)), &words).shown_as(&shown));
         }
         for preset in crate::presets::list(sources.presets, &kind) {
             let words = format!("{}{}", instrument_words(&kind), preset_words(&preset.name));
-            items.push(Item::new(format!("preset-mio:{}:{}", kind.label(), preset.name), preset.name.clone(), format!("{} · mío", kind.label()), Group::Presets, What::Preset(Box::new(preset)), &words));
+            items.push(Item::new(format!("preset-mio:{}:{}", kind.label(), preset.name), preset.name.clone(), fill(tr("{} · mío"), &[&tr(kind.label())]), Group::Presets, What::Preset(Box::new(preset)), &words));
         }
     }
     for effect in MidiEffect::catalog() {
-        items.push(Item::new(format!("efecto-midi:{}", effect.label()), effect.label(), "Efecto MIDI", Group::MidiEffects, What::MidiEffect(effect), midi_words(&effect)));
+        items.push(Item::new(format!("efecto-midi:{}", effect.label()), effect.label(), tr("Efecto MIDI"), Group::MidiEffects, What::MidiEffect(effect), midi_words(&effect)).shown_as(tr(effect.label())));
     }
     for effect in Effect::catalog() {
-        items.push(Item::new(format!("efecto:{}", effect.label()), effect.label(), "Efecto", Group::Effects, What::Effect(effect), effect_words(&effect)));
+        items.push(Item::new(format!("efecto:{}", effect.label()), effect.label(), tr("Efecto"), Group::Effects, What::Effect(effect), effect_words(&effect)).shown_as(tr(effect.label())));
         for (name, preset) in effect.factory_presets() {
-            items.push(Item::new(format!("preset-efecto:{}:{name}", effect.label()), name, effect.label(), Group::Presets, What::EffectPreset(preset), effect_words(&effect)));
+            items.push(Item::new(format!("preset-efecto:{}:{name}", effect.label()), name, tr(effect.label()), Group::Presets, What::EffectPreset(preset), effect_words(&effect)).shown_as(&tr_name(name)));
         }
     }
     for chain in &sources.chains {
         let key = if chain.factory { format!("cadena:{}", chain.name) } else { format!("cadena-mia:{}", chain.name) };
-        let detail = if chain.factory { "Cadena" } else { "Cadena · mía" };
+        let detail = if chain.factory { tr("Cadena") } else { tr("Cadena · mía") };
         let words = format!("chain rack fx {}", chain.summary());
-        items.push(Item::new(key, chain.name.clone(), detail, Group::Chains, What::Chain(Arc::new(chain.clone())), &words));
+        let shown = if chain.factory { tr_name(&chain.name).into_owned() } else { chain.name.clone() };
+        items.push(Item::new(key, chain.name.clone(), detail, Group::Chains, What::Chain(Arc::new(chain.clone())), &words).shown_as(&shown));
     }
     for (i, kit) in crate::factory_sounds::kits().iter().enumerate() {
         // Made, it is a file under Kits/ (found with the files).
         if !sources.factory.join(crate::factory_sounds::KITS).join(format!("{}.json", kit.name)).exists() {
-            items.push(Item::new(format!("kit:{}", kit.name), format!("Kit {}", kit.name), crate::factory_sounds::NAME, Group::Sounds, What::Kit(i), "kit bateria drums"));
+            items.push(Item::new(format!("kit:{}", kit.name), format!("Kit {}", kit.name), tr(crate::factory_sounds::NAME), Group::Sounds, What::Kit(i), "kit bateria drums").shown_as(&fill(tr("Kit {}"), &[&kit.name])));
         }
     }
     for info in sources.plugins {
@@ -326,6 +346,11 @@ pub fn file_item(path: &Path, factory: &Path) -> Item {
     let folder = path.parent().and_then(|p| p.file_name()).map_or(String::new(), |n| n.to_string_lossy().into_owned());
     let group = if path.starts_with(factory) { Group::Sounds } else { Group::Files };
     let kit = if path.starts_with(factory.join(crate::factory_sounds::KITS)) { "kit bateria drums" } else { "" };
+    if group == Group::Sounds {
+        // Pulse's own sounds show in the interface's language.
+        let shown = tr_name(&name).into_owned();
+        return Item::new(format!("archivo:{}", path.display()), name, tr_name(&folder), group, What::File(path.to_path_buf()), kit).shown_as(&shown);
+    }
     Item::new(format!("archivo:{}", path.display()), name, folder, group, What::File(path.to_path_buf()), kit)
 }
 
@@ -424,6 +449,29 @@ mod tests {
 
     fn first(items: &[Item], query: &str) -> String {
         names(items, query).into_iter().next().unwrap_or_default()
+    }
+
+    /// In English, entries show their English names and are found by them,
+    /// and still by their Spanish ones; keys stay the same.
+    #[test]
+    fn in_english_the_search_shows_and_finds_english_names() {
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let items = index();
+            assert_eq!(first(&items, "bus compressor"), "Bus Compressor");
+            assert_eq!(first(&items, "compresor de bus"), "Bus Compressor", "the Spanish name still finds it");
+            let found = items.iter().find(|i| i.key == "preset:Acid Bass:Acid · Cuadrada hueca").unwrap();
+            assert_eq!(found.name, "Acid · Hollow square");
+            assert_eq!(found.group.label(), "PRESETS");
+            assert!(names(&items, "hollow square").contains(&"Acid · Hollow square".to_string()));
+            assert!(names(&items, "cuadrada hueca").contains(&"Acid · Hollow square".to_string()));
+            let factory = std::env::temp_dir().join("pulse-busqueda-fabrica");
+            let kick = file_item(&factory.join(crate::factory_recipes::KICKS).join("Bombo house.wav"), &factory);
+            assert_eq!((kick.name.as_str(), kick.detail.as_str()), ("House kick", "Kicks"));
+            assert_eq!(kick.key, format!("archivo:{}", factory.join("Bombos").join("Bombo house.wav").display()));
+            let mine = file_item(&std::env::temp_dir().join("Bombo house.wav"), &factory);
+            assert_eq!(mine.name, "Bombo house", "the user's own files keep their names");
+        });
+        assert_eq!(first(&index(), "comp bus"), "Compresor de bus");
     }
 
     #[test]

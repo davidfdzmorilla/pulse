@@ -8,6 +8,7 @@
 //! to its bass) without its notes being changed.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, music, tr};
 use crate::arrangement::Grid;
 use crate::project::{Project, Track};
 use crate::theme::{self, ACCENT, TEXT, TEXT_DIM};
@@ -54,17 +55,17 @@ impl Follow {
 
     pub fn label(self) -> &'static str {
         match self {
-            Follow::Chords => "Notas del acorde",
-            Follow::Scale => "Escala del acorde",
-            Follow::Bass => "Bajo: mover el riff",
+            Follow::Chords => tr("Notas del acorde"),
+            Follow::Scale => tr("Escala del acorde"),
+            Follow::Bass => tr("Bajo: mover el riff"),
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Follow::Chords => "Cada nota va a la nota del acorde más cercana, sin repetir notas en un mismo golpe: para pads y acordes",
-            Follow::Scale => "Cada nota va a la nota más cercana de la escala del acorde: para melodías y arpegios",
-            Follow::Bass => "El riff entero se mueve a la nota del bajo de cada acorde y conserva su forma (la nota que más suena hace de raíz): para bajos",
+            Follow::Chords => tr("Cada nota va a la nota del acorde más cercana, sin repetir notas en un mismo golpe: para pads y acordes"),
+            Follow::Scale => tr("Cada nota va a la nota más cercana de la escala del acorde: para melodías y arpegios"),
+            Follow::Bass => tr("El riff entero se mueve a la nota del bajo de cada acorde y conserva su forma (la nota que más suena hace de raíz): para bajos"),
         }
     }
 }
@@ -477,7 +478,7 @@ impl PulseApp {
 
     /// The names of `chords`, as the song's key spells them.
     fn chord_names(&self, chords: &[(f64, f64, Chord)]) -> String {
-        let names: Vec<String> = chords.iter().take(8).map(|c| c.2.name_in(self.project.key)).collect();
+        let names: Vec<String> = chords.iter().take(8).map(|c| music(&c.2.name_in(self.project.key))).collect();
         let more = if chords.len() > 8 { " …" } else { "" };
         format!("{}{more}", names.join(" "))
     }
@@ -486,18 +487,18 @@ impl PulseApp {
     /// clip's heard), onto the chord track in its place.
     pub fn chords_from_clip(&mut self, clip: ClipRef) {
         let ClipRef::Arrangement { track, index } = clip else {
-            self.status = Some("La pista de acordes se rellena desde clips del Arrangement".into());
+            self.status = Some(tr("La pista de acordes se rellena desde clips del Arrangement").into());
             return;
         };
         let name = self.clip(clip).map(|c| c.name().to_string()).unwrap_or_default();
         let Some((from, to, found)) = self.placed_chords(track, index) else { return };
         if found.is_empty() {
-            self.status = Some(format!("No se oyen acordes en «{name}»"));
+            self.status = Some(fill(tr("No se oyen acordes en «{}»"), &[&name]));
             return;
         }
         put_all(&mut self.project.chords, from, to, &found);
         self.sync_chord_followers();
-        self.status = Some(format!("{} acordes de «{name}» en la pista de acordes: {}", found.len(), self.chord_names(&found)));
+        self.status = Some(fill(tr("{} acordes de «{}» en la pista de acordes: {}"), &[&found.len(), &name, &self.chord_names(&found)]));
     }
 
     /// The chords every arrangement clip of track `t` plays, onto the chord track.
@@ -512,11 +513,11 @@ impl PulseApp {
             }
         }
         if all.is_empty() {
-            self.status = Some(format!("No se oyen acordes en «{name}»"));
+            self.status = Some(fill(tr("No se oyen acordes en «{}»"), &[&name]));
             return;
         }
         self.sync_chord_followers();
-        self.status = Some(format!("{} acordes de «{name}» en la pista de acordes: {}", all.len(), self.chord_names(&all)));
+        self.status = Some(fill(tr("{} acordes de «{}» en la pista de acordes: {}"), &[&all.len(), &name, &self.chord_names(&all)]));
     }
 
     /// The chords the song's MIDI clips play together, in place of the chord
@@ -525,13 +526,13 @@ impl PulseApp {
         let to = self.project.tracks.iter().map(|t| t.arrangement_end()).fold(0.0, f64::max);
         let found = song_chords(&self.project, 0.0, to);
         if found.is_empty() {
-            self.status = Some("Los clips MIDI de la canción no tocan acordes".into());
+            self.status = Some(tr("Los clips MIDI de la canción no tocan acordes").into());
             return 0;
         }
         self.project.chords.clear();
         put_all(&mut self.project.chords, 0.0, to, &found);
         self.sync_chord_followers();
-        self.status = Some(format!("{} acordes de la canción en la pista de acordes: {}", found.len(), self.chord_names(&found)));
+        self.status = Some(fill(tr("{} acordes de la canción en la pista de acordes: {}"), &[&found.len(), &self.chord_names(&found)]));
         found.len()
     }
 
@@ -565,7 +566,7 @@ impl PulseApp {
         put(&mut self.project.chords, start, length, chord);
         self.chord_lane.selected = index_at(&self.project.chords, start);
         self.sync_chord_followers();
-        self.status = Some(format!("{} en la pista de acordes: clic derecho para cambiarlo", chord.name_in(self.project.key)));
+        self.status = Some(fill(tr("{} en la pista de acordes: clic derecho para cambiarlo"), &[&music(&chord.name_in(self.project.key))]));
     }
 
     /// Writes `chords` from the menu's place on, each `length` beats (a
@@ -604,7 +605,7 @@ impl PulseApp {
     pub fn apply_chord_follow(&mut self, t: usize, mode: Follow, only: Option<usize>) {
         let Some(track) = self.project.tracks.get(t) else { return };
         if self.project.chords.is_empty() {
-            self.status = Some("La pista de acordes está vacía".into());
+            self.status = Some(tr("La pista de acordes está vacía").into());
             return;
         }
         let mut arrangement = Vec::new();
@@ -638,7 +639,7 @@ impl PulseApp {
         }
         self.set_clip_selection(Vec::new());
         self.sync_arrangement(t);
-        self.status = Some(format!("{changed} clip(s) de «{name}» ajustados a la pista de acordes ({})", mode.label().to_lowercase()));
+        self.status = Some(fill(tr("{} clip(s) de «{}» ajustados a la pista de acordes ({})"), &[&changed, &name, &mode.label().to_lowercase()]));
     }
 
     /// Has track `t` follow the chord track in `mode` (None: no longer).
@@ -648,9 +649,9 @@ impl PulseApp {
         let name = track.name.clone();
         self.sync_arrangement(t);
         self.status = Some(match mode {
-            Some(m) if self.project.chords.is_empty() => format!("«{name}» seguirá la pista de acordes ({}) cuando tenga acordes", m.label().to_lowercase()),
-            Some(m) => format!("«{name}» sigue la pista de acordes ({}): sus notas no cambian, cambia lo que suena", m.label().to_lowercase()),
-            None => format!("«{name}» ya no sigue la pista de acordes"),
+            Some(m) if self.project.chords.is_empty() => fill(tr("«{}» seguirá la pista de acordes ({}) cuando tenga acordes"), &[&name, &m.label().to_lowercase()]),
+            Some(m) => fill(tr("«{}» sigue la pista de acordes ({}): sus notas no cambian, cambia lo que suena"), &[&name, &m.label().to_lowercase()]),
+            None => fill(tr("«{}» ya no sigue la pista de acordes"), &[&name]),
         });
     }
 }
@@ -706,7 +707,7 @@ pub fn paint(app: &PulseApp, painter: &egui::Painter, strip: Rect, x_at: &dyn Fn
         if app.chord_lane.selected == Some(i) {
             crate::widgets::outline(painter, rect, base);
         }
-        let name = c.chord.name_in(key);
+        let name = music(&c.chord.name_in(key));
         let label = match key.and_then(|k| c.chord.numeral(k)) {
             Some(n) if rect.width() > 70.0 => format!("{name} · {n}"),
             _ => name,
@@ -715,7 +716,7 @@ pub fn paint(app: &PulseApp, painter: &egui::Painter, strip: Rect, x_at: &dyn Fn
         clipped.text(pos2(rect.left().max(view.left()) + 4.0, rect.center().y), Align2::LEFT_CENTER, label, theme::small(), TEXT);
     }
     if app.project.chords.is_empty() {
-        let hint = "Pista de acordes: doble clic escribe uno · clic derecho: grados, progresiones o sacarlos de un audio";
+        let hint = tr("Pista de acordes: doble clic escribe uno · clic derecho: grados, progresiones o sacarlos de un audio");
         painter.text(pos2(view.left().max(strip.left()) + 6.0, strip.center().y), Align2::LEFT_CENTER, hint, theme::small(), TEXT_DIM);
     }
 }
@@ -804,27 +805,27 @@ pub(crate) fn menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64, index: Opti
     let mut chosen: Option<Chord> = None;
     match over {
         Some(c) => {
-            ui.label(RichText::new(format!("Acorde {}", c.chord.name_in(key))).strong());
+            ui.label(RichText::new(fill(tr("Acorde {}"), &[&music(&c.chord.name_in(key))])).strong());
         }
         None => {
-            ui.label(RichText::new("Pista de acordes").strong());
+            ui.label(RichText::new(tr("Pista de acordes")).strong());
         }
     }
     match key {
         None => {
-            ui.label(RichText::new("Elige una Escala en la barra de transporte (o detéctala) para ver sus acordes por grados. Puedes escribir el nombre de cualquier acorde abajo.").color(TEXT_DIM).size(10.5));
+            ui.label(RichText::new(tr("Elige una Escala en la barra de transporte (o detéctala) para ver sus acordes por grados. Puedes escribir el nombre de cualquier acorde abajo.")).color(TEXT_DIM).size(10.5));
         }
         Some(key) => {
             let chords = chord::diatonic(key, app.chord_lane.sevenths);
             let at = app.chord_lane.insert;
             let previous = app.project.chords.iter().rev().find(|c| c.start < at - EPS).map(|c| c.chord);
             let suggested: &[usize] = previous.and_then(|p| chords.iter().position(|d| d.root == p.root)).map_or(&[], |d| chord::next_degrees(key, d));
-            let hint = if over.is_some() { "Clic en uno para cambiarlo" } else { "Se escriben uno detrás de otro desde donde hiciste clic" };
-            ui.label(RichText::new(format!("{} · {hint}", key.name())).color(TEXT_DIM).size(10.5));
+            let hint = if over.is_some() { tr("Clic en uno para cambiarlo") } else { tr("Se escriben uno detrás de otro desde donde hiciste clic") };
+            ui.label(RichText::new(format!("{} · {hint}", music(&key.name()))).color(TEXT_DIM).size(10.5));
             egui::Grid::new("song_chords").spacing(egui::vec2(3.0, 3.0)).show(ui, |ui| {
                 for (d, c) in chords.iter().enumerate() {
                     let numeral = c.numeral(key).unwrap_or_default();
-                    let mut text = RichText::new(format!("{numeral}\n{}", c.name_in(Some(key))));
+                    let mut text = RichText::new(format!("{numeral}\n{}", music(&c.name_in(Some(key)))));
                     if suggested.contains(&d) && over.is_none() {
                         text = text.color(ACCENT);
                     }
@@ -836,27 +837,27 @@ pub(crate) fn menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64, index: Opti
             });
             if key.minor {
                 let five = chord::on_degree(key, 4, app.chord_lane.sevenths, true);
-                if ui.button(format!("V {} (menor armónica)", five.name_in(Some(key)))).on_hover_text("La dominante mayor, que lleva con más fuerza a la tónica").clicked() {
+                if ui.button(fill(tr("V {} (menor armónica)"), &[&music(&five.name_in(Some(key)))])).on_hover_text(tr("La dominante mayor, que lleva con más fuerza a la tónica")).clicked() {
                     chosen = Some(five);
                 }
             }
         }
     }
     ui.horizontal(|ui| {
-        ui.label("Nombre");
-        let field = ui.add(egui::TextEdit::singleline(&mut app.chord_lane.name).desired_width(110.0).hint_text("Lam, F#m7, Sol/Si…"));
+        ui.label(tr("Nombre"));
+        let field = ui.add(egui::TextEdit::singleline(&mut app.chord_lane.name).desired_width(110.0).hint_text(tr("Lam, F#m7, Sol/Si…")));
         let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if ui.button("Poner").on_hover_text("Cualquier acorde por su nombre (Do, Lam7, Fa#m, Sib/Re, Gsus4…) o, con escala, por su grado (vi, V7)").clicked() || enter {
+        if ui.button(tr("Poner")).on_hover_text(tr("Cualquier acorde por su nombre (Do, Lam7, Fa#m, Sib/Re, Gsus4…) o, con escala, por su grado (vi, V7)")).clicked() || enter {
             match parse(&app.chord_lane.name, key) {
                 Some(c) => chosen = Some(c),
-                None => app.status = Some(format!("«{}» no es un acorde que Pulse entienda: prueba Lam, F#m7 o Sol/Si", app.chord_lane.name.trim())),
+                None => app.status = Some(fill(tr("«{}» no es un acorde que Pulse entienda: prueba Lam, F#m7 o Sol/Si"), &[&app.chord_lane.name.trim()])),
             }
         }
     });
     ui.horizontal(|ui| {
-        ui.checkbox(&mut app.chord_lane.sevenths, "Con séptima");
-        ui.label(RichText::new("Duración").color(TEXT_DIM).size(10.5));
-        for (bars, label) in [(0.5, "½ c."), (1.0, "1 c."), (2.0, "2 c."), (4.0, "4 c.")] {
+        ui.checkbox(&mut app.chord_lane.sevenths, tr("Con séptima"));
+        ui.label(RichText::new(tr("Duración")).color(TEXT_DIM).size(10.5));
+        for (bars, label) in [(0.5, tr("½ c.")), (1.0, tr("1 c.")), (2.0, tr("2 c.")), (4.0, tr("4 c."))] {
             ui.selectable_value(&mut app.chord_lane.bars, bars, label);
         }
     });
@@ -869,10 +870,10 @@ pub(crate) fn menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64, index: Opti
             }
             _ => app.write_song_chords(&[c], length, false),
         }
-        app.status = Some(format!("{} en la pista de acordes", c.name_in(key)));
+        app.status = Some(fill(tr("{} en la pista de acordes"), &[&music(&c.name_in(key))]));
     }
     if let (Some(i), Some(_)) = (index, over) {
-        if ui.button("Eliminar acorde").clicked() {
+        if ui.button(tr("Eliminar acorde")).clicked() {
             app.project.chords.remove(i);
             app.chord_lane.selected = None;
             app.sync_chord_followers();
@@ -880,21 +881,21 @@ pub(crate) fn menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64, index: Opti
         }
     }
     if let Some(key) = key {
-        crate::widgets::menu_button(ui, "Progresiones", |ui| {
-            ui.checkbox(&mut app.chord_lane.repeat, "Repetir hasta el final de la canción");
+        crate::widgets::menu_button(ui, tr("Progresiones"), |ui| {
+            ui.checkbox(&mut app.chord_lane.repeat, tr("Repetir hasta el final de la canción"));
             for progression in chord::progressions(key) {
                 let chords: Vec<Chord> = progression.degrees.iter().map(|&d| chord::on_degree(key, d, app.chord_lane.sevenths, progression.major_five)).collect();
-                let names: Vec<String> = chords.iter().map(|c| c.name_in(Some(key))).collect();
-                if ui.button(progression.name).on_hover_text(names.join(" – ")).clicked() {
+                let names: Vec<String> = chords.iter().map(|c| music(&c.name_in(Some(key)))).collect();
+                if ui.button(tr(progression.name)).on_hover_text(names.join(" – ")).clicked() {
                     app.write_song_chords(&chords, length, app.chord_lane.repeat);
-                    app.status = Some(format!("{} en la pista de acordes", names.join(" ")));
+                    app.status = Some(fill(tr("{} en la pista de acordes"), &[&names.join(" ")]));
                     ui.close();
                 }
             }
         });
     }
     ui.separator();
-    crate::widgets::menu_button(ui, "Sacar los acordes de", |ui| {
+    crate::widgets::menu_button(ui, tr("Sacar los acordes de"), |ui| {
         let sources: Vec<(usize, String)> = app
             .project
             .tracks
@@ -904,27 +905,27 @@ pub(crate) fn menu(app: &mut PulseApp, ui: &mut egui::Ui, beat: f64, index: Opti
             .map(|(i, t)| (i, format!("{} ({})", t.name, if t.is_audio() { "audio" } else { "MIDI" })))
             .collect();
         if sources.is_empty() {
-            ui.label(RichText::new("Ninguna pista tiene clips en el Arrangement").color(TEXT_DIM).size(10.5));
+            ui.label(RichText::new(tr("Ninguna pista tiene clips en el Arrangement")).color(TEXT_DIM).size(10.5));
         }
         for (t, label) in sources {
-            if ui.button(label).on_hover_text("Lee los acordes de sus clips (un audio, oyéndolo) y los escribe en la pista de acordes donde están").clicked() {
+            if ui.button(label).on_hover_text(tr("Lee los acordes de sus clips (un audio, oyéndolo) y los escribe en la pista de acordes donde están")).clicked() {
                 app.chords_from_track(t);
                 ui.close();
             }
         }
         ui.separator();
-        if ui.button("Todos los clips MIDI de la canción").on_hover_text("Los acordes que suenan juntando las pistas MIDI (sin la batería), en lugar de los que hay").clicked() {
+        if ui.button(tr("Todos los clips MIDI de la canción")).on_hover_text(tr("Los acordes que suenan juntando las pistas MIDI (sin la batería), en lugar de los que hay")).clicked() {
             app.chords_from_song();
             ui.close();
         }
     });
     if !app.project.chords.is_empty() {
         let song = (meter.prev_bar(app.project.chords[0].start), end(&app.project.chords));
-        accompany_menu(app, ui, "Acompañar toda la canción", song);
+        accompany_menu(app, ui, tr("Acompañar toda la canción"), song);
         if let Some((name, from, to)) = app.section_at(beat) {
-            accompany_menu(app, ui, &format!("Acompañar «{name}»"), (from, to));
+            accompany_menu(app, ui, &fill(tr("Acompañar «{}»"), &[&name]), (from, to));
         }
-        if ui.button("Borrar todos los acordes").clicked() {
+        if ui.button(tr("Borrar todos los acordes")).clicked() {
             app.project.chords.clear();
             app.chord_lane.selected = None;
             app.sync_chord_followers();
@@ -960,9 +961,9 @@ pub(crate) fn track_items(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
         return;
     }
     let now = track.follow_chords;
-    crate::widgets::menu_button(ui, "Seguir la pista de acordes", |ui| {
+    crate::widgets::menu_button(ui, tr("Seguir la pista de acordes"), |ui| {
         let mark = |on: bool| if on { "✓ " } else { "    " };
-        if ui.button(format!("{}No", mark(now.is_none()))).on_hover_text("Sus clips suenan con sus notas, como están").clicked() {
+        if ui.button(format!("{}{}", mark(now.is_none()), tr("No"))).on_hover_text(tr("Sus clips suenan con sus notas, como están")).clicked() {
             app.set_chord_follow(t, None);
             ui.close();
         }
@@ -974,7 +975,7 @@ pub(crate) fn track_items(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
         }
         if let Some(mode) = now {
             ui.separator();
-            if ui.add_enabled(!app.project.chords.is_empty(), egui::Button::new("Escribirlo en las notas")).on_hover_text("Las notas de sus clips pasan a ser las que suenan, y la pista deja de seguir los acordes").clicked() {
+            if ui.add_enabled(!app.project.chords.is_empty(), egui::Button::new(tr("Escribirlo en las notas"))).on_hover_text(tr("Las notas de sus clips pasan a ser las que suenan, y la pista deja de seguir los acordes")).clicked() {
                 app.apply_chord_follow(t, mode, None);
                 ui.close();
             }
@@ -987,7 +988,7 @@ pub(crate) fn clip_items(app: &mut PulseApp, ui: &mut egui::Ui, track: usize, in
     if app.project.chords.is_empty() {
         return;
     }
-    crate::widgets::menu_button(ui, "Ajustar a la pista de acordes", |ui| {
+    crate::widgets::menu_button(ui, tr("Ajustar a la pista de acordes"), |ui| {
         for mode in Follow::ALL {
             if ui.button(mode.label()).on_hover_text(mode.hint()).clicked() {
                 app.apply_chord_follow(track, mode, Some(index));

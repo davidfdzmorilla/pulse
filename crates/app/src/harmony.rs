@@ -2,6 +2,7 @@
 //! «Acordes» menu that writes the key's chords, what usually comes next and
 //! ready-made progressions, voiced so that each leads smoothly into the next.
 
+use crate::i18n::{fill, music, tr};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, RichText};
@@ -139,36 +140,36 @@ pub struct Written {
 /// returns the new notes and the pitches to preview.
 pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at: &mut f64, key: Option<Key>, sig: TimeSig) -> Option<Written> {
     // The lengths offered, in the clip's bars; a length from another meter becomes a bar.
-    let lengths = [(chord_step(sig), "½ c."), (sig.bar(), "1 c."), (sig.bar() * 2.0, "2 c.")];
+    let lengths = [(chord_step(sig), tr("½ c.")), (sig.bar(), tr("1 c.")), (sig.bar() * 2.0, tr("2 c."))];
     if !lengths.iter().any(|l| (l.0 - settings.length).abs() < 1e-9) {
         settings.length = sig.bar();
     }
     // What was clicked: the chords, and whether they are a progression.
     let mut chosen: Option<(Vec<Chord>, bool)> = None;
-    widgets::field_menu_button(ui, "Acordes", |ui| {
+    widgets::field_menu_button(ui, tr("Acordes"), |ui| {
         ui.set_min_width(300.0);
         let Some(key) = key else {
-            ui.label(RichText::new("Elige una Escala en la barra de transporte (o detéctala) para ver sus acordes.").color(TEXT_DIM).size(11.0));
+            ui.label(RichText::new(tr("Elige una Escala en la barra de transporte (o detéctala) para ver sus acordes.")).color(TEXT_DIM).size(11.0));
             return;
         };
         let (_, previous) = before(&clip.notes, *at, Some(key));
         let chords = chord::diatonic(key, settings.sevenths);
         let degree_of = |c: &Chord| chords.iter().position(|d| d.root == c.root);
         let suggested: &[usize] = previous.as_ref().and_then(degree_of).map_or(&[], |d| chord::next_degrees(key, d));
-        ui.label(RichText::new(format!("Acordes de {}", key.name())).strong());
+        ui.label(RichText::new(fill(tr("Acordes de {}"), &[&music(&key.name())])).strong());
         match previous {
             Some(p) if !suggested.is_empty() => {
-                let names: Vec<String> = suggested.iter().map(|&d| chords[d].name_in(Some(key))).collect();
-                ui.label(RichText::new(format!("Después de {} suelen ir: {}", p.name_in(Some(key)), names.join(", "))).color(TEXT_DIM).size(10.5));
+                let names: Vec<String> = suggested.iter().map(|&d| music(&chords[d].name_in(Some(key)))).collect();
+                ui.label(RichText::new(fill(tr("Después de {} suelen ir: {}"), &[&music(&p.name_in(Some(key))), &names.join(", ")])).color(TEXT_DIM).size(10.5));
             }
             _ => {
-                ui.label(RichText::new("Se escriben en el marcador naranja, uno detrás de otro").color(TEXT_DIM).size(10.5));
+                ui.label(RichText::new(tr("Se escriben en el marcador naranja, uno detrás de otro")).color(TEXT_DIM).size(10.5));
             }
         }
         egui::Grid::new("diatonic").spacing(egui::vec2(3.0, 3.0)).show(ui, |ui| {
             for (d, c) in chords.iter().enumerate() {
                 let numeral = c.numeral(key).unwrap_or_default();
-                let mut text = RichText::new(format!("{numeral}\n{}", c.name_in(Some(key))));
+                let mut text = RichText::new(format!("{numeral}\n{}", music(&c.name_in(Some(key)))));
                 if suggested.contains(&d) {
                     text = text.color(ACCENT);
                 }
@@ -180,29 +181,29 @@ pub fn menu(ui: &mut egui::Ui, settings: &mut ChordMenu, clip: &mut MidiClip, at
         });
         if key.minor {
             let five = chord::on_degree(key, 4, settings.sevenths, true);
-            if ui.button(format!("V {} (menor armónica)", five.name_in(Some(key)))).on_hover_text("La dominante mayor, que lleva con más fuerza a la tónica").clicked() {
+            if ui.button(fill(tr("V {} (menor armónica)"), &[&music(&five.name_in(Some(key)))])).on_hover_text(tr("La dominante mayor, que lleva con más fuerza a la tónica")).clicked() {
                 chosen = Some((vec![five], false));
             }
         }
         ui.horizontal(|ui| {
-            ui.checkbox(&mut settings.sevenths, "Con séptima");
-            ui.label(RichText::new("Duración").color(TEXT_DIM).size(10.5));
+            ui.checkbox(&mut settings.sevenths, tr("Con séptima"));
+            ui.label(RichText::new(tr("Duración")).color(TEXT_DIM).size(10.5));
             for (beats, label) in lengths {
-                if beats < sig.bar() - 1e-9 || label != "½ c." {
+                if beats < sig.bar() - 1e-9 || label != tr("½ c.") {
                     ui.selectable_value(&mut settings.length, beats, label);
                 }
             }
         });
         ui.separator();
-        ui.label(RichText::new("Progresiones").color(TEXT_DIM).size(10.5));
+        ui.label(RichText::new(tr("Progresiones")).color(TEXT_DIM).size(10.5));
         for progression in chord::progressions(key) {
             let chords: Vec<Chord> = progression.degrees.iter().map(|&d| chord::on_degree(key, d, settings.sevenths, progression.major_five)).collect();
-            let names: Vec<String> = chords.iter().map(|c| c.name_in(Some(key))).collect();
-            if ui.button(progression.name).on_hover_text(format!("{} (si no caben, el clip se alarga)", names.join(" – "))).clicked() {
+            let names: Vec<String> = chords.iter().map(|c| music(&c.name_in(Some(key)))).collect();
+            if ui.button(tr(progression.name)).on_hover_text(fill(tr("{} (si no caben, el clip se alarga)"), &[&names.join(" – ")])).clicked() {
                 chosen = Some((chords, true));
             }
         }
-        ui.label(RichText::new("Las voces se enlazan con el acorde anterior: se mueven lo menos posible.").color(theme::TEXT_DIM).size(10.0));
+        ui.label(RichText::new(tr("Las voces se enlazan con el acorde anterior: se mueven lo menos posible.")).color(theme::TEXT_DIM).size(10.0));
     });
     let (chords, progression) = chosen?;
     let (before, from) = (clip.clone(), *at);

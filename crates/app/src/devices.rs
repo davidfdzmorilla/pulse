@@ -734,10 +734,10 @@ fn effect_presets(ui: &mut egui::Ui, index: usize, device: Device, presets: Vec<
             let (category, short) = name.split_once(" · ").unwrap_or(("", name));
             if category != group {
                 group = category;
-                ui.label(egui::RichText::new(category.to_uppercase()).color(TEXT_DIM).size(10.0));
+                ui.label(egui::RichText::new(crate::i18n::tr_name(category).to_uppercase()).color(TEXT_DIM).size(10.0));
             }
             let hint = preset_hint(&effect);
-            let mut button = ui.button(short);
+            let mut button = ui.button(crate::i18n::tr_name(short).into_owned());
             if !hint.is_empty() {
                 button = button.on_hover_text(hint);
             }
@@ -1659,11 +1659,11 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
             if groups.len() > 1 && groups.iter().map(|g| g.1.len()).sum::<usize>() > 12 {
                 // Many sounds: one submenu a category («Bajos · …»).
                 for (group, presets) in groups {
-                    crate::widgets::menu_button(ui, format!("{group}  ({})", presets.len()), |ui| {
+                    crate::widgets::menu_button(ui, format!("{}  ({})", crate::i18n::tr_name(&group), presets.len()), |ui| {
                         ui.set_min_width(180.0);
                         egui::ScrollArea::vertical().id_salt(("factory_group", &group)).max_height(420.0).show(ui, |ui| {
                             for (short, preset) in presets {
-                                if ui.button(short).clicked() {
+                                if ui.button(crate::i18n::tr_name(&short).into_owned()).clicked() {
                                     actions.push(Action::ApplyPreset(preset));
                                     ui.close();
                                 }
@@ -1674,7 +1674,7 @@ pub(crate) fn preset_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: 
             } else {
                 egui::ScrollArea::vertical().id_salt("factory_presets").max_height(260.0).show(ui, |ui| {
                     for preset in groups.into_iter().flat_map(|g| g.1) {
-                        if ui.button(&preset.1.name).clicked() {
+                        if ui.button(crate::i18n::tr_name(&preset.1.name).into_owned()).clicked() {
                             actions.push(Action::ApplyPreset(preset.1));
                             ui.close();
                         }

@@ -182,7 +182,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 match clip.key {
                     Some(k) => {
                         let own = stems::key::Key { tonic: k.tonic, minor: k.minor };
-                        ui.label(egui::RichText::new(own.name()).size(10.5));
+                        ui.label(egui::RichText::new(crate::i18n::music(&own.name())).size(10.5));
                         let mut follow = k.follow;
                         let hint = match project_key {
                             Some(p) => format!("Transpone el clip a la escala del proyecto ({}) por el camino más corto, y lo sigue si cambia", p.name()),

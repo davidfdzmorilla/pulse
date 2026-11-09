@@ -190,12 +190,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 
             heading(ui, tr("EMPEZAR DE UNA PLANTILLA"));
             ui.horizontal_wrapped(|ui| {
-                if ui.button(crate::templates::EMPTY).on_hover_text(tr("Dos pistas MIDI y nada más")).clicked() {
+                if ui.button(tr(crate::templates::EMPTY)).on_hover_text(tr("Dos pistas MIDI y nada más")).clicked() {
                     chosen = Some(Choice::Empty);
                 }
                 for (i, template) in app.templates.iter().enumerate() {
-                    let about = if template.file.is_some() { tr("Una plantilla tuya") } else { crate::templates::about(&template.name) };
-                    if ui.button(&template.name).on_hover_text(about).clicked() {
+                    let about = if template.file.is_some() { tr("Una plantilla tuya") } else { tr(crate::templates::about(&template.name)) };
+                    if ui.button(template.shown()).on_hover_text(about).clicked() {
                         chosen = Some(Choice::Template(i));
                     }
                 }
@@ -206,8 +206,8 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 heading(ui, tr("APRENDER"));
                 for (i, lesson) in crate::lessons::LESSONS.iter().enumerate() {
                     let finished = app.settings.lessons_done.iter().any(|d| d == lesson.id);
-                    let text = format!("{}. {}{}", i + 1, lesson.title, if finished { "  ✓" } else { "" });
-                    if ui.link(text).on_hover_text(lesson.about).clicked() {
+                    let text = format!("{}. {}{}", i + 1, tr(lesson.title), if finished { "  ✓" } else { "" });
+                    if ui.link(text).on_hover_text(tr(lesson.about)).clicked() {
                         chosen = Some(Choice::Lesson(i));
                     }
                 }
@@ -440,5 +440,34 @@ mod tests {
         std::fs::copy(&shot, dir.join("lecciones.png")).unwrap();
         s.click("×");
         assert!(!s.app.lessons.open);
+    }
+
+    /// In English: the welcome's lessons and Pulse's templates, a lesson's
+    /// steps and its progress; the user's templates keep their names.
+    #[test]
+    fn lessons_and_templates_show_in_english() {
+        let dir = shots();
+        crate::i18n::with(crate::i18n::Language::English, || {
+            assert_eq!(crate::templates::shown("Grabar voz"), "Record Vocals");
+            assert_eq!(crate::templates::shown(crate::templates::EMPTY), "Empty");
+            let mine = crate::templates::Template { name: "Grabar voz".into(), file: Some(PathBuf::from("/x/Grabar voz/Grabar voz.pulse")) };
+            assert_eq!(mine.shown(), "Grabar voz", "a template of the user's, as named");
+            let mut app = PulseApp::headless(Project::empty());
+            app.templates = crate::templates::all();
+            app.start_fresh();
+            let mut s = Studio::new(app, dir.clone());
+            s.frames(4);
+            for text in ["1. Your first beat", "3. Record your voice and tune it", "Record Vocals", "Empty", "House"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            assert!(!s.has("Grabar voz") && !s.has("1. Tu primer ritmo"));
+            s.click("1. Your first beat");
+            s.frames(4);
+            for text in ["Your first beat", "Create a MIDI track", "Give it drums", "0 of 5", "More in the guide (in Spanish): Generar ritmos"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            let shot = s.shot("leccion-en");
+            std::fs::copy(&shot, dir.join("leccion-en.png")).unwrap();
+        });
     }
 }

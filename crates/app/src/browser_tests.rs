@@ -147,3 +147,25 @@ fn search_keys_favourites_and_chains_through_the_interface() {
     let top: Vec<&str> = s.app.browser.results.iter().take(3).map(|r| r.name.as_str()).collect();
     assert!(top.contains(&"Espacio"), "{:?} {top:?}", s.app.browser.search);
 }
+
+/// In English, the favourites and the search show Pulse's names in English,
+/// and the search finds them by them.
+#[test]
+fn in_english_favourites_and_search_show_english_names() {
+    crate::i18n::with(crate::i18n::Language::English, || {
+        let mut app = PulseApp::headless(Project::demo());
+        app.selected_target = Target::Track(0);
+        // Only in memory: the favourites file is left alone.
+        app.browser.favorites().keys = vec!["preset:Acid Bass:Acid · Cuadrada hueca".into(), "efecto:Compresor de bus".into()];
+        let mut s = Studio::new(app, std::env::temp_dir());
+        s.frames(4);
+        assert!(s.has("FAVORITES"));
+        assert!(s.has("Acid · Hollow square") && !s.has("Acid · Cuadrada hueca"));
+        shot(&mut s, "favoritos-en");
+        s.key(Key::F, Modifiers::COMMAND);
+        s.type_text("hollow sq");
+        assert_eq!(s.app.browser.results[0].name, "Acid · Hollow square");
+        assert!(s.has("PRESETS  (1)"), "the group's heading");
+        shot(&mut s, "busqueda-en");
+    });
+}

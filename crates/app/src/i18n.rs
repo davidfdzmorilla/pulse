@@ -113,6 +113,82 @@ pub fn tr(spanish: &'static str) -> &'static str {
     }
 }
 
+/// A key's or chord's name («Re menor», «Lam7», «Sib/Re», «Rem Sib Fa Do»), as
+/// the interface writes it: in English, with letters («D minor», «Am7», «Bb/D»).
+/// The names Pulse keeps stay in Spanish; this is only for showing them.
+pub fn music(name: &str) -> String {
+    if current() == Language::Spanish {
+        return name.to_string();
+    }
+    english_music(name)
+}
+
+fn english_music(name: &str) -> String {
+    // Sol before Si and the rest: the longest syllable first.
+    const NOTES: [(&str, char); 7] = [("Sol", 'G'), ("Do", 'C'), ("Re", 'D'), ("Mi", 'E'), ("Fa", 'F'), ("La", 'A'), ("Si", 'B')];
+    let mut out = String::with_capacity(name.len());
+    let mut rest = name;
+    let mut word_start = true;
+    while let Some(c) = rest.chars().next() {
+        if word_start {
+            if let Some(&(syllable, letter)) = NOTES.iter().find(|(s, _)| rest.starts_with(s)) {
+                let after = &rest[syllable.len()..];
+                // A note only if what follows is a chord's (b, #, m, sus, 7,
+                // °, +, ø, /), not more of a word («Restaurar», «Mio»).
+                let accidental = after.strip_prefix(['b', '#']).unwrap_or(after);
+                let next = accidental.chars().next();
+                let fits = match next {
+                    None => true,
+                    Some(n) if !n.is_alphabetic() => true,
+                    Some('m') => !accidental.starts_with("me") && !accidental.starts_with("ma") || accidental.starts_with("maj"),
+                    Some('s') => accidental.starts_with("sus"),
+                    _ => false,
+                };
+                if fits {
+                    out.push(letter);
+                    out.push_str(&after[..after.len() - accidental.len()]);
+                    rest = accidental;
+                    word_start = false;
+                    continue;
+                }
+            }
+            for (spanish, english) in [("mayor", "major"), ("menor", "minor")] {
+                if let Some(after) = rest.strip_prefix(spanish) {
+                    if after.chars().next().is_none_or(|n| !n.is_alphabetic()) {
+                        out.push_str(english);
+                        rest = after;
+                        break;
+                    }
+                }
+            }
+            if rest.is_empty() {
+                break;
+            }
+        }
+        let c = rest.chars().next().unwrap_or(c);
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+        word_start = !c.is_alphanumeric();
+    }
+    out
+}
+
+/// One of Pulse's own names (a factory preset, kit, chain or sound) in the
+/// interface's language, a part at a time («Bajos · Sub oscuro» → «Basses ·
+/// Dark sub»). A part without English shows as it is. Only for names Pulse
+/// made: the user's own are never translated.
+pub fn tr_name(name: &str) -> std::borrow::Cow<'_, str> {
+    use std::borrow::Cow;
+    if current() == Language::Spanish {
+        return Cow::Borrowed(name);
+    }
+    let table = english();
+    if !name.contains(" · ") {
+        return Cow::Borrowed(table.get(name).copied().unwrap_or(name));
+    }
+    Cow::Owned(name.split(" · ").map(|part| table.get(part).copied().unwrap_or(part)).collect::<Vec<_>>().join(" · "))
+}
+
 /// `template` with each `{}` replaced by the next value.
 pub fn fill(template: &str, values: &[&dyn std::fmt::Display]) -> String {
     let mut out = String::with_capacity(template.len() + 16);
@@ -156,10 +232,36 @@ mod tests {
     }
 
     #[test]
+    fn pulse_names_go_a_part_at_a_time() {
+        assert_eq!(tr_name("Bajos · Sub oscuro"), "Bajos · Sub oscuro");
+        with(Language::English, || {
+            assert_eq!(tr_name("Bajos · Sub oscuro"), "Basses · Dark sub");
+            assert_eq!(tr_name("Bombo house"), "House kick");
+            assert_eq!(tr_name("Mi bombo · raro"), "Mi bombo · raro");
+        });
+    }
+
+    #[test]
     fn templates_take_their_values_in_order() {
         assert_eq!(fill("{} de {}", &[&3, &"4"]), "3 de 4");
         assert_eq!(fill("sin huecos", &[&1]), "sin huecos");
         assert_eq!(fill("{} y {}", &[&1]), "1 y ");
+    }
+
+    #[test]
+    fn keys_and_chords_show_with_letters_in_english() {
+        let names = ["Re menor", "Do mayor", "Mib mayor", "Fa# menor", "Lam7", "Sib/Re", "Do#m", "Solmaj7", "Resus4", "Si°", "Rem Sib Fa/La Do", "vi"];
+        for name in names {
+            assert_eq!(music(name), name, "Spanish stays as it is");
+        }
+        with(Language::English, || {
+            let english: Vec<String> = names.iter().map(|n| music(n)).collect();
+            assert_eq!(english, ["D minor", "C major", "Eb major", "F# minor", "Am7", "Bb/D", "C#m", "Gmaj7", "Dsus4", "B°", "Dm Bb F/A C", "vi"]);
+            assert_eq!(music("Restaurar"), "Restaurar", "a word that starts like a note stays");
+        });
+        // What Pulse keeps is still the Spanish name.
+        let key = stems::key::Key { tonic: 2, minor: true };
+        with(Language::English, || assert_eq!(key.name(), "Re menor"));
     }
 
     #[test]

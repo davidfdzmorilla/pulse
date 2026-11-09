@@ -56,6 +56,7 @@
 //! not what is being compared. The project and its undo are left alone.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::export::{self, Range};
 use crate::theme::{ACCENT, METER_RED, PLAY, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, RichText, Sense, Stroke};
@@ -102,8 +103,8 @@ impl Target {
             Target::Apple => "Apple Music (−16 LUFS)",
             Target::Club => "Club, DJ, SoundCloud (−9 LUFS)",
             Target::HardTechno => "Hard techno, rave (−7 LUFS)",
-            Target::Broadcast => "Radio y TV, EBU R128 (−23 LUFS)",
-            Target::Reference => "Como la referencia",
+            Target::Broadcast => tr("Radio y TV, EBU R128 (−23 LUFS)"),
+            Target::Reference => tr("Como la referencia"),
         }
     }
 
@@ -675,7 +676,7 @@ impl SpaceChange {
     fn describe(&self) -> String {
         let pct = |x: f32| format!("{:.0} %", x * 100.0);
         if self.reverb.unwrap_or(0.0) == 0.0 && self.delay.unwrap_or(0.0) == 0.0 {
-            return format!("«{}» ({}): sin reverb ni delay, para que sus graves no se embarren", self.name, self.role.label());
+            return fill(tr("«{}» ({}): sin reverb ni delay, para que sus graves no se embarren"), &[&self.name, &self.role.label()]);
         }
         let mut parts = Vec::new();
         if let Some(r) = self.reverb.filter(|&r| r > 0.0) {
@@ -993,17 +994,17 @@ pub enum Role {
 impl Role {
     pub fn label(self) -> &'static str {
         match self {
-            Role::Kick => "bombo",
-            Role::Drums => "batería",
-            Role::Percussion => "percusión",
-            Role::Bass => "bajo",
-            Role::Vocal => "voz",
-            Role::Backing => "coros",
-            Role::Lead => "solista",
-            Role::Chords => "acordes",
-            Role::Pad => "pad",
-            Role::Fx => "efectos",
-            Role::Other => "otra",
+            Role::Kick => tr("bombo"),
+            Role::Drums => tr("batería"),
+            Role::Percussion => tr("percusión"),
+            Role::Bass => tr("bajo"),
+            Role::Vocal => tr("voz"),
+            Role::Backing => tr("coros"),
+            Role::Lead => tr("solista"),
+            Role::Chords => tr("acordes"),
+            Role::Pad => tr("pad"),
+            Role::Fx => tr("efectos"),
+            Role::Other => tr("otra"),
         }
     }
 
@@ -1144,19 +1145,19 @@ impl Change {
     fn describe(&self) -> String {
         let mut parts = Vec::new();
         if self.gain_db != 0.0 {
-            parts.push(format!("volumen {} dB", db(self.gain_db as f64)));
+            parts.push(fill(tr("volumen {} dB"), &[&db(self.gain_db as f64)]));
         }
         if self.held {
-            parts.push("no más bajo: enterraría los medios bajo el bombo y el bajo".into());
+            parts.push(tr("no más bajo: enterraría los medios bajo el bombo y el bajo").into());
         }
         if let Some(pan) = self.pan {
             parts.push(match pan {
-                p if p.abs() < 0.01 => "al centro".to_string(),
-                p => format!("panorama {:.0} % {}", p.abs() * 100.0, if p < 0.0 { "izquierda" } else { "derecha" }),
+                p if p.abs() < 0.01 => tr("al centro").to_string(),
+                p => fill(tr("panorama {} % {}"), &[&format!("{:.0}", p.abs() * 100.0), &if p < 0.0 { tr("izquierda") } else { tr("derecha") }]),
             });
         }
         if let Some(hz) = self.low_cut {
-            parts.push(format!("sin graves bajo {hz:.0} Hz"));
+            parts.push(fill(tr("sin graves bajo {} Hz"), &[&format!("{:.0}", hz)]));
         }
         format!("«{}» ({}): {}", self.name, self.role.label(), parts.join(", "))
     }
@@ -1333,8 +1334,8 @@ pub struct Opening {
 
 impl Opening {
     fn describe(&self) -> String {
-        let side = format!("panorama {:.0} % {}", self.pan.abs() * 100.0, if self.pan < 0.0 { "izquierda" } else { "derecha" });
-        format!("«{}» ({}): {side}{}", self.name, self.role.label(), if self.chorus { " y un Chorus suave para abrirla" } else { "" })
+        let side = fill(tr("panorama {} % {}"), &[&format!("{:.0}", self.pan.abs() * 100.0), &if self.pan < 0.0 { tr("izquierda") } else { tr("derecha") }]);
+        format!("«{}» ({}): {side}{}", self.name, self.role.label(), if self.chorus { tr(" y un Chorus suave para abrirla") } else { "" })
     }
 }
 
@@ -1519,23 +1520,23 @@ pub fn next_fix(advice: &[Advice], done: &[Fix]) -> Option<Fix> {
 /// What a fix did, in a few words (for the summary of «Aplicar todo»).
 fn fix_label(fix: &Fix) -> String {
     match fix {
-        Fix::MasterLimiter { .. } => "sonoridad con el limitador del master".into(),
-        Fix::TrackGain { name, .. } => format!("volumen de «{name}»"),
-        Fix::Duck { name, .. } => format!("ducker en «{name}»"),
-        Fix::CutLows { name, .. } => format!("graves de «{name}»"),
-        Fix::MasterEq { .. } => "EQ del master".into(),
-        Fix::Balance(_) => "volúmenes y panoramas".into(),
-        Fix::Widen(changes) => format!("{} {} abiertas a los lados", changes.len(), if changes.len() == 1 { "pista" } else { "pistas" }),
-        Fix::Carve { name, for_name, .. } => format!("hueco en «{name}» para «{for_name}»"),
-        Fix::Compress { name, .. } => format!("compresor en «{name}»"),
-        Fix::Glue { track: Some(_), name, .. } => format!("compresor de bus en «{name}»"),
-        Fix::Glue { track: None, .. } => "compresor de bus en el master".into(),
-        Fix::Space { .. } => "reverb y delay".into(),
-        Fix::Ride { name, .. } => format!("«{name}» nivelada"),
-        Fix::DeEss { name, .. } => format!("de-esser en «{name}»"),
-        Fix::Throws { name, .. } => format!("ecos de «{name}»"),
-        Fix::Grow { .. } => "secciones que crecen".into(),
-        Fix::Stereo { name, .. } => format!("estéreo de «{name}»"),
+        Fix::MasterLimiter { .. } => tr("sonoridad con el limitador del master").into(),
+        Fix::TrackGain { name, .. } => fill(tr("volumen de «{}»"), &[&name]),
+        Fix::Duck { name, .. } => fill(tr("ducker en «{}»"), &[&name]),
+        Fix::CutLows { name, .. } => fill(tr("graves de «{}»"), &[&name]),
+        Fix::MasterEq { .. } => tr("EQ del master").into(),
+        Fix::Balance(_) => tr("volúmenes y panoramas").into(),
+        Fix::Widen(changes) => if changes.len() == 1 { tr("1 pista abierta a los lados").to_string() } else { fill(tr("{} pistas abiertas a los lados"), &[&changes.len()]) },
+        Fix::Carve { name, for_name, .. } => fill(tr("hueco en «{}» para «{}»"), &[&name, &for_name]),
+        Fix::Compress { name, .. } => fill(tr("compresor en «{}»"), &[&name]),
+        Fix::Glue { track: Some(_), name, .. } => fill(tr("compresor de bus en «{}»"), &[&name]),
+        Fix::Glue { track: None, .. } => tr("compresor de bus en el master").into(),
+        Fix::Space { .. } => tr("reverb y delay").into(),
+        Fix::Ride { name, .. } => fill(tr("«{}» nivelada"), &[&name]),
+        Fix::DeEss { name, .. } => fill(tr("de-esser en «{}»"), &[&name]),
+        Fix::Throws { name, .. } => fill(tr("ecos de «{}»"), &[&name]),
+        Fix::Grow { .. } => tr("secciones que crecen").into(),
+        Fix::Stereo { name, .. } => fill(tr("estéreo de «{}»"), &[&name]),
     }
 }
 
@@ -1627,7 +1628,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     let mut out = Vec::new();
     let mix = &report.mix;
     let Some(lufs) = mix.lufs else {
-        out.push(advice(Level::Warning, "La mezcla está en silencio".into(), None));
+        out.push(advice(Level::Warning, tr("La mezcla está en silencio").into(), None));
         return out;
     };
     // Loudness and true peak.
@@ -1639,47 +1640,41 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         let held = report.limited.as_ref().filter(|l| l.target == target).map(|l| l.held.clone());
         let is_held = held.is_some() && off > 0.0;
         if off.abs() < 1.0 {
-            out.push(advice(Level::Good, format!("Sonoridad {} LUFS: justo para {}", num(lufs), target.label()), None));
+            out.push(advice(Level::Good, fill(tr("Sonoridad {} LUFS: justo para {}"), &[&num(lufs), &target.label()]), None));
         } else if let (true, Some(held)) = (off > 0.0, held) {
-            out.push(advice(Level::Note, format!("Sonoridad {} LUFS: {} dB por debajo del objetivo ({} LUFS). {}. {LOUDER_WITHOUT_SQUASHING}", num(lufs), num(off), num(goal), held.says()), None));
+            out.push(advice(Level::Note, fill(tr("Sonoridad {} LUFS: {} dB por debajo del objetivo ({} LUFS). {}. {}"), &[&num(lufs), &num(off), &num(goal), &held.says(), &louder_without_squashing()]), None));
         } else if off > 0.0 {
             out.push(advice(
                 Level::Warning,
-                format!("Sonoridad {} LUFS: {} dB por debajo del objetivo ({} LUFS). Al lado de otras canciones sonará más floja", num(lufs), num(off), num(goal)),
+                fill(tr("Sonoridad {} LUFS: {} dB por debajo del objetivo ({} LUFS). Al lado de otras canciones sonará más floja"), &[&num(lufs), &num(off), &num(goal)]),
                 Some(Fix::MasterLimiter { gain_db: off as f32, ceiling_db }),
             ));
         } else {
             out.push(advice(
                 Level::Note,
-                format!(
-                    "Sonoridad {} LUFS: {} dB por encima del objetivo ({} LUFS). {}",
-                    num(lufs),
-                    num(-off),
-                    num(goal),
-                    if target.turned_down() { "La plataforma la bajará, y lo que hayas apretado de más solo le quita dinámica" } else { "Más apretada no suena más fuerte en el club: solo pierde pegada" }
-                ),
+                fill(tr("Sonoridad {} LUFS: {} dB por encima del objetivo ({} LUFS). {}"), &[&num(lufs), &num(-off), &num(goal), &if target.turned_down() { tr("La plataforma la bajará, y lo que hayas apretado de más solo le quita dinámica") } else { tr("Más apretada no suena más fuerte en el club: solo pierde pegada") }]),
                 Some(Fix::MasterLimiter { gain_db: off as f32, ceiling_db }),
             ));
         }
         if mix.true_peak > ceiling && (off.abs() < 1.0 || is_held) {
             out.push(advice(
                 Level::Warning,
-                format!("Pico real {} dBTP, por encima de {} dBTP: al pasarla a MP3 o AAC puede distorsionar", db(mix.true_peak), num(ceiling)),
+                fill(tr("Pico real {} dBTP, por encima de {} dBTP: al pasarla a MP3 o AAC puede distorsionar"), &[&db(mix.true_peak), &num(ceiling)]),
                 Some(Fix::MasterLimiter { gain_db: 0.0, ceiling_db }),
             ));
         } else if mix.true_peak <= ceiling {
-            out.push(advice(Level::Good, format!("Pico real {} dBTP: sin riesgo de distorsión", db(mix.true_peak)), None));
+            out.push(advice(Level::Good, fill(tr("Pico real {} dBTP: sin riesgo de distorsión"), &[&db(mix.true_peak)]), None));
         }
     }
     // The tracks against each other.
     let (anchor, changes) = balance_tracks(&report.tracks);
     if let Some(anchor) = anchor {
         if changes.is_empty() {
-            out.push(advice(Level::Good, format!("Las pistas están equilibradas para empezar a mezclar, junto a «{}»", anchor.name), None));
+            out.push(advice(Level::Good, fill(tr("Las pistas están equilibradas para empezar a mezclar, junto a «{}»"), &[&anchor.name]), None));
         } else {
             let mut a = advice(
                 Level::Note,
-                format!("Mezcla de partida: {} {} fuera del sitio habitual de su papel junto a «{}»", changes.len(), if changes.len() == 1 { "pista" } else { "pistas" }, anchor.name),
+                if changes.len() == 1 { fill(tr("Mezcla de partida: 1 pista fuera del sitio habitual de su papel junto a «{}»"), &[&anchor.name]) } else { fill(tr("Mezcla de partida: {} pistas fuera del sitio habitual de su papel junto a «{}»"), &[&changes.len(), &anchor.name]) },
                 Some(Fix::Balance(changes.clone())),
             );
             a.details = changes.iter().map(Change::describe).collect();
@@ -1691,7 +1686,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         let lower = -(t.peak + 1.0) as f32;
         out.push(advice(
             Level::Warning,
-            format!("«{}» llega a {} dBFS: por encima de 0 dB satura en cuanto pasa por algo que no lo aguante", t.name, db(t.peak)),
+            fill(tr("«{}» llega a {} dBFS: por encima de 0 dB satura en cuanto pasa por algo que no lo aguante"), &[&t.name, &db(t.peak)]),
             Some(Fix::TrackGain { track: t.index, name: t.name.clone(), db: lower }),
         ));
     }
@@ -1700,10 +1695,10 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         let (a, b) = (&report.tracks[i], &report.tracks[j]);
         // One already makes room for the other (a bass or a rumble ducking to the kick).
         if let Some((ducks, to)) = [(a, b), (b, a)].into_iter().find(|(x, y)| x.listens.contains(&y.id)) {
-            out.push(advice(Level::Good, format!("«{}» se aparta cuando suena «{}»: sus graves no se tapan", ducks.name, to.name), None));
+            out.push(advice(Level::Good, fill(tr("«{}» se aparta cuando suena «{}»: sus graves no se tapan"), &[&ducks.name, &to.name]), None));
             continue;
         }
-        let text = format!("«{}» y «{}» llenan los graves a la vez el {:.0} % del tiempo: se tapan y la mezcla se embarra", a.name, b.name, share * 100.0);
+        let text = fill(tr("«{}» y «{}» llenan los graves a la vez el {} % del tiempo: se tapan y la mezcla se embarra"), &[&a.name, &b.name, &format!("{:.0}", share * 100.0)]);
         // A kick against the rest: the rest ducks. Two drum tracks: a kick of
         // its own keeps the low end. Otherwise the one with less gives it up.
         // Drums that duck to another track themselves (a rumble to its kick)
@@ -1730,7 +1725,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         // once is enough.
         if let Some(Fix::Duck { track, source, source_name, name }) = &fix {
             if report.tracks.iter().any(|t| t.index == *track && t.listens.contains(source)) {
-                let text = format!("«{name}» se aparta cuando suena «{source_name}»: sus graves no se tapan");
+                let text = fill(tr("«{}» se aparta cuando suena «{}»: sus graves no se tapan"), &[&name, &source_name]);
                 if !out.iter().any(|a| a.text == text) {
                     out.push(advice(Level::Good, text, None));
                 }
@@ -1743,7 +1738,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         // Its lows cut already: what is left of them is its own.
         if let Some(Fix::CutLows { track, name }) = &fix {
             if report.tracks.iter().any(|t| t.index == *track && t.cut) {
-                let text = format!("«{name}» ya tiene los graves recortados");
+                let text = fill(tr("«{}» ya tiene los graves recortados"), &[&name]);
                 if !out.iter().any(|a| a.text == text) {
                     out.push(advice(Level::Good, text, None));
                 }
@@ -1760,19 +1755,11 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             continue;
         }
         if t.compressed {
-            out.push(advice(Level::Good, format!("«{}» ya tiene compresor", t.name), None));
+            out.push(advice(Level::Good, fill(tr("«{}» ya tiene compresor"), &[&t.name]), None));
         } else if let Some(params) = compression(t, report.tempo) {
             out.push(advice(
                 Level::Note,
-                format!(
-                    "«{}» ({}) va de {} a {} dBFS: entre sus partes fuertes y suaves hay {} dB, y en la mezcla unas se pierden o saltan. Un compresor le quitaría unos {} dB a lo fuerte",
-                    t.name,
-                    t.role.label(),
-                    db(soft as f64),
-                    db(loud as f64),
-                    num((loud - soft) as f64),
-                    num(reduce as f64)
-                ),
+                fill(tr("«{}» ({}) va de {} a {} dBFS: entre sus partes fuertes y suaves hay {} dB, y en la mezcla unas se pierden o saltan. Un compresor le quitaría unos {} dB a lo fuerte"), &[&t.name, &t.role.label(), &db(soft as f64), &db(loud as f64), &num((loud - soft) as f64), &num(reduce as f64)]),
                 Some(Fix::Compress { track: t.index, name: t.name.clone(), params }),
             ));
         }
@@ -1784,7 +1771,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             continue;
         }
         if g.compressed {
-            out.push(advice(Level::Good, format!("«{}» ya tiene compresor de bus: la batería suena junta", g.name), None));
+            out.push(advice(Level::Good, fill(tr("«{}» ya tiene compresor de bus: la batería suena junta"), &[&g.name]), None));
             continue;
         }
         // Its peak about its tracks' together (their powers added: they don't
@@ -1793,18 +1780,18 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         let before = peak - 20.0 * (g.gain.max(1e-6) as f64).log10();
         out.push(advice(
             Level::Note,
-            format!("Bus de batería: «{}» junta {} pistas de batería sin compresor de bus. Uno suave las pega: suenan como un kit y no como pistas sueltas", g.name, members.len()),
+            fill(tr("Bus de batería: «{}» junta {} pistas de batería sin compresor de bus. Uno suave las pega: suenan como un kit y no como pistas sueltas"), &[&g.name, &members.len()]),
             Some(Fix::Glue { track: Some(g.index), name: g.name.clone(), params: glue(Some(before), true) }),
         ));
     }
     // A loud master: a bus compressor before its limiter.
     if target.levels(reference).is_some_and(|(goal, _)| goal >= GLUE_FROM) {
         if report.master_glued {
-            out.push(advice(Level::Good, "El master ya tiene compresor de bus antes del limitador".into(), None));
+            out.push(advice(Level::Good, tr("El master ya tiene compresor de bus antes del limitador").into(), None));
         } else {
             out.push(advice(
                 Level::Note,
-                format!("Compresor de bus en el master: para {} pega la mezcla y le quita 2 o 3 dB a los golpes antes del limitador, que así llega a la sonoridad sin aplastarla", target.label()),
+                fill(tr("Compresor de bus en el master: para {} pega la mezcla y le quita 2 o 3 dB a los golpes antes del limitador, que así llega a la sonoridad sin aplastarla"), &[&target.label()]),
                 Some(Fix::Glue { track: None, name: "Master".into(), params: glue(report.master_clean.then_some(mix.peak), false) }),
             ));
         }
@@ -1816,17 +1803,11 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             continue;
         }
         if t.deessed {
-            out.push(advice(Level::Good, format!("«{}» ya tiene De-esser", t.name), None));
+            out.push(advice(Level::Good, fill(tr("«{}» ya tiene De-esser"), &[&t.name]), None));
         } else if let Some((params, takes)) = deessing(t) {
             out.push(advice(
                 Level::Note,
-                format!(
-                    "Las eses de «{}» suenan a {} dB de sus vocales: saltan y pinchan, más aún tras comprimirla. Un De-esser en {} las bajaría unos {} dB sin apagar el resto",
-                    t.name,
-                    db(e.over_vowels as f64),
-                    freq_label(e.freq),
-                    format!("{takes:.0}")
-                ),
+                fill(tr("Las eses de «{}» suenan a {} dB de sus vocales: saltan y pinchan, más aún tras comprimirla. Un De-esser en {} las bajaría unos {} dB sin apagar el resto"), &[&t.name, &db(e.over_vowels as f64), &freq_label(e.freq), &format!("{takes:.0}")]),
                 Some(Fix::DeEss { track: t.index, name: t.name.clone(), params }),
             ));
         }
@@ -1841,20 +1822,13 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             continue;
         }
         if t.automated {
-            out.push(advice(Level::Good, format!("«{}» ya tiene automatización de volumen", t.name), None));
+            out.push(advice(Level::Good, fill(tr("«{}» ya tiene automatización de volumen"), &[&t.name]), None));
             continue;
         }
         let (low, high) = found.iter().fold((f32::MAX, f32::MIN), |(a, b), p| (a.min(p.over), b.max(p.over)));
         let mut a = advice(
             Level::Note,
-            format!(
-                "«{}» va de {} a {} dB sobre la base según la frase: unas se pierden y otras tapan la música. Nivelarla mueve {} de sus {} frases con automatización de volumen",
-                t.name,
-                db(low as f64),
-                db(high as f64),
-                gains.iter().filter(|g| **g != 0.0).count(),
-                found.len()
-            ),
+            fill(tr("«{}» va de {} a {} dB sobre la base según la frase: unas se pierden y otras tapan la música. Nivelarla mueve {} de sus {} frases con automatización de volumen"), &[&t.name, &db(low as f64), &db(high as f64), &gains.iter().filter(|g| **g != 0.0).count(), &found.len()]),
             Some(Fix::Ride { track: t.index, name: t.name.clone(), from: report.start, phrases: found.clone(), gains: gains.clone() }),
         );
         a.details = found.iter().zip(&gains).filter(|(_, g)| g.abs() >= 2.0).take(6).map(|(p, g)| format!("{}: {} dB", clock(p.start), db(*g as f64))).collect();
@@ -1866,32 +1840,32 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     let dry: Vec<&SpaceChange> = changes.iter().filter(|c| c.wet()).collect();
     if !dry.is_empty() {
         let names: Vec<String> = dry.iter().take(3).map(|c| format!("«{}»", c.name)).collect();
-        let more = if dry.len() > 3 { format!(" y {} más", dry.len() - 3) } else { String::new() };
+        let more = if dry.len() > 3 { fill(tr(" y {} más"), &[&(dry.len() - 3)]) } else { String::new() };
         let made = match (report.space.reverb.is_none() && changes.iter().any(|c| c.reverb.unwrap_or(0.0) > 0.0), report.space.delay.is_none() && changes.iter().any(|c| c.delay.unwrap_or(0.0) > 0.0)) {
-            (true, true) => ". Crea un retorno de reverb y otro de delay",
-            (true, false) => ". Crea un retorno de reverb",
-            (false, true) => ". Crea un retorno de delay",
+            (true, true) => tr(". Crea un retorno de reverb y otro de delay"),
+            (true, false) => tr(". Crea un retorno de reverb"),
+            (false, true) => tr(". Crea un retorno de delay"),
             (false, false) => "",
         };
         let mut a = advice(
             Level::Note,
-            format!("Espacio de partida: {}{more} {}, sin reverb ni delay, y la mezcla queda plana, todo delante{made}", names.join(", "), if dry.len() == 1 { "suena seca" } else { "suenan secas" }),
+            fill(if dry.len() == 1 { tr("Espacio de partida: {}{} suena seca, sin reverb ni delay, y la mezcla queda plana, todo delante{}") } else { tr("Espacio de partida: {}{} suenan secas, sin reverb ni delay, y la mezcla queda plana, todo delante{}") }, &[&names.join(", "), &more, &made]),
             Some(fix),
         );
         a.details = changes.iter().map(SpaceChange::describe).collect();
         out.push(a);
     } else if let Some(c) = changes.first() {
-        let mut a = advice(Level::Warning, format!("«{}» ({}) manda mucho a la reverb: en los graves embarra la mezcla", c.name, c.role.label()), Some(fix));
+        let mut a = advice(Level::Warning, fill(tr("«{}» ({}) manda mucho a la reverb: en los graves embarra la mezcla"), &[&c.name, &c.role.label()]), Some(fix));
         a.details = changes.iter().map(SpaceChange::describe).collect();
         out.push(a);
     } else if report.tracks.iter().any(|t| t.lufs.is_some() && !t.group && room(t.role).is_some_and(|(r, d)| r + d > 0.0) && t.sends.iter().any(|&s| s > 0.0)) {
-        out.push(advice(Level::Good, "Las pistas tienen su espacio: mandan a reverb o delay".into(), None));
+        out.push(advice(Level::Good, tr("Las pistas tienen su espacio: mandan a reverb o delay").into(), None));
     }
     // Echoes on the voice's last words.
     let echo_s = report.echo * 60.0 / report.tempo.max(1.0);
     for t in report.tracks.iter().filter(|t| t.role == Role::Vocal && !t.group && t.lufs.is_some()) {
         if t.thrown {
-            out.push(advice(Level::Good, format!("«{}» ya tiene sus envíos automatizados", t.name), None));
+            out.push(advice(Level::Good, fill(tr("«{}» ya tiene sus envíos automatizados"), &[&t.name]), None));
             continue;
         }
         let ends = throws(&t.levels, echo_s);
@@ -1905,12 +1879,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         let base = report.space.delay.map_or(0.0, |i| t.sends[i]);
         let mut a = advice(
             Level::Note,
-            format!(
-                "Ecos al final de frase: «{}» deja {} silencios tras sus frases. Abrir el envío al delay en su última palabra hace que el eco los rellene, sin ensuciarla mientras canta{}",
-                t.name,
-                ends.len(),
-                if report.space.delay.is_none() { ". Crea un retorno de delay" } else { "" }
-            ),
+            fill(tr("Ecos al final de frase: «{}» deja {} silencios tras sus frases. Abrir el envío al delay en su última palabra hace que el eco los rellene, sin ensuciarla mientras canta{}"), &[&t.name, &ends.len(), &if report.space.delay.is_none() { tr(". Crea un retorno de delay") } else { "" }]),
             Some(Fix::Throws { track: t.index, name: t.name.clone(), delay: report.space.delay, from: report.start, ends: ends.clone(), base }),
         );
         a.details = vec![ends.iter().take(8).map(|&e| clock(e)).collect::<Vec<_>>().join(" · ") + if ends.len() > 8 { " …" } else { "" }];
@@ -1922,7 +1891,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     if let Some((peak, peak_name)) = peak {
         if cuts.is_empty() {
             if report.sections.iter().any(|s| section_kind(&s.name) == Some(false)) {
-                out.push(advice(Level::Good, format!("«{peak_name}» suena por encima de lo que lleva a él: la canción crece"), None));
+                out.push(advice(Level::Good, fill(tr("«{}» suena por encima de lo que lleva a él: la canción crece"), &[&peak_name]), None));
             }
         } else if report.master_automated {
             // (Its volume moves already: that is left to whoever wrote it.)
@@ -1930,11 +1899,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             let (lead, lead_lufs) = cuts.iter().map(|&(i, _)| (&report.sections[i].name, report.sections[i].lufs.unwrap_or(peak))).max_by(|a, b| a.1.total_cmp(&b.1)).unwrap();
             let mut a = advice(
                 Level::Note,
-                format!(
-                    "«{peak_name}» suena a {} LU de «{lead}»: no crece, y la canción no llega a ningún sitio. Bajar el master en lo que lleva a él lo deja {} LU por encima",
-                    db(peak - lead_lufs),
-                    num(GROW_LU)
-                ),
+                fill(tr("«{}» suena a {} LU de «{}»: no crece, y la canción no llega a ningún sitio. Bajar el master en lo que lleva a él lo deja {} LU por encima"), &[&peak_name, &db(peak - lead_lufs), &lead, &num(GROW_LU)]),
                 Some(Fix::Grow { cuts: cuts.iter().map(|&(i, d)| { let s = &report.sections[i]; (s.name.clone(), s.start, s.end, d) }).collect() }),
             );
             a.details = cuts.iter().map(|&(i, d)| format!("«{}»: {} dB", report.sections[i].name, db(-d as f64))).collect();
@@ -1947,28 +1912,28 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         let hz = MID_HZ[clash.band];
         let made_room = !yields.carves.is_empty() && report.carved.contains(&(yields.id, to.id));
         if carved_at(&yields.carves, hz) || made_room {
-            out.push(advice(Level::Good, format!("«{}» deja hueco a «{}» en {}", yields.name, to.name, freq_label(hz)), None));
+            out.push(advice(Level::Good, fill(tr("«{}» deja hueco a «{}» en {}"), &[&yields.name, &to.name, &freq_label(hz)]), None));
             continue;
         }
         out.push(advice(
             Level::Warning,
-            format!("«{}» y «{}» se tapan en {} el {:.0} % del tiempo: cuesta oír «{}» con claridad", to.name, yields.name, freq_label(hz), clash.share * 100.0, to.name),
+            fill(tr("«{}» y «{}» se tapan en {} el {} % del tiempo: cuesta oír «{}» con claridad"), &[&to.name, &yields.name, &freq_label(hz), &format!("{:.0}", clash.share * 100.0), &to.name]),
             Some(Fix::Carve { track: yields.index, name: yields.name.clone(), hz, for_name: to.name.clone() }),
         ));
     }
     // Stereo.
     if mix.correlation < 0.0 {
-        out.push(advice(Level::Warning, format!("Correlación estéreo {:.2}: hay mucho en contrafase y en mono (un móvil, un club) se perderá", mix.correlation), None));
+        out.push(advice(Level::Warning, fill(tr("Correlación estéreo {}: hay mucho en contrafase y en mono (un móvil, un club) se perderá"), &[&format!("{:.2}", mix.correlation)]), None));
     }
     if mix.upper_correlation > MONO_MIX {
         let changes = widen(&report.tracks);
-        let text = format!("Correlación estéreo {} por encima de {WIDTH_FROM} Hz: la mezcla es casi mono, todo suena en el centro", num2(mix.upper_correlation));
+        let text = fill(tr("Correlación estéreo {} por encima de {} Hz: la mezcla es casi mono, todo suena en el centro"), &[&num2(mix.upper_correlation), &WIDTH_FROM]);
         if changes.is_empty() {
-            out.push(advice(Level::Note, format!("{text}. No queda nada que suela ir a un lado en el centro: dale anchura a los pads o al sample con un chorus o una reverb"), None));
+            out.push(advice(Level::Note, fill(tr("{}. No queda nada que suela ir a un lado en el centro: dale anchura a los pads o al sample con un chorus o una reverb"), &[&text]), None));
         } else {
             let mut a = advice(
                 Level::Note,
-                format!("{text}. Abrir lo que suele ir a los lados (charles, percusión, el sample o los acordes, pads y melodías) le da anchura; el bombo, el bajo, la caja y la voz siguen en el centro"),
+                fill(tr("{}. Abrir lo que suele ir a los lados (charles, percusión, el sample o los acordes, pads y melodías) le da anchura; el bombo, el bajo, la caja y la voz siguen en el centro"), &[&text]),
                 Some(Fix::Widen(changes.clone())),
             );
             a.details = changes.iter().map(Opening::describe).collect();
@@ -1980,36 +1945,36 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
         let was = t.utility.unwrap_or_default();
         let mut parts = Vec::new();
         if fix.flip_right != was.flip_right {
-            parts.push(format!("tiene un canal al revés (correlación {:.2}): en mono casi desaparece. Invertir el derecho lo pone en su sitio", t.correlation));
+            parts.push(fill(tr("tiene un canal al revés (correlación {}): en mono casi desaparece. Invertir el derecho lo pone en su sitio"), &[&format!("{:.2}", t.correlation)]));
         } else if fix.width != was.width {
-            parts.push(format!("es tan abierta (correlación {:.2}) que en mono pierde mucho. Estrecharla al {:.0} % la deja ancha y segura", t.correlation, fix.width * 100.0));
+            parts.push(fill(tr("es tan abierta (correlación {}) que en mono pierde mucho. Estrecharla al {} % la deja ancha y segura"), &[&format!("{:.2}", t.correlation), &format!("{:.0}", fix.width * 100.0)]));
         }
         if fix.bass_mono_hz != was.bass_mono_hz {
-            parts.push(format!("{} los graves abiertos en estéreo: en un club o un móvil (en mono) se pierden o retumban distinto. Ponerlos en mono por debajo de {} Hz los asienta", if parts.is_empty() { "tiene" } else { "y tiene" }, STEREO_LOW));
+            parts.push(fill(if parts.is_empty() { tr("tiene los graves abiertos en estéreo: en un club o un móvil (en mono) se pierden o retumban distinto. Ponerlos en mono por debajo de {} Hz los asienta") } else { tr("y tiene los graves abiertos en estéreo: en un club o un móvil (en mono) se pierden o retumban distinto. Ponerlos en mono por debajo de {} Hz los asienta") }, &[&STEREO_LOW]));
         }
         let level = if fix.flip_right != was.flip_right || fix.width != was.width { Level::Warning } else { Level::Note };
         out.push(advice(level, format!("«{}» {}", t.name, parts.join("; ")), Some(Fix::Stereo { track: t.index, name: t.name.clone(), params: fix })));
     }
     // Dynamics.
     match mix.range {
-        Some(r) if r < 3.0 => out.push(advice(Level::Note, format!("Rango de sonoridad {} LU: muy apretada, apenas cambia de volumen entre partes", num(r)), None)),
-        Some(r) if r > 15.0 => out.push(advice(Level::Note, format!("Rango de sonoridad {} LU: las partes suaves y fuertes están muy lejos (bien para cine o clásica; en una canción, cuesta oír las suaves)", num(r)), None)),
+        Some(r) if r < 3.0 => out.push(advice(Level::Note, fill(tr("Rango de sonoridad {} LU: muy apretada, apenas cambia de volumen entre partes"), &[&num(r)]), None)),
+        Some(r) if r > 15.0 => out.push(advice(Level::Note, fill(tr("Rango de sonoridad {} LU: las partes suaves y fuertes están muy lejos (bien para cine o clásica; en una canción, cuesta oír las suaves)"), &[&num(r)]), None)),
         _ => {}
     }
     // The tonal balance against the reference.
     if let Some(reference) = reference {
         let [low, mid, high] = balance(&mix.bands, &reference.bands);
         let mut fix = [0f32; 3];
-        for (k, (name, d)) in [("Graves", low), ("Medios", mid), ("Agudos", high)].into_iter().enumerate() {
+        for (k, (name, d)) in [(tr("Graves"), low), (tr("Medios"), mid), (tr("Agudos"), high)].into_iter().enumerate() {
             if d.abs() >= 2.0 {
-                out.push(advice(Level::Warning, format!("{name}: {} dB {} que la referencia", num(d.abs()), if d > 0.0 { "más" } else { "menos" }), None));
+                out.push(advice(Level::Warning, fill(if d > 0.0 { tr("{}: {} dB más que la referencia") } else { tr("{}: {} dB menos que la referencia") }, &[&name, &num(d.abs())]), None));
                 fix[k] = (-d).clamp(-6.0, 6.0) as f32;
             }
         }
         if fix != [0.0; 3] {
-            out.push(advice(Level::Note, "Un EQ Three en el master acerca el balance al de la referencia".into(), Some(Fix::MasterEq { low: fix[0], mid: fix[1], high: fix[2] })));
+            out.push(advice(Level::Note, tr("Un EQ Three en el master acerca el balance al de la referencia").into(), Some(Fix::MasterEq { low: fix[0], mid: fix[1], high: fix[2] })));
         } else {
-            out.push(advice(Level::Good, "El balance de graves, medios y agudos se parece al de la referencia".into(), None));
+            out.push(advice(Level::Good, tr("El balance de graves, medios y agudos se parece al de la referencia").into(), None));
         }
     }
     out
@@ -2053,15 +2018,17 @@ pub enum Held {
 impl Held {
     fn says(&self) -> String {
         match self {
-            Held::Gain => format!("El limitador ya le quita {} dB a los picos, lo razonable: más la aplastaría", num(MAX_LIMITER_GAIN as f64)),
-            Held::Section { peak, other } => format!("Más limitador le quitaría a «{peak}» lo que crece sobre «{other}»"),
-            Held::Range => "Más limitador le quitaría la dinámica: todo sonaría igual de fuerte".into(),
+            Held::Gain => fill(tr("El limitador ya le quita {} dB a los picos, lo razonable: más la aplastaría"), &[&num(MAX_LIMITER_GAIN as f64)]),
+            Held::Section { peak, other } => fill(tr("Más limitador le quitaría a «{}» lo que crece sobre «{}»"), &[&peak, &other]),
+            Held::Range => tr("Más limitador le quitaría la dinámica: todo sonaría igual de fuerte").into(),
         }
     }
 }
 
 /// What to do for more loudness than the limiter gives without squashing.
-const LOUDER_WITHOUT_SQUASHING: &str = "Para más volumen sin aplastarla: sube la mezcla antes del master (los faders, sin que el master pase de 0 dBFS), comprime el bus (un Compressor suave antes del limitador: 2:1, que quite 2 o 3 dB) o satura la batería y el bajo";
+fn louder_without_squashing() -> &'static str {
+    tr("Para más volumen sin aplastarla: sube la mezcla antes del master (los faders, sin que el master pase de 0 dBFS), comprime el bus (un Compressor suave antes del limitador: 2:1, que quite 2 o 3 dB) o satura la batería y el bajo")
+}
 
 /// The limiter held back, for a target: at what gain, and why.
 #[derive(Clone, Debug, PartialEq)]
@@ -2291,7 +2258,9 @@ pub struct ReferenceJob {
 }
 
 /// Said when a measuring thread ends without a result (it failed).
-const INTERRUPTED: &str = "El análisis se interrumpió por un fallo interno: vuelve a intentarlo";
+fn interrupted() -> &'static str {
+    tr("El análisis se interrumpió por un fallo interno: vuelve a intentarlo")
+}
 
 /// What a job's thread left in `result`: `Some(None)` when it ended without
 /// one. Whether it ended is asked first, so a result set just before the end
@@ -2443,8 +2412,8 @@ impl PulseApp {
     fn analyze(&mut self, mix: bool) {
         if export::beat_range(&self.project, self.mix.range).is_none() {
             self.status = Some(match self.mix.range {
-                Range::Song | Range::Sections => "El Arrangement está vacío: coloca clips en él para analizar la canción (o analiza el loop)".into(),
-                Range::Loop => "El loop está vacío".into(),
+                Range::Song | Range::Sections => tr("El Arrangement está vacío: coloca clips en él para analizar la canción (o analiza el loop)").into(),
+                Range::Loop => tr("El loop está vacío").into(),
             });
             self.mix.auto = None;
             return;
@@ -2596,7 +2565,7 @@ impl PulseApp {
                     }
                 })
             });
-            let outcome = measured.map_err(|_| "Análisis cancelado".to_string()).and_then(|all| {
+            let outcome = measured.map_err(|_| tr("Análisis cancelado").to_string()).and_then(|all| {
                 let (mut mix, mut sections) = (None, Vec::new());
                 let mut tracks = kept;
                 for m in all {
@@ -2611,7 +2580,7 @@ impl PulseApp {
                         sections = s;
                         m
                     }
-                    (None, None) => return Err("Nada que analizar".to_string()),
+                    (None, None) => return Err(tr("Nada que analizar").to_string()),
                 };
                 tracks.sort_by_key(|t| t.index);
                 for t in &mut tracks {
@@ -2625,7 +2594,7 @@ impl PulseApp {
         });
         self.mix.mix_stale = !mix;
         self.mix.job = Some(Job { progress, cancel, result, thread });
-        self.status = Some(if mix { "Analizando la mezcla…" } else { "Midiendo las pistas…" }.into());
+        self.status = Some(if mix { tr("Analizando la mezcla…") } else { tr("Midiendo las pistas…") }.into());
     }
 
     /// Measures a song to compare the mix with (in the background).
@@ -2636,10 +2605,10 @@ impl PulseApp {
     }
 
     pub fn load_reference(&mut self, path: &std::path::Path) {
-        let name = path.file_stem().map_or("Referencia".into(), |s| s.to_string_lossy().into_owned());
+        let name = path.file_stem().map_or(tr("Referencia").into(), |s| s.to_string_lossy().into_owned());
         let sample = self.sample(&path.to_string_lossy());
         if sample.frames() == 0 {
-            self.status = Some(format!("No se pudo leer «{name}»"));
+            self.status = Some(fill(tr("No se pudo leer «{}»"), &[&name]));
             return;
         }
         let result = Arc::new(Mutex::new(None));
@@ -2658,7 +2627,7 @@ impl PulseApp {
         // Changed while comparing (an edit, an undo): what it is plays again.
         if self.mix.listening.as_ref().is_some_and(|l| l.at != self.project) {
             self.stop_listening();
-            self.status = Some("Has cambiado la mezcla: vuelve a sonar como está".into());
+            self.status = Some(tr("Has cambiado la mezcla: vuelve a sonar como está").into());
         }
         if self.mix.job.is_none() && self.mix.reference_job.is_none() {
             return;
@@ -2671,11 +2640,11 @@ impl PulseApp {
                     self.mix.reference = Some((name, measures));
                     self.mix.reference_job = None;
                     if self.mix.target != Target::Reference && self.mix.report.is_some() {
-                        self.status = Some("Referencia lista: los consejos ya la comparan".into());
+                        self.status = Some(tr("Referencia lista: los consejos ya la comparan").into());
                     }
                 }
                 Some(None) => {
-                    self.status = Some(format!("No se pudo medir «{}»: {INTERRUPTED}", job.name));
+                    self.status = Some(fill(tr("No se pudo medir «{}»: {}"), &[&job.name, &interrupted()]));
                     self.mix.reference_job = None;
                 }
                 None => {}
@@ -2683,15 +2652,15 @@ impl PulseApp {
         }
         let Some(job) = &self.mix.job else { return };
         let Some(outcome) = take_result(&job.result, &job.thread) else { return };
-        let outcome = outcome.unwrap_or_else(|| Err(INTERRUPTED.to_string()));
+        let outcome = outcome.unwrap_or_else(|| Err(interrupted().to_string()));
         self.mix.job = None;
         match outcome {
             Ok(Done::Loud { trial, held, ceiling_db, mix }) => self.set_loudness(trial, held, ceiling_db, mix),
             Ok(Done::Report(report, keys)) => {
                 self.status = Some(match (self.mix.mix_stale, report.mix.lufs) {
-                    (true, _) => "Pistas medidas".into(),
-                    (false, Some(l)) => format!("Mezcla analizada: {} LUFS, pico real {} dBTP", num(l), db(report.mix.true_peak)),
-                    (false, None) => "Mezcla analizada: está en silencio".into(),
+                    (true, _) => tr("Pistas medidas").into(),
+                    (false, Some(l)) => fill(tr("Mezcla analizada: {} LUFS, pico real {} dBTP"), &[&num(l), &db(report.mix.true_peak)]),
+                    (false, None) => tr("Mezcla analizada: está en silencio").into(),
                 });
                 self.mix.keys = Some((self.mix.range, keys));
                 self.mix.report = Some(report);
@@ -2774,7 +2743,7 @@ impl PulseApp {
         if self.mix.mix_stale && !loudness && next.as_ref().is_none_or(|f| stage(f) >= stage(&Fix::Grow { cuts: Vec::new() })) {
             self.analyze(true);
             if self.mix.auto.is_some() {
-                self.status = Some(format!("Mezcla completa, paso {}: midiendo la mezcla…", done.len() + 1));
+                self.status = Some(fill(tr("Mezcla completa, paso {}: midiendo la mezcla…"), &[&(done.len() + 1)]));
             }
             return;
         }
@@ -2784,7 +2753,7 @@ impl PulseApp {
             let mut balanced = false;
             for fix in &done {
                 let label = match fix {
-                    Fix::Balance(_) if balanced => "volúmenes reajustados".into(),
+                    Fix::Balance(_) if balanced => tr("volúmenes reajustados").into(),
                     _ => fix_label(fix),
                 };
                 balanced |= matches!(fix, Fix::Balance(_));
@@ -2793,8 +2762,8 @@ impl PulseApp {
                 }
             }
             let summary = match labels.is_empty() {
-                true => "Mezcla completa: no había nada que cambiar".to_string(),
-                false => format!("Mezcla completa en {} pasos: {}. Cada paso se deshace con ⌘Z", done.len(), labels.join(", ")),
+                true => tr("Mezcla completa: no había nada que cambiar").to_string(),
+                false => fill(tr("Mezcla completa en {} pasos: {}. Cada paso se deshace con ⌘Z"), &[&done.len(), &labels.join(", ")]),
             };
             // What the limiter could not reach stays said.
             self.mix.note = Some(match self.mix.note.take() {
@@ -2828,7 +2797,7 @@ impl PulseApp {
             }
             if self.mix.auto.is_some() {
                 let names: Vec<String> = carves.iter().map(fix_label).collect();
-                self.status = Some(format!("Mezcla completa, paso {step}: {}…", names.join(", ")));
+                self.status = Some(fill(tr("Mezcla completa, paso {}: {}…"), &[&step, &names.join(", ")]));
             }
             return;
         }
@@ -2838,7 +2807,7 @@ impl PulseApp {
             _ => self.apply_fix(&fix),
         }
         if self.mix.auto.is_some() {
-            self.status = Some(format!("Mezcla completa, paso {step}: {}…", fix_label(&fix)));
+            self.status = Some(fill(tr("Mezcla completa, paso {}: {}…"), &[&step, &fix_label(&fix)]));
         }
     }
 
@@ -2895,10 +2864,10 @@ impl PulseApp {
         let (p, c, r) = (progress.clone(), cancel.clone(), result.clone());
         let thread = std::thread::spawn(move || {
             let rendered = export::render_each(renders, RATE, &p, &c, |_, left, right| Ok((left, right)));
-            let outcome = rendered.map_err(|_| "Cancelado".to_string()).and_then(|mut all| {
-                let (left, right) = all.pop().ok_or("Nada que medir")?;
+            let outcome = rendered.map_err(|_| tr("Cancelado").to_string()).and_then(|mut all| {
+                let (left, right) = all.pop().ok_or(tr("Nada que medir"))?;
                 let fader = master_gains(&master, tempo, start, left.len());
-                let (trial, held) = loudest_gain(&left, &right, &fader, limiter, &sections, goal, max_peak, &c).ok_or("La mezcla está en silencio")?;
+                let (trial, held) = loudest_gain(&left, &right, &fader, limiter, &sections, goal, max_peak, &c).ok_or(tr("La mezcla está en silencio"))?;
                 let mix = alone.then(|| {
                     let (mut l, mut r) = (left, right);
                     engine::OfflineLimiter::new(LimiterParams { gain_db: (trial.gain_db * 10.0).round() / 10.0, ..limiter }, RATE).process(&mut l, &mut r, RATE);
@@ -2917,7 +2886,7 @@ impl PulseApp {
             }
         });
         self.mix.job = Some(Job { progress, cancel, result, thread });
-        self.status = Some("Buscando la ganancia del limitador…".into());
+        self.status = Some(tr("Buscando la ganancia del limitador…").into());
     }
 
     /// The limiter's gain found (see [`PulseApp::reach_loudness`]): set, said
@@ -2933,9 +2902,9 @@ impl PulseApp {
         let goal = self.mix.target.levels(reference.as_ref()).map(|l| l.0);
         self.mix.limited = held.clone().map(|held| Limited { target: self.mix.target, gain_db: gain, held });
         if let (Some(held), Some(goal), Some(lufs)) = (held, goal, trial.lufs) {
-            self.mix.note = Some(format!("Con el limitador a {} dB se queda en unos {} LUFS, {} dB por debajo de {}. {}. {LOUDER_WITHOUT_SQUASHING}", db(gain as f64), num(lufs), num(goal - lufs), num(goal), held.says()));
+            self.mix.note = Some(fill(tr("Con el limitador a {} dB se queda en unos {} LUFS, {} dB por debajo de {}. {}. {}"), &[&db(gain as f64), &num(lufs), &num(goal - lufs), &num(goal), &held.says(), &louder_without_squashing()]));
         }
-        self.status = Some(format!("Limitador del master: {} dB, techo {} dB", db(gain as f64), num(ceiling_db as f64)));
+        self.status = Some(fill(tr("Limitador del master: {} dB, techo {} dB"), &[&db(gain as f64), &num(ceiling_db as f64)]));
         self.sync_all();
         // The mix as it comes out, measured already: the analysis has it.
         if let (Some((measures, sections)), Some(report)) = (mix, self.mix.report.as_mut()) {
@@ -3031,7 +3000,7 @@ impl PulseApp {
                     }
                     None => devices.push(Device::new(Effect::Limiter(LimiterParams { gain_db: gain_db.clamp(-24.0, MAX_LIMITER_GAIN), ceiling_db: *ceiling_db, ..Default::default() }))),
                 }
-                self.status = Some("Limitador del master ajustado".into());
+                self.status = Some(tr("Limitador del master ajustado").into());
             }
             Fix::TrackGain { track, name, db } if track_ok(self, *track, name) => {
                 louder(&mut self.project.tracks[*track], *db);
@@ -3041,11 +3010,11 @@ impl PulseApp {
                 // Listening to the drums; a quarter of a beat to come back.
                 let sidechain = self.project.tracks.iter().any(|t| t.id == *source).then_some(*source);
                 self.project.tracks[*track].devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.6, release: 0.25, rate_beats: 1.0, sidechain, ..Default::default() })));
-                self.status = Some(format!("Ducker en «{name}» con sidechain de «{source_name}»: se aparta cada vez que suena"));
+                self.status = Some(fill(tr("Ducker en «{}» con sidechain de «{}»: se aparta cada vez que suena"), &[&name, &source_name]));
             }
             Fix::CutLows { track, name } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -9.0, low_freq: 150.0, ..Default::default() })));
-                self.status = Some(format!("Graves de «{name}» recortados (EQ Three)"));
+                self.status = Some(fill(tr("Graves de «{}» recortados (EQ Three)"), &[&name]));
             }
             Fix::MasterEq { low, mid, high } => {
                 let devices = &mut self.project.master.devices;
@@ -3059,16 +3028,16 @@ impl PulseApp {
                     }
                     None => self.insert_master(at, Device::new(Effect::Eq3(Eq3Params { low_db: *low, mid_db: *mid, high_db: *high, ..Default::default() }))),
                 }
-                self.status = Some("EQ Three del master ajustado a la referencia".into());
+                self.status = Some(tr("EQ Three del master ajustado a la referencia").into());
             }
             Fix::Glue { track: Some(t), name, params } if track_ok(self, *t, name) && self.project.tracks[*t].is_group() => {
                 self.project.tracks[*t].devices.push(Device::new(Effect::Glue(*params)));
-                self.status = Some(format!("Compresor de bus en «{name}»: umbral {} dB, {}", num(params.threshold_db as f64), params.ratio.label()));
+                self.status = Some(fill(tr("Compresor de bus en «{}»: umbral {} dB, {}"), &[&name, &num(params.threshold_db as f64), &params.ratio.label()]));
             }
             Fix::Glue { track: None, params, .. } if !self.project.master.devices.iter().any(|d| d.enabled && matches!(d.effect, Effect::Glue(_) | Effect::Compressor(_))) => {
                 // First on the master: before its EQ, its clipper and its limiter.
                 self.insert_master(0, Device::new(Effect::Glue(*params)));
-                self.status = Some(format!("Compresor de bus en el master: umbral {} dB, {}", num(params.threshold_db as f64), params.ratio.label()));
+                self.status = Some(fill(tr("Compresor de bus en el master: umbral {} dB, {}"), &[&num(params.threshold_db as f64), &params.ratio.label()]));
             }
             Fix::Balance(changes) if changes.iter().all(|c| track_ok(self, c.track, &c.name)) => {
                 for c in changes {
@@ -3085,7 +3054,7 @@ impl PulseApp {
                         track.devices.push(Device::new(Effect::EqEight(eq)));
                     }
                 }
-                self.status = Some(format!("Mezcla de partida: {} pistas en su sitio (⌘Z lo deshace)", changes.len()));
+                self.status = Some(fill(tr("Mezcla de partida: {} pistas en su sitio (⌘Z lo deshace)"), &[&changes.len()]));
             }
             Fix::Widen(changes) if changes.iter().all(|c| track_ok(self, c.track, &c.name)) => {
                 for c in changes {
@@ -3095,7 +3064,7 @@ impl PulseApp {
                         track.devices.push(Device::new(Effect::Chorus(WIDE_CHORUS)));
                     }
                 }
-                self.status = Some(format!("Mezcla abierta: {} {} a los lados (⌘Z lo deshace)", changes.len(), if changes.len() == 1 { "pista" } else { "pistas" }));
+                self.status = Some(if changes.len() == 1 { tr("Mezcla abierta: 1 pista a los lados (⌘Z lo deshace)").to_string() } else { fill(tr("Mezcla abierta: {} pistas a los lados (⌘Z lo deshace)"), &[&changes.len()]) });
             }
             Fix::Carve { track, name, hz, for_name } if track_ok(self, *track, name) => {
                 if let Some(to) = self.project.tracks.iter().find(|t| &t.name == for_name).map(|t| t.id) {
@@ -3121,11 +3090,11 @@ impl PulseApp {
                         devices.push(Device::new(Effect::EqEight(eq)));
                     }
                 }
-                self.status = Some(format!("«{name}» deja hueco a «{for_name}» en {} (EQ Eight, {CARVE_DB} dB)", freq_label(*hz)));
+                self.status = Some(fill(tr("«{}» deja hueco a «{}» en {} (EQ Eight, {} dB)"), &[&name, &for_name, &freq_label(*hz), &CARVE_DB]));
             }
             Fix::Compress { track, name, params } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::Compressor(*params)));
-                self.status = Some(format!("Compresor en «{name}»: umbral {} dB, {}:1", num(params.threshold_db as f64), num(params.ratio as f64)));
+                self.status = Some(fill(tr("Compresor en «{}»: umbral {} dB, {}:1"), &[&name, &num(params.threshold_db as f64), &num(params.ratio as f64)]));
             }
             Fix::Space { reverb, delay, changes } if changes.iter().all(|c| track_ok(self, c.track, &c.name)) && Space::of(&self.project.returns) == Space { reverb: *reverb, delay: *delay, returns: self.project.returns.len() } => {
                 let wants = |f: fn(&SpaceChange) -> Option<f32>| changes.iter().any(|c| f(c).unwrap_or(0.0) > 0.0);
@@ -3151,8 +3120,8 @@ impl PulseApp {
                     }
                 }
                 self.status = Some(match made.is_empty() {
-                    true => format!("Espacio de partida: {} pistas con su reverb y su delay (⌘Z lo deshace)", changes.len()),
-                    false => format!("Espacio de partida: {} pistas, y nuevo{} {} (⌘Z lo deshace)", changes.len(), if made.len() > 1 { "s" } else { "" }, made.iter().map(|n| format!("«{n}»")).collect::<Vec<_>>().join(" y ")),
+                    true => fill(tr("Espacio de partida: {} pistas con su reverb y su delay (⌘Z lo deshace)"), &[&changes.len()]),
+                    false => fill(if made.len() > 1 { tr("Espacio de partida: {} pistas, y nuevos {} (⌘Z lo deshace)") } else { tr("Espacio de partida: {} pistas, y nuevo {} (⌘Z lo deshace)") }, &[&changes.len(), &made.iter().map(|n| format!("«{n}»")).collect::<Vec<_>>().join(tr(" y "))]),
                 });
             }
             Fix::Throws { track, name, delay, from, ends, base } if track_ok(self, *track, name) && Space::of(&self.project.returns).delay == *delay => {
@@ -3164,7 +3133,7 @@ impl PulseApp {
                         i
                     }
                     None => {
-                        self.status = Some("No queda sitio para un retorno de delay".into());
+                        self.status = Some(tr("No queda sitio para un retorno de delay").into());
                         self.mix.auto = None;
                         return false;
                     }
@@ -3177,7 +3146,7 @@ impl PulseApp {
                 lane.points = points;
                 lane.sort();
                 automation.push(lane);
-                self.status = Some(format!("Ecos de «{name}» en {} finales de frase (⌘Z lo deshace)", ends.len()));
+                self.status = Some(fill(tr("Ecos de «{}» en {} finales de frase (⌘Z lo deshace)"), &[&name, &ends.len()]));
             }
             Fix::Stereo { track, name, params } if track_ok(self, *track, name) => {
                 let devices = &mut self.project.tracks[*track].devices;
@@ -3185,7 +3154,7 @@ impl PulseApp {
                     Some(u) => *u = *params,
                     None => devices.push(Device::new(Effect::Utility(*params))),
                 }
-                self.status = Some(format!("Utility de «{name}» ajustado"));
+                self.status = Some(fill(tr("Utility de «{}» ajustado"), &[&name]));
             }
             Fix::Grow { cuts } if !self.project.master.automation.iter().any(|l| l.param == Param::Volume && !l.points.is_empty()) => {
                 let base = self.project.master.mixer.gain;
@@ -3210,11 +3179,11 @@ impl PulseApp {
                 lane.points = points.into_iter().filter(|p| p.0 >= 0.0).map(|(beat, value)| engine::model::AutomationPoint { beat, value, curve: 0.0 }).collect();
                 lane.sort();
                 self.project.master.automation.push(lane);
-                self.status = Some(format!("Master más bajo en {} (⌘Z lo deshace)", cuts.iter().map(|c| format!("«{}» {} dB", c.0, db(-c.3 as f64))).collect::<Vec<_>>().join(", ")));
+                self.status = Some(fill(tr("Master más bajo en {} (⌘Z lo deshace)"), &[&cuts.iter().map(|c| format!("«{}» {} dB", c.0, db(-c.3 as f64))).collect::<Vec<_>>().join(", ")]));
             }
             Fix::DeEss { track, name, params } if track_ok(self, *track, name) => {
                 self.project.tracks[*track].devices.push(Device::new(Effect::DeEsser(*params)));
-                self.status = Some(format!("De-esser en «{name}»: {}, umbral {} dB", freq_label(params.freq_hz), num(params.threshold_db as f64)));
+                self.status = Some(fill(tr("De-esser en «{}»: {}, umbral {} dB"), &[&name, &freq_label(params.freq_hz), &num(params.threshold_db as f64)]));
             }
             Fix::Ride { track, name, from, phrases, gains } if track_ok(self, *track, name) => {
                 let fader = self.project.tracks[*track].mixer.gain;
@@ -3229,10 +3198,10 @@ impl PulseApp {
                 lane.sort();
                 automation.push(lane);
                 self.sync_automation(engine::Target::Track(*track));
-                self.status = Some(format!("«{name}» nivelada: {} frases con automatización de volumen (⌘Z lo deshace)", gains.iter().filter(|g| **g != 0.0).count()));
+                self.status = Some(fill(tr("«{}» nivelada: {} frases con automatización de volumen (⌘Z lo deshace)"), &[&name, &gains.iter().filter(|g| **g != 0.0).count()]));
             }
             _ => {
-                self.status = Some("Esa pista ya no está donde estaba: vuelve a analizar".into());
+                self.status = Some(tr("Esa pista ya no está donde estaba: vuelve a analizar").into());
                 self.mix.auto = None;
                 return false;
             }
@@ -3251,7 +3220,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    egui::Window::new("Asistente de mezcla y master")
+    egui::Window::new(tr("Asistente de mezcla y master"))
         .id(egui::Id::new("mix assistant"))
         .open(&mut open)
         .collapsible(false)
@@ -3268,19 +3237,19 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 
 fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
-        ui.selectable_value(&mut app.mix.range, Range::Song, "La canción");
-        ui.selectable_value(&mut app.mix.range, Range::Loop, "El loop");
+        ui.selectable_value(&mut app.mix.range, Range::Song, tr("La canción"));
+        ui.selectable_value(&mut app.mix.range, Range::Loop, tr("El loop"));
         match &app.mix.job {
             Some(job) => {
                 let progress = f32::from_bits(job.progress.load(Ordering::Relaxed));
-                ui.add(egui::ProgressBar::new(progress).desired_width(180.0).text("Analizando…"));
-                if ui.button("Cancelar").clicked() {
+                ui.add(egui::ProgressBar::new(progress).desired_width(180.0).text(tr("Analizando…")));
+                if ui.button(tr("Cancelar")).clicked() {
                     job.cancel.store(true, Ordering::Relaxed);
                 }
             }
             None => {
-                let label = if app.mix.report.is_some() { "Volver a analizar" } else { "Analizar la mezcla" };
-                if ui.button(label).on_hover_text("La toca entera sin sonido (más rápido que en tiempo real), y cada pista sola, y las mide").clicked() {
+                let label = if app.mix.report.is_some() { tr("Volver a analizar") } else { tr("Analizar la mezcla") };
+                if ui.button(label).on_hover_text(tr("La toca entera sin sonido (más rápido que en tiempo real), y cada pista sola, y las mide")).clicked() {
                     app.mix.note = None;
                     app.analyze_mix();
                 }
@@ -3288,7 +3257,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
     });
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Destino").color(TEXT_DIM));
+        ui.label(RichText::new(tr("Destino")).color(TEXT_DIM));
         let has_reference = app.mix.reference.is_some();
         egui::ComboBox::from_id_salt("mix target").selected_text(app.mix.target.label()).width(250.0).show_ui(ui, |ui| {
             for target in Target::ALL {
@@ -3299,14 +3268,14 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         });
     });
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Referencia").color(TEXT_DIM));
+        ui.label(RichText::new(tr("Referencia")).color(TEXT_DIM));
         match (&app.mix.reference, &app.mix.reference_job) {
             (_, Some(job)) => {
-                ui.label(format!("Midiendo «{}»…", job.name));
+                ui.label(fill(tr("Midiendo «{}»…"), &[&job.name]));
             }
             (Some((name, m)), None) => {
                 ui.label(RichText::new(format!("«{name}»: {} LUFS", m.lufs.map_or("—".into(), num))).color(TEXT));
-                if ui.small_button("Quitar").clicked() {
+                if ui.small_button(tr("Quitar")).clicked() {
                     app.mix.reference = None;
                     if app.mix.target == Target::Reference {
                         app.mix.target = Target::Streaming;
@@ -3315,27 +3284,27 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             }
             (None, None) => {}
         }
-        if ui.button("Elegir canción…").on_hover_text("Una canción que suene como quieres que suene la tuya: compara la sonoridad y el balance de graves, medios y agudos").clicked() {
+        if ui.button(tr("Elegir canción…")).on_hover_text(tr("Una canción que suene como quieres que suene la tuya: compara la sonoridad y el balance de graves, medios y agudos")).clicked() {
             app.choose_reference();
         }
     });
     ui.separator();
     let Some(report) = app.mix.report.clone() else {
-        ui.label(RichText::new("Analiza la mezcla para ver su sonoridad, sus picos y qué mejorar para el destino elegido.").color(TEXT_DIM));
+        ui.label(RichText::new(tr("Analiza la mezcla para ver su sonoridad, sus picos y qué mejorar para el destino elegido.")).color(TEXT_DIM));
         return;
     };
     if app.mix.stale && app.mix.job.is_some() {
-        ui.label(RichText::new("Has cambiado la mezcla: se está volviendo a analizar").color(ACCENT).size(10.5));
+        ui.label(RichText::new(tr("Has cambiado la mezcla: se está volviendo a analizar")).color(ACCENT).size(10.5));
     }
     let m = &report.mix;
     egui::Grid::new("mix numbers").num_columns(5).spacing(vec2(18.0, 2.0)).show(ui, |ui| {
-        for title in ["Sonoridad", "Pico real", "Rango", "Lo más fuerte", "Estéreo"] {
+        for title in [tr("Sonoridad"), tr("Pico real"), tr("Rango"), tr("Lo más fuerte"), tr("Estéreo")] {
             ui.label(RichText::new(title).color(TEXT_DIM).size(10.5));
         }
         ui.end_row();
         let big = |text: String| RichText::new(text).size(20.0).strong();
         ui.label(big(m.lufs.map_or("—".into(), |l| format!("{} LUFS", num(l)))));
-        ui.label(big(format!("{} dBTP", db(m.true_peak)))).on_hover_text(format!("Entre muestras; el pico de las muestras es {} dBFS", db(m.peak)));
+        ui.label(big(format!("{} dBTP", db(m.true_peak)))).on_hover_text(fill(tr("Entre muestras; el pico de las muestras es {} dBFS"), &[&db(m.peak)]));
         ui.label(big(m.range.map_or("—".into(), |r| format!("{} LU", num(r)))));
         ui.label(big(m.short_max.map_or("—".into(), |l| format!("{} LUFS", num(l)))));
         ui.label(big(format!("{:.2}", m.correlation)));
@@ -3349,16 +3318,16 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     let busy = app.mix.job.is_some();
     let mut all = false;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Consejos").strong());
+        ui.label(RichText::new(tr("Consejos")).strong());
         match &app.mix.auto {
             Some(done) => {
-                ui.label(RichText::new(format!("Mezclando: paso {}…", done.len())).color(ACCENT));
+                ui.label(RichText::new(fill(tr("Mezclando: paso {}…"), &[&done.len()])).color(ACCENT));
             }
             None => {
                 let any = next_fix(&list, &[]).is_some();
                 all = ui
-                    .add_enabled(!busy && any, egui::Button::new("Aplicar todo").small())
-                    .on_hover_text("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, ecos, compresor de bus, secciones, y el master. Vuelve a medir después de cada uno")
+                    .add_enabled(!busy && any, egui::Button::new(tr("Aplicar todo")).small())
+                    .on_hover_text(tr("Hace los cambios de los consejos en el orden de una mezcla: picos, volúmenes y panoramas, graves, medios, compresión, eses, voz nivelada, reverb y delay, ecos, compresor de bus, secciones, y el master. Vuelve a medir después de cada uno"))
                     .clicked();
             }
         }
@@ -3373,7 +3342,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(mark).color(color));
             ui.label(&a.text);
             if let Some(fix) = &a.fix {
-                if ui.add_enabled(!busy, egui::Button::new("Aplicar").small()).on_hover_text(fix_hint(fix)).clicked() {
+                if ui.add_enabled(!busy, egui::Button::new(tr("Aplicar")).small()).on_hover_text(fix_hint(fix)).clicked() {
                     chosen = Some(fix.clone());
                 }
             }
@@ -3399,19 +3368,19 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
     }
     ui.add_space(6.0);
-    ui.label(RichText::new("Balance por octavas").strong());
+    ui.label(RichText::new(tr("Balance por octavas")).strong());
     balance_chart(ui, &m.bands, reference.as_ref().map(|r| &r.bands));
     ui.add_space(6.0);
-    egui::CollapsingHeader::new("Pistas").default_open(false).show(ui, |ui| {
+    egui::CollapsingHeader::new(tr("Pistas")).id_salt("mix tracks header").default_open(false).show(ui, |ui| {
         egui::Grid::new("mix tracks").striped(true).spacing(vec2(14.0, 2.0)).show(ui, |ui| {
-            for title in ["Pista", "Pico", "Sonoridad", "Estéreo"] {
+            for title in [tr("Pista"), tr("Pico"), tr("Sonoridad"), tr("Estéreo")] {
                 ui.label(RichText::new(title).color(TEXT_DIM).size(10.5));
             }
             ui.end_row();
             for t in &report.tracks {
                 ui.label(&t.name);
                 ui.label(RichText::new(format!("{} dBFS", db(t.peak))).color(if t.peak > 0.0 { METER_RED } else { TEXT }));
-                ui.label(t.lufs.map_or("silencio".into(), |l| format!("{} LUFS", num(l))));
+                ui.label(t.lufs.map_or(tr("silencio").into(), |l| format!("{} LUFS", num(l))));
                 ui.label(format!("{:.2}", t.correlation));
                 ui.end_row();
             }
@@ -3430,19 +3399,19 @@ fn compare_row(app: &mut PulseApp, ui: &mut egui::Ui) {
     let now = app.mix.report.as_ref().filter(|_| !app.mix.stale && app.mix.job.is_none()).and_then(|r| r.mix.lufs);
     let mut choice = None;
     ui.horizontal(|ui| {
-        ui.label(RichText::new("Escuchar").color(TEXT_DIM));
-        if ui.selectable_label(listening == Some(true), "Antes").on_hover_text("La mezcla como estaba antes de los cambios del asistente").clicked() {
+        ui.label(RichText::new(tr("Escuchar")).color(TEXT_DIM));
+        if ui.selectable_label(listening == Some(true), tr("Antes")).on_hover_text(tr("La mezcla como estaba antes de los cambios del asistente")).clicked() {
             choice = Some(Some(true));
         }
-        if ui.selectable_label(listening == Some(false), "Después").on_hover_text("La mezcla como está ahora").clicked() {
+        if ui.selectable_label(listening == Some(false), tr("Después")).on_hover_text(tr("La mezcla como está ahora")).clicked() {
             choice = Some(Some(false));
         }
-        if listening.is_some() && ui.small_button("Dejar de comparar").clicked() {
+        if listening.is_some() && ui.small_button(tr("Dejar de comparar")).clicked() {
             choice = Some(None);
         }
         let text = match (old_lufs, now) {
-            (Some(b), Some(n)) => format!("al mismo volumen (antes {} LUFS, ahora {}), para que lo más fuerte no te engañe", num(b), num(n)),
-            _ => "sin igualar el volumen: vuelve a analizar".into(),
+            (Some(b), Some(n)) => fill(tr("al mismo volumen (antes {} LUFS, ahora {}), para que lo más fuerte no te engañe"), &[&num(b), &num(n)]),
+            _ => tr("sin igualar el volumen: vuelve a analizar").into(),
         };
         ui.label(RichText::new(text).color(TEXT_DIM).size(10.5));
     });
@@ -3450,7 +3419,7 @@ fn compare_row(app: &mut PulseApp, ui: &mut egui::Ui) {
         Some(Some(before)) => {
             app.listen(before);
             if !app.audio.is_playing() {
-                app.status = Some("Dale a reproducir para oírlas".into());
+                app.status = Some(tr("Dale a reproducir para oírlas").into());
             }
         }
         Some(None) => app.stop_listening(),
@@ -3475,41 +3444,31 @@ fn fix_hint(fix: &Fix) -> String {
         Fix::Stereo { name, params, .. } => {
             let mut what = Vec::new();
             if params.flip_right {
-                what.push("invierte el canal derecho".to_string());
+                what.push(tr("invierte el canal derecho").to_string());
             }
             if params.width < 1.0 {
-                what.push(format!("ancho al {:.0} %", params.width * 100.0));
+                what.push(fill(tr("ancho al {} %"), &[&format!("{:.0}", params.width * 100.0)]));
             }
             if params.bass_mono_hz > 0.0 {
-                what.push(format!("graves en mono por debajo de {:.0} Hz", params.bass_mono_hz));
+                what.push(fill(tr("graves en mono por debajo de {} Hz"), &[&format!("{:.0}", params.bass_mono_hz)]));
             }
-            format!("Utility en «{name}»: {}", what.join(", "))
+            fill(tr("Utility en «{}»: {}"), &[&name, &what.join(", ")])
         }
-        Fix::Grow { .. } => "Escribe automatización de volumen en el master: baja lo que lleva al estribillo o al drop para que estos suenen más grandes, sin tocar el limitador".into(),
-        Fix::Throws { name, .. } => format!("Escribe automatización en el envío de «{name}» al delay: se abre al {:.0} % en la última palabra de cada frase que acaba en silencio y vuelve a donde estaba al acabar", THROW * 100.0),
-        Fix::DeEss { name, params, .. } => format!("Añade un De-esser a «{name}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)", freq_label(params.freq_hz), num(params.threshold_db as f64), num(params.range_db as f64)),
-        Fix::Ride { name, .. } => format!("Escribe automatización de volumen en «{name}»: cada frase sube o baja (como mucho {RIDE_MAX} dB) para quedar igual de por encima de la base. Los cambios caen en los silencios entre frases"),
-        Fix::MasterLimiter { gain_db, ceiling_db } => format!("Limiter en el master: ganancia {gain_db:+.1} dB, techo {ceiling_db:.1} dB"),
-        Fix::TrackGain { name, db, .. } => format!("Volumen de «{name}» {db:+.1} dB"),
-        Fix::Duck { name, source_name, .. } => format!("Añade un Ducker a «{name}» que escucha a «{source_name}» (sidechain): baja cuando suena, para dejarle sitio"),
-        Fix::CutLows { name, .. } => format!("Añade un EQ Three a «{name}» con los graves (bajo 150 Hz) a −9 dB"),
-        Fix::MasterEq { low, mid, high } => format!("EQ Three en el master: graves {low:+.1}, medios {mid:+.1}, agudos {high:+.1} dB"),
-        Fix::Carve { name, hz, for_name, .. } => format!("Baja {} dB «{name}» en {} (un EQ Eight, campana estrecha) para que «{for_name}» se oiga ahí", -CARVE_DB, freq_label(*hz)),
-        Fix::Compress { name, params, .. } => format!(
-            "Añade un Compressor a «{name}»: umbral {:.1} dB, ratio {}:1, ataque {:.0} ms, release {:.0} ms (una semicorchea al tempo; el bajo, una corchea) y {:+.1} dB de ganancia para que siga igual de fuerte",
-            params.threshold_db, params.ratio, params.attack_ms, params.release_ms, params.makeup_db
-        ),
-        Fix::Glue { track, name, params } => format!(
-            "Añade un Compresor de bus a {}: umbral {:.1} dB, ratio {}, ataque {:.0} ms, release automático, y el detector sin graves por debajo de {:.0} Hz (el bombo no lo hace bombear)",
-            if track.is_some() { format!("«{name}»") } else { "el master, antes del limitador".into() },
-            params.threshold_db,
-            params.ratio.label(),
-            params.attack_ms,
-            params.sidechain_hpf_hz
-        ),
-        Fix::Space { .. } => "Pone los envíos de cada pista a la reverb y al delay según su papel (y crea esos retornos si faltan): un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
-        Fix::Balance(_) => "Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo".into(),
-        Fix::Widen(_) => "Mueve el panorama de esas pistas, una a cada lado por turnos, y a las de notas que suenan en mono les pone un Chorus suave (35 %) para que sus dos lados no sean iguales; el bombo, el bajo, la caja y la voz se quedan en el centro. ⌘Z lo deshace todo".into(),
+        Fix::Grow { .. } => tr("Escribe automatización de volumen en el master: baja lo que lleva al estribillo o al drop para que estos suenen más grandes, sin tocar el limitador").into(),
+        Fix::Throws { name, .. } => fill(tr("Escribe automatización en el envío de «{}» al delay: se abre al {} % en la última palabra de cada frase que acaba en silencio y vuelve a donde estaba al acabar"), &[&name, &format!("{:.0}", THROW * 100.0)]),
+        Fix::DeEss { name, params, .. } => fill(tr("Añade un De-esser a «{}»: por encima de {}, lo que pase de {} dB baja (como mucho {} dB)"), &[&name, &freq_label(params.freq_hz), &num(params.threshold_db as f64), &num(params.range_db as f64)]),
+        Fix::Ride { name, .. } => fill(tr("Escribe automatización de volumen en «{}»: cada frase sube o baja (como mucho {} dB) para quedar igual de por encima de la base. Los cambios caen en los silencios entre frases"), &[&name, &RIDE_MAX]),
+        Fix::MasterLimiter { gain_db, ceiling_db } => fill(tr("Limiter en el master: ganancia {} dB, techo {} dB"), &[&format!("{:+.1}", gain_db), &format!("{:.1}", ceiling_db)]),
+        Fix::TrackGain { name, db, .. } => fill(tr("Volumen de «{}» {} dB"), &[&name, &format!("{:+.1}", db)]),
+        Fix::Duck { name, source_name, .. } => fill(tr("Añade un Ducker a «{}» que escucha a «{}» (sidechain): baja cuando suena, para dejarle sitio"), &[&name, &source_name]),
+        Fix::CutLows { name, .. } => fill(tr("Añade un EQ Three a «{}» con los graves (bajo 150 Hz) a −9 dB"), &[&name]),
+        Fix::MasterEq { low, mid, high } => fill(tr("EQ Three en el master: graves {}, medios {}, agudos {} dB"), &[&format!("{:+.1}", low), &format!("{:+.1}", mid), &format!("{:+.1}", high)]),
+        Fix::Carve { name, hz, for_name, .. } => fill(tr("Baja {} dB «{}» en {} (un EQ Eight, campana estrecha) para que «{}» se oiga ahí"), &[&-CARVE_DB, &name, &freq_label(*hz), &for_name]),
+        Fix::Compress { name, params, .. } => fill(tr("Añade un Compressor a «{}»: umbral {} dB, ratio {}:1, ataque {} ms, release {} ms (una semicorchea al tempo; el bajo, una corchea) y {} dB de ganancia para que siga igual de fuerte"), &[&name, &format!("{:.1}", params.threshold_db), &params.ratio, &format!("{:.0}", params.attack_ms), &format!("{:.0}", params.release_ms), &format!("{:+.1}", params.makeup_db)]),
+        Fix::Glue { track, name, params } => fill(tr("Añade un Compresor de bus a {}: umbral {} dB, ratio {}, ataque {} ms, release automático, y el detector sin graves por debajo de {} Hz (el bombo no lo hace bombear)"), &[&if track.is_some() { format!("«{name}»") } else { tr("el master, antes del limitador").into() }, &format!("{:.1}", params.threshold_db), &params.ratio.label(), &format!("{:.0}", params.attack_ms), &format!("{:.0}", params.sidechain_hpf_hz)]),
+        Fix::Space { .. } => tr("Pone los envíos de cada pista a la reverb y al delay según su papel (y crea esos retornos si faltan): un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo").into(),
+        Fix::Balance(_) => tr("Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo").into(),
+        Fix::Widen(_) => tr("Mueve el panorama de esas pistas, una a cada lado por turnos, y a las de notas que suenan en mono les pone un Chorus suave (35 %) para que sus dos lados no sean iguales; el bombo, el bajo, la caja y la voz se quedan en el centro. ⌘Z lo deshace todo").into(),
     }
 }
 
@@ -3538,7 +3497,7 @@ fn balance_chart(ui: &mut egui::Ui, mix: &[f64; 10], reference: Option<&[f64; 10
         let r_mean = level(reference);
         let points: Vec<egui::Pos2> = reference.iter().enumerate().map(|(i, &b)| pos2(rect.left() + w * (i as f32 + 0.5), y_of(b - r_mean))).collect();
         painter.add(egui::Shape::line(points, Stroke::new(2.0, Color32::WHITE)));
-        painter.text(rect.left_top() + vec2(6.0, 4.0), Align2::LEFT_TOP, "Barras: tu mezcla · línea: la referencia", crate::theme::small(), TEXT_DIM);
+        painter.text(rect.left_top() + vec2(6.0, 4.0), Align2::LEFT_TOP, tr("Barras: tu mezcla · línea: la referencia"), crate::theme::small(), TEXT_DIM);
     }
 }
 
@@ -3558,7 +3517,7 @@ mod tests {
             app.follow_mix(&ctx);
             app.mix.job.is_none()
         });
-        assert_eq!(app.status.as_deref(), Some(INTERRUPTED));
+        assert_eq!(app.status.as_deref(), Some(interrupted()));
         let thread = std::thread::spawn(|| panic!("a reference that fails (on purpose)"));
         app.mix.reference_job = Some(ReferenceJob { name: "Ref".into(), result: Arc::new(Mutex::new(None)), thread });
         crate::test_audio::wait_for("la referencia que falla", 30, || {
@@ -3567,6 +3526,29 @@ mod tests {
         });
         assert!(app.status.as_deref().is_some_and(|s| s.contains("«Ref»") && s.contains("fallo interno")), "{:?}", app.status);
         assert!(app.mix.reference.is_none());
+    }
+
+    /// The assistant in English: its window, its numbers and its advice.
+    #[test]
+    fn the_assistant_speaks_english() {
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let low = vec![-10.0; 100];
+            let tracks = vec![track(0, "Kick", true, -3.0, low.clone()), track(1, "Bass", false, 2.0, low)];
+            let mut app = PulseApp::headless(crate::project::Project::demo());
+            app.mix.report = Some(report(-20.0, -6.0, tracks));
+            app.mix.open = true;
+            let dir = std::env::temp_dir().join(format!("pulse-asistente-en-{}", std::process::id()));
+            let mut s = crate::produccion::Studio::new(app, dir);
+            s.frames(4);
+            for text in ["Mix and Master Assistant", "Analyze again", "The song", "Target", "Loudness", "True peak", "Advice", "Apply all", "Apply", "dB under the target", "\"Bass\" reaches", "Balance by octave", "Tracks"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            for text in ["Asistente de mezcla", "Consejos", "Sonoridad", "por debajo del objetivo"] {
+                assert!(!s.has(text), "sobra «{text}»");
+            }
+        });
+        let list = advise(&report(-20.0, -6.0, Vec::new()), Target::Streaming, None);
+        assert!(list.iter().any(|a| a.text.contains("por debajo del objetivo")), "Spanish outside: {list:?}");
     }
 
     fn track(index: usize, name: &str, drums: bool, peak: f64, low: Vec<f64>) -> TrackMeasures {

@@ -692,7 +692,7 @@ fn places(app: &PulseApp) -> Vec<(String, PathBuf)> {
     .map(|(name, folder)| (name.to_string(), root.join(folder)))
     .collect();
     // Pulse's own sounds, made the first time they are opened.
-    places.insert(1, (crate::factory_sounds::NAME.to_string(), crate::factory_sounds::root()));
+    places.insert(1, (tr(crate::factory_sounds::NAME).to_string(), crate::factory_sounds::root()));
     places.extend(app.settings.browser_folders.iter().map(|f| (f.file_name().map_or(f.display().to_string(), |n| n.to_string_lossy().into_owned()), f.clone())));
     places
 }
@@ -809,13 +809,15 @@ fn factory_status(app: &mut PulseApp, ui: &mut egui::Ui) {
 /// A folder's contents: subfolders to open, files as rows.
 fn folder(app: &mut PulseApp, ui: &mut egui::Ui, dir: &Path, depth: usize, favs: &Favs) {
     let entries = app.browser.list(dir);
+    // Pulse's own folders show in the interface's language.
+    let own = dir.starts_with(crate::factory_sounds::root());
     if entries.is_empty() {
         ui.label(RichText::new(tr("Vacía")).color(TEXT_DIM).size(10.5));
     }
     for entry in entries {
         if entry.dir {
             if depth < 12 {
-                egui::CollapsingHeader::new(&entry.name).id_salt(("browser_dir", &entry.path)).show(ui, |ui| folder(app, ui, &entry.path, depth + 1, favs));
+                egui::CollapsingHeader::new(if own { crate::i18n::tr_name(&entry.name).into_owned() } else { entry.name.clone() }).id_salt(("browser_dir", &entry.path)).show(ui, |ui| folder(app, ui, &entry.path, depth + 1, favs));
             }
         } else {
             file_row(app, ui, &entry.path, favs);
@@ -831,6 +833,8 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path, favs: &Favs) {
     let sense = if matches!(kind, Kind::Audio | Kind::Midi | Kind::Preset) { Sense::click_and_drag() } else { Sense::click() };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 20.0), sense);
     crate::widgets::name(&response, egui::WidgetType::Button, &name);
+    // Pulse's own sounds show in the interface's language.
+    let shown = if path.starts_with(crate::factory_sounds::root()) { crate::i18n::tr_name(&name).into_owned() } else { name.clone() };
     app.browser.shown.push(path.to_path_buf());
     let playing = app.browser.previewing() == Some(path);
     let selected = app.browser.selected.as_deref() == Some(path);
@@ -849,7 +853,7 @@ fn file_row(app: &mut PulseApp, ui: &mut egui::Ui, path: &Path, favs: &Favs) {
     };
     let key = format!("archivo:{}", path.display());
     let star = favs.star(ui, &response, &key);
-    paint_row(ui, rect, icon, &name, "", star);
+    paint_row(ui, rect, icon, &shown, "", star);
     let hint = match kind {
         Kind::Audio => tr("Clic: escuchar (otra vez: parar) · ↑ ↓: el anterior o el siguiente · doble clic: a la pista de audio seleccionada · arrastrar: a un slot, un carril, un pad o el Sampler"),
         Kind::Midi => tr("Doble clic: sus partes en pistas nuevas · arrastrar: a una pista MIDI (todo en un clip) o a un hueco vacío (pistas nuevas)"),

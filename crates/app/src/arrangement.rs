@@ -752,7 +752,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let strip = chord_strip(column);
         ui.painter().rect_filled(strip, 0.0, theme::shade(theme::SLOT, 0.7));
         let label = match app.project.key {
-            Some(key) => fill(tr("Acordes · {}"), &[&key.name()]),
+            Some(key) => fill(tr("Acordes · {}"), &[&crate::i18n::music(&key.name())]),
             None => tr("Acordes").to_string(),
         };
         ui.painter().text(pos2(strip.left() + 8.0, strip.center().y), Align2::LEFT_CENTER, label, theme::small(), TEXT_DIM);

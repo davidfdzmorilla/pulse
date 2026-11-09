@@ -366,7 +366,9 @@ mod mac {
                 if i == crate::templates::BUILT_IN.len() {
                     menu.addItem(&NSMenuItem::separatorItem(self.mtm));
                 }
-                let item = item(self.mtm, name, Some(sel!(menuAction:)), "");
+                // Pulse's own in the interface's language; the user's as named.
+                let shown = if i < crate::templates::BUILT_IN.len() { crate::templates::shown(name) } else { name.as_str() };
+                let item = item(self.mtm, shown, Some(sel!(menuAction:)), "");
                 item.setTag(TEMPLATE_TAG + i as isize);
                 unsafe { item.setTarget(Some(&self.target)) };
                 menu.addItem(&item);

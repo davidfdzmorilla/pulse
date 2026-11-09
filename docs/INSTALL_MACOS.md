@@ -1,5 +1,7 @@
 # Instalar Pulse en macOS
 
+**Español** · [English](INSTALL_MACOS.en.md)
+
 Para Macs con Apple Silicon y macOS 13.4 (Ventura) o posterior.
 
 ## Instalar

@@ -50,7 +50,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
 | Status | **Supported**: every release passes the full test suite and is tried by hand before publishing | **Experimental**: on CI's Windows it builds, passes the full test suite, packages, renders, opens its window and installs (2026-11-05); not tested with real audio/MIDI hardware or third-party plugins | Not supported |
 | Signing | Self-signed, **not notarized** by Apple (one-time Gatekeeper step) | Unsigned (SmartScreen warning); updates are checked with Pulse's own Ed25519 signature | — |
 
-Details per feature: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md) · Intel Macs are not supported yet.
+Details per feature: [English](docs/PLATFORM_SUPPORT.en.md) · [Español](docs/PLATFORM_SUPPORT.md) · Intel Macs are not supported yet.
 
 ## Getting started
 

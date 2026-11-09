@@ -1,5 +1,7 @@
 # Instalar Pulse en Windows
 
+**Español** · [English](INSTALL_WINDOWS.en.md)
+
 Para Windows 10 (1809 o posterior) y Windows 11, de 64 bits. Estado del soporte:
 [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md). El instalador se prueba en la CI (instalación
 silenciosa, asociación de `.pulse` y desinstalación), **pero aún no en un

@@ -1,24 +1,28 @@
 # First contributions
 
-Five scoped tasks that are ready to be picked up. Each one was found by
+Scoped tasks that are ready to be picked up. Each one was found by
 reading the code (file and line references are from 2026-11-04, commit
-`5347594`; task 3 is from 2026-11-05). Each one is also a GitHub issue,
-published on 2026-11-06: comment on the issue you want before starting, so
-two people don't do the same work.
+`5347594`; task 3 is from 2026-11-05, task 6 from 2026-11-09). Each one is
+also a GitHub issue (tasks 1–5 published on 2026-11-06, task 6 on
+2026-11-09): comment on the issue you want before starting, so two people
+don't do the same work. Done tasks stay listed, marked as done.
 
 | # | Task | Issue | Area | Difficulty | Good first issue |
 |---|---|---|---|---|---|
-| 1 | [English versions of the install and platform docs](#1-english-versions-of-the-install-and-platform-docs) | [#214](https://github.com/davidfdzmorilla/pulse/issues/214) | Documentation | Easy | ✅ |
+| 1 | ~~[English versions of the install and platform docs](#1-english-versions-of-the-install-and-platform-docs)~~ Done in [#219](https://github.com/davidfdzmorilla/pulse/pull/219) | [#214](https://github.com/davidfdzmorilla/pulse/issues/214) | Documentation | Easy | ✅ |
 | 2 | [Readable dim text: fix `TEXT_DIM` contrast](#2-readable-dim-text-fix-text_dim-contrast) | [#215](https://github.com/davidfdzmorilla/pulse/issues/215) | UX / accessibility | Easy | ✅ |
 | 3 | [Windows CI: make the engine stress tests fast again](#3-windows-ci-make-the-engine-stress-tests-fast-again) | [#213](https://github.com/davidfdzmorilla/pulse/issues/213) | Tests / CI | Medium | |
 | 4 | [`cargo check` on Linux](#4-cargo-check-on-linux) | [#216](https://github.com/davidfdzmorilla/pulse/issues/216) | Platform | Medium | |
 | 5 | [`pulse --help` and errors for unknown flags](#5-pulse---help-and-errors-for-unknown-flags) | [#217](https://github.com/davidfdzmorilla/pulse/issues/217) | App / CLI | Easy | ✅ |
+| 6 | [CI: move `actions/checkout` and `actions/upload-artifact` to Node.js 24](#6-ci-move-actionscheckout-and-actionsupload-artifact-to-nodejs-24) | [#224](https://github.com/davidfdzmorilla/pulse/issues/224) | CI | Easy | ✅ |
 
 Set-up for all of them: [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ---
 
 ## 1. English versions of the install and platform docs
+
+**Done** in [#219](https://github.com/davidfdzmorilla/pulse/pull/219) (2026-11-09), by jiangyuer018.
 
 **Labels:** `documentation`, `good first issue`, `help wanted`
 
@@ -256,3 +260,56 @@ double-clicked `.pulse` file arrives as an argument (`open_files.rs:35-46`).
 **Tests.** The new integration test.
 
 **Knowledge.** Basic Rust and `std::process`.
+
+---
+
+## 6. CI: move `actions/checkout` and `actions/upload-artifact` to Node.js 24
+
+**Labels:** `good first issue`, `help wanted`
+
+**Problem.** Every CI run shows this warning:
+
+> Node.js 20 is deprecated. The following actions target Node.js 20 but are
+> being forced to run on Node.js 24: actions/checkout@11d5960…,
+> actions/upload-artifact@ea165f8…
+
+The workflows use `actions/checkout` v4.4.0 and `actions/upload-artifact`
+v4.6.2, both written for Node.js 20. They still work because GitHub runs them
+on Node.js 24 anyway, but that is a stopgap: they should move to versions made
+for Node.js 24 before GitHub stops allowing it.
+
+**Goal.** No Node.js 20 warning on the macOS and Windows runs, with the
+workflows doing exactly what they do today.
+
+**Scope.** Only these two actions, in both workflows. `Swatinem/rust-cache`
+v2.9.3 doesn't trigger the warning: leave it as it is.
+
+**Files.** `.github/workflows/macos.yml` and `.github/workflows/windows.yml`
+(one `checkout` and two `upload-artifact` steps in each).
+
+**Steps.**
+1. Pick the newest release of each action whose `action.yml` says
+   `using: node24`. At the time of writing that's `actions/checkout` v7.0.1
+   and `actions/upload-artifact` v7.0.2. Check before you start, in case
+   there's a newer one.
+2. Read their release notes from v4 up to that version, and check whether any
+   change affects how we use them: `fetch-depth: 0` (the package version
+   comes from the last git tag), the artifact names, `path` lists and
+   `if-no-files-found: warn`.
+3. Keep the actions **pinned to a full commit SHA**, with the tag in a
+   comment, as they are now:
+   `uses: actions/checkout@<40-character sha> # v7.0.1`. Take the SHA from
+   the tag on GitHub, not from a third-party list.
+4. Open the PR. It runs both workflows, so you'll see the result.
+
+**Acceptance criteria.**
+- Both workflows pass, and their logs show no Node.js 20 warning.
+- The Windows package version is still the last tag (look for `Pulse-<version>`
+  in the `pulse-windows-x64` artifact), not `0.0.0`.
+- Both runs still keep the same artifacts with the same names and files.
+- Every `uses:` is a full SHA with its tag in a comment.
+- The PR says, in a line or two, what you checked in the release notes.
+
+**Tests.** The two CI workflows themselves. No Rust changes.
+
+**Knowledge.** GitHub Actions YAML. No Rust needed.

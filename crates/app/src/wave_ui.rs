@@ -2,6 +2,7 @@
 //! window (oscillators, sub and noise, filter, envelopes, LFOs, matrix).
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::devices::{self, Action};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
@@ -44,7 +45,7 @@ pub(crate) fn source_badge(ui: &mut egui::Ui, source: ModSource) {
         ui.label(text);
     })
     .response
-    .on_hover_text("Arrástralo a un knob para modularlo");
+    .on_hover_text(tr("Arrástralo a un knob para modularlo"));
 }
 
 /// Knob for parameter `i`, with automation shown like everywhere else. It shows
@@ -77,7 +78,7 @@ pub(crate) fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label:
     }
     if !mods.is_empty() {
         crate::widgets::edit_menu(&response, |ui| {
-            ui.label(egui::RichText::new(format!("Modulaciones de {}", info.name)).color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(fill(tr("Modulaciones de {}"), &[&info.name])).color(TEXT_DIM).size(10.5));
             for (s, slot) in &mods {
                 ui.horizontal(|ui| {
                     ui.label(egui::RichText::new(slot.source.label()).color(source_color(slot.source)));
@@ -86,7 +87,7 @@ pub(crate) fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, label:
                     if ui.add(egui::Slider::new(&mut amount, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
                         actions.push(Action::Param(id, amount / 100.0));
                     }
-                    if ui.small_button("×").on_hover_text("Quitar").clicked() {
+                    if ui.small_button("×").on_hover_text(tr("Quitar")).clicked() {
                         let mut p = base;
                         p.matrix[*s] = ModSlot::EMPTY;
                         set(actions, p);
@@ -132,7 +133,7 @@ pub(crate) fn table_view(ui: &mut egui::Ui, table: Option<&Arc<Wavetable>>, posi
 fn table_name(app: &PulseApp, t: usize, o: usize, params: &WaveParams) -> String {
     let index = params.osc[o].table;
     if index == WAVE_USER_TABLE {
-        app.project.tracks[t].sample_name(o).unwrap_or_else(|| "Archivo".into())
+        app.project.tracks[t].sample_name(o).unwrap_or_else(|| tr("Archivo").into())
     } else {
         BUILTIN.get(index as usize).copied().unwrap_or(BUILTIN[0]).to_string()
     }
@@ -149,10 +150,10 @@ pub(crate) fn table_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, 
             }
         }
         ui.separator();
-        if ui.button("Cargar wavetable…").on_hover_text("WAV con frames de 2048 muestras (u otro tamaño indicado en el archivo) o un solo ciclo").clicked() {
+        if ui.button(tr("Cargar wavetable…")).on_hover_text(tr("WAV con frames de 2048 muestras (u otro tamaño indicado en el archivo) o un solo ciclo")).clicked() {
             actions.push(Action::LoadWavetable(o));
         }
-        if ui.button("Editor de wavetables…").on_hover_text("Dibuja fotogramas clave; la tabla pasa de uno a otro").clicked() {
+        if ui.button(tr("Editor de wavetables…")).on_hover_text(tr("Dibuja fotogramas clave; la tabla pasa de uno a otro")).clicked() {
             actions.push(Action::OpenTableEditor(o));
         }
     });
@@ -165,7 +166,7 @@ pub(crate) fn sample_view(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize,
     painter.rect_filled(rect, 2.0, theme::BG);
     let track = &app.project.tracks[t];
     let Some(sample) = track.sample(o).and_then(|p| app.loaded_sample(p)) else {
-        painter.text(rect.center(), Align2::CENTER_CENTER, "Carga una muestra", theme::small(), TEXT_DIM);
+        painter.text(rect.center(), Align2::CENTER_CENTER, tr("Carga una muestra"), theme::small(), TEXT_DIM);
         return;
     };
     let osc = &shown.osc[o];
@@ -202,12 +203,12 @@ pub(crate) fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, b
             egui::ComboBox::from_id_salt(("wave_kind", t, o)).selected_text(kind.label()).width(84.0).show_ui(ui, |ui| {
                 for k in OscKind::ALL {
                     ui.selectable_value(&mut kind, k, k.label()).on_hover_text(match k {
-                        OscKind::Analog => "Analógico: Pos va de seno a triángulo, sierra y cuadrada; PW es el ancho de pulso; Drift, la deriva",
-                        OscKind::Harmonic => "Aditivo: parciales con inclinación y pares/impares; Pos coloca un formante y Formant lo sube",
-                        OscKind::Wavetable => "Lee una wavetable; Pos la recorre",
-                        OscKind::Sample => "Toca la muestra cromáticamente desde C3; Pos es el inicio",
-                        OscKind::Granular => "Nube de granos de la muestra; Pos es de dónde se toman",
-                        OscKind::Spectral => "Convierte la muestra en wavetable por su espectro; Pos recorre el tiempo",
+                        OscKind::Analog => tr("Analógico: Pos va de seno a triángulo, sierra y cuadrada; PW es el ancho de pulso; Drift, la deriva"),
+                        OscKind::Harmonic => tr("Aditivo: parciales con inclinación y pares/impares; Pos coloca un formante y Formant lo sube"),
+                        OscKind::Wavetable => tr("Lee una wavetable; Pos la recorre"),
+                        OscKind::Sample => tr("Toca la muestra cromáticamente desde C3; Pos es el inicio"),
+                        OscKind::Granular => tr("Nube de granos de la muestra; Pos es de dónde se toman"),
+                        OscKind::Spectral => tr("Convierte la muestra en wavetable por su espectro; Pos recorre el tiempo"),
                     });
                 }
             });
@@ -218,7 +219,7 @@ pub(crate) fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, b
             }
             if osc.kind == OscKind::Wavetable {
                 table_menu(app, ui, t, o, base, actions);
-            } else if osc.kind.uses_sample() && ui.small_button("Cargar muestra…").clicked() {
+            } else if osc.kind.uses_sample() && ui.small_button(tr("Cargar muestra…")).clicked() {
                 actions.push(Action::LoadOscSample(o));
             }
         });
@@ -266,8 +267,8 @@ pub(crate) fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, b
                 egui::ComboBox::from_id_salt(("wave_warp", t, o)).selected_text(warp.label()).width(80.0).show_ui(ui, |ui| {
                     for w in OscWarp::ALL {
                         ui.selectable_value(&mut warp, w, w.label()).on_hover_text(match w {
-                            OscWarp::Fm => "El otro oscilador modula la frecuencia de este",
-                            OscWarp::Sync => "Reinicia el ciclo más rápido de lo que suena",
+                            OscWarp::Fm => tr("El otro oscilador modula la frecuencia de este"),
+                            OscWarp::Sync => tr("Reinicia el ciclo más rápido de lo que suena"),
                             _ => "",
                         });
                     }
@@ -281,24 +282,24 @@ pub(crate) fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, b
             }
             OscKind::Sample => {
                 let mut looping = osc.sample_loop;
-                if ui.checkbox(&mut looping, "Loop").on_hover_text("Repite desde Pos al llegar al final").changed() {
+                if ui.checkbox(&mut looping, "Loop").on_hover_text(tr("Repite desde Pos al llegar al final")).changed() {
                     let mut p = base;
                     p.osc[o].sample_loop = looping;
                     set(actions, p);
                 }
             }
             OscKind::Granular => {
-                ui.label(egui::RichText::new("Granos con ventana Hann; Spray esparce el punto de lectura").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Granos con ventana Hann; Spray esparce el punto de lectura")).color(TEXT_DIM).size(10.5));
             }
             OscKind::Analog | OscKind::Harmonic => {
                 let mut fm = osc.warp == OscWarp::Fm;
-                if ui.checkbox(&mut fm, "FM").on_hover_text("El otro oscilador modula la frecuencia de este").changed() {
+                if ui.checkbox(&mut fm, "FM").on_hover_text(tr("El otro oscilador modula la frecuencia de este")).changed() {
                     let mut p = base;
                     p.osc[o].warp = if fm { OscWarp::Fm } else { OscWarp::Off };
                     set(actions, p);
                 }
                 if osc.warp == OscWarp::Fm && osc.kind == OscKind::Harmonic {
-                    ui.label(egui::RichText::new("(Formant también fija la cantidad de FM)").color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(tr("(Formant también fija la cantidad de FM)")).color(TEXT_DIM).size(10.5));
                 }
             }
         });
@@ -319,8 +320,8 @@ pub(crate) fn cycle_view(ui: &mut egui::Ui, osc: &engine::model::WaveOsc, size: 
     }).collect();
     painter.add(egui::Shape::line(points, Stroke::new(1.8, ACCENT)));
     let label = match osc.kind {
-        OscKind::Harmonic => format!("{} parciales", osc.partials.round()),
-        _ => ["Seno", "Triángulo", "Sierra", "Pulso"][((osc.position.clamp(0.0, 1.0) * 3.0).round() as usize).min(3)].to_string(),
+        OscKind::Harmonic => fill(tr("{} parciales"), &[&osc.partials.round()]),
+        _ => [tr("Seno"), tr("Triángulo"), tr("Sierra"), tr("Pulso")][((osc.position.clamp(0.0, 1.0) * 3.0).round() as usize).min(3)].to_string(),
     };
     painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, label, theme::small(), TEXT_DIM);
 }
@@ -437,9 +438,9 @@ pub(crate) fn sync_label(beats: f32) -> &'static str {
         b if b == 0.5 => "1/8",
         b if b == 1.0 => "1/4",
         b if b == 2.0 => "1/2",
-        b if b == 4.0 => "1 compás",
-        b if b == 8.0 => "2 compases",
-        b if b == 16.0 => "4 compases",
+        b if b == 4.0 => tr("1 compás"),
+        b if b == 8.0 => tr("2 compases"),
+        b if b == 16.0 => tr("4 compases"),
         _ => "?",
     }
 }
@@ -543,10 +544,10 @@ pub(crate) fn filter_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: Wa
         });
         filter_view(ui, shown, vec2(196.0, 64.0));
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Entrada").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Entrada")).color(TEXT_DIM).size(10.5));
             for (i, label) in ["A", "B", "S", "N"].into_iter().enumerate() {
                 let mut routed = base.filter.routes[i];
-                if ui.toggle_value(&mut routed, label).on_hover_text("Pasa por el filtro").changed() {
+                if ui.toggle_value(&mut routed, label).on_hover_text(tr("Pasa por el filtro")).changed() {
                     let mut p = base;
                     p.filter.routes[i] = routed;
                     set(actions, p);
@@ -601,9 +602,9 @@ pub(crate) fn lfo_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveP
                 ui.horizontal(|ui| {
                     for m in LfoMode::ALL {
                         ui.selectable_value(&mut mode, m, m.label()).on_hover_text(match m {
-                            LfoMode::Free => "Corre libre; todas las voces a la vez",
-                            LfoMode::Retrig => "Empieza de cero con cada nota",
-                            LfoMode::Envelope => "Recorre la forma una vez por nota",
+                            LfoMode::Free => tr("Corre libre; todas las voces a la vez"),
+                            LfoMode::Retrig => tr("Empieza de cero con cada nota"),
+                            LfoMode::Envelope => tr("Recorre la forma una vez por nota"),
                         });
                     }
                 });
@@ -634,7 +635,7 @@ pub(crate) fn arp_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveP
         let arp = base.arp;
         let mut next = arp;
         ui.horizontal(|ui| {
-            ui.checkbox(&mut next.on, egui::RichText::new("ARPEGIADOR").strong());
+            ui.checkbox(&mut next.on, egui::RichText::new(tr("ARPEGIADOR")).strong());
         });
         ui.horizontal(|ui| {
             egui::ComboBox::from_id_salt(("wave_arp_mode", t)).selected_text(next.mode.label()).width(80.0).show_ui(ui, |ui| {
@@ -658,7 +659,7 @@ pub(crate) fn arp_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveP
             });
         });
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Octavas").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Octavas")).color(TEXT_DIM).size(10.5));
             for o in 1..=4u8 {
                 ui.selectable_value(&mut next.octaves, o, o.to_string());
             }
@@ -673,7 +674,7 @@ pub(crate) fn arp_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveP
 
 
 pub(crate) fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Action>) {
-    ui.label(egui::RichText::new("Efectos del propio sinte, en orden; se guardan con el preset.").color(TEXT_DIM).size(10.5));
+    ui.label(egui::RichText::new(tr("Efectos del propio sinte, en orden; se guardan con el preset.")).color(TEXT_DIM).size(10.5));
     ui.horizontal_wrapped(|ui| {
         for slot in 0..WAVE_FX {
             match base.fx[slot] {
@@ -724,7 +725,7 @@ pub(crate) fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &m
                     }
                 }
                 None => {
-                    egui::ComboBox::from_id_salt(("wave_fx_add", t, slot)).selected_text("+ Añadir efecto").width(130.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("wave_fx_add", t, slot)).selected_text(tr("+ Añadir efecto")).width(130.0).show_ui(ui, |ui| {
                         for effect in Effect::catalog().into_iter().filter(Effect::fits_in_synths) {
                             if ui.selectable_label(false, effect.label()).clicked() {
                                 let mut p = base;
@@ -742,7 +743,7 @@ pub(crate) fn fx_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &m
 
 pub(crate) fn matrix_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Action>) {
     egui::Grid::new(("wave_matrix", t)).num_columns(6).spacing([10.0, 3.0]).striped(true).show(ui, |ui| {
-        for h in ["#", "Fuente", "Cantidad", "Destino", "Bipolar", ""] {
+        for h in ["#", tr("Fuente"), tr("Cantidad"), tr("Destino"), "Bipolar", ""] {
             ui.label(egui::RichText::new(h).color(TEXT_DIM).size(10.5));
         }
         ui.end_row();
@@ -770,7 +771,7 @@ pub(crate) fn matrix_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: Wav
             });
             let mut bipolar = slot.bipolar;
             ui.checkbox(&mut bipolar, "");
-            let clear = ui.small_button("×").on_hover_text("Vaciar").clicked();
+            let clear = ui.small_button("×").on_hover_text(tr("Vaciar")).clicked();
             if source != slot.source || dest != slot.dest || bipolar != slot.bipolar || clear {
                 let mut p = base;
                 p.matrix[s] = if clear { ModSlot::EMPTY } else { ModSlot { source, dest, bipolar, ..slot } };
@@ -810,7 +811,7 @@ pub fn compact(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, ac
             OscKind::Sample | OscKind::Granular => sample_view(app, ui, t, 0, &shown, vec2(190.0, 100.0)),
             OscKind::Analog | OscKind::Harmonic => cycle_view(ui, &shown.osc[0], vec2(190.0, 100.0)),
         }
-        if ui.small_button("►").on_hover_text("Escuchar").clicked() {
+        if ui.small_button("►").on_hover_text(tr("Escuchar")).clicked() {
             actions.push(Action::Preview(60));
         }
     });
@@ -844,9 +845,9 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 devices::preset_menu(app, ui, t, &mut actions);
                 ui.separator();
                 let mut voicing = (base.mono, base.legato);
-                ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text("Varias notas a la vez; con Glide, cada nota desliza desde la anterior");
-                ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio");
-                ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono");
+                ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text(tr("Varias notas a la vez; con Glide, cada nota desliza desde la anterior"));
+                ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text(tr("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio"));
+                ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text(tr("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono"));
                 if voicing != (base.mono, base.legato) {
                     set(&mut actions, WaveParams { mono: voicing.0, legato: voicing.1, ..base });
                 }
@@ -858,12 +859,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     knob(app, ui, t, MACROS + m, &format!("Macro {}", m + 1), 24.0, &mut actions);
                 }
                 ui.add_space(12.0);
-                if ui.button("► Escuchar").clicked() {
+                if ui.button(tr("► Escuchar")).clicked() {
                     actions.push(Action::Preview(60));
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("FUENTES").color(TEXT_DIM).size(10.0).strong());
+                ui.label(egui::RichText::new(tr("FUENTES")).color(TEXT_DIM).size(10.0).strong());
                 for source in ModSource::ALL.into_iter().skip(1) {
                     source_badge(ui, source);
                 }
@@ -947,6 +948,35 @@ mod tests {
         app.kick_window = Some(0);
         frames(&mut app, |app, ui| crate::kick_ui::window(app, &ui.ctx().clone()));
         assert_eq!(app.kick_window, Some(0));
+    }
+
+    #[test]
+    fn the_instrument_editors_speak_english() {
+        use engine::model::ModularParams;
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let dir = std::env::temp_dir().join(format!("pulse-instrumentos-en-{}", std::process::id()));
+            let check = |kind: InstrumentKind, open: fn(&mut PulseApp), english: &[&str], spanish: &[&str]| {
+                let mut app = app_with(kind);
+                open(&mut app);
+                let mut s = crate::produccion::Studio::new(app, dir.clone());
+                s.frames(4);
+                for text in english {
+                    assert!(s.has(text), "falta «{text}»");
+                }
+                for text in spanish {
+                    assert!(!s.has(text), "sobra «{text}»");
+                }
+            };
+            let wave = InstrumentKind::Wavetable(WaveParams::presets()[4].1);
+            check(wave, |app| app.wave_window = Some(0), &["SOURCES", "► Listen", "Input", "ARPEGGIATOR"], &["FUENTES", "► Escuchar"]);
+            check(wave, |app| crate::table_editor::open(app, 0, 0), &["Wavetable editor", "KEYFRAMES", "Normalize", "Sine", "Save and use in the oscillator"], &["FOTOGRAMAS CLAVE", "Guardar y usar en el oscilador"]);
+            check(InstrumentKind::Polychrome(WaveParams::polychrome()), |app| app.poly_window = Some(0), &["FILTER ROUTING", "Serial: 1 → 2", "COMBINE", "SOURCES"], &["RUTA DE FILTROS", "COMBINAR"]);
+            check(InstrumentKind::Modular(ModularParams::default()), |app| app.modular_window = Some(0), &["GENERATORS", "EFFECT LANES", "MODULATORS", "+ Add module", "+ Modulator"], &["GENERADORES", "MODULADORES"]);
+            check(InstrumentKind::Kick(Default::default()), |app| app.kick_window = Some(0), &["BODY", "ENVELOPE", "DISTORTION", "OUTPUT", "Limiter", "Snap to grid", "Export WAV…"], &["CUERPO", "Limitador"]);
+        });
+        let model = engine::model::KeysModel::Organ;
+        assert_eq!(crate::i18n::with(crate::i18n::Language::English, || crate::keys_ui::hint(engine::model::KEYS_LESLIE, model)), "How much plays through the rotary speaker");
+        assert_eq!(crate::keys_ui::hint(engine::model::KEYS_LESLIE, model), "Cuánto suena por el altavoz giratorio");
     }
 
     #[test]

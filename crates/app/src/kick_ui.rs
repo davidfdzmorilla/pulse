@@ -3,6 +3,7 @@
 //! spectrum.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::devices::{self, Action, Zones};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
@@ -73,7 +74,7 @@ pub fn editor(
     // Which curve is edited, chosen with the tabs in the corner.
     let mut curve: Curve = ui.ctx().memory(|m| m.data.get_temp(id.with("tab"))).unwrap_or(Curve::Pitch);
     let mut x = rect.left() + 4.0;
-    for (tab, label) in [(Curve::Pitch, "Tono"), (Curve::Amp, "Amp"), (Curve::Drive, "Drive")] {
+    for (tab, label) in [(Curve::Pitch, tr("Tono")), (Curve::Amp, "Amp"), (Curve::Drive, "Drive")] {
         let galley = painter.layout_no_wrap(label.into(), theme::small(), theme::TEXT);
         let tab_rect = Rect::from_min_size(pos2(x, rect.top() + 2.0), galley.size() + vec2(8.0, 2.0));
         painter.rect_filled(tab_rect, 2.0, if tab == curve { theme::CONTROL_HOVER } else { theme::SURFACE });
@@ -235,12 +236,12 @@ pub fn editor(
         }
     }
     response.context_menu(|ui| {
-        if ui.button("Restablecer curva").clicked() {
+        if ui.button(tr("Restablecer curva")).clicked() {
             edited = if curve == Curve::Drive { Shape::flat() } else { Shape::falling() };
             ui.close();
         }
     });
-    response.on_hover_text("Arrastra los puntos · doble clic añade o borra · arrastra el círculo de un tramo para curvarlo · clic derecho para restablecer");
+    response.on_hover_text(tr("Arrastra los puntos · doble clic añade o borra · arrastra el círculo de un tramo para curvarlo · clic derecho para restablecer"));
     if edited != shape {
         let params = match curve {
             Curve::Pitch => KickParams { pitch_shape: edited, ..base },
@@ -281,10 +282,10 @@ fn oscilloscope(ui: &mut egui::Ui, hit: &[f32], size: egui::Vec2) {
         .map(|i| pos2(rect.left() + i as f32 / frames.max(1) as f32 * rect.width(), rect.center().y - hit[i].clamp(-1.2, 1.2) * rect.height() * 0.42))
         .collect();
     painter.add(egui::Shape::line(points, Stroke::new(1.2, theme::PLAY)));
-    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, "Osciloscopio · 60 ms", theme::small(), TEXT_DIM);
+    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, tr("Osciloscopio · 60 ms"), theme::small(), TEXT_DIM);
     let peak = hit.iter().fold(0f32, |m, s| m.max(s.abs()));
     let db = 20.0 * peak.max(1e-6).log10();
-    painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, format!("pico {db:+.1} dB"), theme::small(), if db > -0.1 { theme::METER_RED } else { TEXT_DIM });
+    painter.text(rect.right_top() + vec2(-4.0, 3.0), Align2::RIGHT_TOP, fill(tr("pico {} dB"), &[&format!("{db:+.1}")]), theme::small(), if db > -0.1 { theme::METER_RED } else { TEXT_DIM });
 }
 
 /// Magnitude spectrum (dB) of `hit`, from `PREVIEW_RATE` samples, as (Hz, dB) pairs.
@@ -362,7 +363,7 @@ fn knob(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, actions: &mut Vec
     let kind = app.project.tracks[t].instrument;
     let Some(info) = kind.params().get(i) else { return };
     let (target, id) = (Target::Track(t), Param::Instrument(i));
-    if let Some(v) = widgets::param_knob(ui, info, app.display_value(target, id), info.name, 30.0, app.automation_state(target, id)) {
+    if let Some(v) = widgets::param_knob(ui, info, app.display_value(target, id), tr(info.name), 30.0, app.automation_state(target, id)) {
         actions.push(Action::Param(id, v));
     }
 }
@@ -386,8 +387,8 @@ fn beats_label(beats: f32) -> &'static str {
         b if b == 0.5 => "1/8",
         b if b == 1.0 => "1/4",
         b if b == 2.0 => "1/2",
-        b if b == 4.0 => "1 compás",
-        _ => "Libre",
+        b if b == 4.0 => tr("1 compás"),
+        _ => tr("Libre"),
     }
 }
 
@@ -412,7 +413,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 devices::preset_menu(app_ref, ui, t, &mut actions);
                 ui.separator();
-                ui.label(egui::RichText::new("Duración").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Duración")).color(TEXT_DIM).size(10.5));
                 let mut sync = base.sync_beats;
                 egui::ComboBox::from_id_salt(("kick_sync", t)).selected_text(beats_label(sync)).width(84.0).show_ui(ui, |ui| {
                     for beats in KICK_SYNC_BEATS {
@@ -423,18 +424,18 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     actions.push(Action::Instrument(InstrumentKind::Kick(KickParams { sync_beats: sync, ..base })));
                 }
                 let length = engine::kick_length_ms(&engine::kick_effective(&shown, tempo));
-                ui.label(egui::RichText::new(format!("{length:.0} ms")).size(10.5)).on_hover_text("Con duración sincronizada, el Decay se ajusta para durar lo elegido al tempo actual");
+                ui.label(egui::RichText::new(format!("{length:.0} ms")).size(10.5)).on_hover_text(tr("Con duración sincronizada, el Decay se ajusta para durar lo elegido al tempo actual"));
                 ui.separator();
                 let snap_id = ui.id().with(("kick_snap", t));
                 let mut snap: bool = ui.ctx().memory(|m| m.data.get_temp(snap_id)).unwrap_or(false);
-                if ui.checkbox(&mut snap, "Ajustar a rejilla").changed() {
+                if ui.checkbox(&mut snap, tr("Ajustar a rejilla")).changed() {
                     ui.ctx().memory_mut(|m| m.data.insert_temp(snap_id, snap));
                 }
                 ui.separator();
-                if ui.button("► Escuchar").clicked() {
+                if ui.button(tr("► Escuchar")).clicked() {
                     actions.push(Action::Preview(60));
                 }
-                if ui.button("Exportar WAV…").on_hover_text("Guarda un golpe como archivo de audio").clicked() {
+                if ui.button(tr("Exportar WAV…")).on_hover_text(tr("Guarda un golpe como archivo de audio")).clicked() {
                     actions.push(Action::ExportKick);
                 }
             });
@@ -455,7 +456,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 
             // Modules.
             ui.horizontal_top(|ui| {
-                module(ui, "CUERPO", |ui| {
+                module(ui, tr("CUERPO"), |ui| {
                     ui.vertical(|ui| {
                         let mut wave = base.wave;
                         egui::ComboBox::from_id_salt(("kick_wave", t)).selected_text(wave.label()).width(72.0).show_ui(ui, |ui| {
@@ -464,7 +465,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                             }
                         });
                         let mut follow = base.key_follow;
-                        ui.checkbox(&mut follow, "Key").on_hover_text("La nota tocada afina el cuerpo (dos octavas por debajo) en lugar de Tune");
+                        ui.checkbox(&mut follow, "Key").on_hover_text(tr("La nota tocada afina el cuerpo (dos octavas por debajo) en lugar de Tune"));
                         if wave != base.wave || follow != base.key_follow {
                             actions.push(Action::Instrument(InstrumentKind::Kick(KickParams { wave, key_follow: follow, ..base })));
                         }
@@ -473,7 +474,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                         knob(app_ref, ui, t, i, &mut actions);
                     }
                 });
-                module(ui, "ENVOLVENTE", |ui| {
+                module(ui, tr("ENVOLVENTE"), |ui| {
                     for i in [4, 5, 6, 7] {
                         knob(app_ref, ui, t, i, &mut actions);
                     }
@@ -506,7 +507,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                         knob(app_ref, ui, t, i, &mut actions);
                     }
                 });
-                module(ui, "DISTORSIÓN", |ui| {
+                module(ui, tr("DISTORSIÓN"), |ui| {
                     ui.vertical(|ui| {
                         let mut mode = base.drive_mode;
                         for m in KickDrive::ALL {
@@ -523,12 +524,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                         knob(app_ref, ui, t, i, &mut actions);
                     }
                 });
-                module(ui, "SALIDA", |ui| {
+                module(ui, tr("SALIDA"), |ui| {
                     for i in [22, 23, 13] {
                         knob(app_ref, ui, t, i, &mut actions);
                     }
                     let mut limiter = base.limiter;
-                    if ui.checkbox(&mut limiter, "Limitador").on_hover_text("Mantiene el bombo por debajo de -0.3 dBFS").changed() {
+                    if ui.checkbox(&mut limiter, tr("Limitador")).on_hover_text(tr("Mantiene el bombo por debajo de -0.3 dBFS")).changed() {
                         actions.push(Action::Instrument(InstrumentKind::Kick(KickParams { limiter, ..base })));
                     }
                 });
@@ -548,7 +549,7 @@ pub fn export(app: &mut PulseApp, t: usize) {
     let click = app.project.tracks[t].sample(0).and_then(|p| app.loaded_sample(p)).cloned();
     let hit = engine::render_kick(params, click, 48_000.0, app.project.tempo);
     app.status = Some(match crate::capture::write_wav(&path, &hit, &hit, 48_000.0) {
-        Ok(()) => format!("Bombo exportado: {}", path.display()),
+        Ok(()) => fill(tr("Bombo exportado: {}"), &[&path.display()]),
         Err(error) => error,
     });
 }

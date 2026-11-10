@@ -7,6 +7,7 @@
 //! the controller, so they are kept for every project.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
 use engine::model::{Param, PluginId};
@@ -41,12 +42,12 @@ pub enum Transport {
 impl Transport {
     pub fn label(self) -> &'static str {
         match self {
-            Transport::Play => "Reproducir",
-            Transport::Stop => "Parar",
-            Transport::Record => "Grabar",
-            Transport::Loop => "Loop",
-            Transport::Metronome => "Metrónomo",
-            Transport::AutomationArm => "Armar automatización",
+            Transport::Play => tr("Reproducir"),
+            Transport::Stop => tr("Parar"),
+            Transport::Record => tr("Grabar"),
+            Transport::Loop => tr("Loop"),
+            Transport::Metronome => tr("Metrónomo"),
+            Transport::AutomationArm => tr("Armar automatización"),
         }
     }
 }
@@ -209,9 +210,9 @@ impl PulseApp {
         self.touched_control.set(None);
         self.learn.shared.learning.store(self.learn.on, Ordering::Relaxed);
         self.status = Some(if self.learn.on {
-            "Asignar MIDI: toca un control de Pulse y mueve un knob o pulsa un botón del teclado (en cualquier orden)".into()
+            tr("Asignar MIDI: toca un control de Pulse y mueve un knob o pulsa un botón del teclado (en cualquier orden)").into()
         } else {
-            format!("{} asignaciones MIDI", self.mappings().len())
+            fill(tr("{} asignaciones MIDI"), &[&self.mappings().len()])
         });
     }
 
@@ -351,7 +352,7 @@ impl PulseApp {
         }
         self.sync_midi_map();
         let count = self.mappings().iter().filter(|m| m.cc == cc).count();
-        self.status = Some(if count > 1 { format!("CC {cc} → {} (y {} más)", self.control_name(control), count - 1) } else { format!("CC {cc} → {}", self.control_name(control)) });
+        self.status = Some(if count > 1 { fill(tr("CC {} → {} (y {} más)"), &[&cc, &self.control_name(control), &(count - 1)]) } else { format!("CC {cc} → {}", self.control_name(control)) });
     }
 
     /// Removes one control from what controller `cc` moves.
@@ -379,12 +380,12 @@ impl PulseApp {
 
     pub fn control_name(&self, control: Control) -> String {
         if !self.control_exists(control) {
-            return "(ya no existe)".into();
+            return tr("(ya no existe)").into();
         }
         match control {
             Control::Param { target, param } => format!("{} · {}", self.target_name(target), self.param_name(target, param)),
             Control::Plugin { id, param } => {
-                let name = self.samples.plugins.get(&id).and_then(|h| h.param(param)).map_or_else(|| format!("parámetro {param}"), |p| p.name.clone());
+                let name = self.samples.plugins.get(&id).and_then(|h| h.param(param)).map_or_else(|| fill(tr("parámetro {}"), &[&param]), |p| p.name.clone());
                 format!("{} · {name}", self.plugin_name(id))
             }
             Control::Transport(t) => t.label().into(),
@@ -417,7 +418,7 @@ impl PulseApp {
                 }
                 None => {
                     self.learn.armed = Some(control);
-                    self.status = Some(format!("Mueve un knob o pulsa un botón del teclado para «{}»", self.control_name(control)));
+                    self.status = Some(fill(tr("Mueve un knob o pulsa un botón del teclado para «{}»"), &[&self.control_name(control)]));
                 }
             }
         }
@@ -437,7 +438,7 @@ impl PulseApp {
                             eprintln!("[asignar] CC {cc}: esperando a que toques un control de Pulse");
                         }
                         self.learn.pending = Some((cc, Instant::now()));
-                        self.status = Some(format!("CC {cc}: ahora toca el control de Pulse que quieres que mueva"));
+                        self.status = Some(fill(tr("CC {}: ahora toca el control de Pulse que quieres que mueva"), &[&cc]));
                     }
                     None => {}
                 }
@@ -578,24 +579,24 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     }
     let mut remove = None;
     let mut close = false;
-    egui::Window::new("Asignar MIDI").default_pos([980.0, 80.0]).resizable(false).show(ctx, |ui| {
-        ui.label(egui::RichText::new("Toca un control de Pulse (knob, fader, parámetro de plugin o botón de transporte) y mueve un knob o pulsa un botón del teclado MIDI, en cualquier orden.").color(TEXT_DIM).size(10.5));
+    egui::Window::new(tr("Asignar MIDI")).default_pos([980.0, 80.0]).resizable(false).show(ctx, |ui| {
+        ui.label(egui::RichText::new(tr("Toca un control de Pulse (knob, fader, parámetro de plugin o botón de transporte) y mueve un knob o pulsa un botón del teclado MIDI, en cualquier orden.")).color(TEXT_DIM).size(10.5));
         if let Some(control) = app.learn.armed {
-            ui.label(egui::RichText::new(format!("Esperando un control para «{}»…", app.control_name(control))).strong());
+            ui.label(egui::RichText::new(fill(tr("Esperando un control para «{}»…"), &[&app.control_name(control)])).strong());
         } else if let Some((cc, _)) = app.learn.pending {
-            ui.label(egui::RichText::new(format!("CC {cc}: toca el control de Pulse que quieres que mueva…")).strong());
+            ui.label(egui::RichText::new(fill(tr("CC {}: toca el control de Pulse que quieres que mueva…"), &[&cc])).strong());
         }
         ui.separator();
         let mappings = app.mappings();
         if mappings.is_empty() {
-            ui.label(egui::RichText::new("Sin asignaciones").color(TEXT_DIM));
+            ui.label(egui::RichText::new(tr("Sin asignaciones")).color(TEXT_DIM));
         }
         egui::Grid::new("midi_mappings").num_columns(6).striped(true).show(ui, |ui| {
             ui.label(egui::RichText::new("CC").color(TEXT_DIM).size(10.5));
-            ui.label(egui::RichText::new("Mueve").color(TEXT_DIM).size(10.5));
-            ui.label(egui::RichText::new("Desde").color(TEXT_DIM).size(10.5)).on_hover_text("Dónde pone el control con el knob abajo del todo (en % de su recorrido)");
-            ui.label(egui::RichText::new("Hasta").color(TEXT_DIM).size(10.5)).on_hover_text("Y arriba del todo. «Desde» por encima de «Hasta» lo mueve al revés");
-            ui.label(egui::RichText::new("Suavizado").color(TEXT_DIM).size(10.5)).on_hover_text("Lo que tarda el control en llegar adonde pones el knob: sin saltos aunque el knob vaya a escalones");
+            ui.label(egui::RichText::new(tr("Mueve")).color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Desde")).color(TEXT_DIM).size(10.5)).on_hover_text(tr("Dónde pone el control con el knob abajo del todo (en % de su recorrido)"));
+            ui.label(egui::RichText::new(tr("Hasta")).color(TEXT_DIM).size(10.5)).on_hover_text(tr("Y arriba del todo. «Desde» por encima de «Hasta» lo mueve al revés"));
+            ui.label(egui::RichText::new(tr("Suavizado")).color(TEXT_DIM).size(10.5)).on_hover_text(tr("Lo que tarda el control en llegar adonde pones el knob: sin saltos aunque el knob vaya a escalones"));
             ui.end_row();
             for m in &mappings {
                 ui.label(format!("CC {}", m.cc));
@@ -624,15 +625,15 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                         *slot = edited;
                     }
                 }
-                if ui.small_button("×").on_hover_text("Quitar").clicked() {
+                if ui.small_button("×").on_hover_text(tr("Quitar")).clicked() {
                     remove = Some((m.cc, m.control));
                 }
                 ui.end_row();
             }
         });
-        ui.checkbox(&mut app.learn.add, "Un knob para varios controles").on_hover_text("Al asignar un knob que ya mueve algo, lo añade a lo que mueve en vez de cambiarlo: un solo gesto para el filtro, la reverb y el volumen a la vez");
+        ui.checkbox(&mut app.learn.add, tr("Un knob para varios controles")).on_hover_text(tr("Al asignar un knob que ya mueve algo, lo añade a lo que mueve en vez de cambiarlo: un solo gesto para el filtro, la reverb y el volumen a la vez"));
         ui.separator();
-        if ui.button("Terminar").clicked() {
+        if ui.button(tr("Terminar")).clicked() {
             close = true;
         }
     });

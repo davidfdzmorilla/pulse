@@ -7,6 +7,7 @@
 //! transposition and gain applied, so the clip then starts at 0 of it, at the
 //! project's tempo (it keeps following the tempo if that changes later).
 
+use crate::i18n::{fill, tr};
 use crate::app::{ClipRef, PulseApp};
 use engine::model::{ArrangementClip, AudioClip, AutomationLane, Clip, WarpMode};
 use std::path::PathBuf;
@@ -47,7 +48,7 @@ impl PulseApp {
     /// project's media.
     fn write_consolidated(&self, name: &str, left: &[f32], right: &[f32]) -> Result<PathBuf, String> {
         let dir = self.media_dir(crate::library::CONSOLIDATED);
-        std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
         let path = crate::library::claim(&dir.join(format!("{} (consolidado).wav", crate::files::safe_name(name))));
         if let Err(e) = crate::export::write(&path, left, right, self.audio.sample_rate() as u32, crate::export::BitDepth::Float32, 1.0) {
             let _ = std::fs::remove_file(&path);
@@ -63,7 +64,7 @@ impl PulseApp {
     fn consolidated(&mut self, audio: &AudioClip, beats: f64, handles: bool) -> Result<AudioClip, String> {
         let sample = self.sample(&audio.sample);
         if sample.frames() == 0 {
-            return Err(format!("No se encuentra el audio de «{}»", audio.name));
+            return Err(fill(tr("No se encuentra el audio de «{}»"), &[&audio.name]));
         }
         let tempo = self.project.tempo;
         // What it sounds when on: a deactivated clip stays deactivated, with its sound.
@@ -114,9 +115,9 @@ impl PulseApp {
             }
         }
         self.status = Some(match done {
-            0 => "Consolidar es para clips de audio".into(),
-            1 => "Clip consolidado: ahora tiene su propio archivo de audio".into(),
-            n => format!("{n} clips consolidados, cada uno con su propio archivo"),
+            0 => tr("Consolidar es para clips de audio").into(),
+            1 => tr("Clip consolidado: ahora tiene su propio archivo de audio").into(),
+            n => fill(tr("{} clips consolidados, cada uno con su propio archivo"), &[&n]),
         });
     }
 
@@ -130,7 +131,7 @@ impl PulseApp {
             let (beats, handles) = placed_length(self, clip, &audio);
             let sample = self.sample(&audio.sample);
             if sample.frames() == 0 {
-                self.status = Some(format!("No se encuentra el audio de «{}»", audio.name));
+                self.status = Some(fill(tr("No se encuentra el audio de «{}»"), &[&audio.name]));
                 return;
             }
             let tempo = self.project.tempo;
@@ -184,9 +185,9 @@ impl PulseApp {
             done += 1;
         }
         self.status = Some(match done {
-            0 => "Invertir es para clips de audio".into(),
-            1 => "Clip invertido: suena del final al principio, desde un archivo nuevo".into(),
-            n => format!("{n} clips invertidos"),
+            0 => tr("Invertir es para clips de audio").into(),
+            1 => tr("Clip invertido: suena del final al principio, desde un archivo nuevo").into(),
+            n => fill(tr("{} clips invertidos"), &[&n]),
         });
     }
 
@@ -195,8 +196,8 @@ impl PulseApp {
     pub(crate) fn join_audio(&mut self, track: usize, parts: &[ArrangementClip]) -> Result<ArrangementClip, String> {
         let start = parts.iter().map(|p| p.start).fold(f64::INFINITY, f64::min);
         let end = parts.iter().map(|p| p.end()).fold(f64::NEG_INFINITY, f64::max);
-        let first = parts.iter().min_by(|a, b| a.start.total_cmp(&b.start)).ok_or("Nada que unir")?;
-        let Clip::Audio(base) = &first.clip else { return Err("Solo se unen clips del mismo tipo".into()) };
+        let first = parts.iter().min_by(|a, b| a.start.total_cmp(&b.start)).ok_or(tr("Nada que unir"))?;
+        let Clip::Audio(base) = &first.clip else { return Err(tr("Solo se unen clips del mismo tipo").into()) };
         let (tempo, rate) = (self.project.tempo, self.audio.sample_rate());
         let frames = ((end - start) * 60.0 / tempo * rate as f64).round() as usize;
         let (mut left, mut right) = (vec![0f32; frames], vec![0f32; frames]);
@@ -205,7 +206,7 @@ impl PulseApp {
         let all_off = parts.iter().all(|p| p.clip.muted());
         let mut placed = Vec::new();
         for part in parts {
-            let Clip::Audio(audio) = &part.clip else { return Err("Solo se unen clips del mismo tipo".into()) };
+            let Clip::Audio(audio) = &part.clip else { return Err(tr("Solo se unen clips del mismo tipo").into()) };
             let sample = self.sample(&audio.sample);
             let audio = AudioClip { muted: audio.muted && !all_off, ..audio.clone() };
             placed.push(engine::PlacedClip::new(part.start, part.length, engine::PlayClip::Audio(audio, sample)));

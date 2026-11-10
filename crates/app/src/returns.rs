@@ -4,6 +4,7 @@
 //! move up a letter: their names too, when they start with it ("C Delay" → "B
 //! Delay").
 
+use crate::i18n::{fill, tr};
 use crate::app::PulseApp;
 use crate::project::{return_letter, Mixer, Project, ReturnTrack, PALETTE};
 use engine::model::{AutomationLane, Clip, Param};
@@ -35,19 +36,19 @@ pub fn name_field(index: usize) -> eframe::egui::Id {
 /// The right-click menu of return `index`'s header: its name (after the
 /// letter), its color and deleting it. True when «Eliminar retorno» is clicked.
 pub fn header_menu(ui: &mut eframe::egui::Ui, ret: &mut ReturnTrack, index: usize) -> bool {
-    ui.label("Nombre");
+    ui.label(tr("Nombre"));
     let mut bare = bare_name(&ret.name, index).to_string();
     let field = ui.horizontal(|ui| {
         ui.label(return_letter(index).to_string());
-        ui.add(eframe::egui::TextEdit::singleline(&mut bare).id(name_field(index)).desired_width(120.0)).on_hover_text("El nombre después de la letra. La letra cambia sola si borras un retorno anterior")
+        ui.add(eframe::egui::TextEdit::singleline(&mut bare).id(name_field(index)).desired_width(120.0)).on_hover_text(tr("El nombre después de la letra. La letra cambia sola si borras un retorno anterior"))
     });
     if field.inner.changed() {
         set_name(ret, index, &bare);
     }
-    ui.label("Color");
+    ui.label(tr("Color"));
     crate::session::color_picker(ui, &mut ret.color);
     ui.separator();
-    let delete = ui.button("Eliminar retorno").on_hover_text("Las pistas dejan de enviarle sonido; los retornos de después suben una letra").clicked();
+    let delete = ui.button(tr("Eliminar retorno")).on_hover_text(tr("Las pistas dejan de enviarle sonido; los retornos de después suben una letra")).clicked();
     if delete {
         ui.close();
     }
@@ -125,7 +126,7 @@ impl PulseApp {
     pub fn add_return(&mut self) {
         let index = self.project.returns.len();
         if index >= MAX_RETURNS {
-            self.status = Some(format!("Máximo de {MAX_RETURNS} retornos"));
+            self.status = Some(fill(tr("Máximo de {} retornos"), &[&MAX_RETURNS]));
             return;
         }
         self.project.returns.push(new_return(index));

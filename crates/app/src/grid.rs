@@ -263,7 +263,7 @@ impl Model {
             Model::ApcMini => "APC mini",
             Model::ApcMiniMk2 => "APC mini mk2",
             Model::Apc40Mk2 => "APC40 mkII",
-            Model::Generic => "Rejilla aprendida",
+            Model::Generic => crate::i18n::tr("Rejilla aprendida"),
         }
     }
 

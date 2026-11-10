@@ -1,6 +1,7 @@
 //! Slicing a loop into drum rack pads: finding where each hit starts, writing the
 //! hits as files and building the MIDI clip that plays them back in order.
 
+use crate::i18n::{fill, tr};
 use crate::capture::write_wav;
 use engine::model::{MidiClip, Note, RackParams, RACK_FIRST_NOTE, RACK_PADS};
 use engine::Sample;
@@ -21,11 +22,11 @@ impl SliceMode {
 
     pub fn label(self) -> &'static str {
         match self {
-            Self::Transients => "Transitorios",
+            Self::Transients => tr("Transitorios"),
             Self::Grid(b) if b == 0.25 => "1/16",
             Self::Grid(b) if b == 0.5 => "1/8",
             Self::Grid(b) if b == 1.0 => "1/4",
-            Self::Grid(_) => "Rejilla",
+            Self::Grid(_) => tr("Rejilla"),
         }
     }
 }
@@ -40,15 +41,15 @@ pub fn grid_label(beats: f64) -> String {
         b if (b - 0.5).abs() < 1e-9 => "1/8".into(),
         b if (b - 1.0).abs() < 1e-9 => "1/4".into(),
         b if (b - 2.0).abs() < 1e-9 => "1/2".into(),
-        b if (b - 4.0).abs() < 1e-9 => "1 compás".into(),
-        b if (b / 4.0).fract().abs() < 1e-9 => format!("{} compases", b / 4.0),
-        b => format!("{b} tiempos"),
+        b if (b - 4.0).abs() < 1e-9 => tr("1 compás").into(),
+        b if (b / 4.0).fract().abs() < 1e-9 => fill(tr("{} compases"), &[&(b / 4.0)]),
+        b => fill(tr("{} tiempos"), &[&b]),
     }
 }
 
 /// «1 trozo», «16 trozos».
 pub fn slices_text(n: usize) -> String {
-    if n == 1 { "1 trozo".into() } else { format!("{n} trozos") }
+    if n == 1 { tr("1 trozo").into() } else { fill(tr("{} trozos"), &[&n]) }
 }
 
 /// Analysis hop (about 5 ms at 48 kHz) and spectral frame size.
@@ -203,7 +204,7 @@ fn region(sample: &Sample, (offset, seconds): (f64, f64)) -> Result<(usize, usiz
     let first = ((offset.max(0.0) * rate) as usize).min(sample.frames());
     let last = (((offset + seconds) * rate) as usize).clamp(first, sample.frames());
     if last - first < 64 {
-        return Err("La región es demasiado corta para trocearla".into());
+        return Err(tr("La región es demasiado corta para trocearla").into());
     }
     Ok((first, last))
 }
@@ -302,10 +303,10 @@ pub fn slice_at(sample: &Sample, (offset, seconds): (f64, f64), bpm: f64, cuts: 
     starts.dedup();
     starts.truncate(RACK_PADS);
     if starts.is_empty() {
-        return Err("No hay ningún corte dentro de la región del clip".into());
+        return Err(tr("No hay ningún corte dentro de la región del clip").into());
     }
 
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     // A chord loop's pads are named by their chord, spelt in the project's key.
     let mono: Vec<f32> = left.iter().zip(right).map(|(l, r)| (l + r) * 0.5).collect();
     let tonal = tonal_key(&mono, sample.sample_rate);

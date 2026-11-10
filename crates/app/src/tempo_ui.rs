@@ -4,6 +4,7 @@
 //! line so its downbeats land on the project's, and as many whole bars long as
 //! the file. "Usar el tempo de este clip" sets the project to the clip's tempo.
 
+use crate::i18n::{fill, tr};
 use crate::app::{ClipRef, PulseApp};
 use beats::Grid;
 use engine::model::{AudioClip, Clip, WarpMarker, WarpMode};
@@ -14,6 +15,7 @@ use std::sync::{Arc, Mutex};
 type Outcome = Result<Option<Grid>, String>;
 
 /// Said when an analysis thread ends without a result (it failed).
+#[cfg(test)]
 pub(crate) const TEMPO_INTERRUPTED: &str = "El análisis del tempo se interrumpió por un fallo interno";
 
 /// A file being analysed, and the clips waiting for the result.
@@ -133,7 +135,7 @@ impl PulseApp {
                 *r = Some(outcome);
             }
         });
-        self.status = Some(format!("Analizando el tempo de «{}»…", first.name));
+        self.status = Some(fill(tr("Analizando el tempo de «{}»…"), &[&first.name]));
         self.tempo.jobs.push(TempoJob { path, clips, manual, result, thread });
     }
 
@@ -154,7 +156,7 @@ impl PulseApp {
             .collect();
         for i in done.into_iter().rev() {
             let job = self.tempo.jobs.remove(i);
-            let outcome = job.result.lock().ok().and_then(|mut r| r.take()).unwrap_or(Err(TEMPO_INTERRUPTED.into()));
+            let outcome = job.result.lock().ok().and_then(|mut r| r.take()).unwrap_or(Err(tr("El análisis del tempo se interrumpió por un fallo interno").into()));
             if let Ok(grid) = &outcome {
                 self.tempo.grids.insert(job.path.clone(), grid.clone());
             }
@@ -169,10 +171,10 @@ impl PulseApp {
             Ok(Some(grid)) => grid,
             Ok(None) => {
                 self.status = Some(if manual {
-                    format!("«{name}»: no se encontró un ritmo claro")
+                    fill(tr("«{}»: no se encontró un ritmo claro"), &[&name])
                 } else {
                     self.unwarp_guess(path, clips);
-                    format!("«{name}»: no se encontró un ritmo claro; suena a su velocidad")
+                    fill(tr("«{}»: no se encontró un ritmo claro; suena a su velocidad"), &[&name])
                 });
                 return;
             }
@@ -218,9 +220,9 @@ impl PulseApp {
         if count > 0 {
             let tempo = self.project.tempo;
             self.status = Some(if (grid.bpm - tempo).abs() < 0.01 {
-                format!("«{name}» va a {} BPM, como el proyecto", bpm_text(grid.bpm))
+                fill(tr("«{}» va a {} BPM, como el proyecto"), &[&name, &bpm_text(grid.bpm)])
             } else {
-                format!("«{name}» va a {} BPM y ahora sigue el tempo del proyecto ({} BPM)", bpm_text(grid.bpm), bpm_text(tempo))
+                fill(tr("«{}» va a {} BPM y ahora sigue el tempo del proyecto ({} BPM)"), &[&name, &bpm_text(grid.bpm), &bpm_text(tempo)])
             });
         }
     }
@@ -286,13 +288,13 @@ impl PulseApp {
     pub fn use_clip_tempo(&mut self, clip: ClipRef) {
         let Some(Clip::Audio(audio)) = self.clip(clip) else { return };
         if audio.warp == WarpMode::Off {
-            self.status = Some("Este clip no tiene tempo: usa «Detectar tempo» primero".into());
+            self.status = Some(tr("Este clip no tiene tempo: usa «Detectar tempo» primero").into());
             return;
         }
         let bpm = audio.original_bpm;
         self.project.tempo = bpm;
         self.audio.send(engine::Command::SetTempo(bpm));
-        self.status = Some(format!("Tempo del proyecto: {} BPM", bpm_text(bpm)));
+        self.status = Some(fill(tr("Tempo del proyecto: {} BPM"), &[&bpm_text(bpm)]));
     }
 }
 

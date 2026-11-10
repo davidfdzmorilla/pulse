@@ -7,6 +7,7 @@
 //! and `versiones.json` lists them with their names, notes and dates.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::project::Project;
 use crate::theme::{ACCENT, TEXT_DIM};
 use eframe::egui::{self, RichText};
@@ -55,7 +56,7 @@ fn in_folder(file: &str) -> bool {
 }
 
 fn write_list(dir: &Path, versions: &[Version]) -> Result<(), String> {
-    crate::store::write_json(&dir.join(INDEX), versions).map_err(|e| format!("No se pudo guardar la lista de versiones: {e}"))
+    crate::store::write_json(&dir.join(INDEX), versions).map_err(|e| fill(tr("No se pudo guardar la lista de versiones: {}"), &[&e]))
 }
 
 pub fn now() -> u64 {
@@ -79,7 +80,7 @@ fn text(project: &Project, dir: &Path) -> Result<String, String> {
 /// kept if nothing changed since the last one, and only the newest [`MAX_AUTO`]
 /// of those stay.
 pub fn add(dir: &Path, project: &Project, name: &str, note: &str, auto: bool) -> Result<Option<Version>, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     let content = text(project, dir)?;
     let mut versions = list(dir);
     if auto && versions.last().is_some_and(|last| std::fs::read_to_string(dir.join(&last.file)).is_ok_and(|t| t == content)) {
@@ -93,7 +94,7 @@ pub fn add(dir: &Path, project: &Project, name: &str, note: &str, auto: bool) ->
         stem = format!("{created}-{n}");
     }
     let file = format!("{stem}.pulse");
-    crate::store::write_atomic(&dir.join(&file), content.as_bytes()).map_err(|e| format!("No se pudo guardar la versión: {e}"))?;
+    crate::store::write_atomic(&dir.join(&file), content.as_bytes()).map_err(|e| fill(tr("No se pudo guardar la versión: {}"), &[&e]))?;
     let version = Version { file, name: name.to_string(), note: note.to_string(), created, auto };
     versions.push(version.clone());
     let autos = versions.iter().filter(|v| v.auto).count();
@@ -115,7 +116,7 @@ pub fn add(dir: &Path, project: &Project, name: &str, note: &str, auto: bool) ->
 
 /// The project a version holds, its files found in the project's folder.
 pub fn load(dir: &Path, version: &Version) -> Result<Project, String> {
-    let text = std::fs::read_to_string(dir.join(&version.file)).map_err(|e| format!("No se pudo leer la versión: {e}"))?;
+    let text = std::fs::read_to_string(dir.join(&version.file)).map_err(|e| fill(tr("No se pudo leer la versión: {}"), &[&e]))?;
     let mut project = Project::from_json(&text)?;
     crate::library::resolve(&mut project, dir.parent().unwrap_or(dir));
     Ok(project)
@@ -149,8 +150,8 @@ pub fn diff(old: &Project, new: &Project) -> Vec<String> {
         out.push(format!("Tempo {} → {}", trim(old.tempo), trim(new.tempo)));
     }
     if old.key != new.key {
-        let name = |k: Option<stems::key::Key>| k.map_or("sin escala".to_string(), |k| k.name());
-        out.push(format!("Escala: {} → {}", name(old.key), name(new.key)));
+        let name = |k: Option<stems::key::Key>| k.map_or(tr("sin escala").to_string(), |k| crate::i18n::music(&k.name()));
+        out.push(fill(tr("Escala: {} → {}"), &[&name(old.key), &name(new.key)]));
     }
     // Tracks are matched by name, in order (two of the same name pair up in turn).
     let mut unmatched: Vec<usize> = (0..old.tracks.len()).collect();
@@ -158,68 +159,68 @@ pub fn diff(old: &Project, new: &Project) -> Vec<String> {
     for (j, track) in new.tracks.iter().enumerate() {
         match unmatched.iter().position(|&i| old.tracks[i].name == track.name) {
             Some(k) => pairs.push((unmatched.remove(k), j)),
-            None => out.push(format!("+ Pista «{}»", track.name)),
+            None => out.push(fill(tr("+ Pista «{}»"), &[&track.name])),
         }
     }
     for &i in &unmatched {
-        out.push(format!("− Pista «{}»", old.tracks[i].name));
+        out.push(fill(tr("− Pista «{}»"), &[&old.tracks[i].name]));
     }
     let moved = pairs.windows(2).any(|w| w[0].0 > w[1].0);
     for (i, j) in pairs {
         let (a, b) = (&old.tracks[i], &new.tracks[j]);
         let mut what = Vec::new();
         if std::mem::discriminant(&a.instrument) != std::mem::discriminant(&b.instrument) {
-            what.push("otro instrumento".to_string());
+            what.push(tr("otro instrumento").to_string());
         } else if a.instrument != b.instrument || a.samples != b.samples {
-            what.push("sonido retocado".to_string());
+            what.push(tr("sonido retocado").to_string());
         }
         if a.devices.len() != b.devices.len() {
-            what.push(format!("{} → {} efectos", a.devices.len(), b.devices.len()));
+            what.push(fill(tr("{} → {} efectos"), &[&a.devices.len(), &b.devices.len()]));
         } else if a.devices != b.devices {
-            what.push("efectos retocados".to_string());
+            what.push(tr("efectos retocados").to_string());
         }
         let session = |t: &crate::project::Track| t.clips.iter().flatten().count();
         if session(a) != session(b) {
-            what.push(format!("{} → {} clips en Session", session(a), session(b)));
+            what.push(fill(tr("{} → {} clips en Session"), &[&session(a), &session(b)]));
         } else if a.clips != b.clips {
-            what.push("clips de Session editados".to_string());
+            what.push(tr("clips de Session editados").to_string());
         }
         if a.arrangement.len() != b.arrangement.len() {
-            what.push(format!("{} → {} clips en el Arrangement", a.arrangement.len(), b.arrangement.len()));
+            what.push(fill(tr("{} → {} clips en el Arrangement"), &[&a.arrangement.len(), &b.arrangement.len()]));
         } else if a.arrangement != b.arrangement {
-            what.push("Arrangement editado".to_string());
+            what.push(tr("Arrangement editado").to_string());
         }
         if a.automation != b.automation {
-            what.push("automatización".to_string());
+            what.push(tr("automatización").to_string());
         }
         if a.mixer != b.mixer || a.sends != b.sends || a.solo != b.solo {
-            what.push("mezcla".to_string());
+            what.push(tr("mezcla").to_string());
         }
         if a.frozen.is_some() != b.frozen.is_some() {
-            what.push(if b.frozen.is_some() { "congelada" } else { "descongelada" }.to_string());
+            what.push(if b.frozen.is_some() { tr("congelada") } else { tr("descongelada") }.to_string());
         }
         if a.color != b.color && what.is_empty() {
-            what.push("color".to_string());
+            what.push(tr("color").to_string());
         }
         if !what.is_empty() {
             out.push(format!("«{}»: {}", b.name, what.join(", ")));
         }
     }
     if moved {
-        out.push("Pistas en otro orden".into());
+        out.push(tr("Pistas en otro orden").into());
     }
     if old.returns != new.returns {
-        out.push("Retornos cambiados".into());
+        out.push(tr("Retornos cambiados").into());
     }
     if old.master != new.master {
-        out.push("Master cambiado".into());
+        out.push(tr("Master cambiado").into());
     }
     if old.meter != new.meter {
-        out.push(format!("Compás: {}", new.meter.changes().iter().map(|c| if c.bar == 0 { c.sig.label() } else { format!("{} desde el compás {}", c.sig.label(), c.bar + 1) }).collect::<Vec<_>>().join(", ")));
+        out.push(fill(tr("Compás: {}"), &[&new.meter.changes().iter().map(|c| if c.bar == 0 { c.sig.label() } else { fill(tr("{} desde el compás {}"), &[&c.sig.label(), &(c.bar + 1)]) }).collect::<Vec<_>>().join(", ")]));
     }
     let rest = |p: &Project| (p.loop_enabled, p.loop_start, p.loop_end, p.swing, p.swing_grid, p.quantize, p.scene_names.clone());
     if rest(old) != rest(new) {
-        out.push("Loop, swing, escenas u otros ajustes".into());
+        out.push(tr("Loop, swing, escenas u otros ajustes").into());
     }
     out
 }
@@ -233,11 +234,11 @@ fn trim(x: f64) -> String {
 pub fn ago(created: u64, now: u64) -> String {
     let s = now.saturating_sub(created);
     match s {
-        0..60 => "ahora mismo".into(),
-        60..3600 => format!("hace {} min", s / 60),
-        3600..86_400 => format!("hace {} h", s / 3600),
-        86_400..172_800 => "ayer".into(),
-        _ => format!("hace {} días", s / 86_400),
+        0..60 => tr("ahora mismo").into(),
+        60..3600 => fill(tr("hace {} min"), &[&(s / 60)]),
+        3600..86_400 => fill(tr("hace {} h"), &[&(s / 3600)]),
+        86_400..172_800 => tr("ayer").into(),
+        _ => fill(tr("hace {} días"), &[&(s / 86_400)]),
     }
 }
 
@@ -262,8 +263,8 @@ impl PulseApp {
     /// Where this project's versions are, or why it has none yet.
     pub(crate) fn versions_dir(&self) -> Result<PathBuf, String> {
         match &self.file {
-            None => Err(crate::theme::keys("Guarda el proyecto (⌘S) para poder guardar versiones")),
-            Some(file) => folder(file).ok_or_else(|| "Usa «Guardar como…» para dar al proyecto su carpeta: las versiones se guardan en ella".into()),
+            None => Err(crate::theme::keys(tr("Guarda el proyecto (⌘S) para poder guardar versiones"))),
+            Some(file) => folder(file).ok_or_else(|| tr("Usa «Guardar como…» para dar al proyecto su carpeta: las versiones se guardan en ella").into()),
         }
     }
 
@@ -279,7 +280,7 @@ impl PulseApp {
         self.capture_plugins();
         let name = if name.trim().is_empty() { format!("Versión {}", list(&dir).iter().filter(|v| !v.auto).count() + 1) } else { name.trim().to_string() };
         self.status = Some(match add(&dir, &self.project, &name, note.trim(), false) {
-            Ok(_) => format!("Versión «{name}» guardada"),
+            Ok(_) => fill(tr("Versión «{}» guardada"), &[&name]),
             Err(e) => e,
         });
     }
@@ -313,7 +314,7 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         self.selected_clip = None;
         self.after_project_replaced(None);
-        self.status = Some(crate::theme::keys(&format!("Has vuelto a «{}» (⌘Z lo deshace; guarda para quedarte con ella)", version.name)));
+        self.status = Some(crate::theme::keys(&fill(tr("Has vuelto a «{}» (⌘Z lo deshace; guarda para quedarte con ella)"), &[&version.name])));
     }
 }
 
@@ -323,7 +324,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    let title = format!("Versiones de «{}»", app.file_name());
+    let title = fill(tr("Versiones de «{}»"), &[&app.file_name()]);
     egui::Window::new(title)
         .id(egui::Id::new("versions"))
         .open(&mut open)
@@ -347,28 +348,28 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     // Save one.
     ui.horizontal(|ui| {
         let w = &mut app.versions;
-        ui.add(egui::TextEdit::singleline(&mut w.name).hint_text("Nombre (p. ej. «Con el bajo nuevo»)").desired_width(220.0));
-        ui.add(egui::TextEdit::singleline(&mut w.note).hint_text("Nota (opcional)").desired_width(150.0));
-        if ui.button("Guardar versión").on_hover_text(crate::theme::keys("Guarda cómo está el proyecto ahora (⌥⌘S)")).clicked() {
+        ui.add(egui::TextEdit::singleline(&mut w.name).hint_text(tr("Nombre (p. ej. «Con el bajo nuevo»)")).desired_width(220.0));
+        ui.add(egui::TextEdit::singleline(&mut w.note).hint_text(tr("Nota (opcional)")).desired_width(150.0));
+        if ui.button(tr("Guardar versión")).on_hover_text(crate::theme::keys(tr("Guarda cómo está el proyecto ahora (⌥⌘S)"))).clicked() {
             let (name, note) = (std::mem::take(&mut app.versions.name), std::mem::take(&mut app.versions.note));
             app.save_version(&name, &note);
         }
     });
-    ui.label(RichText::new(crate::theme::keys(&format!("Al guardar (⌘S) se hace también una versión automática; se guardan las {MAX_AUTO} últimas."))).color(TEXT_DIM).size(10.5));
+    ui.label(RichText::new(crate::theme::keys(&fill(tr("Al guardar (⌘S) se hace también una versión automática; se guardan las {} últimas."), &[&MAX_AUTO]))).color(TEXT_DIM).size(10.5));
     ui.separator();
 
     let versions = list(&dir);
     if versions.is_empty() {
-        ui.label(RichText::new("Aún no hay versiones.").color(TEXT_DIM));
+        ui.label(RichText::new(tr("Aún no hay versiones.")).color(TEXT_DIM));
         return;
     }
     // What each changed from the one before, worked out the first time it is shown.
     for (i, v) in versions.iter().enumerate() {
         if !app.versions.changes.contains_key(&v.file) {
             let changes = match (i.checked_sub(1).map(|p| load(&dir, &versions[p])), load(&dir, v)) {
-                (None, _) => vec!["La primera".to_string()],
+                (None, _) => vec![tr("La primera").to_string()],
                 (Some(Ok(before)), Ok(this)) => diff(&before, &this),
-                _ => vec!["No se pudo leer".to_string()],
+                _ => vec![tr("No se pudo leer").to_string()],
             };
             app.versions.changes.insert(v.file.clone(), changes);
         }
@@ -379,29 +380,31 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
         for v in versions.iter().rev() {
             let w = &mut app.versions;
             ui.horizontal(|ui| {
-                ui.label(RichText::new(&v.name).strong().color(if v.auto { TEXT_DIM } else { ACCENT }));
-                let when = if v.auto { format!("{} · automática", ago(v.created, now)) } else { ago(v.created, now) };
+                // The automatic ones are all named «Guardado» (see `auto_version`).
+                let name = if v.auto && v.name == "Guardado" { tr("Guardado") } else { v.name.as_str() };
+                ui.label(RichText::new(name).strong().color(if v.auto { TEXT_DIM } else { ACCENT }));
+                let when = if v.auto { fill(tr("{} · automática"), &[&ago(v.created, now)]) } else { ago(v.created, now) };
                 ui.label(RichText::new(when).color(TEXT_DIM).size(10.5));
             });
             if !v.note.is_empty() {
                 ui.label(RichText::new(&v.note).italics().size(11.0));
             }
             let changes = w.changes.get(&v.file).cloned().unwrap_or_default();
-            let shown = if changes.is_empty() { "Sin cambios".to_string() } else { changes.join(" · ") };
+            let shown = if changes.is_empty() { tr("Sin cambios").to_string() } else { changes.join(" · ") };
             ui.label(RichText::new(shown).color(TEXT_DIM).size(10.5));
             ui.horizontal(|ui| {
-                if ui.small_button("Volver a esta").on_hover_text(crate::theme::keys("La abre en lugar de lo que hay ahora, que queda guardado como versión (⌘Z lo deshace)")).clicked() {
+                if ui.small_button(tr("Volver a esta")).on_hover_text(crate::theme::keys(tr("La abre en lugar de lo que hay ahora, que queda guardado como versión (⌘Z lo deshace)"))).clicked() {
                     action = Some(("restore", v.file.clone()));
                 }
                 let comparing = w.comparing.as_deref() == Some(v.file.as_str());
-                if ui.selectable_label(comparing, "Comparar con ahora").clicked() {
+                if ui.selectable_label(comparing, tr("Comparar con ahora")).clicked() {
                     w.comparing = if comparing { None } else { Some(v.file.clone()) };
                 }
-                if ui.small_button("Renombrar").clicked() {
+                if ui.small_button(tr("Renombrar")).clicked() {
                     w.renaming = Some((v.file.clone(), v.name.clone(), v.note.clone()));
                 }
                 let asking = w.deleting.as_deref() == Some(v.file.as_str());
-                if ui.small_button(if asking { "¿Seguro? Borrar" } else { "Borrar" }).clicked() {
+                if ui.small_button(if asking { tr("¿Seguro? Borrar") } else { tr("Borrar") }).clicked() {
                     if asking {
                         action = Some(("remove", v.file.clone()));
                     } else {
@@ -412,8 +415,8 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             if let Some((file, name, note)) = w.renaming.as_mut().filter(|(f, ..)| f == &v.file) {
                 ui.horizontal(|ui| {
                     ui.add(egui::TextEdit::singleline(name).desired_width(200.0));
-                    ui.add(egui::TextEdit::singleline(note).hint_text("Nota").desired_width(150.0));
-                    if ui.small_button("Aceptar").clicked() {
+                    ui.add(egui::TextEdit::singleline(note).hint_text(tr("Nota")).desired_width(150.0));
+                    if ui.small_button(tr("Aceptar")).clicked() {
                         action = Some(("rename", file.clone()));
                     }
                 });
@@ -424,9 +427,9 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                     Err(e) => vec![e],
                 };
                 ui.group(|ui| {
-                    ui.label(RichText::new("De esta versión a ahora:").size(10.5));
+                    ui.label(RichText::new(tr("De esta versión a ahora:")).size(10.5));
                     if lines.is_empty() {
-                        ui.label(RichText::new("Igual que ahora").color(TEXT_DIM));
+                        ui.label(RichText::new(tr("Igual que ahora")).color(TEXT_DIM));
                     }
                     for line in lines {
                         ui.label(RichText::new(line).size(11.0));

@@ -81,9 +81,9 @@ impl Monitor {
 
     pub fn hint(self) -> &'static str {
         match self {
-            Monitor::Auto => "Monitorizar en Auto: oyes la entrada de audio mientras la pista está armada",
-            Monitor::In => "Monitorizar siempre: oyes la entrada de audio en vez de los clips",
-            Monitor::Off => "Sin monitorizar: no oyes la entrada (usa la del micrófono o la interfaz)",
+            Monitor::Auto => crate::i18n::tr("Monitorizar en Auto: oyes la entrada de audio mientras la pista está armada"),
+            Monitor::In => crate::i18n::tr("Monitorizar siempre: oyes la entrada de audio en vez de los clips"),
+            Monitor::Off => crate::i18n::tr("Sin monitorizar: no oyes la entrada (usa la del micrófono o la interfaz)"),
         }
     }
 }
@@ -741,7 +741,7 @@ impl Project {
     }
 
     pub fn load(path: &Path) -> Result<Self, String> {
-        let text = std::fs::read_to_string(path).map_err(|e| format!("No se pudo leer: {e}"))?;
+        let text = std::fs::read_to_string(path).map_err(|e| crate::i18n::fill(crate::i18n::tr("No se pudo leer: {}"), &[&e]))?;
         let mut project = Self::from_json(&text)?;
         // Files in its folder are saved relative to it (it can be moved).
         crate::library::resolve(&mut project, path.parent().unwrap_or(Path::new(".")));
@@ -757,11 +757,11 @@ impl Project {
     }
 
     pub fn from_json(text: &str) -> Result<Self, String> {
-        let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| format!("Archivo no válido: {e}"))?;
+        let mut value: serde_json::Value = serde_json::from_str(text).map_err(|e| crate::i18n::fill(crate::i18n::tr("Archivo no válido: {}"), &[&e]))?;
         // Files from before the format number are format 0.
         let format = value.get(FORMAT_KEY).and_then(|f| f.as_u64()).unwrap_or(0);
         if format > FORMAT as u64 {
-            return Err("Este proyecto se guardó con una versión más nueva de Pulse. Actualiza Pulse para abrirlo.".into());
+            return Err(crate::i18n::tr("Este proyecto se guardó con una versión más nueva de Pulse. Actualiza Pulse para abrirlo.").into());
         }
         let saved_by = value.get(SAVED_BY_KEY).and_then(|v| v.as_str()).map(str::to_string);
         if let Some(object) = value.as_object_mut() {
@@ -769,7 +769,7 @@ impl Project {
             object.remove(SAVED_BY_KEY);
         }
         migrate(&mut value, format);
-        let mut project: Project = serde_json::from_value(value).map_err(|e| format!("Archivo no válido: {e}"))?;
+        let mut project: Project = serde_json::from_value(value).map_err(|e| crate::i18n::fill(crate::i18n::tr("Archivo no válido: {}"), &[&e]))?;
         for track in &mut project.tracks {
             track.instrument = track.instrument.upgraded();
         }
@@ -850,7 +850,7 @@ impl Project {
         let text = serde_json::to_string_pretty(&value).map_err(|e| e.to_string())?;
         if repaired > 0 {
             // Never write what wouldn't open again.
-            Self::from_json(&text).map_err(|e| format!("El proyecto tiene valores no válidos y no se pudo corregir: {e}"))?;
+            Self::from_json(&text).map_err(|e| crate::i18n::fill(crate::i18n::tr("El proyecto tiene valores no válidos y no se pudo corregir: {}"), &[&e]))?;
         }
         Ok((text, repaired))
     }

@@ -7,6 +7,7 @@
 //! when the project is saved.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use engine::model::Clip;
 use serde::{Deserialize, Serialize};
 use std::collections::{HashMap, HashSet};
@@ -134,7 +135,7 @@ impl PulseApp {
         }
         let sample = self.sample(&source);
         if sample.frames() == 0 {
-            self.status = Some("No se encuentra el audio de este clip".into());
+            self.status = Some(tr("No se encuentra el audio de este clip").into());
             self.tuner.open = None;
             return;
         }
@@ -146,7 +147,7 @@ impl PulseApp {
             *out.lock().unwrap_or_else(|e| e.into_inner()) = Some(analysis);
         });
         self.tuner.jobs.push((source, job));
-        self.status = Some("Analizando la voz: sus notas y su afinación…".into());
+        self.status = Some(tr("Analizando la voz: sus notas y su afinación…").into());
     }
 
     /// Every frame: analyses finished.
@@ -166,8 +167,8 @@ impl PulseApp {
             let count = analysis.notes.len();
             self.tuner.analyses.insert(source, Arc::new(analysis));
             self.status = Some(match count {
-                0 => "No se oyen notas en este clip: la afinación es para una voz o un instrumento que toque una nota a la vez".into(),
-                n => format!("{n} notas: arrastra una arriba o abajo para cambiarla de nota"),
+                0 => tr("No se oyen notas en este clip: la afinación es para una voz o un instrumento que toque una nota a la vez").into(),
+                n => fill(tr("{} notas: arrastra una arriba o abajo para cambiarla de nota"), &[&n]),
             });
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
@@ -189,9 +190,9 @@ impl PulseApp {
     /// (or the one made before for the same), which the clip (and its copies)
     /// play from now on. Notes as sung: the file as recorded again.
     pub fn apply_tuning(&mut self, clip: ClipRef, notes: Vec<TunedNote>) -> Result<(), String> {
-        let source = self.tuning_source(clip).ok_or("No es un clip de audio")?;
-        let analysis = self.tuner.analysis(&source).ok_or("La voz aún se está analizando")?;
-        let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { return Err("No es un clip de audio".into()) };
+        let source = self.tuning_source(clip).ok_or(tr("No es un clip de audio"))?;
+        let analysis = self.tuner.analysis(&source).ok_or(tr("La voz aún se está analizando"))?;
+        let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { return Err(tr("No es un clip de audio").into()) };
         let current = self.tuning_of(clip);
         let id = match current {
             Some(i) => self.project.tunings[i].id,
@@ -207,7 +208,7 @@ impl PulseApp {
                 let edits: Vec<NoteEdit> = notes.iter().map(TunedNote::edit).collect();
                 let mut moved = stems::tune::render(&[&sample.left, &sample.right], sample.sample_rate, &analysis, &edits);
                 let (right, left) = (moved.pop().unwrap_or_default(), moved.pop().unwrap_or_default());
-                std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+                std::fs::create_dir_all(&dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
                 let rate = sample.sample_rate;
                 let tuned = Arc::new(engine::Sample::from_channels(left, right, rate));
                 self.samples.insert(path_text.clone(), tuned.clone());

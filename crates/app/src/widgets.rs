@@ -145,7 +145,7 @@ impl<'a> Knob<'a> {
             theme::small(),
             if hover { Color32::WHITE } else { TEXT },
         );
-        response.on_hover_text("Arrastra arriba/abajo (Shift = fino) · doble clic = valor por defecto")
+        response.on_hover_text(crate::i18n::tr("Arrastra arriba/abajo (Shift = fino) · doble clic = valor por defecto"))
     }
 }
 
@@ -269,7 +269,7 @@ pub fn fader_with_meter(ui: &mut Ui, gain: &mut f32, peak: f32, height: f32) -> 
         theme::small(),
         TEXT,
     );
-    response.on_hover_text("Volumen · doble clic = 0 dB · Shift = fino")
+    response.on_hover_text(crate::i18n::tr("Volumen · doble clic = 0 dB · Shift = fino"))
 }
 
 /// A right-click menu with fields in it (names, amounts): egui's own closes on any

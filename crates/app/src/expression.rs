@@ -137,15 +137,15 @@ pub fn slice(lanes: &[ControlLane], length: f64, from: f64, to: f64) -> Vec<Cont
 /// What a take's status says of its lanes: « y el pitch bend y la rueda».
 pub fn expression_note(lanes: &[ControlLane]) -> String {
     let names: Vec<String> = lanes.iter().map(|l| match l.control {
-        MidiControl::PitchBend => "el pitch bend".to_string(),
-        MidiControl::Pressure => "el aftertouch".to_string(),
-        MidiControl::Cc(1) => "la rueda".to_string(),
+        MidiControl::PitchBend => crate::i18n::tr("el pitch bend").to_string(),
+        MidiControl::Pressure => crate::i18n::tr("el aftertouch").to_string(),
+        MidiControl::Cc(1) => crate::i18n::tr("la rueda").to_string(),
         c => c.short(),
     }).collect();
     match names.split_last() {
         None => String::new(),
-        Some((last, [])) => format!(" y {last}"),
-        Some((last, rest)) => format!(", {} y {last}", rest.join(", ")),
+        Some((last, [])) => crate::i18n::fill(crate::i18n::tr(" y {}"), &[last]),
+        Some((last, rest)) => crate::i18n::fill(crate::i18n::tr(", {} y {}"), &[&rest.join(", "), last]),
     }
 }
 

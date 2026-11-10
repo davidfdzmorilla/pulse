@@ -5,6 +5,7 @@
 //! point, dragging moves it, a double clic deletes it; ⌥ + drag on a stretch
 //! bends it (see `curves`).
 
+use crate::i18n::{fill, tr};
 use crate::theme::{self, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::{AutomationLane, AutomationPoint, ControlLane, MidiControl, Param, ParamInfo};
@@ -68,14 +69,14 @@ enum Shown {
 /// With a MIDI clip's `controls`, its controller lanes can be shown too.
 pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<AutomationLane>, controls: Option<&mut Vec<ControlLane>>) {
     ui.horizontal(|ui| {
-        ui.label(egui::RichText::new("Carril").color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(tr("Carril")).color(TEXT_DIM).size(10.5));
         let has = |p: Param| envelopes.iter().any(|l| l.param == p && !l.points.is_empty());
         let label = |p: Option<Param>| match p {
-            None => "Velocidad".to_string(),
+            None => tr("Velocidad").to_string(),
             Some(p) => format!("{}{}", if has(p) { "● " } else { "" }, choice.name(p)),
         };
         let present: Vec<MidiControl> = controls.as_deref().map_or(Vec::new(), |c| c.iter().filter(|l| !l.points.is_empty()).map(|l| l.control).collect());
-        let control_label = |c: MidiControl| format!("{}{}", if present.contains(&c) { "◆ " } else { "" }, c.label());
+        let control_label = |c: MidiControl| format!("{}{}", if present.contains(&c) { "◆ " } else { "" }, crate::expression_ui::control_name(c));
         let mut shown = match choice.control.filter(|_| controls.is_some()) {
             Some(c) => Shown::Control(c),
             None => Shown::Envelope(choice.shown),
@@ -86,28 +87,28 @@ pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<Au
         };
         let mut cc = choice.expression.cc;
         egui::ComboBox::from_id_salt("clip_lane").selected_text(selected).width(220.0).height(420.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut shown, Shown::Envelope(None), "Velocidad");
+            ui.selectable_value(&mut shown, Shown::Envelope(None), tr("Velocidad"));
             if controls.is_some() {
                 ui.separator();
-                ui.label(egui::RichText::new("Expresión MIDI del clip").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Expresión MIDI del clip")).color(TEXT_DIM).size(10.5));
                 for &c in &present {
-                    ui.selectable_value(&mut shown, Shown::Control(c), control_label(c)).on_hover_text("Un controlador grabado o dibujado en el clip");
+                    ui.selectable_value(&mut shown, Shown::Control(c), control_label(c)).on_hover_text(tr("Un controlador grabado o dibujado en el clip"));
                 }
-                ui.label(egui::RichText::new("Añadir").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Añadir")).color(TEXT_DIM).size(10.5));
                 for c in MidiControl::COMMON.into_iter().filter(|c| !present.contains(c)) {
-                    ui.selectable_value(&mut shown, Shown::Control(c), format!("+ {}", c.label())).on_hover_text("Un carril nuevo para dibujar este controlador");
+                    ui.selectable_value(&mut shown, Shown::Control(c), format!("+ {}", crate::expression_ui::control_name(c))).on_hover_text(tr("Un carril nuevo para dibujar este controlador"));
                 }
                 ui.horizontal(|ui| {
                     ui.label("+ CC");
-                    ui.add(egui::DragValue::new(&mut cc).range(0..=119)).on_hover_text("El número del controlador (el 64, el pedal, se graba en la duración de las notas)");
-                    if ui.button("Añadir").clicked() && MidiControl::Cc(cc).recordable() {
+                    ui.add(egui::DragValue::new(&mut cc).range(0..=119)).on_hover_text(tr("El número del controlador (el 64, el pedal, se graba en la duración de las notas)"));
+                    if ui.button(tr("Añadir")).clicked() && MidiControl::Cc(cc).recordable() {
                         shown = Shown::Control(MidiControl::Cc(cc));
                         ui.close();
                     }
                 });
             }
             ui.separator();
-            ui.label(egui::RichText::new("Envolventes del clip").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Envolventes del clip")).color(TEXT_DIM).size(10.5));
             // Those with points first.
             let mut params: Vec<Param> = choice.names.iter().map(|(p, _)| *p).collect();
             params.sort_by_key(|&p| !has(p));
@@ -132,13 +133,13 @@ pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<Au
         }
         let shown = choice.shown;
         if let Some(param) = shown.filter(|&p| has(p)) {
-            if ui.small_button("Borrar envolvente").clicked() {
+            if ui.small_button(tr("Borrar envolvente")).clicked() {
                 envelopes.retain(|l| l.param != param);
             }
         }
         let count = envelopes.iter().filter(|l| !l.points.is_empty()).count();
         if count > 0 {
-            ui.label(egui::RichText::new(format!("{count} envolvente{} en el clip", if count == 1 { "" } else { "s" })).color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(if count == 1 { tr("1 envolvente en el clip").to_string() } else { fill(tr("{} envolventes en el clip"), &[&count]) }).color(TEXT_DIM).size(10.5));
         }
     });
 }
@@ -177,7 +178,7 @@ pub fn lane(
     if points.is_empty() {
         let y = y_of(value);
         painter.line_segment([pos2(area.left(), y), pos2(end, y)], Stroke::new(1.0, Color32::from_gray(110)));
-        painter.text(pos2(area.left() + 4.0, lane.top() + 3.0), Align2::LEFT_TOP, "Clic para añadir puntos a la envolvente del clip", theme::small(), TEXT_DIM);
+        painter.text(pos2(area.left() + 4.0, lane.top() + 3.0), Align2::LEFT_TOP, tr("Clic para añadir puntos a la envolvente del clip"), theme::small(), TEXT_DIM);
     } else {
         let line = crate::curves::line(&points, x_of, &y_of, area.left(), end);
         painter.add(egui::Shape::line(line, Stroke::new(1.5, color)));

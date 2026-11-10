@@ -15,6 +15,7 @@
 //! in a project with nothing in it yet, the tempo is taken from what was
 //! played (see [`detect_tempo`]), unless it is close to the project's.
 
+use crate::i18n::{fill, tr};
 use crate::app::{ClipRef, PulseApp, View};
 use engine::meter::Meter;
 use engine::model::{ArrangementClip, Clip, MidiClip, Note};
@@ -370,7 +371,7 @@ impl PulseApp {
     /// «Capturar MIDI»: the last thing played, as a clip on the capture track.
     pub fn capture_midi(&mut self) {
         let Some(track) = self.capture_track() else {
-            self.status = Some("Capturar MIDI: selecciona o arma una pista MIDI".into());
+            self.status = Some(tr("Capturar MIDI: selecciona o arma una pista MIDI").into());
             return;
         };
         let transport = self.capture_transport();
@@ -379,7 +380,7 @@ impl PulseApp {
         let empty = self.project.tracks.iter().all(|t| t.arrangement.is_empty() && t.clips.iter().all(Option::is_none));
         let tempo_lane = self.project.master.automation.iter().any(|l| l.param == engine::model::Param::Tempo && !l.points.is_empty());
         let Some(captured) = capture(&pending, &self.project.meter, self.project.tempo, empty && !tempo_lane) else {
-            self.status = Some("Capturar MIDI: aún no has tocado nada".into());
+            self.status = Some(tr("Capturar MIDI: aún no has tocado nada").into());
             return;
         };
         self.midi_capture.taken(&pending);
@@ -391,11 +392,10 @@ impl PulseApp {
         let t = &self.project.tracks[track];
         let clip = MidiClip { name: "Captura".into(), length: captured.length, notes: captured.notes, color: t.color, envelopes: Vec::new(), groove: None, muted: false, controls: Vec::new() };
         let bars = captured.length / self.project.meter.first().bar();
-        let tempo = captured.tempo.map_or(String::new(), |bpm| format!(", a {bpm} BPM"));
         match self.view {
             View::Session => {
                 let Some(slot) = t.clips.iter().position(Option::is_none) else {
-                    self.status = Some(format!("Capturar MIDI: «{}» no tiene ningún slot libre", t.name));
+                    self.status = Some(fill(tr("Capturar MIDI: «{}» no tiene ningún slot libre"), &[&t.name]));
                     return;
                 };
                 self.set_clip(track, slot, Some(Clip::Midi(clip)));
@@ -410,7 +410,11 @@ impl PulseApp {
                 self.select_clip(ClipRef::Arrangement { track, index });
             }
         }
-        self.status = Some(format!("Capturadas {count} notas en «{}»: {bars} comp.{tempo}", self.project.tracks[track].name));
+        let name = &self.project.tracks[track].name;
+        self.status = Some(match captured.tempo {
+            Some(bpm) => fill(tr("Capturadas {} notas en «{}»: {} comp., a {} BPM"), &[&count, name, &bars, &bpm]),
+            None => fill(tr("Capturadas {} notas en «{}»: {} comp."), &[&count, name, &bars]),
+        });
     }
 }
 

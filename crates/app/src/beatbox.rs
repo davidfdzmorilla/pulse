@@ -54,18 +54,18 @@ impl Drum {
 
     pub fn name(self) -> &'static str {
         match self {
-            Drum::Kick => "Bombo",
-            Drum::Snare => "Caja",
-            Drum::Hat => "Charles",
+            Drum::Kick => crate::i18n::tr("Bombo"),
+            Drum::Snare => crate::i18n::tr("Caja"),
+            Drum::Hat => crate::i18n::tr("Charles"),
         }
     }
 
     /// What the sound to make for it is.
     pub fn sound(self) -> &'static str {
         match self {
-            Drum::Kick => "«pum»",
-            Drum::Snare => "«pf» o «ka»",
-            Drum::Hat => "«ts»",
+            Drum::Kick => crate::i18n::tr("«pum»"),
+            Drum::Snare => crate::i18n::tr("«pf» o «ka»"),
+            Drum::Hat => crate::i18n::tr("«ts»"),
         }
     }
 

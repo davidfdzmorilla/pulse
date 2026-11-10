@@ -4,6 +4,7 @@
 
 use crate::app::{ClipRef, PulseApp, View};
 use engine::model::{ArrangementClip, Clip};
+use crate::i18n::{fill, tr};
 use crate::theme;
 use eframe::egui::{self, Color32, Pos2, Rect, Stroke};
 use engine::Target;
@@ -86,8 +87,8 @@ impl PulseApp {
             }
         }
         self.status = Some(match items.len() {
-            1 => format!("Copiado «{}»", self.clip(first).map_or("", |c| c.name())),
-            n => format!("{n} clips copiados"),
+            1 => fill(tr("Copiado «{}»"), &[&self.clip(first).map_or("", |c| c.name())]),
+            n => fill(tr("{} clips copiados"), &[&n]),
         });
         self.clip_clipboard = Some(Clipboard { items });
     }
@@ -132,7 +133,7 @@ impl PulseApp {
             t < tracks && !app.project.tracks[t].is_group() && matches!(item.clip, Clip::Audio(_)) == app.project.tracks[t].is_audio()
         };
         if !board.items.iter().all(|item| fits(self, item)) {
-            self.status = Some("Los clips no caben: faltan pistas o son de otro tipo (audio o MIDI)".into());
+            self.status = Some(tr("Los clips no caben: faltan pistas o son de otro tipo (audio o MIDI)").into());
             return;
         }
         let mut pasted = Vec::new();
@@ -171,7 +172,7 @@ impl PulseApp {
                     .collect()
             };
             let Some(places) = (0..engine::NUM_SCENES).find_map(place) else {
-                self.status = Some("No quedan huecos libres debajo para los clips".into());
+                self.status = Some(tr("No quedan huecos libres debajo para los clips").into());
                 return;
             };
             for (item, &(t, s)) in board.items.iter().zip(&places) {
@@ -181,7 +182,7 @@ impl PulseApp {
             }
         }
         if pasted.len() > 1 {
-            self.status = Some(format!("{} clips pegados", pasted.len()));
+            self.status = Some(fill(tr("{} clips pegados"), &[&pasted.len()]));
         }
         self.set_clip_selection(pasted);
     }
@@ -216,8 +217,13 @@ impl PulseApp {
         for track in lanes {
             self.sync_arrangement(track);
         }
-        let what = if clips.len() == 1 { "Clip".to_string() } else { format!("{} clips", clips.len()) };
-        self.status = Some(if mute { format!("{what} desactivado{}: no suena{} (0 lo vuelve a activar)", if clips.len() == 1 { "" } else { "s" }, if clips.len() == 1 { "" } else { "n" }) } else { format!("{what} activado{}", if clips.len() == 1 { "" } else { "s" }) });
+        let n = clips.len();
+        self.status = Some(match (mute, n) {
+            (true, 1) => tr("Clip desactivado: no suena (0 lo vuelve a activar)").to_string(),
+            (true, n) => fill(tr("{} clips desactivados: no suenan (0 lo vuelve a activar)"), &[&n]),
+            (false, 1) => tr("Clip activado").to_string(),
+            (false, n) => fill(tr("{} clips activados"), &[&n]),
+        });
     }
 
     /// The selected clips. The selected one is always among them.
@@ -311,7 +317,7 @@ impl PulseApp {
             return false;
         }
         let Some(to) = self.session_destinations(clips, tracks, slots, copy) else {
-            self.status = Some("Los clips no caben ahí".into());
+            self.status = Some(tr("Los clips no caben ahí").into());
             return false;
         };
         // Their follow actions go with them.
@@ -342,10 +348,10 @@ impl PulseApp {
         selection.swap(0, first);
         self.set_clip_selection(selection);
         self.status = Some(match (clips.len(), copy) {
-            (1, false) => "Clip movido".to_string(),
-            (1, true) => "Clip copiado".to_string(),
-            (n, false) => format!("{n} clips movidos"),
-            (n, true) => format!("{n} clips copiados"),
+            (1, false) => tr("Clip movido").to_string(),
+            (1, true) => tr("Clip copiado").to_string(),
+            (n, false) => fill(tr("{} clips movidos"), &[&n]),
+            (n, true) => fill(tr("{} clips copiados"), &[&n]),
         });
         true
     }

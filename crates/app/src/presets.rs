@@ -1,6 +1,7 @@
 //! Instrument presets: the factory ones built into Pulse and the user's own,
 //! saved as JSON files (one folder per instrument) with the samples they use.
 
+use crate::i18n::{fill, tr};
 use engine::model::InstrumentKind;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -71,10 +72,10 @@ fn file_name(name: &str) -> String {
 /// Saves (or overwrites) a preset; returns its file.
 pub fn save(root: &Path, preset: &Preset) -> Result<PathBuf, String> {
     if preset.name.trim().is_empty() {
-        return Err("El preset necesita un nombre".into());
+        return Err(tr("El preset necesita un nombre").into());
     }
     let dir = folder(root, &preset.instrument);
-    std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(&dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     let path = dir.join(file_name(&preset.name));
     crate::store::write_json(&path, preset)?;
     Ok(path)
@@ -82,7 +83,7 @@ pub fn save(root: &Path, preset: &Preset) -> Result<PathBuf, String> {
 
 pub fn delete(root: &Path, preset: &Preset) -> Result<(), String> {
     let path = folder(root, &preset.instrument).join(file_name(&preset.name));
-    std::fs::remove_file(&path).map_err(|e| format!("No se pudo borrar {}: {e}", path.display()))
+    std::fs::remove_file(&path).map_err(|e| fill(tr("No se pudo borrar {}: {}"), &[&path.display(), &e]))
 }
 
 #[cfg(test)]

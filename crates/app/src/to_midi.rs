@@ -13,6 +13,7 @@
 //! slicer's transient detection.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, music, tr};
 use engine::model::{AudioClip, Clip, InstrumentKind, MidiClip, Note, SynthParams};
 use engine::{Target, MAX_TRACKS};
 use stems::transcribe::NoteEvent;
@@ -32,7 +33,8 @@ pub enum ToMidi {
 impl ToMidi {
     pub const ALL: [ToMidi; 6] = [ToMidi::Melody, ToMidi::MelodyFree, ToMidi::Harmony, ToMidi::Chords, ToMidi::Drums, ToMidi::Beatbox];
 
-    pub fn label(self) -> &'static str {
+    /// Its name for the new track and clip, kept in the project.
+    pub fn name(self) -> &'static str {
         match self {
             ToMidi::Melody => "Melodía",
             ToMidi::MelodyFree => "Melodía sin ajustar",
@@ -43,14 +45,26 @@ impl ToMidi {
         }
     }
 
+    /// Its name in the interface's language.
+    pub fn label(self) -> &'static str {
+        match self {
+            ToMidi::Melody => tr("Melodía"),
+            ToMidi::MelodyFree => tr("Melodía sin ajustar"),
+            ToMidi::Harmony => tr("Armonía"),
+            ToMidi::Chords => tr("Acordes"),
+            ToMidi::Drums => tr("Batería"),
+            ToMidi::Beatbox => "Beatbox",
+        }
+    }
+
     pub fn hint(self) -> &'static str {
         match self {
-            ToMidi::Melody => "Una nota cada vez: voz, tarareo, un instrumento solista. Cada nota va a la de la escala de la canción más cercana, así que cantar un poco alto o bajo no cambia la nota",
-            ToMidi::MelodyFree => "Como Melodía, pero cada nota al semitono más cercano, sin la escala (para melodías con notas fuera de la tonalidad)",
-            ToMidi::Harmony => "Todas las notas: acordes, piano, guitarra",
-            ToMidi::Chords => "Los acordes de una canción o de un instrumento, uno por cada cambio (como mucho cada medio compás), con las voces enlazadas: para tocarlos con otro sonido",
-            ToMidi::Drums => "Cada golpe como bombo, caja o charles, en una Drum Machine",
-            ToMidi::Beatbox => "Tu beatbox grabado como batería: «pum» es el bombo, «pf» o «ka» la caja y «ts» el charles (o los sonidos que le enseñaste a la Voz), cada golpe en su semicorchea, en una Drum Machine",
+            ToMidi::Melody => tr("Una nota cada vez: voz, tarareo, un instrumento solista. Cada nota va a la de la escala de la canción más cercana, así que cantar un poco alto o bajo no cambia la nota"),
+            ToMidi::MelodyFree => tr("Como Melodía, pero cada nota al semitono más cercano, sin la escala (para melodías con notas fuera de la tonalidad)"),
+            ToMidi::Harmony => tr("Todas las notas: acordes, piano, guitarra"),
+            ToMidi::Chords => tr("Los acordes de una canción o de un instrumento, uno por cada cambio (como mucho cada medio compás), con las voces enlazadas: para tocarlos con otro sonido"),
+            ToMidi::Drums => tr("Cada golpe como bombo, caja o charles, en una Drum Machine"),
+            ToMidi::Beatbox => tr("Tu beatbox grabado como batería: «pum» es el bombo, «pf» o «ka» la caja y «ts» el charles (o los sonidos que le enseñaste a la Voz), cada golpe en su semicorchea, en una Drum Machine"),
         }
     }
 }
@@ -202,7 +216,7 @@ fn convert(sample: &engine::Sample, audio: &AudioClip, tempo: f64, mode: ToMidi,
     let to = audio.source_seconds(audio.length, tempo).min(sample.duration());
     let (a, b) = ((from * rate as f64) as usize, ((to * rate as f64) as usize).min(sample.frames()));
     if b <= a + 64 {
-        return Err("El clip es demasiado corto para sacar notas".into());
+        return Err(tr("El clip es demasiado corto para sacar notas").into());
     }
     let mono: Vec<f32> = sample.left[a..b].iter().zip(&sample.right[a..b]).map(|(l, r)| (l + r) * 0.5).collect();
     let report = |f: f32| {
@@ -330,12 +344,12 @@ impl PulseApp {
             Some((key, clarity)) => {
                 self.set_key(Some(key));
                 self.status = Some(if clarity >= CLEAR_KEY {
-                    format!("La canción está en {}", key.name())
+                    fill(tr("La canción está en {}"), &[&music(&key.name())])
                 } else {
-                    format!("La canción parece estar en {}, aunque no está muy claro: si no lo es, elige la escala a mano", key.name())
+                    fill(tr("La canción parece estar en {}, aunque no está muy claro: si no lo es, elige la escala a mano"), &[&music(&key.name())])
                 });
             }
-            None => self.status = Some("No hay notas ni audio con una tonalidad clara de donde sacarla: elige la escala a mano".into()),
+            None => self.status = Some(tr("No hay notas ni audio con una tonalidad clara de donde sacarla: elige la escala a mano").into()),
         }
     }
 }
@@ -344,13 +358,13 @@ impl PulseApp {
     /// Starts turning an audio clip into MIDI (see `follow_to_midi`).
     pub fn convert_to_midi(&mut self, clip: ClipRef, mode: ToMidi) {
         if self.to_midi.is_some() {
-            self.status = Some("Ya se está convirtiendo un clip a MIDI: espera a que termine".into());
+            self.status = Some(tr("Ya se está convirtiendo un clip a MIDI: espera a que termine").into());
             return;
         }
         let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { return };
         let sample = self.sample(&audio.sample);
         if sample.frames() == 0 {
-            self.status = Some("No se encuentra el audio del clip".into());
+            self.status = Some(tr("No se encuentra el audio del clip").into());
             return;
         }
         let context = match mode {
@@ -371,7 +385,7 @@ impl PulseApp {
                 *slot = Some(outcome);
             }
         });
-        self.status = Some(format!("Sacando las notas de «{}» ({})…", audio.name, mode.label().to_lowercase()));
+        self.status = Some(fill(tr("Sacando las notas de «{}» ({})…"), &[&audio.name, &mode.label().to_lowercase()]));
         self.to_midi = Some(MidiJob { clip, audio, mode, chosen, progress, result });
     }
 
@@ -383,7 +397,7 @@ impl PulseApp {
         let Some(outcome) = done else {
             let fraction = job.progress.lock().map_or(0.0, |p| *p);
             if fraction > 0.0 {
-                self.status = Some(format!("Sacando las notas de «{}»… {:.0} %", job.audio.name, fraction * 100.0));
+                self.status = Some(fill(tr("Sacando las notas de «{}»… {} %"), &[&job.audio.name, &format!("{:.0}", fraction * 100.0)]));
             }
             return;
         };
@@ -393,10 +407,10 @@ impl PulseApp {
                 self.place_midi(job.clip, &job.audio, job.mode, &events);
                 if let (Some(key), Some(status)) = (key, self.status.as_mut()) {
                     status.push_str(&match job.mode {
-                        ToMidi::Melody if job.chosen => format!(", ajustadas a la escala del proyecto ({})", key.name()),
-                        ToMidi::Melody => format!(", en {} (ajustadas a su escala)", key.name()),
-                        ToMidi::Chords => format!(", en {}", key.name()),
-                        _ => format!(" (la canción parece estar en {})", key.name()),
+                        ToMidi::Melody if job.chosen => fill(tr(", ajustadas a la escala del proyecto ({})"), &[&music(&key.name())]),
+                        ToMidi::Melody => fill(tr(", en {} (ajustadas a su escala)"), &[&music(&key.name())]),
+                        ToMidi::Chords => fill(tr(", en {}"), &[&music(&key.name())]),
+                        _ => fill(tr(" (la canción parece estar en {})"), &[&music(&key.name())]),
                     });
                 }
             }
@@ -412,11 +426,11 @@ impl PulseApp {
             notes = on_grid(notes, audio.length);
         }
         if notes.is_empty() {
-            self.status = Some(format!("No se encontraron notas en «{}»", audio.name));
+            self.status = Some(fill(tr("No se encontraron notas en «{}»"), &[&audio.name]));
             return;
         }
         if self.project.tracks.len() >= MAX_TRACKS {
-            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&MAX_TRACKS]));
             return;
         }
         let instrument = match mode {
@@ -431,8 +445,8 @@ impl PulseApp {
         let count = notes.len();
         let of = |drum: crate::beatbox::Drum| notes.iter().filter(|n| n.pitch == drum.note()).count();
         let (kicks, snares, hats) = (of(crate::beatbox::Drum::Kick), of(crate::beatbox::Drum::Snare), of(crate::beatbox::Drum::Hat));
-        let midi = Clip::Midi(MidiClip { notes, ..MidiClip::new(format!("{} · {}", audio.name, mode.label()), audio.length, audio.color) });
-        let name = format!("{} · {}", audio.name, mode.label());
+        let midi = Clip::Midi(MidiClip { notes, ..MidiClip::new(format!("{} · {}", audio.name, mode.name()), audio.length, audio.color) });
+        let name = format!("{} · {}", audio.name, mode.name());
         let mut track = crate::project::Track::new(name, audio.color, instrument);
         match (clip, placed) {
             (ClipRef::Session { slot, .. }, _) => track.clips[slot] = Some(midi),
@@ -453,8 +467,8 @@ impl PulseApp {
             ClipRef::Arrangement { .. } => ClipRef::Arrangement { track: at, index: 0 },
         });
         self.status = Some(match mode {
-            ToMidi::Beatbox => format!("{count} golpes de «{}» en una Drum Machine nueva: {kicks} de bombo, {snares} de caja y {hats} de charles", audio.name),
-            _ => format!("{count} notas de «{}» en una pista MIDI nueva", audio.name),
+            ToMidi::Beatbox => fill(tr("{} golpes de «{}» en una Drum Machine nueva: {} de bombo, {} de caja y {} de charles"), &[&count, &audio.name, &kicks, &snares, &hats]),
+            _ => fill(tr("{} notas de «{}» en una pista MIDI nueva"), &[&count, &audio.name]),
         });
     }
 }

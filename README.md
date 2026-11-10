@@ -40,8 +40,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
 
 > **Status: early public release, in active development.** macOS (Apple
 > Silicon) is the supported platform. Windows builds are experimental. **The interface and the
-> in-app guide are in Spanish; English comes in the next release** (a few
-> parts still show in Spanish). Help with translation is very welcome.
+> in-app guide are in Spanish; English comes in the next release**. Help with translation is very welcome.
 
 ## Platform status
 

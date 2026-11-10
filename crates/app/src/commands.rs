@@ -6,6 +6,7 @@
 //! Anything that would throw away unsaved work asks first.
 
 use crate::app::{Detail, PulseApp, View};
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
 use engine::Target;
@@ -95,6 +96,7 @@ pub fn load_recent() -> Vec<PathBuf> {
 }
 
 /// The keyboard shortcuts, for the help window and the menus: (keys, what they do).
+/// The window shows them through `tr` (the keys with words in them too).
 pub const SHORTCUTS: [(&str, &str); 41] = [
     ("⌘N", "Proyecto nuevo"),
     ("⌘O", "Abrir"),
@@ -217,7 +219,7 @@ impl PulseApp {
             }
             Command::Revert => {
                 if let Some(path) = self.file.clone() {
-                    if self.ask_discard(&format!("¿Volver a la versión guardada de «{}»?", self.file_name()), "Se perderán los cambios desde la última vez que guardaste.", "Volver") {
+                    if self.ask_discard(&fill(tr("¿Volver a la versión guardada de «{}»?"), &[&self.file_name()]), tr("Se perderán los cambios desde la última vez que guardaste."), tr("Volver")) {
                         self.open_path(&path);
                     }
                 }
@@ -326,7 +328,7 @@ impl PulseApp {
                 let folder = crate::library::root();
                 let _ = std::fs::create_dir_all(&folder);
                 if let Err(e) = crate::files::show_folder(&folder) {
-                    self.status = Some(format!("No se pudo abrir {}: {e}", folder.display()));
+                    self.status = Some(fill(tr("No se pudo abrir {}: {}"), &[&folder.display(), &e]));
                 }
             }
             Command::CheckUpdates => {
@@ -344,8 +346,8 @@ impl PulseApp {
         if !self.is_dirty() {
             return true;
         }
-        let title = format!("¿Guardar los cambios de «{}»?", self.file_name());
-        match self.ask(&title, "Si no los guardas, se perderán.") {
+        let title = fill(tr("¿Guardar los cambios de «{}»?"), &[&self.file_name()]);
+        match self.ask(&title, tr("Si no los guardas, se perderán.")) {
             Answer::Save => {
                 self.save();
                 !self.is_dirty()
@@ -367,7 +369,7 @@ impl PulseApp {
             .set_level(rfd::MessageLevel::Warning)
             .set_title(title)
             .set_description(description)
-            .set_buttons(rfd::MessageButtons::OkCancelCustom(action.into(), "Cancelar".into()))
+            .set_buttons(rfd::MessageButtons::OkCancelCustom(action.into(), tr("Cancelar").into()))
             .show();
         matches!(result, rfd::MessageDialogResult::Ok) || result == rfd::MessageDialogResult::Custom(action.into())
     }
@@ -384,13 +386,13 @@ impl PulseApp {
             .set_level(rfd::MessageLevel::Warning)
             .set_title(title)
             .set_description(description)
-            .set_buttons(rfd::MessageButtons::YesNoCancelCustom("Guardar".into(), "No guardar".into(), "Cancelar".into()))
+            .set_buttons(rfd::MessageButtons::YesNoCancelCustom(tr("Guardar").into(), tr("No guardar").into(), tr("Cancelar").into()))
             .show();
         match result {
             rfd::MessageDialogResult::Yes => Answer::Save,
             rfd::MessageDialogResult::No => Answer::Discard,
-            rfd::MessageDialogResult::Custom(label) if label == "Guardar" => Answer::Save,
-            rfd::MessageDialogResult::Custom(label) if label == "No guardar" => Answer::Discard,
+            rfd::MessageDialogResult::Custom(label) if label == tr("Guardar") => Answer::Save,
+            rfd::MessageDialogResult::Custom(label) if label == tr("No guardar") => Answer::Discard,
             _ => Answer::Cancel,
         }
     }
@@ -430,15 +432,15 @@ impl PulseApp {
 /// The help window with every keyboard shortcut.
 pub fn shortcuts_window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = app.show_shortcuts;
-    egui::Window::new("Atajos de teclado").open(&mut open).resizable(false).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
+    egui::Window::new(tr("Atajos de teclado")).open(&mut open).resizable(false).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
         egui::Grid::new("shortcuts").num_columns(2).striped(true).show(ui, |ui| {
             for (keys, what) in SHORTCUTS {
-                ui.label(egui::RichText::new(crate::theme::keys(keys)).strong());
-                ui.label(what);
+                ui.label(egui::RichText::new(crate::theme::keys(tr(keys))).strong());
+                ui.label(tr(what));
                 ui.end_row();
             }
         });
-        let note = if app.has_menu_bar() { "Los atajos con ⌘ también están en la barra de menús." } else { "Los atajos con Ctrl también están en los menús de la barra de arriba." };
+        let note = if app.has_menu_bar() { tr("Los atajos con ⌘ también están en la barra de menús.") } else { tr("Los atajos con Ctrl también están en los menús de la barra de arriba.") };
         ui.label(egui::RichText::new(note).color(TEXT_DIM).size(10.5));
     });
     app.show_shortcuts = open;
@@ -630,5 +632,26 @@ mod tests {
         app.show_shortcuts = true;
         let _ = ctx.run_ui(Default::default(), |ui| shortcuts_window(&mut app, ui.ctx()));
         assert!(app.show_shortcuts);
+    }
+
+    /// The shortcuts, the macros, MIDI learn and the audio load, in English.
+    #[test]
+    fn the_shortcuts_and_the_tool_windows_speak_english() {
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let mut app = app();
+            app.show_shortcuts = true;
+            app.macro_window.open = true;
+            app.toggle_learn();
+            app.cpu.open = true;
+            let dir = std::env::temp_dir().join(format!("pulse-atajos-en-{}", std::process::id()));
+            let mut s = crate::produccion::Studio::new(app, dir);
+            s.frames(4);
+            for text in ["Keyboard Shortcuts", "New project", "Drag a header", "Move the selected tracks", "Play / Stop", "Macros", "under a macro", "MIDI Map", "Smoothing", "One knob for several controls", "Done", "Performance", "Reset", "Audio load: average"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            for text in ["Atajos de teclado", "Proyecto nuevo", "Arrastrar cabecera", "Suavizado", "Terminar", "Rendimiento", "Poner a cero"] {
+                assert!(!s.has(text), "sobra «{text}»");
+            }
+        });
     }
 }

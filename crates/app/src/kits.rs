@@ -34,7 +34,7 @@ pub fn kits_dir() -> PathBuf {
 /// Writes the basic kit's sounds to `dir` (once) and returns the rack settings and
 /// the file for each pad.
 pub fn basic_kit(dir: &Path) -> Result<(RackParams, Vec<String>), String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| crate::i18n::fill(crate::i18n::tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     const SAMPLE_RATE: f32 = 48_000.0;
     let mut params = RackParams::default();
     let mut files = vec![String::new(); RACK_PADS];
@@ -48,7 +48,7 @@ pub fn basic_kit(dir: &Path) -> Result<(RackParams, Vec<String>), String> {
             // crash, a full disk) or half written by another call is never
             // taken for the sound.
             let part = dir.join(format!(".{name}.wav.{}-{}.part", std::process::id(), PART.fetch_add(1, std::sync::atomic::Ordering::Relaxed)));
-            let written = write_wav(&part, &left, &right, SAMPLE_RATE).and_then(|_| std::fs::rename(&part, &path).map_err(|e| format!("No se pudo guardar {}: {e}", path.display())));
+            let written = write_wav(&part, &left, &right, SAMPLE_RATE).and_then(|_| std::fs::rename(&part, &path).map_err(|e| crate::i18n::fill(crate::i18n::tr("No se pudo guardar {}: {}"), &[&path.display(), &e])));
             if written.is_err() {
                 let _ = std::fs::remove_file(&part);
             }

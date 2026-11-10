@@ -5,6 +5,7 @@
 //! go (see `tuning`).
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, music, tr};
 use crate::theme::{self, TEXT_DIM};
 use crate::tuning::TunedNote;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
@@ -26,7 +27,7 @@ fn tuned(pitch: f32, key: Option<stems::key::Key>) -> f32 {
 fn describe(pitch: f32) -> String {
     let note = pitch.round().clamp(0.0, 127.0) as u8;
     let cents = ((pitch - pitch.round()) * 100.0).round() as i32;
-    if cents == 0 { crate::project::note_name(note) } else { format!("{} {cents:+} cents", crate::project::note_name(note)) }
+    if cents == 0 { music(&crate::project::note_name(note)) } else { format!("{} {cents:+} cents", music(&crate::project::note_name(note))) }
 }
 
 impl PulseApp {
@@ -56,19 +57,21 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let analysis = app.tuner.analysis(&source);
     let notes = app.tuning_notes(clip_ref);
     ui.horizontal(|ui| {
-        if ui.button("← Forma de onda").clicked() {
+        if ui.button(tr("← Forma de onda")).clicked() {
             app.tuner.open = None;
         }
-        ui.label(egui::RichText::new(format!("Afinación · {}", clip.name)).strong());
+        ui.label(egui::RichText::new(fill(tr("Afinación · {}"), &[&clip.name])).strong());
         let Some(notes) = &notes else { return };
         ui.add_space(12.0);
         let selected = app.tuner.selected.clone();
-        let scope = if selected.is_empty() { "todas" } else { "las elegidas" };
-        let hint = match key {
-            Some(k) => format!("Lleva {scope} a la nota de la escala ({}) más cercana", k.name()),
-            None => format!("Lleva {scope} al semitono más cercano"),
+        let all = selected.is_empty();
+        let hint = match (key, all) {
+            (Some(k), true) => fill(tr("Lleva todas a la nota de la escala ({}) más cercana"), &[&music(&k.name())]),
+            (Some(k), false) => fill(tr("Lleva las elegidas a la nota de la escala ({}) más cercana"), &[&music(&k.name())]),
+            (None, true) => tr("Lleva todas al semitono más cercano").to_string(),
+            (None, false) => tr("Lleva las elegidas al semitono más cercano").to_string(),
         };
-        if ui.button("Afinar").on_hover_text(hint).clicked() {
+        if ui.button(tr("Afinar")).on_hover_text(hint).clicked() {
             app.edit_tuning(clip_ref, |n| {
                 for (i, note) in n.iter_mut().enumerate().filter(|(i, _)| chosen(&selected, *i)) {
                     let _ = i;
@@ -76,14 +79,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 }
             });
         }
-        if ui.button("Sin vibrato").on_hover_text(format!("Quita el vibrato y las oscilaciones de {scope}: cada nota se queda en su tono")).clicked() {
+        if ui.button(tr("Sin vibrato")).on_hover_text(if all { tr("Quita el vibrato y las oscilaciones de todas: cada nota se queda en su tono") } else { tr("Quita el vibrato y las oscilaciones de las elegidas: cada nota se queda en su tono") }).clicked() {
             app.edit_tuning(clip_ref, |n| {
                 for (_, note) in n.iter_mut().enumerate().filter(|(i, _)| chosen(&selected, *i)) {
                     note.modulation = 0.0;
                 }
             });
         }
-        if ui.button("Como se cantó").on_hover_text(format!("Devuelve {scope} a como se cantaron")).clicked() {
+        if ui.button(tr("Como se cantó")).on_hover_text(if all { tr("Devuelve todas a como se cantaron") } else { tr("Devuelve las elegidas a como se cantaron") }).clicked() {
             app.edit_tuning(clip_ref, |n| {
                 for (_, note) in n.iter_mut().enumerate().filter(|(i, _)| chosen(&selected, *i)) {
                     note.target = note.pitch;
@@ -97,7 +100,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 ui.add_space(12.0);
                 ui.label(egui::RichText::new(format!("{} → {}", describe(note.pitch), describe(note.target))).size(11.0));
                 let mut vibrato = note.modulation * 100.0;
-                let response = ui.add(egui::Slider::new(&mut vibrato, 0.0..=150.0).suffix(" %").text("vibrato")).on_hover_text("Cuánto de lo que oscila la voz en esta nota se queda: 100 % como se cantó, 0 % nada");
+                let response = ui.add(egui::Slider::new(&mut vibrato, 0.0..=150.0).suffix(" %").text("vibrato")).on_hover_text(tr("Cuánto de lo que oscila la voz en esta nota se queda: 100 % como se cantó, 0 % nada"));
                 if response.drag_stopped() || (response.changed() && !response.dragged()) {
                     app.edit_tuning(clip_ref, |n| n[i].modulation = vibrato / 100.0);
                 }
@@ -108,7 +111,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let Some(analysis) = analysis else {
         ui.horizontal(|ui| {
             ui.spinner();
-            ui.label(egui::RichText::new("Analizando la voz…").color(TEXT_DIM));
+            ui.label(egui::RichText::new(tr("Analizando la voz…")).color(TEXT_DIM));
         });
         return;
     };
@@ -122,7 +125,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
     let (v0, v1) = (clip.offset.max(0.0), clip.source_seconds(clip.length, tempo).max(clip.offset + 0.05));
     let shown: Vec<usize> = (0..notes.len()).filter(|&i| notes[i].end > v0 && notes[i].start < v1).collect();
     if shown.is_empty() {
-        painter.text(rect.center(), Align2::CENTER_CENTER, "No se oyen notas en este clip", theme::body(), TEXT_DIM);
+        painter.text(rect.center(), Align2::CENTER_CENTER, tr("No se oyen notas en este clip"), theme::body(), TEXT_DIM);
         return;
     }
     // The notes shown, sung and moved, with room around.
@@ -145,7 +148,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             painter.rect_filled(band, 0.0, theme::shade(theme::SLOT, 0.8));
         }
         if p.rem_euclid(12) == 0 || row >= 14.0 {
-            painter.text(pos2(rect.left() + 3.0, y), Align2::LEFT_CENTER, crate::project::note_name(p.clamp(0, 127) as u8), theme::small(), if black { TEXT_DIM } else { Color32::from_gray(190) });
+            painter.text(pos2(rect.left() + 3.0, y), Align2::LEFT_CENTER, music(&crate::project::note_name(p.clamp(0, 127) as u8)), theme::small(), if black { TEXT_DIM } else { Color32::from_gray(190) });
         }
         if p.rem_euclid(12) == 0 {
             painter.line_segment([pos2(area.left(), y_of(p as f32)), pos2(rect.right(), y_of(p as f32))], Stroke::new(1.0, Color32::from_gray(70)));
@@ -221,7 +224,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, Color32::WHITE));
         }
     }
-    painter.text(pos2(rect.right() - 4.0, rect.top() + 3.0), Align2::RIGHT_TOP, "Arrastra una nota para cambiarla (⌥: sin ajustar a semitonos) · doble clic: afinarla", theme::small(), TEXT_DIM);
+    painter.text(pos2(rect.right() - 4.0, rect.top() + 3.0), Align2::RIGHT_TOP, crate::theme::keys(tr("Arrastra una nota para cambiarla (⌥: sin ajustar a semitonos) · doble clic: afinarla")), theme::small(), TEXT_DIM);
 
     // Picking, dragging, tuning one.
     let under = |pos: egui::Pos2| blocks.iter().find(|(_, r)| r.expand(2.0).contains(pos)).map(|&(i, _)| i);

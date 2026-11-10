@@ -6,6 +6,7 @@
 //! chosen. The tone is in the project's key, if it has one.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use engine::model::{ArrangementClip, AudioClip, Clip, WarpMode};
 use std::f32::consts::PI;
 
@@ -32,12 +33,22 @@ impl Kind {
         }
     }
 
+    /// Its name in the interface's language (`label` names its clip and file).
+    fn shown(self) -> &'static str {
+        match self {
+            Kind::Riser => tr("Subida"),
+            Kind::Downlifter => tr("Bajada"),
+            Kind::Impact => tr("Impacto"),
+            Kind::ReverseCymbal => tr("Platillo invertido"),
+        }
+    }
+
     fn hint(self) -> &'static str {
         match self {
-            Kind::Riser => "Ruido y un tono que suben hasta aquí (riser)",
-            Kind::Downlifter => "Ruido y un tono que caen desde aquí (downlifter)",
-            Kind::Impact => "Un golpe grave con su cola, aquí",
-            Kind::ReverseCymbal => "Un platillo al revés que crece hasta aquí",
+            Kind::Riser => tr("Ruido y un tono que suben hasta aquí (riser)"),
+            Kind::Downlifter => tr("Ruido y un tono que caen desde aquí (downlifter)"),
+            Kind::Impact => tr("Un golpe grave con su cola, aquí"),
+            Kind::ReverseCymbal => tr("Un platillo al revés que crece hasta aquí"),
         }
     }
 
@@ -218,7 +229,7 @@ impl PulseApp {
             at
         };
         if beats <= 0.0 {
-            self.status = Some(format!("No cabe «{}» antes del principio de la canción", kind.label()));
+            self.status = Some(fill(tr("No cabe «{}» antes del principio de la canción"), &[&kind.shown()]));
             return;
         }
         let rate = self.audio.sample_rate();
@@ -233,7 +244,7 @@ impl PulseApp {
         let path = match written {
             Ok(path) => path,
             Err(error) => {
-                self.status = Some(format!("No se pudo crear la transición: {error}"));
+                self.status = Some(fill(tr("No se pudo crear la transición: {}"), &[&error]));
                 return;
             }
         };
@@ -262,25 +273,25 @@ impl PulseApp {
         let index = lane.len() - 1;
         self.sync_arrangement(track);
         self.select_clip(ClipRef::Arrangement { track, index });
-        self.status = Some(format!("{} en la pista «{TRACK}»", kind.label()));
+        self.status = Some(fill(tr("{} en la pista «{}»"), &[&kind.shown(), &TRACK]));
     }
 }
 
 /// The «Transición» submenu for beat `at` (a bar, a marker).
 pub fn menu(app: &mut PulseApp, ui: &mut eframe::egui::Ui, at: f64) {
-    crate::widgets::menu_button(ui, "Transición aquí", |ui| {
+    crate::widgets::menu_button(ui, tr("Transición aquí"), |ui| {
         for kind in Kind::ALL {
             let bars = kind.bars();
             if let [only] = bars {
-                if ui.button(kind.label()).on_hover_text(kind.hint()).clicked() {
+                if ui.button(kind.shown()).on_hover_text(kind.hint()).clicked() {
                     app.add_transition(kind, *only, at);
                     ui.close();
                 }
                 continue;
             }
-            crate::widgets::menu_button(ui, kind.label(), |ui| {
+            crate::widgets::menu_button(ui, kind.shown(), |ui| {
                 for &n in bars {
-                    if ui.button(bars_label(n)).on_hover_text(kind.hint()).clicked() {
+                    if ui.button(bars_shown(n)).on_hover_text(kind.hint()).clicked() {
                         app.add_transition(kind, n, at);
                         ui.close();
                     }
@@ -290,7 +301,12 @@ pub fn menu(app: &mut PulseApp, ui: &mut eframe::egui::Ui, at: f64) {
     });
 }
 
-/// «1 compás», «4 compases».
+/// The same, as the menu shows it.
+fn bars_shown(bars: u32) -> String {
+    if bars == 1 { tr("1 compás").into() } else { fill(tr("{} compases"), &[&bars]) }
+}
+
+/// «1 compás», «4 compases», for its clip's name.
 fn bars_label(bars: u32) -> String {
     if bars == 1 { "1 compás".into() } else { format!("{bars} compases") }
 }

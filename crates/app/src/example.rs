@@ -13,6 +13,7 @@
 use crate::accompany::Part;
 use crate::lyrics::{LyricLine, Lyrics};
 use crate::melody::Melody;
+use crate::i18n::{fill, tr};
 use crate::project::{Project, Track, PALETTE};
 use engine::model::{ArrangementClip, AudioClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, ControlLane, Device, Effect, InstrumentKind, MidiClip, MidiControl, Note, Param, WarpMode};
 use std::path::{Path, PathBuf};
@@ -47,7 +48,7 @@ pub fn song() -> Result<Project, String> {
 
 /// The example song with its files in `dir` (made if missing).
 pub fn build(dir: &Path) -> Result<Project, String> {
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     let (mut project, voice_beats) = tracks(&dir.join("Voz principal.wav"))?;
     arrange(&mut project, voice_beats, dir)?;
     project.assign_ids();
@@ -242,7 +243,7 @@ fn write_once(path: &Path, left: &[f32], right: &[f32], rate: u32) -> Result<(),
     let n = NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let partial = path.with_extension(format!("{}-{n}.tmp", std::process::id()));
     crate::export::write(&partial, left, right, rate, crate::export::BitDepth::Int24, 1.0)?;
-    std::fs::rename(&partial, path).map_err(|e| format!("No se pudo guardar {}: {e}", path.display()))
+    std::fs::rename(&partial, path).map_err(|e| fill(tr("No se pudo guardar {}: {}"), &[&path.display(), &e]))
 }
 
 fn hz(pitch: f32) -> f32 {
@@ -290,7 +291,7 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
 
     let mut bass = Track::new("Bajo", color(9), Part::BassRolling.instrument());
     bass.mixer.gain = 0.4;
-    bass.clips[DROP] = Some(midi(Part::BassRolling.label(), color(9), crate::accompany::generate(Part::BassRolling, &found, BARS, SEED, sig)));
+    bass.clips[DROP] = Some(midi(Part::BassRolling.name(), color(9), crate::accompany::generate(Part::BassRolling, &found, BARS, SEED, sig)));
 
     let mut pad = Track::new("Pad", color(11), instrument(InstrumentKind::Wavetable(Default::default()), "Pad · Analógico cálido"));
     pad.mixer.gain = 0.3;
@@ -307,7 +308,7 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
     let mut lead = Track::new("Melodía", color(7), Part::Melody(melody).instrument());
     lead.mixer.gain = 0.45;
     lead.sends[..2].copy_from_slice(&[0.2, 0.3]);
-    let mut hook = MidiClip { notes: tune, ..MidiClip::new(Part::Melody(melody).label(), BARS, color(7)) };
+    let mut hook = MidiClip { notes: tune, ..MidiClip::new(Part::Melody(melody).name(), BARS, color(7)) };
     // Played with expression: the brightness opening along the phrase, a bend into the last note.
     let point = |beat: f64, value: f32, curve: f32| AutomationPoint { beat, value, curve };
     hook.controls.push(ControlLane { control: MidiControl::Cc(74), points: vec![point(0.0, 0.25, 0.0), point(4.0, 0.4, -0.5), point(11.5, 0.9, 0.0), point(12.0, 0.6, 0.4), point(16.0, 0.95, 0.0)] });

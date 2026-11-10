@@ -8,6 +8,7 @@
 
 use crate::app::PulseApp;
 use crate::example::{effect, instrument};
+use crate::i18n::{fill, tr};
 use crate::project::{Project, Track, PALETTE};
 use engine::model::{AcidParams, BitcrusherParams, CompressorParams, DeEsserParams, DelayParams, Device, DrumModel, DrumParams, DuckerParams, Effect, Eq3Params, FmParams, GateParams, InstrumentKind, KeysParams, KickParams, LimiterParams, SaturatorParams, SuperSawParams, SynthParams, UtilityParams, WaveParams};
 use std::path::PathBuf;
@@ -342,7 +343,7 @@ impl PulseApp {
                 if !self.start_from(&template) {
                     let why = self.status.take().unwrap_or_default();
                     self.new_project();
-                    self.status = Some(format!("{why} · proyecto vacío"));
+                    self.status = Some(fill(tr("{} · proyecto vacío"), &[&why]));
                 }
             }
             None => self.new_project(),
@@ -354,11 +355,11 @@ impl PulseApp {
         match project(template) {
             Ok(project) => {
                 self.replace_project(project, None);
-                self.status = Some(format!("Proyecto nuevo desde la plantilla «{}»", template.name));
+                self.status = Some(fill(tr("Proyecto nuevo desde la plantilla «{}»"), &[&template.shown()]));
                 true
             }
             Err(error) => {
-                self.status = Some(format!("No se pudo abrir la plantilla «{}»: {error}", template.name));
+                self.status = Some(fill(tr("No se pudo abrir la plantilla «{}»: {}"), &[&template.shown(), &error]));
                 self.templates = all();
                 false
             }
@@ -368,7 +369,7 @@ impl PulseApp {
     /// "Guardar como plantilla…": asks for a name, in the templates' folder.
     pub fn save_as_template(&mut self) {
         let dialog = rfd::FileDialog::new()
-            .add_filter("Plantilla de Pulse", &["pulse"])
+            .add_filter(tr("Plantilla de Pulse"), &["pulse"])
             .set_directory(crate::library::folder(crate::library::TEMPLATES))
             .set_file_name(format!("{}.pulse", self.file_name()));
         if let Some(path) = crate::files::save_file(dialog) {
@@ -383,7 +384,7 @@ impl PulseApp {
     pub fn save_template(&mut self, name: &str) {
         let name = name.trim().replace(['/', '\\', ':'], "-");
         if name.is_empty() || name.starts_with('.') {
-            self.status = Some("La plantilla necesita un nombre".into());
+            self.status = Some(tr("La plantilla necesita un nombre").into());
             return;
         }
         self.capture_plugins();
@@ -395,9 +396,9 @@ impl PulseApp {
         let collected = crate::library::collect_copies(&mut template, &dir);
         let result = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| template.save(&dir.join(format!("{name}.pulse"))));
         self.status = Some(match result {
-            Ok(_) if collected.missing > 0 => format!("Plantilla «{name}» guardada · {} audio(s) no encontrados", collected.missing),
-            Ok(_) => format!("Plantilla «{name}» guardada: está en Archivo ▸ Nuevo desde plantilla"),
-            Err(error) => format!("No se pudo guardar la plantilla: {error}"),
+            Ok(_) if collected.missing > 0 => fill(tr("Plantilla «{}» guardada · {} audio(s) no encontrados"), &[&name, &collected.missing]),
+            Ok(_) => fill(tr("Plantilla «{}» guardada: está en Archivo ▸ Nuevo desde plantilla"), &[&name]),
+            Err(error) => fill(tr("No se pudo guardar la plantilla: {}"), &[&error]),
         });
         self.templates = all();
     }
@@ -694,5 +695,26 @@ mod tests {
         let list = [Template { name: "Beat".into(), file: None }, mine.clone()];
         assert_eq!(find(&list, "Beat"), Some(mine));
         assert_eq!(find(&list, "Otra"), None);
+    }
+
+    #[test]
+    fn templates_kits_and_presets_speak_english() {
+        use crate::i18n::{with, Language};
+        let mut app = PulseApp::headless(Project::demo());
+        app.templates = all();
+        let index = app.templates.iter().position(|t| t.name == "Grabar voz").unwrap();
+        with(Language::English, || {
+            app.new_from_template(index);
+            assert_eq!(app.status.as_deref(), Some("New project from the \"Record Vocals\" template"));
+            app.save_template("  ");
+            assert_eq!(app.status.as_deref(), Some("The template needs a name"));
+            let house = crate::factory_sounds::kits().into_iter().find(|k| k.name == "House").unwrap();
+            assert!(house.about.starts_with("Round, punchy kick"), "{}", house.about);
+            let nameless = crate::presets::Preset { name: " ".into(), instrument: InstrumentKind::Drums, samples: Vec::new() };
+            assert_eq!(crate::presets::save(std::path::Path::new("/nonexistent"), &nameless), Err("The preset needs a name".into()));
+        });
+        // In Spanish, as it was.
+        app.save_template("");
+        assert_eq!(app.status.as_deref(), Some("La plantilla necesita un nombre"));
     }
 }

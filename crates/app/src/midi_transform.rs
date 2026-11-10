@@ -9,6 +9,7 @@
 //! menu) leaves the notes as they were. Quantizing, the groove's humanize
 //! (different on each lap), rolls and «A la escala» are elsewhere in the bar.
 
+use crate::i18n::{fill, tr};
 use crate::note_edit::{self, Selection, MIN_LENGTH};
 use eframe::egui;
 use engine::model::Note;
@@ -31,27 +32,27 @@ impl Kind {
 
     pub fn label(self) -> &'static str {
         match self {
-            Kind::Strum => "Rasgueo",
-            Kind::Humanize => "Humanizar",
-            Kind::Velocity => "Velocidad",
-            Kind::Length => "Longitud",
-            Kind::Ornament => "Ornamentos",
-            Kind::Arpeggiate => "Arpegiar",
-            Kind::Connect => "Conectar",
-            Kind::Flip => "Invertir",
+            Kind::Strum => tr("Rasgueo"),
+            Kind::Humanize => tr("Humanizar"),
+            Kind::Velocity => tr("Velocidad"),
+            Kind::Length => tr("Longitud"),
+            Kind::Ornament => tr("Ornamentos"),
+            Kind::Arpeggiate => tr("Arpegiar"),
+            Kind::Connect => tr("Conectar"),
+            Kind::Flip => tr("Invertir"),
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Kind::Strum => "Las notas de cada acorde entran una tras otra, como al rasguear una guitarra",
-            Kind::Humanize => "Mueve un poco al azar el tiempo y la velocidad de cada nota, siempre igual con la misma semilla",
-            Kind::Velocity => "Rampa de velocidad, comprimir o expandir las diferencias, o darles la vuelta",
-            Kind::Length => "Legato (cada nota llega a la siguiente) o notas más cortas o más largas",
-            Kind::Ornament => "Una nota de gracia antes de cada nota, o un flam (la misma nota, antes y más suave)",
-            Kind::Arpeggiate => "Cada acorde, nota a nota, a la rejilla que elijas",
-            Kind::Connect => "Rellena los huecos entre una nota y la siguiente con pasos de la escala",
-            Kind::Flip => "Los tonos al revés (lo agudo abajo) o las notas del final al principio",
+            Kind::Strum => tr("Las notas de cada acorde entran una tras otra, como al rasguear una guitarra"),
+            Kind::Humanize => tr("Mueve un poco al azar el tiempo y la velocidad de cada nota, siempre igual con la misma semilla"),
+            Kind::Velocity => tr("Rampa de velocidad, comprimir o expandir las diferencias, o darles la vuelta"),
+            Kind::Length => tr("Legato (cada nota llega a la siguiente) o notas más cortas o más largas"),
+            Kind::Ornament => tr("Una nota de gracia antes de cada nota, o un flam (la misma nota, antes y más suave)"),
+            Kind::Arpeggiate => tr("Cada acorde, nota a nota, a la rejilla que elijas"),
+            Kind::Connect => tr("Rellena los huecos entre una nota y la siguiente con pasos de la escala"),
+            Kind::Flip => tr("Los tonos al revés (lo agudo abajo) o las notas del final al principio"),
         }
     }
 }
@@ -432,56 +433,56 @@ fn settings_ui(ui: &mut egui::Ui, s: &mut Settings, key: Option<Scale>) {
     match s.kind {
         Kind::Strum => {
             ui.horizontal(|ui| {
-                label(ui, "Dirección");
-                ui.selectable_value(&mut s.strum_up, true, "Arriba").on_hover_text("De la nota más grave a la más aguda");
-                ui.selectable_value(&mut s.strum_up, false, "Abajo").on_hover_text("De la más aguda a la más grave");
+                label(ui, tr("Dirección"));
+                ui.selectable_value(&mut s.strum_up, true, tr("Arriba")).on_hover_text(tr("De la nota más grave a la más aguda"));
+                ui.selectable_value(&mut s.strum_up, false, tr("Abajo")).on_hover_text(tr("De la más aguda a la más grave"));
             });
-            label(ui, "Tiempo entre la primera y la última");
-            step(ui, &mut s.strum_time, &[(0.0625, "1/64"), (0.125, "1/32"), (0.25, "1/16"), (0.5, "1/8"), (1.0, "1/4")], "Lo que tarda el rasgueo de la primera nota del acorde a la última");
+            label(ui, tr("Tiempo entre la primera y la última"));
+            step(ui, &mut s.strum_time, &[(0.0625, "1/64"), (0.125, "1/32"), (0.25, "1/16"), (0.5, "1/8"), (1.0, "1/4")], tr("Lo que tarda el rasgueo de la primera nota del acorde a la última"));
             ui.horizontal(|ui| {
-                label(ui, "Curva");
-                ui.add(egui::Slider::new(&mut s.strum_curve, -1.0..=1.0).show_value(false)).on_hover_text("A la izquierda las notas se juntan al final (un rasgueo que acelera); a la derecha, al principio (uno que frena)");
+                label(ui, tr("Curva"));
+                ui.add(egui::Slider::new(&mut s.strum_curve, -1.0..=1.0).show_value(false)).on_hover_text(tr("A la izquierda las notas se juntan al final (un rasgueo que acelera); a la derecha, al principio (uno que frena)"));
             });
         }
         Kind::Humanize => {
             ui.horizontal(|ui| {
-                label(ui, "Tiempo");
+                label(ui, tr("Tiempo"));
                 let mut ms = s.human_time * 1000.0;
-                if ui.add(egui::DragValue::new(&mut ms).range(0.0..=250.0).speed(1.0).suffix(" milésimas de tiempo").max_decimals(0)).on_hover_text("Cuánto puede adelantarse o retrasarse cada nota, en milésimas de tiempo (125 = una fusa)").changed() {
+                if ui.add(egui::DragValue::new(&mut ms).range(0.0..=250.0).speed(1.0).suffix(tr(" milésimas de tiempo")).max_decimals(0)).on_hover_text(tr("Cuánto puede adelantarse o retrasarse cada nota, en milésimas de tiempo (125 = una fusa)")).changed() {
                     s.human_time = ms / 1000.0;
                 }
             });
             ui.horizontal(|ui| {
-                label(ui, "Velocidad");
-                percent(ui, &mut s.human_velocity, 0.0..=0.5, "Cuánto puede subir o bajar la velocidad de cada nota");
+                label(ui, tr("Velocidad"));
+                percent(ui, &mut s.human_velocity, 0.0..=0.5, tr("Cuánto puede subir o bajar la velocidad de cada nota"));
             });
             ui.horizontal(|ui| {
-                label(ui, "Semilla");
-                ui.add(egui::DragValue::new(&mut s.seed).range(1..=9999)).on_hover_text("La misma semilla da siempre el mismo resultado; cámbiala para otro");
-                if ui.small_button("Otra").on_hover_text("Otra semilla: otro resultado").clicked() {
+                label(ui, tr("Semilla"));
+                ui.add(egui::DragValue::new(&mut s.seed).range(1..=9999)).on_hover_text(tr("La misma semilla da siempre el mismo resultado; cámbiala para otro"));
+                if ui.small_button(tr("Otra")).on_hover_text(tr("Otra semilla: otro resultado")).clicked() {
                     s.seed = s.seed % 9999 + 1;
                 }
             });
         }
         Kind::Velocity => {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.velocity, VelocityMode::Ramp, "Rampa").on_hover_text("De una velocidad a otra, de la primera nota a la última");
-                ui.selectable_value(&mut s.velocity, VelocityMode::Scale, "Comprimir / expandir").on_hover_text("Acerca las velocidades a su media o las aleja");
-                ui.selectable_value(&mut s.velocity, VelocityMode::Invert, "Dar la vuelta").on_hover_text("Lo fuerte pasa a suave y lo suave a fuerte");
+                ui.selectable_value(&mut s.velocity, VelocityMode::Ramp, tr("Rampa")).on_hover_text(tr("De una velocidad a otra, de la primera nota a la última"));
+                ui.selectable_value(&mut s.velocity, VelocityMode::Scale, tr("Comprimir / expandir")).on_hover_text(tr("Acerca las velocidades a su media o las aleja"));
+                ui.selectable_value(&mut s.velocity, VelocityMode::Invert, tr("Dar la vuelta")).on_hover_text(tr("Lo fuerte pasa a suave y lo suave a fuerte"));
             });
             match s.velocity {
                 VelocityMode::Ramp => {
                     ui.horizontal(|ui| {
-                        label(ui, "De");
-                        percent(ui, &mut s.ramp.0, 0.01..=1.0, "La velocidad de la primera nota");
-                        label(ui, "a");
-                        percent(ui, &mut s.ramp.1, 0.01..=1.0, "La velocidad de la última");
+                        label(ui, tr("De"));
+                        percent(ui, &mut s.ramp.0, 0.01..=1.0, tr("La velocidad de la primera nota"));
+                        label(ui, tr("a"));
+                        percent(ui, &mut s.ramp.1, 0.01..=1.0, tr("La velocidad de la última"));
                     });
                 }
                 VelocityMode::Scale => {
                     ui.horizontal(|ui| {
-                        label(ui, "Diferencias");
-                        percent(ui, &mut s.spread, -1.0..=1.0, "-100 %: todas como la media; 0: igual; +100 %: el doble de lejos de la media");
+                        label(ui, tr("Diferencias"));
+                        percent(ui, &mut s.spread, -1.0..=1.0, tr("-100 %: todas como la media; 0: igual; +100 %: el doble de lejos de la media"));
                     });
                 }
                 VelocityMode::Invert => {}
@@ -489,53 +490,53 @@ fn settings_ui(ui: &mut egui::Ui, s: &mut Settings, key: Option<Scale>) {
         }
         Kind::Length => {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.length, LengthMode::Legato, "Legato").on_hover_text("Cada nota dura hasta que empieza la siguiente");
-                ui.selectable_value(&mut s.length, LengthMode::Scale, "Multiplicar").on_hover_text("Más cortas (staccato) o más largas");
+                ui.selectable_value(&mut s.length, LengthMode::Legato, "Legato").on_hover_text(tr("Cada nota dura hasta que empieza la siguiente"));
+                ui.selectable_value(&mut s.length, LengthMode::Scale, tr("Multiplicar")).on_hover_text(tr("Más cortas (staccato) o más largas"));
             });
             if s.length == LengthMode::Scale {
                 ui.horizontal(|ui| {
                     for (factor, text) in [(0.25, "×¼"), (0.5, "×½"), (0.75, "×¾"), (1.5, "×1½"), (2.0, "×2")] {
-                        ui.selectable_value(&mut s.factor, factor, text).on_hover_text("Multiplica la duración de cada nota");
+                        ui.selectable_value(&mut s.factor, factor, text).on_hover_text(tr("Multiplica la duración de cada nota"));
                     }
                 });
             }
         }
         Kind::Ornament => {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.ornament, Ornament::Grace, "Nota de gracia").on_hover_text("Una nota corta justo antes, un poco más arriba o más abajo");
-                ui.selectable_value(&mut s.ornament, Ornament::Flam, "Flam").on_hover_text("La misma nota justo antes y más suave, como el flam de una caja");
+                ui.selectable_value(&mut s.ornament, Ornament::Grace, tr("Nota de gracia")).on_hover_text(tr("Una nota corta justo antes, un poco más arriba o más abajo"));
+                ui.selectable_value(&mut s.ornament, Ornament::Flam, "Flam").on_hover_text(tr("La misma nota justo antes y más suave, como el flam de una caja"));
             });
             if s.ornament == Ornament::Grace {
                 ui.horizontal(|ui| {
-                    label(ui, if key.is_some() { "Pasos de la escala" } else { "Semitonos" });
-                    ui.add(egui::DragValue::new(&mut s.grace_step).range(-12..=12)).on_hover_text("Lo lejos que está la nota de gracia: negativo, por debajo");
+                    label(ui, if key.is_some() { tr("Pasos de la escala") } else { tr("Semitonos") });
+                    ui.add(egui::DragValue::new(&mut s.grace_step).range(-12..=12)).on_hover_text(tr("Lo lejos que está la nota de gracia: negativo, por debajo"));
                 });
             }
-            label(ui, "Antes de la nota");
-            step(ui, &mut s.grace_time, &SHORT, "Cuánto antes de su nota entra");
+            label(ui, tr("Antes de la nota"));
+            step(ui, &mut s.grace_time, &SHORT, tr("Cuánto antes de su nota entra"));
         }
         Kind::Arpeggiate => {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.pattern, Pattern::Up, "Sube");
-                ui.selectable_value(&mut s.pattern, Pattern::Down, "Baja");
-                ui.selectable_value(&mut s.pattern, Pattern::UpDown, "Sube y baja");
+                ui.selectable_value(&mut s.pattern, Pattern::Up, tr("Sube"));
+                ui.selectable_value(&mut s.pattern, Pattern::Down, tr("Baja"));
+                ui.selectable_value(&mut s.pattern, Pattern::UpDown, tr("Sube y baja"));
             });
-            label(ui, "Cada");
-            step(ui, &mut s.rate, &RATES, "Cada cuánto suena la siguiente nota del acorde");
+            label(ui, tr("Cada"));
+            step(ui, &mut s.rate, &RATES, tr("Cada cuánto suena la siguiente nota del acorde"));
             gate(ui, s);
         }
         Kind::Connect => {
-            label(ui, "Cada");
-            step(ui, &mut s.rate, &RATES, "Cada cuánto suena un paso en los huecos");
+            label(ui, tr("Cada"));
+            step(ui, &mut s.rate, &RATES, tr("Cada cuánto suena un paso en los huecos"));
             gate(ui, s);
             if key.is_none() {
-                label(ui, "Sin tonalidad en el proyecto, los pasos son cromáticos");
+                label(ui, tr("Sin tonalidad en el proyecto, los pasos son cromáticos"));
             }
         }
         Kind::Flip => {
             ui.horizontal(|ui| {
-                ui.selectable_value(&mut s.flip, Flip::Pitches, "Tonos").on_hover_text("Lo más agudo pasa a lo más grave y al revés (en la escala, si hay tonalidad)");
-                ui.selectable_value(&mut s.flip, Flip::Time, "Retrogradar").on_hover_text("Del final al principio: la última nota es la primera");
+                ui.selectable_value(&mut s.flip, Flip::Pitches, tr("Tonos")).on_hover_text(tr("Lo más agudo pasa a lo más grave y al revés (en la escala, si hay tonalidad)"));
+                ui.selectable_value(&mut s.flip, Flip::Time, tr("Retrogradar")).on_hover_text(tr("Del final al principio: la última nota es la primera"));
             });
         }
     }
@@ -543,9 +544,9 @@ fn settings_ui(ui: &mut egui::Ui, s: &mut Settings, key: Option<Scale>) {
 
 fn gate(ui: &mut egui::Ui, s: &mut Settings) {
     ui.horizontal(|ui| {
-        label(ui, "Duración");
+        label(ui, tr("Duración"));
         let mut g = s.gate as f32;
-        percent(ui, &mut g, 0.1..=1.0, "Cuánto del paso dura cada nota");
+        percent(ui, &mut g, 0.1..=1.0, tr("Cuánto del paso dura cada nota"));
         s.gate = g as f64;
     });
 }
@@ -558,8 +559,8 @@ pub fn panel(ui: &mut egui::Ui, panel: &mut Panel, clip_ref: crate::app::ClipRef
     if panel.trying.as_ref().is_some_and(|t| t.clip != clip_ref) {
         panel.trying = None;
     }
-    let scope = if panel.trying.as_ref().map_or(selection.is_empty(), |t| t.selection.is_empty()) { "todas las notas" } else { "las notas seleccionadas" };
-    label(ui, &format!("Transforma {scope}"));
+    let all = panel.trying.as_ref().map_or(selection.is_empty(), |t| t.selection.is_empty());
+    label(ui, if all { tr("Transforma todas las notas") } else { tr("Transforma las notas seleccionadas") });
     ui.horizontal_wrapped(|ui| {
         for kind in Kind::ALL {
             let chosen = panel.trying.is_some() && panel.settings.kind == kind;
@@ -572,7 +573,7 @@ pub fn panel(ui: &mut egui::Ui, panel: &mut Panel, clip_ref: crate::app::ClipRef
         }
     });
     let Some(trying) = panel.trying.clone() else {
-        label(ui, "Elige una para verla (y oírla) antes de aplicarla");
+        label(ui, tr("Elige una para verla (y oírla) antes de aplicarla"));
         return;
     };
     ui.separator();
@@ -588,11 +589,11 @@ pub fn panel(ui: &mut egui::Ui, panel: &mut Panel, clip_ref: crate::app::ClipRef
     *selection = if trying.selection.is_empty() { Selection::new() } else { added };
     ui.separator();
     ui.horizontal(|ui| {
-        if ui.button("Aplicar").on_hover_text("Se queda así (⌘Z lo deshace)").clicked() {
+        if ui.button(tr("Aplicar")).on_hover_text(tr("Se queda así (⌘Z lo deshace)")).clicked() {
             panel.trying = None;
             ui.close();
         }
-        if ui.button("Cancelar").on_hover_text("Las notas vuelven a como estaban").clicked() {
+        if ui.button(tr("Cancelar")).on_hover_text(tr("Las notas vuelven a como estaban")).clicked() {
             *notes = trying.notes.clone();
             *selection = trying.selection.clone();
             panel.trying = None;
@@ -604,7 +605,7 @@ pub fn panel(ui: &mut egui::Ui, panel: &mut Panel, clip_ref: crate::app::ClipRef
 /// The right-click menu's «Transformar ▸»: each one at once, with its last settings.
 pub fn quick_menu(ui: &mut egui::Ui, panel: &mut Panel, notes: &mut Vec<Note>, selection: &mut Selection, clip_length: f64, key: Option<Scale>) {
     for kind in Kind::ALL {
-        if ui.button(kind.label()).on_hover_text(format!("{} (con lo último que elegiste en «Transformar»)", kind.hint())).clicked() {
+        if ui.button(kind.label()).on_hover_text(fill(tr("{} (con lo último que elegiste en «Transformar»)"), &[&kind.hint()])).clicked() {
             panel.settings.kind = kind;
             let targets = note_edit::targets(notes, selection);
             let had = !selection.is_empty();
@@ -629,6 +630,39 @@ mod tests {
 
     fn chord(at: f64) -> Vec<Note> {
         vec![note(at, 60, 1.0, 0.8), note(at, 64, 1.0, 0.8), note(at, 67, 1.0, 0.8)]
+    }
+
+    /// In English «Transformar»'s panel speaks English.
+    #[test]
+    fn the_panel_speaks_english() {
+        use eframe::egui;
+        crate::i18n::with(crate::i18n::Language::English, || {
+            // «Transformar»'s panel, before and after choosing one.
+            let mut panel = Panel::default();
+            let mut notes = vec![Note { start: 0.0, length: 1.0, pitch: 60, velocity: 0.8, chance: 1.0 }];
+            let mut selection = Selection::new();
+            let clip = crate::app::ClipRef::Session { track: 1, slot: 0 };
+            let ctx = egui::Context::default();
+            let mut drawn = Vec::new();
+            for round in 0..2 {
+                if round == 1 {
+                    panel.settings.kind = Kind::Strum;
+                    panel.trying = Some(Trying { clip, notes: notes.clone(), selection: selection.clone() });
+                }
+                let output = ctx.run_ui(egui::RawInput::default(), |ui| super::panel(ui, &mut panel, clip, &mut notes, &mut selection, 4.0, None));
+                fn collect(shape: &egui::Shape, texts: &mut Vec<String>) {
+                    match shape {
+                        egui::Shape::Text(t) => texts.push(t.galley.text().to_string()),
+                        egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
+                        _ => {}
+                    }
+                }
+                output.shapes.iter().for_each(|s| collect(&s.shape, &mut drawn));
+            }
+            for text in ["Transforms all the notes", "Strum", "Humanize", "Choose one to see (and hear) it before applying it", "Direction", "Curve", "Apply", "Cancel"] {
+                assert!(drawn.iter().any(|t| t == text), "falta «{text}»: {drawn:?}");
+            }
+        });
     }
 
     #[test]

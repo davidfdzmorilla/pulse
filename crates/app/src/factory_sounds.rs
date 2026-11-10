@@ -21,6 +21,7 @@
 //! asked for before that makes just its sounds, also in the background.
 
 use crate::factory_recipes::{recipes, render_project, Recipe, Role, Stereo, RATE};
+use crate::i18n::{fill, tr};
 use crate::project::{Project, Track};
 use engine::model::{ArrangementClip, Clip, Effect, InstrumentKind, LimiterParams, MidiClip, Note, RackParams, RACK_FIRST_NOTE, RACK_PADS};
 use std::path::{Path, PathBuf};
@@ -210,7 +211,7 @@ pub fn finish((mut l, mut r): Stereo, role: Role, length: Option<f32>) -> (Stere
 /// file renamed into place (two makers of it never leave half a file).
 pub fn write_wav(path: &Path, l: &[f32], r: &[f32]) -> Result<(), String> {
     let dir = path.parent().ok_or("Sin carpeta")?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     let name = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
     // Its own name for each writer, in this process and any other.
     static WRITERS: AtomicUsize = AtomicUsize::new(0);
@@ -218,7 +219,7 @@ pub fn write_wav(path: &Path, l: &[f32], r: &[f32]) -> Result<(), String> {
     let mono = l.iter().zip(r).all(|(a, b)| a == b);
     let spec = hound::WavSpec { channels: if mono { 1 } else { 2 }, sample_rate: RATE as u32, bits_per_sample: 24, sample_format: hound::SampleFormat::Int };
     let write = || -> Result<(), String> {
-        let mut writer = hound::WavWriter::create(&part, spec).map_err(|e| format!("No se pudo crear {}: {e}", part.display()))?;
+        let mut writer = hound::WavWriter::create(&part, spec).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&part.display(), &e]))?;
         let value = |s: f32| (s.clamp(-1.0, 1.0) * 8_388_607.0).round() as i32;
         for (&a, &b) in l.iter().zip(r) {
             writer.write_sample(value(a)).map_err(|e| e.to_string())?;
@@ -228,7 +229,7 @@ pub fn write_wav(path: &Path, l: &[f32], r: &[f32]) -> Result<(), String> {
         }
         writer.finalize().map_err(|e| e.to_string())
     };
-    let result = write().and_then(|_| std::fs::rename(&part, path).map_err(|e| format!("No se pudo guardar {}: {e}", path.display())));
+    let result = write().and_then(|_| std::fs::rename(&part, path).map_err(|e| fill(tr("No se pudo guardar {}: {}"), &[&path.display(), &e])));
     if result.is_err() {
         let _ = std::fs::remove_file(&part);
     }
@@ -269,7 +270,7 @@ pub fn kits() -> Vec<Kit> {
     vec![
         Kit {
             name: "House",
-            about: "Bombo redondo con pegada, palmada larga con sala, charles abierto a contratiempo, shaker, congas y un stab de órgano",
+            about: tr("Bombo redondo con pegada, palmada larga con sala, charles abierto a contratiempo, shaker, congas y un stab de órgano"),
             tempo: 124.0,
             swing: 0.0,
             pads: [
@@ -302,7 +303,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Techno",
-            about: "Bombo saturado con rumble, charles metálicos y saturados, palmada en placa, aro y cencerro distorsionados",
+            about: tr("Bombo saturado con rumble, charles metálicos y saturados, palmada en placa, aro y cencerro distorsionados"),
             tempo: 130.0,
             swing: 0.0,
             pads: [
@@ -335,7 +336,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Trap",
-            about: "Bombo corto y 808 largo afinado en Do, caja y palmada secas y con chasquido, charles nítidos para redobles",
+            about: tr("Bombo corto y 808 largo afinado en Do, caja y palmada secas y con chasquido, charles nítidos para redobles"),
             tempo: 140.0,
             swing: 0.0,
             pads: [
@@ -367,7 +368,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Drum & Bass",
-            about: "Bombo seco y agudo, caja tensa que restalla con algo de placa, caja suave para los fantasmas, charles cortos y ride",
+            about: tr("Bombo seco y agudo, caja tensa que restalla con algo de placa, caja suave para los fantasmas, charles cortos y ride"),
             tempo: 174.0,
             swing: 0.0,
             pads: [
@@ -399,7 +400,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Lo-Fi",
-            about: "Todo apagado, saturado y con la resolución reducida: bombo blando, caja grave, charles oscuros y un acorde de piano gastado",
+            about: tr("Todo apagado, saturado y con la resolución reducida: bombo blando, caja grave, charles oscuros y un acorde de piano gastado"),
             tempo: 85.0,
             swing: 0.55,
             pads: [
@@ -430,7 +431,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "UK Garage",
-            about: "Bombo corto que rebota, aro y caja nítidos, charles rápidos con swing, shaker y pandereta",
+            about: tr("Bombo corto que rebota, aro y caja nítidos, charles rápidos con swing, shaker y pandereta"),
             tempo: 132.0,
             swing: 0.6,
             pads: [
@@ -462,7 +463,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Afro House",
-            about: "Bombo cálido y redondo, congas grave y aguda, bongó, shaker, clave, cencerro y toms que llevan el groove",
+            about: tr("Bombo cálido y redondo, congas grave y aguda, bongó, shaker, clave, cencerro y toms que llevan el groove"),
             tempo: 122.0,
             swing: 0.15,
             pads: [
@@ -495,7 +496,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Synthwave",
-            about: "Caja y palmada con reverb puerta de los 80, bombo sólido con algo de sala, toms grandes, crash y charles en placa",
+            about: tr("Caja y palmada con reverb puerta de los 80, bombo sólido con algo de sala, toms grandes, crash y charles en placa"),
             tempo: 105.0,
             swing: 0.0,
             pads: [
@@ -526,7 +527,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Minimal",
-            about: "Bombo corto con clic, clics y aros pequeños, charles diminutos, bloque de madera, blips y gotas: pocos sonidos, muy secos",
+            about: tr("Bombo corto con clic, clics y aros pequeños, charles diminutos, bloque de madera, blips y gotas: pocos sonidos, muy secos"),
             tempo: 126.0,
             swing: 0.1,
             pads: [
@@ -558,7 +559,7 @@ pub fn kits() -> Vec<Kit> {
         },
         Kit {
             name: "Hip Hop",
-            about: "Boom bap: bombo que golpea, caja gorda con saturación y sala, aro, charles apagados con swing y pandereta",
+            about: tr("Boom bap: bombo que golpea, caja gorda con saturación y sala, aro, charles apagados con swing y pandereta"),
             tempo: 90.0,
             swing: 0.5,
             pads: [
@@ -824,7 +825,7 @@ impl crate::app::PulseApp {
             }
         });
         self.factory.waiting = Some((track, kit, result));
-        self.status = Some(format!("Preparando el kit {}…", chosen.name));
+        self.status = Some(fill(tr("Preparando el kit {}…"), &[&crate::i18n::tr_name(chosen.name)]));
     }
 
     fn apply_factory_kit(&mut self, track: usize, name: &str, params: RackParams, files: Vec<String>) {
@@ -838,7 +839,7 @@ impl crate::app::PulseApp {
             self.project.tracks[track].name = self.free_track_name(&format!("Kit {name}"));
         }
         self.sync_samples(track);
-        self.status = Some(format!("Kit {name} cargado"));
+        self.status = Some(fill(tr("Kit {} cargado"), &[&crate::i18n::tr_name(name)]));
     }
 
     /// Picks up what was being made in the background, once it is.
@@ -848,7 +849,7 @@ impl crate::app::PulseApp {
             match making.handle.join() {
                 Ok(Ok(())) => {}
                 Ok(Err(error)) => self.factory.error = Some(error),
-                Err(_) => self.factory.error = Some("No se pudieron preparar los sonidos".into()),
+                Err(_) => self.factory.error = Some(tr("No se pudieron preparar los sonidos").into()),
             }
         }
         let ready = self.factory.waiting.as_ref().and_then(|(_, _, result)| result.lock().ok()?.take());

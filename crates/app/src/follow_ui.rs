@@ -2,6 +2,7 @@
 //! scene's (in the clip panel's bar and in their menus) and how they read.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui::{self, RichText};
 use engine::follow::{Follow, FollowKind, FollowUnit};
@@ -15,23 +16,38 @@ const SCENE_KINDS: [FollowKind; 8] = [FollowKind::None, FollowKind::Stop, Follow
 /// «Siguiente 70 % · Parar 30 % tras 1 compás», «Sin acción».
 pub fn summary(follow: &Follow) -> String {
     if !follow.is_active() {
-        return "Sin acción al acabar".into();
+        return tr("Sin acción al acabar").into();
     }
-    let unit = match (follow.unit, follow.count) {
-        (FollowUnit::Loops, 1) => "vuelta",
-        (FollowUnit::Loops, _) => "vueltas",
-        (FollowUnit::Bars, 1) => "compás",
-        (FollowUnit::Bars, _) => "compases",
+    let template = match (follow.unit, follow.count) {
+        (FollowUnit::Loops, 1) => tr("{} tras {} vuelta"),
+        (FollowUnit::Loops, _) => tr("{} tras {} vueltas"),
+        (FollowUnit::Bars, 1) => tr("{} tras {} compás"),
+        (FollowUnit::Bars, _) => tr("{} tras {} compases"),
     };
     let a = (follow.chance_a * 100.0).round() as i32;
     let what = if a >= 100 || follow.b == follow.a {
-        follow.a.label().to_string()
+        shown(follow.a).to_string()
     } else if a <= 0 {
-        follow.b.label().to_string()
+        shown(follow.b).to_string()
     } else {
-        format!("{} {a} % · {} {} %", follow.a.label(), follow.b.label(), 100 - a)
+        format!("{} {a} % · {} {} %", shown(follow.a), shown(follow.b), 100 - a)
     };
-    format!("{what} tras {} {unit}", follow.count)
+    fill(template, &[&what, &follow.count])
+}
+
+/// A kind's name in the interface's language.
+fn shown(kind: FollowKind) -> &'static str {
+    match kind {
+        FollowKind::None => tr("Nada"),
+        FollowKind::Stop => tr("Parar"),
+        FollowKind::Again => tr("El mismo"),
+        FollowKind::Previous => tr("Anterior"),
+        FollowKind::Next => tr("Siguiente"),
+        FollowKind::First => tr("Primero"),
+        FollowKind::Last => tr("Último"),
+        FollowKind::Any => tr("Cualquiera"),
+        FollowKind::Other => tr("Otro al azar"),
+    }
 }
 
 /// Edits `follow` in place; whether it changed. `scene`: a scene's (its
@@ -39,32 +55,32 @@ pub fn summary(follow: &Follow) -> String {
 pub fn editor(ui: &mut egui::Ui, follow: &mut Follow, scene: bool) -> bool {
     let before = *follow;
     ui.set_min_width(300.0);
-    ui.label(RichText::new(if scene { "Acción al acabar la escena" } else { "Acción al acabar el clip" }).strong());
+    ui.label(RichText::new(if scene { tr("Acción al acabar la escena") } else { tr("Acción al acabar el clip") }).strong());
     ui.horizontal(|ui| {
-        ui.label("Tras");
+        ui.label(tr("Tras"));
         ui.add(egui::DragValue::new(&mut follow.count).range(1..=64).speed(0.1))
-            .on_hover_text("Cuántas vueltas o compases suena antes de decidir (y vuelve a decidir cada tanto si sale «Nada»)");
-        let loops = if scene { "vueltas del clip más largo" } else { "vueltas" };
-        ui.selectable_value(&mut follow.unit, FollowUnit::Loops, loops).on_hover_text("Veces que suena entero");
-        ui.selectable_value(&mut follow.unit, FollowUnit::Bars, "compases").on_hover_text("Compases del compás de la canción");
+            .on_hover_text(tr("Cuántas vueltas o compases suena antes de decidir (y vuelve a decidir cada tanto si sale «Nada»)"));
+        let loops = if scene { tr("vueltas del clip más largo") } else { tr("vueltas") };
+        ui.selectable_value(&mut follow.unit, FollowUnit::Loops, loops).on_hover_text(tr("Veces que suena entero"));
+        ui.selectable_value(&mut follow.unit, FollowUnit::Bars, tr("compases")).on_hover_text(tr("Compases del compás de la canción"));
     });
     let kinds: &[FollowKind] = if scene { &SCENE_KINDS } else { &FollowKind::ALL };
     let row = |ui: &mut egui::Ui, kind: &mut FollowKind, name: &str| {
         ui.horizontal_wrapped(|ui| {
             ui.label(RichText::new(name).strong());
             for &k in kinds {
-                ui.selectable_value(kind, k, k.label()).on_hover_text(hint(k, scene));
+                ui.selectable_value(kind, k, shown(k)).on_hover_text(hint(k, scene));
             }
         });
     };
     row(ui, &mut follow.a, "A");
     row(ui, &mut follow.b, "B");
     ui.horizontal(|ui| {
-        ui.label("Probabilidad");
+        ui.label(tr("Probabilidad"));
         let mut percent = (follow.chance_a * 100.0).round();
         let changed = ui
             .add(egui::Slider::new(&mut percent, 0.0..=100.0).step_by(5.0).custom_formatter(|v, _| format!("A {v:.0} % · B {:.0} %", 100.0 - v)))
-            .on_hover_text("Cuántas veces de cada cien sale A; el resto, B")
+            .on_hover_text(tr("Cuántas veces de cada cien sale A; el resto, B"))
             .changed();
         if changed {
             follow.chance_a = percent / 100.0;
@@ -72,7 +88,7 @@ pub fn editor(ui: &mut egui::Ui, follow: &mut Follow, scene: bool) -> bool {
     });
     ui.horizontal(|ui| {
         ui.label(RichText::new(summary(follow)).color(TEXT_DIM).size(10.5));
-        if follow.is_active() && ui.small_button("Quitar").on_hover_text("Sin acción: sigue sonando").clicked() {
+        if follow.is_active() && ui.small_button(tr("Quitar")).on_hover_text(tr("Sin acción: sigue sonando")).clicked() {
             *follow = Follow::default();
         }
     });
@@ -81,22 +97,22 @@ pub fn editor(ui: &mut egui::Ui, follow: &mut Follow, scene: bool) -> bool {
 
 fn hint(kind: FollowKind, scene: bool) -> &'static str {
     match (kind, scene) {
-        (FollowKind::None, _) => "Sigue sonando",
-        (FollowKind::Stop, false) => "Para la pista",
-        (FollowKind::Stop, true) => "Para todos los clips",
-        (FollowKind::Again, _) => "Vuelve a empezar el mismo clip",
-        (FollowKind::Previous, false) => "El clip de encima (del último pasa al primero, y al revés)",
-        (FollowKind::Next, false) => "El clip de debajo (del último vuelve al primero)",
-        (FollowKind::First, false) => "El primero del grupo: los clips seguidos, sin huecos",
-        (FollowKind::Last, false) => "El último del grupo: los clips seguidos, sin huecos",
-        (FollowKind::Any, false) => "Uno del grupo al azar, este incluido",
-        (FollowKind::Other, false) => "Otro del grupo al azar, nunca este",
-        (FollowKind::Previous, true) => "La escena de encima",
-        (FollowKind::Next, true) => "La escena de debajo (de la última con clips vuelve a la primera)",
-        (FollowKind::First, true) => "La primera escena",
-        (FollowKind::Last, true) => "La última escena con clips",
-        (FollowKind::Any, true) => "Una escena al azar, esta incluida",
-        (FollowKind::Other, true) => "Otra escena al azar, nunca esta",
+        (FollowKind::None, _) => tr("Sigue sonando"),
+        (FollowKind::Stop, false) => tr("Para la pista"),
+        (FollowKind::Stop, true) => tr("Para todos los clips"),
+        (FollowKind::Again, _) => tr("Vuelve a empezar el mismo clip"),
+        (FollowKind::Previous, false) => tr("El clip de encima (del último pasa al primero, y al revés)"),
+        (FollowKind::Next, false) => tr("El clip de debajo (del último vuelve al primero)"),
+        (FollowKind::First, false) => tr("El primero del grupo: los clips seguidos, sin huecos"),
+        (FollowKind::Last, false) => tr("El último del grupo: los clips seguidos, sin huecos"),
+        (FollowKind::Any, false) => tr("Uno del grupo al azar, este incluido"),
+        (FollowKind::Other, false) => tr("Otro del grupo al azar, nunca este"),
+        (FollowKind::Previous, true) => tr("La escena de encima"),
+        (FollowKind::Next, true) => tr("La escena de debajo (de la última con clips vuelve a la primera)"),
+        (FollowKind::First, true) => tr("La primera escena"),
+        (FollowKind::Last, true) => tr("La última escena con clips"),
+        (FollowKind::Any, true) => tr("Una escena al azar, esta incluida"),
+        (FollowKind::Other, true) => tr("Otra escena al azar, nunca esta"),
     }
 }
 

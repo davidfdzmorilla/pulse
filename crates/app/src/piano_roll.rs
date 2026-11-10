@@ -15,6 +15,7 @@
 //! writes the key's chords at the insert marker.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::note_edit::{self, Selection, MIN_LENGTH};
 use crate::project::{is_black_key, note_name};
 use crate::theme::{self, ACCENT, TEXT_DIM};
@@ -348,7 +349,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let Some(clip_ref) = app.selected_clip.filter(|&c| app.clip(c).is_some()) else {
         ui.centered_and_justified(|ui| {
             ui.label(
-                egui::RichText::new("Selecciona un clip para editarlo.\nDoble clic en un slot vacío o en una pista del Arrangement crea uno nuevo.")
+                egui::RichText::new(tr("Selecciona un clip para editarlo.\nDoble clic en un slot vacío o en una pista del Arrangement crea uno nuevo."))
                     .color(TEXT_DIM),
             );
         });
@@ -621,7 +622,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             roll_menu(ui, state, clip);
             ui.separator();
             let length = clip.length;
-            widgets::menu_button(ui, "Transformar", |ui| crate::midi_transform::quick_menu(ui, &mut state.transform, &mut clip.notes, &mut state.selection, length, key));
+            widgets::menu_button(ui, tr("Transformar"), |ui| crate::midi_transform::quick_menu(ui, &mut state.transform, &mut clip.notes, &mut state.selection, length, key));
         });
 
         // ----- Pointer -------------------------------------------------------------
@@ -790,8 +791,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
         let beat_of = |x: f32| ((x - origin_x) / beat_w) as f64;
         let tip = match state.lane.expression.tool {
-            crate::expression_ui::Tool::Pencil => "Arrastra: dibujar · arrastrar un punto: moverlo · doble clic: borrarlo · ⌥ arrastrar entre puntos: curvar",
-            crate::expression_ui::Tool::Line => "Arrastra: una rampa recta · arrastrar un punto: moverlo · doble clic: borrarlo · ⌥ arrastrar entre puntos: curvar",
+            crate::expression_ui::Tool::Pencil => tr("Arrastra: dibujar · arrastrar un punto: moverlo · doble clic: borrarlo · ⌥ arrastrar entre puntos: curvar"),
+            crate::expression_ui::Tool::Line => tr("Arrastra: una rampa recta · arrastrar un punto: moverlo · doble clic: borrarlo · ⌥ arrastrar entre puntos: curvar"),
         };
         crate::expression_ui::lane(ui, &mut state.lane.expression, &mut clip.controls, control, clip.length, lane, &x_of, &beat_of, state.grid, theme::ACCENT).on_hover_text(tip);
     } else if let Some((param, info, value)) = envelope {
@@ -800,12 +801,12 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
         let beat_of = |x: f32| ((x - origin_x) / beat_w) as f64;
         crate::clip_envelope::lane(ui, &mut state.lane, &mut clip.envelopes, clip.length, param, &info, value, lane, lane.left() + KEY_W, &x_of, &beat_of, state.grid, theme::METER_RED)
-            .on_hover_text("Clic: añadir un punto · arrastrar: moverlo · doble clic: borrarlo");
+            .on_hover_text(tr("Clic: añadir un punto · arrastrar: moverlo · doble clic: borrarlo"));
     } else {
         let (lane, response) = ui.allocate_exact_size(vec2(ui.available_width(), VELOCITY_H), Sense::click_and_drag());
         let painter = ui.painter_at(lane);
         painter.rect_filled(lane, 2.0, theme::SLOT);
-        painter.text(lane.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, "Velocidad", theme::small(), TEXT_DIM);
+        painter.text(lane.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, tr("Velocidad"), theme::small(), TEXT_DIM);
         let origin_x = lane.left() + KEY_W - state.scroll_x;
         let bar_area = Rect::from_min_max(pos2(lane.left() + KEY_W, lane.top() + 4.0), lane.max - vec2(0.0, 3.0));
         let x_of = |beat: f64| origin_x + beat as f32 * beat_w;
@@ -852,7 +853,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 state.drag = None;
             }
         }
-        response.on_hover_text("Arrastra arriba o abajo para cambiar la velocidad de las notas seleccionadas");
+        response.on_hover_text(tr("Arrastra arriba o abajo para cambiar la velocidad de las notas seleccionadas"));
 
     }
 
@@ -1046,7 +1047,7 @@ fn to_scale(notes: &mut [Note], targets: &[usize], scale: Scale) -> usize {
 fn length_label(length: f64, sig: TimeSig) -> String {
     let bars = length / sig.bar();
     if (bars - bars.round()).abs() < 1e-9 && bars >= 1.0 {
-        format!("{bars} comp.")
+        fill(tr("{} comp."), &[&bars])
     } else {
         format!("{}/16", (length * 4.0).round() as u32)
     }
@@ -1231,7 +1232,7 @@ fn toolbar(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, key: Optio
                         ui.add_space(2.0);
                     }
                 });
-                button.on_hover_text(format!("Lo que no cabe en la barra: {}", names.join(", ")));
+                button.on_hover_text(fill(tr("Lo que no cabe en la barra: {}"), &[&names.join(", ")]));
             }
         });
     }
@@ -1250,22 +1251,22 @@ impl Part {
     /// What «⋯»'s tooltip calls it.
     fn name(self) -> &'static str {
         match self {
-            Part::Retake => "variación",
-            Part::Clip => "nombre",
-            Part::Loop => "loop",
-            Part::Grid => "rejilla",
-            Part::NoteLength => "nota",
-            Part::Draw => "dibujar",
+            Part::Retake => tr("variación"),
+            Part::Clip => tr("nombre"),
+            Part::Loop => tr("loop"),
+            Part::Grid => tr("rejilla"),
+            Part::NoteLength => tr("nota"),
+            Part::Draw => tr("dibujar"),
             Part::Groove => "groove",
-            Part::Chords => "acordes",
-            Part::Quantize => "cuantizar",
-            Part::Strength => "intensidad",
-            Part::Chance => "probabilidad",
-            Part::Transpose => "transponer",
-            Part::Scale => "escala",
+            Part::Chords => tr("acordes"),
+            Part::Quantize => tr("cuantizar"),
+            Part::Strength => tr("intensidad"),
+            Part::Chance => tr("probabilidad"),
+            Part::Transpose => tr("transponer"),
+            Part::Scale => tr("escala"),
             Part::Double => "×2",
-            Part::Roll => "redoble",
-            Part::Transform => "transformar",
+            Part::Roll => tr("redoble"),
+            Part::Transform => tr("transformar"),
             Part::Zoom => "zoom",
         }
     }
@@ -1276,7 +1277,7 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
     let Bar { state, clip, key, retake, grooves, previews } = bar;
     let key = *key;
     let targets = note_edit::targets(&clip.notes, &state.selection);
-    let scope = if state.selection.is_empty() { "todas las notas" } else { "las notas seleccionadas" };
+    let scope = if state.selection.is_empty() { tr("todas las notas") } else { tr("las notas seleccionadas") };
     // In «⋯» a list of choices, not a drop-down (one can't open inside it).
     let pick = |ui: &mut egui::Ui, id: &str, name: &str, value: &mut f64, options: &[(f64, &str)]| {
         label(ui, name);
@@ -1291,29 +1292,29 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
     match p {
         Part::Retake => {
             let Some(retake) = retake.as_mut() else { return };
-            if widgets::flat_button(ui, "Otra variación", true, vec2(104.0, 20.0)).on_hover_text("Escribe esta parte de otra manera, sobre los mismos acordes").clicked() {
+            if widgets::flat_button(ui, tr("Otra variación"), true, vec2(104.0, 20.0)).on_hover_text(tr("Escribe esta parte de otra manera, sobre los mismos acordes")).clicked() {
                 retake.again = true;
             }
             // A melody: the same take in another style, density or register.
             if let Some(m) = retake.melody.as_mut() {
                 use crate::melody::{Density, Register, Style};
-                choice(ui, "melody_style", &mut m.style, &Style::ALL, Style::label, "Estilo de la melodía: la misma toma, de otra manera");
-                choice(ui, "melody_density", &mut m.density, &Density::ALL, Density::label, "Cuántas notas toca la melodía");
-                choice(ui, "melody_register", &mut m.register, &Register::ALL, Register::label, "Lo alta que va la melodía: grave (Do3–Sol4), media (La3–Mi5) o aguda (Sol4–Re6)");
+                choice(ui, "melody_style", &mut m.style, &Style::ALL, Style::label, tr("Estilo de la melodía: la misma toma, de otra manera"));
+                choice(ui, "melody_density", &mut m.density, &Density::ALL, Density::label, tr("Cuántas notas toca la melodía"));
+                choice(ui, "melody_register", &mut m.register, &Register::ALL, Register::label, tr("Lo alta que va la melodía: grave (Do3–Sol4), media (La3–Mi5) o aguda (Sol4–Re6)"));
             }
         }
         Part::Clip => {
             let (swatch, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
             ui.painter().rect_filled(swatch, 2.0, theme::rgb(clip.color));
-            ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(92.0)).on_hover_text("El nombre del clip");
+            ui.add(egui::TextEdit::singleline(&mut clip.name).desired_width(92.0)).on_hover_text(tr("El nombre del clip"));
         }
         Part::Loop => {
-            label(ui, "Loop");
+            label(ui, tr("Loop"));
             let bar_len = state.sig.bar();
             let bars = clip.length / bar_len;
             egui::ComboBox::from_id_salt("clip_length").selected_text(length_label(clip.length, state.sig)).width(70.0).show_ui(ui, |ui| {
                 for option in [1.0, 2.0, 4.0, 8.0, 16.0] {
-                    if ui.selectable_label((bars - option).abs() < 1e-9, format!("{option} comp.")).clicked() {
+                    if ui.selectable_label((bars - option).abs() < 1e-9, fill(tr("{} comp."), &[&option])).clicked() {
                         clip.length = option * bar_len;
                     }
                 }
@@ -1322,16 +1323,16 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
             let mut sixteenths = (clip.length * 4.0).round().max(1.0) as u32;
             let changed = ui
                 .add(egui::DragValue::new(&mut sixteenths).range(1..=256).speed(0.2).suffix("/16"))
-                .on_hover_text("Longitud del loop en semicorcheas: 3/16, 5/16 o 7/16 sobre el compás de la canción hacen polirritmos")
+                .on_hover_text(tr("Longitud del loop en semicorcheas: 3/16, 5/16 o 7/16 sobre el compás de la canción hacen polirritmos"))
                 .changed();
             if changed {
                 clip.length = sixteenths as f64 / 4.0;
             }
         }
-        Part::Grid => pick(ui, "grid", "Rejilla", &mut state.grid, &GRIDS),
-        Part::NoteLength => pick(ui, "note_length", "Nota", &mut state.note_length, &NOTE_LENGTHS),
+        Part::Grid => pick(ui, "grid", tr("Rejilla"), &mut state.grid, &GRIDS),
+        Part::NoteLength => pick(ui, "note_length", tr("Nota"), &mut state.note_length, &NOTE_LENGTHS),
         Part::Draw => {
-            if widgets::flat_button(ui, "Dibujar", state.draw_mode, vec2(70.0, 20.0)).on_hover_text("Modo dibujo (B): clic añade o borra notas").clicked() {
+            if widgets::flat_button(ui, tr("Dibujar"), state.draw_mode, vec2(70.0, 20.0)).on_hover_text(tr("Modo dibujo (B): clic añade o borra notas")).clicked() {
                 state.draw_mode = !state.draw_mode;
             }
         }
@@ -1364,25 +1365,25 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
             }
         }
         Part::Quantize => {
-            if ui.button("Cuantizar").on_hover_text(crate::theme::keys(&format!("Cuantiza {scope} a la rejilla (⌘U)"))).clicked() {
+            if ui.button(tr("Cuantizar")).on_hover_text(crate::theme::keys(&fill(tr("Cuantiza {} a la rejilla (⌘U)"), &[&scope]))).clicked() {
                 note_edit::quantize(&mut clip.notes, &targets, state.grid, state.quantize_strength, state.quantize_ends, clip.length);
             }
         }
         Part::Strength => {
-            label(ui, "Cuantizar al");
+            label(ui, tr("Cuantizar al"));
             let mut percent = state.quantize_strength * 100.0;
-            if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %")).on_hover_text("Intensidad de la cuantización").changed() {
+            if ui.add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %")).on_hover_text(tr("Intensidad de la cuantización")).changed() {
                 state.quantize_strength = percent / 100.0;
             }
-            ui.checkbox(&mut state.quantize_ends, "finales").on_hover_text("Cuantiza también el final de las notas");
+            ui.checkbox(&mut state.quantize_ends, tr("finales")).on_hover_text(tr("Cuantiza también el final de las notas"));
         }
         Part::Chance => {
-            label(ui, "Prob.");
+            label(ui, tr("Prob."));
             let shown = targets.first().and_then(|&i| clip.notes.get(i)).map_or(1.0, |n| n.chance);
             let mut percent = shown * 100.0;
             if ui
                 .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(1.0).suffix(" %").max_decimals(0))
-                .on_hover_text(format!("Probabilidad de {scope}: cuántas de las veces que pasa el loop suenan. Al 50 % un hat suena una vuelta sí y otra no, al azar pero siempre igual al reproducir y al exportar"))
+                .on_hover_text(fill(tr("Probabilidad de {}: cuántas de las veces que pasa el loop suenan. Al 50 % un hat suena una vuelta sí y otra no, al azar pero siempre igual al reproducir y al exportar"), &[&scope]))
                 .changed()
             {
                 note_edit::set_chance(&mut clip.notes, &targets, percent / 100.0);
@@ -1391,7 +1392,7 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
         Part::Transpose => {
             let walk = key.filter(|_| state.fold);
             for (text, semitones) in [("-12", -12), ("-1", -1), ("+1", 1), ("+12", 12)] {
-                let hint = if walk.is_some() { format!("Transponer {scope} por la escala (↑↓, ⇧ octava)") } else { format!("Transponer {scope} (↑↓, ⇧ octava)") };
+                let hint = fill(if walk.is_some() { tr("Transponer {} por la escala (↑↓, ⇧ octava)") } else { tr("Transponer {} (↑↓, ⇧ octava)") }, &[&scope]);
                 if ui.small_button(text).on_hover_text(hint).clicked() {
                     transpose(&mut clip.notes, &targets, semitones, walk);
                 }
@@ -1399,17 +1400,17 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
         }
         Part::Scale => {
             let Some(key) = key else { return };
-            let hint = format!("Solo las filas de {}: las notas se mueven por la escala", key.name());
-            if widgets::flat_button(ui, "Plegar", state.fold, vec2(56.0, 20.0)).on_hover_text(hint).clicked() {
+            let hint = fill(tr("Solo las filas de {}: las notas se mueven por la escala"), &[&crate::i18n::music(&key.name())]);
+            if widgets::flat_button(ui, tr("Plegar"), state.fold, vec2(56.0, 20.0)).on_hover_text(hint).clicked() {
                 state.fold = !state.fold;
                 state.scrolled = None;
             }
-            if ui.button("A la escala").on_hover_text(format!("Lleva {scope} que no son de {} a la nota de la escala más cercana", key.name())).clicked() {
+            if ui.button(tr("A la escala")).on_hover_text(fill(tr("Lleva {} que no son de {} a la nota de la escala más cercana"), &[&scope, &crate::i18n::music(&key.name())])).clicked() {
                 to_scale(&mut clip.notes, &targets, key);
             }
         }
         Part::Double => {
-            if ui.small_button("×2").on_hover_text("Duplicar loop: dobla la longitud copiando las notas").clicked() {
+            if ui.small_button("×2").on_hover_text(tr("Duplicar loop: dobla la longitud copiando las notas")).clicked() {
                 let length = clip.length;
                 let copies: Vec<Note> = clip.notes.iter().map(|n| Note { start: n.start + length, ..n.clone() }).collect();
                 clip.notes.extend(copies);
@@ -1419,13 +1420,13 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
         Part::Roll => {
             if in_menu {
                 ui.vertical(|ui| {
-                    label(ui, "Redoble");
+                    label(ui, tr("Redoble"));
                     roll_menu(ui, state, clip);
                 });
             } else {
-                widgets::menu_button(ui, "Redoble", |ui| roll_menu(ui, state, clip))
+                widgets::menu_button(ui, tr("Redoble"), |ui| roll_menu(ui, state, clip))
                     .response
-                    .on_hover_text(crate::theme::keys("Reparte las notas seleccionadas en redobles de 1/16 a 1/64, con la velocidad en rampa (R repite el último)"));
+                    .on_hover_text(crate::theme::keys(tr("Reparte las notas seleccionadas en redobles de 1/16 a 1/64, con la velocidad en rampa (R repite el último)")));
             }
         }
         Part::Transform => {
@@ -1435,16 +1436,16 @@ fn part(ui: &mut egui::Ui, bar: &mut Bar, p: Part, in_menu: bool) {
                 ui.vertical(|ui| crate::midi_transform::panel(ui, &mut state.transform, clip_ref, &mut clip.notes, &mut state.selection, length, key));
             } else {
                 let config = egui::containers::menu::MenuConfig::find(ui).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside);
-                let (button, _) = egui::containers::menu::MenuButton::new("Transformar").config(config).ui(ui, |ui| crate::midi_transform::panel(ui, &mut state.transform, clip_ref, &mut clip.notes, &mut state.selection, length, key));
-                button.on_hover_text(format!("Rasguear, humanizar, velocidades, legato, ornamentos, arpegiar, conectar o invertir {scope}, viéndolo antes de aplicarlo"));
+                let (button, _) = egui::containers::menu::MenuButton::new(tr("Transformar")).config(config).ui(ui, |ui| crate::midi_transform::panel(ui, &mut state.transform, clip_ref, &mut clip.notes, &mut state.selection, length, key));
+                button.on_hover_text(fill(tr("Rasguear, humanizar, velocidades, legato, ornamentos, arpegiar, conectar o invertir {}, viéndolo antes de aplicarlo"), &[&scope]));
             }
         }
         Part::Zoom => {
             label(ui, "Zoom");
-            ui.add(egui::Slider::new(&mut state.zoom, 0.5..=4.0).logarithmic(true).show_value(false)).on_hover_text("Ancho de los tiempos");
-            label(ui, "Alto");
+            ui.add(egui::Slider::new(&mut state.zoom, 0.5..=4.0).logarithmic(true).show_value(false)).on_hover_text(tr("Ancho de los tiempos"));
+            label(ui, tr("Alto"));
             ui.add(egui::Slider::new(&mut state.row_zoom, ROW_ZOOM.0..=ROW_ZOOM.1).logarithmic(true).show_value(false))
-                .on_hover_text("Alto de las filas de notas (también ⌥ + rueda sobre las notas)");
+                .on_hover_text(tr("Alto de las filas de notas (también ⌥ + rueda sobre las notas)"));
         }
     }
 }
@@ -1472,38 +1473,39 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
     }
     let generating = state.drum_job.is_some();
     ui.horizontal(|ui| {
-        widgets::field_menu_button(ui, if generating { "Generando…" } else { "Generar ritmo" }, |ui| {
+        widgets::field_menu_button(ui, if generating { tr("Generando…") } else { tr("Generar ritmo") }, |ui| {
             ui.set_min_width(320.0);
             let before = state.drums.clone();
             let settings = &mut state.drums;
-            ui.label(egui::RichText::new("Estilo").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Estilo")).color(TEXT_DIM).size(10.5));
             ui.horizontal_wrapped(|ui| {
                 for style in Style::ALL {
-                    if ui.selectable_label(settings.style == style, style.label()).on_hover_text(format!("Suele ir a unos {} BPM", style.tempo())).clicked() && settings.style != style {
+                    if ui.selectable_label(settings.style == style, style.shown()).on_hover_text(fill(tr("Suele ir a unos {} BPM"), &[&style.tempo()])).clicked() && settings.style != style {
                         settings.style = style;
                         settings.sounds = style.sounds();
                     }
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Nivel").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Nivel")).color(TEXT_DIM).size(10.5));
                 for level in Level::ALL {
                     ui.selectable_value(&mut settings.level, level, level.label());
                 }
             });
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Largo").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Largo")).color(TEXT_DIM).size(10.5));
                 for bars in [1, 2, 4, 8] {
-                    ui.selectable_value(&mut settings.bars, bars, format!("{bars} c.")).on_hover_text("Compases del clip: con 4, el cuarto da la vuelta a la frase; con 8, redoble al final");
+                    ui.selectable_value(&mut settings.bars, bars, fill(tr("{} c."), &[&bars])).on_hover_text(tr("Compases del clip: con 4, el cuarto da la vuelta a la frase; con 8, redoble al final"));
                 }
             });
-            ui.label(egui::RichText::new("Sonidos").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Sonidos")).color(TEXT_DIM).size(10.5));
             ui.horizontal_wrapped(|ui| {
                 for (name, sounds) in crate::drum_gen::SOUND_CHOICES {
                     let on = sounds.iter().all(|&s| settings.sounds[s as usize]);
                     let here = sounds.iter().any(|&s| kit.pitch(s).is_some());
+                    let name = crate::i18n::tr_name(name);
                     let text = if here { egui::RichText::new(name) } else { egui::RichText::new(name).color(TEXT_DIM).strikethrough() };
-                    let hint = if here { "Que la base pueda usarlo" } else { "Este kit no lo tiene: no sonará" };
+                    let hint = if here { tr("Que la base pueda usarlo") } else { tr("Este kit no lo tiene: no sonará") };
                     if ui.selectable_label(on, text).on_hover_text(hint).clicked() {
                         for &s in sounds {
                             settings.sounds[s as usize] = !on;
@@ -1511,20 +1513,20 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
                     }
                 }
             });
-            ui.checkbox(&mut settings.ai, "Que lo toque la IA")
-                .on_hover_text("El modelo de batería de Pulse oye la base del estilo y la toca a su manera, como un batería: varía, mete redobles donde acaban las frases y cada versión es distinta");
-            ui.add_enabled(!settings.ai, egui::Checkbox::new(&mut settings.fills, "Redoble al final de cada frase"))
-                .on_hover_text("En el último tiempo de cada 8 compases (o del clip, si tiene 4 o más), el de cada estilo")
-                .on_disabled_hover_text("La IA pone los suyos donde acaban las frases");
-            ui.add_enabled(!bass.is_empty(), egui::Checkbox::new(&mut settings.follow_bass, "El bombo sigue al bajo"))
-                .on_hover_text("Añade bombos donde el bajo empieza notas (en corcheas)")
-                .on_disabled_hover_text("No hay una pista de bajo sonando con este clip");
+            ui.checkbox(&mut settings.ai, tr("Que lo toque la IA"))
+                .on_hover_text(tr("El modelo de batería de Pulse oye la base del estilo y la toca a su manera, como un batería: varía, mete redobles donde acaban las frases y cada versión es distinta"));
+            ui.add_enabled(!settings.ai, egui::Checkbox::new(&mut settings.fills, tr("Redoble al final de cada frase")))
+                .on_hover_text(tr("En el último tiempo de cada 8 compases (o del clip, si tiene 4 o más), el de cada estilo"))
+                .on_disabled_hover_text(tr("La IA pone los suyos donde acaban las frases"));
+            ui.add_enabled(!bass.is_empty(), egui::Checkbox::new(&mut settings.follow_bass, tr("El bombo sigue al bajo")))
+                .on_hover_text(tr("Añade bombos donde el bajo empieza notas (en corcheas)"))
+                .on_disabled_hover_text(tr("No hay una pista de bajo sonando con este clip"));
             if machine {
-                ui.checkbox(&mut settings.machine, format!("Sonido del estilo ({})", settings.style.machine().label()))
-                    .on_hover_text("Pone la Drum Machine en la máquina del estilo (808 para trap, hip hop y reggaetón; 909 para el resto) afinada como suena el estilo. Si has afinado tú la máquina, solo cambia de máquina y respeta tus ajustes");
+                ui.checkbox(&mut settings.machine, fill(tr("Sonido del estilo ({})"), &[&settings.style.machine().label()]))
+                    .on_hover_text(tr("Pone la Drum Machine en la máquina del estilo (808 para trap, hip hop y reggaetón; 909 para el resto) afinada como suena el estilo. Si has afinado tú la máquina, solo cambia de máquina y respeta tus ajustes"));
             }
             let style = settings.style;
-            if ui.small_button(format!("Tempo del proyecto a {} BPM", style.tempo())).on_hover_text("Cada estilo suena a sí mismo a su tempo").clicked() {
+            if ui.small_button(fill(tr("Tempo del proyecto a {} BPM"), &[&style.tempo()])).on_hover_text(tr("Cada estilo suena a sí mismo a su tempo")).clicked() {
                 tempo = Some(style.tempo() as f64);
             }
             // Another style or level starts from its first take.
@@ -1534,14 +1536,14 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
             ui.separator();
             let takes = crate::drum_gen::take_count(state.drums.style, state.drums.level);
             let label = match state.drum_takes {
-                0 => "Generar".to_string(),
-                n if state.drums.ai => format!("Otra versión ({n})"),
-                n => format!("Otra versión ({} de {takes})", (n as usize - 1) % takes + 1),
+                0 => tr("Generar").to_string(),
+                n if state.drums.ai => fill(tr("Otra versión ({})"), &[&n]),
+                n => fill(tr("Otra versión ({} de {})"), &[&((n as usize - 1) % takes + 1), &takes]),
             };
             let clicked = ui
                 .add_enabled(state.drum_job.is_none(), egui::Button::new(label))
-                .on_hover_text(crate::theme::keys("Sustituye las notas del clip (⌘Z las recupera)"))
-                .on_disabled_hover_text("La IA está tocando la anterior")
+                .on_hover_text(crate::theme::keys(tr("Sustituye las notas del clip (⌘Z las recupera)")))
+                .on_disabled_hover_text(tr("La IA está tocando la anterior"))
                 .clicked();
             if clicked {
                 let take = state.drum_takes;
@@ -1552,7 +1554,7 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
                 // The drum model learned in 4/4: in other meters, the written beat.
                 let four = crate::drum_gen::steps_from_four(state.sig).is_none();
                 if state.drums.ai && !four {
-                    state.drum_error = Some(format!("La IA de batería solo toca en 4/4: en {} suena el ritmo escrito", state.sig.label()));
+                    state.drum_error = Some(fill(tr("La IA de batería solo toca en 4/4: en {} suena el ritmo escrito"), &[&state.sig.label()]));
                 }
                 if state.drums.ai && four {
                     // The model takes a moment: on its own thread, so Pulse goes on.
@@ -1576,7 +1578,7 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
             if state.drum_job.is_some() {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(egui::RichText::new("La IA está tocando la base…").color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(tr("La IA está tocando la base…")).color(TEXT_DIM).size(10.5));
                 });
             }
             if let Some(e) = &state.drum_error {
@@ -1617,7 +1619,7 @@ fn take_beat(state: &mut State, clip: &mut MidiClip, settings: &crate::drum_gen:
 /// (swing, softer off-beats, humanize), with some ready-made ones and those
 /// taken from the project's recordings (see `groove_audio`).
 fn groove_menu(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::project::SavedGroove]) {
-    let label = if clip.groove.is_some() { "Groove: propio" } else { "Groove: proyecto" };
+    let label = if clip.groove.is_some() { tr("Groove: propio") } else { tr("Groove: proyecto") };
     widgets::field_menu_button(ui, label, |ui| {
         ui.set_min_width(250.0);
         groove_choices(ui, clip, grooves);
@@ -1629,8 +1631,8 @@ fn groove_choices(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::proj
     use engine::model::Groove;
     {
         let mut own = clip.groove.is_some();
-        ui.radio_value(&mut own, false, "El del proyecto").on_hover_text("El swing del transporte, como los demás clips");
-        ui.radio_value(&mut own, true, "Uno propio para este clip");
+        ui.radio_value(&mut own, false, tr("El del proyecto")).on_hover_text(tr("El swing del transporte, como los demás clips"));
+        ui.radio_value(&mut own, true, tr("Uno propio para este clip"));
         if own != clip.groove.is_some() {
             clip.groove = own.then(Groove::default);
         }
@@ -1638,11 +1640,11 @@ fn groove_choices(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::proj
         ui.separator();
         ui.horizontal_wrapped(|ui| {
             let presets = [
-                ("Recto", Groove::default()),
+                (tr("Recto"), Groove::default()),
                 ("Swing 1/16", Groove { grid: 0.25, swing: 0.5, ..Groove::default() }),
                 ("MPC 1/16", Groove { grid: 0.25, swing: 0.36, accent: 0.3, ..Groove::default() }),
                 ("Shuffle 1/8", Groove { grid: 0.5, swing: 1.0, accent: 0.2, ..Groove::default() }),
-                ("Humano", Groove { grid: 0.25, swing: 0.15, accent: 0.25, humanize: 0.5, template: None }),
+                (tr("Humano"), Groove { grid: 0.25, swing: 0.15, accent: 0.25, humanize: 0.5, template: None }),
             ];
             for (name, preset) in presets {
                 if ui.selectable_label(*groove == preset, name).clicked() {
@@ -1651,7 +1653,7 @@ fn groove_choices(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::proj
             }
         });
         if !grooves.is_empty() {
-            ui.label(egui::RichText::new("De tus grabaciones").color(theme::TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("De tus grabaciones")).color(theme::TEXT_DIM).size(10.5));
             ui.horizontal_wrapped(|ui| {
                 for saved in grooves {
                     let chosen = groove.template.is_some() && groove.template == saved.groove.template && groove.grid == saved.groove.grid;
@@ -1663,10 +1665,10 @@ fn groove_choices(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::proj
         }
         let template = groove.template.is_some();
         if template {
-            ui.label(egui::RichText::new(format!("Groove de una grabación: {}", crate::groove_audio::describe(groove))).size(10.5));
+            ui.label(egui::RichText::new(fill(tr("Groove de una grabación: {}"), &[&crate::groove_audio::describe(groove)])).size(10.5));
         } else {
             ui.horizontal(|ui| {
-                ui.label("Rejilla");
+                ui.label(tr("Rejilla"));
                 ui.selectable_value(&mut groove.grid, 0.5, "1/8");
                 ui.selectable_value(&mut groove.grid, 0.25, "1/16");
             });
@@ -1681,14 +1683,14 @@ fn groove_choices(ui: &mut egui::Ui, clip: &mut MidiClip, grooves: &[crate::proj
             });
         };
         if template {
-            percent(ui, "Tiempo", &mut groove.swing, "Cuánto se mueve cada nota hacia donde caía el golpe en la grabación (100 % = igual que en ella)");
-            percent(ui, "Dinámica", &mut groove.accent, "Cuánto sigue cada nota la fuerza de su golpe en la grabación (100 % = igual que en ella)");
+            percent(ui, tr("Tiempo"), &mut groove.swing, tr("Cuánto se mueve cada nota hacia donde caía el golpe en la grabación (100 % = igual que en ella)"));
+            percent(ui, tr("Dinámica"), &mut groove.accent, tr("Cuánto sigue cada nota la fuerza de su golpe en la grabación (100 % = igual que en ella)"));
         } else {
-            percent(ui, "Swing", &mut groove.swing, "Retrasa los contratiempos de la rejilla (100 % = shuffle de tresillo)");
-            percent(ui, "Acentos", &mut groove.accent, "Los contratiempos suenan más suaves");
+            percent(ui, "Swing", &mut groove.swing, tr("Retrasa los contratiempos de la rejilla (100 % = shuffle de tresillo)"));
+            percent(ui, tr("Acentos"), &mut groove.accent, tr("Los contratiempos suenan más suaves"));
         }
-        percent(ui, "Humanizar", &mut groove.humanize, "Pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta");
-        ui.label(egui::RichText::new("Se aplica al tocar: las notas no se mueven.").color(theme::TEXT_DIM).size(10.5));
+        percent(ui, tr("Humanizar"), &mut groove.humanize, tr("Pequeños desplazamientos al azar de tiempo y velocidad, distintos en cada vuelta"));
+        ui.label(egui::RichText::new(tr("Se aplica al tocar: las notas no se mueven.")).color(theme::TEXT_DIM).size(10.5));
     }
 }
 
@@ -1723,36 +1725,38 @@ struct Moved {
 fn roll_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip) {
     let selected: Vec<usize> = state.selection.iter().copied().filter(|&i| i < clip.notes.len()).collect();
     ui.horizontal(|ui| {
-        label(ui, "Velocidad");
+        label(ui, tr("Velocidad"));
         for ramp in note_edit::Ramp::ALL {
             let hint = match ramp {
-                note_edit::Ramp::Up => "De suave a fuerte, como un redoble que entra",
-                note_edit::Ramp::Down => "De fuerte a suave, como un eco",
-                note_edit::Ramp::Flat => "Todas con la misma velocidad",
+                note_edit::Ramp::Up => tr("De suave a fuerte, como un redoble que entra"),
+                note_edit::Ramp::Down => tr("De fuerte a suave, como un eco"),
+                note_edit::Ramp::Flat => tr("Todas con la misma velocidad"),
             };
             ui.selectable_value(&mut state.roll_ramp, ramp, ramp.label()).on_hover_text(hint);
         }
     });
     if !state.bends.is_empty() {
         ui.horizontal(|ui| {
-            label(ui, "Tono");
+            label(ui, tr("Tono"));
             for (semitones, text) in note_edit::PITCH_RAMPS {
                 let hint = if semitones == 0.0 {
-                    "Todos los golpes en su tono".to_string()
+                    tr("Todos los golpes en su tono").to_string()
+                } else if semitones > 0.0 {
+                    fill(tr("Cada golpe más agudo hasta {} semitonos en el último (con el pitch bend del clip; el pad que no lo seguía pasa a seguirlo una octava)"), &[&format!("{semitones:+}")])
                 } else {
-                    format!("Cada golpe más {} hasta {:+} semitonos en el último (con el pitch bend del clip; el pad que no lo seguía pasa a seguirlo una octava)", if semitones > 0.0 { "agudo" } else { "grave" }, semitones)
+                    fill(tr("Cada golpe más grave hasta {} semitonos en el último (con el pitch bend del clip; el pad que no lo seguía pasa a seguirlo una octava)"), &[&format!("{semitones:+}")])
                 };
-                ui.selectable_value(&mut state.roll_pitch, semitones, text).on_hover_text(hint);
+                ui.selectable_value(&mut state.roll_pitch, semitones, note_edit::pitch_ramp_name(text)).on_hover_text(hint);
             }
         });
     }
     if selected.is_empty() {
-        label(ui, "Selecciona notas (o un tramo con un recuadro) para hacer un redoble");
+        label(ui, tr("Selecciona notas (o un tramo con un recuadro) para hacer un redoble"));
     }
     ui.horizontal(|ui| {
         for (step, text) in ROLLS {
-            let button = ui.add_enabled(!selected.is_empty(), egui::Button::new(format!("Redoble {text}")).selected(state.roll_step == step));
-            if button.on_hover_text(crate::theme::keys(&format!("Reparte cada nota seleccionada en notas de {text} que la llenan (R repite el último)"))).clicked() {
+            let button = ui.add_enabled(!selected.is_empty(), egui::Button::new(fill(tr("Redoble {}"), &[&text])).selected(state.roll_step == step));
+            if button.on_hover_text(crate::theme::keys(&fill(tr("Reparte cada nota seleccionada en notas de {} que la llenan (R repite el último)"), &[&text]))).clicked() {
                 state.roll_step = step;
                 make_roll(state, clip, &selected, step);
                 ui.close();
@@ -1929,6 +1933,23 @@ mod tests {
         click(&mut app, view, fit, egui::Modifiers::NONE);
         let Some(Clip::Midi(midi)) = app.clip(clip) else { panic!() };
         assert_eq!(midi.notes.iter().map(|n| n.pitch).collect::<Vec<_>>(), vec![60, 64], "C# to C, E stays");
+    }
+
+    /// In English the editor's bar, its lane and «Transformar» speak English.
+    #[test]
+    fn the_editor_speaks_english() {
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let mut app = PulseApp::headless(crate::project::Project::demo());
+            app.project.key = Some(Scale { tonic: 0, minor: false });
+            app.select_clip(ClipRef::Session { track: 1, slot: 0 });
+            let shown: Vec<String> = texts(&mut app).into_iter().map(|(t, _)| t).collect();
+            for text in ["Fold", "To scale", "Quantize", "Velocity", "Lane"] {
+                assert!(shown.iter().any(|t| t == text), "falta «{text}»: {shown:?}");
+            }
+            for text in ["Plegar", "A la escala", "Cuantizar", "Velocidad", "Carril"] {
+                assert!(!shown.iter().any(|t| t == text), "sobra «{text}»");
+            }
+        });
     }
 
     /// The drum model plays in the background: while it does, the editor says

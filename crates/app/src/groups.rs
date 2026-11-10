@@ -3,6 +3,7 @@
 //! Its tracks are the ones right under it, one level deeper (`Track::depth`),
 //! as in Live; groups can hold groups. Folded, its tracks are hidden.
 
+use crate::i18n::{fill, tr};
 use crate::app::PulseApp;
 use crate::project::Track;
 use engine::{Target, MAX_TRACKS};
@@ -78,11 +79,11 @@ impl PulseApp {
             return;
         }
         if self.recording_anything() {
-            self.status = Some("No se pueden agrupar pistas mientras se graba".into());
+            self.status = Some(tr("No se pueden agrupar pistas mientras se graba").into());
             return;
         }
         if tracks.len() >= MAX_TRACKS {
-            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&MAX_TRACKS]));
             return;
         }
         // Each one's depth inside the new group: its own under the outermost of
@@ -113,7 +114,10 @@ impl PulseApp {
         self.selected_tracks = vec![first];
         self.selected_target = Target::Track(first);
         self.sync_all();
-        self.status = Some(format!("{} pista(s) en un grupo: suenan por su fader y sus efectos", members.len()));
+        self.status = Some(match members.len() {
+            1 => tr("1 pista en un grupo: suena por su fader y sus efectos").to_string(),
+            n => fill(tr("{} pistas en un grupo: suenan por su fader y sus efectos"), &[&n]),
+        });
     }
 
     /// Takes a group's tracks out of it, and the group away.
@@ -135,7 +139,7 @@ impl PulseApp {
         self.selected_tracks = (inside.start - 1..inside.end - 1).collect();
         self.selected_target = Target::Track(g.min(self.project.tracks.len() - 1));
         self.sync_all();
-        self.status = Some("Grupo deshecho".into());
+        self.status = Some(tr("Grupo deshecho").into());
     }
 
     /// Takes a track (and what it holds) out of its group, right after it.

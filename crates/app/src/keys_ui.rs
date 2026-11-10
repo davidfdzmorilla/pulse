@@ -1,5 +1,6 @@
 //! Pulse Keys' device: the model, its controls and the organ's drawbars.
 
+use crate::i18n::{fill, tr};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::*;
@@ -19,27 +20,27 @@ pub(crate) fn rows(model: KeysModel) -> &'static [&'static [usize]] {
 /// What each knob does, for its tooltip.
 pub(crate) fn hint(index: usize, model: KeysModel) -> &'static str {
     match index {
-        KEYS_TONE if model == KeysModel::Piano => "Lo duros que son los martillos: más brillo cuanto más fuerte se toca",
-        KEYS_TONE if model == KeysModel::Organ => "Filtro de agudos del órgano",
-        KEYS_TONE => "Lo abierto que suena la pastilla",
-        KEYS_LENGTH => "Cuánto tardan las notas en apagarse solas mientras se mantienen",
-        KEYS_RELEASE => "Cuánto suena una nota al soltarla (los apagadores)",
-        KEYS_DYNAMICS => "Cuánto cambia el volumen con la fuerza de la nota (0: todas igual)",
-        KEYS_HAMMER => "El golpe del martillo al empezar la nota",
-        KEYS_STRINGS => "Desafinación entre las cuerdas de cada nota: más, más «de bar»",
-        KEYS_BODY => "La resonancia de la tabla armónica y la caja",
-        KEYS_BELL => "El brillo de campana al atacar la nota",
-        KEYS_BARK => "Lo que gruñe la pastilla en las notas fuertes",
-        KEYS_TREMOLO_RATE => "Velocidad del trémolo",
-        KEYS_TREMOLO if model == KeysModel::Tines => "Trémolo estéreo: el sonido va de un lado a otro",
-        KEYS_TREMOLO => "Trémolo: el volumen sube y baja",
-        KEYS_PERCUSSION => "Golpe de percusión al empezar: solo en la primera nota de una ligadura",
-        KEYS_PERC_DECAY => "Cuánto dura la percusión",
-        KEYS_CLICK => "El chasquido de los contactos al pulsar y soltar",
-        KEYS_LESLIE => "Cuánto suena por el altavoz giratorio",
-        KEYS_DRIVE => "Saturación del amplificador",
-        KEYS_WIDTH => "Anchura estéreo",
-        KEYS_GAIN => "Volumen",
+        KEYS_TONE if model == KeysModel::Piano => tr("Lo duros que son los martillos: más brillo cuanto más fuerte se toca"),
+        KEYS_TONE if model == KeysModel::Organ => tr("Filtro de agudos del órgano"),
+        KEYS_TONE => tr("Lo abierto que suena la pastilla"),
+        KEYS_LENGTH => tr("Cuánto tardan las notas en apagarse solas mientras se mantienen"),
+        KEYS_RELEASE => tr("Cuánto suena una nota al soltarla (los apagadores)"),
+        KEYS_DYNAMICS => tr("Cuánto cambia el volumen con la fuerza de la nota (0: todas igual)"),
+        KEYS_HAMMER => tr("El golpe del martillo al empezar la nota"),
+        KEYS_STRINGS => tr("Desafinación entre las cuerdas de cada nota: más, más «de bar»"),
+        KEYS_BODY => tr("La resonancia de la tabla armónica y la caja"),
+        KEYS_BELL => tr("El brillo de campana al atacar la nota"),
+        KEYS_BARK => tr("Lo que gruñe la pastilla en las notas fuertes"),
+        KEYS_TREMOLO_RATE => tr("Velocidad del trémolo"),
+        KEYS_TREMOLO if model == KeysModel::Tines => tr("Trémolo estéreo: el sonido va de un lado a otro"),
+        KEYS_TREMOLO => tr("Trémolo: el volumen sube y baja"),
+        KEYS_PERCUSSION => tr("Golpe de percusión al empezar: solo en la primera nota de una ligadura"),
+        KEYS_PERC_DECAY => tr("Cuánto dura la percusión"),
+        KEYS_CLICK => tr("El chasquido de los contactos al pulsar y soltar"),
+        KEYS_LESLIE => tr("Cuánto suena por el altavoz giratorio"),
+        KEYS_DRIVE => tr("Saturación del amplificador"),
+        KEYS_WIDTH => tr("Anchura estéreo"),
+        KEYS_GAIN => tr("Volumen"),
         _ => "",
     }
 }
@@ -78,7 +79,7 @@ pub(crate) fn drawbar(ui: &mut egui::Ui, i: usize, value: f32) -> Option<f32> {
     let digit = if i >= 2 && i != 4 && i != 6 && i != 7 { Color32::from_gray(40) } else { Color32::from_gray(220) };
     painter.text(knob.center(), Align2::CENTER_CENTER, format!("{}", out.round() as u8), egui::FontId::proportional(7.5), digit);
     painter.text(pos2(rect.center().x, rect.bottom() - 7.0), Align2::CENTER_CENTER, FOOTAGES[i], theme::small(), TEXT_DIM);
-    let response = response.on_hover_text(format!("Registro {} · {} de 8 · arrastra hacia abajo para sacarlo", FOOTAGES[i], out.round()));
+    let response = response.on_hover_text(fill(tr("Registro {} · {} de 8 · arrastra hacia abajo para sacarlo"), &[&FOOTAGES[i], &out.round()]));
     if response.double_clicked() {
         return Some(if out > 0.0 { 0.0 } else { 8.0 });
     }

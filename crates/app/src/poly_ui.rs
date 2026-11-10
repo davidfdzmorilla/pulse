@@ -3,6 +3,7 @@
 //! random, combinations) and the step sequencer, on the shared engine.
 
 use crate::app::PulseApp;
+use crate::i18n::tr;
 use crate::devices::{self, Action};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::wave_ui::{self, knob, panel, set, source_badge};
@@ -51,10 +52,10 @@ fn filter2_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, 
 
 fn routing_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Action>) {
     panel(ui, 140.0, |ui| {
-        ui.label(egui::RichText::new("RUTA DE FILTROS").color(TEXT_DIM).size(10.0).strong());
+        ui.label(egui::RichText::new(tr("RUTA DE FILTROS")).color(TEXT_DIM).size(10.0).strong());
         let mut parallel = base.filter_parallel;
-        ui.selectable_value(&mut parallel, false, "Serie: 1 → 2");
-        ui.selectable_value(&mut parallel, true, "Paralelo: 1 | 2");
+        ui.selectable_value(&mut parallel, false, tr("Serie: 1 → 2"));
+        ui.selectable_value(&mut parallel, true, tr("Paralelo: 1 | 2"));
         if parallel != base.filter_parallel {
             set(actions, WaveParams { filter_parallel: parallel, ..base });
         }
@@ -64,7 +65,7 @@ fn routing_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, 
                 knob(app, ui, t, WAVE_BALANCE, "Balance", 28.0, actions);
             });
         });
-        ui.label(egui::RichText::new("Entradas: en el filtro 1").color(TEXT_DIM).size(10.0));
+        ui.label(egui::RichText::new(tr("Entradas: en el filtro 1")).color(TEXT_DIM).size(10.0));
     });
 }
 
@@ -78,7 +79,7 @@ fn random_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, a
             knob(app, ui, t, WAVE_RANDOM_RATE, "Rate", 24.0, actions);
         });
         ui.separator();
-        ui.label(egui::RichText::new("COMBINAR").strong());
+        ui.label(egui::RichText::new(tr("COMBINAR")).strong());
         for c in 0..2 {
             let combo = base.combos[c];
             let mut next = combo;
@@ -92,9 +93,9 @@ fn random_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, a
                     });
                 };
                 pick(ui, ("poly_combo_a", t, c), &mut next.a);
-                egui::ComboBox::from_id_salt(("poly_combo_op", t, c)).selected_text(next.op.label()).width(48.0).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt(("poly_combo_op", t, c)).selected_text(op_label(next.op)).width(48.0).show_ui(ui, |ui| {
                     for op in ComboOp::ALL {
-                        ui.selectable_value(&mut next.op, op, op.label());
+                        ui.selectable_value(&mut next.op, op, op_label(op));
                     }
                 });
                 pick(ui, ("poly_combo_b", t, c), &mut next.b);
@@ -129,6 +130,11 @@ fn synth_page(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, sho
     });
 }
 
+/// A combination's operation, in the interface's language.
+fn op_label(op: ComboOp) -> &'static str {
+    if op == ComboOp::Average { tr("Media") } else { op.label() }
+}
+
 const CELL: f32 = 40.0;
 
 /// A row of sixteen bars set by dragging across them; returns the edited values.
@@ -154,7 +160,7 @@ fn lane(ui: &mut egui::Ui, label: &str, values: [f32; SEQ_STEPS], (min, max): (f
             let n = ((rect.bottom() - pos.y) / rect.height()).clamp(0.0, 1.0);
             edited[i] = min + n * (max - min);
         }
-        response.on_hover_text("Arrastra sobre los pasos para dibujar");
+        response.on_hover_text(tr("Arrastra sobre los pasos para dibujar"));
     });
     (edited != values).then_some(edited)
 }
@@ -184,8 +190,8 @@ fn seq_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Act
     let seq = base.seq;
     let mut next = seq;
     ui.horizontal(|ui| {
-        ui.checkbox(&mut next.on, egui::RichText::new("SECUENCIADOR").strong()).on_hover_text("Mientras mantienes una tecla, toca los pasos transpuestos a ella");
-        ui.label(egui::RichText::new("Pasos").color(TEXT_DIM).size(10.5));
+        ui.checkbox(&mut next.on, egui::RichText::new(tr("SECUENCIADOR")).strong()).on_hover_text(tr("Mientras mantienes una tecla, toca los pasos transpuestos a ella"));
+        ui.label(egui::RichText::new(tr("Pasos")).color(TEXT_DIM).size(10.5));
         egui::ComboBox::from_id_salt(("poly_seq_len", t)).selected_text(next.length.to_string()).width(44.0).show_ui(ui, |ui| {
             for n in 1..=SEQ_STEPS as u8 {
                 ui.selectable_value(&mut next.length, n, n.to_string());
@@ -203,7 +209,7 @@ fn seq_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Act
                 ui.selectable_value(&mut next.rate_beats, b, rate_label(b));
             }
         });
-        if ui.button("Variar").on_hover_text("Cambia notas al azar dentro de la escala menor").clicked() {
+        if ui.button(tr("Variar")).on_hover_text(tr("Cambia notas al azar dentro de la escala menor")).clicked() {
             const SCALE: [f32; 8] = [0.0, 3.0, 5.0, 7.0, 10.0, 12.0, 15.0, -5.0];
             let mut seed = (ui.ctx().input(|i| i.time) * 1000.0) as u32 | 1;
             for step in &mut next.steps {
@@ -215,30 +221,30 @@ fn seq_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Act
                 }
             }
         }
-        if ui.button("Limpiar").clicked() {
+        if ui.button(tr("Limpiar")).clicked() {
             next.steps = [engine::model::SeqStep::default(); SEQ_STEPS];
         }
         source_badge(ui, ModSource::Sequencer);
         if base.arp.on && next.on {
-            ui.label(egui::RichText::new("(el secuenciador manda sobre el arpegiador)").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("(el secuenciador manda sobre el arpegiador)")).color(TEXT_DIM).size(10.5));
         }
     });
     ui.add_space(4.0);
     let length = next.length as usize;
-    if let Some(on) = toggles(ui, "Paso", std::array::from_fn(|i| next.steps[i].on), length) {
+    if let Some(on) = toggles(ui, tr("Paso"), std::array::from_fn(|i| next.steps[i].on), length) {
         for (step, v) in next.steps.iter_mut().zip(on) {
             step.on = v;
         }
     }
-    if let Some(values) = lane(ui, "Nota (st)", column(&next.steps, |s| s.pitch), (-24.0, 24.0), length, |v| format!("{:+}", v.round())) {
+    if let Some(values) = lane(ui, tr("Nota (st)"), column(&next.steps, |s| s.pitch), (-24.0, 24.0), length, |v| format!("{:+}", v.round())) {
         for (step, v) in next.steps.iter_mut().zip(values) {
             step.pitch = v.round();
         }
     }
     let lanes: [(&str, fn(&mut engine::model::SeqStep) -> &mut f32, fn(&engine::model::SeqStep) -> f32); 4] = [
-        ("Velocidad", |s| &mut s.velocity, |s| s.velocity),
+        (tr("Velocidad"), |s| &mut s.velocity, |s| s.velocity),
         ("Gate", |s| &mut s.gate, |s| s.gate),
-        ("Probabilidad", |s| &mut s.probability, |s| s.probability),
+        (tr("Probabilidad"), |s| &mut s.probability, |s| s.probability),
         ("Mod", |s| &mut s.value, |s| s.value),
     ];
     for (label, field, read) in lanes {
@@ -253,7 +259,7 @@ fn seq_page(ui: &mut egui::Ui, t: usize, base: WaveParams, actions: &mut Vec<Act
             step.slide = v;
         }
     }
-    ui.label(egui::RichText::new("Velocidad multiplica la de la tecla · Gate es la duración de la nota en el paso · Slide liga con el siguiente (usa Glide) · Mod sale por la fuente «Seq Mod»").color(TEXT_DIM).size(10.5));
+    ui.label(egui::RichText::new(tr("Velocidad multiplica la de la tecla · Gate es la duración de la nota en el paso · Slide liga con el siguiente (usa Glide) · Mod sale por la fuente «Seq Mod»")).color(TEXT_DIM).size(10.5));
     if next != seq {
         set(actions, WaveParams { seq: next, ..base });
     }
@@ -280,9 +286,9 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 devices::preset_menu(app, ui, t, &mut actions);
                 ui.separator();
                 let mut voicing = (base.mono, base.legato);
-                ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text("Varias notas a la vez; con Glide, cada nota desliza desde la anterior");
-                ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio");
-                ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono");
+                ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text(tr("Varias notas a la vez; con Glide, cada nota desliza desde la anterior"));
+                ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text(tr("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio"));
+                ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text(tr("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono"));
                 if voicing != (base.mono, base.legato) {
                     set(&mut actions, WaveParams { mono: voicing.0, legato: voicing.1, ..base });
                 }
@@ -294,12 +300,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     knob(app, ui, t, 60 + m, &format!("Macro {}", m + 1), 24.0, &mut actions);
                 }
                 ui.add_space(12.0);
-                if ui.button("► Escuchar").clicked() {
+                if ui.button(tr("► Escuchar")).clicked() {
                     actions.push(Action::Preview(60));
                 }
             });
             ui.horizontal_wrapped(|ui| {
-                ui.label(egui::RichText::new("FUENTES").color(TEXT_DIM).size(10.0).strong());
+                ui.label(egui::RichText::new(tr("FUENTES")).color(TEXT_DIM).size(10.0).strong());
                 for source in ModSource::ALL.into_iter().skip(1) {
                     source_badge(ui, source);
                 }

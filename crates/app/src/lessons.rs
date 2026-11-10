@@ -10,6 +10,7 @@
 //! drums on a track» by itself.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::project::{Project, Track};
 use crate::theme::{self, ACCENT, PLAY, TEXT, TEXT_DIM};
 use eframe::egui;
@@ -251,7 +252,7 @@ impl PulseApp {
             let mut settings = self.settings.clone();
             settings.lessons_done.push(id.to_string());
             self.set_settings(settings);
-            self.status = Some(format!("Lección «{}» terminada", LESSONS[index].title));
+            self.status = Some(fill(tr("Lección «{}» terminada"), &[&tr(LESSONS[index].title)]));
         }
     }
 }
@@ -264,14 +265,14 @@ pub fn panel(app: &mut PulseApp, ui: &mut egui::Ui) {
     ui.set_width(WIDTH - 16.0);
     ui.horizontal(|ui| {
         if app.lessons.current.is_some() {
-            if ui.button("‹ Lecciones").on_hover_text("Todas las lecciones").clicked() {
+            if ui.button(tr("‹ Lecciones")).on_hover_text(tr("Todas las lecciones")).clicked() {
                 app.lessons.current = None;
             }
         } else {
-            ui.label(egui::RichText::new("Lecciones").font(theme::bold(15.0)).color(TEXT));
+            ui.label(egui::RichText::new(tr("Lecciones")).font(theme::bold(15.0)).color(TEXT));
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.button("×").on_hover_text("Cerrar las lecciones (Ayuda › Lecciones las abre)").clicked() {
+            if ui.button("×").on_hover_text(tr("Cerrar las lecciones (Ayuda › Lecciones las abre)")).clicked() {
                 app.lessons.open = false;
             }
         });
@@ -284,13 +285,13 @@ pub fn panel(app: &mut PulseApp, ui: &mut egui::Ui) {
 }
 
 fn list(app: &mut PulseApp, ui: &mut egui::Ui) {
-    ui.label(egui::RichText::new("Unos minutos cada una. Los pasos se marcan solos al hacerlos, sobre tu proyecto.").color(TEXT_DIM));
+    ui.label(egui::RichText::new(tr("Unos minutos cada una. Los pasos se marcan solos al hacerlos, sobre tu proyecto.")).color(TEXT_DIM));
     ui.add_space(6.0);
     for (i, lesson) in LESSONS.iter().enumerate() {
         let finished = app.settings.lessons_done.iter().any(|d| d == lesson.id);
         let mark = if finished { "✓" } else { "" };
-        let response = crate::welcome::card(ui, &format!("{}. {}", i + 1, lesson.title), lesson.about, mark, ui.available_width(), 0.0);
-        if response.on_hover_text("Empezar esta lección con tu proyecto tal como está").clicked() {
+        let response = crate::welcome::card(ui, &format!("{}. {}", i + 1, tr(lesson.title)), tr(lesson.about), mark, ui.available_width(), 0.0);
+        if response.on_hover_text(tr("Empezar esta lección con tu proyecto tal como está")).clicked() {
             app.start_lesson(i);
         }
         ui.add_space(4.0);
@@ -299,11 +300,11 @@ fn list(app: &mut PulseApp, ui: &mut egui::Ui) {
 
 fn lesson(app: &mut PulseApp, ui: &mut egui::Ui, index: usize) {
     let lesson = &LESSONS[index];
-    ui.label(egui::RichText::new(lesson.title).font(theme::bold(15.0)).color(TEXT));
-    ui.label(egui::RichText::new(lesson.about).color(TEXT_DIM));
+    ui.label(egui::RichText::new(tr(lesson.title)).font(theme::bold(15.0)).color(TEXT));
+    ui.label(egui::RichText::new(tr(lesson.about)).color(TEXT_DIM));
     let (done, all) = app.lessons.progress();
     ui.add_space(4.0);
-    ui.add(egui::ProgressBar::new(done as f32 / all.max(1) as f32).text(format!("{done} de {all}")).desired_width(ui.available_width()));
+    ui.add(egui::ProgressBar::new(done as f32 / all.max(1) as f32).text(fill(tr("{} de {}"), &[&done, &all])).desired_width(ui.available_width()));
     ui.add_space(6.0);
     let next = app.lessons.done.iter().position(|d| !d);
     let mut toggled = None;
@@ -311,16 +312,16 @@ fn lesson(app: &mut PulseApp, ui: &mut egui::Ui, index: usize) {
         let is_done = app.lessons.done.get(i).copied().unwrap_or(false);
         ui.horizontal_top(|ui| {
             let (mark, color) = if is_done { ("✓", PLAY) } else if Some(i) == next { ("●", ACCENT) } else { ("○", TEXT_DIM) };
-            let tip = if is_done { "Hecho (clic para desmarcarlo)" } else if step.done.is_some() { "Se marca solo al hacerlo; también con un clic" } else { "Márcalo cuando lo hayas hecho" };
+            let tip = if is_done { tr("Hecho (clic para desmarcarlo)") } else if step.done.is_some() { tr("Se marca solo al hacerlo; también con un clic") } else { tr("Márcalo cuando lo hayas hecho") };
             let button = egui::Button::new(egui::RichText::new(mark).color(color).font(theme::bold(14.0))).frame(false).min_size(egui::vec2(20.0, 20.0));
             if ui.add(button).on_hover_text(tip).clicked() {
                 toggled = Some(i);
             }
             ui.vertical(|ui| {
-                let text = egui::RichText::new(step.text).color(if is_done { TEXT_DIM } else { TEXT });
+                let text = egui::RichText::new(tr(step.text)).color(if is_done { TEXT_DIM } else { TEXT });
                 ui.label(if Some(i) == next { text.strong() } else { text });
                 if !is_done {
-                    ui.label(egui::RichText::new(theme::keys(&step.how.replace(['{', '}'], ""))).color(TEXT_DIM).size(11.0));
+                    ui.label(egui::RichText::new(theme::keys(&tr(step.how).replace(['{', '}'], ""))).color(TEXT_DIM).size(11.0));
                 }
             });
         });
@@ -331,14 +332,14 @@ fn lesson(app: &mut PulseApp, ui: &mut egui::Ui, index: usize) {
     }
     ui.add_space(6.0);
     if next.is_none() {
-        ui.label(egui::RichText::new("¡Lección terminada!").color(PLAY).strong());
+        ui.label(egui::RichText::new(tr("¡Lección terminada!")).color(PLAY).strong());
         if let Some(following) = LESSONS.get(index + 1) {
-            if ui.button(format!("Siguiente: {}", following.title)).clicked() {
+            if ui.button(fill(tr("Siguiente: {}"), &[&tr(following.title)])).clicked() {
                 app.start_lesson(index + 1);
             }
         }
     }
-    if ui.button(format!("Más en la guía: {}", lesson.topic)).on_hover_text("Abre el tema de la guía con todos los detalles").clicked() {
+    if ui.button(fill(tr("Más en la guía: {}"), &[&lesson.topic])).on_hover_text(tr("Abre el tema de la guía con todos los detalles")).clicked() {
         app.guide.open_at(lesson.topic);
     }
 }

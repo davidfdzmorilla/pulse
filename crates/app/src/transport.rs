@@ -469,7 +469,7 @@ fn groove(app: &mut PulseApp, ui: &mut egui::Ui) {
 /// The project's key: chosen by hand, detected from its clips, or none.
 fn scale(app: &mut PulseApp, ui: &mut egui::Ui) {
     use stems::key::Key;
-    let label = app.project.key.map_or(tr("Escala").to_string(), |k| k.name());
+    let label = app.project.key.map_or(tr("Escala").to_string(), |k| crate::i18n::music(&k.name()));
     widgets::field_menu_button(ui, &label, |ui| {
         ui.set_min_width(230.0);
         if ui.button(tr("Detectar en la canción")).on_hover_text(tr("Escucha las notas MIDI y el audio con una tonalidad clara")).clicked() {
@@ -495,7 +495,7 @@ fn scale(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.label(RichText::new(if minor { tr("Menores") } else { tr("Mayores") }).color(TEXT_DIM).size(10.5));
             egui::Grid::new(("keys", minor)).spacing(vec2(2.0, 2.0)).show(ui, |ui| {
                 for (i, key) in Key::all().filter(|k| k.minor == minor).enumerate() {
-                    let name = key.name();
+                    let name = crate::i18n::music(&key.name());
                     let short = name.split(' ').next().unwrap_or(&name);
                     if ui.selectable_label(app.project.key == Some(key), short).on_hover_text(&name).clicked() {
                         app.set_key(Some(key));
@@ -574,7 +574,7 @@ fn in_app_menus(app: &mut PulseApp, ui: &mut egui::Ui) {
                                 if i == crate::templates::BUILT_IN.len() {
                                     ui.separator();
                                 }
-                                if ui.button(&template.name).clicked() {
+                                if ui.button(template.shown()).clicked() {
                                     chosen = Some(crate::commands::Command::NewFromTemplate(i));
                                     ui.close();
                                 }

@@ -9,7 +9,7 @@ use engine::model::{ArpMode, ChordParams, MidiDevice, MidiEffect, ScaleKey, MAX_
 use engine::Command;
 
 fn key_name(key: ScaleKey) -> String {
-    stems::key::Key { tonic: key.tonic, minor: key.minor }.name()
+    crate::i18n::music(&stems::key::Key { tonic: key.tonic, minor: key.minor }.name())
 }
 
 fn mode_label(mode: ArpMode) -> &'static str {

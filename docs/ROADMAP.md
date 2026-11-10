@@ -26,7 +26,7 @@ each version: [CHANGELOG](../CHANGELOG.md).
 
 | Item | State |
 |---|---|
-| English (and other languages) in the interface | In progress: **Ajustes › Idioma · Language** (Spanish or English, the system's by default). Translated so far: the menus, Settings, the welcome window, the transport bar, the browser, the Arrangement, the Session and the devices. Still in Spanish: the mix assistant, lessons, templates, factory sound and preset names, some messages. Texts live in `crates/app/src/en.rs` |
+| English (and other languages) in the interface | In progress: **Ajustes › Idioma · Language** (Spanish or English, the system's by default). Translated so far: the menus, Settings, the welcome window, the transport bar, the browser and its search, the Arrangement, the Session, the devices, the mix assistant, lessons, templates, factory presets and sounds, key and chord names. Still in Spanish: some editors and messages. Texts live in `crates/app/src/en.rs` |
 | English user guide | `docs/guia.md` is Spanish only |
 | Demo video | Not recorded yet: [DEMO_VIDEO_PLAN.md](DEMO_VIDEO_PLAN.md) |
 

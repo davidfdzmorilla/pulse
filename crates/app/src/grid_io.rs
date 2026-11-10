@@ -98,9 +98,9 @@ impl Learning {
     /// What to press next.
     pub fn prompt(&self) -> &'static str {
         match self.notes.len() {
-            0 => "Pulsa el pad de arriba a la izquierda",
-            1 => "Ahora el que tiene a su derecha",
-            _ => "Y el que tiene debajo",
+            0 => crate::i18n::tr("Pulsa el pad de arriba a la izquierda"),
+            1 => crate::i18n::tr("Ahora el que tiene a su derecha"),
+            _ => crate::i18n::tr("Y el que tiene debajo"),
         }
     }
 }

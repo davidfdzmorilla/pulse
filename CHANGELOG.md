@@ -37,8 +37,11 @@ still in `0.x`, so any release may change things.
 - Interface language: **Ajustes › Idioma · Language** chooses Spanish or
   English, following the system's language by default. Translated so far:
   the menus, Settings, the "What would you like to do?" window, the
-  transport bar, the browser, the Arrangement, the Session and the devices
-  (with their parameter names); the rest still shows in Spanish.
+  transport bar, the browser with its search and favorites, the
+  Arrangement, the Session, the devices (with their parameter names), the
+  mix and master assistant, lessons, templates, factory presets and sounds,
+  and key and chord names (with letters in English: "D minor", "Dm"); some
+  editors and messages still show in Spanish.
 
 ### Changed
 

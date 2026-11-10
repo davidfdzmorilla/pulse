@@ -42,6 +42,9 @@ still in `0.x`, so any release may change things.
   mix and master assistant, lessons, templates, factory presets and sounds,
   and key and chord names (with letters in English: "D minor", "Dm"); some
   editors and messages still show in Spanish.
+- The user guide in English (`docs/guide.md`): Help › Pulse Guide shows it
+  when the interface is in English. Both guides keep the same topics and
+  headings, and the tests check it.
 
 ### Changed
 

@@ -61,7 +61,7 @@ Delete this section if it doesn't apply.
 ## Checklist
 
 - [ ] Commits are signed off (`git commit -s`, see CONTRIBUTING.md)
-- [ ] `docs/guia.md` updated if something visible or usable in the app changed
+- [ ] `docs/guia.md` and `docs/guide.md` updated if something visible or usable in the app changed
 - [ ] `CHANGELOG.md` updated under **Unreleased** (if user-facing)
 - [ ] `python3 scripts/notices.py` run if dependencies changed
 - [ ] No `cargo fmt` over the whole repository (the code keeps its hand style)

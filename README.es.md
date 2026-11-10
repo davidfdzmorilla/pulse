@@ -40,7 +40,7 @@ stems y análisis de la mezcla. Todo corre en tu ordenador, sin conexión y sin 
 
 > **Estado: primera versión pública, en desarrollo activo.** macOS (Apple
 > Silicon) es el sistema soportado; Windows es experimental. La interfaz y la
-> guía están en español.
+> guía están en español; el inglés llega en la próxima versión.
 
 ## Sistemas
 
@@ -126,9 +126,10 @@ Detalle por función: [docs/PLATFORM_SUPPORT.md](docs/PLATFORM_SUPPORT.md). Los 
   Hay pruebas automáticas que lo cubren, también que un render offline se
   repita igual.
 
-Todo está explicado en la **guía**, [`docs/guia.md`](docs/guia.md), que la app
-muestra en Ayuda → Guía de Pulse (con buscador). Cada función nueva se añade a
-la guía en el mismo pull request.
+Todo está explicado en la **guía**, [`docs/guia.md`](docs/guia.md) (en inglés,
+[`docs/guide.md`](docs/guide.md)), que la app muestra en Ayuda → Guía de Pulse
+(con buscador), en el idioma de la interfaz. Cada función nueva se añade a la
+guía en el mismo pull request.
 
 ## Capturas
 

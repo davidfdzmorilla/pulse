@@ -205,7 +205,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
             app.capture_midi();
         }
         let bars = app.settings.count_in_bars;
-        let label = |b: u32| if b == 0 { tr("Sin cuenta").to_string() } else { fill(tr("Cuenta {} c."), &[&b]) };
+        let label = |b: u32| match b {
+            0 => tr("Sin cuenta").to_string(),
+            1 => tr("Cuenta 1 c.").to_string(),
+            b => fill(tr("Cuenta {} c."), &[&b]),
+        };
         let mut chosen = bars;
         egui::ComboBox::from_id_salt("count_in")
             .selected_text(label(bars))

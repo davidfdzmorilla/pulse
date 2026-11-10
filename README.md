@@ -25,7 +25,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
   <a href="docs/DOWNLOADS.md"><strong>Download</strong></a> ·
   <a href="#getting-started">Getting started</a> ·
   <a href="#what-you-can-do">Features</a> ·
-  <a href="docs/guia.md">Documentation</a> ·
+  <a href="docs/guide.md">Documentation</a> ·
   <a href="docs/ROADMAP.md">Roadmap</a> ·
   <a href="CONTRIBUTING.md">Contributing</a> ·
   <a href="CHANGELOG.md">Changelog</a> ·
@@ -40,7 +40,8 @@ mix analysis. They all run on your computer, offline and with no accounts.
 
 > **Status: early public release, in active development.** macOS (Apple
 > Silicon) is the supported platform. Windows builds are experimental. **The interface and the
-> in-app guide are in Spanish for now.** Help with translation is very welcome.
+> in-app guide are in Spanish; English comes in the next release** (a few
+> parts still show in Spanish). Help with translation is very welcome.
 
 ## Platform status
 
@@ -126,9 +127,10 @@ Details per feature: [English](docs/PLATFORM_SUPPORT.en.md) · [Español](docs/P
   deterministic rendering across buffer sizes and thread counts. Automated
   tests cover this behavior, including repeatability of offline renders.
 
-Everything is explained in the **guide** (in Spanish),
-[`docs/guia.md`](docs/guia.md), which the app shows under Ayuda → Guía de Pulse
-(with search). Every new feature updates the guide in the same pull request.
+Everything is explained in the **guide**, [`docs/guide.md`](docs/guide.md) (in
+Spanish, [`docs/guia.md`](docs/guia.md)), which the app shows under Help → Pulse
+Guide (with search), in the interface's language. Every new feature updates
+the guide in the same pull request.
 
 ## Screenshots
 

@@ -33,19 +33,8 @@ pub enum ToMidi {
 impl ToMidi {
     pub const ALL: [ToMidi; 6] = [ToMidi::Melody, ToMidi::MelodyFree, ToMidi::Harmony, ToMidi::Chords, ToMidi::Drums, ToMidi::Beatbox];
 
-    /// Its name for the new track and clip, kept in the project.
-    pub fn name(self) -> &'static str {
-        match self {
-            ToMidi::Melody => "Melodía",
-            ToMidi::MelodyFree => "Melodía sin ajustar",
-            ToMidi::Harmony => "Armonía",
-            ToMidi::Chords => "Acordes",
-            ToMidi::Drums => "Batería",
-            ToMidi::Beatbox => "Beatbox",
-        }
-    }
-
-    /// Its name in the interface's language.
+    /// Its name in the interface's language: in menus, and for the new track
+    /// and clip (named so when they're made, and kept).
     pub fn label(self) -> &'static str {
         match self {
             ToMidi::Melody => tr("Melodía"),
@@ -445,8 +434,8 @@ impl PulseApp {
         let count = notes.len();
         let of = |drum: crate::beatbox::Drum| notes.iter().filter(|n| n.pitch == drum.note()).count();
         let (kicks, snares, hats) = (of(crate::beatbox::Drum::Kick), of(crate::beatbox::Drum::Snare), of(crate::beatbox::Drum::Hat));
-        let midi = Clip::Midi(MidiClip { notes, ..MidiClip::new(format!("{} · {}", audio.name, mode.name()), audio.length, audio.color) });
-        let name = format!("{} · {}", audio.name, mode.name());
+        let name = format!("{} · {}", audio.name, mode.label());
+        let midi = Clip::Midi(MidiClip { notes, ..MidiClip::new(name.clone(), audio.length, audio.color) });
         let mut track = crate::project::Track::new(name, audio.color, instrument);
         match (clip, placed) {
             (ClipRef::Session { slot, .. }, _) => track.clips[slot] = Some(midi),

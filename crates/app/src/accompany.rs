@@ -4,7 +4,7 @@
 //! another take of the same part.
 
 use crate::app::{ClipRef, PulseApp};
-use crate::i18n::{fill, tr};
+use crate::i18n::{fill, named, tr};
 use engine::meter::TimeSig;
 use engine::model::{AcidParams, Clip, FmParams, InstrumentKind, MidiClip, Note, SuperSawParams, SynthParams};
 use engine::{Target, MAX_TRACKS};
@@ -41,7 +41,8 @@ pub enum Part {
 impl Part {
     pub const ALL: [Part; 10] = [Part::BassRoot, Part::BassOctaves, Part::BassOffbeat, Part::BassWalking, Part::BassRolling, Part::BassGallop, Part::ArpUp, Part::ArpUpDown, Part::Pad, Part::Stabs];
 
-    /// Its clip's name, kept in the project (and so in Spanish).
+    /// Its clip's name in Spanish: what a clip made in Spanish (and every
+    /// one before the names followed the language) is called.
     pub fn name(self) -> &'static str {
         match self {
             Part::BassRoot => "Bajo: raíz",
@@ -63,7 +64,8 @@ impl Part {
         }
     }
 
-    /// Its name as menus and messages show it, in the interface's language.
+    /// Its name as menus and messages show it, in the interface's language;
+    /// also its new clip's, named so when it's made.
     pub fn label(self) -> &'static str {
         match self {
             Part::BassRoot => tr("Bajo: raíz"),
@@ -185,15 +187,16 @@ impl Part {
         if PALETTE[index] == chords { PALETTE[(index + 1) % PALETTE.len()] } else { PALETTE[index] }
     }
 
-    /// The name of the track it is written on.
+    /// The name of the track it is written on, in the interface's language
+    /// when it's made.
     pub(crate) fn short(self) -> &'static str {
         match self {
-            Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => "Bajo",
-            Part::BassRolling | Part::BassGallop => "Bajo",
-            Part::ArpUp | Part::ArpUpDown => "Arpegio",
+            Part::BassRoot | Part::BassOctaves | Part::BassOffbeat | Part::BassWalking => named("Bajo"),
+            Part::BassRolling | Part::BassGallop => named("Bajo"),
+            Part::ArpUp | Part::ArpUpDown => named("Arpegio"),
             Part::Pad => "Pad",
-            Part::Stabs => "Acordes",
-            Part::Melody(_) => "Melodía",
+            Part::Stabs => named("Acordes"),
+            Part::Melody(_) => named("Melodía"),
         }
     }
 }
@@ -637,7 +640,7 @@ impl PulseApp {
         // A new track takes its role's color; a template's, its own.
         let color = existing.map_or_else(|| part.color(self.clip(clip).map_or(self.project.tracks[source].color, |c| c.color())), |t| self.project.tracks[t].color);
         // The clip says what it plays: «Bajo: contratiempo», «Pad».
-        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.name(), length, color) });
+        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.label(), length, color) });
         let placed = match clip {
             ClipRef::Session { .. } => None,
             ClipRef::Arrangement { track: t, index } => match self.project.tracks[t].arrangement.get(index) {
@@ -703,7 +706,7 @@ impl PulseApp {
         let key = matches!(part, Part::Melody(_)).then(|| crate::melody::key_for(&chords, self.project.key));
         let notes = write(part, &chords, length, seed, sig, key);
         let color = existing.map_or_else(|| part.color([0; 3]), |t| self.project.tracks[t].color);
-        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.name(), length, color) });
+        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.label(), length, color) });
         let (index, instrument) = match existing {
             Some(t) => (t, None),
             None => {
@@ -773,8 +776,11 @@ impl PulseApp {
             self.set_instrument(t, lead);
         }
         if let Some(Clip::Midi(m)) = self.clip_mut(clip) {
+            // In the language it was named in.
             if m.name == old.name() {
                 m.name = Part::Melody(melody).name().to_string();
+            } else if m.name == old.label() {
+                m.name = Part::Melody(melody).label().to_string();
             }
         }
         self.rewrite_accompaniment();

@@ -8,7 +8,7 @@
 //! Arrangement (⌘Z brings it back).
 
 use crate::app::PulseApp;
-use crate::i18n::{fill, tr};
+use crate::i18n::{fill, named, tr};
 use crate::project::{Project, Track};
 use crate::theme::{ACCENT, TEXT_DIM};
 use eframe::egui::{self, RichText};
@@ -58,7 +58,7 @@ pub fn role(track: &Track) -> Role {
     if track.is_drums() && track.melodic {
         return if has(&track.name, &["bass", "bajo", "sub", "808"]) {
             Role::Bass
-        } else if has(&track.name, &["lead", "melod", "vox", "voz", "vocal", "solo"]) {
+        } else if has(&track.name, &["lead", "melod", "vox", "voz", "vocal", "voice", "solo"]) {
             Role::Lead
         } else {
             Role::Harmony
@@ -79,14 +79,15 @@ pub fn role(track: &Track) -> Role {
         if says(&["bass", "bajo", "sub"]) {
             return Role::Bass;
         }
-        if says(&["lead", "melod", "vox", "voz", "vocal"]) {
+        if says(&["lead", "melod", "vox", "voz", "vocal", "voice"]) {
             return Role::Lead;
         }
     }
     if matches!(track.instrument, InstrumentKind::Acid(_)) || has(&track.name, &["bass", "bajo", "sub"]) {
         return Role::Bass;
     }
-    if has(&track.name, &["lead", "melod", "vox", "voz", "vocal", "solo"]) {
+    // Backing vocals («Backing vocals», as «Coros») aren't the lead.
+    if has(&track.name, &["lead", "melod", "vox", "voz", "vocal", "voice", "solo"]) && !has(&track.name, &["backing"]) {
         return Role::Lead;
     }
     // MIDI notes: low ones are a bass; one at a time, a lead; together, harmony.
@@ -310,7 +311,7 @@ fn snare(track: &Track, sig: engine::meter::TimeSig) -> u8 {
 
 /// A bar's snare roll, `bar` beats long: eighths, then sixteenths, getting louder.
 fn roll(pitch: u8, color: [u8; 3], bar: f64) -> MidiClip {
-    let mut clip = MidiClip::new("Redoble", bar, color);
+    let mut clip = MidiClip::new(named("Redoble"), bar, color);
     let mut beat = 0.0;
     while beat < bar - 1e-9 {
         let step = if beat < bar / 2.0 { 0.5 } else { 0.25 };
@@ -382,7 +383,7 @@ pub fn lay_out_project(project: &mut Project, sections: &[Section]) {
         // Its bars in the song's meter, and the last one's length (for the roll).
         let length = meter.add_bars(start, section.bars as i64) - start;
         let last_bar = meter.bar_length_at(meter.add_bars(start, section.bars as i64 - 1));
-        project.markers.push(crate::project::SongMarker { beat: start, name: section.name.clone() });
+        project.markers.push(crate::project::SongMarker { beat: start, name: marker_name(&section.name).to_string() });
         // A cut: the last beat silent, before what comes next.
         let cut = if section.cut && k + 1 < sections.len() { 1.0 } else { 0.0 };
         // A build's last bar is the roll alone: the kick and the other
@@ -403,7 +404,7 @@ pub fn lay_out_project(project: &mut Project, sections: &[Section]) {
                     Clip::Midi(m) if trap => {
                         let kit = crate::drum_gen::Kit::from_rows(&track.drum_rows());
                         let (notes, rolled) = crate::drum_gen::hat_turnaround(&bar_of(m, length - last_bar, last_bar), &kit, last_bar);
-                        let name = if rolled { "Redoble de charles" } else { "Hueco" };
+                        let name = if rolled { named("Redoble de charles") } else { named("Hueco") };
                         MidiClip { notes, groove: m.groove.clone(), ..MidiClip::new(name, last_bar, track.color) }
                     }
                     _ => roll(snare(track, meter.first()), track.color, last_bar),
@@ -438,8 +439,22 @@ impl PulseApp {
     }
 }
 
-/// A section's name as the window shows it: the names stay Spanish in the
-/// project (they become its markers).
+/// The marker a section leaves on the song: its name in the interface's
+/// language when it's laid out («Subida» a Build, «Estribillo» a Chorus),
+/// kept so afterwards. A section's own name stays the Spanish one (the key
+/// its scene is found by).
+pub fn marker_name(section: &str) -> &str {
+    match section {
+        "Subida" => named("Subida"),
+        "Estrofa" => named("Estrofa"),
+        "Estribillo" => named("Estribillo"),
+        "Puente" => named("Puente"),
+        "Final" => named("Final"),
+        _ => section,
+    }
+}
+
+/// A section's name as the window shows it (its key stays Spanish).
 fn section_shown(name: &str) -> &str {
     match name {
         "Subida" => tr("Subida hacia el drop"),
@@ -817,8 +832,8 @@ mod tests {
     }
 
     /// In English the window, and the generators' and voice tools' texts,
-    /// speak English; what the project keeps (section and part names) stays
-    /// Spanish.
+    /// speak English; the sections keep their Spanish keys, and what laying
+    /// them out makes (markers, rolls) is named in English.
     #[test]
     fn the_generators_speak_english() {
         crate::i18n::with(crate::i18n::Language::English, || {
@@ -844,16 +859,22 @@ mod tests {
             }
             assert!(texts.iter().any(|t| t.starts_with("Create")), "{texts:?}");
             assert!(!texts.iter().any(|t| t == "Estribillo" || t.contains("Redoble")), "{texts:?}");
-            assert_eq!(app.arrange.sections[1].name, "Estrofa", "the project keeps the Spanish");
+            assert_eq!(app.arrange.sections[1].name, "Estrofa", "the section's key stays Spanish");
+            let sections = app.arrange.sections.clone();
+            app.lay_out(&sections);
+            let markers: Vec<&str> = app.project.markers.iter().map(|m| m.name.as_str()).collect();
+            assert_eq!(markers, ["Intro", "Verse", "Chorus", "Verse", "Chorus", "Bridge", "Chorus", "Ending"]);
+            assert!(app.project.tracks.iter().flat_map(|t| &t.arrangement).any(|c| c.clip.name() == "Roll"));
+            assert!(!app.project.tracks.iter().flat_map(|t| &t.arrangement).any(|c| c.clip.name() == "Redoble"));
 
             use engine::follow::{Follow, FollowKind};
             let next = Follow { a: FollowKind::Next, count: 2, ..Default::default() };
             assert_eq!(crate::follow_ui::summary(&next), "Next after 2 loops");
             assert_eq!(crate::follow_ui::summary(&Follow::default()), "No follow action");
             let bass = crate::accompany::Part::BassWalking;
-            assert_eq!((bass.label(), bass.name()), ("Bass: walking", "Bajo: caminante"));
+            assert_eq!((bass.label(), bass.name()), ("Bass: walking", "Bajo: caminante"), "the Spanish name finds the clips old projects have");
             assert!(bass.hint().starts_with("One note per beat"));
-            assert_eq!((crate::to_midi::ToMidi::Chords.label(), crate::to_midi::ToMidi::Chords.name()), ("Chords", "Acordes"));
+            assert_eq!(crate::to_midi::ToMidi::Chords.label(), "Chords");
             assert_eq!(crate::drum_gen::Level::Intense.label(), "Intense");
             assert_eq!(crate::beatbox::Drum::Kick.sound(), "\"boom\"");
             assert_eq!(crate::lyrics_ui::Language::Spanish.label(), "Spanish");

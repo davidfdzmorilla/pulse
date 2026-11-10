@@ -113,9 +113,32 @@ pub fn tr(spanish: &'static str) -> &'static str {
     }
 }
 
+/// A name Pulse gives what it makes (a track, a clip, a marker, a return) in
+/// the interface's language when it's made: kept so in the project, it never
+/// changes with the language afterwards. It's `tr`'s English, unless the word
+/// as a name is another one (`en::NAMES`: «Subida» is a Riser in the
+/// transitions menu but a Build as a section).
+pub fn named(spanish: &'static str) -> &'static str {
+    match current() {
+        Language::Spanish => spanish,
+        Language::English => english_name(spanish),
+    }
+}
+
+/// Whether `name` is the one Pulse gives as `spanish`, made in either
+/// language («Voz», «Vocals»): what finds them again, in old projects and new.
+pub fn is_named(name: &str, spanish: &'static str) -> bool {
+    name == spanish || name == english_name(spanish)
+}
+
+fn english_name(spanish: &'static str) -> &'static str {
+    crate::en::NAMES.iter().find(|(es, _)| *es == spanish).map(|(_, en)| *en).or_else(|| english().get(spanish).copied()).unwrap_or(spanish)
+}
+
 /// A key's or chord's name («Re menor», «Lam7», «Sib/Re», «Rem Sib Fa Do»), as
 /// the interface writes it: in English, with letters («D minor», «Am7», «Bb/D»).
-/// The names Pulse keeps stay in Spanish; this is only for showing them.
+/// What a project keeps stays as it is (a key is kept in Spanish); this is
+/// for showing it, and for naming a new clip after its chords (see `example`).
 pub fn music(name: &str) -> String {
     if current() == Language::Spanish {
         return name.to_string();
@@ -239,6 +262,19 @@ mod tests {
             assert_eq!(tr_name("Bombo house"), "House kick");
             assert_eq!(tr_name("Mi bombo · raro"), "Mi bombo · raro");
         });
+    }
+
+    #[test]
+    fn names_are_given_in_the_language_of_the_moment() {
+        assert_eq!((named("Bajo"), named("Voz")), ("Bajo", "Voz"));
+        with(Language::English, || {
+            // A name's own English where the interface's word is another.
+            assert_eq!((named("Bajo"), named("Voz")), ("Bass", "Vocals"));
+            assert_eq!((tr("Voz"), tr("Subida"), named("Subida")), ("Voice", "Riser", "Build"));
+        });
+        for language in Language::ALL {
+            with(language, || assert!(is_named("Voz", "Voz") && is_named("Vocals", "Voz") && !is_named("Voice", "Voz")));
+        }
     }
 
     #[test]

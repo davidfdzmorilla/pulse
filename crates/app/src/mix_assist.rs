@@ -1065,7 +1065,7 @@ pub fn role_hint(name: &str, instrument: &InstrumentKind, drums: bool) -> Option
     let has = |keys: &[&str]| words.iter().any(|w| keys.iter().any(|k| w.starts_with(k)));
     // The most telling first: «Kick Rumble» is low end, «Voz FX» an effect.
     let by_name = [
-        (Role::Fx, &["fx", "riser", "sweep", "impact", "efecto", "noise", "ruido", "transici"][..]),
+        (Role::Fx, &["fx", "riser", "sweep", "impact", "efecto", "noise", "ruido", "transici", "transit"][..]),
         (Role::Backing, &["coro", "backing", "bvs", "dobl"]),
         (Role::Vocal, &["voz", "voces", "vocal", "vox", "voice", "cant"]),
         (Role::Bass, &["bass", "bajo", "sub", "808", "rumble"]),

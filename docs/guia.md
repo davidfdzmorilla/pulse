@@ -56,7 +56,7 @@ Si cambias de proyecto con cambios sin guardar, Pulse pregunta antes. Para que n
 - **Arrangement**: la canción montada, de dos minutos y medio: intro, subida, drop, break con la voz, subida, drop y outro, con subidas e impactos en la pista **Transiciones**.
 - **Acordes y acompañamiento**: los acordes (Rem Sib Fa Do) están en **Acordes**; el bajo rodante, el pad y la melodía los escribió [[Acompañamiento|Acompañar]] a partir de ellos.
 - **Automatización**: el filtro del pad se abre en cada subida, y la melodía lleva brillo y pitch bend en el clip.
-- **Voz con letra**: la pista **Voz** canta en el break, con su letra (ver [[Letras]]).
+- **Voz con letra**: la pista **Voz** canta en el break, en castellano, con su letra (ver [[Letras]]).
 - **Mezcla**: un grupo de batería con compresor de bus, retornos de espacio y delay, y el master con compresor y limitador. Pruébala con el [[Asistente de mezcla y master]].
 
 Lo que cambies no toca el original: al guardar, {⌘S} te pregunta dónde. Para volver a tenerla tal cual, **Archivo › ¿Qué quieres hacer?… › Escuchar el ejemplo**.
@@ -932,7 +932,7 @@ Efectos para los cambios de sección (subidas, bajadas, impactos), hechos a la m
 
 ### Dónde quedan
 
-- Cada transición es un clip de audio a tu tempo en una pista **Transiciones**, que se crea la primera vez; las siguientes van a ella.
+- Cada transición es un clip de audio a tu tempo en una pista **Transiciones**, que se crea la primera vez; las siguientes van a ella (también a una pista **Transitions**, de un proyecto hecho en inglés).
 - Si cambias el tempo, la transición lo sigue.
 - Los archivos van a `Samples/Transiciones` dentro del proyecto.
 - El [[Asistente de mezcla y master]] trata esa pista como efectos: no la comprime ni la mezcla como un bajo.
@@ -1482,7 +1482,7 @@ Pulse toca contigo: a partir de un clip con acordes (o de la [[Pista de acordes]
 
 ¿En qué pista?
 
-- Si hay una **pista vacía de su papel** (la **Bajo** de una plantilla, una «Pad», «Arpegio» o «Acordes»), en esa, con su sonido.
+- Si hay una **pista vacía de su papel** (la **Bajo** de una plantilla, una «Pad», «Arpegio» o «Acordes», o con sus nombres en inglés), en esa, con su sonido.
 - Si no, en una pista nueva justo debajo, que se llama como la parte: **Bajo**, **Pad**, **Arpegio** o **Acordes** (o **Bajo 2** si ya hay otra).
 
 El clip se llama como lo que toca («Bajo: contratiempo»). Una pista nueva llega con un instrumento que le va: Acid para los bajos, FM para los arpegios y SuperSaw para el pad. Cámbialo como cualquier otro.
@@ -3512,7 +3512,7 @@ Dónde elegir el idioma, la tarjeta de sonido, los dispositivos MIDI, las carpet
 
 **Idioma · Language** elige entre castellano e inglés. Por defecto, **Como el sistema**: castellano si tu sistema está en castellano, inglés si está en cualquier otro idioma. El cambio se ve al momento, también en la barra de menús.
 
-Toda la interfaz está traducida al inglés: menús, ventanas, editores, dispositivos, mensajes y los presets, kits y sonidos de Pulse, y los nombres de las escalas y los acordes, que en inglés salen con letras («D minor», «Dm», «Bb/D»). Lo que guardas no cambia con el idioma: un proyecto, sus acordes y los nombres de sus pistas y clips (los tuyos, y los que Pulse da a las pistas que crean sus plantillas y la canción de ejemplo) se abren igual en castellano y en inglés. Esta guía también sale en el idioma de la interfaz.
+Toda la interfaz está traducida al inglés: menús, ventanas, editores, dispositivos, mensajes y los presets, kits y sonidos de Pulse, y los nombres de las escalas y los acordes, que en inglés salen con letras («D minor», «Dm», «Bb/D»). Los nombres que Pulse da a lo que crea (las pistas, clips, marcadores y retornos de sus plantillas, la canción de ejemplo, el arreglo automático, Acompañar, Audio a MIDI y las transiciones) salen en el idioma de la interfaz al crearlos: «Bajo», «Voz», «Estribillo». Después, lo que guardas no cambia con el idioma: un proyecto, sus acordes y los nombres de sus pistas y clips (los tuyos, y los que les dio Pulse) se abren igual en castellano y en inglés, así que un proyecto hecho en inglés conserva «Bass» en castellano, y uno hecho en castellano, «Bajo». El título y la letra de la canción de ejemplo son siempre en castellano, como los canta su voz. Esta guía también sale en el idioma de la interfaz.
 
 ### Audio
 

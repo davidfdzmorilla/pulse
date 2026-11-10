@@ -32,8 +32,8 @@ fn arrange(app: &mut PulseApp, voice_beats: f64) {
     let sections = crate::arrange::plan(&app.project.tracks, &app.project.scene_names, crate::arrange::Template::Electronic);
     app.lay_out(&sections);
     let markers = app.project.markers.clone();
-    let at = |name: &str| markers.iter().filter(|m| m.name == name).map(|m| m.beat).collect::<Vec<_>>();
-    let vocal = app.project.tracks.iter().position(|t| t.name == "Voz").unwrap();
+    let at = |section: &str| markers.iter().filter(|m| m.name == crate::arrange::marker_name(section)).map(|m| m.beat).collect::<Vec<_>>();
+    let vocal = app.project.tracks.iter().position(|t| crate::i18n::is_named(&t.name, "Voz")).unwrap();
     let clip = app.project.tracks[vocal].clips[BREAK].clone().unwrap();
     app.project.tracks[vocal].arrangement = at("Break").into_iter().chain(at("Drop").into_iter().skip(1)).map(|start| ArrangementClip { start, length: voice_beats, clip: clip.clone() }).collect();
     for drop in at("Drop") {
@@ -96,7 +96,7 @@ fn readme_shots() {
     // 2. The Session, with the mixer and the returns.
     s.app.show_browser = true;
     s.app.view = View::Session;
-    let vocal = s.app.project.tracks.iter().position(|t| t.name == "Voz").unwrap();
+    let vocal = s.app.project.tracks.iter().position(|t| crate::i18n::is_named(&t.name, "Voz")).unwrap();
     s.app.selected_target = engine::Target::Track(vocal);
     s.frames(10);
     panel_to(&mut s, 600.0);
@@ -104,7 +104,7 @@ fn readme_shots() {
     save(&mut s, "session");
 
     // 3. The piano roll: the melody and its brightness.
-    let lead = s.app.project.tracks.iter().position(|t| t.name == "Melodía").unwrap();
+    let lead = s.app.project.tracks.iter().position(|t| crate::i18n::is_named(&t.name, "Melodía")).unwrap();
     s.app.select_clip(ClipRef::Session { track: lead, slot: DROP });
     s.app.detail = Detail::Clip;
     s.app.piano_roll.lane.show_control(MidiControl::Cc(74));

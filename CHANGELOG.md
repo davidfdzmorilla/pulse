@@ -39,6 +39,11 @@ still in `0.x`, so any release may change things.
   is translated: menus, windows, editors, devices, instruments, messages,
   Pulse's presets, kits and sounds, and key and chord names (with letters in
   English: "D minor", "Dm"). Projects open the same in both languages.
+- Names Pulse gives what it creates (the tracks, clips, markers and returns
+  of the example song and the templates, and of Auto-Arrange, Accompany,
+  Audio to MIDI and transitions) follow the interface's language when they
+  are created ("Bass", "Vocals", "Chorus" in English) and are kept as saved
+  afterwards. Projects made in Spanish keep their Spanish names.
 - The user guide in English (`docs/guide.md`): Help › Pulse Guide shows it
   when the interface is in English. Both guides keep the same topics and
   headings, and the tests check it.

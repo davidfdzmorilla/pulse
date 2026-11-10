@@ -55,10 +55,10 @@ If you switch projects with unsaved changes, Pulse asks first. To stop it appear
 "Luces de la ciudad" ("City Lights") is a short melodic techno track in D minor, at 122 BPM, made only with Pulse's own sounds. It's there to hear what Pulse can do and to take apart:
 
 - **Session**: three scenes, **Intro**, **Drop** and **Break**, to launch and mix as you like.
-- **Arrangement**: the finished song, two and a half minutes long: intro, build-up, drop, break with the vocal, build-up, drop and outro, with risers and impacts on the **Transiciones** track.
-- **Chords and accompaniment**: the chords (Dm B♭ F C) are on **Acordes**; the rolling bass, the pad and the melody were written from them by [[Accompaniment|Accompany]].
+- **Arrangement**: the finished song, two and a half minutes long: intro, build-up, drop, break with the vocal, build-up, drop and outro, with risers and impacts on the **Transitions** track.
+- **Chords and accompaniment**: the chords (Dm B♭ F C) are on **Chords**; the rolling bass, the pad and the melody were written from them by [[Accompaniment|Accompany]].
 - **Automation**: the pad's filter opens on every build-up, and the melody has brightness and pitch bend in the clip.
-- **Vocal with lyrics**: the **Voz** track sings in the break, with its lyrics (see [[Lyrics]]).
+- **Vocal with lyrics**: the **Vocals** track sings in the break, in Spanish, with its lyrics (see [[Lyrics]]).
 - **Mix**: a drum group with bus compressor, space and delay returns, and the master with compressor and limiter. Try it with the [[Mix and Master Assistant]].
 
 Whatever you change doesn't touch the original: when you save, {⌘S} asks you where. To get it back exactly as it was, use **File › What Would You Like to Do?… › Listen to the example**.
@@ -933,7 +933,7 @@ Effects for section changes (risers, downlifters, impacts), made to fit your son
 
 ### Where they go
 
-- Each transition is an audio clip in your tempo on a **Transiciones** ("Transitions") track, which is created the first time; later ones go to it.
+- Each transition is an audio clip in your tempo on a **Transitions** track, which is created the first time; later ones go to it (also to a **Transiciones** track, from a project made in Spanish).
 - If you change the tempo, the transition follows it.
 - The files go to `Samples/Transiciones` inside the project.
 - The [[Mix and Master Assistant]] treats that track as effects: it doesn't compress or mix it like a bass.
@@ -1447,7 +1447,7 @@ Names follow the project's key (**Bb** in F major, **A#** in B major) and, if th
 
 ### Making the song follow them
 
-**Accompany**: right-click the strip → **Accompany the whole song** (or **Accompany "Estribillo"**, the section between that marker and the next) → a part. It writes a bass, an arpeggio, a pad, rhythmic chords or a melody in a clip of that length, on the empty track for its role or on a new one at the end (see [[Accompaniment]]). If you change chords later, **Another variation** in the editor rewrites it with the new ones.
+**Accompany**: right-click the strip → **Accompany the whole song** (or **Accompany "Chorus"**, the section between that marker and the next) → a part. It writes a bass, an arpeggio, a pad, rhythmic chords or a melody in a clip of that length, on the empty track for its role or on a new one at the end (see [[Accompaniment]]). If you change chords later, **Another variation** in the editor rewrites it with the new ones.
 
 **Tracks that follow the chords**: right-click a MIDI track's header → **Follow the chord track** and a mode. Its notes don't change: what you hear changes, bar by bar, even if the clip is a one-bar loop.
 
@@ -1482,10 +1482,10 @@ Pulse plays along with you: from a clip with chords (or from the [[Chord track]]
 
 Which track does it go on?
 
-- If there's an **empty track for its role** (a template's **Bajo** track, or a "Pad", "Arpegio" or "Acordes" track), on that one, with its sound.
-- If not, on a new track right below, named after the part: **Bajo** (bass), **Pad**, **Arpegio** (arpeggio) or **Acordes** (chords) (or **Bajo 2** if there's already one).
+- If there's an **empty track for its role** (a template's **Bass** track, or a "Pad", "Arpeggio" or "Chords" track, or their Spanish names), on that one, with its sound.
+- If not, on a new track right below, named after the part: **Bass**, **Pad**, **Arpeggio** or **Chords** (or **Bass 2** if there's already one).
 
-The clip is named after what it plays ("Bajo: contratiempo"). A new track comes with an instrument that suits it: Acid for basslines, FM for arpeggios and SuperSaw for the pad. Change it like any other.
+The clip is named after what it plays ("Bass: offbeat"). A new track comes with an instrument that suits it: Acid for basslines, FM for arpeggios and SuperSaw for the pad. Change it like any other.
 
 > Tip: to make the bass or pad pump with the kick, right-click its header and choose **Sidechain from the kick** (see [[Devices and effects#Sidechain from the kick, in one click]]).
 
@@ -1509,7 +1509,7 @@ It comes in at the fader level of the chords' track (the arpeggio and the pad 1.
 
 ### Melody
 
-The last four parts of **Accompany** write the main melody: the lead, the hook or the topline. They go to the empty **Melodía** (or **Lead**) track if there is one; if not, to a new **Melodía** track with a factory lead that suits the style, 3 dB below the chords.
+The last four parts of **Accompany** write the main melody: the lead, the hook or the topline. They go to the empty **Melody** (or **Lead**) track if there is one; if not, to a new **Melody** track with a factory lead that suits the style, 3 dB below the chords.
 
 | Style | What it plays | Default sound |
 |---|---|---|
@@ -3509,7 +3509,7 @@ Where you choose the language, the sound card, MIDI devices, plugin folders and 
 
 **Idioma · Language** chooses between Spanish and English. By default it's **Same as the system**: Spanish if your system is in Spanish, English if it's in any other language. The change shows immediately, in the menu bar too.
 
-The whole interface is in English: menus, windows, editors, devices, messages and Pulse's own presets, kits and sounds, and the names of scales and chords, which in English use letters ("D minor", "Dm", "Bb/D"). What you save doesn't change with the language: a project, its chords and the names of its tracks and clips (yours, and the ones Pulse gives the tracks its templates and the example song create) open the same in Spanish and in English. This guide is shown in the interface's language (English or Spanish).
+The whole interface is in English: menus, windows, editors, devices, messages and Pulse's own presets, kits and sounds, and the names of scales and chords, which in English use letters ("D minor", "Dm", "Bb/D"). The names Pulse gives what it creates (the tracks, clips, markers and returns of its templates, the example song, Auto-Arrange, Accompany, Audio to MIDI and transitions) are in the interface's language when they're created: "Bass", "Vocals", "Chorus". After that, what you save doesn't change with the language: a project, its chords and the names of its tracks and clips (yours, and the ones Pulse gave them) open the same in Spanish and in English, so a project made in English keeps "Bass" in Spanish, and one made in Spanish keeps "Bajo". The example song's title and lyrics are always Spanish, as its voice sings them. This guide is shown in the interface's language (English or Spanish).
 
 ### Audio
 

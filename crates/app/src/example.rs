@@ -6,6 +6,9 @@
 //! arrangement with sections, transitions and automation.
 //!
 //! Everything is made in code with fixed seeds: the same song every time.
+//! Its tracks, clips, markers and returns are named in the interface's
+//! language when it's made (a project keeps them so); its title and lyrics
+//! are the song's, in Spanish, as the voice sings them.
 //! What it plays (the voice, the transitions) is written once into a folder
 //! of its own in the data folder; the kits are Pulse's sounds (see
 //! `factory_sounds`).
@@ -13,12 +16,13 @@
 use crate::accompany::Part;
 use crate::lyrics::{LyricLine, Lyrics};
 use crate::melody::Melody;
-use crate::i18n::{fill, tr};
+use crate::i18n::{fill, is_named, music, named, tr};
 use crate::project::{Project, Track, PALETTE};
 use engine::model::{ArrangementClip, AudioClip, AutoFilterParams, AutomationLane, AutomationPoint, Clip, ControlLane, Device, Effect, InstrumentKind, MidiClip, MidiControl, Note, Param, WarpMode};
 use std::path::{Path, PathBuf};
 
-/// Its name, for the window's title and the status bar.
+/// Its name, for the window's title and the status bar: the song's title, in
+/// Spanish as its lyrics.
 pub const NAME: &str = "Luces de la ciudad";
 /// Bumped when the files it plays change: made anew in a folder of its own.
 const VERSION: &str = "v1";
@@ -262,36 +266,36 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
     let sig = p.meter.first();
 
     // Drums: a group with the Techno and Minimal kits.
-    let mut group = Track::new_group("Batería", color(1));
+    let mut group = Track::new_group(named("Batería"), color(1));
     group.devices.push(Device::new(effect(Effect::Glue(Default::default()), "Bus de batería")));
     group.devices.push(Device::new(effect(Effect::Convolution(Default::default()), "Batería · Habitación")));
     group.mixer.gain = 0.55;
-    let (mut kick, pattern) = kit_track("Bombo y charles", "Techno", color(1))?;
+    let (mut kick, pattern) = kit_track(named("Bombo y charles"), "Techno", color(1))?;
     kick.depth = 1;
-    kick.clips[INTRO] = Some(drum_clip("Bombo y charles", color(1), &pattern, &[36, 42]));
-    kick.clips[DROP] = Some(drum_clip("Bombo y palmas", color(1), &pattern, &[36, 39, 42, 46]));
-    let (mut perc, perc_pattern) = kit_track("Percusión", "Minimal", color(2))?;
+    kick.clips[INTRO] = Some(drum_clip(named("Bombo y charles"), color(1), &pattern, &[36, 42]));
+    kick.clips[DROP] = Some(drum_clip(named("Bombo y palmas"), color(1), &pattern, &[36, 39, 42, 46]));
+    let (mut perc, perc_pattern) = kit_track(named("Percusión"), "Minimal", color(2))?;
     perc.depth = 1;
     perc.mixer.gain = 0.6;
     perc.sends[1] = 0.12;
     let percussion: Vec<u8> = perc_pattern.iter().map(|n| n.1).filter(|p| ![36, 38, 39, 40].contains(p)).collect();
-    perc.clips[DROP] = Some(drum_clip("Percusión", color(2), &perc_pattern, &percussion));
+    perc.clips[DROP] = Some(drum_clip(named("Percusión"), color(2), &perc_pattern, &percussion));
 
     // Chords, and what «Acompañar» writes from them.
     let chord_color = color(6);
     let chords = chord_notes();
     let found: Vec<_> = crate::harmony::chords(&chords, BARS, Some(KEY), sig).into_iter().filter_map(|(a, b, c)| c.map(|c| (a, b, c))).collect();
-    let mut keys = Track::new("Acordes", chord_color, instrument(InstrumentKind::Wavetable(Default::default()), "Teclas · Acordes future"));
+    let mut keys = Track::new(named("Acordes"), chord_color, instrument(InstrumentKind::Wavetable(Default::default()), "Teclas · Acordes future"));
     keys.mixer.gain = 0.34;
     keys.sends[0] = 0.25;
     keys.devices.push(Device::new(effect(Effect::Multiband(Default::default()), "OTT suave")));
     for scene in [INTRO, DROP, BREAK] {
-        keys.clips[scene] = Some(midi("Rem Sib Fa Do", chord_color, chords.clone()));
+        keys.clips[scene] = Some(midi(&music("Rem Sib Fa Do"), chord_color, chords.clone()));
     }
 
-    let mut bass = Track::new("Bajo", color(9), Part::BassRolling.instrument());
+    let mut bass = Track::new(named("Bajo"), color(9), Part::BassRolling.instrument());
     bass.mixer.gain = 0.4;
-    bass.clips[DROP] = Some(midi(Part::BassRolling.name(), color(9), crate::accompany::generate(Part::BassRolling, &found, BARS, SEED, sig)));
+    bass.clips[DROP] = Some(midi(Part::BassRolling.label(), color(9), crate::accompany::generate(Part::BassRolling, &found, BARS, SEED, sig)));
 
     let mut pad = Track::new("Pad", color(11), instrument(InstrumentKind::Wavetable(Default::default()), "Pad · Analógico cálido"));
     pad.mixer.gain = 0.3;
@@ -305,10 +309,10 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
     let melody = Melody::new(crate::melody::Style::Topline);
     let key = crate::melody::key_for(&found, Some(KEY));
     let tune = crate::melody::generate(melody, &found, BARS, SEED, sig, Some(key));
-    let mut lead = Track::new("Melodía", color(7), Part::Melody(melody).instrument());
+    let mut lead = Track::new(named("Melodía"), color(7), Part::Melody(melody).instrument());
     lead.mixer.gain = 0.45;
     lead.sends[..2].copy_from_slice(&[0.2, 0.3]);
-    let mut hook = MidiClip { notes: tune, ..MidiClip::new(Part::Melody(melody).name(), BARS, color(7)) };
+    let mut hook = MidiClip { notes: tune, ..MidiClip::new(Part::Melody(melody).label(), BARS, color(7)) };
     // Played with expression: the brightness opening along the phrase, a bend into the last note.
     let point = |beat: f64, value: f32, curve: f32| AutomationPoint { beat, value, curve };
     hook.controls.push(ControlLane { control: MidiControl::Cc(74), points: vec![point(0.0, 0.25, 0.0), point(4.0, 0.4, -0.5), point(11.5, 0.9, 0.0), point(12.0, 0.6, 0.4), point(16.0, 0.95, 0.0)] });
@@ -319,13 +323,13 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
     // The voice, sung over the break.
     sing(voice)?;
     let (seconds, lines) = phrase_times();
-    let mut vocal = Track::new_audio("Voz", color(0));
+    let mut vocal = Track::new_audio(named("Voz"), color(0));
     vocal.mixer.gain = 0.5;
     vocal.sends[..2].copy_from_slice(&[0.3, 0.22]);
     vocal.devices.push(Device::new(Effect::Eq3(engine::model::Eq3Params { low_db: -6.0, high_db: 2.0, low_freq: 150.0, ..Default::default() })));
     vocal.devices.push(Device::new(Effect::Compressor(engine::model::CompressorParams { threshold_db: -20.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 4.0, sidechain: None })));
     let beats = seconds * TEMPO / 60.0;
-    vocal.clips[BREAK] = Some(audio_clip("Voz principal", color(0), voice, beats, WarpMode::Off));
+    vocal.clips[BREAK] = Some(audio_clip(named("Voz principal"), color(0), voice, beats, WarpMode::Off));
 
     p.tracks = vec![group, kick, perc, bass, keys, pad, lead, vocal];
     crate::groups::normalize(&mut p.tracks);
@@ -335,7 +339,7 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
     if let Effect::Convolution(c) = &mut space {
         c.mix = 1.0;
     }
-    p.returns[0].name = "A Espacio".into();
+    p.returns[0].name = named("A Espacio").into();
     p.returns[0].devices = vec![Device::new(space)];
     p.returns[1].name = "B Delay".into();
     p.returns[1].devices = vec![Device::new(Effect::Delay(engine::model::DelayParams { time_beats: 0.75, feedback: 0.45, mix: 1.0, ..Default::default() }))];
@@ -385,10 +389,11 @@ fn arrange(p: &mut Project, voice_beats: f64, dir: &Path) -> Result<(), String> 
     }
     crate::arrange::lay_out_project(p, &sections);
     let markers = p.markers.clone();
-    let at = |name: &str| markers.iter().filter(|m| m.name == name).map(|m| m.beat).collect::<Vec<_>>();
+    // A section's markers, named as `arrange` names them now.
+    let at = |section: &str| markers.iter().filter(|m| m.name == crate::arrange::marker_name(section)).map(|m| m.beat).collect::<Vec<_>>();
     let length = |start: f64| markers.iter().map(|m| m.beat).find(|&b| b > start).unwrap_or(p.loop_end) - start;
 
-    let vocal = p.tracks.iter().position(|t| t.name == "Voz").ok_or("sin voz")?;
+    let vocal = p.tracks.iter().position(|t| is_named(&t.name, "Voz")).ok_or("sin voz")?;
     let clip = p.tracks[vocal].clips[BREAK].clone().ok_or("sin voz")?;
     p.tracks[vocal].arrangement = at("Break").into_iter().chain(at("Drop").into_iter().skip(1)).map(|start| ArrangementClip { start, length: voice_beats, clip: clip.clone() }).collect();
 
@@ -406,12 +411,12 @@ fn arrange(p: &mut Project, voice_beats: f64, dir: &Path) -> Result<(), String> 
     };
     let (riser, riser_beats) = made(crate::transitions::Kind::Riser, 8)?;
     let (impact, impact_beats) = made(crate::transitions::Kind::Impact, 1)?;
-    let mut transitions = Track::new_audio(crate::transitions::TRACK, color(4));
+    let mut transitions = Track::new_audio(crate::transitions::track_name(), color(4));
     transitions.mixer.gain = 0.5;
     for drop in at("Drop") {
-        let riser_clip = audio_clip("Subida 8 compases", color(4), &riser, riser_beats, WarpMode::Stretch);
+        let riser_clip = audio_clip(&format!("{} {}", crate::transitions::Kind::Riser.shown(), crate::transitions::bars_shown(8)), color(4), &riser, riser_beats, WarpMode::Stretch);
         transitions.arrangement.push(ArrangementClip { start: (drop - riser_beats).max(0.0), length: riser_beats, clip: riser_clip });
-        let impact_clip = audio_clip("Impacto 1 compás", color(4), &impact, impact_beats, WarpMode::Stretch);
+        let impact_clip = audio_clip(&format!("{} {}", crate::transitions::Kind::Impact.shown(), crate::transitions::bars_shown(1)), color(4), &impact, impact_beats, WarpMode::Stretch);
         transitions.arrangement.push(ArrangementClip { start: drop, length: impact_beats, clip: impact_clip });
     }
     transitions.arrangement.sort_by(|a, b| a.start.total_cmp(&b.start));
@@ -463,6 +468,44 @@ mod tests {
         // Saved and opened again.
         let again = Project::from_json(&project.to_json().unwrap()).unwrap();
         assert_eq!(again.tracks.len(), project.tracks.len());
+    }
+
+    /// Made in English, its names are English ones (and Spanish, made in
+    /// Spanish, the same as ever); saved and opened in Spanish, it keeps them.
+    #[test]
+    fn the_example_is_named_in_the_language_it_is_made_in() {
+        use crate::i18n::{with, Language};
+        let tracks = |p: &Project| p.tracks.iter().map(|t| t.name.clone()).collect::<Vec<_>>();
+        let markers = |p: &Project| p.markers.iter().map(|m| m.name.clone()).collect::<Vec<_>>();
+        let returns = |p: &Project| p.returns.iter().map(|r| r.name.clone()).collect::<Vec<_>>();
+        let spanish = with(Language::Spanish, || song().unwrap());
+        assert_eq!(tracks(&spanish), ["Batería", "Bombo y charles", "Percusión", "Bajo", "Acordes", "Pad", "Melodía", "Voz", "Transiciones"]);
+        assert_eq!(markers(&spanish), ["Intro", "Subida", "Drop", "Break", "Subida", "Drop", "Outro"]);
+        assert_eq!(returns(&spanish), ["A Espacio", "B Delay"]);
+        let clips: Vec<&str> = spanish.tracks.iter().flat_map(|t| t.clips.iter().flatten().map(|c| c.name()).chain(t.arrangement.iter().map(|a| a.clip.name()))).collect();
+        for name in ["Bombo y palmas", "Rem Sib Fa Do", "Bajo: rodante", "Melodía: cantable", "Voz principal", "Subida 8 compases", "Impacto 1 compás"] {
+            assert!(clips.contains(&name), "{name}: {clips:?}");
+        }
+
+        let english = with(Language::English, || song().unwrap());
+        assert_eq!(tracks(&english), ["Drums", "Kick & Hats", "Percussion", "Bass", "Chords", "Pad", "Melody", "Vocals", "Transitions"]);
+        assert_eq!(markers(&english), ["Intro", "Build", "Drop", "Break", "Build", "Drop", "Outro"]);
+        assert_eq!(&english.scene_names[..3], ["Intro", "Drop", "Break"]);
+        assert_eq!(returns(&english), ["A Space", "B Delay"]);
+        let clips: Vec<&str> = english.tracks.iter().flat_map(|t| t.clips.iter().flatten().map(|c| c.name()).chain(t.arrangement.iter().map(|a| a.clip.name()))).collect();
+        for name in ["Kick & Claps", "Dm Bb F C", "Bass: rolling", "Melody: singable", "Lead Vocal", "Riser 8 bars", "Impact 1 bar"] {
+            assert!(clips.contains(&name), "{name}: {clips:?}");
+        }
+        // The same song: what finds its tracks and markers by name found them.
+        for (es, en) in spanish.tracks.iter().zip(&english.tracks) {
+            assert_eq!((es.arrangement.len(), es.automation.len()), (en.arrangement.len(), en.automation.len()), "{} / {}", es.name, en.name);
+        }
+        assert_eq!(english.lyrics, spanish.lyrics, "it sings in Spanish either way");
+
+        // Saved in English, opened in Spanish: the names it was made with.
+        let json = english.to_json().unwrap();
+        let again = with(Language::Spanish, || Project::from_json(&json).unwrap());
+        assert_eq!((tracks(&again), markers(&again), returns(&again)), (tracks(&english), markers(&english), returns(&english)));
     }
 
     /// `pulse --render` without a project plays the example: every bar

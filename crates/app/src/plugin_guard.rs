@@ -143,13 +143,12 @@ impl PulseApp {
         if self.settings.blocked_plugins.contains(&plugin) {
             return;
         }
-        let doing = match stage {
-            Stage::Loading => "cargaba",
-            Stage::Processing => "hacía sonar",
-        };
-        let description = format!(
-            "Pulse se cerró de golpe mientras {doing} el plugin «{}». Puedes abrir tus proyectos sin él: sus pistas quedan en silencio, pero el plugin y sus ajustes siguen en el proyecto, y vuelve a sonar cuando lo desbloquees en Ajustes → Plugins.",
-            plugin.name
+        let description = crate::i18n::fill(
+            match stage {
+                Stage::Loading => crate::i18n::tr("Pulse se cerró de golpe mientras cargaba el plugin «{}». Puedes abrir tus proyectos sin él: sus pistas quedan en silencio, pero el plugin y sus ajustes siguen en el proyecto, y vuelve a sonar cuando lo desbloquees en Ajustes → Plugins."),
+                Stage::Processing => crate::i18n::tr("Pulse se cerró de golpe mientras hacía sonar el plugin «{}». Puedes abrir tus proyectos sin él: sus pistas quedan en silencio, pero el plugin y sus ajustes siguen en el proyecto, y vuelve a sonar cuando lo desbloquees en Ajustes → Plugins."),
+            },
+            &[&plugin.name],
         );
         let choice = self.ask_about_plugin(&plugin, &description);
         self.status = Some(match choice {
@@ -157,13 +156,13 @@ impl PulseApp {
                 let mut settings = self.settings.clone();
                 settings.blocked_plugins.push(plugin.clone());
                 self.set_settings(settings);
-                format!("«{}» está bloqueado: no se carga hasta que lo desbloquees en Ajustes → Plugins", plugin.name)
+                crate::i18n::fill(crate::i18n::tr("«{}» está bloqueado: no se carga hasta que lo desbloquees en Ajustes → Plugins"), &[&plugin.name])
             }
             Choice::SkipOnce => {
                 self.samples.skipped.push(plugin.clone());
-                format!("«{}» no se carga hasta que cierres Pulse", plugin.name)
+                crate::i18n::fill(crate::i18n::tr("«{}» no se carga hasta que cierres Pulse"), &[&plugin.name])
             }
-            Choice::Load => format!("«{}» se carga como siempre", plugin.name),
+            Choice::Load => crate::i18n::fill(crate::i18n::tr("«{}» se carga como siempre"), &[&plugin.name]),
         });
     }
 
@@ -178,10 +177,10 @@ impl PulseApp {
         if !self.interactive {
             return Choice::SkipOnce;
         }
-        let (block, once, load) = ("Bloquearlo".to_string(), "Solo esta vez".to_string(), "Cargarlo".to_string());
+        let (block, once, load) = (crate::i18n::tr("Bloquearlo").to_string(), crate::i18n::tr("Solo esta vez").to_string(), crate::i18n::tr("Cargarlo").to_string());
         let result = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
-            .set_title(format!("«{}» cerró Pulse", plugin.name))
+            .set_title(crate::i18n::fill(crate::i18n::tr("«{}» cerró Pulse"), &[&plugin.name]))
             .set_description(description)
             .set_buttons(rfd::MessageButtons::YesNoCancelCustom(block.clone(), once.clone(), load.clone()))
             .show();

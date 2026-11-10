@@ -1,4 +1,5 @@
 use crate::history::History;
+use crate::i18n::{fill, tr};
 use crate::project::{Mixer, Project, Track, PALETTE};
 use std::collections::HashSet;
 use std::path::Path;
@@ -38,7 +39,7 @@ impl Audio {
     pub fn info(&self) -> (String, f32, Option<u32>) {
         match &self.handle {
             Some(h) => (h.device_name.clone(), h.sample_rate, h.buffer),
-            None => ("Sin audio".into(), 48_000.0, None),
+            None => (tr("Sin audio").into(), 48_000.0, None),
         }
     }
 
@@ -798,7 +799,7 @@ impl PulseApp {
                     View::Session => {
                         let free = (0..NUM_SCENES).find(|&s| self.project.tracks[track].clips[s].is_none());
                         let Some(slot) = free else {
-                            self.status = Some("No quedan slots libres en esa pista".into());
+                            self.status = Some(tr("No quedan slots libres en esa pista").into());
                             return;
                         };
                         Placement::Session { track, slot }
@@ -858,14 +859,16 @@ impl PulseApp {
             self.detect_tempo(vec![clip], false);
         }
         if added + unreadable > 0 {
-            let mut status = format!("{added} muestra(s) añadida(s)");
+            let mut status = fill(tr("{} muestra(s) añadida(s)"), &[&added]);
             if new_tracks > 0 {
-                status += &format!(" · {new_tracks} pista(s) nueva(s) para las que no cabían");
+                status += " · ";
+                status += &fill(tr("{} pista(s) nueva(s) para las que no cabían"), &[&new_tracks]);
             }
             if unreadable > 0 {
-                status += &format!(" · {unreadable} archivo(s) no se pudieron leer");
+                status += " · ";
+                status += &fill(tr("{} archivo(s) no se pudieron leer"), &[&unreadable]);
             }
-            self.status = Some(status + " · analizando su tempo…");
+            self.status = Some(status + " · " + tr("analizando su tempo…"));
         }
     }
 
@@ -1036,14 +1039,14 @@ impl PulseApp {
 
     pub fn param_name(&self, target: Target, param: Param) -> String {
         if let Some((id, p)) = self.plugin_param(target, param) {
-            let name = self.samples.plugins.get(&id).and_then(|h| h.param(p)).map_or_else(|| format!("parámetro {p}"), |p| p.name.clone());
+            let name = self.samples.plugins.get(&id).and_then(|h| h.param(p)).map_or_else(|| fill(tr("parámetro {}"), &[&p]), |p| p.name.clone());
             return format!("{}: {name}", self.plugin_name(id));
         }
         let info = self.param_info(target, param).map_or("?", |i| i.name);
         match param {
-            Param::Volume => "Volumen".into(),
+            Param::Volume => tr("Volumen").into(),
             Param::Pan => "Pan".into(),
-            Param::Send(i) => format!("Envío {}", crate::project::return_letter(i)),
+            Param::Send(i) => fill(tr("Envío {}"), &[&crate::project::return_letter(i)]),
             Param::Device { device, .. } => {
                 let label = self.devices(target).get(device).map_or("?", |d| d.effect.label());
                 format!("{} {label}: {info}", device + 1)
@@ -1211,7 +1214,7 @@ impl PulseApp {
             ui.set_max_width(420.0);
             ui.label(text.as_str());
             ui.add_space(6.0);
-            close = ui.button("Aceptar").clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
+            close = ui.button(tr("Aceptar")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter) || i.key_pressed(egui::Key::Escape));
         });
         if close {
             self.notice = None;
@@ -1370,7 +1373,7 @@ impl PulseApp {
         let length = clip.length().max(meter.bar_length_at(start));
         t.arrangement.push(engine::model::ArrangementClip { start, length, clip });
         self.sync_arrangement(track);
-        self.status = Some(format!("Clip copiado al Arrangement en el compás {}", meter.bar_at(start).0 + 1));
+        self.status = Some(fill(tr("Clip copiado al Arrangement en el compás {}"), &[&(meter.bar_at(start).0 + 1)]));
     }
 
     pub fn add_device(&mut self, target: Target, device: Device) {
@@ -1530,16 +1533,16 @@ impl PulseApp {
         let name = params.param_name(dest);
         let targets = &mut params.modulators[modulator].targets;
         if targets.iter().any(|t| t.dest as usize == dest) {
-            self.status = Some(format!("Ya modula {name}"));
+            self.status = Some(fill(tr("Ya modula {}"), &[&name]));
             return;
         }
         let Some(free) = targets.iter().position(|t| t.dest == engine::model::MOD_NO_TARGET) else {
-            self.status = Some("Este modulador ya tiene 8 destinos".into());
+            self.status = Some(tr("Este modulador ya tiene 8 destinos").into());
             return;
         };
         targets[free] = ModTarget::new(dest, 0.5);
         self.set_instrument(track, InstrumentKind::Modular(params));
-        self.status = Some(format!("→ {name} (50 %) · clic derecho en el knob para ajustar"));
+        self.status = Some(fill(tr("→ {} (50 %) · clic derecho en el knob para ajustar"), &[&name]));
     }
 
     /// Edits a modular synth's stack, moving the modules' files along with them.
@@ -1551,7 +1554,7 @@ impl PulseApp {
         match edit {
             StackEdit::Insert(after, kind) => {
                 let Some(at) = params.insert_module(after, engine::model::Module::new(kind)) else {
-                    self.status = Some(format!("La pila admite {MOD_MODULES} módulos"));
+                    self.status = Some(fill(tr("La pila admite {} módulos"), &[&MOD_MODULES]));
                     return;
                 };
                 files.insert(at, String::new());
@@ -1599,7 +1602,7 @@ impl PulseApp {
                 self.status = Some(format!("Audio {} → {} {} (50 %)", source + 1, target + 1, param.label()));
                 self.set_instrument(track, InstrumentKind::Modular(params));
             }
-            None => self.status = Some("No quedan conexiones de audio libres".into()),
+            None => self.status = Some(tr("No quedan conexiones de audio libres").into()),
         }
     }
 
@@ -1627,16 +1630,16 @@ impl PulseApp {
         let Some(mut params) = kind.wave().copied() else { return };
         let name = WAVE_PARAMS.get(dest).map_or("?", |p| p.name);
         if params.matrix.iter().any(|s| s.source == source && s.dest as usize == dest) {
-            self.status = Some(format!("{} ya modula {name}", source.label()));
+            self.status = Some(fill(tr("{} ya modula {}"), &[&source.label(), &name]));
             return;
         }
         let Some(slot) = params.matrix.iter().position(|s| s.source == engine::model::ModSource::None) else {
-            self.status = Some("La matriz de modulación está llena".into());
+            self.status = Some(tr("La matriz de modulación está llena").into());
             return;
         };
         params.matrix[slot] = ModSlot { source, dest: dest as u8, amount: 0.5, bipolar: false };
         self.set_instrument(track, kind.with_wave(params));
-        self.status = Some(format!("{} → {name} (50 %) · clic derecho en el knob para ajustar", source.label()));
+        self.status = Some(fill(tr("{} → {} (50 %) · clic derecho en el knob para ajustar"), &[&source.label(), &name]));
     }
 
     /// Loads the audio file oscillator `osc` plays in sample, granular or spectral mode.
@@ -1649,7 +1652,7 @@ impl PulseApp {
         self.project.tracks[track].set_sample(osc, Some(path));
         self.sync_samples(track);
         self.sync_tables(track);
-        self.status = Some(format!("Muestra del oscilador: {}", self.project.tracks[track].sample_name(osc).unwrap_or_default()));
+        self.status = Some(fill(tr("Muestra del oscilador: {}"), &[&self.project.tracks[track].sample_name(osc).unwrap_or_default()]));
     }
 
     pub fn sync_samples(&mut self, track: usize) {
@@ -1688,7 +1691,7 @@ impl PulseApp {
         if loaded > 0 {
             self.sync_samples(track);
             let name = self.project.tracks[track].sample_name(slot).unwrap_or_default();
-            self.status = Some(if loaded == 1 { format!("Cargado: {name}") } else { format!("{loaded} muestras cargadas") });
+            self.status = Some(if loaded == 1 { fill(tr("Cargado: {}"), &[&name]) } else { fill(tr("{} muestras cargadas"), &[&loaded]) });
         }
     }
 
@@ -1715,7 +1718,7 @@ impl PulseApp {
                 self.set_instrument(track, InstrumentKind::DrumRack(params));
                 self.project.tracks[track].samples = files;
                 self.sync_samples(track);
-                self.status = Some("Kit básico cargado".into());
+                self.status = Some(tr("Kit básico cargado").into());
             }
             Err(error) => self.status = Some(error),
         }
@@ -1742,14 +1745,14 @@ impl PulseApp {
         let samples = if t.instrument.uses_samples() { t.samples.clone() } else { Vec::new() };
         let preset = crate::presets::Preset { name, instrument: t.instrument, samples };
         self.status = Some(match crate::presets::save(&crate::presets::user_root(), &preset) {
-            Ok(_) => format!("Preset guardado: {}", preset.name),
+            Ok(_) => fill(tr("Preset guardado: {}"), &[&preset.name]),
             Err(error) => error,
         });
     }
 
     pub fn delete_preset(&mut self, preset: &crate::presets::Preset) {
         self.status = Some(match crate::presets::delete(&crate::presets::user_root(), preset) {
-            Ok(()) => format!("Preset borrado: {}", preset.name),
+            Ok(()) => fill(tr("Preset borrado: {}"), &[&preset.name]),
             Err(error) => error,
         });
     }
@@ -1824,9 +1827,9 @@ impl PulseApp {
                 match free {
                     Some(slot) => {
                         self.set_clip(track, slot, Some(Clip::Midi(sliced.clip)));
-                        self.status = Some(format!("{name}: {pads} a {bpm:.1} BPM, clip en la escena {}", slot + 1));
+                        self.status = Some(fill(tr("{}: {} a {} BPM, clip en la escena {}"), &[&name, &pads, &format!("{bpm:.1}"), &(slot + 1)]));
                     }
-                    None => self.status = Some(format!("{name}: {pads} (no quedan slots libres para el clip)")),
+                    None => self.status = Some(fill(tr("{}: {} (no quedan slots libres para el clip)"), &[&name, &pads])),
                 }
             }
             Err(error) => self.status = Some(error),
@@ -1839,7 +1842,7 @@ impl PulseApp {
         let Some(Clip::Audio(audio)) = self.clip(clip_ref).cloned() else { return };
         let sample = self.sample(&audio.sample);
         if sample.frames() == 0 {
-            self.status = Some("No se encuentra la muestra del clip".into());
+            self.status = Some(tr("No se encuentra la muestra del clip").into());
             return;
         }
         let (region, bpm) = crate::slicing::clip_region(&audio, self.project.tempo);
@@ -1889,19 +1892,19 @@ impl PulseApp {
             ClipRef::Arrangement { .. } => ClipRef::Arrangement { track, index: 0 },
         });
         // Said only when the grid had to widen to fit the pads.
-        let grid_note = match mode {
-            crate::slicing::SliceMode::Grid(asked) if edited.is_none() && grid > asked + 1e-9 => {
-                format!(" (cada {}: a {} no caben en {RACK_PADS} pads)", crate::slicing::grid_label(grid), crate::slicing::grid_label(asked))
-            }
-            _ => String::new(),
-        };
-        self.status = Some(format!("{name}: {pads} en un Drum Pads nuevo{grid_note}"));
+        self.status = Some(match mode {
+            crate::slicing::SliceMode::Grid(asked) if edited.is_none() && grid > asked + 1e-9 => fill(
+                tr("{}: {} en un Drum Pads nuevo (cada {}: a {} no caben en {} pads)"),
+                &[&name, &pads, &crate::slicing::grid_label(grid), &crate::slicing::grid_label(asked), &RACK_PADS],
+            ),
+            _ => fill(tr("{}: {} en un Drum Pads nuevo"), &[&name, &pads]),
+        });
     }
 
     fn push_track(&mut self, make: impl FnOnce(usize, [u8; 3]) -> Track) -> Option<usize> {
         let index = self.project.tracks.len();
         if index >= MAX_TRACKS {
-            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&MAX_TRACKS]));
             return None;
         }
         let color = PALETTE[(index * 5 + 1) % PALETTE.len()];
@@ -1940,7 +1943,7 @@ impl PulseApp {
         // A group, with copies of everything in it, after it.
         let block = crate::groups::block(&self.project.tracks, track);
         if self.project.tracks.len() + block.len() > MAX_TRACKS {
-            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&MAX_TRACKS]));
             return;
         }
         // A drum sound plays on one track only: a track taking one is
@@ -1948,7 +1951,7 @@ impl PulseApp {
         let originals: Vec<u32> = block.clone().map(|t| self.project.tracks[t].id).collect();
         if let Some(taker) = block.clone().map(|t| &self.project.tracks[t]).find(|t| t.sounds_from != 0 && t.audio_from.is_some_and(|id| !originals.contains(&id))) {
             let source = self.project.tracks.iter().find(|t| Some(t.id) == taker.audio_from).map_or(String::new(), |t| t.name.clone());
-            self.status = Some(format!("«{}» toca un sonido de «{source}», que suena en una sola pista: duplica «{source}» (o su grupo) con ella", taker.name));
+            self.status = Some(fill(tr("«{}» toca un sonido de «{}», que suena en una sola pista: duplica «{}» (o su grupo) con ella"), &[&taker.name, &source, &source]));
             return;
         }
         self.capture_plugins();
@@ -2029,8 +2032,9 @@ impl PulseApp {
         self.midi = MidiInputs::connect(self.audio.live(), self.learn.shared.clone(), self.grids.inbox.clone());
         self.grids.connect();
         self.status = Some(match self.midi.names.len() {
-            0 => "No hay dispositivos MIDI conectados".into(),
-            n => format!("{n} dispositivo(s) MIDI: {}", self.midi.names.join(", ")),
+            0 => tr("No hay dispositivos MIDI conectados").into(),
+            1 => fill(tr("1 dispositivo MIDI: {}"), &[&self.midi.names.join(", ")]),
+            n => fill(tr("{} dispositivos MIDI: {}"), &[&n, &self.midi.names.join(", ")]),
         });
     }
 
@@ -2041,7 +2045,7 @@ impl PulseApp {
 
     pub fn toggle_arm(&mut self, track: usize) {
         if self.project.tracks[track].is_group() {
-            self.status = Some("Un grupo no graba: arma las pistas que tiene dentro".into());
+            self.status = Some(tr("Un grupo no graba: arma las pistas que tiene dentro").into());
             return;
         }
         let t = &mut self.project.tracks[track];
@@ -2081,7 +2085,7 @@ impl PulseApp {
         let Some(state) = self.audio.state() else { return false };
         match InputCapture::open(state, &self.settings.audio) {
             Ok(mut capture) => {
-                self.status = Some(format!("Entrada de audio: {}", capture.device_name()));
+                self.status = Some(fill(tr("Entrada de audio: {}"), &[&capture.device_name()]));
                 // The engine resamples it if the input runs at another rate than the output.
                 if let Some(monitor) = capture.take_monitor() {
                     self.audio.send(Command::SetMonitorInput(Some(Box::new(monitor))));
@@ -2090,7 +2094,7 @@ impl PulseApp {
                 true
             }
             Err(error) => {
-                self.status = Some(format!("No se pudo abrir la entrada de audio: {error}"));
+                self.status = Some(fill(tr("No se pudo abrir la entrada de audio: {}"), &[&error]));
                 self.capture_failed = true;
                 false
             }
@@ -2126,7 +2130,7 @@ impl PulseApp {
                 (false, true) if self.take_failed => {
                     self.take_failed = false;
                     if let Some(kept) = capture.keep_safety() {
-                        self.status = Some(format!("No se pudo guardar la toma: la grabación entera queda en {}", kept.display()));
+                        self.status = Some(fill(tr("No se pudo guardar la toma: la grabación entera queda en {}"), &[&kept.display()]));
                     }
                 }
                 (false, true) => capture.finish_safety(),
@@ -2178,7 +2182,7 @@ impl PulseApp {
         let rate = self.capture.as_ref()?.sample_rate();
         let dir = self.recordings_dir();
         if let Err(e) = std::fs::create_dir_all(&dir) {
-            self.status = Some(format!("No se pudo crear {}: {e}", dir.display()));
+            self.status = Some(fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]));
             return None;
         }
         let stamp = std::time::SystemTime::now()
@@ -2223,7 +2227,7 @@ impl PulseApp {
         audio.sample = take;
         audio.name = format!("Toma {}", k + 1);
         self.sync_arrangement(track);
-        self.status = Some(format!("Suena la toma {}", k + 1));
+        self.status = Some(fill(tr("Suena la toma {}"), &[&(k + 1)]));
     }
 
     /// The clips of an audio recording over the loop: each pass is a take of the
@@ -2310,7 +2314,7 @@ impl PulseApp {
         if !self.project.tracks.iter().any(|t| t.armed) && !session_playing {
             let selection = self.track_selection();
             if selection.is_empty() {
-                self.status = Some("Selecciona una pista (o ármala con su botón ●) para grabar en ella".into());
+                self.status = Some(tr("Selecciona una pista (o ármala con su botón ●) para grabar en ella").into());
                 return;
             }
             for t in selection {
@@ -2330,9 +2334,9 @@ impl PulseApp {
         let meter = self.project.meter;
         let bar = |beat: f64| crate::transport::bars_label(crate::transport::bars_between(&meter, 0.0, beat) + 1.0).trim_end_matches(" c.").to_string();
         match self.project.punch() {
-            (Some(i), Some(o)) => self.status = Some(format!("Punch: graba del compás {} al {}", bar(i), bar(o))),
-            (Some(i), None) => self.status = Some(format!("Punch in: empieza a grabar en el compás {}", bar(i))),
-            (None, Some(o)) => self.status = Some(format!("Punch out: deja de grabar en el compás {}", bar(o))),
+            (Some(i), Some(o)) => self.status = Some(fill(tr("Punch: graba del compás {} al {}"), &[&bar(i), &bar(o)])),
+            (Some(i), None) => self.status = Some(fill(tr("Punch in: empieza a grabar en el compás {}"), &[&bar(i)])),
+            (None, Some(o)) => self.status = Some(fill(tr("Punch out: deja de grabar en el compás {}"), &[&bar(o)])),
             (None, None) => {}
         }
     }
@@ -2416,7 +2420,7 @@ impl PulseApp {
                             clip.envelopes = envelopes;
                             self.set_clip(track, slot, Some(Clip::Audio(clip)));
                             self.select_clip(ClipRef::Session { track, slot });
-                            self.status = Some(format!("Toma de audio guardada en {}", self.recordings_dir().display()));
+                            self.status = Some(fill(tr("Toma de audio guardada en {}"), &[&self.recordings_dir().display()]));
                         }
                         continue;
                     }
@@ -2428,12 +2432,12 @@ impl PulseApp {
                     let clip = MidiClip { name: format!("Toma {}", slot + 1), length, notes, color: t.color, envelopes, groove: None, muted: false, controls };
                     self.set_clip(track, slot, Some(Clip::Midi(clip)));
                     self.select_clip(ClipRef::Session { track, slot });
-                    let automation = match moved {
-                        0 => String::new(),
-                        1 => " y la automatización de 1 control".into(),
-                        n => format!(" y la automatización de {n} controles"),
-                    };
-                    self.status = Some(format!("Grabadas {count} notas{expression}{automation} en {}", self.project.tracks[track].name));
+                    let name = &self.project.tracks[track].name;
+                    self.status = Some(match moved {
+                        0 => fill(tr("Grabadas {} notas{} en {}"), &[&count, &expression, name]),
+                        1 => fill(tr("Grabadas {} notas{} y la automatización de 1 control en {}"), &[&count, &expression, name]),
+                        n => fill(tr("Grabadas {} notas{} y la automatización de {} controles en {}"), &[&count, &expression, &n, name]),
+                    });
                 }
                 Finished::Arrangement { track, start, length, notes, controls } => {
                     let notes = self.quantize_take(notes, start, length);
@@ -2446,21 +2450,21 @@ impl PulseApp {
                     let index = t.arrangement.len() - 1;
                     self.sync_arrangement(track);
                     self.select_clip(ClipRef::Arrangement { track, index });
-                    self.status = Some(format!("Grabadas {count} notas{expression} en el Arrangement"));
+                    self.status = Some(fill(tr("Grabadas {} notas{} en el Arrangement"), &[&count, &expression]));
                 }
                 Finished::ArrangementEnded { passes } => {
                     let clips = self.finish_session_capture();
                     if clips > 0 {
                         self.status = Some(match clips {
-                            1 => "Grabado 1 clip de Session en el Arrangement".to_string(),
-                            n => format!("Grabados {n} clips de Session en el Arrangement"),
+                            1 => tr("Grabado 1 clip de Session en el Arrangement").to_string(),
+                            n => fill(tr("Grabados {} clips de Session en el Arrangement"), &[&n]),
                         });
                     }
                     let moved = self.finish_automation_take();
                     if moved > 0 {
                         self.status = Some(match moved {
-                            1 => "Grabada la automatización de 1 control".to_string(),
-                            n => format!("Grabada la automatización de {n} controles"),
+                            1 => tr("Grabada la automatización de 1 control").to_string(),
+                            n => fill(tr("Grabada la automatización de {} controles"), &[&n]),
                         });
                     }
                     // Nothing between the punch-in and the punch-out.
@@ -2491,9 +2495,9 @@ impl PulseApp {
                             self.arrangement.takes.insert(track);
                         }
                         self.status = Some(if takes > 1 {
-                            format!("{takes} tomas grabadas en el loop: arrastra en sus filas para quedarte con lo mejor de cada una")
+                            fill(tr("{} tomas grabadas en el loop: arrastra en sus filas para quedarte con lo mejor de cada una"), &[&takes])
                         } else {
-                            format!("Toma de audio guardada en {}", self.recordings_dir().display())
+                            fill(tr("Toma de audio guardada en {}"), &[&self.recordings_dir().display()])
                         });
                     }
                 }
@@ -2611,14 +2615,21 @@ impl PulseApp {
             return;
         }
         self.seen_faults = faults;
-        let name = match state.last_fault() {
+        let fault = state.last_fault();
+        // In Spanish for pulse.log; in the interface's language for the status bar.
+        let name = match fault {
             engine::Fault::Track(t) => self.project.tracks.get(t).map_or_else(|| format!("la pista {}", t + 1), |t| format!("«{}»", t.name)),
             engine::Fault::Return(r) => self.project.returns.get(r).map_or_else(|| format!("el retorno {}", r + 1), |r| format!("«{}»", r.name)),
             engine::Fault::Master => "el master".into(),
         };
         let message = format!("El sonido de {name} dejó de ser válido (NaN o infinito: un archivo dañado o un plugin): Pulse lo silenció y vació sus efectos");
         crate::logs::note(&message);
-        self.status = Some(message);
+        let name = match fault {
+            engine::Fault::Track(t) => self.project.tracks.get(t).map_or_else(|| fill(tr("la pista {}"), &[&(t + 1)]), |t| fill(tr("«{}»"), &[&t.name])),
+            engine::Fault::Return(r) => self.project.returns.get(r).map_or_else(|| fill(tr("el retorno {}"), &[&(r + 1)]), |r| fill(tr("«{}»"), &[&r.name])),
+            engine::Fault::Master => tr("el master").into(),
+        };
+        self.status = Some(fill(tr("El sonido de {} dejó de ser válido (NaN o infinito: un archivo dañado o un plugin): Pulse lo silenció y vació sus efectos"), &[&name]));
     }
 
     /// Notes changes made inside plugins (their editors, presets, controllers).
@@ -2638,18 +2649,18 @@ impl PulseApp {
 
     pub fn new_project(&mut self) {
         self.replace_project(Project::empty(), None);
-        self.status = Some("Proyecto nuevo".into());
+        self.status = Some(tr("Proyecto nuevo").into());
     }
 
     pub fn open(&mut self) {
-        let dialog = rfd::FileDialog::new().add_filter("Proyecto Pulse", &["pulse"]).set_directory(crate::library::folder(crate::library::PROJECTS));
+        let dialog = rfd::FileDialog::new().add_filter(tr("Proyecto Pulse"), &["pulse"]).set_directory(crate::library::folder(crate::library::PROJECTS));
         if let Some(path) = crate::files::pick_file(dialog) {
             self.open_from(&path);
         }
     }
 
     pub fn import_live_set(&mut self) {
-        let dialog = rfd::FileDialog::new().add_filter("Set de Ableton Live", &["als"]);
+        let dialog = rfd::FileDialog::new().add_filter(tr("Set de Ableton Live"), &["als"]);
         if let Some(path) = crate::files::pick_file(dialog) {
             self.import_live_set_from(&path);
         }
@@ -2664,7 +2675,7 @@ impl PulseApp {
                 self.saved = Project::empty();
                 self.status = Some(report.summary());
             }
-            Err(error) => self.status = Some(format!("No se pudo importar: {error}")),
+            Err(error) => self.status = Some(fill(tr("No se pudo importar: {}"), &[&error])),
         }
     }
 
@@ -2683,18 +2694,17 @@ impl PulseApp {
             Ok(project) => {
                 let missing = crate::library::missing_files(&project);
                 self.status = Some(match missing.first() {
-                    None => format!("Abierto {}", path.display()),
-                    Some(first) => format!(
-                        "Abierto {} · {} audio(s) no encontrados (p. ej. {first}): se conservan sus rutas; vuelve a importarlos o pon los archivos en su sitio",
-                        path.display(),
-                        missing.len()
+                    None => fill(tr("Abierto {}"), &[&path.display()]),
+                    Some(first) => fill(
+                        tr("Abierto {} · {} audio(s) no encontrados (p. ej. {}): se conservan sus rutas; vuelve a importarlos o pon los archivos en su sitio"),
+                        &[&path.display(), &missing.len(), first],
                     ),
                 });
                 let newer = newer_pulse(&project);
                 self.replace_project(project, Some(path.to_path_buf()));
                 self.remember_recent(path);
                 if let Some(version) = newer {
-                    self.status = Some(format!("Abierto {} · lo guardó Pulse {version}, más nuevo que este ({}): si lo guardas aquí, se perderá lo que esta versión no conoce", path.display(), crate::updates::VERSION));
+                    self.status = Some(fill(tr("Abierto {} · lo guardó Pulse {}, más nuevo que este ({}): si lo guardas aquí, se perderá lo que esta versión no conoce"), &[&path.display(), &version, &crate::updates::VERSION]));
                 }
             }
             Err(error) => self.status = Some(error),
@@ -2716,11 +2726,11 @@ impl PulseApp {
         }
         let result = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
-            .set_title(format!("Este proyecto lo guardó Pulse {version}"))
-            .set_description(format!("Es más nuevo que este Pulse ({}). Si lo guardas aquí, se perderá lo que esta versión no conoce (instrumentos, efectos o ajustes nuevos). Puedes guardarlo como una copia con «Guardar como…».", crate::updates::VERSION))
-            .set_buttons(rfd::MessageButtons::OkCancelCustom("Guardar igualmente".into(), "Cancelar".into()))
+            .set_title(fill(tr("Este proyecto lo guardó Pulse {}"), &[&version]))
+            .set_description(fill(tr("Es más nuevo que este Pulse ({}). Si lo guardas aquí, se perderá lo que esta versión no conoce (instrumentos, efectos o ajustes nuevos). Puedes guardarlo como una copia con «Guardar como…»."), &[&crate::updates::VERSION]))
+            .set_buttons(rfd::MessageButtons::OkCancelCustom(tr("Guardar igualmente").into(), tr("Cancelar").into()))
             .show();
-        matches!(result, rfd::MessageDialogResult::Ok) || matches!(&result, rfd::MessageDialogResult::Custom(label) if label == "Guardar igualmente")
+        matches!(result, rfd::MessageDialogResult::Ok) || matches!(&result, rfd::MessageDialogResult::Custom(label) if label == tr("Guardar igualmente"))
     }
 
     /// Where dropped audio files go when a sampler or drum rack is on screen: the
@@ -2784,7 +2794,7 @@ impl PulseApp {
                 Some("als") if self.may_discard() => self.import_live_set_from(&path),
                 Some("pulse") if self.may_discard() => self.open_from(&path),
                 Some("als" | "pulse") => {}
-                _ => self.status = Some(format!("Formato no compatible: {}", path.display())),
+                _ => self.status = Some(fill(tr("Formato no compatible: {}"), &[&path.display()])),
             }
         }
     }
@@ -2800,7 +2810,7 @@ impl PulseApp {
     /// chosen, and always in a folder of the project's own (see `library`).
     pub fn save_as(&mut self) {
         let dialog = rfd::FileDialog::new()
-            .add_filter("Proyecto Pulse", &["pulse"])
+            .add_filter(tr("Proyecto Pulse"), &["pulse"])
             .set_directory(crate::library::folder(crate::library::PROJECTS))
             .set_file_name(format!("{}.pulse", self.file_name()));
         if let Some(path) = crate::files::save_file(dialog) {
@@ -2820,7 +2830,7 @@ impl PulseApp {
 
     fn save_to(&mut self, path: PathBuf) {
         if !self.may_overwrite_newer(&path) {
-            self.status = Some("No se guardó: usa «Guardar como…» para guardar una copia".into());
+            self.status = Some(tr("No se guardó: usa «Guardar como…» para guardar una copia").into());
             return;
         }
         self.capture_plugins();
@@ -2858,17 +2868,18 @@ impl PulseApp {
                 self.saved = self.project.clone();
                 self.forget_plugin_edits();
                 self.clear_recovery();
-                let mut status = format!("Guardado en {}", path.display());
+                let mut status = fill(tr("Guardado en {}"), &[&path.display()]);
                 if repaired > 0 {
-                    status += &format!(" · {repaired} valor(es) no válidos (NaN o infinito) guardados como 0");
+                    status += " · ";
+                    status += &fill(tr("{} valor(es) no válidos (NaN o infinito) guardados como 0"), &[&repaired]);
                 }
                 match collected {
-                    Some(c) if c.copied + c.moved > 0 => status += &format!(" · {} audio(s) traídos a su carpeta", c.copied + c.moved),
-                    None => status += " · usa «Guardar como…» para darle su propia carpeta con sus audios",
+                    Some(c) if c.copied + c.moved > 0 => status += &format!(" · {}", fill(tr("{} audio(s) traídos a su carpeta"), &[&(c.copied + c.moved)])),
+                    None => status += &format!(" · {}", tr("usa «Guardar como…» para darle su propia carpeta con sus audios")),
                     _ => {}
                 }
                 if let Some(c) = collected.filter(|c| c.missing > 0) {
-                    status += &format!(" · {} audio(s) no encontrados", c.missing);
+                    status += &format!(" · {}", fill(tr("{} audio(s) no encontrados"), &[&c.missing]));
                 }
                 self.status = Some(status);
                 self.remember_recent(&path);
@@ -2883,7 +2894,7 @@ impl PulseApp {
         self.file
             .as_ref()
             .and_then(|p| p.file_stem())
-            .map_or("Sin título".into(), |s| s.to_string_lossy().into_owned())
+            .map_or(tr("Sin título").into(), |s| s.to_string_lossy().into_owned())
     }
 
     /// The input's latency (if it is open), the output's and the effects'
@@ -3374,5 +3385,22 @@ mod window_tests {
         let status = app.status.clone().unwrap();
         assert!(status.starts_with("19 muestra(s)") && status.contains("1 pista(s) nueva(s)") && status.contains("1 archivo(s) no se pudieron leer"), "{status}");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The status bar and the automation lanes' names speak English too.
+    #[test]
+    fn status_messages_in_english() {
+        use crate::i18n::{with, Language};
+        let mut app = PulseApp::headless(Project::demo());
+        with(Language::English, || {
+            assert_eq!(app.param_name(Target::Track(0), Param::Volume), "Volume");
+            assert_eq!(app.param_name(Target::Track(0), Param::Send(0)), "Send A");
+            while app.project.tracks.len() < MAX_TRACKS {
+                app.add_track();
+            }
+            app.add_track();
+            assert_eq!(app.status.as_deref(), Some(format!("{MAX_TRACKS} tracks at most").as_str()));
+        });
+        assert_eq!(app.param_name(Target::Track(0), Param::Send(0)), "Envío A");
     }
 }

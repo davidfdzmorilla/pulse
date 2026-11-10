@@ -229,7 +229,7 @@ pub fn write_wav(path: &Path, left: &[f32], right: &[f32], sample_rate: f32) -> 
         bits_per_sample: 32,
         sample_format: hound::SampleFormat::Float,
     };
-    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| format!("No se pudo crear {}: {e}", path.display()))?;
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| crate::i18n::fill(crate::i18n::tr("No se pudo crear {}: {}"), &[&path.display(), &e]))?;
     for (&l, &r) in left.iter().zip(right) {
         writer.write_sample(l).map_err(|e| e.to_string())?;
         writer.write_sample(r).map_err(|e| e.to_string())?;

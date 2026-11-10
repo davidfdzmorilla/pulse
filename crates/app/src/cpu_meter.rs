@@ -4,6 +4,7 @@
 //! twice a second and turns them into shares of real time.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::theme::{self, TEXT, TEXT_DIM};
 use eframe::egui::{self, vec2, Align2, RichText, Sense};
 use engine::cpu::Load;
@@ -97,7 +98,14 @@ impl CpuMeter {
 /// «23 %» (one decimal under 10).
 pub fn percent(share: f32) -> String {
     let p = share * 100.0;
-    if p < 10.0 { format!("{p:.1} %").replace('.', ",") } else { format!("{p:.0} %") }
+    // A decimal comma in Spanish, a point in English.
+    if p >= 10.0 {
+        format!("{p:.0} %")
+    } else if crate::i18n::current() == crate::i18n::Language::Spanish {
+        format!("{p:.1} %").replace('.', ",")
+    } else {
+        format!("{p:.1} %")
+    }
 }
 
 fn load_color(load: f32) -> egui::Color32 {
@@ -122,7 +130,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     }
     let meter = &app.cpu;
     let (mean, peak) = (meter.load.mean, meter.load.peak.max(meter.load.mean));
-    let text = format!("CPU {}", percent(mean).replace(",0 ", " "));
+    let text = format!("CPU {}", percent(mean).replace(",0 ", " ").replace(".0 ", " "));
     let width = 96.0 + if meter.dropouts > 0 { 64.0 } else { 0.0 };
     let (rect, response) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click());
     let painter = ui.painter();
@@ -136,16 +144,14 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     painter.line_segment([egui::pos2(x, bar.top() - 1.0), egui::pos2(x, bar.bottom() + 1.0)], egui::Stroke::new(1.5, load_color(peak)));
     painter.text(egui::pos2(bar.right() + 6.0, rect.center().y), Align2::LEFT_CENTER, &text, egui::FontId::proportional(11.0), if mean >= 0.7 { load_color(mean) } else { TEXT });
     if meter.dropouts > 0 {
-        let cuts = if meter.dropouts == 1 { "1 corte".to_string() } else { format!("{} cortes", meter.dropouts) };
+        let cuts = if meter.dropouts == 1 { tr("1 corte").to_string() } else { fill(tr("{} cortes"), &[&meter.dropouts]) };
         painter.text(rect.right_center() - vec2(6.0, 0.0), Align2::RIGHT_CENTER, cuts, egui::FontId::proportional(11.0), theme::METER_RED);
     }
     let label = format!("Carga del audio · {text} · pico {} · {} cortes", percent(peak), meter.dropouts);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, true, label.clone()));
-    let hint = format!(
-        "Carga del audio: el tiempo que tarda Pulse en hacer cada trozo de sonido, sobre lo que dura. Media {}, pico {} en el último medio segundo. Cerca del 100 % el sonido se corta: sube el búfer (Ajustes → Audio), congela pistas o quita plugins pesados.\nCortes: {} (trozos que llegaron tarde, desde que los pusiste a cero).\nClic: lo que se lleva cada pista y cada plugin",
-        percent(mean),
-        percent(peak),
-        meter.dropouts
+    let hint = fill(
+        tr("Carga del audio: el tiempo que tarda Pulse en hacer cada trozo de sonido, sobre lo que dura. Media {}, pico {} en el último medio segundo. Cerca del 100 % el sonido se corta: sube el búfer (Ajustes → Audio), congela pistas o quita plugins pesados.\nCortes: {} (trozos que llegaron tarde, desde que los pusiste a cero).\nClic: lo que se lleva cada pista y cada plugin"),
+        &[&percent(mean), &percent(peak), &meter.dropouts],
     );
     if response.on_hover_text(hint).clicked() {
         app.cpu.open = !app.cpu.open;
@@ -160,22 +166,22 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     }
     let mut open = true;
     let mut clear = false;
-    egui::Window::new("Rendimiento").open(&mut open).resizable(true).default_width(380.0).pivot(Align2::RIGHT_TOP).default_pos(ctx.content_rect().right_top() + vec2(-16.0, 140.0)).show(ctx, |ui| {
+    egui::Window::new(tr("Rendimiento")).open(&mut open).resizable(true).default_width(380.0).pivot(Align2::RIGHT_TOP).default_pos(ctx.content_rect().right_top() + vec2(-16.0, 140.0)).show(ctx, |ui| {
         let meter = &app.cpu;
-        ui.label(format!("Carga del audio: media {} · pico {}", percent(meter.load.mean), percent(meter.load.peak.max(meter.load.mean))));
+        ui.label(fill(tr("Carga del audio: media {} · pico {}"), &[&percent(meter.load.mean), &percent(meter.load.peak.max(meter.load.mean))]));
         ui.horizontal(|ui| {
-            ui.label(RichText::new(format!("Cortes: {}", meter.dropouts)).color(if meter.dropouts > 0 { theme::METER_RED } else { TEXT }));
-            clear = ui.small_button("Poner a cero").on_hover_text("Vuelve a contar los cortes desde ahora").clicked();
+            ui.label(RichText::new(fill(tr("Cortes: {}"), &[&meter.dropouts])).color(if meter.dropouts > 0 { theme::METER_RED } else { TEXT }));
+            clear = ui.small_button(tr("Poner a cero")).on_hover_text(tr("Vuelve a contar los cortes desde ahora")).clicked();
         });
-        ui.label(RichText::new("Lo que se lleva cada parte del tiempo real (cada plugin suena en el hilo de audio, uno tras otro)").color(TEXT_DIM).size(10.5));
+        ui.label(RichText::new(tr("Lo que se lleva cada parte del tiempo real (cada plugin suena en el hilo de audio, uno tras otro)")).color(TEXT_DIM).size(10.5));
         ui.separator();
         let heaviest = meter.heaviest();
         if heaviest.is_empty() {
-            ui.label(RichText::new("Midiendo… (dale a play para ver lo que pesa cada pista)").color(TEXT_DIM));
+            ui.label(RichText::new(tr("Midiendo… (dale a play para ver lo que pesa cada pista)")).color(TEXT_DIM));
         }
         let device_name = |devices: &[engine::model::Device], d: usize| match devices.get(d).map(|d| d.effect) {
             Some(engine::model::Effect::Plugin(id)) => format!("{} (plugin)", app.plugin_name(id)),
-            Some(effect) => effect.label().to_string(),
+            Some(effect) => tr(effect.label()).to_string(),
             None => "?".into(),
         };
         egui::ScrollArea::vertical().max_height(420.0).show(ui, |ui| {

@@ -3,6 +3,7 @@
 //! engine with the project's key filled in where they follow it.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui::{self, RichText};
 use engine::model::{ArpMode, ChordParams, MidiDevice, MidiEffect, ScaleKey, MAX_MIDI_EFFECTS};
@@ -14,25 +15,27 @@ fn key_name(key: ScaleKey) -> String {
 
 fn mode_label(mode: ArpMode) -> &'static str {
     match mode {
-        ArpMode::Up => "Arriba",
-        ArpMode::Down => "Abajo",
-        ArpMode::UpDown => "Arriba y abajo",
-        ArpMode::Random => "Al azar",
-        ArpMode::Played => "Como se tocan",
+        ArpMode::Up => tr("Arriba"),
+        ArpMode::Down => tr("Abajo"),
+        ArpMode::UpDown => tr("Arriba y abajo"),
+        ArpMode::Random => tr("Al azar"),
+        ArpMode::Played => tr("Como se tocan"),
     }
 }
 
 const RATES: [(f64, &str); 6] = [(1.0, "1/4"), (0.5, "1/8"), (1.0 / 3.0, "1/8T"), (0.25, "1/16"), (1.0 / 6.0, "1/16T"), (0.125, "1/32")];
 
 /// Ready-made fixed chords: name and semitones above.
-const SHAPES: [(&str, [i8; 3]); 6] = [
-    ("Mayor", [4, 7, 0]),
-    ("Menor", [3, 7, 0]),
-    ("Quinta", [7, 12, 0]),
-    ("Octava", [12, 0, 0]),
-    ("Sus4", [5, 7, 0]),
-    ("Séptima", [4, 7, 10]),
-];
+fn shapes() -> [(&'static str, [i8; 3]); 6] {
+    [
+        (tr("Mayor"), [4, 7, 0]),
+        (tr("Menor"), [3, 7, 0]),
+        (tr("Quinta"), [7, 12, 0]),
+        (tr("Octava"), [12, 0, 0]),
+        ("Sus4", [5, 7, 0]),
+        (tr("Séptima"), [4, 7, 10]),
+    ]
+}
 
 impl PulseApp {
     /// The project's key, as the MIDI effects take it.
@@ -64,16 +67,16 @@ impl PulseApp {
     pub fn add_midi_effect(&mut self, t: usize, effect: MidiEffect) {
         let Some(track) = self.project.tracks.get_mut(t) else { return };
         if track.is_audio() || track.is_group() {
-            self.status = Some("Los efectos MIDI van en pistas MIDI".into());
+            self.status = Some(tr("Los efectos MIDI van en pistas MIDI").into());
             return;
         }
         if track.midi_effects.len() >= MAX_MIDI_EFFECTS {
-            self.status = Some(format!("Como mucho {MAX_MIDI_EFFECTS} efectos MIDI por pista"));
+            self.status = Some(fill(tr("Como mucho {} efectos MIDI por pista"), &[&MAX_MIDI_EFFECTS]));
             return;
         }
         track.midi_effects.push(MidiDevice::new(effect));
         self.sync_midi_effects(t);
-        self.status = Some(format!("{} en «{}»", effect.label(), self.project.tracks[t].name));
+        self.status = Some(fill(tr("{} en «{}»"), &[&tr(effect.label()), &self.project.tracks[t].name]));
     }
 }
 
@@ -92,7 +95,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
     for index in 0..count {
         let before = app.project.tracks[t].midi_effects[index];
         let mut device = before;
-        let title = device.effect.label();
+        let title = tr(device.effect.label());
         let width = match device.effect {
             MidiEffect::Arpeggiator(_) => 250.0,
             MidiEffect::Chord(_) => 230.0,
@@ -105,13 +108,13 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, t: usize) {
             width,
             Some(enabled),
             |ui| {
-                if ui.small_button("×").on_hover_text("Eliminar").clicked() {
+                if ui.small_button("×").on_hover_text(tr("Eliminar")).clicked() {
                     changes.push(Change::Remove(index));
                 }
-                if index + 1 < count && ui.small_button("►").on_hover_text("Mover a la derecha").clicked() {
+                if index + 1 < count && ui.small_button("►").on_hover_text(tr("Mover a la derecha")).clicked() {
                     changes.push(Change::Move(index, index + 1));
                 }
-                if index > 0 && ui.small_button("◄").on_hover_text("Mover a la izquierda").clicked() {
+                if index > 0 && ui.small_button("◄").on_hover_text(tr("Mover a la izquierda")).clicked() {
                     changes.push(Change::Move(index, index - 1));
                 }
             },
@@ -143,14 +146,14 @@ fn small(text: &str) -> RichText {
 
 /// The key an effect uses: the project's, or one of its own.
 fn key_picker(ui: &mut egui::Ui, id: (&str, usize), follow: &mut bool, key: &mut Option<ScaleKey>, project_key: Option<ScaleKey>) {
-    ui.checkbox(follow, "La del proyecto").on_hover_text("Sigue la Escala de la barra de transporte (y cambia con ella)");
+    ui.checkbox(follow, tr("La del proyecto")).on_hover_text(tr("Sigue la Escala de la barra de transporte (y cambia con ella)"));
     if *follow {
-        ui.label(small(&project_key.map_or("(el proyecto no tiene escala)".to_string(), key_name)));
+        ui.label(small(&project_key.map_or(tr("(el proyecto no tiene escala)").to_string(), key_name)));
         return;
     }
-    let shown = key.map_or("Ninguna".to_string(), key_name);
+    let shown = key.map_or(tr("Ninguna").to_string(), key_name);
     egui::ComboBox::from_id_salt(id).selected_text(shown).width(110.0).show_ui(ui, |ui| {
-        ui.selectable_value(key, None, "Ninguna");
+        ui.selectable_value(key, None, tr("Ninguna"));
         for minor in [false, true] {
             for tonic in 0..12 {
                 let k = ScaleKey { tonic, minor };
@@ -164,13 +167,13 @@ fn body(ui: &mut egui::Ui, effect: &mut MidiEffect, index: usize, project_key: O
     match effect {
         MidiEffect::Arpeggiator(p) => {
             ui.vertical(|ui| {
-                ui.label(small("Orden"));
+                ui.label(small(tr("Orden")));
                 egui::ComboBox::from_id_salt(("arp mode", index)).selected_text(mode_label(p.mode)).width(110.0).show_ui(ui, |ui| {
                     for mode in ArpMode::ALL {
                         ui.selectable_value(&mut p.mode, mode, mode_label(mode));
                     }
                 });
-                ui.label(small("Ritmo"));
+                ui.label(small(tr("Ritmo")));
                 let rate = RATES.iter().find(|r| (r.0 - p.rate).abs() < 1e-9).map_or("?", |r| r.1);
                 egui::ComboBox::from_id_salt(("arp rate", index)).selected_text(rate).width(110.0).show_ui(ui, |ui| {
                     for (value, label) in RATES {
@@ -179,30 +182,30 @@ fn body(ui: &mut egui::Ui, effect: &mut MidiEffect, index: usize, project_key: O
                 });
             });
             ui.vertical(|ui| {
-                ui.label(small("Octavas"));
+                ui.label(small(tr("Octavas")));
                 ui.add(egui::Slider::new(&mut p.octaves, 1..=4));
-                ui.label(small("Duración"));
+                ui.label(small(tr("Duración")));
                 let mut percent = p.gate * 100.0;
-                if ui.add(egui::Slider::new(&mut percent, 5.0..=100.0).suffix(" %").fixed_decimals(0)).on_hover_text("Lo que dura cada nota, del paso").changed() {
+                if ui.add(egui::Slider::new(&mut percent, 5.0..=100.0).suffix(" %").fixed_decimals(0)).on_hover_text(tr("Lo que dura cada nota, del paso")).changed() {
                     p.gate = percent / 100.0;
                 }
             });
         }
         MidiEffect::Chord(p) => {
             ui.vertical(|ui| {
-                ui.checkbox(&mut p.in_key, "En la escala").on_hover_text("Cada nota con su tercera y su quinta de la escala: los acordes encajan con la canción");
+                ui.checkbox(&mut p.in_key, tr("En la escala")).on_hover_text(tr("Cada nota con su tercera y su quinta de la escala: los acordes encajan con la canción"));
                 if p.in_key {
-                    ui.checkbox(&mut p.seventh, "Con séptima");
+                    ui.checkbox(&mut p.seventh, tr("Con séptima"));
                     key_picker(ui, ("chord key", index), &mut p.follow_project, &mut p.key, project_key);
                 } else {
-                    ui.label(small("Semitonos añadidos"));
+                    ui.label(small(tr("Semitonos añadidos")));
                     ui.horizontal(|ui| {
                         for iv in &mut p.intervals {
                             ui.add(egui::DragValue::new(iv).range(-24..=24));
                         }
                     });
                     ui.horizontal_wrapped(|ui| {
-                        for (name, shape) in SHAPES {
+                        for (name, shape) in shapes() {
                             if ui.selectable_label(p.intervals == shape, name).clicked() {
                                 p.intervals = shape;
                             }
@@ -214,7 +217,7 @@ fn body(ui: &mut egui::Ui, effect: &mut MidiEffect, index: usize, project_key: O
         }
         MidiEffect::Scale(p) => {
             ui.vertical(|ui| {
-                ui.label(small("Las notas fuera de la escala van a la más cercana"));
+                ui.label(small(tr("Las notas fuera de la escala van a la más cercana")));
                 key_picker(ui, ("scale key", index), &mut p.follow_project, &mut p.key, project_key);
             });
         }
@@ -224,7 +227,7 @@ fn body(ui: &mut egui::Ui, effect: &mut MidiEffect, index: usize, project_key: O
 fn velocity(ui: &mut egui::Ui, p: &mut ChordParams) {
     let mut percent = p.velocity * 100.0;
     ui.horizontal(|ui| {
-        ui.label(small("Velocidad añadidas"));
+        ui.label(small(tr("Velocidad añadidas")));
         if ui.add(egui::DragValue::new(&mut percent).range(10.0..=100.0).suffix(" %").speed(1.0)).changed() {
             p.velocity = percent / 100.0;
         }

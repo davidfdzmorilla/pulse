@@ -3,6 +3,7 @@
 
 use crate::app::{Detail, PulseApp};
 use crate::devices::Action;
+use crate::i18n::{fill, tr};
 use crate::project::PluginRef;
 use crate::theme::{self, TEXT_DIM};
 use eframe::egui;
@@ -306,7 +307,7 @@ impl PulseApp {
             self.samples.plugins.remove(&old);
         }
         self.audio.send(Command::set_plugin(track, id, processor));
-        self.status = Some(format!("{} en {}", info.name, self.project.tracks[track].name));
+        self.status = Some(fill(tr("{} en {}"), &[&info.name, &self.project.tracks[track].name]));
         self.detail = Detail::Devices;
     }
 
@@ -380,7 +381,7 @@ pub enum PluginWindow {
 /// linked to MIDI controllers like any other.
 pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, as_param: &dyn Fn(u32) -> Param, id: PluginId, knobs: usize, actions: &mut Vec<Action>) {
     let Some(handle) = app.samples.plugins.get(&id) else {
-        ui.label(egui::RichText::new("No se pudo cargar el plugin.\nComprueba que sigue instalado.").color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(tr("No se pudo cargar el plugin.\nComprueba que sigue instalado.")).color(TEXT_DIM).size(10.5));
         return;
     };
     ui.vertical(|ui| {
@@ -388,10 +389,10 @@ pub fn device_body(app: &PulseApp, ui: &mut egui::Ui, target: Target, as_param: 
             ui.label(egui::RichText::new(&plugin.vendor).color(TEXT_DIM).size(10.5));
         }
         let editor = if app.editors.is_open(id) { "Editor ✓" } else { "Editor" };
-        if ui.button(editor).on_hover_text("La ventana del propio plugin").clicked() {
+        if ui.button(editor).on_hover_text(tr("La ventana del propio plugin")).clicked() {
             actions.push(Action::OpenPlugin(PluginWindow::Editor(id)));
         }
-        if ui.button("Parámetros…").on_hover_text("Todos los parámetros del plugin, en una lista").clicked() {
+        if ui.button(tr("Parámetros…")).on_hover_text(tr("Todos los parámetros del plugin, en una lista")).clicked() {
             actions.push(Action::OpenPlugin(PluginWindow::Params(id)));
         }
     });
@@ -459,11 +460,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    let title = format!("{} · parámetros", app.plugin_name(id));
+    let title = fill(tr("{} · parámetros"), &[&app.plugin_name(id)]);
     let mut filter = app.plugin_library.filter.clone();
     egui::Window::new(title).id(egui::Id::new(("plugin_window", id.0))).open(&mut open).default_size([420.0, 520.0]).show(ctx, |ui| {
         ui.horizontal(|ui| {
-            ui.label("Buscar");
+            ui.label(tr("Buscar"));
             ui.text_edit_singleline(&mut filter);
         });
         ui.separator();
@@ -486,7 +487,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 }
             });
             if params.is_empty() {
-                ui.label(egui::RichText::new("Ningún parámetro").color(TEXT_DIM));
+                ui.label(egui::RichText::new(tr("Ningún parámetro")).color(TEXT_DIM));
             }
         });
     });
@@ -504,16 +505,17 @@ pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::U
         _ => None,
     };
     let folders = app.plugin_folders();
-    let hint = format!("Busca plugins VST3 en {}", folders.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", "));
-    let search = if app.plugin_library.searched { "Volver a buscar plugins" } else { "Buscar plugins VST3" };
+    let hint = fill(tr("Busca plugins VST3 en {}"), &[&folders.iter().map(|f| f.display().to_string()).collect::<Vec<_>>().join(", ")]);
+    let search = if app.plugin_library.searched { tr("Volver a buscar plugins") } else { tr("Buscar plugins VST3") };
     if item(ui, "plugins:buscar", "⟳", search, &hint) {
         app.plugin_library.search(&folders);
         app.plugin_library.remember();
         let (found, failed) = (app.plugin_library.found.len(), app.plugin_library.failed.len());
         app.status = Some(match (found, failed) {
-            (0, 0) => "No hay plugins VST3 instalados".to_string(),
-            (n, 0) => format!("{n} plugins encontrados"),
-            (n, f) => format!("{n} plugins encontrados; {f} no se pudieron cargar"),
+            (0, 0) => tr("No hay plugins VST3 instalados").to_string(),
+            (1, 0) => tr("1 plugin encontrado").to_string(),
+            (n, 0) => fill(tr("{} plugins encontrados"), &[&n]),
+            (n, f) => fill(tr("{} plugins encontrados; {} no se pudieron cargar"), &[&n, &f]),
         });
     }
     let found = app.plugin_library.found.clone();
@@ -523,18 +525,18 @@ pub fn browser(app: &mut PulseApp, ui: &mut egui::Ui, item: impl Fn(&mut egui::U
             label.push_str(" (CLAP)");
         }
         if info.instrument {
-            let hint = if track.is_some() { "Clic: será el instrumento de la pista seleccionada" } else { "Selecciona una pista MIDI" };
+            let hint = if track.is_some() { tr("Clic: será el instrumento de la pista seleccionada") } else { tr("Selecciona una pista MIDI") };
             if item(ui, &format!("plugin:{}", info.cid), "♫", &label, hint) {
                 if let Some(t) = track {
                     app.set_plugin_instrument(t, info);
                 }
             }
-        } else if item(ui, &format!("plugin:{}", info.cid), "≈", &label, "Clic: añade el efecto al final de la cadena seleccionada") {
+        } else if item(ui, &format!("plugin:{}", info.cid), "≈", &label, tr("Clic: añade el efecto al final de la cadena seleccionada")) {
             app.add_plugin_effect(target, info);
         }
     }
     if app.plugin_library.searched && found.is_empty() {
-        ui.label(egui::RichText::new("No hay plugins VST3 instalados").color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(tr("No hay plugins VST3 instalados")).color(TEXT_DIM).size(10.5));
     }
 }
 

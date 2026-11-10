@@ -8,6 +8,7 @@
 //! Arrangement (⌘Z brings it back).
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::project::{Project, Track};
 use crate::theme::{ACCENT, TEXT_DIM};
 use eframe::egui::{self, RichText};
@@ -26,10 +27,10 @@ pub enum Role {
 impl Role {
     fn label(self) -> &'static str {
         match self {
-            Role::Drums => "batería",
-            Role::Bass => "bajo",
-            Role::Harmony => "armonía",
-            Role::Lead => "melodía",
+            Role::Drums => tr("batería"),
+            Role::Bass => tr("bajo"),
+            Role::Harmony => tr("armonía"),
+            Role::Lead => tr("melodía"),
         }
     }
 
@@ -137,9 +138,9 @@ impl Template {
 
     pub fn label(self) -> &'static str {
         match self {
-            Template::Electronic => "Electrónica (intro, subida, drop, break, drop, outro)",
-            Template::Pop => "Pop (intro, estrofa, estribillo, puente, final)",
-            Template::Short => "Corta (intro, A, B, final)",
+            Template::Electronic => tr("Electrónica (intro, subida, drop, break, drop, outro)"),
+            Template::Pop => tr("Pop (intro, estrofa, estribillo, puente, final)"),
+            Template::Short => tr("Corta (intro, A, B, final)"),
         }
     }
 
@@ -433,7 +434,20 @@ impl PulseApp {
         self.sync_loop();
         self.back_to_arrangement();
         let bars: u32 = sections.iter().map(|s| s.bars).sum();
-        self.status = Some(crate::theme::keys(&format!("Canción de {bars} compases en {} partes en el Arrangement (⌘Z la deshace)", sections.len())));
+        self.status = Some(crate::theme::keys(&fill(tr("Canción de {} compases en {} partes en el Arrangement (⌘Z la deshace)"), &[&bars, &sections.len()])));
+    }
+}
+
+/// A section's name as the window shows it: the names stay Spanish in the
+/// project (they become its markers).
+fn section_shown(name: &str) -> &str {
+    match name {
+        "Subida" => tr("Subida hacia el drop"),
+        "Estrofa" => tr("Estrofa"),
+        "Estribillo" => tr("Estribillo"),
+        "Puente" => tr("Puente"),
+        "Final" => tr("Final"),
+        _ => name,
     }
 }
 
@@ -450,7 +464,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    egui::Window::new("Arreglo automático")
+    egui::Window::new(tr("Arreglo automático"))
         .id(egui::Id::new("arrange"))
         .open(&mut open)
         .collapsible(false)
@@ -463,7 +477,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
 }
 
 fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
-    ui.label(RichText::new("De las escenas de Session a una canción en el Arrangement. Elige una estructura, retócala y créala.").color(TEXT_DIM));
+    ui.label(RichText::new(tr("De las escenas de Session a una canción en el Arrangement. Elige una estructura, retócala y créala.")).color(TEXT_DIM));
     ui.horizontal(|ui| {
         for template in Template::ALL {
             if ui.selectable_label(app.arrange.template == Some(template), template.label()).clicked() {
@@ -474,7 +488,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     });
     let Some(_) = app.arrange.template else { return };
     if app.arrange.sections.is_empty() {
-        ui.label(RichText::new("No hay clips en las escenas de Session de los que hacer una canción.").color(ACCENT));
+        ui.label(RichText::new(tr("No hay clips en las escenas de Session de los que hacer una canción.")).color(ACCENT));
         return;
     }
     // Tracks that ever play (rows), sections (columns).
@@ -488,10 +502,10 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             ui.label("");
             for s in sections.iter_mut() {
                 ui.vertical(|ui| {
-                    ui.label(RichText::new(&s.name).strong());
-                    ui.add(egui::DragValue::new(&mut s.bars).range(1..=64).suffix(" c."));
+                    ui.label(RichText::new(section_shown(&s.name)).strong());
+                    ui.add(egui::DragValue::new(&mut s.bars).range(1..=64).suffix(tr(" c.")));
                     let scene = scene_names.get(s.scene).cloned().unwrap_or_default();
-                    ui.label(RichText::new(format!("Escena {scene}")).color(TEXT_DIM).size(10.5));
+                    ui.label(RichText::new(fill(tr("Escena {}"), &[&scene])).color(TEXT_DIM).size(10.5));
                 });
             }
             ui.end_row();
@@ -504,7 +518,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                     if let Some(source) = s.tracks.get_mut(t) {
                         let mut plays = source.is_some();
                         let other = source.is_some_and(|k| k != s.scene);
-                        let hint = if other { "Toca su clip de otra escena (aquí no tiene)" } else { "Suena en esta parte" };
+                        let hint = if other { tr("Toca su clip de otra escena (aquí no tiene)") } else { tr("Suena en esta parte") };
                         if ui.add_enabled(fallback.is_some(), egui::Checkbox::without_text(&mut plays)).on_hover_text(hint).changed() {
                             *source = if plays { fallback } else { None };
                         }
@@ -512,14 +526,14 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
                 ui.end_row();
             }
-            ui.label(RichText::new("Redoble al final").color(TEXT_DIM));
+            ui.label(RichText::new(tr("Redoble al final")).color(TEXT_DIM));
             for s in sections.iter_mut() {
-                ui.checkbox(&mut s.roll, "").on_hover_text("El último compás de la batería, un redoble de caja que sube; en trap, un redoble de charles y un hueco antes de lo siguiente");
+                ui.checkbox(&mut s.roll, "").on_hover_text(tr("El último compás de la batería, un redoble de caja que sube; en trap, un redoble de charles y un hueco antes de lo siguiente"));
             }
             ui.end_row();
-            ui.label(RichText::new("Corte antes de lo siguiente").color(TEXT_DIM));
+            ui.label(RichText::new(tr("Corte antes de lo siguiente")).color(TEXT_DIM));
             for s in sections.iter_mut() {
-                ui.checkbox(&mut s.cut, "").on_hover_text("El último tiempo en silencio, para que lo que sigue entre con fuerza");
+                ui.checkbox(&mut s.cut, "").on_hover_text(tr("El último tiempo en silencio, para que lo que sigue entre con fuerza"));
             }
             ui.end_row();
         });
@@ -528,13 +542,13 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
     let bars: u32 = app.arrange.sections.iter().map(|s| s.bars).sum();
     let replaces = app.project.tracks.iter().any(|t| !t.arrangement.is_empty());
     ui.horizontal(|ui| {
-        let label = if replaces { "Crear (sustituye el Arrangement)" } else { "Crear en el Arrangement" };
-        if ui.button(label).on_hover_text(crate::theme::keys("⌘Z lo deshace")).clicked() {
+        let label = if replaces { tr("Crear (sustituye el Arrangement)") } else { tr("Crear en el Arrangement") };
+        if ui.button(label).on_hover_text(crate::theme::keys(tr("⌘Z lo deshace"))).clicked() {
             let sections = app.arrange.sections.clone();
             app.lay_out(&sections);
             app.arrange.open = false;
         }
-        ui.label(RichText::new(format!("{bars} compases")).color(TEXT_DIM));
+        ui.label(RichText::new(fill(tr("{} compases"), &[&bars])).color(TEXT_DIM));
     });
 }
 
@@ -800,6 +814,51 @@ mod tests {
             assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
         }
         assert!(texts.iter().any(|t| t.starts_with("Crear")));
+    }
+
+    /// In English the window, and the generators' and voice tools' texts,
+    /// speak English; what the project keeps (section and part names) stays
+    /// Spanish.
+    #[test]
+    fn the_generators_speak_english() {
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let mut app = PulseApp::headless(Project::demo());
+            app.open_panel(crate::app::Panel::Arrange);
+            app.arrange.template = Some(Template::Pop);
+            app.arrange.sections = plan(&app.project.tracks, &app.project.scene_names, Template::Pop);
+            let ctx = egui::Context::default();
+            let input = || egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1600.0, 1000.0))), ..Default::default() };
+            let _ = ctx.run_ui(input(), |ui| window(&mut app, ui.ctx()));
+            let output = ctx.run_ui(input(), |ui| window(&mut app, ui.ctx()));
+            let mut texts = Vec::new();
+            fn collect(shape: &egui::Shape, texts: &mut Vec<String>) {
+                match shape {
+                    egui::Shape::Text(t) => texts.push(t.galley.text().to_string()),
+                    egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
+                    _ => {}
+                }
+            }
+            output.shapes.iter().for_each(|s| collect(&s.shape, &mut texts));
+            for expected in ["Auto-arrange", "Pop (intro, verse, chorus, bridge, ending)", "Chorus", "Bridge", "Verse", "Bass (bass)", "Roll at the end", "Cut before the next section"] {
+                assert!(texts.iter().any(|t| t == expected), "{expected}: {texts:?}");
+            }
+            assert!(texts.iter().any(|t| t.starts_with("Create")), "{texts:?}");
+            assert!(!texts.iter().any(|t| t == "Estribillo" || t.contains("Redoble")), "{texts:?}");
+            assert_eq!(app.arrange.sections[1].name, "Estrofa", "the project keeps the Spanish");
+
+            use engine::follow::{Follow, FollowKind};
+            let next = Follow { a: FollowKind::Next, count: 2, ..Default::default() };
+            assert_eq!(crate::follow_ui::summary(&next), "Next after 2 loops");
+            assert_eq!(crate::follow_ui::summary(&Follow::default()), "No follow action");
+            let bass = crate::accompany::Part::BassWalking;
+            assert_eq!((bass.label(), bass.name()), ("Bass: walking", "Bajo: caminante"));
+            assert!(bass.hint().starts_with("One note per beat"));
+            assert_eq!((crate::to_midi::ToMidi::Chords.label(), crate::to_midi::ToMidi::Chords.name()), ("Chords", "Acordes"));
+            assert_eq!(crate::drum_gen::Level::Intense.label(), "Intense");
+            assert_eq!(crate::beatbox::Drum::Kick.sound(), "\"boom\"");
+            assert_eq!(crate::lyrics_ui::Language::Spanish.label(), "Spanish");
+            assert_eq!(crate::lyrics_ui::language_name("en"), "English");
+        });
     }
 
     #[test]

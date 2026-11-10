@@ -8,6 +8,7 @@
 //! key from C3 up.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use engine::model::{InstrumentKind, SamplerParams, Zone, SAMPLER_ZONES};
 use std::path::PathBuf;
 
@@ -124,12 +125,12 @@ impl PulseApp {
         self.set_instrument(track, InstrumentKind::Sampler(params));
         self.sync_samples(track);
         let skipped = files.len().saturating_sub(SAMPLER_ZONES);
-        let mut status = format!("{} muestras repartidas por el teclado", zones.len());
+        let mut status = fill(tr("{} muestras repartidas por el teclado"), &[&zones.len()]);
         if unnamed > 0 {
-            status.push_str(&format!(" ({unnamed} sin nota en el nombre: desde C3, una por tecla)"));
+            status.push_str(&fill(tr(" ({} sin nota en el nombre: desde C3, una por tecla)"), &[&unnamed]));
         }
         if skipped > 0 {
-            status.push_str(&format!(" · {skipped} no caben (máximo {SAMPLER_ZONES})"));
+            status.push_str(&fill(tr(" · {} no caben (máximo {})"), &[&skipped, &SAMPLER_ZONES]));
         }
         self.status = Some(status);
     }
@@ -150,7 +151,7 @@ impl PulseApp {
         let count = params.zone_count as usize;
         let fits = params.zones[..count].iter().all(|z| (0..=127).contains(&(z.root as i32 + semitones)));
         if !fits {
-            self.status = Some("No cabe más allá: el mapa llegaría fuera del teclado".into());
+            self.status = Some(tr("No cabe más allá: el mapa llegaría fuera del teclado").into());
             return;
         }
         let at = |n: u8| (n as i32 + semitones).clamp(0, 127) as u8;

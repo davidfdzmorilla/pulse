@@ -5,6 +5,7 @@
 //! drag between two points bends that stretch. With «Rejilla», what is drawn
 //! falls on the editor's grid.
 
+use crate::i18n::{fill, tr};
 use crate::theme::{self, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
 use engine::model::{thin_points, AutomationPoint, ControlLane, MidiControl};
@@ -52,23 +53,46 @@ impl Default for Editing {
 /// How far apart (beats) the pencil leaves points as it moves.
 const PENCIL_STEP: f64 = 1.0 / 64.0;
 
+/// A controller's name, as the lane menu lists it, in the interface's language.
+pub fn control_name(control: MidiControl) -> String {
+    match control {
+        MidiControl::Cc(1) => tr("Rueda de modulación (CC 1)").into(),
+        MidiControl::Cc(2) => tr("Soplo (CC 2)").into(),
+        MidiControl::Cc(4) => tr("Pedal de expresión (CC 4)").into(),
+        MidiControl::Cc(7) => tr("Volumen (CC 7)").into(),
+        MidiControl::Cc(10) => tr("Panorama (CC 10)").into(),
+        MidiControl::Cc(11) => tr("Expresión (CC 11)").into(),
+        MidiControl::Cc(71) => tr("Resonancia (CC 71)").into(),
+        MidiControl::Cc(74) => tr("Brillo (CC 74)").into(),
+        c => c.label(),
+    }
+}
+
+/// A controller's short name, over its lane.
+fn control_short(control: MidiControl) -> String {
+    match control {
+        MidiControl::Cc(1) => tr("Rueda").into(),
+        c => c.short(),
+    }
+}
+
 /// The tools beside the lane menu, for the controller shown.
 pub fn tools(ui: &mut egui::Ui, choice: &mut crate::clip_envelope::LaneChoice, controls: &mut Vec<ControlLane>, control: MidiControl) {
     let editing = &mut choice.expression;
     ui.add_space(6.0);
-    ui.selectable_value(&mut editing.tool, Tool::Pencil, "Lápiz").on_hover_text("Arrastra para dibujar a mano alzada");
-    ui.selectable_value(&mut editing.tool, Tool::Line, "Línea").on_hover_text("Arrastra de un punto a otro para trazar una rampa recta");
-    ui.checkbox(&mut editing.snap, "Rejilla").on_hover_text("Lo que dibujas cae en la rejilla del editor");
+    ui.selectable_value(&mut editing.tool, Tool::Pencil, tr("Lápiz")).on_hover_text(tr("Arrastra para dibujar a mano alzada"));
+    ui.selectable_value(&mut editing.tool, Tool::Line, tr("Línea")).on_hover_text(tr("Arrastra de un punto a otro para trazar una rampa recta"));
+    ui.checkbox(&mut editing.snap, tr("Rejilla")).on_hover_text(tr("Lo que dibujas cae en la rejilla del editor"));
     let count = controls.iter().find(|l| l.control == control).map_or(0, |l| l.points.len());
     if count > 0 {
-        if ui.small_button("Borrar carril").on_hover_text("Quita este controlador del clip").clicked() {
+        if ui.small_button(tr("Borrar carril")).on_hover_text(tr("Quita este controlador del clip")).clicked() {
             controls.retain(|l| l.control != control);
         }
-        ui.label(egui::RichText::new(format!("{count} punto{}", if count == 1 { "" } else { "s" })).color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(if count == 1 { tr("1 punto").to_string() } else { fill(tr("{} puntos"), &[&count]) }).color(TEXT_DIM).size(10.5));
     }
     let others = controls.iter().filter(|l| !l.points.is_empty()).count();
     if others > 0 {
-        ui.label(egui::RichText::new(format!("· {others} controlador{} en el clip", if others == 1 { "" } else { "es" })).color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(if others == 1 { tr("· 1 controlador en el clip").to_string() } else { fill(tr("· {} controladores en el clip"), &[&others]) }).color(TEXT_DIM).size(10.5));
     }
 }
 
@@ -112,7 +136,7 @@ pub fn lane(
     painter.text(pos2(scale_rect.right(), area.top()), Align2::RIGHT_TOP, names[0], theme::small(), TEXT_DIM);
     painter.text(pos2(scale_rect.right(), (area.top() + area.bottom()) / 2.0), Align2::RIGHT_CENTER, names[1], theme::small(), TEXT_DIM);
     painter.text(pos2(scale_rect.right(), area.bottom()), Align2::RIGHT_BOTTOM, names[2], theme::small(), TEXT_DIM);
-    painter.text(pos2(rect.left() + 4.0, area.top()), Align2::LEFT_TOP, control.short(), theme::small(), color);
+    painter.text(pos2(rect.left() + 4.0, area.top()), Align2::LEFT_TOP, control_short(control), theme::small(), color);
     let clip = painter.with_clip_rect(Rect::from_min_max(pos2(area.left(), rect.top()), rect.max));
     let first = beat_of(area.left()).max(0.0).floor() as i64;
     let last = beat_of(area.right()).ceil() as i64;
@@ -132,8 +156,8 @@ pub fn lane(
         let rest = control.rest().unwrap_or(min);
         clip.line_segment([pos2(area.left(), y_of(rest)), pos2(end, y_of(rest))], Stroke::new(1.0, Color32::from_gray(110)));
         let hint = match editing.tool {
-            Tool::Pencil => "Arrastra para dibujar el controlador a mano alzada",
-            Tool::Line => "Arrastra de un punto a otro para trazar una rampa",
+            Tool::Pencil => tr("Arrastra para dibujar el controlador a mano alzada"),
+            Tool::Line => tr("Arrastra de un punto a otro para trazar una rampa"),
         };
         clip.text(pos2(area.left() + 6.0, rect.top() + 4.0), Align2::LEFT_TOP, hint, theme::small(), TEXT_DIM);
     } else {

@@ -5,6 +5,7 @@
 //! macro (see `midi_map`).
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::midi_map::Control;
 use crate::theme::{ACCENT, TEXT_DIM};
 use eframe::egui;
@@ -87,18 +88,18 @@ impl PulseApp {
     /// says why it can't.
     pub fn add_to_macro(&mut self, index: usize, control: Control) {
         if matches!(control, Control::Macro(_) | Control::Transport(_)) {
-            self.status = Some("Una macro mueve knobs, faders y parámetros, no otras macros ni el transporte".into());
+            self.status = Some(tr("Una macro mueve knobs, faders y parámetros, no otras macros ni el transporte").into());
             return;
         }
         let name = self.control_name(control);
         let routes = &mut self.macros_mut()[index].routes;
         if routes.iter().any(|r| r.control == control) {
-            self.status = Some(format!("La macro ya mueve «{name}»"));
+            self.status = Some(fill(tr("La macro ya mueve «{}»"), &[&name]));
             return;
         }
         routes.push(Route { control, min: 0.0, max: 1.0 });
         let label = self.project.macros[index].label(index);
-        self.status = Some(format!("«{label}» mueve también «{name}»"));
+        self.status = Some(fill(tr("«{}» mueve también «{}»"), &[&label, &name]));
     }
 
     /// Whether a click on a control picks it (for MIDI learn or a macro).
@@ -114,7 +115,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         return;
     }
     let mut open = true;
-    egui::Window::new("Macros").id(egui::Id::new("macros")).open(&mut open).resizable(false).default_pos([600.0, 120.0]).show(ctx, |ui| contents(app, ui));
+    egui::Window::new(tr("Macros")).id(egui::Id::new("macros")).open(&mut open).resizable(false).default_pos([600.0, 120.0]).show(ctx, |ui| contents(app, ui));
     if !open {
         app.macro_window.open = false;
         app.macro_window.picking = None;
@@ -132,28 +133,28 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                     app.set_macro(i, value);
                 }
                 let count = app.project.macros.get(i).map_or(0, |m| m.routes.len());
-                let text = egui::RichText::new(if count == 1 { "1 control".to_string() } else { format!("{count} controles") }).size(10.0);
+                let text = egui::RichText::new(if count == 1 { tr("1 control").to_string() } else { fill(tr("{} controles"), &[&count]) }).size(10.0);
                 let chosen = app.macro_window.picking == Some(i);
-                if ui.selectable_label(chosen, text.color(if chosen { ACCENT } else { TEXT_DIM })).on_hover_text("Añadir un control: pulsa y toca el knob, fader o parámetro que quieras que mueva").clicked() {
+                if ui.selectable_label(chosen, text.color(if chosen { ACCENT } else { TEXT_DIM })).on_hover_text(tr("Añadir un control: pulsa y toca el knob, fader o parámetro que quieras que mueva")).clicked() {
                     app.macro_window.picking = if chosen { None } else { Some(i) };
                 }
-                response.on_hover_text("Gira para mover a la vez todo lo que tiene asignado");
+                response.on_hover_text(tr("Gira para mover a la vez todo lo que tiene asignado"));
             });
         }
     });
     let Some(i) = app.macro_window.picking else {
-        ui.label(egui::RichText::new("Pulsa «controles» bajo una macro para ver qué mueve y añadirle más.").color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(tr("Pulsa «controles» bajo una macro para ver qué mueve y añadirle más.")).color(TEXT_DIM).size(10.5));
         return;
     };
     ui.separator();
     let mut name = app.project.macros.get(i).map(|m| m.name.clone()).unwrap_or_default();
     ui.horizontal(|ui| {
-        ui.label("Nombre");
+        ui.label(tr("Nombre"));
         if ui.add(egui::TextEdit::singleline(&mut name).hint_text(format!("Macro {}", i + 1)).desired_width(160.0)).changed() {
             app.macros_mut()[i].name = name.clone();
         }
     });
-    ui.label(egui::RichText::new("Toca un knob, un fader o un parámetro de plugin para añadirlo. Desde y Hasta: dónde lo pone la macro al mínimo y al máximo (en % de su recorrido; al revés si Desde es mayor).").color(TEXT_DIM).size(10.5));
+    ui.label(egui::RichText::new(tr("Toca un knob, un fader o un parámetro de plugin para añadirlo. Desde y Hasta: dónde lo pone la macro al mínimo y al máximo (en % de su recorrido; al revés si Desde es mayor).")).color(TEXT_DIM).size(10.5));
     let routes = app.project.macros.get(i).map(|m| m.routes.clone()).unwrap_or_default();
     let mut remove = None;
     let mut edited = Vec::new();
@@ -170,14 +171,14 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
             if r != *route {
                 edited.push((k, r));
             }
-            if ui.small_button("×").on_hover_text("Quitar").clicked() {
+            if ui.small_button("×").on_hover_text(tr("Quitar")).clicked() {
                 remove = Some(k);
             }
             ui.end_row();
         }
     });
     if routes.is_empty() {
-        ui.label(egui::RichText::new("Aún no mueve nada.").color(TEXT_DIM));
+        ui.label(egui::RichText::new(tr("Aún no mueve nada.")).color(TEXT_DIM));
     }
     let changed = !edited.is_empty() || remove.is_some();
     let macro_ = &mut app.macros_mut()[i];

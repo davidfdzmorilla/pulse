@@ -5,6 +5,7 @@
 //! rendering, so the true peak can be reported and the mix normalized.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::project::{Project, Track};
 use engine::model::InstrumentKind;
 use crate::sync::{self, SampleCache};
@@ -132,18 +133,19 @@ pub struct Report {
 
 impl Report {
     pub fn summary(&self) -> String {
-        let mut text = format!(
-            "Exportado{} {} archivo(s), {:.1} s, pico {:.1} dBFS",
-            if self.files.len() == 1 { "" } else { "s" },
-            self.files.len(),
-            self.seconds,
-            self.peak_db
-        );
+        let (seconds, peak) = (format!("{:.1}", self.seconds), format!("{:.1}", self.peak_db));
+        let mut text = if self.files.len() == 1 {
+            fill(tr("Exportado 1 archivo, {} s, pico {} dBFS"), &[&seconds, &peak])
+        } else {
+            fill(tr("Exportados {} archivos, {} s, pico {} dBFS"), &[&self.files.len(), &seconds, &peak])
+        };
         if self.clipped > 0 {
-            text.push_str(&format!(" · ¡{} muestras saturadas! Baja el master o normaliza", self.clipped));
+            text.push_str(" · ");
+            text.push_str(&fill(tr("¡{} muestras saturadas! Baja el master o normaliza"), &[&self.clipped]));
         }
         if self.silent > 0 {
-            text.push_str(&format!(" · {} stem(s) en silencio, de pistas que no suenan en esa parte, no se escribieron", self.silent));
+            text.push_str(" · ");
+            text.push_str(&fill(tr("{} stem(s) en silencio, de pistas que no suenan en esa parte, no se escribieron"), &[&self.silent]));
         }
         if let Some(dir) = self.files.first().and_then(|f| f.parent()) {
             text.push_str(&format!(" · {}", dir.display()));
@@ -688,7 +690,7 @@ pub fn write(path: &Path, left: &[f32], right: &[f32], sample_rate: u32, bits: B
         BitDepth::Float32 => (32, hound::SampleFormat::Float),
     };
     let spec = hound::WavSpec { channels: 2, sample_rate, bits_per_sample, sample_format };
-    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| format!("No se pudo crear {}: {e}", path.display()))?;
+    let mut writer = hound::WavWriter::create(path, spec).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&path.display(), &e]))?;
     let mut clipped = 0;
     // TPDF dither for 16-bit, from a small xorshift generator.
     let mut seed: u32 = dither_seed(path);
@@ -756,7 +758,7 @@ fn encode_all(temporaries: Vec<PathBuf>, settings: &Settings, clipped: &mut usiz
     let work = || loop {
         let i = next.fetch_add(1, Ordering::Relaxed);
         let Some(temporary) = temporaries.get(i) else { return };
-        let result = if cancel.load(Ordering::Relaxed) { Err("Exportación cancelada".to_string()) } else { encode(temporary, &finals[i], settings) };
+        let result = if cancel.load(Ordering::Relaxed) { Err(tr("Exportación cancelada").to_string()) } else { encode(temporary, &finals[i], settings) };
         if let Ok(mut slot) = results[i].lock() {
             *slot = Some(result);
         }
@@ -771,7 +773,7 @@ fn encode_all(temporaries: Vec<PathBuf>, settings: &Settings, clipped: &mut usiz
         let _ = std::fs::remove_file(temporary);
     }
     for result in results {
-        *clipped += result.into_inner().ok().flatten().unwrap_or_else(|| Err("Exportación cancelada".into()))?;
+        *clipped += result.into_inner().ok().flatten().unwrap_or_else(|| Err(tr("Exportación cancelada").into()))?;
     }
     Ok(finals)
 }
@@ -779,7 +781,7 @@ fn encode_all(temporaries: Vec<PathBuf>, settings: &Settings, clipped: &mut usiz
 /// Encodes a 32-bit float WAV to FLAC or MP3 at `to`. How many samples were
 /// over full scale (clipped).
 fn encode(from: &Path, to: &Path, settings: &Settings) -> Result<usize, String> {
-    let reader = hound::WavReader::open(from).map_err(|e| format!("No se pudo leer {}: {e}", from.display()))?;
+    let reader = hound::WavReader::open(from).map_err(|e| fill(tr("No se pudo leer {}: {}"), &[&from.display(), &e]))?;
     let rate = reader.spec().sample_rate;
     let mut samples = reader.into_samples::<f32>().map(|s| s.unwrap_or(0.0));
     let mut clipped = 0;
@@ -791,11 +793,11 @@ fn encode(from: &Path, to: &Path, settings: &Settings) -> Result<usize, String> 
             use flacenc::error::Verify;
             let config = flacenc::config::Encoder::default().into_verified().map_err(|(_, e)| format!("FLAC: {e}"))?;
             let block = config.block_size;
-            let stream = flacenc::encode_with_fixed_block_size(&config, &mut source, block).map_err(|e| format!("No se pudo codificar en FLAC: {e}"))?;
+            let stream = flacenc::encode_with_fixed_block_size(&config, &mut source, block).map_err(|e| fill(tr("No se pudo codificar en {}: {}"), &[&"FLAC", &e]))?;
             clipped = source.clipped;
             let mut sink = flacenc::bitsink::ByteSink::new();
             use flacenc::component::BitRepr;
-            stream.write(&mut sink).map_err(|e| format!("No se pudo codificar en FLAC: {e:?}"))?;
+            stream.write(&mut sink).map_err(|e| fill(tr("No se pudo codificar en {}: {}"), &[&"FLAC", &format!("{e:?}")]))?;
             let mut bytes = sink.into_inner();
             // Every block but the last is `block` long: STREAMINFO's smallest
             // block size says so, as libFLAC writes it (flacenc puts the last
@@ -823,12 +825,12 @@ fn encode(from: &Path, to: &Path, settings: &Settings) -> Result<usize, String> 
                     break;
                 }
                 frames += chunk.len() / 2;
-                encoder.push_pcm_f32(&chunk, 2, rate).map_err(|e| format!("No se pudo codificar en MP3: {e:?}"))?;
+                encoder.push_pcm_f32(&chunk, 2, rate).map_err(|e| fill(tr("No se pudo codificar en {}: {}"), &[&"MP3", &format!("{e:?}")]))?;
             }
             // Silence after the end: what is still inside the encoder's delay
             // gets encoded too (the tag then says to drop the silence).
             let flush = vec![0f32; 2 * 2 * 1152];
-            encoder.push_pcm_f32(&flush, 2, rate).map_err(|e| format!("No se pudo codificar en MP3: {e:?}"))?;
+            encoder.push_pcm_f32(&flush, 2, rate).map_err(|e| fill(tr("No se pudo codificar en {}: {}"), &[&"MP3", &format!("{e:?}")]))?;
             // Only once it is all in: the Info frame goes first, before every other.
             encoder.finish();
             while let Ok(packet) = encoder.next_packet() {
@@ -960,7 +962,7 @@ impl<I: Iterator<Item = f32>> flacenc::source::Source for FloatSource<'_, I> {
 
 /// Adds `frames` of silence at the end of a WAV written by [`write`].
 fn pad(path: &Path, frames: usize, bits: BitDepth) -> Result<(), String> {
-    let mut writer = hound::WavWriter::append(path).map_err(|e| format!("No se pudo alargar {}: {e}", path.display()))?;
+    let mut writer = hound::WavWriter::append(path).map_err(|e| fill(tr("No se pudo alargar {}: {}"), &[&path.display(), &e]))?;
     for _ in 0..frames * 2 {
         match bits {
             BitDepth::Float32 => writer.write_sample(0f32),
@@ -1001,7 +1003,7 @@ impl Job {
             return None;
         }
         let handle = self.handle.take()?;
-        Some(handle.join().unwrap_or_else(|_| Err("La exportación falló inesperadamente".into())))
+        Some(handle.join().unwrap_or_else(|_| Err(tr("La exportación falló inesperadamente").into())))
     }
 }
 
@@ -1131,7 +1133,7 @@ fn write_all(renders: Vec<Render>, settings: Settings, progress: &AtomicU32, can
         let clipped = write(&path, &left, &right, settings.sample_rate, bits, gain)?;
         Ok(Some((path, render.group, left.len(), peak, clipped)))
     })
-    .map_err(|e| if e == "Cancelado" { "Exportación cancelada".to_string() } else { e })?;
+    .map_err(|e| if e == "Cancelado" { tr("Exportación cancelada").to_string() } else { e })?;
     let mut report = Report::default();
     let mut peak_overall = 0f32;
     let mut lengths = Vec::new();
@@ -1152,13 +1154,13 @@ fn write_all(renders: Vec<Render>, settings: Settings, progress: &AtomicU32, can
         }
     }
     if cancel.load(Ordering::Relaxed) {
-        return Err("Exportación cancelada".into());
+        return Err(tr("Exportación cancelada").into());
     }
     if format == Format::Wav {
         let mut finals = Vec::new();
         for temporary in &report.files {
             let to = final_of(temporary);
-            std::fs::rename(temporary, &to).map_err(|e| format!("No se pudo guardar {}: {e}", to.display()))?;
+            std::fs::rename(temporary, &to).map_err(|e| fill(tr("No se pudo guardar {}: {}"), &[&to.display(), &e]))?;
             finals.push(to);
         }
         report.files = finals;
@@ -1184,7 +1186,7 @@ pub fn render_from_command_line(output: &Path, project: Option<&Path>) -> Result
 /// The whole of `project`'s Arrangement as 24-bit, 48 kHz, to `output`: a report.
 pub fn render_project(output: &Path, project: &Project) -> Result<String, String> {
     let settings = Settings::default();
-    beat_range(project, settings.range).ok_or("El Arrangement está vacío")?;
+    beat_range(project, settings.range).ok_or(tr("El Arrangement está vacío"))?;
     let mut samples = SampleCache::default();
     let renders = plan(project, &mut samples, &settings, output);
     if let Some(error) = samples.errors.first() {
@@ -1228,10 +1230,10 @@ impl PulseApp {
         let now = !self.export.only_versions || versions.is_empty();
         if now {
             if beat_range(&self.project, settings.range).is_none() {
-                return Err("El Arrangement está vacío: coloca clips en él (o copia clips de la sesión) para exportar".into());
+                return Err(tr("El Arrangement está vacío: coloca clips en él (o copia clips de la sesión) para exportar").into());
             }
             if settings.range == Range::Sections && sections(&self.project).is_empty() {
-                return Err("No hay marcadores en la canción: añade alguno (doble clic en la franja de marcadores) para exportar por secciones".into());
+                return Err(tr("No hay marcadores en la canción: añade alguno (doble clic en la franja de marcadores) para exportar por secciones").into());
             }
         }
         self.capture_plugins();
@@ -1243,7 +1245,7 @@ impl PulseApp {
         self.samples.plugins = live;
         distinct(&mut renders);
         if renders.is_empty() {
-            return Err("Esas versiones no tienen nada que exportar en ese rango".into());
+            return Err(tr("Esas versiones no tienen nada que exportar en ese rango").into());
         }
         Ok(renders)
     }
@@ -1271,7 +1273,7 @@ impl PulseApp {
         let chosen = destination.with_extension(extension);
         let existing: Vec<PathBuf> = renders.iter().map(|r| r.path.with_extension(extension)).filter(|p| *p != chosen && p.exists()).collect();
         if !existing.is_empty() && !self.may_replace(&existing) {
-            self.status = Some("Exportación cancelada: no se ha sustituido nada".into());
+            self.status = Some(tr("Exportación cancelada: no se ha sustituido nada").into());
             return;
         }
         self.export.job = Some(Job::start(renders, self.export.settings));
@@ -1285,14 +1287,14 @@ impl PulseApp {
             return true;
         }
         let names: Vec<String> = existing.iter().take(6).map(|p| format!("· {}", p.file_name().unwrap_or_default().to_string_lossy())).collect();
-        let more = if existing.len() > 6 { format!("\n… y {} más", existing.len() - 6) } else { String::new() };
+        let more = if existing.len() > 6 { format!("\n{}", fill(tr("… y {} más"), &[&(existing.len() - 6)])) } else { String::new() };
         let result = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
-            .set_title("¿Sustituir los archivos que ya existen?")
-            .set_description(format!("En {} ya hay {} archivo(s) con esos nombres:\n{}{more}", existing[0].parent().map_or_else(String::new, |d| d.display().to_string()), existing.len(), names.join("\n")))
-            .set_buttons(rfd::MessageButtons::OkCancelCustom("Sustituir".into(), "Cancelar".into()))
+            .set_title(tr("¿Sustituir los archivos que ya existen?"))
+            .set_description(format!("{}\n{}{more}", fill(tr("En {} ya hay {} archivo(s) con esos nombres:"), &[&existing[0].parent().map_or_else(String::new, |d| d.display().to_string()), &existing.len()]), names.join("\n")))
+            .set_buttons(rfd::MessageButtons::OkCancelCustom(tr("Sustituir").into(), tr("Cancelar").into()))
             .show();
-        matches!(&result, rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes) || matches!(&result, rfd::MessageDialogResult::Custom(label) if label == "Sustituir")
+        matches!(&result, rfd::MessageDialogResult::Ok | rfd::MessageDialogResult::Yes) || matches!(&result, rfd::MessageDialogResult::Custom(label) if label == tr("Sustituir"))
     }
 }
 
@@ -1319,48 +1321,48 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         app.export.loaded = true;
     }
     let mut open = true;
-    egui::Window::new("Exportar audio")
+    egui::Window::new(tr("Exportar audio"))
         .open(&mut open)
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
         .show(ctx, |ui| {
             if let Some(job) = &app.export.job {
-                ui.label("Renderizando…");
+                ui.label(tr("Renderizando…"));
                 ui.add(egui::ProgressBar::new(job.progress()).show_percentage().desired_width(320.0));
-                if ui.button("Cancelar").clicked() {
+                if ui.button(tr("Cancelar")).clicked() {
                     job.cancel();
                 }
                 return;
             }
             let s = &mut app.export.settings;
             egui::Grid::new("export").num_columns(2).spacing([12.0, 8.0]).show(ui, |ui| {
-                ui.label("Qué");
+                ui.label(tr("Qué"));
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut s.stems, false, "Mezcla completa");
-                    ui.radio_value(&mut s.stems, true, "Una pista por archivo (stems)");
+                    ui.radio_value(&mut s.stems, false, tr("Mezcla completa"));
+                    ui.radio_value(&mut s.stems, true, tr("Una pista por archivo (stems)"));
                 });
                 ui.end_row();
-                ui.label("Rango");
+                ui.label(tr("Rango"));
                 ui.horizontal(|ui| {
-                    ui.radio_value(&mut s.range, Range::Song, "Toda la canción");
-                    ui.radio_value(&mut s.range, Range::Loop, "Región del loop");
-                    ui.radio_value(&mut s.range, Range::Sections, "Por secciones").on_hover_text("Un archivo por cada parte de la canción, de un marcador al siguiente");
+                    ui.radio_value(&mut s.range, Range::Song, tr("Toda la canción"));
+                    ui.radio_value(&mut s.range, Range::Loop, tr("Región del loop"));
+                    ui.radio_value(&mut s.range, Range::Sections, tr("Por secciones")).on_hover_text(tr("Un archivo por cada parte de la canción, de un marcador al siguiente"));
                 });
                 ui.end_row();
-                ui.label("Formato");
+                ui.label(tr("Formato"));
                 ui.horizontal(|ui| {
                     for format in Format::ALL {
                         ui.radio_value(&mut s.format, format, format.label()).on_hover_text(match format {
-                            Format::Wav => "Sin pérdida, el de siempre",
-                            Format::Flac => "Sin pérdida y la mitad de grande (16 o 24 bits)",
-                            Format::Mp3 => "Para escuchar y compartir",
+                            Format::Wav => tr("Sin pérdida, el de siempre"),
+                            Format::Flac => tr("Sin pérdida y la mitad de grande (16 o 24 bits)"),
+                            Format::Mp3 => tr("Para escuchar y compartir"),
                         });
                     }
                 });
                 ui.end_row();
                 if s.format == Format::Mp3 {
-                    ui.label("Calidad");
+                    ui.label(tr("Calidad"));
                     ui.horizontal(|ui| {
                         for kbps in [192, 256, 320] {
                             ui.radio_value(&mut s.mp3_kbps, kbps, format!("{kbps} kbps"));
@@ -1378,17 +1380,17 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     });
                 }
                 ui.end_row();
-                ui.label("Frecuencia");
+                ui.label(tr("Frecuencia"));
                 ui.horizontal(|ui| {
                     ui.radio_value(&mut s.sample_rate, 44_100, "44.1 kHz");
                     ui.radio_value(&mut s.sample_rate, 48_000, "48 kHz");
                 });
                 ui.end_row();
-                ui.label("Normalizar");
+                ui.label(tr("Normalizar"));
                 ui.add_enabled_ui(!s.stems, |ui| {
                     ui.horizontal(|ui| {
                         let mut on = s.normalize.is_some();
-                        ui.checkbox(&mut on, "Pico a");
+                        ui.checkbox(&mut on, tr("Pico a"));
                         let mut target = s.normalize.unwrap_or(-1.0);
                         ui.add_enabled(on, egui::DragValue::new(&mut target).range(-24.0..=0.0).speed(0.1).suffix(" dBFS"));
                         s.normalize = on.then_some(target);
@@ -1397,7 +1399,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 ui.end_row();
                 if s.stems {
                     ui.label("Master");
-                    ui.checkbox(&mut s.stems_master, "Con la cadena del master").on_hover_text("Sin ella, los stems sumados dan la mezcla (sin los efectos del master), salvo que un grupo o un retorno compriman o saturen");
+                    ui.checkbox(&mut s.stems_master, tr("Con la cadena del master")).on_hover_text(tr("Sin ella, los stems sumados dan la mezcla (sin los efectos del master), salvo que un grupo o un retorno compriman o saturen"));
                     ui.end_row();
                 }
             });
@@ -1405,19 +1407,23 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             if app.export.settings.range == Range::Sections {
                 let parts = sections(&app.project);
                 let text = if parts.is_empty() {
-                    "No hay marcadores en la canción: añade alguno (doble clic en la franja de marcadores).".to_string()
+                    tr("No hay marcadores en la canción: añade alguno (doble clic en la franja de marcadores).").to_string()
                 } else {
                     let names: Vec<&str> = parts.iter().map(|(n, _)| n.as_str()).collect();
-                    format!("{} secciones: {}. Cada una con lo que suena en ella desde antes y su cola{}.", parts.len(), names.join(", "), if app.export.settings.stems { "; sin los stems de las pistas que no suenan en ella" } else { "" })
+                    let template = if app.export.settings.stems {
+                        tr("{} secciones: {}. Cada una con lo que suena en ella desde antes y su cola; sin los stems de las pistas que no suenan en ella.")
+                    } else {
+                        tr("{} secciones: {}. Cada una con lo que suena en ella desde antes y su cola.")
+                    };
+                    fill(template, &[&parts.len(), &names.join(", ")])
                 };
                 ui.label(egui::RichText::new(text).color(TEXT_DIM).size(10.5));
             } else if let Some((start, end)) = beat_range(&app.project, app.export.settings.range) {
                 let seconds = (end - start) * 60.0 / app.project.tempo;
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} · {:.1} s, más la cola de los efectos. La automatización se exporta tal como está escrita.",
-                        crate::transport::bars_label(crate::transport::bars_between(&app.project.meter, start, end)).replace(" c.", " compases"),
-                        seconds
+                    egui::RichText::new(fill(
+                        tr("{} compases · {} s, más la cola de los efectos. La automatización se exporta tal como está escrita."),
+                        &[&crate::transport::bars_label(crate::transport::bars_between(&app.project.meter, start, end)).trim_end_matches(" c."), &format!("{seconds:.1}")],
                     ))
                     .color(TEXT_DIM)
                     .size(10.5),
@@ -1426,12 +1432,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             if app.export.settings.stems {
                 ui.label(
                     egui::RichText::new(if app.export.settings.stems_master {
-                        "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay, su grupo y la cadena del master."
+                        tr("Cada pista que suena se exporta en solo, con sus envíos de reverb y delay, su grupo y la cadena del master.")
                     } else {
                         if stems_add_up(&app.project) {
-                            "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master: sumados dan la mezcla."
+                            tr("Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master: sumados dan la mezcla.")
                         } else {
-                            "Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master. Un grupo o un retorno comprime o satura (lo que suena junto se comprime junto), así que sumados se parecen a la mezcla pero no la dan exacta."
+                            tr("Cada pista que suena se exporta en solo, con sus envíos de reverb y delay y su grupo, sin los efectos del master. Un grupo o un retorno comprime o satura (lo que suena junto se comprime junto), así que sumados se parecen a la mezcla pero no la dan exacta.")
                         }
                     })
                         .color(TEXT_DIM)
@@ -1439,7 +1445,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 );
             }
             ui.add_space(6.0);
-            if ui.button("Exportar…").clicked() {
+            if ui.button(tr("Exportar…")).clicked() {
                 app.start_export();
             }
         });
@@ -1467,8 +1473,8 @@ fn versions_list(app: &mut PulseApp, ui: &mut egui::Ui) {
         return;
     }
     ui.add_space(4.0);
-    egui::CollapsingHeader::new(format!("Versiones ({} marcadas)", d.versions.len())).id_salt("export_versions").show(ui, |ui| {
-        ui.label(egui::RichText::new("Las marcadas se exportan también, cada una con su nombre al final del archivo.").color(TEXT_DIM).size(10.5));
+    egui::CollapsingHeader::new(fill(tr("Versiones ({} marcadas)"), &[&d.versions.len()])).id_salt("export_versions").show(ui, |ui| {
+        ui.label(egui::RichText::new(tr("Las marcadas se exportan también, cada una con su nombre al final del archivo.")).color(TEXT_DIM).size(10.5));
         for v in versions.iter().rev() {
             let mut on = d.versions.contains(&v.file);
             if ui.checkbox(&mut on, &v.name).changed() {
@@ -1479,7 +1485,7 @@ fn versions_list(app: &mut PulseApp, ui: &mut egui::Ui) {
                 }
             }
         }
-        ui.add_enabled(!d.versions.is_empty(), egui::Checkbox::new(&mut d.only_versions, "Solo las versiones (no lo de ahora)"));
+        ui.add_enabled(!d.versions.is_empty(), egui::Checkbox::new(&mut d.only_versions, tr("Solo las versiones (no lo de ahora)")));
     });
 }
 
@@ -2427,6 +2433,45 @@ mod playback {
             let peak = track_peak(&project, 0, 24_000);
             assert!(peak > 0.1 && peak < 1.5, "{name}: peak {peak}");
         }
+    }
+
+    /// The export dialog and the windows around files (versions, about,
+    /// updates) speak English, and so do their messages.
+    #[test]
+    fn the_file_windows_speak_english() {
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let app = PulseApp::headless(Project::demo());
+            let dir = std::env::temp_dir().join(format!("pulse-ventanas-en-{}", std::process::id()));
+            let mut s = crate::produccion::Studio::new(app, dir);
+            s.app.export.open = true;
+            s.frames(4);
+            for text in ["Export audio", "Full mix", "One track per file (stems)", "Whole song", "Format", "Sample rate", "Normalize", "plus the effects' tail", "Export…"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            assert!(!s.has("Mezcla completa") && !s.has("Toda la canción"));
+            s.app.export.open = false;
+            s.app.versions.open = true;
+            s.frames(4);
+            assert!(s.has("Versions of \"Untitled\"") && s.has("to be able to save versions"));
+            s.app.versions.open = false;
+            s.app.show_about = true;
+            s.frames(4);
+            for text in ["About Pulse", "Source code:", "License (GPL-3.0)", "Third-party components", "Pulse is free software"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            s.app.show_about = false;
+            s.app.updates.show = true;
+            s.frames(4);
+            for text in ["Updates", "Installed version: Pulse", "Check now", "Check for updates at startup", "GitHub access (optional)"] {
+                assert!(s.has(text), "falta «{text}»");
+            }
+            assert!(!s.has("Buscar ahora"));
+            let report = Report { files: vec![PathBuf::from("/tmp/Tema.wav")], seconds: 12.0, peak_db: -1.0, clipped: 3, silent: 0 };
+            assert!(report.summary().starts_with("Exported 1 file, 12.0 s, peak -1.0 dBFS · 3 clipped samples!"), "{}", report.summary());
+            assert_eq!(crate::versions::ago(0, 7200), "2 h ago");
+        });
+        let report = Report { files: vec![PathBuf::from("/tmp/a.wav"), PathBuf::from("/tmp/b.wav")], ..Default::default() };
+        assert!(report.summary().starts_with("Exportados 2 archivos"), "{}", report.summary());
     }
 }
 

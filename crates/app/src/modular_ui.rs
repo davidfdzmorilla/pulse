@@ -7,6 +7,7 @@
 //! Right-click a modulated knob to switch, bend, bound or remove each connection.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::devices::{self, Action};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
@@ -170,7 +171,7 @@ fn audio_handle(ui: &mut egui::Ui, t: usize, i: usize) {
         ui.label(egui::RichText::new("⟿").color(Color32::BLACK).background_color(AUDIO_GREEN).size(12.0));
     })
     .response
-    .on_hover_text("Arrástralo a Phase, Harmonic, Shift, Level o Semi de un generador, o a un Aux: modulación de audio");
+    .on_hover_text(tr("Arrástralo a Phase, Harmonic, Shift, Level o Semi de un generador, o a un Aux: modulación de audio"));
 }
 
 fn insert_menu(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, after: Option<usize>, label: &str, actions: &mut Vec<Action>) {
@@ -234,10 +235,10 @@ fn sync_choice(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, module: &e
 /// The global unison: the whole stack once per unison voice.
 fn unison_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, actions: &mut Vec<Action>) {
     let mut unison = p.unison;
-    ui.label(egui::RichText::new("UNÍSONO").color(TEXT_DIM).size(10.0).strong());
-    egui::ComboBox::from_id_salt(("modular_unison_voices", t)).selected_text(format!("{} voces", unison.voices)).width(66.0).show_ui(ui, |ui| {
+    ui.label(egui::RichText::new(tr("UNÍSONO")).color(TEXT_DIM).size(10.0).strong());
+    egui::ComboBox::from_id_salt(("modular_unison_voices", t)).selected_text(fill(tr("{} voces"), &[&unison.voices])).width(66.0).show_ui(ui, |ui| {
         for v in 1..=MOD_UNISON_VOICES as u8 {
-            ui.selectable_value(&mut unison.voices, v, format!("{v} voces"));
+            ui.selectable_value(&mut unison.voices, v, fill(tr("{} voces"), &[&v]));
         }
     });
     egui::ComboBox::from_id_salt(("modular_unison_mode", t)).selected_text(unison.mode.label()).width(110.0).show_ui(ui, |ui| {
@@ -262,16 +263,16 @@ fn unison_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, a
 }
 
 fn stack_buttons(ui: &mut egui::Ui, t: usize, i: usize, actions: &mut Vec<Action>) {
-    if ui.small_button("▲").on_hover_text("Subir").clicked() {
+    if ui.small_button("▲").on_hover_text(tr("Subir")).clicked() {
         actions.push(Action::StackEdit(StackEdit::Move(i, true)));
     }
-    if ui.small_button("▼").on_hover_text("Bajar").clicked() {
+    if ui.small_button("▼").on_hover_text(tr("Bajar")).clicked() {
         actions.push(Action::StackEdit(StackEdit::Move(i, false)));
     }
-    if ui.small_button("⧉").on_hover_text("Duplicar").clicked() {
+    if ui.small_button("⧉").on_hover_text(tr("Duplicar")).clicked() {
         actions.push(Action::StackEdit(StackEdit::Duplicate(i)));
     }
-    if ui.small_button("×").on_hover_text("Quitar").clicked() {
+    if ui.small_button("×").on_hover_text(tr("Quitar")).clicked() {
         actions.push(Action::StackEdit(StackEdit::Remove(i)));
     }
     insert_menu(ui, ("modular_insert", t, i), Some(i), "+", actions);
@@ -284,8 +285,8 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
         egui::Frame::new().fill(theme::CONTROL).corner_radius(2.0).inner_margin(egui::Margin::symmetric(6, 3)).show(ui, |ui| {
             ui.set_width(STACK_WIDTH);
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new(format!("GRUPO {group_number}")).strong());
-                ui.label(egui::RichText::new("la señal empieza de cero aquí").color(TEXT_DIM).size(10.0));
+                ui.label(egui::RichText::new(fill(tr("GRUPO {}"), &[&group_number])).strong());
+                ui.label(egui::RichText::new(tr("la señal empieza de cero aquí")).color(TEXT_DIM).size(10.0));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| stack_buttons(ui, t, i, actions));
             });
         });
@@ -306,7 +307,7 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                     choice_combo(ui, ("mm_wave", t, i), &mut next.choice[0], &ANALOG_WAVES, 72.0);
                 }
                 ModuleKind::Wavetable => {
-                    let name = if module.table == WAVE_USER_TABLE { app.project.tracks[t].sample_name(i).unwrap_or_else(|| "Archivo".into()) } else { BUILTIN.get(module.table as usize).copied().unwrap_or(BUILTIN[0]).to_string() };
+                    let name = if module.table == WAVE_USER_TABLE { app.project.tracks[t].sample_name(i).unwrap_or_else(|| tr("Archivo").into()) } else { BUILTIN.get(module.table as usize).copied().unwrap_or(BUILTIN[0]).to_string() };
                     egui::ComboBox::from_id_salt(("mm_table", t, i)).selected_text(name).width(120.0).show_ui(ui, |ui| {
                         for (k, label) in BUILTIN.iter().enumerate() {
                             ui.selectable_value(&mut next.table, k as u8, *label);
@@ -321,7 +322,7 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                     choice_combo(ui, ("mm_slope", t, i), &mut next.choice[1], &["1×", "2×"], 36.0);
                 }
                 ModuleKind::Mix | ModuleKind::Aux => {
-                    ui.checkbox(&mut next.flag, "Invertir");
+                    ui.checkbox(&mut next.flag, tr("Invertir fase"));
                 }
                 ModuleKind::Sample => {
                     // The first layout kept the loop in `flag`; the mode replaces it.
@@ -339,8 +340,8 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                     if module.choice[1] != 0 {
                         choice_combo(ui, ("mm_pick", t, i), &mut next.table, &CHORD_PICKS, 66.0);
                     }
-                    ui.checkbox(&mut next.flag, "Warm").on_hover_text("Warm Start: todos los granos empiezan ya al tocar la nota");
-                    ui.checkbox(&mut next.alt, "Align").on_hover_text("Alinea los granos con la fase de la fundamental (necesita una raíz correcta)");
+                    ui.checkbox(&mut next.flag, "Warm").on_hover_text(tr("Warm Start: todos los granos empiezan ya al tocar la nota"));
+                    ui.checkbox(&mut next.alt, "Align").on_hover_text(tr("Alinea los granos con la fase de la fundamental (necesita una raíz correcta)"));
                 }
                 ModuleKind::Noise => {
                     choice_combo(ui, ("mm_noise", t, i), &mut next.choice[0], &NOISE_TYPES, 72.0);
@@ -351,16 +352,16 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                     choice_combo(ui, ("mm_nl_mode", t, i), &mut next.choice[1], &NONLINEAR_MODES, 60.0);
                 }
                 ModuleKind::Output | ModuleKind::CurveOutput => {
-                    ui.checkbox(&mut next.flag, "Out").on_hover_text("Apagado: no suena, solo sirve como fuente de modulación");
+                    ui.checkbox(&mut next.flag, "Out").on_hover_text(tr("Apagado: no suena, solo sirve como fuente de modulación"));
                     choice_combo(ui, ("mm_send", t, i), &mut next.choice[0], &["→ Lane 1", "→ Lane 2", "→ Lane 3", "→ Master", "→ Sideband"], 90.0)
-                        .on_hover_text("Sideband: no suena; lo escuchan Audio Follower y Pitch Tracker");
+                        .on_hover_text(tr("Sideband: no suena; lo escuchan Audio Follower y Pitch Tracker"));
                     if module.kind == ModuleKind::CurveOutput {
                         choice_combo(ui, ("mm_curve_loop", t, i), &mut next.choice[1], &CURVE_LOOPS, 78.0);
                     }
                 }
                 _ => {}
             }
-            if (module.kind == ModuleKind::Wavetable || module.kind.uses_sample()) && ui.small_button("Cargar…").clicked() {
+            if (module.kind == ModuleKind::Wavetable || module.kind.uses_sample()) && ui.small_button(tr("Cargar…")).clicked() {
                 actions.push(Action::LoadGenFile(i));
             }
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| stack_buttons(ui, t, i, actions));
@@ -471,13 +472,13 @@ fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularP
             let title = egui::RichText::new(format!("LANE {}", l + 1)).strong();
             ui.label(if heard { title } else { title.color(TEXT_DIM) });
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                ui.toggle_value(&mut next.lanes[l].solo, "S").on_hover_text("Solo: silencia los demás carriles");
+                ui.toggle_value(&mut next.lanes[l].solo, "S").on_hover_text(tr("Solo: silencia los demás carriles"));
                 ui.toggle_value(&mut next.lanes[l].mute, "M").on_hover_text("Mute");
                 let response = ui.toggle_value(&mut next.lanes[l].poly, "Poly");
                 let hint = if lane.poly && !poly {
-                    "Polifónico: no se aplica hasta que lo sean también los carriles de su izquierda"
+                    tr("Polifónico: no se aplica hasta que lo sean también los carriles de su izquierda")
                 } else {
-                    "Polifónico: los efectos se aplican a cada voz por separado (y suenan hasta que se apaga su cola)"
+                    tr("Polifónico: los efectos se aplican a cada voz por separado (y suenan hasta que se apaga su cola)")
                 };
                 response.on_hover_text(hint);
             });
@@ -495,13 +496,13 @@ fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularP
                     ui.horizontal(|ui| {
                         ui.checkbox(&mut edited.enabled, egui::RichText::new(device.effect.label()).size(11.0));
                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            if ui.small_button("×").on_hover_text("Quitar").clicked() {
+                            if ui.small_button("×").on_hover_text(tr("Quitar")).clicked() {
                                 next.remove_lane_fx(l, slot);
                             }
-                            if slot + 1 < used && ui.small_button("▼").on_hover_text("Bajar").clicked() {
+                            if slot + 1 < used && ui.small_button("▼").on_hover_text(tr("Bajar")).clicked() {
                                 next.move_lane_fx(l, slot, false);
                             }
-                            if slot > 0 && ui.small_button("▲").on_hover_text("Subir").clicked() {
+                            if slot > 0 && ui.small_button("▲").on_hover_text(tr("Subir")).clicked() {
                                 next.move_lane_fx(l, slot, true);
                             }
                         });
@@ -520,7 +521,7 @@ fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularP
                 }
             }
             if let Some(free) = lane.fx.iter().position(Option::is_none) {
-                egui::ComboBox::from_id_salt(("mod_lane_add", t, l)).selected_text("+ Efecto").width(100.0).show_ui(ui, |ui| {
+                egui::ComboBox::from_id_salt(("mod_lane_add", t, l)).selected_text(tr("+ Efecto")).width(100.0).show_ui(ui, |ui| {
                     for effect in Effect::catalog().into_iter().filter(Effect::fits_in_synths) {
                         if ui.selectable_label(false, effect.label()).clicked() {
                             next.lanes[l].fx[free] = Some(Device::new(effect));
@@ -536,7 +537,7 @@ fn lane_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, l: usize, p: ModularP
             knob(app, ui, t, MOD_LANE_MIX + l, "Mix", None, 22.0, actions);
             ui.spacing_mut().item_spacing.x = 6.0;
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Enviar a").color(TEXT_DIM).size(10.0));
+                ui.label(egui::RichText::new(tr("Enviar a")).color(TEXT_DIM).size(10.0));
                 let label = |d: u8| if d == MOD_NO_LANE { "Master".to_string() } else { format!("Lane {}", d + 1) };
                 egui::ComboBox::from_id_salt(("mod_lane_dest", t, l)).selected_text(label(lane.dest)).width(76.0).show_ui(ui, |ui| {
                     ui.selectable_value(&mut next.lanes[l].dest, MOD_NO_LANE, label(MOD_NO_LANE));
@@ -581,19 +582,19 @@ fn sync_combo(ui: &mut egui::Ui, id: impl std::hash::Hash + std::fmt::Debug, bea
 
 /// A connection's settings: on/off, amount, curve and offset.
 fn connection_editor(ui: &mut egui::Ui, target: &mut ModTarget, range: OutputRange) {
-    ui.checkbox(&mut target.on, "").on_hover_text("Activa o desactiva esta modulación");
+    ui.checkbox(&mut target.on, "").on_hover_text(tr("Activa o desactiva esta modulación"));
     let mut depth = target.depth * 100.0;
     if ui.add(egui::Slider::new(&mut depth, -100.0..=100.0).suffix(" %").fixed_decimals(0)).changed() {
         target.depth = depth / 100.0;
     }
     crate::widgets::field_menu_button(ui, "⋯", |ui| {
-        ui.label(egui::RichText::new("Curva").size(10.5).color(TEXT_DIM));
+        ui.label(egui::RichText::new(tr("Curva")).size(10.5).color(TEXT_DIM));
         ui.add(egui::Slider::new(&mut target.curve, -1.0..=1.0).fixed_decimals(2));
-        ui.label(egui::RichText::new("Límites (en % del recorrido del knob)").size(10.5).color(TEXT_DIM));
+        ui.label(egui::RichText::new(tr("Límites (en % del recorrido del knob)")).size(10.5).color(TEXT_DIM));
         let (low, high) = target.bounds(range);
         let (mut low, mut high) = (low * 100.0, high * 100.0);
-        let changed = ui.add(egui::Slider::new(&mut low, -100.0..=100.0).text("Inferior").fixed_decimals(0)).changed()
-            | ui.add(egui::Slider::new(&mut high, -100.0..=100.0).text("Superior").fixed_decimals(0)).changed();
+        let changed = ui.add(egui::Slider::new(&mut low, -100.0..=100.0).text(tr("Inferior")).fixed_decimals(0)).changed()
+            | ui.add(egui::Slider::new(&mut high, -100.0..=100.0).text(tr("Superior")).fixed_decimals(0)).changed();
         if changed {
             // Unipolar and inverted sources move between the bounds over 0..1, bipolar over -1..1.
             let (low, high) = (low / 100.0, high / 100.0);
@@ -607,7 +608,7 @@ fn connection_editor(ui: &mut egui::Ui, target: &mut ModTarget, range: OutputRan
                 target.offset = from;
             }
         }
-        if ui.small_button("Sin desplazamiento").clicked() {
+        if ui.small_button(tr("Sin desplazamiento")).clicked() {
             target.offset = 0.0;
         }
     });
@@ -626,7 +627,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
                 ui.label(egui::RichText::new(format!("✚ {}", modulator_name(&p, i))).size(11.0).color(Color32::BLACK).background_color(color));
             })
             .response
-            .on_hover_text("Arrástralo a cualquier knob para modularlo, también a los de otro modulador");
+            .on_hover_text(tr("Arrástralo a cualquier knob para modularlo, también a los de otro modulador"));
             let mut range = modulator.range();
             egui::ComboBox::from_id_salt(("modular_range", t, i)).selected_text(range.label()).width(70.0).show_ui(ui, |ui| {
                 for r in OutputRange::ALL {
@@ -640,20 +641,20 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
         });
         if kind.triggered() {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Disparo").size(10.5).color(TEXT_DIM));
+                ui.label(egui::RichText::new(tr("Disparo")).size(10.5).color(TEXT_DIM));
                 egui::ComboBox::from_id_salt(("modular_trigger", t, i)).selected_text(next.trigger.label()).width(62.0).show_ui(ui, |ui| {
                     for mode in TriggerMode::ALL {
                         ui.selectable_value(&mut next.trigger, mode, mode.label());
                     }
                 })
                 .response
-                .on_hover_text("Cuándo lo reinician las notas. Auto: nunca si tiene entrada de disparo; si no, Legato en modo legato y Always en los demás");
-                modulator_choice(ui, ("modular_trigger_in", t, i), &mut next.trigger_source, &p, i, "Notas");
+                .on_hover_text(tr("Cuándo lo reinician las notas. Auto: nunca si tiene entrada de disparo; si no, Legato en modo legato y Always en los demás"));
+                modulator_choice(ui, ("modular_trigger_in", t, i), &mut next.trigger_source, &p, i, tr("Notas"));
             });
         }
         if kind.takes_input() {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Entrada").size(10.5).color(TEXT_DIM));
+                ui.label(egui::RichText::new(tr("Entrada")).size(10.5).color(TEXT_DIM));
                 modulator_choice(ui, ("modular_input", t, i), &mut next.source, &p, i, "—");
             });
         }
@@ -669,7 +670,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
                 ModulatorKind::Envelope => {
                     ui.vertical(|ui| {
                         ui.horizontal(|ui| knobs(ui, &[DELAY, ATTACK, HOLD, DECAY, SUSTAIN, RELEASE], actions));
-                        ui.checkbox(&mut next.seamless, "Seamless").on_hover_text("Al redisparar, sigue desde el nivel actual en vez de empezar de cero");
+                        ui.checkbox(&mut next.seamless, "Seamless").on_hover_text(tr("Al redisparar, sigue desde el nivel actual en vez de empezar de cero"));
                     });
                 }
                 ModulatorKind::Lfo | ModulatorKind::LfoTable => {
@@ -717,7 +718,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
                         }
                         ui.horizontal(|ui| {
                             choice_combo(ui, ("modular_timeline_loop", t, i), &mut next.loop_mode, &CURVE_LOOPS, 70.0);
-                            sync_combo(ui, ("modular_timeline_sync", t, i), &mut next.sync_beats, "Seg");
+                            sync_combo(ui, ("modular_timeline_sync", t, i), &mut next.sync_beats, tr("Seg"));
                         });
                     });
                     ui.add_enabled_ui(modulator.sync_beats == 0.0, |ui| knobs(ui, &[LENGTH], actions));
@@ -735,7 +736,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
                 }
                 ModulatorKind::AudioFollower | ModulatorKind::PitchTracker => {
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("Escucha").size(10.5).color(TEXT_DIM));
+                        ui.label(egui::RichText::new(tr("Escucha")).size(10.5).color(TEXT_DIM));
                         choice_combo(ui, ("modular_listen", t, i), &mut next.index, &MOD_LISTEN, 70.0);
                     });
                     if kind == ModulatorKind::AudioFollower {
@@ -778,15 +779,15 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
                 }
                 ModulatorKind::SampleHold => {
                     knobs(ui, &[THRESHOLD], actions);
-                    ui.label(egui::RichText::new("Toma la entrada cuando el disparo sube del umbral (sin disparo: con cada nota)").size(10.0).color(TEXT_DIM));
+                    ui.label(egui::RichText::new(tr("Toma la entrada cuando el disparo sube del umbral (sin disparo: con cada nota)")).size(10.0).color(TEXT_DIM));
                 }
                 _ => {
                     let text = match kind {
-                        ModulatorKind::Note => "La nota tocada, 0 a 1 (con la rueda de tono)",
-                        ModulatorKind::Velocity => "La velocidad de la nota",
-                        ModulatorKind::NoteGate => "1 mientras la nota está pulsada",
-                        ModulatorKind::Pressure => "Aftertouch de canal o polifónico",
-                        ModulatorKind::PitchWheel => "La rueda de tono (bipolar)",
+                        ModulatorKind::Note => tr("La nota tocada, 0 a 1 (con la rueda de tono)"),
+                        ModulatorKind::Velocity => tr("La velocidad de la nota"),
+                        ModulatorKind::NoteGate => tr("1 mientras la nota está pulsada"),
+                        ModulatorKind::Pressure => tr("Aftertouch de canal o polifónico"),
+                        ModulatorKind::PitchWheel => tr("La rueda de tono (bipolar)"),
                         _ => "",
                     };
                     ui.label(egui::RichText::new(text).color(TEXT_DIM).size(10.5));
@@ -799,7 +800,7 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
         });
         let targets: Vec<(usize, ModTarget)> = modulator.targets.iter().copied().enumerate().filter(|(_, tg)| (tg.dest as usize) < MODULAR_PARAMS.len()).collect();
         if targets.is_empty() {
-            ui.label(egui::RichText::new("Sin destinos: arrastra ✚ a un knob").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("Sin destinos: arrastra ✚ a un knob")).color(TEXT_DIM).size(10.5));
         }
         for (s, target) in targets {
             ui.horizontal(|ui| {
@@ -831,12 +832,12 @@ fn modulator_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modu
 pub fn compact(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, actions: &mut Vec<Action>) {
     ui.vertical(|ui| {
         let used: Vec<usize> = (0..MOD_MODULES).filter(|&m| p.modules[m].kind != ModuleKind::Empty).collect();
-        ui.label(egui::RichText::new(format!("{} módulos · {} moduladores", used.len(), p.modulators.iter().filter(|m| m.kind != ModulatorKind::Off).count())).color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(fill(tr("{} módulos · {} moduladores"), &[&used.len(), &p.modulators.iter().filter(|m| m.kind != ModulatorKind::Off).count()])).color(TEXT_DIM).size(10.5));
         for &m in used.iter().take(6) {
             let module = p.modules[m];
             ui.label(egui::RichText::new(format!("{} {}", m + 1, module.kind.label())).size(10.5).color(module_color(module.kind)));
         }
-        if ui.small_button("►").on_hover_text("Escuchar").clicked() {
+        if ui.small_button("►").on_hover_text(tr("Escuchar")).clicked() {
             actions.push(Action::Preview(60));
         }
     });
@@ -864,15 +865,15 @@ fn voice_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, ac
         ui.set_width(STACK_WIDTH - 12.0);
         let mut next = p;
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("VOZ").color(TEXT_DIM).size(10.0).strong());
+            ui.label(egui::RichText::new(tr("VOZ")).color(TEXT_DIM).size(10.0).strong());
             let mut voicing = (p.mono, p.legato);
-            ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text("Varias notas a la vez; con Glide, cada nota desliza desde la anterior");
-            ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio");
-            ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono");
+            ui.selectable_value(&mut voicing, (false, false), "Poly").on_hover_text(tr("Varias notas a la vez; con Glide, cada nota desliza desde la anterior"));
+            ui.selectable_value(&mut voicing, (true, false), "Mono").on_hover_text(tr("Una nota cada vez; con Glide, todas deslizan desde la anterior, también después de un silencio"));
+            ui.selectable_value(&mut voicing, (true, true), "Legato").on_hover_text(tr("Una nota cada vez; con Glide, solo deslizan las notas que se solapan con la anterior, sin reiniciar las envolventes (el 808 del trap). Tras un silencio, la nota empieza en su tono"));
             (next.mono, next.legato) = voicing;
-            ui.add_enabled(!p.mono, egui::DragValue::new(&mut next.polyphony).range(1..=MOD_POLYPHONY).suffix(" notas"))
-                .on_hover_text("Polifonía: notas a la vez (cada una usa una voz por voz de unísono)");
-            ui.add(egui::DragValue::new(&mut next.bend_range).range(0..=48).prefix("Bend ±").suffix(" st")).on_hover_text("Rango de la rueda de pitch bend");
+            ui.add_enabled(!p.mono, egui::DragValue::new(&mut next.polyphony).range(1..=MOD_POLYPHONY).suffix(tr(" notas")))
+                .on_hover_text(tr("Polifonía: notas a la vez (cada una usa una voz por voz de unísono)"));
+            ui.add(egui::DragValue::new(&mut next.bend_range).range(0..=48).prefix("Bend ±").suffix(" st")).on_hover_text(tr("Rango de la rueda de pitch bend"));
             ui.spacing_mut().item_spacing.x = 0.0;
             knob(app, ui, t, MOD_GLIDE, "Glide", None, 22.0, actions);
             knob(app, ui, t, MOD_PITCH, "Pitch", None, 22.0, actions);
@@ -901,7 +902,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
                 devices::preset_menu(app, ui, t, &mut actions);
-                if ui.button("► Escuchar").clicked() {
+                if ui.button(tr("► Escuchar")).clicked() {
                     actions.push(Action::Preview(60));
                 }
             });
@@ -918,20 +919,20 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("GENERADORES").color(TEXT_DIM).size(10.0).strong());
-                    ui.label(egui::RichText::new("de arriba abajo; cada grupo empieza de cero").color(TEXT_DIM).size(10.0));
+                    ui.label(egui::RichText::new(tr("GENERADORES")).color(TEXT_DIM).size(10.0).strong());
+                    ui.label(egui::RichText::new(tr("de arriba abajo; cada grupo empieza de cero")).color(TEXT_DIM).size(10.0));
                 });
                 egui::ScrollArea::vertical().id_salt(("modular_stack", t)).max_height(LANES_HEIGHT - 70.0).show(ui, |ui| {
                     for i in (0..MOD_MODULES).filter(|&i| p.modules[i].kind != ModuleKind::Empty) {
                         module_card(app, ui, t, i, p, &mut actions);
                     }
                     let last = p.modules.iter().rposition(|m| m.kind != ModuleKind::Empty);
-                    insert_menu(ui, ("modular_add", t), last, "+ Añadir módulo", &mut actions);
+                    insert_menu(ui, ("modular_add", t), last, tr("+ Añadir módulo"), &mut actions);
                 });
                 voice_panel(app, ui, t, p, &mut actions);
             });
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("CARRILES DE EFECTOS").color(TEXT_DIM).size(10.0).strong());
+                ui.label(egui::RichText::new(tr("CARRILES DE EFECTOS")).color(TEXT_DIM).size(10.0).strong());
                 ui.horizontal_top(|ui| {
                     for l in 0..MOD_LANES {
                         ui.vertical(|ui| lane_panel(app, ui, t, l, p, &mut actions));
@@ -945,14 +946,14 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         });
         ui.separator();
         // Bottom: the modulators.
-        ui.label(egui::RichText::new("MODULADORES").color(TEXT_DIM).size(10.0).strong());
+        ui.label(egui::RichText::new(tr("MODULADORES")).color(TEXT_DIM).size(10.0).strong());
         egui::ScrollArea::horizontal().id_salt(("modular_mods", t)).show(ui, |ui| {
             ui.horizontal_top(|ui| {
                 for i in (0..MOD_MODULATORS).filter(|&i| p.modulators[i].kind != ModulatorKind::Off) {
                     modulator_card(app, ui, t, i, p, &mut actions);
                 }
                 if let Some(free) = p.modulators.iter().position(|m| m.kind == ModulatorKind::Off) {
-                    egui::ComboBox::from_id_salt(("modular_add_mod", t)).selected_text("+ Modulador").width(120.0).show_ui(ui, |ui| {
+                    egui::ComboBox::from_id_salt(("modular_add_mod", t)).selected_text(tr("+ Modulador")).width(120.0).show_ui(ui, |ui| {
                         for kind in ModulatorKind::ALL {
                             if ui.selectable_label(false, kind.label()).clicked() {
                                 let mut next = p;

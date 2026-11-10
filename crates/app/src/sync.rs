@@ -1,5 +1,6 @@
 //! Translating a project into engine commands, for live playback and offline rendering.
 
+use crate::i18n::{fill, tr};
 use crate::project::{Project, Track};
 use engine::model::{AutomationLane, Clip, Device, Effect, InstrumentKind, Param, PluginId, SynthParams};
 use engine::plugin::{PluginHandle, PluginProcessor};
@@ -38,7 +39,7 @@ impl SampleCache {
         let sample = match Sample::load(Path::new(path)) {
             Ok(sample) => Arc::new(sample),
             Err(error) => {
-                self.errors.push(format!("No se pudo cargar la muestra: {error}"));
+                self.errors.push(fill(tr("No se pudo cargar la muestra: {}"), &[&error]));
                 Arc::new(Sample::default())
             }
         };
@@ -205,19 +206,19 @@ fn mixer_commands(target: Target, mixer: &crate::project::Mixer) -> [Command; 3]
 /// `samples.plugins`. None (with an error to show) if it cannot be loaded.
 pub fn load_plugin(project: &Project, id: PluginId, samples: &mut SampleCache, sample_rate: f32) -> Option<PluginProcessor> {
     let Some(plugin) = project.plugin(id) else {
-        samples.errors.push(format!("Falta el plugin {}", id.0));
+        samples.errors.push(fill(tr("Falta el plugin {}"), &[&id.0]));
         return None;
     };
     if !crate::plugins::trusted(Path::new(&plugin.path)) {
-        samples.errors.push(format!("«{}» no se carga: está en {}, fuera de tus carpetas de plugins. Si te fías de él, añade su carpeta en Ajustes → Plugins.", plugin.name, plugin.path));
+        samples.errors.push(fill(tr("«{}» no se carga: está en {}, fuera de tus carpetas de plugins. Si te fías de él, añade su carpeta en Ajustes → Plugins."), &[&plugin.name, &plugin.path]));
         return None;
     }
     if samples.blocked.iter().any(|b| b.matches(plugin)) {
-        samples.errors.push(format!("«{}» está bloqueado y no se carga: su pista queda en silencio. Lo desbloqueas en Ajustes → Plugins.", plugin.name));
+        samples.errors.push(fill(tr("«{}» está bloqueado y no se carga: su pista queda en silencio. Lo desbloqueas en Ajustes → Plugins."), &[&plugin.name]));
         return None;
     }
     if samples.skipped.iter().any(|b| b.matches(plugin)) {
-        samples.errors.push(format!("«{}» no se carga hasta que cierres Pulse (cerró Pulse la última vez).", plugin.name));
+        samples.errors.push(fill(tr("«{}» no se carga hasta que cierres Pulse (cerró Pulse la última vez)."), &[&plugin.name]));
         return None;
     }
     let state = crate::plugins::decode(&plugin.state);

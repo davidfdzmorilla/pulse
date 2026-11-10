@@ -9,6 +9,7 @@
 //! of another scale.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use engine::model::PluginId;
 use std::collections::HashMap;
 
@@ -36,7 +37,7 @@ impl PulseApp {
     pub fn open_editor(&mut self, id: PluginId) {
         let name = self.plugin_name(id);
         let Some(handle) = self.samples.plugins.get(&id) else {
-            self.status = Some(format!("{name} no está cargado"));
+            self.status = Some(fill(tr("{} no está cargado"), &[&name]));
             return;
         };
         #[cfg(any(target_os = "macos", windows))]
@@ -62,7 +63,7 @@ impl PulseApp {
         #[cfg(not(any(target_os = "macos", windows)))]
         {
             let _ = handle;
-            self.status = Some(format!("{name}: en este sistema los editores de plugins aún no se abren; usa Parámetros…"));
+            self.status = Some(fill(tr("{}: en este sistema los editores de plugins aún no se abren; usa Parámetros…"), &[&name]));
         }
     }
 
@@ -249,10 +250,10 @@ mod mac {
 
     impl Editor {
         pub fn open(handle: &PluginHandle, title: &str) -> Result<Editor, String> {
-            let mtm = MainThreadMarker::new().ok_or("los editores solo se abren desde la ventana principal")?;
-            let mut view = handle.editor().ok_or("no tiene editor propio; usa Parámetros…")?;
+            let mtm = MainThreadMarker::new().ok_or(crate::i18n::tr("los editores solo se abren desde la ventana principal"))?;
+            let mut view = handle.editor().ok_or(crate::i18n::tr("no tiene editor propio; usa Parámetros…"))?;
             if !view.supports(engine::plugin::PLATFORM_VIEW) {
-                return Err("su editor no funciona en macOS".into());
+                return Err(crate::i18n::tr("su editor no funciona en macOS").into());
             }
             let (width, height) = view.size();
             let (width, height) = (width.max(100) as f64, height.max(60) as f64);
@@ -267,7 +268,7 @@ mod mac {
             window.setLevel(NSFloatingWindowLevel);
             window.setHidesOnDeactivate(true);
             window.center();
-            let content = window.contentView().ok_or("ventana sin contenido")?;
+            let content = window.contentView().ok_or(crate::i18n::tr("ventana sin contenido"))?;
             let size = Rc::new(Cell::new((width, height)));
             {
                 let (window, size) = (window.clone(), size.clone());
@@ -279,7 +280,7 @@ mod mac {
             }
             if !unsafe { view.attach(Retained::as_ptr(&content) as *mut std::ffi::c_void) } {
                 window.close();
-                return Err("su editor no se pudo abrir".into());
+                return Err(crate::i18n::tr("su editor no se pudo abrir").into());
             }
             let closed = Rc::new(Cell::new(false));
             let delegate = WindowDelegate::new(mtm, closed.clone());
@@ -394,7 +395,7 @@ mod win {
             };
             unsafe { RegisterClassExW(&class) != 0 }
         });
-        if ok { Ok(()) } else { Err("no se pudo preparar la ventana del editor".into()) }
+        if ok { Ok(()) } else { Err(crate::i18n::tr("no se pudo preparar la ventana del editor").into()) }
     }
 
     fn style(resizable: bool) -> u32 {
@@ -432,7 +433,7 @@ mod win {
         let hwnd = unsafe {
             CreateWindowExW(0, class.as_ptr(), title.as_ptr(), style(resizable), CW_USEDEFAULT, CW_USEDEFAULT, 400, 300, owner, std::ptr::null_mut(), GetModuleHandleW(std::ptr::null()), std::ptr::null())
         };
-        if hwnd.is_null() { Err("no se pudo crear la ventana del editor".into()) } else { Ok(hwnd) }
+        if hwnd.is_null() { Err(crate::i18n::tr("no se pudo crear la ventana del editor").into()) } else { Ok(hwnd) }
     }
 
     /// Centers `hwnd` over `owner` (or leaves it where Windows put it).
@@ -458,9 +459,9 @@ mod win {
 
     impl Editor {
         pub fn open(handle: &PluginHandle, title: &str) -> Result<Editor, String> {
-            let mut view = handle.editor().ok_or("no tiene editor propio; usa Parámetros…")?;
+            let mut view = handle.editor().ok_or(crate::i18n::tr("no tiene editor propio; usa Parámetros…"))?;
             if !view.supports(engine::plugin::PLATFORM_VIEW) {
-                return Err("su editor no funciona en Windows".into());
+                return Err(crate::i18n::tr("su editor no funciona en Windows").into());
             }
             // Pulse's window, active when the editor is asked for: the editor stays over it.
             let owner = unsafe { GetActiveWindow() };
@@ -488,7 +489,7 @@ mod win {
                     SetWindowLongPtrW(hwnd, GWLP_USERDATA, 0);
                     DestroyWindow(hwnd);
                 }
-                return Err("su editor no se pudo abrir".into());
+                return Err(crate::i18n::tr("su editor no se pudo abrir").into());
             }
             unsafe {
                 ShowWindow(hwnd, SW_SHOW);

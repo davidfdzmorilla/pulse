@@ -4,6 +4,7 @@
 //! another take of the same part.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use engine::meter::TimeSig;
 use engine::model::{AcidParams, Clip, FmParams, InstrumentKind, MidiClip, Note, SuperSawParams, SynthParams};
 use engine::{Target, MAX_TRACKS};
@@ -40,7 +41,8 @@ pub enum Part {
 impl Part {
     pub const ALL: [Part; 10] = [Part::BassRoot, Part::BassOctaves, Part::BassOffbeat, Part::BassWalking, Part::BassRolling, Part::BassGallop, Part::ArpUp, Part::ArpUpDown, Part::Pad, Part::Stabs];
 
-    pub fn label(self) -> &'static str {
+    /// Its clip's name, kept in the project (and so in Spanish).
+    pub fn name(self) -> &'static str {
         match self {
             Part::BassRoot => "Bajo: raíz",
             Part::BassOctaves => "Bajo: octavas",
@@ -57,6 +59,28 @@ impl Part {
                 Style::Topline => "Melodía: cantable",
                 Style::Trance => "Melodía: lead de trance",
                 Style::CallResponse => "Melodía: pregunta y respuesta",
+            },
+        }
+    }
+
+    /// Its name as menus and messages show it, in the interface's language.
+    pub fn label(self) -> &'static str {
+        match self {
+            Part::BassRoot => tr("Bajo: raíz"),
+            Part::BassOctaves => tr("Bajo: octavas"),
+            Part::BassOffbeat => tr("Bajo: contratiempo"),
+            Part::BassWalking => tr("Bajo: caminante"),
+            Part::BassRolling => tr("Bajo: rodante"),
+            Part::BassGallop => tr("Bajo: galope"),
+            Part::ArpUp => tr("Arpegio ascendente"),
+            Part::ArpUpDown => tr("Arpegio arriba y abajo"),
+            Part::Pad => "Pad",
+            Part::Stabs => tr("Acordes rítmicos"),
+            Part::Melody(m) => match m.style {
+                Style::Hook => tr("Melodía: gancho"),
+                Style::Topline => tr("Melodía: cantable"),
+                Style::Trance => tr("Melodía: lead de trance"),
+                Style::CallResponse => tr("Melodía: pregunta y respuesta"),
             },
         }
     }
@@ -79,16 +103,16 @@ impl Part {
 
     pub fn hint(self) -> &'static str {
         match self {
-            Part::BassRoot => "La fundamental de cada acorde en cada tiempo, con alguna octava y notas de paso hacia el siguiente",
-            Part::BassOctaves => "Fundamental y su octava en corcheas, como en la música disco",
-            Part::BassOffbeat => "En los contratiempos, como el bajo del house",
-            Part::BassWalking => "Una nota por tiempo que recorre el acorde y llega al siguiente por un semitono",
-            Part::BassRolling => "Semicorcheas que dejan el tiempo al bombo (o tresillos), con acentos, octavas y quintas: el bajo del techno y el melodic techno",
-            Part::BassGallop => "Corchea con puntillo y semicorchea en cada tiempo, como el galope del rock, el EBM y el tech house",
-            Part::ArpUp => "Las notas de cada acorde una tras otra, subiendo, en semicorcheas",
-            Part::ArpUpDown => "Las notas de cada acorde subiendo y bajando, en semicorcheas",
-            Part::Pad => "Los acordes sostenidos, con las voces enlazadas",
-            Part::Stabs => "Acordes cortos con un ritmo sincopado",
+            Part::BassRoot => tr("La fundamental de cada acorde en cada tiempo, con alguna octava y notas de paso hacia el siguiente"),
+            Part::BassOctaves => tr("Fundamental y su octava en corcheas, como en la música disco"),
+            Part::BassOffbeat => tr("En los contratiempos, como el bajo del house"),
+            Part::BassWalking => tr("Una nota por tiempo que recorre el acorde y llega al siguiente por un semitono"),
+            Part::BassRolling => tr("Semicorcheas que dejan el tiempo al bombo (o tresillos), con acentos, octavas y quintas: el bajo del techno y el melodic techno"),
+            Part::BassGallop => tr("Corchea con puntillo y semicorchea en cada tiempo, como el galope del rock, el EBM y el tech house"),
+            Part::ArpUp => tr("Las notas de cada acorde una tras otra, subiendo, en semicorcheas"),
+            Part::ArpUpDown => tr("Las notas de cada acorde subiendo y bajando, en semicorcheas"),
+            Part::Pad => tr("Los acordes sostenidos, con las voces enlazadas"),
+            Part::Stabs => tr("Acordes cortos con un ritmo sincopado"),
             Part::Melody(m) => m.style.hint(),
         }
     }
@@ -563,7 +587,7 @@ impl PulseApp {
     fn melody_here(&mut self, clip: ClipRef, part: Part) {
         let chords = self.song_chords(clip);
         if chords.is_empty() {
-            self.status = Some("No suenan acordes con este clip vacío: ponlo en la escena o el tramo de una pista de acordes".into());
+            self.status = Some(tr("No suenan acordes con este clip vacío: ponlo en la escena o el tramo de una pista de acordes").into());
             return;
         }
         let key = crate::melody::key_for(&chords, self.project.key);
@@ -575,7 +599,7 @@ impl PulseApp {
         self.sync_clip_ref(clip);
         self.select_clip(clip);
         self.accompaniment = Some(Generated { clip, part, seed, chords, key: Some(key), notes, instrument: None, song: None });
-        self.status = Some(format!("{} sobre los acordes de la canción: «Otra variación» en el editor escribe otra", part.label()));
+        self.status = Some(fill(tr("{} sobre los acordes de la canción: «Otra variación» en el editor escribe otra"), &[&part.label()]));
     }
 
     /// An empty MIDI track for `part`'s role, other than `source`: a template's
@@ -598,7 +622,7 @@ impl PulseApp {
         }
         let (chords, length) = self.clip_chords(clip);
         if chords.is_empty() {
-            self.status = Some("No se encuentran acordes en este clip para acompañarlos".into());
+            self.status = Some(tr("No se encuentran acordes en este clip para acompañarlos").into());
             return;
         }
         let seed = crate::versions::seed() ^ part.id() << 32;
@@ -607,13 +631,13 @@ impl PulseApp {
         let source = clip.track();
         let existing = self.track_for(part, source);
         if existing.is_none() && self.project.tracks.len() >= MAX_TRACKS {
-            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&MAX_TRACKS]));
             return;
         }
         // A new track takes its role's color; a template's, its own.
         let color = existing.map_or_else(|| part.color(self.clip(clip).map_or(self.project.tracks[source].color, |c| c.color())), |t| self.project.tracks[t].color);
         // The clip says what it plays: «Bajo: contratiempo», «Pad».
-        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.label(), length, color) });
+        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.name(), length, color) });
         let placed = match clip {
             ClipRef::Session { .. } => None,
             ClipRef::Arrangement { track: t, index } => match self.project.tracks[t].arrangement.get(index) {
@@ -654,8 +678,8 @@ impl PulseApp {
         self.sync_all();
         self.select_clip(new);
         self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes, instrument, song: None });
-        let more = if matches!(part, Part::Melody(_)) { ", y ahí cambias densidad y registro" } else { "" };
-        self.status = Some(format!("{} para {} acordes: «Otra variación» en el editor escribe otra{more}", part.label(), self.accompaniment.as_ref().map_or(0, |g| g.chords.len())));
+        let template = if matches!(part, Part::Melody(_)) { tr("{} para {} acordes: «Otra variación» en el editor escribe otra, y ahí cambias densidad y registro") } else { tr("{} para {} acordes: «Otra variación» en el editor escribe otra") };
+        self.status = Some(fill(template, &[&part.label(), &self.accompaniment.as_ref().map_or(0, |g| g.chords.len())]));
     }
 
     /// Writes `part` over the chord track's chords from `from` to `to` (song
@@ -665,12 +689,12 @@ impl PulseApp {
         let from = self.project.meter.prev_bar(from.max(0.0));
         let chords = crate::chord_track::between(&self.project.chords, from, to);
         if chords.is_empty() || to <= from {
-            self.status = Some("La pista de acordes no tiene acordes ahí: escríbelos o sácalos de un audio".into());
+            self.status = Some(tr("La pista de acordes no tiene acordes ahí: escríbelos o sácalos de un audio").into());
             return;
         }
         let existing = self.track_for(part, usize::MAX);
         if existing.is_none() && self.project.tracks.len() >= MAX_TRACKS {
-            self.status = Some(format!("Máximo de {MAX_TRACKS} pistas"));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&MAX_TRACKS]));
             return;
         }
         let length = to - from;
@@ -679,7 +703,7 @@ impl PulseApp {
         let key = matches!(part, Part::Melody(_)).then(|| crate::melody::key_for(&chords, self.project.key));
         let notes = write(part, &chords, length, seed, sig, key);
         let color = existing.map_or_else(|| part.color([0; 3]), |t| self.project.tracks[t].color);
-        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.label(), length, color) });
+        let midi = Clip::Midi(MidiClip { notes: notes.clone(), ..MidiClip::new(part.name(), length, color) });
         let (index, instrument) = match existing {
             Some(t) => (t, None),
             None => {
@@ -701,7 +725,7 @@ impl PulseApp {
         self.select_clip(new);
         let count = chords.len();
         self.accompaniment = Some(Generated { clip: new, part, seed, chords, key, notes, instrument, song: Some((from, to)) });
-        self.status = Some(format!("{} sobre {count} acordes de la pista de acordes: «Otra variación» en el editor escribe otra", part.label()));
+        self.status = Some(fill(tr("{} sobre {} acordes de la pista de acordes: «Otra variación» en el editor escribe otra"), &[&part.label(), &count]));
     }
 
     /// `name`, or «name 2», «name 3»… if a track already has it.
@@ -729,7 +753,7 @@ impl PulseApp {
         let Some(generated) = self.accompaniment.as_mut() else { return };
         generated.seed = generated.seed.wrapping_add(0x5851_F42D_4C95_7F2D);
         self.rewrite_accompaniment();
-        self.status = Some("Otra variación".into());
+        self.status = Some(tr("Otra variación").into());
     }
 
     /// The last melody again, the same take in another style, density or
@@ -749,8 +773,8 @@ impl PulseApp {
             self.set_instrument(t, lead);
         }
         if let Some(Clip::Midi(m)) = self.clip_mut(clip) {
-            if m.name == old.label() {
-                m.name = Part::Melody(melody).label().to_string();
+            if m.name == old.name() {
+                m.name = Part::Melody(melody).name().to_string();
             }
         }
         self.rewrite_accompaniment();
@@ -1208,7 +1232,7 @@ mod tests {
             let (l, r) = song_with_melody(style);
             let peak = stems::loudness::sample_peak(&l, &r);
             let lufs = stems::loudness::integrated(&l, &r, 48_000.0).unwrap();
-            let name = Part::Melody(crate::melody::Melody::new(style)).label().replace(": ", "-").replace(' ', "-").replace('í', "i").to_lowercase();
+            let name = Part::Melody(crate::melody::Melody::new(style)).name().replace(": ", "-").replace(' ', "-").replace('í', "i").to_lowercase();
             let path = dir.join(format!("{name}.wav"));
             crate::export::write(&path, &l, &r, 48_000, crate::export::BitDepth::Int24, 1.0).unwrap();
             println!("{}: {lufs:.1} LUFS, pico {peak:+.1} dBFS", path.display());

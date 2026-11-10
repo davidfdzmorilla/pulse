@@ -5,6 +5,7 @@
 //! `drum_split`), so the hats don't pump it. Also: which sources a sidechain
 //! would close a loop with (the engine hears those a fixed 64 frames late).
 
+use crate::i18n::{fill, tr};
 use crate::app::PulseApp;
 use crate::mix_assist::Role;
 use crate::project::Track;
@@ -104,7 +105,7 @@ impl PulseApp {
         let Some(track) = self.project.tracks.get(t) else { return };
         let name = track.name.clone();
         let Some(kick) = self.kick_for(t) else {
-            self.status = Some(format!("No hay bombo para «{name}»: añade un Kick Designer o una batería (o llama «Kick» o «Bombo» a su pista)"));
+            self.status = Some(fill(tr("No hay bombo para «{}»: añade un Kick Designer o una batería (o llama «Kick» o «Bombo» a su pista)"), &[&name]));
             return;
         };
         let tracks = &self.project.tracks;
@@ -115,7 +116,7 @@ impl PulseApp {
         };
         if let Some(already) = tracks[t].devices.iter().find(|d| d.effect.sidechain().is_some_and(|s| s == source || Some(s) == drums)) {
             let from = tracks.iter().find(|o| Some(o.id) == already.effect.sidechain()).map_or(String::new(), |o| o.name.clone());
-            self.status = Some(format!("«{name}» ya se aparta con «{from}» ({})", already.effect.label()));
+            self.status = Some(fill(tr("«{}» ya se aparta con «{}» ({})"), &[&name, &from, &tr(already.effect.label())]));
             return;
         }
         let before = self.project.clone();
@@ -124,7 +125,7 @@ impl PulseApp {
             Kick::Track(k) => (self.project.tracks[k].id, None),
             Kick::Drums(d) => {
                 let drums = &self.project.tracks[d];
-                (drums.id, Some(format!(" Escucha toda «{}», solo sus graves (por debajo de 600 Hz): casi solo el bombo. Para que sea solo el bombo, ponlo en su propia pista", drums.name)))
+                (drums.id, Some(fill(tr("Escucha toda «{}», solo sus graves (por debajo de 600 Hz): casi solo el bombo. Para que sea solo el bombo, ponlo en su propia pista"), &[&drums.name])))
             }
             Kick::Machine(d) => match self.take_sound(d, 0) {
                 Ok(Some(k)) => {
@@ -132,10 +133,10 @@ impl PulseApp {
                     if k <= t {
                         t += 1;
                     }
-                    (self.project.tracks[k].id, Some(format!(" El bombo de «{}» suena ahora en su propia pista, «{}», para que solo él lo mueva", self.project.tracks[d].name, self.project.tracks[k].name)))
+                    (self.project.tracks[k].id, Some(fill(tr("El bombo de «{}» suena ahora en su propia pista, «{}», para que solo él lo mueva"), &[&self.project.tracks[d].name, &self.project.tracks[k].name])))
                 }
                 // Can't take it out: the whole kit's lows.
-                Ok(None) | Err(_) => (self.project.tracks[d].id, Some(format!(" Escucha toda «{}», solo sus graves: casi solo el bombo", self.project.tracks[d].name))),
+                Ok(None) | Err(_) => (self.project.tracks[d].id, Some(fill(tr("Escucha toda «{}», solo sus graves: casi solo el bombo"), &[&self.project.tracks[d].name]))),
             },
         };
         let devices = &mut self.project.tracks[t].devices;
@@ -145,7 +146,11 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         self.sync_from(&before);
         let kick_name = self.project.tracks.iter().find(|o| o.id == source).map_or("", |o| o.name.as_str());
-        self.status = Some(format!("«{name}» se aparta con cada golpe de «{kick_name}» y vuelve en una corchea (Ducker).{}", warning.unwrap_or_default()));
+        let done = fill(tr("«{}» se aparta con cada golpe de «{}» y vuelve en una corchea (Ducker)."), &[&name, &kick_name]);
+        self.status = Some(match warning {
+            Some(warning) => format!("{done} {warning}"),
+            None => done,
+        });
     }
 }
 

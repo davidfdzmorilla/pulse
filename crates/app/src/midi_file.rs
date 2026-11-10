@@ -5,6 +5,7 @@
 //! and go out again; the sustain pedal comes in as the notes' lengths.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::project::{Track, PALETTE};
 use engine::meter::{Meter, TimeSig};
 use engine::model::{ArrangementClip, Clip, ControlLane, InstrumentKind, KeysParams, MidiClip, MidiControl, Note, SynthParams};
@@ -48,13 +49,13 @@ struct Reader<'a> {
 
 impl<'a> Reader<'a> {
     fn byte(&mut self) -> Result<u8, String> {
-        let b = *self.bytes.get(self.at).ok_or("El archivo MIDI se corta antes de tiempo")?;
+        let b = *self.bytes.get(self.at).ok_or(tr("El archivo MIDI se corta antes de tiempo"))?;
         self.at += 1;
         Ok(b)
     }
 
     fn take(&mut self, n: usize) -> Result<&'a [u8], String> {
-        let end = self.at.checked_add(n).filter(|&e| e <= self.bytes.len()).ok_or("El archivo MIDI se corta antes de tiempo")?;
+        let end = self.at.checked_add(n).filter(|&e| e <= self.bytes.len()).ok_or(tr("El archivo MIDI se corta antes de tiempo"))?;
         let out = &self.bytes[self.at..end];
         self.at = end;
         Ok(out)
@@ -82,7 +83,7 @@ impl<'a> Reader<'a> {
                 return Ok(value);
             }
         }
-        Err("El archivo MIDI tiene un número mal escrito".into())
+        Err(tr("El archivo MIDI tiene un número mal escrito").into())
     }
 }
 
@@ -91,7 +92,7 @@ impl<'a> Reader<'a> {
 pub fn read(bytes: &[u8]) -> Result<Song, String> {
     let mut r = Reader { bytes, at: 0 };
     if r.take(4)? != b"MThd" {
-        return Err("No es un archivo MIDI".into());
+        return Err(tr("No es un archivo MIDI").into());
     }
     let header = r.u32()? as usize;
     let format = r.u16()?;
@@ -99,10 +100,10 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
     let division = r.u16()?;
     r.take(header.saturating_sub(6))?;
     if format > 1 {
-        return Err("Archivo MIDI de formato 2 (patrones sueltos): Pulse lee los de formato 0 y 1".into());
+        return Err(tr("Archivo MIDI de formato 2 (patrones sueltos): Pulse lee los de formato 0 y 1").into());
     }
     if division & 0x8000 != 0 {
-        return Err("Archivo MIDI con tiempo en SMPTE: Pulse lee los que cuentan en negras".into());
+        return Err(tr("Archivo MIDI con tiempo en SMPTE: Pulse lee los que cuentan en negras").into());
     }
     let ppq = division.max(1) as f64;
     let mut tempos: Vec<(u64, f64)> = Vec::new();
@@ -122,7 +123,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
             r.take(length)?;
         };
         let _ = id;
-        let end = r.at.checked_add(length).filter(|&e| e <= bytes.len()).ok_or("El archivo MIDI se corta antes de tiempo")?;
+        let end = r.at.checked_add(length).filter(|&e| e <= bytes.len()).ok_or(tr("El archivo MIDI se corta antes de tiempo"))?;
         let mut tick = 0u64;
         let mut status = 0u8;
         let mut name = String::new();
@@ -159,7 +160,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
             if first & 0x80 == 0 {
                 // Running status: the last status again, this its first data byte.
                 if status == 0 {
-                    return Err("El archivo MIDI tiene datos sin mensaje".into());
+                    return Err(tr("El archivo MIDI tiene datos sin mensaje").into());
                 }
                 r.at -= 1;
                 first = status;
@@ -235,7 +236,7 @@ pub fn read(bytes: &[u8]) -> Result<Song, String> {
                         0xA0 => {
                             r.take(2)?;
                         }
-                        _ => return Err("El archivo MIDI tiene un mensaje que no se entiende".into()),
+                        _ => return Err(tr("El archivo MIDI tiene un mensaje que no se entiende").into()),
                     }
                 }
             }
@@ -463,12 +464,12 @@ impl PulseApp {
         let song = match std::fs::read(path).map_err(|e| e.to_string()).and_then(|b| read(&b)) {
             Ok(song) => song,
             Err(e) => {
-                self.status = Some(format!("No se pudo leer «{file}»: {e}"));
+                self.status = Some(fill(tr("No se pudo leer «{}»: {}"), &[&file, &e]));
                 return false;
             }
         };
         if song.parts.is_empty() {
-            self.status = Some(format!("«{file}» no tiene notas"));
+            self.status = Some(fill(tr("«{}» no tiene notas"), &[&file]));
             return false;
         }
         let empty = self.project.tracks.iter().all(|t| t.arrangement.is_empty() && t.clips.iter().all(Option::is_none));
@@ -476,20 +477,20 @@ impl PulseApp {
         if let Some(tempo) = song.tempo {
             if empty {
                 self.project.tempo = tempo.clamp(20.0, 999.0);
-                tempo_note = format!(", a su tempo ({tempo:.0} BPM)");
+                tempo_note = fill(tr(", a su tempo ({} BPM)"), &[&format!("{tempo:.0}")]);
             } else if (tempo - self.project.tempo).abs() > 0.5 {
-                tempo_note = format!(". El archivo va a {tempo:.0} BPM: suena al tempo del proyecto");
+                tempo_note = fill(tr(". El archivo va a {} BPM: suena al tempo del proyecto"), &[&format!("{tempo:.0}")]);
             }
         }
         if song.tempo_changes > 0 {
-            tempo_note.push_str(". Sus cambios de tempo no se traen");
+            tempo_note.push_str(tr(". Sus cambios de tempo no se traen"));
         }
         if let Some(meter) = song.meter.filter(|m| *m != self.project.meter) {
             if empty {
                 self.set_meter(meter);
-                tempo_note.push_str(&format!(", en {}", meter.first().label()));
+                tempo_note.push_str(&fill(tr(", en {}"), &[&meter.first().label()]));
             } else {
-                tempo_note.push_str(&format!(". El archivo va en {}: suena en el compás del proyecto", meter.first().label()));
+                tempo_note.push_str(&fill(tr(". El archivo va en {}: suena en el compás del proyecto"), &[&meter.first().label()]));
             }
         }
         let before = self.project.clone();
@@ -553,10 +554,16 @@ impl PulseApp {
             }
         };
         self.sync_from(&before);
-        let what = if into.is_some() { "en la pista".to_string() } else if placed == 1 { "en una pista nueva".to_string() } else { format!("en {placed} pistas nuevas") };
+        let what = if into.is_some() {
+            fill(tr("«{}» en la pista"), &[&file])
+        } else if placed == 1 {
+            fill(tr("«{}» en una pista nueva"), &[&file])
+        } else {
+            fill(tr("«{}» en {} pistas nuevas"), &[&file, &placed])
+        };
         let lost = song.parts.len().saturating_sub(if into.is_some() { song.parts.len() } else { placed });
-        let lost = if lost > 0 { format!(". {lost} partes no caben (máximo de {} pistas)", engine::MAX_TRACKS) } else { String::new() };
-        self.status = Some(format!("«{file}» {what}{tempo_note}{lost}"));
+        let lost = if lost > 0 { fill(tr(". {} partes no caben (máximo de {} pistas)"), &[&lost, &engine::MAX_TRACKS]) } else { String::new() };
+        self.status = Some(format!("{what}{tempo_note}{lost}"));
         placed > 0
     }
 
@@ -600,7 +607,7 @@ impl PulseApp {
     pub fn export_song_midi(&mut self) {
         let parts = self.song_parts();
         if parts.is_empty() {
-            self.status = Some("No hay clips MIDI en el Arrangement para exportar".into());
+            self.status = Some(tr("No hay clips MIDI en el Arrangement para exportar").into());
             return;
         }
         let dialog = rfd::FileDialog::new().add_filter("MIDI", &["mid"]).set_file_name(format!("{}.mid", self.file_name()));
@@ -620,8 +627,8 @@ impl PulseApp {
     pub(crate) fn write_midi(&mut self, path: &Path, parts: &[Part]) {
         let bytes = write(parts, self.project.tempo, &self.project.meter);
         self.status = Some(match crate::store::write_atomic(path, &bytes) {
-            Ok(()) => format!("MIDI guardado en «{}»", path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned())),
-            Err(e) => format!("No se pudo guardar el MIDI: {e}"),
+            Ok(()) => fill(tr("MIDI guardado en «{}»"), &[&path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned())]),
+            Err(e) => fill(tr("No se pudo guardar el MIDI: {}"), &[&e]),
         });
     }
 }

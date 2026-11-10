@@ -207,15 +207,15 @@ impl PulseApp {
         let text = if lrc { to_lrc(&name, &language, &lines) } else { to_txt(&lines) };
         let file = path.file_name().map_or(String::new(), |n| n.to_string_lossy().into_owned());
         self.status = Some(match crate::store::write_atomic(path, text.as_bytes()) {
-            Ok(()) => format!("Letra guardada en «{file}»"),
-            Err(e) => format!("No se pudo guardar la letra: {e}"),
+            Ok(()) => crate::i18n::fill(crate::i18n::tr("Letra guardada en «{}»"), &[&file]),
+            Err(e) => crate::i18n::fill(crate::i18n::tr("No se pudo guardar la letra: {}"), &[&e]),
         });
     }
 
     /// Asks where, and writes `clip`'s lyrics there as `.txt` or `.lrc`.
     pub fn export_lyrics(&mut self, clip: ClipRef, lrc: bool) {
         let name = self.clip(clip).map(|c| c.name().to_string()).unwrap_or_default();
-        let (label, extension) = if lrc { ("LRC (letra con tiempos)", "lrc") } else { ("Texto", "txt") };
+        let (label, extension) = if lrc { (crate::i18n::tr("LRC (letra con tiempos)"), "lrc") } else { (crate::i18n::tr("Texto"), "txt") };
         let dialog = rfd::FileDialog::new().add_filter(label, &[extension]).set_file_name(format!("{name}.{extension}"));
         let Some(path) = crate::files::save_file(dialog) else { return };
         self.write_lyrics(clip, &path);

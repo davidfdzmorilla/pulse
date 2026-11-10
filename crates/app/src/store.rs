@@ -12,7 +12,7 @@ use std::path::{Path, PathBuf};
 /// the old one still is.
 pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     let dir = path.parent().filter(|d| !d.as_os_str().is_empty()).unwrap_or(Path::new("."));
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| crate::i18n::fill(crate::i18n::tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     let name = path.file_name().map_or_else(|| "archivo".to_string(), |n| n.to_string_lossy().into_owned());
     // One of its own for each write: two at once of the same file (threads,
     // tests side by side) never rename the other's half-written one in.
@@ -31,7 +31,7 @@ pub fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), String> {
     })();
     written.map_err(|e| {
         let _ = std::fs::remove_file(&temporary);
-        format!("No se pudo guardar {}: {e}", path.display())
+        crate::i18n::fill(crate::i18n::tr("No se pudo guardar {}: {}"), &[&path.display(), &e])
     })
 }
 

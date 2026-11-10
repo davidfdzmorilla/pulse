@@ -127,7 +127,7 @@ impl PulseApp {
         }
         self.sync_arrangement(track);
         self.set_clip_selection(comped.into_iter().map(|index| ClipRef::Arrangement { track, index }).collect());
-        self.status = Some(format!("Suena la toma {} en ese trozo", k + 1));
+        self.status = Some(crate::i18n::fill(crate::i18n::tr("Suena la toma {} en ese trozo"), &[&(k + 1)]));
     }
 }
 

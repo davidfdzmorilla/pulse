@@ -64,6 +64,12 @@ impl Style {
         }
     }
 
+    /// Its name in the interface's language (`label` names the clips it
+    /// writes, kept in the project); the others are the same in English.
+    pub fn shown(self) -> &'static str {
+        if self == Style::Reggaeton { crate::i18n::tr("Reggaetón") } else { self.label() }
+    }
+
     /// The tempo it usually goes at (for the hint).
     pub fn tempo(self) -> u32 {
         match self {
@@ -305,9 +311,9 @@ impl Level {
 
     pub fn label(self) -> &'static str {
         match self {
-            Level::Basic => "Básico",
-            Level::Medium => "Medio",
-            Level::Intense => "Intenso",
+            Level::Basic => crate::i18n::tr("Básico"),
+            Level::Medium => crate::i18n::tr("Medio"),
+            Level::Intense => crate::i18n::tr("Intenso"),
         }
     }
 }

@@ -5,6 +5,7 @@
 //! key changes they follow. The first loop with a key gives the project its key
 //! if it had none. Drums are left as they are.
 
+use crate::i18n::{fill, music, tr};
 use crate::app::{ClipRef, PulseApp};
 use engine::model::{AudioClip, Clip, ClipKey, WarpMode};
 use stems::key::Key;
@@ -198,15 +199,15 @@ impl PulseApp {
         let Some((_, first, name)) = found.first().cloned() else { return };
         if self.project.key.is_none() && self.settings.loops_follow_key {
             self.project.key = Some(first);
-            self.status = Some(format!("«{name}» está en {}: es ahora la escala del proyecto, y los loops que añadas se ajustan a ella", first.name()));
+            self.status = Some(fill(tr("«{}» está en {}: es ahora la escala del proyecto, y los loops que añadas se ajustan a ella"), &[&name, &music(&first.name())]));
         } else if let (Some(project), true) = (self.project.key, self.settings.loops_follow_key) {
             let moved: Vec<String> = found
                 .iter()
                 .filter(|(_, k, _)| shift(*k, project) != 0)
-                .map(|(_, k, n)| format!("«{n}» ({} → {:+} st)", k.name(), shift(*k, project)))
+                .map(|(_, k, n)| fill(tr("«{}» ({} → {} st)"), &[n, &music(&k.name()), &format!("{:+}", shift(*k, project))]))
                 .collect();
             if !moved.is_empty() {
-                self.status = Some(format!("Ajustado a {}: {}", project.name(), moved.join(", ")));
+                self.status = Some(fill(tr("Ajustado a {}: {}"), &[&music(&project.name()), &moved.join(", ")]));
             }
         }
         self.follow_key();
@@ -277,10 +278,10 @@ impl PulseApp {
         match key {
             Some(key) => {
                 self.edit_audio_clip(clip, |a| a.key = Some(ClipKey { tonic: key.tonic, minor: key.minor, follow: true }));
-                self.status = Some(format!("«{}» está en {}", audio.name, key.name()));
+                self.status = Some(fill(tr("«{}» está en {}"), &[&audio.name, &music(&key.name())]));
                 self.follow_key();
             }
-            None => self.status = Some(format!("«{}» no tiene una tonalidad clara", audio.name)),
+            None => self.status = Some(fill(tr("«{}» no tiene una tonalidad clara"), &[&audio.name])),
         }
     }
 

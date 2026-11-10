@@ -4,6 +4,7 @@
 //! the oscillator it was opened from.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Color32, Rect, Sense, Stroke};
 use engine::model::{OscKind, WAVE_USER_TABLE};
@@ -97,7 +98,7 @@ pub fn write_table(path: &Path, frames: &[Vec<f32>]) -> Result<(), String> {
     }
     let riff = (bytes.len() - 8) as u32;
     bytes[4..8].copy_from_slice(&riff.to_le_bytes());
-    std::fs::write(path, bytes).map_err(|e| format!("No se pudo guardar {}: {e}", path.display()))
+    std::fs::write(path, bytes).map_err(|e| fill(tr("No se pudo guardar {}: {}"), &[&path.display(), &e]))
 }
 
 fn tables_dir() -> PathBuf {
@@ -123,7 +124,7 @@ fn save_and_use(app: &mut PulseApp) {
     app.project.tracks[track].set_sample(osc, Some(path.clone()));
     app.set_instrument(track, kind.with_wave(params));
     app.sync_samples(track);
-    app.status = Some(format!("Wavetable guardada y cargada: {path}"));
+    app.status = Some(fill(tr("Wavetable guardada y cargada: {}"), &[&path]));
 }
 
 fn thumbnail(ui: &mut egui::Ui, key: &[f32], selected: bool) -> egui::Response {
@@ -169,7 +170,7 @@ fn canvas(ui: &mut egui::Ui, editor: &mut TableEditor) {
     }
     let points: Vec<_> = key.iter().enumerate().map(|(i, v)| pos2(rect.left() + (i as f32 + 0.5) / POINTS as f32 * rect.width(), rect.center().y - v * rect.height() * 0.45)).collect();
     painter.add(egui::Shape::line(points, Stroke::new(2.0, ACCENT)));
-    response.on_hover_text("Arrastra para dibujar el fotograma");
+    response.on_hover_text(tr("Arrastra para dibujar el fotograma"));
 }
 
 /// The morph between keyframes as stacked frames.
@@ -200,17 +201,17 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     }
     let mut open = true;
     let mut save = false;
-    egui::Window::new("Editor de wavetables").id(egui::Id::new("table_editor")).open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
+    egui::Window::new(tr("Editor de wavetables")).id(egui::Id::new("table_editor")).open(&mut open).resizable(false).collapsible(false).show(ctx, |ui| {
         let Some(editor) = app.table_editor.as_mut() else { return };
         ui.horizontal(|ui| {
-            ui.label("Nombre");
+            ui.label(tr("Nombre"));
             ui.add(egui::TextEdit::singleline(&mut editor.name).desired_width(200.0));
-            ui.label(egui::RichText::new(format!("Oscilador {}", if editor.osc == 0 { "A" } else { "B" })).color(TEXT_DIM));
+            ui.label(egui::RichText::new(fill(tr("Oscilador {}"), &[&if editor.osc == 0 { "A" } else { "B" }])).color(TEXT_DIM));
         });
         ui.separator();
         ui.horizontal_top(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("FOTOGRAMAS CLAVE").color(TEXT_DIM).size(10.0).strong());
+                ui.label(egui::RichText::new(tr("FOTOGRAMAS CLAVE")).color(TEXT_DIM).size(10.0).strong());
                 egui::ScrollArea::vertical().max_height(250.0).show(ui, |ui| {
                     let mut select = None;
                     for (k, key) in editor.keys.iter().enumerate() {
@@ -223,12 +224,12 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                     }
                 });
                 ui.horizontal(|ui| {
-                    if ui.add_enabled(editor.keys.len() < MAX_KEYS, egui::Button::new("+")).on_hover_text("Duplica el fotograma seleccionado").clicked() {
+                    if ui.add_enabled(editor.keys.len() < MAX_KEYS, egui::Button::new("+")).on_hover_text(tr("Duplica el fotograma seleccionado")).clicked() {
                         let copy = editor.keys[editor.selected].clone();
                         editor.keys.insert(editor.selected + 1, copy);
                         editor.selected += 1;
                     }
-                    if ui.add_enabled(editor.keys.len() > 1, egui::Button::new("−")).on_hover_text("Borra el fotograma seleccionado").clicked() {
+                    if ui.add_enabled(editor.keys.len() > 1, egui::Button::new("−")).on_hover_text(tr("Borra el fotograma seleccionado")).clicked() {
                         editor.keys.remove(editor.selected);
                         editor.selected = editor.selected.min(editor.keys.len() - 1);
                     }
@@ -237,30 +238,30 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             ui.vertical(|ui| {
                 canvas(ui, editor);
                 ui.horizontal(|ui| {
-                    for name in ["Seno", "Triángulo", "Sierra", "Cuadrada", "Ruido", "Silencio"] {
-                        if ui.small_button(name).clicked() {
+                    for (name, label) in [("Seno", tr("Seno")), ("Triángulo", tr("Triángulo")), ("Sierra", tr("Sierra")), ("Cuadrada", tr("Cuadrada")), ("Ruido", tr("Ruido")), ("Silencio", tr("Silencio"))] {
+                        if ui.small_button(label).clicked() {
                             editor.keys[editor.selected] = shape(name);
                         }
                     }
                 });
                 ui.horizontal(|ui| {
                     let key = &mut editor.keys[editor.selected];
-                    if ui.small_button("Normalizar").clicked() {
+                    if ui.small_button(tr("Normalizar")).clicked() {
                         let peak = key.iter().fold(0f32, |m, v| m.max(v.abs()));
                         if peak > 1e-6 {
                             key.iter_mut().for_each(|v| *v /= peak);
                         }
                     }
-                    if ui.small_button("Suavizar").clicked() {
+                    if ui.small_button(tr("Suavizar")).clicked() {
                         let copy = key.clone();
                         for i in 0..POINTS {
                             key[i] = (copy[(i + POINTS - 1) % POINTS] + 2.0 * copy[i] + copy[(i + 1) % POINTS]) / 4.0;
                         }
                     }
-                    if ui.small_button("Invertir").clicked() {
+                    if ui.small_button(tr("Invertir fase")).clicked() {
                         key.iter_mut().for_each(|v| *v = -*v);
                     }
-                    if ui.small_button("Espejo").on_hover_text("La segunda mitad repite la primera al revés").clicked() {
+                    if ui.small_button(tr("Espejo")).on_hover_text(tr("La segunda mitad repite la primera al revés")).clicked() {
                         for i in POINTS / 2..POINTS {
                             key[i] = -key[POINTS - 1 - i];
                         }
@@ -268,11 +269,11 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 });
             });
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("RESULTADO").color(TEXT_DIM).size(10.0).strong());
+                ui.label(egui::RichText::new(tr("RESULTADO")).color(TEXT_DIM).size(10.0).strong());
                 preview(ui, &editor.keys);
-                ui.label(egui::RichText::new(format!("{} fotogramas, morph entre las claves", if editor.keys.len() == 1 { 1 } else { TABLE_FRAMES })).color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(fill(tr("{} fotogramas, morph entre las claves"), &[&if editor.keys.len() == 1 { 1 } else { TABLE_FRAMES }])).color(TEXT_DIM).size(10.5));
                 ui.add_space(8.0);
-                save = ui.button("Guardar y usar en el oscilador").on_hover_text("Se guarda como WAV de wavetable en la carpeta Wavetables de Pulse").clicked();
+                save = ui.button(tr("Guardar y usar en el oscilador")).on_hover_text(tr("Se guarda como WAV de wavetable en la carpeta Wavetables de Pulse")).clicked();
             });
         });
     });

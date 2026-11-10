@@ -8,6 +8,7 @@
 //! unfreezes it, so a frozen track never plays stale audio. «Convertir en audio»
 //! turns it into an audio track playing those files (Live's Flatten).
 
+use crate::i18n::{fill, tr};
 use crate::app::PulseApp;
 use crate::project::{Project, Track, TrackKind};
 use engine::model::{ArrangementClip, AudioClip, AutomationLane, Clip, InstrumentKind, Param, SynthParams, WarpMode};
@@ -213,21 +214,21 @@ impl PulseApp {
     /// Starts rendering track `t` to freeze it.
     pub fn freeze(&mut self, t: usize) {
         if self.freeze_job.is_some() {
-            self.status = Some("Ya se está congelando una pista".into());
+            self.status = Some(tr("Ya se está congelando una pista").into());
             return;
         }
         let Some(track) = self.project.tracks.get(t) else { return };
         if track.audio_from.is_some() {
-            self.status = Some(format!("«{}» toca lo que suena en otra pista (un rumble), no clips propios: no se puede congelar", track.name));
+            self.status = Some(fill(tr("«{}» toca lo que suena en otra pista (un rumble), no clips propios: no se puede congelar"), &[&track.name]));
             return;
         }
         let taken = self.sounds_taken(t);
         if taken != 0 {
-            self.status = Some(format!("{} de «{}» suenan en otras pistas: no se puede congelar", crate::drum_split::sound_names(taken), self.project.tracks[t].name));
+            self.status = Some(fill(tr("{} de «{}» suenan en otras pistas: no se puede congelar"), &[&crate::drum_split::sound_names(taken), &self.project.tracks[t].name]));
             return;
         }
         if track.is_audio() && track.devices.is_empty() {
-            self.status = Some("Una pista de audio sin efectos no gasta nada: no hace falta congelarla".into());
+            self.status = Some(tr("Una pista de audio sin efectos no gasta nada: no hace falta congelarla").into());
             return;
         }
         let (tempo, rate) = (self.project.tempo, self.audio.sample_rate());
@@ -253,7 +254,7 @@ impl PulseApp {
                 *r = Some(Ok(Rendered { arrangement, clips, map }));
             }
         });
-        self.status = Some(format!("Congelando «{}»…", self.project.tracks[t].name));
+        self.status = Some(fill(tr("Congelando «{}»…"), &[&self.project.tracks[t].name]));
         self.freeze_job = Some(FreezeJob { track: t, content: content(&self.project, t), tempo_changes, end, result });
     }
 
@@ -266,7 +267,7 @@ impl PulseApp {
             if let Some(result) = done {
                 let job = self.freeze_job.take().expect("a job");
                 match result.and_then(|rendered| self.finish_freeze(&job, rendered)) {
-                    Ok(name) => self.status = Some(format!("«{name}» congelada: suena su audio; su instrumento y efectos no gastan CPU")),
+                    Ok(name) => self.status = Some(fill(tr("«{}» congelada: suena su audio; su instrumento y efectos no gastan CPU"), &[&name])),
                     Err(error) => self.status = Some(error),
                 }
             }
@@ -275,13 +276,13 @@ impl PulseApp {
 
     fn finish_freeze(&mut self, job: &FreezeJob, rendered: Rendered) -> Result<String, String> {
         let t = job.track;
-        let track = self.project.tracks.get(t).ok_or("La pista ya no existe")?;
+        let track = self.project.tracks.get(t).ok_or(tr("La pista ya no existe"))?;
         if content(&self.project, t) != job.content {
-            return Err(format!("«{}» cambió mientras se congelaba: vuelve a congelarla", track.name));
+            return Err(fill(tr("«{}» cambió mientras se congelaba: vuelve a congelarla"), &[&track.name]));
         }
         let (name, color, tempo, rate) = (track.name.clone(), track.color, self.project.tempo, self.audio.sample_rate());
         let dir = self.media_dir(crate::library::FROZEN);
-        std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
         let clean = crate::files::safe_name(&name);
         let write = |label: &str, (left, right): &(Vec<f32>, Vec<f32>)| -> Result<String, String> {
             let path = crate::library::claim(&dir.join(format!("{} {label}.wav", clean.trim())));
@@ -350,7 +351,7 @@ impl PulseApp {
             if track.frozen.take().is_some() {
                 let name = track.name.clone();
                 self.sync_track(t);
-                self.status = Some(format!("«{name}» descongelada"));
+                self.status = Some(fill(tr("«{}» descongelada"), &[&name]));
             }
         }
     }
@@ -362,7 +363,7 @@ impl PulseApp {
         self.project.tracks[t] = Track { kind: TrackKind::Audio, frozen: None, ..playing };
         let name = self.project.tracks[t].name.clone();
         self.sync_track(t);
-        self.status = Some(format!("«{name}» es ahora una pista de audio"));
+        self.status = Some(fill(tr("«{}» es ahora una pista de audio"), &[&name]));
     }
 
     /// Sends everything about track `t` to the engine again (what it plays).
@@ -389,7 +390,7 @@ impl PulseApp {
             .collect();
         for t in changed {
             self.unfreeze(t);
-            self.status = Some(format!("«{}» descongelada: has cambiado su contenido", self.project.tracks[t].name));
+            self.status = Some(fill(tr("«{}» descongelada: has cambiado su contenido"), &[&self.project.tracks[t].name]));
         }
     }
 }

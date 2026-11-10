@@ -5,6 +5,7 @@
 //! must go on where it was, so its content is turned round to start there: MIDI
 //! notes and clip envelopes rotate within the loop; audio starts later in the file.
 
+use crate::i18n::{fill, tr};
 use crate::app::{ClipRef, PulseApp};
 use engine::model::{ArrangementClip, AudioClip, AutomationLane, AutomationPoint, Clip, Groove, MidiClip, Note, Param};
 
@@ -342,7 +343,7 @@ impl PulseApp {
             }
         }
         if pieces.is_empty() {
-            self.status = Some("Selecciona clips del Arrangement para trocearlos".into());
+            self.status = Some(tr("Selecciona clips del Arrangement para trocearlos").into());
         } else {
             self.set_clip_selection(pieces);
         }
@@ -360,7 +361,7 @@ impl PulseApp {
             })
             .collect();
         if selected.is_empty() {
-            self.status = Some("Selecciona clips del Arrangement para dividirlos".into());
+            self.status = Some(tr("Selecciona clips del Arrangement para dividirlos").into());
             return;
         }
         let inside = |beat: f64| selected.iter().any(|&(t, i)| self.project.tracks.get(t).and_then(|t| t.arrangement.get(i)).is_some_and(|p| p.start < beat && beat < p.end()));
@@ -372,7 +373,7 @@ impl PulseApp {
             }
         }
         if parts.is_empty() {
-            self.status = Some(crate::theme::keys("Haz clic en el clip donde quieras cortar y pulsa ⌘E otra vez"));
+            self.status = Some(crate::theme::keys(tr("Haz clic en el clip donde quieras cortar y pulsa ⌘E otra vez")));
         } else {
             self.set_clip_selection(parts);
         }
@@ -389,11 +390,11 @@ impl PulseApp {
             })
             .collect();
         let Some(&(track, _)) = selected.first() else {
-            self.status = Some("Selecciona dos o más clips MIDI de una pista del Arrangement para unirlos".into());
+            self.status = Some(tr("Selecciona dos o más clips MIDI de una pista del Arrangement para unirlos").into());
             return;
         };
         if selected.len() < 2 || selected.iter().any(|&(t, _)| t != track) {
-            self.status = Some("Selecciona dos o más clips MIDI de la misma pista para unirlos".into());
+            self.status = Some(tr("Selecciona dos o más clips MIDI de la misma pista para unirlos").into());
             return;
         }
         let lane = &self.project.tracks[track].arrangement;
@@ -410,7 +411,7 @@ impl PulseApp {
         } else if let Some(joined) = join(&parts, &|p| self.envelope_base(track, p)) {
             joined
         } else {
-            self.status = Some("Solo se unen clips del mismo tipo: todos MIDI o todos audio".into());
+            self.status = Some(tr("Solo se unen clips del mismo tipo: todos MIDI o todos audio").into());
             return;
         };
         let mut indices: Vec<usize> = selected.iter().map(|&(_, i)| i).collect();
@@ -423,7 +424,7 @@ impl PulseApp {
         let index = lane.len() - 1;
         self.sync_arrangement(track);
         self.select_clip(ClipRef::Arrangement { track, index });
-        self.status = Some(format!("{} clips unidos en uno", parts.len()));
+        self.status = Some(fill(tr("{} clips unidos en uno"), &[&parts.len()]));
     }
 }
 

@@ -5,6 +5,7 @@
 //! the scale's in between, and each phrase ends on a chord note.
 
 use crate::accompany::Dice;
+use crate::i18n::tr;
 use engine::meter::TimeSig;
 use engine::model::Note;
 use stems::chord::Chord;
@@ -27,19 +28,19 @@ impl Style {
 
     pub fn label(self) -> &'static str {
         match self {
-            Style::Hook => "Gancho",
-            Style::Topline => "Cantable",
-            Style::Trance => "Lead de trance",
-            Style::CallResponse => "Pregunta y respuesta",
+            Style::Hook => tr("Gancho"),
+            Style::Topline => tr("Cantable"),
+            Style::Trance => tr("Lead de trance"),
+            Style::CallResponse => tr("Pregunta y respuesta"),
         }
     }
 
     pub fn hint(self) -> &'static str {
         match self {
-            Style::Hook => "Un riff corto y sincopado de un compás que se repite, como los de house y techno",
-            Style::Topline => "Una frase de dos compases con notas largas, que se puede cantar, como en el pop",
-            Style::Trance => "Semicorcheas que saltan entre las notas del acorde, como un lead de trance",
-            Style::CallResponse => "Un compás pregunta y el siguiente responde con el mismo ritmo y cierra en la nota del acorde",
+            Style::Hook => tr("Un riff corto y sincopado de un compás que se repite, como los de house y techno"),
+            Style::Topline => tr("Una frase de dos compases con notas largas, que se puede cantar, como en el pop"),
+            Style::Trance => tr("Semicorcheas que saltan entre las notas del acorde, como un lead de trance"),
+            Style::CallResponse => tr("Un compás pregunta y el siguiente responde con el mismo ritmo y cierra en la nota del acorde"),
         }
     }
 
@@ -64,9 +65,9 @@ impl Density {
 
     pub fn label(self) -> &'static str {
         match self {
-            Density::Sparse => "Pocas notas",
-            Density::Normal => "Normal",
-            Density::Busy => "Muchas notas",
+            Density::Sparse => tr("Pocas notas"),
+            Density::Normal => tr("Normal"),
+            Density::Busy => tr("Muchas notas"),
         }
     }
 }
@@ -83,9 +84,9 @@ impl Register {
 
     pub fn label(self) -> &'static str {
         match self {
-            Register::Low => "Grave",
-            Register::Mid => "Medio",
-            Register::High => "Agudo",
+            Register::Low => tr("Grave"),
+            Register::Mid => tr("Medio"),
+            Register::High => tr("Agudo"),
         }
     }
 

@@ -80,7 +80,7 @@ impl PulseApp {
     /// Maximizes the panel, or brings it back to its height.
     pub fn toggle_editor_max(&mut self) {
         self.editor_max = !self.editor_max;
-        self.status = Some(crate::theme::keys(if self.editor_max { "Editor maximizado: ⇧⌘E lo devuelve a su altura" } else { "Editor a su altura" }));
+        self.status = Some(crate::theme::keys(if self.editor_max { tr("Editor maximizado: ⇧⌘E lo devuelve a su altura") } else { tr("Editor a su altura") }));
     }
 
     /// After drawing the panel (`shown` points tall in `room`): what the editor
@@ -163,7 +163,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     if app.detail_folded {
         frame.show(ui, |ui| {
             ui.set_min_width(ui.available_width());
-            let text = "Selecciona un clip para editarlo · doble clic en un slot vacío o en una pista del Arrangement crea uno nuevo";
+            let text = tr("Selecciona un clip para editarlo · doble clic en un slot vacío o en una pista del Arrangement crea uno nuevo");
             ui.add(egui::Label::new(RichText::new(text).color(TEXT_DIM).size(10.5)).truncate()).on_hover_text(text);
         });
         return;

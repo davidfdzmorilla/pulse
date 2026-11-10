@@ -70,7 +70,7 @@ impl PulseApp {
                 self.finish_automation_take();
             }
         }
-        self.status = Some(if armed { "Armar automatización: encendido" } else { "Armar automatización: apagado" }.into());
+        self.status = Some(if armed { crate::i18n::tr("Armar automatización: encendido") } else { crate::i18n::tr("Armar automatización: apagado") }.into());
     }
 
     fn new_take(&self, only: Option<Target>, origin: f64) -> AutomationTake {

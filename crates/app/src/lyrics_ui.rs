@@ -9,6 +9,7 @@
 //! goes on from there the next time.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::lyrics::{ms, LyricLine, LyricWord};
 use crate::theme::{self, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense};
@@ -64,9 +65,9 @@ impl Language {
 
     pub fn label(self) -> &'static str {
         match self {
-            Language::Auto => "Automático",
-            Language::Spanish => "Español",
-            Language::English => "Inglés",
+            Language::Auto => tr("Automático"),
+            Language::Spanish => tr("Español"),
+            Language::English => tr("Inglés"),
         }
     }
 
@@ -82,10 +83,10 @@ impl Language {
 /// A language's name, from its code.
 pub fn language_name(code: &str) -> String {
     match code {
-        "es" => "español".into(),
-        "en" => "inglés".into(),
-        "" => "idioma sin detectar".into(),
-        other => format!("idioma «{other}»"),
+        "es" => tr("español").into(),
+        "en" => tr("inglés").into(),
+        "" => tr("idioma sin detectar").into(),
+        other => fill(tr("idioma «{}»"), &[&other]),
     }
 }
 
@@ -152,16 +153,16 @@ pub enum Command {
 /// The «Letra» submenu of an audio clip; `has` says whether it has lyrics.
 pub fn menu(ui: &mut egui::Ui, has: bool, busy: bool) -> Option<Command> {
     let mut chosen = None;
-    crate::widgets::menu_button(ui, "Letra", |ui| {
-        let transcribe = if has { "Transcribir otra vez…" } else { "Transcribir letra…" };
-        if ui.add_enabled(!busy, egui::Button::new(transcribe)).on_hover_text("Saca el texto que se canta, con el tiempo de cada frase (en este equipo, sin internet)").clicked() {
+    crate::widgets::menu_button(ui, tr("Letra"), |ui| {
+        let transcribe = if has { tr("Transcribir otra vez…") } else { tr("Transcribir letra…") };
+        if ui.add_enabled(!busy, egui::Button::new(transcribe)).on_hover_text(tr("Saca el texto que se canta, con el tiempo de cada frase (en este equipo, sin internet)")).clicked() {
             chosen = Some(Command::Transcribe);
         }
         let items = [
-            (Command::Edit, "Editar letra…", "Corrige las palabras a mano"),
-            (Command::Copy, "Copiar letra", "Toda la letra del clip al portapapeles, una frase por línea"),
-            (Command::ExportTxt, "Exportar .txt…", "La letra en un archivo de texto"),
-            (Command::ExportLrc, "Exportar .lrc…", "La letra con el tiempo de cada frase, para karaoke y reproductores"),
+            (Command::Edit, tr("Editar letra…"), tr("Corrige las palabras a mano")),
+            (Command::Copy, tr("Copiar letra"), tr("Toda la letra del clip al portapapeles, una frase por línea")),
+            (Command::ExportTxt, tr("Exportar .txt…"), tr("La letra en un archivo de texto")),
+            (Command::ExportLrc, tr("Exportar .lrc…"), tr("La letra con el tiempo de cada frase, para karaoke y reproductores")),
         ];
         for (command, label, hint) in items {
             if ui.add_enabled(has, egui::Button::new(label)).on_hover_text(hint).clicked() {
@@ -197,7 +198,7 @@ impl PulseApp {
         match command {
             Command::Transcribe => self.ask_lyrics(clip),
             Command::Edit => self.lyrics_ui.editing = Some(clip),
-            Command::Copy => self.status = Some("Letra copiada".into()),
+            Command::Copy => self.status = Some(tr("Letra copiada").into()),
             Command::ExportTxt => self.export_lyrics(clip, false),
             Command::ExportLrc => self.export_lyrics(clip, true),
         }
@@ -207,7 +208,7 @@ impl PulseApp {
     /// whether to download the model).
     pub fn ask_lyrics(&mut self, clip: ClipRef) {
         if self.lyrics_ui.job.is_some() {
-            self.notify("Transcribir letra", "Ya hay una transcripción en marcha: espera a que termine.");
+            self.notify(tr("Transcribir letra"), tr("Ya hay una transcripción en marcha: espera a que termine."));
             return;
         }
         if !matches!(self.clip(clip), Some(Clip::Audio(_))) {
@@ -253,34 +254,34 @@ impl PulseApp {
         let ready = model_ready(&model_dir());
         let separable = crate::stems_ui::model_path().exists();
         let (mut go, mut cancel) = (false, false);
-        egui::Window::new("Transcribir letra").collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        egui::Window::new(tr("Transcribir letra")).id(egui::Id::new("lyrics_ask")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             ui.set_max_width(400.0);
-            ui.label(format!("Saca el texto que se canta en «{}», con el tiempo de cada frase.", audio.name));
+            ui.label(fill(tr("Saca el texto que se canta en «{}», con el tiempo de cada frase."), &[&audio.name]));
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                ui.label("Idioma");
+                ui.label(tr("Idioma"));
                 for language in Language::ALL {
                     ui.selectable_value(&mut ask.language, language, language.label()).on_hover_text(match language {
-                        Language::Auto => "Lo reconoce al escuchar el principio",
-                        _ => "Mejor si lo sabes: no se equivoca de idioma en frases cortas",
+                        Language::Auto => tr("Lo reconoce al escuchar el principio"),
+                        _ => tr("Mejor si lo sabes: no se equivoca de idioma en frases cortas"),
                     });
                 }
             });
             if separable {
-                ui.checkbox(&mut ask.isolate, "Aislar la voz antes").on_hover_text("Separa la voz de la música con el modelo de stems y lee solo la voz: más lento, pero mucho mejor si hay música de fondo");
+                ui.checkbox(&mut ask.isolate, tr("Aislar la voz antes")).on_hover_text(tr("Separa la voz de la música con el modelo de stems y lee solo la voz: más lento, pero mucho mejor si hay música de fondo"));
             } else {
-                ui.label(egui::RichText::new("Con música de fondo sale mejor sobre la voz sola: usa «Separar en stems» y transcribe la pista de voz.").color(TEXT_DIM).size(10.5));
+                ui.label(egui::RichText::new(tr("Con música de fondo sale mejor sobre la voz sola: usa «Separar en stems» y transcribe la pista de voz.")).color(TEXT_DIM).size(10.5));
             }
             if !ready {
                 ui.add_space(4.0);
-                ui.label(format!("La primera vez hay que descargar el modelo de voz (Whisper small, {MODEL_MB} MB) de Hugging Face. Se guarda en este equipo y después funciona sin internet."));
+                ui.label(fill(tr("La primera vez hay que descargar el modelo de voz (Whisper small, {} MB) de Hugging Face. Se guarda en este equipo y después funciona sin internet."), &[&MODEL_MB]));
             }
-            ui.label(egui::RichText::new("El audio no sale de este equipo.").color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(tr("El audio no sale de este equipo.")).color(TEXT_DIM).size(10.5));
             ui.add_space(6.0);
             ui.horizontal(|ui| {
-                let label = if ready { "Transcribir".to_string() } else { format!("Descargar ({MODEL_MB} MB) y transcribir") };
+                let label = if ready { tr("Transcribir").to_string() } else { fill(tr("Descargar ({} MB) y transcribir"), &[&MODEL_MB]) };
                 go = ui.button(label).clicked() || ui.input(|i| i.key_pressed(egui::Key::Enter));
-                cancel = ui.button("Cancelar").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
+                cancel = ui.button(tr("Cancelar")).clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape));
             });
         });
         if go {
@@ -301,7 +302,7 @@ impl PulseApp {
             match result {
                 Ok((language, lines)) if lines.is_empty() => {
                     let _ = language;
-                    self.notify("Transcribir letra", &format!("No se oye letra en «{}». Si hay música de fondo, prueba a aislar la voz antes.", job.name));
+                    self.notify(tr("Transcribir letra"), &fill(tr("No se oye letra en «{}». Si hay música de fondo, prueba a aislar la voz antes."), &[&job.name]));
                 }
                 Ok((language, lines)) => {
                     let count = lines.len();
@@ -313,26 +314,26 @@ impl PulseApp {
                     if matches!(self.clip(job.clip), Some(Clip::Audio(a)) if a.sample == job.sample) {
                         self.select_clip(job.clip);
                     }
-                    self.status = Some(format!("Letra de «{}»: {count} frase(s) en {}. Haz clic en una palabra para corregirla.", job.name, language_name(&language)));
+                    self.status = Some(fill(tr("Letra de «{}»: {} frase(s) en {}. Haz clic en una palabra para corregirla."), &[&job.name, &count, &language_name(&language)]));
                 }
-                Err(e) if e == CANCELLED => self.status = Some(e),
-                Err(e) => self.notify("No se pudo transcribir la letra", &e),
+                Err(e) if e == CANCELLED => self.status = Some(tr("Transcripción cancelada").into()),
+                Err(e) => self.notify(tr("No se pudo transcribir la letra"), &e),
             }
             return;
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
         let mut cancel = false;
-        egui::Window::new("Transcribir letra").id(egui::Id::new("lyrics_progress")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        egui::Window::new(tr("Transcribir letra")).id(egui::Id::new("lyrics_progress")).collapsible(false).resizable(false).anchor(Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             let (text, fraction) = match stage {
-                Stage::Download(f) => (format!("Descargando el modelo de voz ({MODEL_MB} MB, solo la primera vez)…"), f),
-                Stage::Isolate(f) => (format!("Aislando la voz de «{}»…", job.name), f),
-                Stage::Listen(f) => (format!("Escuchando la letra de «{}»…", job.name), f),
+                Stage::Download(f) => (fill(tr("Descargando el modelo de voz ({} MB, solo la primera vez)…"), &[&MODEL_MB]), f),
+                Stage::Isolate(f) => (fill(tr("Aislando la voz de «{}»…"), &[&job.name]), f),
+                Stage::Listen(f) => (fill(tr("Escuchando la letra de «{}»…"), &[&job.name]), f),
                 Stage::Done(_) => (String::new(), 1.0),
             };
             ui.label(text);
             ui.add(egui::ProgressBar::new(fraction).show_percentage().desired_width(360.0));
-            ui.label(egui::RichText::new("Se hace en este equipo, sin enviar el audio a internet. Puedes seguir trabajando.").color(TEXT_DIM).size(10.5));
-            cancel = ui.button("Cancelar").clicked();
+            ui.label(egui::RichText::new(tr("Se hace en este equipo, sin enviar el audio a internet. Puedes seguir trabajando.")).color(TEXT_DIM).size(10.5));
+            cancel = ui.button(tr("Cancelar")).clicked();
         });
         if cancel {
             job.cancel.store(true, Ordering::Relaxed);
@@ -390,7 +391,7 @@ fn transcribe(source: &Path, region: (f64, f64), language: Language, isolate: bo
 /// Downloads the model's files that are missing into `dir`, checking each.
 fn download_model(dir: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Result<(), String> {
     set(stage, Stage::Download(0.0));
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    std::fs::create_dir_all(dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     let total: u64 = MODEL.iter().map(|f| f.size).sum();
     let mut done = 0u64;
     for (name, file) in stems::whisper::FILES.iter().zip(&MODEL) {
@@ -407,7 +408,7 @@ fn download_model(dir: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Resu
         let size = std::fs::metadata(&partial).map_or(0, |m| m.len());
         if size != file.size || crate::stems_ui::sha256(&partial)? != file.sha256 {
             let _ = std::fs::remove_file(&partial);
-            return Err("El modelo descargado no es el esperado (tamaño o huella distintos); vuelve a intentarlo".into());
+            return Err(tr("El modelo descargado no es el esperado (tamaño o huella distintos); vuelve a intentarlo").into());
         }
         std::fs::rename(&partial, &dest).map_err(|e| e.to_string())?;
         done += file.size;
@@ -439,7 +440,7 @@ fn fetch(url: &str, partial: &Path, cancel: &AtomicBool, progress: impl Fn(u64))
         use std::io::Read;
         let _ = stderr.read_to_string(&mut error);
     }
-    Err(format!("No se pudo descargar el modelo de voz (se seguirá desde aquí la próxima vez): {}", crate::updates::curl_error(&error)))
+    Err(fill(tr("No se pudo descargar el modelo de voz (se seguirá desde aquí la próxima vez): {}"), &[&crate::updates::curl_error(&error)]))
 }
 
 /// The lyrics' window: each line with its time, to correct by hand, and
@@ -457,20 +458,20 @@ pub fn edit_window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = true;
     let mut command = None;
     let mut edits = Vec::new();
-    egui::Window::new(format!("Letra · {}", audio.name)).id(egui::Id::new("lyrics_window")).open(&mut open).default_size([420.0, 360.0]).show(ctx, |ui| {
+    egui::Window::new(fill(tr("Letra · {}"), &[&audio.name])).id(egui::Id::new("lyrics_window")).open(&mut open).default_size([420.0, 360.0]).show(ctx, |ui| {
         ui.horizontal(|ui| {
             for (c, label, hint) in [
-                (Command::Copy, "Copiar", "Toda la letra del clip al portapapeles"),
-                (Command::ExportTxt, ".txt…", "Exportar la letra como texto"),
-                (Command::ExportLrc, ".lrc…", "Exportar la letra con los tiempos (LRC)"),
-                (Command::Transcribe, "Transcribir otra vez…", "Vuelve a escuchar el clip; las frases de su trozo se sustituyen"),
+                (Command::Copy, tr("Copiar"), tr("Toda la letra del clip al portapapeles")),
+                (Command::ExportTxt, ".txt…", tr("Exportar la letra como texto")),
+                (Command::ExportLrc, ".lrc…", tr("Exportar la letra con los tiempos (LRC)")),
+                (Command::Transcribe, tr("Transcribir otra vez…"), tr("Vuelve a escuchar el clip; las frases de su trozo se sustituyen")),
             ] {
                 if ui.button(label).on_hover_text(hint).clicked() {
                     command = Some(c);
                 }
             }
         });
-        ui.label(egui::RichText::new(format!("{} · los tiempos son del archivo · deja una frase vacía para quitarla", language_name(&lyrics.language))).color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(fill(tr("{} · los tiempos son del archivo · deja una frase vacía para quitarla"), &[&language_name(&lyrics.language)])).color(TEXT_DIM).size(10.5));
         ui.separator();
         egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
             for (i, line) in lyrics.lines.iter().enumerate() {
@@ -542,7 +543,7 @@ pub fn strip(app: &mut PulseApp, ui: &mut egui::Ui, strip: Rect, sample: &str, x
             }
         }
     }
-    let response = response.on_hover_text("La letra, donde se canta: clic en una palabra para corregirla");
+    let response = response.on_hover_text(tr("La letra, donde se canta: clic en una palabra para corregirla"));
     let _ = response;
     if let Some((line, word, text, at)) = hit {
         app.lyrics_ui.word = Some(WordEdit { sample: sample.to_string(), line, word, text, at });
@@ -557,13 +558,13 @@ pub fn word_popup(app: &mut PulseApp, ctx: &egui::Context) {
     egui::Area::new(id.with("area")).order(egui::Order::Foreground).fixed_pos(edit.at + vec2(0.0, 2.0)).show(ctx, |ui| {
         egui::Frame::popup(ui.style()).show(ui, |ui| {
             ui.horizontal(|ui| {
-                let response = ui.add(egui::TextEdit::singleline(&mut edit.text).id(id).desired_width(140.0)).on_hover_text("La palabra bien escrita (vacía: se quita; con espacios: varias palabras)");
+                let response = ui.add(egui::TextEdit::singleline(&mut edit.text).id(id).desired_width(140.0)).on_hover_text(tr("La palabra bien escrita (vacía: se quita; con espacios: varias palabras)"));
                 if !response.has_focus() && !response.lost_focus() {
                     response.request_focus();
                 }
                 done = response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 cancel = ui.input(|i| i.key_pressed(egui::Key::Escape));
-                done |= ui.button("✓").on_hover_text("Corregir").clicked();
+                done |= ui.button("✓").on_hover_text(tr("Corregir")).clicked();
             });
         });
     });

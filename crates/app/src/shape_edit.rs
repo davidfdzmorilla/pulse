@@ -3,6 +3,7 @@
 //! Drag a point to move it, double-click to add or remove one, drag the small
 //! handle in the middle of a segment to bend it; right-click for preset shapes.
 
+use crate::i18n::tr;
 use crate::theme::{self, ACCENT};
 use eframe::egui::{self, pos2, Color32, Sense, Stroke};
 use engine::model::Shape;
@@ -10,13 +11,13 @@ use engine::model::Shape;
 /// Ready-made shapes offered in the context menu.
 pub fn presets() -> [(&'static str, Shape); 7] {
     [
-        ("Seno", sine()),
-        ("Triángulo", Shape::from_points(&[(0.0, 0.5, 0.0), (0.25, 1.0, 0.0), (0.75, 0.0, 0.0), (1.0, 0.5, 0.0)])),
-        ("Sierra", Shape::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.0, 0.0)])),
-        ("Rampa", Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)])),
-        ("Cuadrada", Shape::from_points(&[(0.0, 1.0, 0.0), (0.5, 1.0, 0.0), (0.501, 0.0, 0.0), (1.0, 0.0, 0.0)])),
-        ("Bombeo", Shape::from_points(&[(0.0, 0.0, 0.0), (0.4, 1.0, -0.6), (1.0, 1.0, 0.0)])),
-        ("Escalones", Shape::from_points(&[(0.0, 0.2, 0.0), (0.25, 0.2, 0.0), (0.251, 0.9, 0.0), (0.5, 0.9, 0.0), (0.501, 0.5, 0.0), (0.75, 0.5, 0.0), (0.751, 0.0, 0.0), (1.0, 0.0, 0.0)])),
+        (tr("Seno"), sine()),
+        (tr("Triángulo"), Shape::from_points(&[(0.0, 0.5, 0.0), (0.25, 1.0, 0.0), (0.75, 0.0, 0.0), (1.0, 0.5, 0.0)])),
+        (tr("Sierra"), Shape::from_points(&[(0.0, 1.0, 0.0), (1.0, 0.0, 0.0)])),
+        (tr("Rampa"), Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)])),
+        (tr("Cuadrada"), Shape::from_points(&[(0.0, 1.0, 0.0), (0.5, 1.0, 0.0), (0.501, 0.0, 0.0), (1.0, 0.0, 0.0)])),
+        (tr("Bombeo"), Shape::from_points(&[(0.0, 0.0, 0.0), (0.4, 1.0, -0.6), (1.0, 1.0, 0.0)])),
+        (tr("Escalones"), Shape::from_points(&[(0.0, 0.2, 0.0), (0.25, 0.2, 0.0), (0.251, 0.9, 0.0), (0.5, 0.9, 0.0), (0.501, 0.5, 0.0), (0.75, 0.5, 0.0), (0.751, 0.0, 0.0), (1.0, 0.0, 0.0)])),
     ]
 }
 
@@ -114,7 +115,7 @@ pub fn edit(ui: &mut egui::Ui, id: egui::Id, size: egui::Vec2, shape: Shape, pla
             }
         }
     });
-    response.on_hover_text("Arrastra los puntos · doble clic añade o borra · arrastra el círculo de un tramo para curvarlo · clic derecho: formas");
+    response.on_hover_text(tr("Arrastra los puntos · doble clic añade o borra · arrastra el círculo de un tramo para curvarlo · clic derecho: formas"));
     (edited != shape).then_some(edited)
 }
 

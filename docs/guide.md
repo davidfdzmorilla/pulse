@@ -138,13 +138,13 @@ Next to the master meter, **CPU** tells you how hard the audio is working: the t
 
 - Above 70 % it turns orange, and above 90 % red: you're close to the sound breaking up.
 - If a chunk arrives late, it counts as a **dropout** (in red, beside it).
-- **Click** opens **Rendimiento** ("Performance"): what each track, its instrument, each effect and each plugin takes up, heaviest first. **Poner a cero** ("Reset") starts counting dropouts again.
+- **Click** opens **Performance**: what each track, its instrument, each effect and each plugin takes up, heaviest first. **Reset** starts counting dropouts again.
 
 If you get dropouts, raise the buffer in **Settings › Audio**, freeze the heavy tracks (see [[Tracks#Freeze a track]]) or remove plugins.
 
 +++ Details
 - A dropout is a chunk that Pulse took longer to make than it lasts, or a call from the sound card that came in late.
-- The per-track breakdown is only measured while **Rendimiento** is open: closed, it costs nothing.
+- The per-track breakdown is only measured while **Performance** is open: closed, it costs nothing.
 - Plugins play one after another in the audio core: spreading the work across cores doesn't help them.
 +++
 
@@ -170,7 +170,7 @@ In the MIDI editor, the ruler and the loop count the bars where the clip sits; S
 
 The generators also write in the time signature:
 
-- **Generar ritmo** ("Generate beat") makes its bars in the clip's time signature. The first pulse gets the kick and the second the snare: beat 2 in 3/4, the second pulse in 6/8. The hi-hats play eighth notes and the fill goes on the last pulse.
+- **Generate beat** makes its bars in the clip's time signature. The first pulse gets the kick and the second the snare: beat 2 in 3/4, the second pulse in 6/8. The hi-hats play eighth notes and the fill goes on the last pulse.
 - The **accompaniment** plays the bass by pulses (dotted quarters in 6/8, groups of 2+2+3 in 7/8) and accents the first of each bar.
 - **From humming to song** puts one chord per bar.
 - **Auto-Arrange** counts its sections in the project's bars, and the fill lasts the last bar.
@@ -230,7 +230,7 @@ Right-click a clip:
 - **Deactivate clip**: it stays in place but doesn't play. See [[Arrangement]].
 - **Follow action**: moves on to another clip by itself after a few loops. See [[#Follow actions]].
 - Colors.
-- Audio clips only: **Separate into stems…**, **Letra ▸** ("Lyrics"), **Consolidate**, **Reverse**, **Detect tempo** and **Use this clip's tempo in the project**. See [[Slicing and separating stems]], [[Lyrics]] and [[Audio tempo]].
+- Audio clips only: **Separate into stems…**, **Lyrics ▸**, **Consolidate**, **Reverse**, **Detect tempo** and **Use this clip's tempo in the project**. See [[Slicing and separating stems]], [[Lyrics]] and [[Audio tempo]].
 - MIDI clips only: **Export MIDI…**. See [[MIDI files]].
 
 ### Launch scenes
@@ -242,9 +242,9 @@ Right-click a clip:
 
 A clip can move on to another by itself once it has played for a while: right-click the clip → **Follow action**, or the **»** button in the clip panel's bar.
 
-- **Tras** ("After"): how many loops of the clip, or how many bars, it plays before deciding.
-- **A** and **B**: what it does then: **Siguiente** ("Next"), **Anterior** ("Previous"), **Primero** ("First"), **Último** ("Last"), **Cualquiera** ("Any"), **Otro al azar** ("Other at random"), **El mismo** ("The same", starts again), **Parar** ("Stop") or **Nada** ("Nothing").
-- **Probabilidad** ("Chance"): how many times out of a hundred A comes up; the rest, B. At 100 % it's always A.
+- **After**: how many loops of the clip, or how many bars, it plays before deciding.
+- **A** and **B**: what it does then: **Next**, **Previous**, **First**, **Last**, **Any**, **Other** (at random), **Play again** (starts again), **Stop** or **No action**.
+- **Chance**: how many times out of a hundred A comes up; the rest, B. At 100 % it's always A.
 - Clips and scenes with an action show **»** on the right.
 - Actions work within the clip's **group**: the consecutive clips on its track, with no gaps. Next, from the last one, goes back to the first.
 - Scenes have them too (right-click the scene): Next launches the scene below on every track.
@@ -295,8 +295,8 @@ When it wraps around, the clips' notes end at the loop's end; the ones you're ho
 
 - **Double-click** the strip: a new marker there.
 - **Drag** a marker: moves it along the grid.
-- **Right-click** a marker: rename it, **Go here**, delete it, or add a **Transición aquí ▸** ("Transition here"). See [[Transitions]].
-- **Right-click** the empty strip: **Add marker here** and **Transición aquí ▸** at the nearest bar.
+- **Right-click** a marker: rename it, **Go here**, delete it, or add a **Transition here ▸**. See [[Transitions]].
+- **Right-click** the empty strip: **Add marker here** and **Transition here ▸** at the nearest bar.
 
 > Note: [[Auto-Arrange]] puts a marker on each section, and when you [[Importing from Ableton Live]] its locators come along.
 
@@ -338,7 +338,7 @@ Right-click a clip:
 - **Deactivate clip** ({0}): see below.
 - **Copy**, **Cut**, **Duplicate** ({⌘D}) and **Delete** ({⌫}).
 - With a single clip: **Name** and **Color**.
-- Audio clips only: **Separate into stems…**, **Letra ▸** ("Lyrics", see [[Lyrics]]), **Detect tempo**, **Use this clip's tempo in the project**, **Consolidate** and **Reverse**.
+- Audio clips only: **Separate into stems…**, **Lyrics ▸** (see [[Lyrics]]), **Detect tempo**, **Use this clip's tempo in the project**, **Consolidate** and **Reverse**.
 - MIDI clips only: **Export MIDI…**. See [[MIDI files]].
 - **Convert to audio on a new track**: what the selected clips play becomes audio. See [[Tracks#Convert a range to audio and resample]].
 
@@ -359,7 +359,7 @@ Right-click a gap on a track:
 
 - **Paste here**, if there's something copied.
 - **Add sample here…** (audio tracks) or **New MIDI clip here** (MIDI tracks).
-- **Transición aquí ▸** ("Transition here"): a riser, a downlifter, an impact or a reverse cymbal at the nearest bar. See [[Transitions]].
+- **Transition here ▸**: a riser, a downlifter, an impact or a reverse cymbal at the nearest bar. See [[Transitions]].
 
 ### Track header
 
@@ -700,32 +700,32 @@ Plug it in and play: Pulse listens to **all** connected MIDI keyboards, on all c
 
 ### Mapping a knob to a control (MIDI learn)
 
-1. Press **Map** in the transport (or **Transport › Assign MIDI Controls**). The **Asignar MIDI** ("Map MIDI") window opens and the mappable controls are marked with an outline.
+1. Press **Map** in the transport (or **Transport › Assign MIDI Controls**). The **MIDI Map** window opens and the mappable controls are marked with an outline.
 2. Click a Pulse control: a knob, a fader, a plugin parameter or a transport button. The click picks it without changing it.
 3. Turn a knob or press a button on the controller.
-4. Repeat with other controls and press **Terminar** ("Finish").
+4. Repeat with other controls and press **Done**.
 
 > Tip: the order doesn't matter. If you turn the knob first, you have 10 seconds to touch the control.
 
 - You can map **Play**, **Stop**, **Record**, **Loop**, **Metronome** and **Automation Arm**.
-- Each CC moves a single control: mapping one that's already in use moves it to the new control. With **Un knob para varios controles** ("One knob for several controls") ticked, it's added to what it already moves: a single knob to open the filter, raise the reverb and lower the volume at the same time.
+- Each CC moves a single control: mapping one that's already in use moves it to the new control. With **One knob for several controls** ticked, it's added to what it already moves: a single knob to open the filter, raise the reverb and lower the volume at the same time.
 - The list shows the mappings. **×** removes one.
 - **From** and **To**: the part of the control's range the knob covers, in %. For example, a filter from 20 % to 70 % so it never closes fully or opens all the way. With **From** above **To**, the knob moves it in reverse.
-- **Suavizado** ("Smoothing"): how long the control takes to reach where you put the knob, up to 2 s. It removes the steps of a 0–127 knob and turns a quick gesture into a slow sweep.
+- **Smoothing**: how long the control takes to reach where you put the knob, up to 2 s. It removes the steps of a 0–127 knob and turns a quick gesture into a slow sweep.
 - A mapped CC no longer reaches the instrument.
 - Parameter mappings are saved with the project; transport mappings apply to every project.
 
 +++ Details
-A mapping follows its control: if you move, duplicate, group or delete tracks, or move effects in the chain, the knob keeps moving the same thing. If you delete the track or the effect, its mapping goes with it. One that no longer points to anything (from an old project) shows as "(ya no existe)" ("no longer exists") and does nothing; remove it with **×**.
+A mapping follows its control: if you move, duplicate, group or delete tracks, or move effects in the chain, the knob keeps moving the same thing. If you delete the track or the effect, its mapping goes with it. One that no longer points to anything (from an old project) shows as "(no longer exists)" and does nothing; remove it with **×**.
 +++
 
 ### Moving several controls with a macro
 
 **Transport › Macros…** opens the project's eight knobs. Each one moves the controls you assign to it at once, each control over its own range: a single gesture to open the filter, raise the reverb and add saturation in the break.
 
-1. Press **controles** ("controls") under a macro.
+1. Press **controls** under a macro.
 2. Click the knobs, faders or plugin parameters you want it to move. They're marked with an outline, and the click picks them without changing them.
-3. Press **controles** again to finish.
+3. Press **controls** again to finish.
 
 - In the list, **From** and **To** say where the macro puts each control at its minimum and maximum, in % of its range. With From greater than To it goes in reverse: the macro opens one filter while closing another.
 - **×** removes a control. **Name** is what you'll see on the knob.
@@ -840,7 +840,7 @@ From then on that sound of yours plays that instrument. Taught sounds have a ✓
 Each hit sounds about 15–20 ms after you make it.
 +++
 
-> Tip: to turn something already recorded into MIDI, use **Audio a MIDI › Melodía** ("Audio to MIDI › Melody"), which analyzes it more carefully and gets cleaner notes. For a beatbox recorded as audio, **Audio a MIDI › Beatbox**. See [[Audio to MIDI]].
+> Tip: to turn something already recorded into MIDI, use **Convert to MIDI › Melody**, which analyzes it more carefully and gets cleaner notes. For a beatbox recorded as audio, **Convert to MIDI › Beatbox**. See [[Audio to MIDI]].
 
 # Editing
 
@@ -922,14 +922,14 @@ Effects for section changes (risers, downlifters, impacts), made to fit your son
 ### Adding a transition
 
 1. In the Arrangement, right-click a marker, the marker strip or an empty space on a track.
-2. Choose **Transición aquí ▸** ("Transition here") and the type.
+2. Choose **Transition here ▸** and the type.
 
 | Transition | What it is |
 |---|---|
-| **Subida** ("Riser", 1, 2, 4 or 8 bars) | Noise and a tone rising from low to high and from soft to loud, ending right on that bar. The riser before the drop |
-| **Bajada** ("Downlifter", 1, 2 or 4 bars) | The opposite, from that bar: it falls and fades out (downlifter) |
-| **Impacto** ("Impact") | A low hit that drops in pitch, with noise and a tail, two bars long, from that bar |
-| **Platillo invertido** ("Reverse cymbal", 1, 2 or 4 bars) | A backwards cymbal that swells into that bar |
+| **Riser** (1, 2, 4 or 8 bars) | Noise and a tone rising from low to high and from soft to loud, ending right on that bar. The riser before the drop |
+| **Downlifter** (1, 2 or 4 bars) | The opposite, from that bar: it falls and fades out (downlifter) |
+| **Impact** | A low hit that drops in pitch, with noise and a tail, two bars long, from that bar |
+| **Reverse cymbal** (1, 2 or 4 bars) | A backwards cymbal that swells into that bar |
 
 ### Where they go
 
@@ -1000,17 +1000,17 @@ Everything follows tempo automation: MIDI clips, audio in Stretch, Beats or Re-P
 Automation inside a clip, which repeats with it every time it plays.
 
 1. Open the clip in the editor.
-2. In the **Carril** ("Lane") dropdown, choose **Envolventes del clip** ("Clip envelopes"; the other option is **Velocidad**, "Velocity").
+2. In the **Lane** dropdown, choose **Clip envelopes** (the other option is **Velocity**).
 3. Draw as on the track: click adds a point, dragging moves it, double-clicking deletes it, {⌥ + arrastrar} on a segment curves it and {⌥ + doble clic} straightens it.
 
-- **Borrar envolvente** ("Clear envelope") removes it.
+- **Clear envelope** removes it.
 - Envelopes are only in charge while the clip plays. When it ends, volume, pan, sends and parameters go back to what the mixer and the track's automation say.
 
 ## MIDI editor
 
 Where you write and edit a MIDI clip's notes. It opens when you select a MIDI clip; on drum tracks, each row has the name of its sound.
 
-When you open a clip, and when you write notes with **Chords**, **Generar ritmo** ("Generate beat"), **Accompany** or **Otra variación** ("Another variation"), the editor goes to where the notes are: on a drum kit, to the rows that play (kick and snare first, if they don't all fit).
+When you open a clip, and when you write notes with **Chords**, **Generate beat**, **Accompany** or **Another variation**, the editor goes to where the notes are: on a drum kit, to the rows that play (kick and snare first, if they don't all fit).
 
 ### Writing and editing notes
 
@@ -1025,7 +1025,7 @@ When you open a clip, and when you write notes with **Chords**, **Generar ritmo*
 | Click an empty spot | Deselects and places the orange marker, where {⌘V} pastes |
 | Click a key on the keyboard on the left | You hear it |
 
-- **Modo dibujo** ("Draw mode", {B}): click adds or deletes notes; click and drag adds a note and lengthens it.
+- **Draw** mode ({B}): click adds or deletes notes; click and drag adds a note and lengthens it.
 
 ### Editor shortcuts
 
@@ -1037,7 +1037,7 @@ When you open a clip, and when you write notes with **Chords**, **Generar ritmo*
 | {⌫} | Delete |
 | {Esc} | Deselect |
 | {← →} | Move along the grid ({⇧}: one bar) |
-| {↑ ↓} | Transpose ({⇧}: one octave). With **Plegar** ("Fold"), one scale note |
+| {↑ ↓} | Transpose ({⇧}: one octave). With **Fold**, one scale note |
 | {⌘U} | Quantize |
 | {R} | Roll on the selected notes, like the last one |
 
@@ -1048,10 +1048,10 @@ When you move notes with the arrows, the view follows them: if they were about t
 Trap hi-hat and snare rolls, in one step.
 
 1. Select the notes (click, or a box over the range). For a one-beat roll, a one-beat note is enough.
-2. Right-click → **Redoble** ("Roll") **1/16**, **1/16T**, **1/32**, **1/32T** or **1/64**. It's also in the **Redoble** button on the bar.
+2. Right-click → **Roll** **1/16**, **1/16T**, **1/32**, **1/32T** or **1/64**. It's also in the **Roll** button on the bar.
 3. Each note is split into notes of that length that fill it. {R} repeats the last roll.
 
-- **Velocity**: **Crece** ("Grows", soft to loud, like a roll coming in), **Se apaga** ("Fades", loud to soft) or **Plana** ("Flat"). The ramp goes from 35 % to 100 % of the note's velocity.
+- **Velocity**: **Grows** (soft to loud, like a roll coming in), **Fades** (loud to soft) or **Flat**. The ramp goes from 35 % to 100 % of the note's velocity.
 - The roll stays selected: choose another length and it's redone entirely with it.
 - {⌘Z} undoes it.
 
@@ -1063,7 +1063,7 @@ Trap hi-hat and snare rolls, in one step.
 
 #### Rolls that rise in pitch
 
-In a **Drum Pads** or **Drum Machine** clip, the roll menu also has **Tono** ("Pitch"): **Igual** ("Same"), **Sube 5** ("Up 5"), **Sube 12** ("Up 12") or **Baja 12** ("Down 12"), the semitones of the last hit.
+In a **Drum Pads** or **Drum Machine** clip, the roll menu also has **Tone** (the pitch): **Same**, **Up 5**, **Up 12** or **Down 12**, the semitones of the last hit.
 
 1. Choose the pitch and then the roll length, as usual.
 2. Each hit sounds a little higher (or lower) than the previous one: the rising trap hi-hat.
@@ -1074,25 +1074,25 @@ In a **Drum Pads** or **Drum Machine** clip, the roll menu also has **Tono** ("P
 
 ### Transforming notes
 
-**Transformar** ("Transform"), on the editor bar, changes the selected notes (or all of them, if none are selected) in one of these ways:
+**Transform**, on the editor bar, changes the selected notes (or all of them, if none are selected) in one of these ways:
 
 | Transformation | What it does |
 |---|---|
-| **Rasgueo** ("Strum") | The notes of each chord come in one after another, **Arriba** ("Up", low to high) or **Abajo** ("Down"), over the time you choose; **Curva** ("Curve") bunches them at the start or the end. The chord's end doesn't change. |
-| **Humanizar** ("Humanize") | Nudges each note's timing and velocity a little at random. The same **Semilla** ("Seed") always gives the same result; **Otra** ("Another") tries a different one. |
-| **Velocidad** ("Velocity") | **Rampa** ("Ramp") from one velocity to another, **Comprimir / expandir** ("Compress / expand") the differences from the average, or **Dar la vuelta** ("Flip": loud becomes soft). |
-| **Longitud** ("Length") | **Legato** (each note reaches the next) or **Multiplicar** ("Multiply") its length (×¼ for staccato, ×2…). |
-| **Ornamentos** ("Ornaments") | A **Nota de gracia** ("Grace note") right before each note (in scale steps if there's a key), or a **Flam**: the same note, earlier and softer. |
-| **Arpegiar** ("Arpeggiate") | Each chord, note by note (**Sube**, "Up"; **Baja**, "Down"; **Sube y baja**, "Up and down"), at the grid and length you choose. |
-| **Conectar** ("Connect") | Fills the gaps between one note and the next with scale steps (chromatic if the project has no key). |
-| **Invertir** ("Invert") | **Tonos** ("Pitches"): high goes low (within the scale, if there's a key). **Retrogradar** ("Retrograde"): end to start. |
+| **Strum** | The notes of each chord come in one after another, **Up** (low to high) or **Down**, over the time you choose; **Curve** bunches them at the start or the end. The chord's end doesn't change. |
+| **Humanize** | Nudges each note's timing and velocity a little at random. The same **Seed** always gives the same result; **Another** tries a different one. |
+| **Velocity** | **Ramp** from one velocity to another, **Compress / expand** the differences from the average, or **Flip** (loud becomes soft). |
+| **Length** | **Legato** (each note reaches the next) or **Multiply** its length (×¼ for staccato, ×2…). |
+| **Ornaments** | A **Grace note** right before each note (in scale steps if there's a key), or a **Flam**: the same note, earlier and softer. |
+| **Arpeggiate** | Each chord, note by note (**Up**, **Down** or **Up and down**), at the grid and length you choose. |
+| **Connect** | Fills the gaps between one note and the next with scale steps (chromatic if the project has no key). |
+| **Invert** | **Pitches**: high goes low (within the scale, if there's a key). **Retrograde**: end to start. |
 
-1. Press **Transformar** and pick one. The clip changes immediately: you see it and, if it's playing, you hear it.
+1. Press **Transform** and pick one. The clip changes immediately: you see it and, if it's playing, you hear it.
 2. Move its settings until you like it.
 3. **Apply** keeps it (a single {⌘Z} undoes it). **Cancel**, or closing the menu, leaves the notes as they were.
 
-- With a right-click on the notes, **Transformar ▸** applies any of them immediately, with the last settings you chose.
-- Quantize, groove (with its humanize that differs on every pass), rolls and **A la escala** ("To the scale") have their own buttons on the bar.
+- With a right-click on the notes, **Transform ▸** applies any of them immediately, with the last settings you chose.
+- Quantize, groove (with its humanize that differs on every pass), rolls and **To scale** have their own buttons on the bar.
 
 ### More room for the notes
 
@@ -1100,7 +1100,7 @@ When you open a clip, the detail panel has room for two octaves of notes, and th
 
 - **Maximize** the editor: the button on the right of the panel, {⇧⌘E} or double-click its top edge. It takes up almost the whole window; the same brings it back to its height.
 - **Taller or shorter**: drag the edge. Pulse remembers the height for next time.
-- **Taller or shorter rows**: {⌥ + rueda} over the notes, or the **Alto** ("Height") slider. The row under the mouse stays where it is.
+- **Taller or shorter rows**: {⌥ + rueda} over the notes, or the **Height** slider. The row under the mouse stays where it is.
 - **The bar** takes one row if it fits and two at most. In a narrow window, the least-used controls go into **⋯**; they work the same there and the menu doesn't close when you use them.
 
 +++ How Pulse decides the height
@@ -1113,26 +1113,26 @@ When you open a clip, the detail panel has room for two octaves of notes, and th
 
 ### Changing velocity
 
-Choose **Velocidad** ("Velocity") on the bottom lane and drag up or down near a note. Selected notes change together.
+Choose **Velocity** on the bottom lane and drag up or down near a note. Selected notes change together.
 
 ### The editor bar
 
 - The clip's **Name**.
 - **Loop**: 1, 2, 4, 8 or 16 bars (from the bar where the clip is), or any number of sixteenths in the **/16** field. A 3/16, 5/16 or 7/16 clip over 4/4 shifts every bar: good for polyrhythms.
-- **Grid** (1/4 to 1/64, with 1/8, 1/16 and 1/32 triplets) and **Nota** ("Note": length of new notes). Each clip remembers its own: if you set 1/16T on the hi-hats, the bass stays at 1/16. A clip you haven't opened yet takes the grid its notes are written in.
-- **Dibujar** ("Draw", {B}): pencil mode.
-- **Cuantizar** ("Quantize", {⌘U}) with its **intensidad** ("strength", %) and **finales** ("ends": also quantizes note ends). It acts on the selected notes or, if none, on all of them.
-- **Prob.** (%): on how many loop passes each note plays (see "Notes that don't always play", below).
-- **-12, -1, +1, +12**: transpose. **×2**: doubles the loop by copying the notes. **Redoble**: see [[MIDI editor#Rolls]]. **Transformar**: see [[MIDI editor#Transforming notes]]. **Zoom** (the width of the beats) and **Alto** (the height of the rows).
+- **Grid** (1/4 to 1/64, with 1/8, 1/16 and 1/32 triplets) and **Note** (the length of new notes). Each clip remembers its own: if you set 1/16T on the hi-hats, the bass stays at 1/16. A clip you haven't opened yet takes the grid its notes are written in.
+- **Draw** ({B}): pencil mode.
+- **Quantize** ({⌘U}) with its **Strength** (%) and **ends** (also quantizes note ends). It acts on the selected notes or, if none, on all of them.
+- **Chance** (%): on how many loop passes each note plays (see "Notes that don't always play", below).
+- **-12, -1, +1, +12**: transpose. **×2**: doubles the loop by copying the notes. **Roll**: see [[MIDI editor#Rolls]]. **Transform**: see [[MIDI editor#Transforming notes]]. **Zoom** (the width of the beats) and **Height** (the height of the rows).
 - **⋯**: whatever doesn't fit on the bar. Hover over it to see what's inside.
-- With a scale in the project, **Plegar** and **A la escala** (see [[Key and scale]]).
+- With a scale in the project, **Fold** and **To scale** (see [[Key and scale]]).
 - **Chords**: writes chords from the scale, whole progressions, and suggests the next one (see [[Chords]]).
-- On drum tracks, **Generar ritmo** (see [[Generating beats]]).
+- On drum tracks, **Generate beat** (see [[Generating beats]]).
 - Under the ruler, a strip shows the **chord** playing in each range.
 
 ### Notes that don't always play
 
-With **Prob.** you choose on what percentage of loop passes each selected note plays (or all of them, if nothing is selected). A hat at 60 % or a ghost snare note at 30 % makes the loop vary by itself. Notes with a probability look paler, with their %.
+With **Chance** you choose on what percentage of loop passes each selected note plays (or all of them, if nothing is selected). A hat at 60 % or a ghost snare note at 30 % makes the loop vary by itself. Notes with a probability look paler, with their %.
 
 +++ How the randomness works
 - It's random, but always the same randomness: the song sounds the same every time you play it, when you export it and when you freeze the track.
@@ -1146,10 +1146,10 @@ With **Prob.** you choose on what percentage of loop passes each selected note p
 - **The project's**: the transport's swing (see [[Transport]]).
 - **One of its own for this clip**, with:
   - **Swing** and its grid.
-  - **Acentos** ("Accents"): softer offbeats.
-  - **Humanizar** ("Humanize"): small random shifts in timing and velocity, different on every pass.
-- Ready-made grooves: **Recto** ("Straight"), **Swing 1/16**, **MPC 1/16**, **Shuffle 1/8** and **Humano** ("Human").
-- **De tus grabaciones** ("From your recordings"): the grooves you've extracted from audio (see the next section). Each note that falls on the grid moves like its hit in the recording and takes its strength. **Time** and **Dynamics** say how much: 100 %, the same as the recording; 50 %, halfway. **Humanizar** is added on top.
+  - **Accents**: softer offbeats.
+  - **Humanize**: small random shifts in timing and velocity, different on every pass.
+- Ready-made grooves: **Straight**, **Swing 1/16**, **MPC 1/16**, **Shuffle 1/8** and **Human**.
+- **From your recordings**: the grooves you've extracted from audio (see the next section). Each note that falls on the grid moves like its hit in the recording and takes its strength. **Time** and **Dynamics** say how much: 100 %, the same as the recording; 50 %, halfway. **Humanize** is added on top.
 
 ### Extracting the groove from audio
 
@@ -1157,9 +1157,9 @@ Copy the feel of a drum loop, a break or your beatbox and apply it to any MIDI c
 
 1. Right-click an audio clip → **Extract groove**.
 2. Pulse listens to where each hit lands relative to the grid and how hard, and saves it in the project with the clip's name.
-3. In any MIDI clip's **Groove**, choose it under **De tus grabaciones**.
+3. In any MIDI clip's **Groove**, choose it under **From your recordings**.
 
-- Pulse knows whether the loop moves in **sixteenths** or in **eighths** (a shuffle). The status bar says so, along with how late its offbeats are: "en semicorcheas, los contratiempos un 30 % de paso tarde" ("in sixteenths, the offbeats 30 % of a step late").
+- Pulse knows whether the loop moves in **sixteenths** or in **eighths** (a shuffle). The status bar says so, along with how late its offbeats are: "in sixteenths, the offbeats 30 % of a step late".
 
 > Warning: a project with grooves extracted from audio doesn't open in Pulse versions from before this feature (format 11), so they aren't lost.
 
@@ -1186,19 +1186,19 @@ What you do with the keyboard's wheels and controls while recording stays in the
 ### Seeing and drawing it
 
 1. Open the clip in the editor.
-2. In **Carril** ("Lane"), under **Expresión MIDI del clip** ("Clip MIDI expression"), choose a control the clip has (◆) or add one: **Pitch bend**, **Rueda de modulación** ("Mod wheel"), **Aftertouch**, **Brillo** ("Brightness"), **Expresión** ("Expression"), **Soplo** ("Breath") or **+ CC** with its number.
+2. In **Lane**, under **Clip MIDI expression**, choose a control the clip has (◆) or add one: **Pitch bend**, **Mod wheel**, **Aftertouch**, **Brightness**, **Expression**, **Breath** or **+ CC** with its number.
 3. Draw on the lane:
 
 | Tool | What it does |
 |---|---|
-| **Lápiz** ("Pencil") | Drag to draw freehand |
-| **Línea** ("Line") | Drag from one point to another: a straight ramp |
+| **Pencil** | Drag to draw freehand |
+| **Line** | Drag from one point to another: a straight ramp |
 | Drag a point | Moves it |
 | Double-click a point | Deletes it |
 | {⌥ + arrastrar} between two points | Curves that segment ({⌥ + doble clic}: straight again) |
 
 - **Grid**: what you draw snaps to the editor's grid.
-- **Borrar carril** ("Clear lane") removes that control from the clip.
+- **Clear lane** removes that control from the clip.
 - Pitch bend snaps to the center as you get close to it, like a real wheel.
 
 ### How it sounds
@@ -1243,30 +1243,30 @@ Choose the **Warp**:
 | **Stretch** | Follows the tempo while keeping the pitch |
 | **Beats** | For drums: each hit starts where it should and plays at its own speed, without the echo Stretch leaves when the tempo changes a lot. If the tempo is slower, a short silence is left between hits |
 
-- **BPM original** ("Original BPM"), with **÷2** and **×2** if the detector landed on double or half.
-- **Tempo: Detectar / Usar en el proyecto** ("Tempo: Detect / Use in the project"; see [[Audio tempo]]).
+- **Original BPM**, with **÷2** and **×2** if the detector landed on double or half.
+- **Tempo: Detect / Use in the project** (see [[Audio tempo]]).
 
 ### The clip's controls
 
-- **Longitud** ("Length") in beats, and **Ajustar al archivo** ("Fit to file").
-- **Ver** ("View"): **El clip** ("The clip") or **Archivo entero** ("Whole file"). In "Archivo entero", clicking or dragging on the waveform moves the clip's **start**.
-- **Inicio** ("Start") in seconds. It can be negative, to start a bar before the file.
-- **Fundidos** ("Fades") **in** and **out**, in beats: the same as the handles in the Arrangement. In Session they're applied on every loop pass.
+- **Length** in beats, and **Fit to file**.
+- **View**: **The clip** or **Whole file**. In "Whole file", clicking or dragging on the waveform moves the clip's **start**.
+- **Start** in seconds. It can be negative, to start a bar before the file.
+- **Fades** **in** and **out**, in beats: the same as the handles in the Arrangement. In Session they're applied on every loop pass.
 - **Gain** (−36 to +12 dB) and **Transp.** (±24 semitones, Stretch only).
-- The audio's **Tonalidad** ("Key"), **Seguir la escala** ("Follow the scale") and **Detectar** ("Detect"; see [[Key and scale]]).
-- Warp **Marcadores** ("Markers") and **Quitar** ("Remove"; see below).
-- **Trocear → A Drum Pads** ("Slice → To Drum Pads") and **Separate into stems…** (see [[Slicing and separating stems]]).
-- **Afinación → Editar notas…** ("Tuning → Edit notes…"): tune a vocal note by note (see below).
-- **Carril** ("Lane"): clip envelopes (see [[Automation]]).
+- The audio's **Key**, **Follow the scale** and **Detect** (see [[Key and scale]]).
+- Warp **Markers** and **Remove** (see below).
+- **Slice → To Drum Pads** and **Separate into stems…** (see [[Slicing and separating stems]]).
+- **Tuning → Edit notes…**: tune a vocal note by note (see below).
+- **Lane**: clip envelopes (see [[Automation]]).
 
 ### Tuning a vocal note by note
 
 Like Melodyne: on a clip with a vocal, or an instrument that plays one note at a time, you see each note as a block and move it wherever you want.
 
-1. Select the clip and press **Afinación → Editar notas…**. The first time, it analyzes the voice for a few seconds.
+1. Select the clip and press **Tuning → Edit notes…**. The first time, it analyzes the voice for a few seconds.
 2. The waveform is replaced by its **notes**: each one is a block over the keyboard, at the pitch it sounds. Below it runs the pitch you sang (gray line) and, if you've changed it, how it will sound (in the clip's color).
 3. Drag a note up or down, or double-click to tune it.
-4. **← Forma de onda** ("← Waveform") goes back to the audio editor. A tuned clip shows **Editar notas… ✓**.
+4. **← Waveform** goes back to the audio editor. A tuned clip shows **Edit notes… ✓**.
 
 | Action | What it does |
 |---|---|
@@ -1275,7 +1275,7 @@ Like Melodyne: on a clip with a vocal, or an instrument that plays one note at a
 | Click | Picks a note |
 | {⇧ clic} or {⌘ clic} | Adds notes to or removes them from the selection. Dragging one of the selected notes moves them all |
 
-- **Afinar** ("Tune"), **Sin vibrato** ("No vibrato") and **Como se cantó** ("As sung") act on the selected notes or, if none, on all of them. **Sin vibrato** holds each note still on its pitch; **Como se cantó** returns it to how it was.
+- **Tune**, **No vibrato** and **As sung** act on the selected notes or, if none, on all of them. **No vibrato** holds each note still on its pitch; **As sung** returns it to how it was.
 - With a note selected, at the top you see where it was sung and where it's going ("A2 +30 cents → A2") and its **vibrato**: 100 % as sung, 0 % none, over 100 % more pronounced.
 - {⌘Z} undoes instantly.
 
@@ -1346,10 +1346,10 @@ Chords (in the editor, in **Chords** and on sliced pads) and scales are spelled 
 With a scale in the project, the [[MIDI editor]] helps you stay inside it:
 
 - Rows for the scale's notes look lighter, and the tonic's rows are orange, with their name.
-- **Plegar** ("Fold") shows only the scale's rows, all with their names, plus the rows of any notes you already have outside it, so none get lost. When you drag notes up or down, or use {↑} {↓} and **-1 / +1**, they jump from scale note to scale note: there's no way to step outside.
-- **A la escala** ("To scale") moves notes that aren't in the scale to the nearest scale note: the selected ones or, with no selection, all of them.
+- **Fold** shows only the scale's rows, all with their names, plus the rows of any notes you already have outside it, so none get lost. When you drag notes up or down, or use {↑} {↓} and **-1 / +1**, they jump from scale note to scale note: there's no way to step outside.
+- **To scale** moves notes that aren't in the scale to the nearest scale note: the selected ones or, with no selection, all of them.
 
-In [[Audio to MIDI]], **Melodía** ("Melody") uses the project's scale instead of looking for one.
+In [[Audio to MIDI]], **Melody** uses the project's scale instead of looking for one.
 
 ### Loops in your key
 
@@ -1361,8 +1361,8 @@ Audio you add (by dragging it, from the browser or with Import) is put into the 
 
 In each clip's [[Audio editor]]:
 
-- **Tonalidad** ("Key") shows the file's key, and **Detectar** ("Detect") looks for it again.
-- **Seguir la escala** ("Follow the scale") fits it to the project's scale or leaves it in its own.
+- **Key** shows the file's key, and **Detect** looks for it again.
+- **Follow the scale** fits it to the project's scale or leaves it in its own.
 - Moving **Transp.** by hand makes it stop following the scale.
 
 To keep new loops from being adjusted, untick **Fit new loops to the scale** in the transport's **Scale** menu.
@@ -1385,7 +1385,7 @@ In the [[MIDI editor]], below the ruler, a strip shows the chord playing in each
 - It marks at most one chord every half bar.
 - Loose melody notes on top don't change the chord.
 
-To get the chords from audio (a song, a stem, a piano loop), use [[Audio to MIDI]] → **Acordes** ("Chords").
+To get the chords from audio (a song, a stem, a piano loop), use [[Audio to MIDI]] → **Chords**.
 
 ### Writing a progression
 
@@ -1443,11 +1443,11 @@ Names follow the project's key (**Bb** in F major, **A#** in B major) and, if th
 - Right-click the strip → **Take the chords from** → a track: the chords of all its clips.
 - **All the song's MIDI clips**: the chords you get by combining the MIDI tracks, without the drums.
 
-> Tip: the full workflow in three clicks: audio with chords → **Its chords to the chord track** → right-click the strip → **Accompany the whole song** → **Bajo: raíz** ("Bass: root"), and again → **Pad**.
+> Tip: the full workflow in three clicks: audio with chords → **Its chords to the chord track** → right-click the strip → **Accompany the whole song** → **Bass: root**, and again → **Pad**.
 
 ### Making the song follow them
 
-**Accompany**: right-click the strip → **Accompany the whole song** (or **Accompany "Estribillo"**, the section between that marker and the next) → a part. It writes a bass, an arpeggio, a pad, rhythmic chords or a melody in a clip of that length, on the empty track for its role or on a new one at the end (see [[Accompaniment]]). If you change chords later, **Otra variación** ("Another variation") in the editor rewrites it with the new ones.
+**Accompany**: right-click the strip → **Accompany the whole song** (or **Accompany "Estribillo"**, the section between that marker and the next) → a part. It writes a bass, an arpeggio, a pad, rhythmic chords or a melody in a clip of that length, on the empty track for its role or on a new one at the end (see [[Accompaniment]]). If you change chords later, **Another variation** in the editor rewrites it with the new ones.
 
 **Tracks that follow the chords**: right-click a MIDI track's header → **Follow the chord track** and a mode. Its notes don't change: what you hear changes, bar by bar, even if the clip is a one-bar loop.
 
@@ -1497,15 +1497,15 @@ It comes in at the fader level of the chords' track (the arpeggio and the pad 1.
 
 | Part | What it plays |
 |---|---|
-| **Bajo: raíz** ("Bass: root") | The root on every beat, with the odd octave and passing notes into the next chord. |
-| **Bajo: octavas** ("Bass: octaves") | Root and octave in eighth notes (disco). |
-| **Bajo: contratiempo** ("Bass: offbeat") | On the offbeats (house). |
-| **Bajo: caminante** ("Bass: walking") | One note per beat walking through the chord; it reaches the next one by a semitone. |
-| **Bajo: rodante** ("Bass: rolling") | Sixteenths on the three parts of each beat that aren't the kick (triplets in one take out of four), with the offbeat accented and octaves and fifths that change with each take. The bass of techno and melodic techno. Comes with the Acid "Bass · Rolling techno". |
-| **Bajo: galope** ("Bass: gallop") | A dotted eighth and a sixteenth on every beat, the first of the bar accented: the gallop of rock, EBM and tech house. Comes with the Acid "Bass · Fat saturated". |
-| **Arpegio ascendente** ("Arpeggio up") and **Arpegio arriba y abajo** ("Arpeggio up and down") | The chord notes one after another. |
+| **Bass: root** | The root on every beat, with the odd octave and passing notes into the next chord. |
+| **Bass: octaves** | Root and octave in eighth notes (disco). |
+| **Bass: offbeat** | On the offbeats (house). |
+| **Bass: walking** | One note per beat walking through the chord; it reaches the next one by a semitone. |
+| **Bass: rolling** | Sixteenths on the three parts of each beat that aren't the kick (triplets in one take out of four), with the offbeat accented and octaves and fifths that change with each take. The bass of techno and melodic techno. Comes with the Acid "Bass · Rolling techno". |
+| **Bass: gallop** | A dotted eighth and a sixteenth on every beat, the first of the bar accented: the gallop of rock, EBM and tech house. Comes with the Acid "Bass · Fat saturated". |
+| **Arpeggio up** and **Arpeggio up and down** | The chord notes one after another. |
 | **Pad** | Sustained chords, with smooth voice leading. |
-| **Acordes rítmicos** ("Rhythmic chords") | Short chords with a syncopated rhythm. |
+| **Chord stabs** | Short chords with a syncopated rhythm. |
 
 ### Melody
 
@@ -1513,24 +1513,24 @@ The last four parts of **Accompany** write the main melody: the lead, the hook o
 
 | Style | What it plays | Default sound |
 |---|---|---|
-| **Melodía: gancho** ("Melody: hook") | A short, syncopated one-bar riff that repeats (house, techno). | Pulse Synth "Pluck · Short" |
-| **Melodía: cantable** ("Melody: singable") | A two-bar phrase with long notes that you could sing (pop). | FM "Lead · FM flute" |
-| **Melodía: lead de trance** ("Melody: trance lead") | Eighths and sixteenths jumping between the chord notes. | Super Saw "Lead · Classic trance" |
-| **Melodía: pregunta y respuesta** ("Melody: call and response") | One bar asks and the next answers with the same rhythm. | Pulse Synth "Lead · Bright saw" |
+| **Melody: hook** | A short, syncopated one-bar riff that repeats (house, techno). | Pulse Synth "Pluck · Short" |
+| **Melody: singable** | A two-bar phrase with long notes that you could sing (pop). | FM "Lead · FM flute" |
+| **Melody: trance lead** | Eighths and sixteenths jumping between the chord notes. | Super Saw "Lead · Classic trance" |
+| **Melody: call and response** | One bar asks and the next answers with the same rhythm. | Pulse Synth "Lead · Bright saw" |
 
 It sounds like a song, not random notes:
 
 - On every strong beat it plays a note of the chord that's sounding; in between, scale notes moving stepwise. It never clashes a semitone against the chord on a strong beat.
 - A one- or two-bar motif repeats through the whole clip and adapts to each chord.
-- The melody has a contour: it rises when the motif rises and falls when it falls, with a high point in each phrase. On strong beats it picks, among the chord notes, the one heading in that direction, not always the nearest. No note lasts more than half the melody, not even with **Pocas notas**.
+- The melody has a contour: it rises when the motif rises and falls when it falls, with a high point in each phrase. On strong beats it picks, among the chord notes, the one heading in that direction, not always the nearest. No note lasts more than half the melody, not even with **Few notes**.
 - Phrases come in pairs: the first stays open and the second resolves to the tonic or the chord's root, just like the end of the clip.
 - It follows the clip's time signature (4/4, 3/4, 6/8…) and its length.
 
 In the melody's [[MIDI editor]], next to **Otra variación**, you have three drop-downs:
 
-- **Estilo** ("Style"): the same take in another style. The clip is renamed if it's still named after the style. If the track was created by **Accompany** and you haven't touched its instrument, the lead also switches to the new style's default sound. {⌘Z} undoes both. If you've changed the sound, or the melody is on a track you already had, the instrument stays as it is.
-- **Densidad** ("Density"): **Pocas notas** ("Few notes"), **Normal** or **Muchas notas** ("Many notes").
-- **Registro** ("Register"): **Grave** ("Low", C2–G3), **Medio** ("Mid", A2–E4) or **Agudo** ("High", G3–D5), with the editor's note names (C3 is middle C).
+- **Style**: the same take in another style. The clip is renamed if it's still named after the style. If the track was created by **Accompany** and you haven't touched its instrument, the lead also switches to the new style's default sound. {⌘Z} undoes both. If you've changed the sound, or the melody is on a track you already had, the instrument stays as it is.
+- **Density**: **Few notes**, **Normal** or **Many notes**.
+- **Register**: **Low** (C2–G3), **Medium** (A2–E4) or **High** (G3–D5), with the editor's note names (C3 is middle C).
 
 Changing them rewrites the same take; **Otra variación** writes a different one.
 
@@ -1548,41 +1548,41 @@ In the new clip's [[MIDI editor]], **Otra variación** rewrites it a different w
 
 ## Generating beats
 
-**Generar ritmo** ("Generate beat") writes a drum beat in the style you choose: house, techno, trap, reggaeton… It can write it as is, or have Pulse's AI play it, with variations and fills like a drummer.
+**Generate beat** writes a drum beat in the style you choose: house, techno, trap, reggaeton… It can write it as is, or have Pulse's AI play it, with variations and fills like a drummer.
 
 ### Generating a beat
 
 1. Open a clip on a drum track (Drum Machine or Drum Pads) in the [[MIDI editor]].
-2. In **Generar ritmo**, choose the **Estilo** ("Style"), the **Nivel** ("Level") and the **Largo** ("Length").
-3. Click **Generar** ("Generate"). The clip's notes are replaced by the beat, and a clip that doesn't have its own name yet takes the style's name ("Techno").
-4. **Otra versión** ("Another version") moves to another beat of the same style and level. {⌘Z} brings back the previous ones.
+2. In **Generate beat**, choose the **Style**, the **Level** and how **Long** it is.
+3. Click **Generate**. The clip's notes are replaced by the beat, and a clip that doesn't have its own name yet takes the style's name ("Techno").
+4. **Another version** moves to another beat of the same style and level. {⌘Z} brings back the previous ones.
 
-> Tip: each style sounds like itself at its own tempo. **Tempo del proyecto a… BPM** ("Project tempo to… BPM") sets it.
+> Tip: each style sounds like itself at its own tempo. **Project tempo to… BPM** sets it.
 
 ### Options
 
 - **Estilo** (styles): House, Techno, Hardgroove, Hard techno, Trap, Drum & Bass, Hip hop, Pop / Rock, Reggaetón and Breakbeat.
-- **Nivel**: **Básico** ("Basic", just the essentials), **Medio** ("Medium") and **Intenso** ("Intense", more hits, percussion and ghost notes).
-- **Largo**: 1, 2, 4 or 8 bars. The rhythm repeats, and the **fourth bar** turns the phrase around with a variation.
-- **Redoble al final de cada frase** ("Fill at the end of each phrase"): on the last beat of every 8 bars (or of the clip, if it's 4 bars or longer), each style's own fill. Reggaeton doesn't get one.
-- **El bombo sigue al bajo** ("The kick follows the bass"): adds kicks where the bass starts its notes (in eighths), if there's a bass track playing along with the clip.
-- **Sonidos** ("Sounds"): which instruments the beat can use: kick, snare, clap, hi-hat, ride, crash, rim, toms, shaker, tambourine, cowbell, congas and clave.
+- **Level**: **Basic** (just the essentials), **Medium** and **Intense** (more hits, percussion and ghost notes).
+- **Length**: 1, 2, 4 or 8 bars. The rhythm repeats, and the **fourth bar** turns the phrase around with a variation.
+- **Fill at the end of each phrase**: on the last beat of every 8 bars (or of the clip, if it's 4 bars or longer), each style's own fill. Reggaeton doesn't get one.
+- **The kick follows the bass**: adds kicks where the bass starts its notes (in eighths), if there's a bass track playing along with the clip.
+- **Sounds**: which instruments the beat can use: kick, snare, clap, hi-hat, ride, crash, rim, toms, shaker, tambourine, cowbell, congas and clave.
   - Each style comes with its own ticked (techno without ride or cowbell, pop with crash, toms and tambourine), and you can remove or add whichever you like.
   - The ones the kit doesn't have are shown crossed out.
   - With percussion only (no kick, snare, clap or hi-hat), each ticked sound plays its own pattern, fuller at each level: a percussion track to play over another track's drums.
   - With **crash** ticked and a clip of 4 bars or more, it plays at the start of each phrase.
-- **Sonido del estilo** ("Style's sound"): on a Drum Machine, it sets the style's machine (**808** for trap, hip hop and reggaeton; **909** for the rest) tuned the way the style sounds: trap's long, deep kick, techno's dry one, drum & bass's high snare… If you've tuned the machine yourself, it only switches machine and keeps your settings.
+- **Style's sound**: on a Drum Machine, it sets the style's machine (**808** for trap, hip hop and reggaeton; **909** for the rest) tuned the way the style sounds: trap's long, deep kick, techno's dry one, drum & bass's high snare… If you've tuned the machine yourself, it only switches machine and keeps your settings.
 
 It works with any kit: Pulse finds each sound by its name, in Spanish or English, with or without accents (kick/bombo, snare/caja, clap/palmada, hat/charles, tom, rim/aro, conga/bongó, clave/bloque de madera…), and uses whatever's there. If a ticked sound isn't there, it uses the closest one you have.
 
 ### Letting the AI play it
 
-Tick **Que lo toque la IA** ("Let the AI play it") and Pulse's drum model listens to the style's beat and plays it its own way: it keeps it going, varies it, and throws in fills and changes where phrases end. Each **Otra versión** is a different performance.
+Tick **Let the AI play it** and Pulse's drum model listens to the style's beat and plays it its own way: it keeps it going, varies it, and throws in fills and changes where phrases end. Each **Otra versión** is a different performance.
 
 - With **Básico** it plays it safer; with **Intenso** it lets loose more.
 - The kick the beat has on every beat (the four-on-the-floor of house, techno, hardgroove or hard techno) always stays: the AI varies the rest.
 - It plays with the ticked **Sonidos**. Toms come in on fills; from **Medio** up, tambourine and shaker too, and on **Intenso**, congas and cowbell as well.
-- It plays in the background: meanwhile the button says **Generando…** ("Generating…") and you can keep working. The beat lands in its clip as soon as it's ready; if you're in another clip, when you go back to it.
+- It plays in the background: meanwhile the button says **Generating…** and you can keep working. The beat lands in its clip as soon as it's ready; if you're in another clip, when you go back to it.
 
 > Note: the AI runs inside Pulse and works without internet.
 
@@ -1641,11 +1641,11 @@ It takes a few seconds and runs on this Mac, without internet; the status bar sh
 
 | Option | What for |
 |---|---|
-| **Melodía** ("Melody") | One note at a time: a voice, humming or a solo instrument. Sing an idea, convert it and play it with any synth. |
-| **Melodía sin ajustar** ("Melody, unsnapped") | The same, but each note goes to the nearest semitone instead of to the scale. For melodies with notes outside the key, or a well-tuned instrument. |
-| **Armonía** ("Harmony") | All the notes at once: chords, piano or guitar. |
-| **Acordes** ("Chords") | The chords of a song or an instrument, one per change (at most every half bar), with the bass and smooth voice leading. It ignores drums and short hits. |
-| **Batería** ("Drums") | Each hit becomes a kick, snare or hi-hat, depending on where its energy is, on a Drum Machine. |
+| **Melody** | One note at a time: a voice, humming or a solo instrument. Sing an idea, convert it and play it with any synth. |
+| **Melody, unsnapped** | The same, but each note goes to the nearest semitone instead of to the scale. For melodies with notes outside the key, or a well-tuned instrument. |
+| **Harmony** | All the notes at once: chords, piano or guitar. |
+| **Chords** | The chords of a song or an instrument, one per change (at most every half bar), with the bass and smooth voice leading. It ignores drums and short hits. |
+| **Drums** | Each hit becomes a kick, snare or hi-hat, depending on where its energy is, on a Drum Machine. |
 | **Beatbox** | Your recorded beatbox becomes drums. |
 
 > Tip: it pairs well with [[Slicing and separating stems|Separate into stems]]. Separate a song and convert the bass or the vocal to MIDI.
@@ -1675,9 +1675,9 @@ Two ways to split up audio: into hits, to play them from pads, or into its instr
 ### Slicing a loop into pads
 
 1. Open the clip in the [[Audio editor]].
-2. In **Trocear** ("Slice"), choose how to cut: **Transitorios** ("Transients", at each hit), **1/16**, **1/8** or **1/4**.
-3. With **Transitorios**, adjust the **sensitivity**: higher gives more slices (it also cuts at soft hits); lower, only at strong ones.
-4. Click **A Drum Pads** ("To Drum Pads").
+2. In **Slice**, choose how to cut: **Transients** (at each hit), **1/16**, **1/8** or **1/4**.
+3. With **Transients**, adjust the **sensitivity**: higher gives more slices (it also cuts at soft hits); lower, only at strong ones.
+4. Click **To Drum Pads**.
 
 The clip is cut into hits, up to 16, each on a pad of a **Drum Pads** on a new track, "… troceado" ("… sliced"). A MIDI clip plays them in order in the same place, with each note on the grid. When you change the tempo, the groove follows without stretching the audio, and in the [[MIDI editor]] you can reorder or repeat hits.
 
@@ -1695,20 +1695,20 @@ Drum Pads also has **Slice File…**, to cut audio straight into its pads.
 
 #### Adjusting the slices by hand
 
-Tick **Editar cortes** ("Edit slices"), below "Trocear". The slices appear numbered over the waveform, with a strip below:
+Tick **Edit slices**, below "Slice". The slices appear numbered over the waveform, with a strip below:
 
 - **Drag** a slice to move it.
 - **Double-click** a slice to remove it; on an empty spot, to add one (up to 16, one per pad).
 - **A Drum Pads** then slices at your cuts.
 
-> Warning: changing the mode (Transitorios, 1/16…) finds the slices again, and you lose any you've moved.
+> Warning: changing the mode (Transients, 1/16…) finds the slices again, and you lose any you've moved.
 
 ### Separating into stems
 
 A stem is one part of the mix on its own. Pulse extracts four: **Batería** (drums), **Bajo** (bass), **Voz** (vocals) and **Resto** (other).
 
 1. Right-click an audio clip → **Separate into stems…**, or use the button in the audio editor.
-2. Wait: you can keep working meanwhile. **Cancelar** ("Cancel") stops it.
+2. Wait: you can keep working meanwhile. **Cancel** stops it.
 3. Four new tracks appear below, **Batería**, **Bajo**, **Resto** and **Voz**, with the clip in the same place, and the original is deactivated so everything sounds the same.
 
 Each new track is a copy of the original, with its effects, volume, pan, sends, automation and group, and the clip keeps its envelopes.
@@ -1723,10 +1723,10 @@ Pulse listens to a vocal clip and writes down what's sung, in Spanish or English
 
 ### Transcribing a clip's lyrics
 
-1. Right-click an audio clip → **Letra ▸ Transcribir letra…** ("Lyrics ▸ Transcribe lyrics…"). There's also the **Transcribir…** ("Transcribe…") button in the **Letra** row of the [[Audio editor]].
-2. Choose the **idioma** ("language"): **Automático** ("Automatic") recognizes it by listening to the beginning; if you know it, choose **Español** ("Spanish") or **Inglés** ("English").
-3. If you've already separated a song into stems, tick **Aislar la voz antes** ("Isolate the vocal first"): it reads only the vocal and is far more accurate when there's music in the background.
-4. Click **Transcribir**. You can keep working meanwhile; **Cancelar** stops it.
+1. Right-click an audio clip → **Lyrics ▸ Transcribe lyrics…**. There's also the **Transcribe…** button in the **Lyrics** row of the [[Audio editor]].
+2. Choose the **Language**: **Automatic** recognizes it by listening to the beginning; if you know it, choose **Spanish** or **English**.
+3. If you've already separated a song into stems, tick **Isolate the vocals first**: it reads only the vocal and is far more accurate when there's music in the background.
+4. Click **Transcribe**. You can keep working meanwhile; **Cancel** stops it.
 
 The part of the file that plays in the clip is transcribed. If you transcribe again, the lines in that part are replaced and the rest are kept.
 
@@ -1744,17 +1744,17 @@ The lyrics travel with the audio file: clips that use it show them in place even
 ### Correcting words
 
 - **Click a word** in the editor's strip: type the right one and press {Intro}. Empty, the word is removed; with spaces, it becomes several. {Esc} leaves it as it was.
-- **Letra ▸ Editar letra…** ("Lyrics ▸ Edit lyrics…"), or **Editar…** ("Edit…") in the editor, opens the lyrics line by line with their timing: correct any line. Leave one empty to remove it.
+- **Lyrics ▸ Edit lyrics…**, or **Edit…** in the editor, opens the lyrics line by line with their timing: correct any line. Leave one empty to remove it.
 
 Everything can be undone with {⌘Z}.
 
 ### Copying and exporting
 
-In **Letra ▸** or in the lyrics window:
+In **Lyrics ▸** or in the lyrics window:
 
-- **Copiar letra** ("Copy lyrics"): all the clip's lyrics to the clipboard, one line per line.
-- **Exportar .txt…** ("Export .txt…"): the lyrics as text.
-- **Exportar .lrc…** ("Export .lrc…"): the lyrics with each line's timing, for karaoke and players. On an Arrangement clip, the times are the song's; on a Session clip, from the start of the clip.
+- **Copy lyrics**: all the clip's lyrics to the clipboard, one line per line.
+- **Export .txt…**: the lyrics as text.
+- **Export .lrc…**: the lyrics with each line's timing, for karaoke and players. On an Arrangement clip, the times are the song's; on a Session clip, from the start of the clip.
 
 +++ How it works
 - The model is OpenAI's Whisper small (MIT license), in onnx-community's 8-bit quantized version. It's stored in Pulse's data folder, in `Models/whisper-small`, and each file is checked against its SHA-256 fingerprint before use.
@@ -1777,9 +1777,9 @@ When you have your ideas in Session scenes, **Create › Auto-Arrange…** turns
 
 The structures:
 
-- **Electrónica** ("Electronic"): intro, build-up, drop, break, build-up, drop, outro.
+- **Electronic**: intro, build-up, drop, break, build-up, drop, outro.
 - **Pop**: intro, verse, chorus, verse, chorus, bridge, chorus, ending.
-- **Corta** ("Short"): intro, A, B, ending.
+- **Short**: intro, A, B, ending.
 
 > Warning: **Create** replaces whatever was in the Arrangement. {⌘Z} brings it back.
 
@@ -1789,9 +1789,9 @@ The structures:
 
 - Each section takes a scene (see "How it chooses" below).
 - Each section only gets the tracks that belong in it by **role**: no bass in the intro, no drums in the break… In the chorus or drop everything plays: if a track has no clip in that scene, it brings in its clip from another one.
-- Drums play in every section that calls for them, even if its scene has no drums: it brings in the drums from the lightest scene that has them. In **Electrónica**, the intro and outro have kick and percussion so a DJ can mix, and the build-up has drums for its fill.
-- **Build-ups**: with **Redoble al final** ("Fill at the end"), the last bar of the drums is a snare **roll** that speeds up and grows, and the rest of the drums drop out underneath. If you remove the drums from that section, there's no roll.
-- **In trap** (snare or clap on 3), **Redoble al final** doesn't add a snare roll: the last bar keeps its rhythm up to beat 3, the hi-hats do a rising triplet roll, and the last beat is left as a **gap** before the chorus.
+- Drums play in every section that calls for them, even if its scene has no drums: it brings in the drums from the lightest scene that has them. In **Electronic**, the intro and outro have kick and percussion so a DJ can mix, and the build-up has drums for its fill.
+- **Build-ups**: with **Roll at the end**, the last bar of the drums is a snare **roll** that speeds up and grows, and the rest of the drums drop out underneath. If you remove the drums from that section, there's no roll.
+- **In trap** (snare or clap on 3), **Roll at the end** doesn't add a snare roll: the last bar keeps its rhythm up to beat 3, the hi-hats do a rising triplet roll, and the last beat is left as a **gap** before the chorus.
 - **Cuts**: the last beat before the drop is silent, so the drop hits hard.
 
 +++ How it chooses
@@ -1967,7 +1967,7 @@ The **Tone**, **Amp** and **Drive** tabs have a curve each:
 - Double-click to add a point, or double-click a point to delete it.
 - Drag a segment's circle to bend it.
 - Right-click resets the curve.
-- In the large editor, **Ajustar a rejilla** (Snap to grid) snaps the points.
+- In the large editor, **Snap to grid** snaps the points.
 
 ### Controls
 
@@ -1975,10 +1975,10 @@ The **Tone**, **Amp** and **Drive** tabs have a curve each:
 - **Sub**: a low end that follows the body.
 - **Click**: 12 synthesized ones, or a sample of your own (drag it onto the click box).
 - **Key**: the note you play tunes the body, instead of Tune.
-- **Distorsión** (Distortion: Soft, Hard, Fold, Tube, Crush), **EQ**, **Punch** and **Limitador** (Limiter).
+- **Distortion** (Soft, Hard, Fold, Tube, Crush), **EQ**, **Punch** and **Limiter**.
 - **Length**: free or synced to the tempo, from 1/16 to one bar.
 - An oscilloscope shows the attack, and a spectrum shows the fundamental and its note.
-- **Exportar WAV…** (Export WAV…) saves one hit as a file.
+- **Export WAV…** saves one hit as a file.
 
 It comes with 18 factory presets by style (see [[Presets]]).
 
@@ -2001,12 +2001,12 @@ It comes with 38 factory presets by category: Bass, Lead, Pad, Pluck, Keys, Arpe
 
 #### Your own wavetables
 
-- It comes with 12 wavetables. **Cargar wavetable…** (Load wavetable…) opens your own.
-- **Editor de wavetables…** (Wavetable editor…) lets you draw them: draw keyframes with the mouse (or start from the current table's) and the table morphs smoothly from one to the next. It's saved as a standard wavetable WAV.
+- It comes with 12 wavetables. **Load wavetable…** opens your own.
+- **Wavetable editor…** lets you draw them: draw keyframes with the mouse (or start from the current table's) and the table morphs smoothly from one to the next. It's saved as a standard wavetable WAV.
 
 #### Drag-to-modulate
 
-1. Find the **FUENTES** (SOURCES) row (for example "✚ LFO 1").
+1. Find the **SOURCES** row (for example "✚ LFO 1").
 2. Drag the source onto any knob.
 3. The knob shows colored rings. Right-click it to adjust or remove each modulation.
 
@@ -2019,7 +2019,7 @@ The same engine as Wavetable, on **SYNTH**, **SEQ**, **FX** and **MATRIX** pages
 - **16-step sequencer** (SEQ): note, velocity, gate, probability, slide and a modulation lane.
   - Draw the steps by dragging over them.
   - While you hold a key, it plays the steps transposed to it.
-  - **Variar** (Vary) changes notes at random within the scale.
+  - **Vary** changes notes at random within the scale.
 
 It comes with 34 factory presets by category: analog brass, strings and leads, basses, harmonic organs, bells and flutes, dual filters (vowels, crossovers and a plucked string), sequences, pads and effects (see [[Presets]]).
 
@@ -2058,7 +2058,7 @@ The stack is read from top to bottom, inside **groups**; each group starts from 
 - **Process** what's above: Filter, Nonlinear Filter and Distortion.
 - **Route**: Mix, Aux and **Output** (with destination Lane 1–3, Master or Sideband).
 
-Each module has buttons to enable it, **▲ ▼** to move it, **⧉** to duplicate it, **×** to remove it and **+** to insert another below. **+ Añadir módulo** (+ Add module) adds one at the end.
+Each module has buttons to enable it, **▲ ▼** to move it, **⧉** to duplicate it, **×** to remove it and **+** to insert another below. **+ Add module** adds one at the end.
 
 ### Modulation
 
@@ -2108,7 +2108,7 @@ Pulse loads instruments and effects from other makers in VST3 and CLAP format, t
 ### Finding your plugins
 
 1. In the browser, open the **PLUGINS (VST3 · CLAP)** section.
-2. Press **Buscar plugins VST3** (Scan for VST3 plugins).
+2. Press **Search for VST3 plugins**.
 
 It searches the system plugin folders and the ones you add in **Settings › Plugins** (see [[Settings]]).
 
@@ -2122,7 +2122,7 @@ It searches the system plugin folders and the ones you add in **Settings › Plu
 On the plugin's device:
 
 - **Editor** opens the plugin's own window, floating over Pulse.
-- **Parámetros…** (Parameters…) opens all its parameters in a list, with a search box.
+- **Parameters…** opens all its parameters in a list, with a search box.
 - 6 knobs show its main parameters, automated ones first.
 
 All its parameters can be automated (see [[Automation]]) and mapped to a MIDI controller (see [[MIDI controllers]]). Its state is saved with the project.
@@ -2167,9 +2167,9 @@ The main output stays on the plugin's track. An output that no track plays isn't
 
 Before loading a plugin, Pulse notes it on disk, and while it plays it knows which one it's in. If Pulse suddenly quits because of a plugin, when you reopen it it tells you which one it was and lets you choose:
 
-- **Bloquearlo** (Block it): it doesn't load in any project until you unblock it in **Settings › Plugins**.
-- **Solo esta vez** (Just this once): it doesn't load until you quit Pulse.
-- **Cargarlo** (Load it): as usual.
+- **Block it**: it doesn't load in any project until you unblock it in **Settings › Plugins**.
+- **Just this once**: it doesn't load until you quit Pulse.
+- **Load it**: as usual.
 
 A plugin that doesn't load leaves its track silent, but stays in the project with its settings: once unblocked, it sounds as it did.
 
@@ -2220,7 +2220,7 @@ A **return track** is a shared effects track: several tracks send it part of the
 
 To rename it or change its color: right-click its header and type in **Name**. The letter stays in front: type "Hall" and the return becomes "C Hall".
 
-To remove one: right-click its header › **Eliminar retorno** (Delete return).
+To remove one: right-click its header › **Delete return**.
 
 > Warning: when you delete a return, the tracks stop sending it sound, and its send automation, clip envelopes and the MIDI controls and macros that moved it are lost.
 
@@ -2285,8 +2285,8 @@ An eight-band equalizer, like Live's EQ Eight. The graph shows the curve (orange
 
 The shapes:
 
-- **Corte graves** (Low cut) and **Corte agudos** (High cut): remove what's below or above the frequency.
-- **Estante graves** (Low shelf) and **Estante agudos** (High shelf): boost or cut everything below or above.
+- **Low cut** and **High cut**: remove what's below or above the frequency.
+- **Low shelf** and **High shelf**: boost or cut everything below or above.
 - **Bell**: boosts or cuts around the frequency.
 - **Notch**: removes one very specific frequency (a 50 Hz hum, a whine).
 
@@ -2519,17 +2519,17 @@ They change the notes before they reach the instrument, on MIDI tracks.
 3. Like audio effects: the dot turns them on, **◄ ►** move them and **×** removes them. Up to 4 per track, in order.
 
 - **Arpeggiator**: plays the notes you hold one by one, in time.
-  - **Orden** (Order): up, down, up and down, as played, or random. **Rate**: from 1/4 to 1/32, with triplets. **Octaves** (1–4) and the **Length** of each note.
+  - **Order**: up, down, up and down, as played, or random. **Rate**: from 1/4 to 1/32, with triplets. **Octaves** (1–4) and the **Length** of each note.
 - **Chord**: turns each note into a chord.
-  - **En la escala** (In key): adds its third and fifth (and **seventh**) from the scale, so the chords fit the song (in C major, a D gives D–F–A, a G gives G–B–D). The scale can be the project's or one of its own.
-  - Without "En la escala": the **Semitonos añadidos** (Added semitones), with shortcuts (Major, Minor, Fifth, Octave, Sus4, Séptima (Seventh)). **Velocidad añadidas** (Added velocity): how loud the new notes are.
+  - **In key**: adds its third and fifth (and **seventh**) from the scale, so the chords fit the song (in C major, a D gives D–F–A, a G gives G–B–D). The scale can be the project's or one of its own.
+  - Without "In key": the **Added semitones**, with shortcuts (Major, Minor, Fifth, Octave, Sus4, Seventh). **Added velocity**: how loud the new notes are.
 - **Scale**: moves notes that fall outside the scale to the nearest one. With it, no note is ever out of key. It uses the project's scale or one of its own.
 
 > Tip: they combine. **Chord + Arpeggiator** arpeggiates chords from a single note.
 
 +++ Details
 - With the transport running, the Arpeggiator follows the grid; when stopped, it starts when you play and follows the tempo.
-- **Al azar** (Random), with the transport running, gives each grid step the same note every time: the song sounds the same each time you play it and when you export it.
+- **Random**, with the transport running, gives each grid step the same note every time: the song sounds the same each time you play it and when you export it.
 - They work with the keyboard and with clips.
 - When recording, the notes you play are recorded, before the effects.
 +++
@@ -3262,7 +3262,7 @@ Almost everything is in the **File** menu:
 - **New from Template ▸** and **Save as Template…**: see below.
 - **Show Pulse Folder** opens it in the Finder (in File Explorer on Windows).
 - The window title has a * if there are unsaved changes. Changes you make inside a plugin count too: in its editor, with a controller or in **Parámetros…** (Parameters…).
-- Before you lose unsaved changes, Pulse asks: **Guardar** (Save), **No guardar** (Don't Save) or **Cancelar** (Cancel).
+- Before you lose unsaved changes, Pulse asks: **Save**, **Don't Save** or **Cancel**.
 
 > Tip: you can undo while playing. Only what you undo changes: the other tracks stay as they were, with their reverb and delay tails and their plugins. The same goes for adding a track.
 
@@ -3333,8 +3333,8 @@ Every 30 seconds, if there are unsaved changes, Pulse saves a separate copy. You
 
 If Pulse closes without saving or asking (a crash, the computer shuts down), when you open it again it asks if you want to recover the changes:
 
-- **Recuperar** (Recover): brings the project back as it was at the last autosave, marked as unsaved. Save it with {⌘S} to keep it.
-- **Descartar** (Discard): sets it aside as `descartado.pulse` in the same folder, just in case, until next time.
+- **Recover**: brings the project back as it was at the last autosave, marked as unsaved. Save it with {⌘S} to keep it.
+- **Discard**: sets it aside as `descartado.pulse` in the same folder, just in case, until next time.
 
 Recordings are protected too: while you record audio, what comes in is written to disk as it goes. If Pulse closes halfway, the take keeps what was recorded up to that moment.
 
@@ -3356,7 +3356,7 @@ Pulse keeps your song's history: try ideas without fear and go back to any point
 ### Saving a version
 
 1. Type a name, for example "With the new bass", and a note if you like.
-2. Click **Guardar versión** (Save version). The project's current state is saved.
+2. Click **Save version**. The project's current state is saved.
 
 Named versions stay forever.
 
@@ -3364,17 +3364,17 @@ Also, every time you save with {⌘S}, an **automatic** version is made, if some
 
 ### Seeing what changed
 
-- Each version says **when** it was made and **what changed** from the previous one: "Tempo 120 → 124", "+ Pista "Voz"" (a track called Voz was added), ""Bass": 1 → 2 clips en Session, mezcla" (clips in Session, mix)…
-- **Comparar con ahora** (Compare with now): what has changed from that version to the project as it is now.
+- Each version says **when** it was made and **what changed** from the previous one: "Tempo 120 → 124", "+ Track "Voz"" (a track called Voz was added), ""Bass": 1 → 2 clips in the Session, mix"…
+- **Compare with now**: what has changed from that version to the project as it is now.
 
 ### Going back to a version
 
-**Volver a esta** (Go back to this one) opens that version in place of what's there. Save to keep it.
+**Go back to this one** opens that version in place of what's there. Save to keep it.
 
 > Tip: nothing is lost. What was there is first saved as a named version ("Antes de volver a…", before going back to…), which automatic versions never push out, and {⌘Z} undoes it.
 
-- **Renombrar** (Rename): giving an automatic version a name makes it stay forever.
-- **Borrar** (Delete): asks for confirmation.
+- **Rename**: giving an automatic version a name makes it stay forever.
+- **Delete**: asks for confirmation.
 
 > Note: versions live in the project folder (`Versiones/`) and use the same audio. The project has to be saved in its folder: if it's a loose `.pulse` from before, use **Save As…**.
 
@@ -3442,9 +3442,9 @@ Turn your song into an audio file to listen to, share or release, or into one tr
 ### Exporting the song
 
 1. Press {⇧⌘R}.
-2. In **Qué** (What), leave **Mezcla completa** (Full mix).
-3. In **Rango** (Range), choose **Toda la canción** (Whole song).
-4. Choose the **Formato** (Format) and click **Exportar…** (Export…).
+2. In **What**, leave **Full mix**.
+3. In **Range**, choose **Whole song**.
+4. Choose the **Format** and click **Export…**.
 
 By default it's saved in the `Exportaciones` folder. The dialog remembers what you chose last time (format, range, stems, normalization…), across sessions too.
 
@@ -3452,21 +3452,21 @@ The **Arrangement** is exported, not the Session, with the tail of reverbs and d
 
 ### What to export
 
-- **Mezcla completa** (Full mix): the song in one file.
-- **Una pista por archivo (stems)** (One track per file): each track as it sounds soloed, with its sends and its group.
+- **Full mix**: the song in one file.
+- **One track per file (stems)**: each track as it sounds soloed, with its sends and its group.
   - Deactivated tracks (or those in a deactivated group) aren't exported, nor are groups as a separate stem: their tracks already go through them.
   - If you have a track soloed, only the tracks that sound with that solo are exported, as in the mix.
-  - **Con la cadena del master** (With the master chain): untick it so the summed stems give the mix. If a group or a return compresses or saturates, summed they come close but don't match exactly, and the dialog warns you.
+  - **With the master chain**: untick it so the summed stems give the mix. If a group or a return compresses or saturates, summed they come close but don't match exactly, and the dialog warns you.
 
 ### Which part
 
-- **Toda la canción** (Whole song).
-- **Región del loop** (Loop region).
-- **Por secciones** (By sections): one file for each part of the song, from one marker to the next (the last one, to the end), with the marker's number and name: "Tema - 1 Intro.wav", "Tema - 2 Drop.wav"… Anything before the first marker comes out as "Inicio" (Start). With stems, one batch per section: "Tema - 2 Drop - 1 Drums.wav".
+- **Whole song**.
+- **Loop region**.
+- **By section**: one file for each part of the song, from one marker to the next (the last one, to the end), with the marker's number and name: "Tema - 1 Intro.wav", "Tema - 2 Drop.wav"… Anything before the first marker comes out as "Inicio" (Start). With stems, one batch per section: "Tema - 2 Drop - 1 Drums.wav".
 
 ### Exporting versions
 
-If the project has named versions (see [[Project versions]]), tick under **Versiones** (Versions) the ones you also want to export. Each one comes out as it was (its tempo, its tracks, its mix) and with its name at the end of the file: "Tema - With the new bass.wav". **Solo las versiones** (Only the versions) leaves out the current state.
+If the project has named versions (see [[Project versions]]), tick under **Versions** the ones you also want to export. Each one comes out as it was (its tempo, its tracks, its mix) and with its name at the end of the file: "Tema - With the new bass.wav". **Only the versions (not the current state)** leaves out the current state.
 
 ### Format
 
@@ -3477,7 +3477,7 @@ If the project has named versions (see [[Project versions]]), tick under **Versi
 | **MP3** | Listening and sharing | 192, 256 or 320 kbps |
 
 - All three, at **44.1** or **48 kHz**.
-- **Normalizar** (Normalize): brings the peak to a value. Not available for stems.
+- **Normalize**: brings the peak to a value. Not available for stems.
 
 > Note: an MP3 comes out normalized, at most to −1 dBFS: decoding it raises it slightly, and at 0 it would clip.
 
@@ -3494,7 +3494,7 @@ If the project has named versions (see [[Project versions]]), tick under **Versi
 - **Plugins**: if the project has plugins, stems are rendered one at a time, and their copies are closed on Pulse's main thread, as VST3 plugins require (some crash otherwise).
 - **Sections**: each section starts with what was already sounding (including a long note that started many bars earlier) and ends with its tail. It starts and ends exactly on its markers, even if the tempo is automated. A track that doesn't play in a section gets no stem for it, instead of a silent file; at the end, the message says how many were skipped.
 - **Tails**: it waits as long as the slowest delay in the project before considering the tail finished, so the echoes of a long delay fit too.
-- **Start**: it begins at full volume from the first sample. When exporting the **Región del loop**, it plays from a few bars earlier, so what was already sounding (long notes, tails) is there from the start.
+- **Start**: it begins at full volume from the first sample. When exporting the **Loop region**, it plays from a few bars earlier, so what was already sounding (long notes, tails) is there from the start.
 - **Same as what you hear**: sample for sample, at any buffer size. Automation is applied every 64 samples, at the same points, and the LFOs of the Auto Filter and the Phaser move at the same instants. The Polychrome, with a buffer that isn't a multiple of 64, may move its modulation a few samples earlier or later: it's inaudible.
 - **Safe writing**: while exporting, files are written hidden alongside and only take their names when all of them are done.
 +++
@@ -3509,7 +3509,7 @@ Where you choose the language, the sound card, MIDI devices, plugin folders and 
 
 **Idioma · Language** chooses between Spanish and English. By default it's **Same as the system**: Spanish if your system is in Spanish, English if it's in any other language. The change shows immediately, in the menu bar too.
 
-The English translation is in progress: so far the menus, Settings, the "What would you like to do?" window, the transport bar, the browser, the Arrangement, the Session and the devices (with their parameter names) are translated. So are the Mix and Master Assistant, the lessons, the templates, the browser's search and favorites, the factory presets and sounds, and the names of scales and chords, which in English use letters ("D minor", "Dm", "Bb/D"). Some editors and messages are still in Spanish. What you save doesn't change with the language: a project, its chords and the names you give tracks and clips open the same in Spanish and in English. This guide is shown in the interface's language (English or Spanish); whatever is still untranslated in the app appears in Spanish.
+The whole interface is in English: menus, windows, editors, devices, messages and Pulse's own presets, kits and sounds, and the names of scales and chords, which in English use letters ("D minor", "Dm", "Bb/D"). What you save doesn't change with the language: a project, its chords and the names of its tracks and clips (yours, and the ones Pulse gives the tracks its templates and the example song create) open the same in Spanish and in English. This guide is shown in the interface's language (English or Spanish).
 
 ### Audio
 
@@ -3551,14 +3551,14 @@ Pulse looks for new versions on its own and installs them with one click, keepin
 ### Installing a new version
 
 1. Pulse checks at startup and every 6 hours. You can also check with **Pulse › Check for Updates…**.
-2. If there's one, the window shows what's new. Choose **Descargar e instalar** (Download and install), **Más tarde** (Later) or **Omitir esta versión** (Skip this version).
-3. When it's done, click **Reiniciar ahora** (Restart now). If there are unsaved changes, it asks first.
+2. If there's one, the window shows what's new. Choose **Download and install**, **Later** or **Skip this version**.
+3. When it's done, click **Restart now**. If there are unsaved changes, it asks first.
 
 The first time a new version starts, it shows what's new.
 
 ### Going back to the previous version
 
-The previous version is kept as "Pulse (anterior)" (previous). **Volver a la versión anterior** (Go back to the previous version) restores it.
+The previous version is kept as "Pulse (anterior)" (previous). **Go back to the previous version** restores it.
 
 > Warning: if you open a project saved with a newer version in an older one, the status bar says so and, before saving over it, Pulse asks: that version doesn't know the new features and they would be lost. **Save As…** saves a copy without touching the original. Settings it doesn't know are kept.
 
@@ -3569,7 +3569,7 @@ The previous version is kept as "Pulse (anterior)" (previous). **Volver a la ver
 - Only versions that have a package for your system are announced.
 
 +++ GitHub access (optional)
-You don't need a GitHub account: the repository is public. **Acceso a GitHub (opcional)** (GitHub access, optional) is only useful if GitHub says there are too many requests (it has an hourly limit). It uses the `gh auth login` session or a token pasted there, which is stored in the Keychain on macOS and in Credential Manager on Windows. If the token expires, Pulse carries on without it.
+You don't need a GitHub account: the repository is public. **GitHub access (optional)** is only useful if GitHub says there are too many requests (it has an hourly limit). It uses the `gh auth login` session or a token pasted there, which is stored in the Keychain on macOS and in Credential Manager on Windows. If the token expires, Pulse carries on without it.
 +++
 
 +++ On Windows, and security checks
@@ -3581,8 +3581,8 @@ You don't need a GitHub account: the repository is public. **Acceso a GitHub (op
 
 **Pulse › About Pulse** shows the version and the license. Pulse is free software (GPL-3.0 or later): you can use it, study it, modify it and share it.
 
-- **Licencia (GPL-3.0)** (License) opens the full license text.
-- **Componentes de terceros** (Third-party components) opens the licenses of what Pulse includes: the libraries, ONNX Runtime, the AI models and the fonts.
+- **License (GPL-3.0)** opens the full license text.
+- **Third-party components** opens the licenses of what Pulse includes: the libraries, ONNX Runtime, the AI models and the fonts.
 - The code is on GitHub (the link in the window).
 
 > Note: if you distribute a modified version of Pulse, share it with its source code too, under the same license.

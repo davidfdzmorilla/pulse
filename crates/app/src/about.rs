@@ -3,6 +3,7 @@
 //! texts go inside the program, so every copy has them, also after an update.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
 
@@ -12,27 +13,26 @@ pub const LICENSE: &str = include_str!("../../../LICENSE");
 /// Everything Pulse carries that isn't Pulse's (scripts/notices.py writes it).
 pub const NOTICES: &str = include_str!("../../../packaging/THIRD_PARTY_NOTICES.txt");
 
-const NOTICE: &str = "Pulse es software libre: puedes redistribuirlo y modificarlo según los \
-términos de la Licencia Pública General de GNU publicada por la Free Software Foundation, \
-versión 3 o (a tu elección) cualquier versión posterior. Pulse se distribuye con la esperanza \
-de que sea útil, pero SIN NINGUNA GARANTÍA; ni siquiera la garantía implícita de \
-COMERCIABILIDAD o IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Los detalles están en la licencia.";
+/// The GPL's notice, in the interface's language.
+fn notice() -> &'static str {
+    tr("Pulse es software libre: puedes redistribuirlo y modificarlo según los términos de la Licencia Pública General de GNU publicada por la Free Software Foundation, versión 3 o (a tu elección) cualquier versión posterior. Pulse se distribuye con la esperanza de que sea útil, pero SIN NINGUNA GARANTÍA; ni siquiera la garantía implícita de COMERCIABILIDAD o IDONEIDAD PARA UN PROPÓSITO PARTICULAR. Los detalles están en la licencia.")
+}
 
-const TRADEMARKS: &str = "Ableton y Live son marcas de Ableton AG; VST es una marca de Steinberg \
-Media Technologies GmbH; Roland, TR-808 y TR-909 son marcas de Roland Corporation. Se nombran \
-solo para describir la compatibilidad o el estilo: Pulse no tiene relación con ellas.";
+fn trademarks() -> &'static str {
+    tr("Ableton y Live son marcas de Ableton AG; VST es una marca de Steinberg Media Technologies GmbH; Roland, TR-808 y TR-909 son marcas de Roland Corporation. Se nombran solo para describir la compatibilidad o el estilo: Pulse no tiene relación con ellas.")
+}
 
 /// Writes `text` to the cache folder and opens it with the system's text viewer.
 fn open_text(name: &str, text: &str) -> Result<(), String> {
     let dir = paths::ensure(&paths::cache_dir())?;
     let path = dir.join(name);
-    std::fs::write(&path, text).map_err(|e| format!("No se pudo escribir {}: {e}", path.display()))?;
-    crate::files::show_folder(&path).map_err(|e| format!("No se pudo abrir {}: {e}", path.display()))
+    std::fs::write(&path, text).map_err(|e| fill(tr("No se pudo escribir {}: {}"), &[&path.display(), &e]))?;
+    crate::files::show_folder(&path).map_err(|e| fill(tr("No se pudo abrir {}: {}"), &[&path.display(), &e]))
 }
 
 pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = app.show_about;
-    egui::Window::new("Acerca de Pulse")
+    egui::Window::new(tr("Acerca de Pulse"))
         .open(&mut open)
         .resizable(false)
         .collapsible(false)
@@ -41,21 +41,21 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.set_max_width(420.0);
             ui.heading(format!("Pulse {}", crate::updates::VERSION));
-            ui.label(egui::RichText::new(crate::logs::system()).color(TEXT_DIM).size(10.5)).on_hover_text("Con qué se compiló y dónde corre: dilo si avisas de un fallo");
+            ui.label(egui::RichText::new(crate::logs::system()).color(TEXT_DIM).size(10.5)).on_hover_text(tr("Con qué se compiló y dónde corre: dilo si avisas de un fallo"));
             ui.label(COPYRIGHT);
             ui.add_space(6.0);
-            ui.label(NOTICE);
+            ui.label(notice());
             ui.add_space(4.0);
             let source = format!("https://github.com/{}", crate::updates::REPOSITORY);
             ui.horizontal(|ui| {
-                ui.label("Código fuente:");
+                ui.label(tr("Código fuente:"));
                 ui.hyperlink(&source);
             });
             ui.add_space(6.0);
             ui.horizontal(|ui| {
                 for (button, name, text) in [
-                    ("Licencia (GPL-3.0)", "Pulse - LICENSE.txt", LICENSE),
-                    ("Componentes de terceros", "Pulse - THIRD_PARTY_NOTICES.txt", NOTICES),
+                    (tr("Licencia (GPL-3.0)"), "Pulse - LICENSE.txt", LICENSE),
+                    (tr("Componentes de terceros"), "Pulse - THIRD_PARTY_NOTICES.txt", NOTICES),
                 ] {
                     if ui.button(button).clicked() {
                         if let Err(e) = open_text(name, text) {
@@ -65,7 +65,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 }
             });
             ui.add_space(6.0);
-            ui.label(egui::RichText::new(TRADEMARKS).color(TEXT_DIM).size(10.5));
+            ui.label(egui::RichText::new(trademarks()).color(TEXT_DIM).size(10.5));
         });
     app.show_about = open;
 }

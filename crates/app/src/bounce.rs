@@ -15,6 +15,7 @@
 //! A group's tracks' sends to the returns aren't in its audio (the returns'
 //! effects are not the group's).
 
+use crate::i18n::{fill, tr};
 use crate::app::PulseApp;
 use crate::project::{Project, Track};
 use engine::model::{ArrangementClip, AudioClip, Clip, Param, WarpMode};
@@ -123,17 +124,17 @@ impl PulseApp {
     pub fn range_label(&self, (from, to): (f64, f64)) -> String {
         let bar = |b: f64| self.project.meter.bar_at(b + 1e-9).0 + 1;
         let last = self.project.meter.bar_at((to - 1e-6).max(from)).0 + 1;
-        if last == bar(from) { format!("compás {}", bar(from)) } else { format!("compases {}–{last}", bar(from)) }
+        if last == bar(from) { fill(tr("compás {}"), &[&bar(from)]) } else { fill(tr("compases {}–{}"), &[&bar(from), &last]) }
     }
 
     /// Starts rendering `sources` over `range` (see the module's notes).
     pub fn bounce(&mut self, sources: Vec<Source>, range: (f64, f64), resample: bool) {
         if self.bounce_job.is_some() {
-            self.status = Some("Ya se está convirtiendo un tramo en audio".into());
+            self.status = Some(tr("Ya se está convirtiendo un tramo en audio").into());
             return;
         }
         if range.1 - range.0 < 1e-3 {
-            self.status = Some("Elige un tramo: selecciona clips en el Arrangement o pon el loop donde quieras".into());
+            self.status = Some(tr("Elige un tramo: selecciona clips en el Arrangement o pon el loop donde quieras").into());
             return;
         }
         // A track inside a group also chosen goes with the group.
@@ -151,7 +152,7 @@ impl PulseApp {
             return;
         }
         if self.project.tracks.len() + new_tracks > engine::MAX_TRACKS {
-            self.status = Some(format!("Máximo de {} pistas", engine::MAX_TRACKS));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&engine::MAX_TRACKS]));
             return;
         }
         self.project.assign_ids();
@@ -194,7 +195,7 @@ impl PulseApp {
                 *r = Some(done);
             }
         });
-        self.status = Some(format!("Convirtiendo en audio {}…", self.range_label(range)));
+        self.status = Some(fill(tr("Convirtiendo en audio {}…"), &[&self.range_label(range)]));
         self.bounce_job = Some(BounceJob { parts, range, resample, tempo_changes, result });
     }
 
@@ -218,19 +219,19 @@ impl PulseApp {
             for (id, lane) in &part.lanes {
                 let now = index_of(self, *id).map(|t| &self.project.tracks[t].arrangement);
                 if now != Some(lane) {
-                    return Err("Las pistas cambiaron mientras se convertían en audio: vuelve a hacerlo".into());
+                    return Err(tr("Las pistas cambiaron mientras se convertían en audio: vuelve a hacerlo").into());
                 }
             }
         }
         let (tempo, rate, range) = (self.project.tempo, self.audio.sample_rate(), job.range);
         let dir = self.media_dir(crate::library::BOUNCED);
-        std::fs::create_dir_all(&dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+        std::fs::create_dir_all(&dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
         let ids = self.track_ids();
         let mut made = Vec::new();
         // From the last one up, so the tracks above stay where they are.
         let mut order: Vec<(usize, &Part, Rendered)> = Vec::new();
         for (part, r) in job.parts.iter().zip(rendered) {
-            let r = r.ok_or("No se pudo convertir en audio")?;
+            let r = r.ok_or(tr("No se pudo convertir en audio"))?;
             let at = part.id.and_then(|id| index_of(self, id)).unwrap_or(usize::MAX);
             order.push((at, part, r));
         }
@@ -306,9 +307,9 @@ impl PulseApp {
         made.reverse();
         let what = self.range_label(range);
         Ok(match (job.resample, made.len()) {
-            (true, _) => format!("Remuestreado {what} de «{}» en una pista nueva, silenciada: actívala para oírla", made.join("», «")),
-            (false, 1) => format!("«{}» ({what}) es ahora audio en la pista de debajo; sus clips de ahí quedan desactivados", made[0]),
-            (false, n) => format!("{n} pistas ({what}) convertidas en audio, cada una debajo de la suya; sus clips de ahí quedan desactivados"),
+            (true, _) => fill(tr("Remuestreado {} de «{}» en una pista nueva, silenciada: actívala para oírla"), &[&what, &made.join(tr("», «"))]),
+            (false, 1) => fill(tr("«{}» ({}) es ahora audio en la pista de debajo; sus clips de ahí quedan desactivados"), &[&made[0], &what]),
+            (false, n) => fill(tr("{} pistas ({}) convertidas en audio, cada una debajo de la suya; sus clips de ahí quedan desactivados"), &[&n, &what]),
         })
     }
 }

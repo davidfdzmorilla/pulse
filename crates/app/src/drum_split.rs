@@ -10,13 +10,14 @@
 //! them: the plugin chooses what plays on which output, and the new track
 //! takes that output, in stereo, with its effects, sends and fader.
 
+use crate::i18n::{fill, tr, tr_name};
 use crate::app::PulseApp;
 use crate::project::{voice_name, Monitor, Track};
 use engine::model::{InstrumentKind, DRUM_SOUNDS};
 
 /// The names of the sounds in `mask`, quoted: «Bombo», «Palmada».
 pub fn sound_names(mask: u16) -> String {
-    let names: Vec<String> = (0..DRUM_SOUNDS).filter(|v| mask >> v & 1 == 1).map(|v| format!("«{}»", voice_name(v))).collect();
+    let names: Vec<String> = (0..DRUM_SOUNDS).filter(|v| mask >> v & 1 == 1).map(|v| fill(tr("«{}»"), &[&tr_name(voice_name(v))])).collect();
     names.join(", ")
 }
 
@@ -59,12 +60,12 @@ impl PulseApp {
         let sounds = self.project.tracks[t].sounds_from;
         let from = self.project.tracks.iter().position(|o| Some(o.id) == self.project.tracks[t].audio_from);
         Some(if sounds == 0 {
-            format!("Toca lo que suena en «{source}», después de sus efectos (un rumble: no tiene clips propios, sigue a esa pista y se silencia con ella)")
+            fill(tr("Toca lo que suena en «{}», después de sus efectos (un rumble: no tiene clips propios, sigue a esa pista y se silencia con ella)"), &[&source])
         } else if let Some(s) = from.filter(|&s| matches!(self.project.tracks[s].instrument, InstrumentKind::Plugin(_))) {
-            let names: Vec<String> = (1..16).filter(|v| sounds >> v & 1 == 1).map(|v| format!("«{}»", self.sound_name(s, v))).collect();
-            format!("Toca la salida {} del plugin de «{source}», antes de sus efectos. No tiene clips propios: sigue a esa pista y se silencia con ella", names.join(", "))
+            let names: Vec<String> = (1..16).filter(|v| sounds >> v & 1 == 1).map(|v| fill(tr("«{}»"), &[&self.sound_name(s, v)])).collect();
+            fill(tr("Toca la salida {} del plugin de «{}», antes de sus efectos. No tiene clips propios: sigue a esa pista y se silencia con ella"), &[&names.join(", "), &source])
         } else {
-            format!("Toca {} de la Drum Machine de «{source}», antes de sus efectos; «{source}» ya no lo toca. No tiene clips propios: sigue a esa pista y se silencia con ella", sound_names(sounds))
+            fill(tr("Toca {} de la Drum Machine de «{}», antes de sus efectos; «{}» ya no lo toca. No tiene clips propios: sigue a esa pista y se silencia con ella"), &[&sound_names(sounds), &source, &source])
         })
     }
 
@@ -84,7 +85,7 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         // The tracks after it moved: those go again; the rest play on.
         self.sync_from(&before);
-        self.status = Some(format!("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»", self.sound_name(t, voice), self.project.tracks[at].name, self.project.tracks[t].name));
+        self.status = Some(fill(tr("«{}» suena ahora en «{}», con sus propios efectos y fader; los clips siguen en «{}»"), &[&tr_name(&self.sound_name(t, voice)), &self.project.tracks[at].name, &self.project.tracks[t].name]));
     }
 
     /// [`Self::sound_apart`]'s new track (its index; None if `t` has no Drum
@@ -102,13 +103,13 @@ impl PulseApp {
             return Ok(None);
         }
         if drums.frozen.is_some() {
-            return Err(format!("«{}» está congelada: descongélala para sacar sus sonidos a otras pistas", drums.name));
+            return Err(fill(tr("«{}» está congelada: descongélala para sacar sus sonidos a otras pistas"), &[&drums.name]));
         }
         if let Some(name) = self.sound_track(t, voice) {
-            return Err(format!("«{}» ya suena en «{name}»", self.sound_name(t, voice)));
+            return Err(fill(tr("«{}» ya suena en «{}»"), &[&tr_name(&self.sound_name(t, voice)), &name]));
         }
         if self.project.tracks.len() >= engine::MAX_TRACKS {
-            return Err(format!("Máximo de {} pistas", engine::MAX_TRACKS));
+            return Err(fill(tr("Máximo de {} pistas"), &[&engine::MAX_TRACKS]));
         }
         let name = format!("{} {}", self.project.tracks[t].name, self.sound_name(t, voice));
         let drums = &self.project.tracks[t];

@@ -11,6 +11,7 @@
 use crate::accompany::Part;
 use crate::app::{ClipRef, PulseApp};
 use crate::drum_gen::{self, Level, Style};
+use crate::i18n::{fill, music, tr};
 use engine::model::{AudioClip, Clip, InstrumentKind, MidiClip, Note, SynthParams};
 use engine::{Target, MAX_TRACKS};
 use engine::meter::TimeSig;
@@ -163,12 +164,12 @@ impl PulseApp {
             }
             Some(Clip::Audio(audio)) => {
                 if self.hum_song.is_some() {
-                    self.status = Some("Ya se está escuchando un tarareo: espera a que termine".into());
+                    self.status = Some(tr("Ya se está escuchando un tarareo: espera a que termine").into());
                     return;
                 }
                 let sample = self.sample(&audio.sample);
                 if sample.frames() == 0 {
-                    self.status = Some("No se encuentra el audio del clip".into());
+                    self.status = Some(tr("No se encuentra el audio del clip").into());
                     return;
                 }
                 let (tempo, key, a) = (self.project.tempo, self.project.key, audio.clone());
@@ -190,7 +191,7 @@ impl PulseApp {
                     }
                     *out.lock().unwrap_or_else(|e| e.into_inner()) = Some((events, heard));
                 });
-                self.status = Some(format!("Escuchando la melodía de «{}»…", audio.name));
+                self.status = Some(fill(tr("Escuchando la melodía de «{}»…"), &[&audio.name]));
                 self.hum_song = Some(HumJob { clip, audio, style, result });
             }
             None => {}
@@ -226,15 +227,15 @@ impl PulseApp {
         let length = (length / sig.bar() - 1e-9).ceil().max(1.0) * sig.bar();
         let melody = quantize(notes, length);
         if melody.len() < 2 {
-            self.status = Some(format!("No se oye una melodía en «{name}»: tararea, canta o silba unas notas, con el metrónomo"));
+            self.status = Some(fill(tr("No se oye una melodía en «{}»: tararea, canta o silba unas notas, con el metrónomo"), &[&name]));
             return;
         }
         let Some(key) = key_of(&melody, self.project.key.or(heard)) else {
-            self.status = Some("No se sabe en qué tonalidad está la melodía: elige la escala del proyecto y vuelve a probar".into());
+            self.status = Some(tr("No se sabe en qué tonalidad está la melodía: elige la escala del proyecto y vuelve a probar").into());
             return;
         };
         if self.project.tracks.len() + 4 > MAX_TRACKS {
-            self.status = Some(format!("Hacen falta 4 pistas más y el máximo es {MAX_TRACKS}"));
+            self.status = Some(fill(tr("Hacen falta 4 pistas más y el máximo es {}"), &[&MAX_TRACKS]));
             return;
         }
         if self.project.key.is_none() {
@@ -310,7 +311,7 @@ impl PulseApp {
             ClipRef::Arrangement { .. } => ClipRef::Arrangement { track: source + 1, index: 0 },
         });
         let names: Vec<String> = chords.iter().map(|c| c.2.name_in(Some(key))).collect();
-        self.status = Some(format!("Canción en {}: {} notas de melodía, acordes {}, bajo y batería {}", key.name(), melody.len(), names.join(" "), style.label()));
+        self.status = Some(fill(tr("Canción en {}: {} notas de melodía, acordes {}, bajo y batería {}"), &[&music(&key.name()), &melody.len(), &music(&names.join(" ")), &style.shown()]));
     }
 }
 

@@ -7,6 +7,7 @@
 //! if Pulse closes during that, the next start doesn't reopen it again.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::project::Project;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -34,7 +35,7 @@ pub struct Info {
 impl Info {
     /// The project's name, for the question.
     pub fn name(&self) -> String {
-        self.original.as_deref().and_then(|p| p.file_stem()).map_or_else(|| "Sin título".into(), |s| s.to_string_lossy().into_owned())
+        self.original.as_deref().and_then(|p| p.file_stem()).map_or_else(|| tr("Sin título").into(), |s| s.to_string_lossy().into_owned())
     }
 }
 
@@ -192,21 +193,22 @@ impl PulseApp {
         let Some(info) = recovery.pending() else { return false };
         let recordings_dir = crate::library::media_dir(info.original.as_deref(), crate::library::RECORDINGS);
         let recordings = unfinished_recordings(&recordings_dir);
-        let mut description = format!("Pulse se cerró sin guardar los cambios de «{}» (el último autoguardado es de {}).", info.name(), crate::versions::ago(info.saved_at, crate::versions::now()));
-        let unfinished = (!recordings.is_empty()).then(|| format!("{} grabación(es) sin terminar en {}", recordings.len(), recordings_dir.display()));
+        let mut description = fill(tr("Pulse se cerró sin guardar los cambios de «{}» (el último autoguardado es de {})."), &[&info.name(), &crate::versions::ago(info.saved_at, crate::versions::now())]);
+        let unfinished = (!recordings.is_empty()).then(|| fill(tr("{} grabación(es) sin terminar en {}"), &[&recordings.len(), &recordings_dir.display()]));
         if let Some(unfinished) = &unfinished {
-            description += &format!(" Además hay {unfinished}.");
+            description += " ";
+            description += &fill(tr("Además hay {}."), &[unfinished]);
         }
         if !self.ask_to_recover(&description) {
             recovery.discard();
-            self.status = Some("Cambios sin guardar descartados (la copia queda en «descartado.pulse», en la carpeta Recuperación de Pulse)".into());
+            self.status = Some(tr("Cambios sin guardar descartados (la copia queda en «descartado.pulse», en la carpeta Recuperación de Pulse)").into());
             return false;
         }
         let project = match recovery.load() {
             Ok(project) => project,
             Err(e) => {
-                let kept = recovery.set_aside().map_or_else(String::new, |p| format!(" · la copia queda en {}", p.display()));
-                self.status = Some(format!("No se pudieron recuperar los cambios: {e}{kept}"));
+                let kept = recovery.set_aside().map_or_else(String::new, |p| format!(" · {}", fill(tr("la copia queda en {}"), &[&p.display()])));
+                self.status = Some(fill(tr("No se pudieron recuperar los cambios: {}"), &[&e]) + &kept);
                 return false;
             }
         };
@@ -223,7 +225,7 @@ impl PulseApp {
         if let Err(e) = recovery.write(&self.project, &info) {
             crate::logs::note(&format!("No se pudo autoguardar: {e}"));
         }
-        let mut status = format!("Recuperados los cambios de «{}»: guárdalos (⌘S) para conservarlos", info.name());
+        let mut status = fill(tr("Recuperados los cambios de «{}»: guárdalos (⌘S) para conservarlos"), &[&info.name()]);
         if let Some(unfinished) = unfinished {
             status += &format!(" · {unfinished}");
         }
@@ -237,13 +239,13 @@ impl PulseApp {
         }
         let result = rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Warning)
-            .set_title("¿Recuperar los cambios sin guardar?")
+            .set_title(tr("¿Recuperar los cambios sin guardar?"))
             .set_description(description)
-            .set_buttons(rfd::MessageButtons::OkCancelCustom("Recuperar".into(), "Descartar".into()))
+            .set_buttons(rfd::MessageButtons::OkCancelCustom(tr("Recuperar").into(), tr("Descartar").into()))
             .show();
         // Only a clear «Descartar» lets them go.
         !matches!(result, rfd::MessageDialogResult::Cancel | rfd::MessageDialogResult::No)
-            && !matches!(&result, rfd::MessageDialogResult::Custom(label) if label == "Descartar")
+            && !matches!(&result, rfd::MessageDialogResult::Custom(label) if label == tr("Descartar"))
     }
 
     /// Reopens the last project at the start, unless Pulse closed by itself the
@@ -253,7 +255,7 @@ impl PulseApp {
             if recovery.interrupted_opening().as_deref() == Some(path) {
                 recovery.opened();
                 let name = path.file_stem().map_or_else(String::new, |s| s.to_string_lossy().into_owned());
-                self.status = Some(format!("No se volvió a abrir «{name}»: Pulse se cerró la última vez mientras lo abría. Puedes abrirlo desde Archivo → Abrir recientes."));
+                self.status = Some(fill(tr("No se volvió a abrir «{}»: Pulse se cerró la última vez mientras lo abría. Puedes abrirlo desde Archivo → Abrir recientes."), &[&name]));
                 return;
             }
             recovery.opening(path);

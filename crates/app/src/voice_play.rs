@@ -13,6 +13,7 @@
 
 use crate::app::PulseApp;
 use crate::beatbox::{Beatbox, Drum, Examples, Features, TEACH};
+use crate::i18n::{fill, tr};
 use engine::{Controller, LiveInput, LiveNote, VoiceInput};
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
@@ -488,16 +489,16 @@ impl PulseApp {
             self.capture_failed = false;
             if self.ensure_capture() {
                 self.status = Some(if self.voice.drums {
-                    "Haz beatbox: «pum» es el bombo, «pf» la caja y «ts» el charles de la pista seleccionada (una Drum Machine). Con auriculares".into()
+                    tr("Haz beatbox: «pum» es el bombo, «pf» la caja y «ts» el charles de la pista seleccionada (una Drum Machine). Con auriculares").into()
                 } else {
-                    "Canta, tararea o silba: suena la pista seleccionada (o las armadas). Con auriculares, para que el micrófono no oiga los altavoces".into()
+                    tr("Canta, tararea o silba: suena la pista seleccionada (o las armadas). Con auriculares, para que el micrófono no oiga los altavoces").into()
                 });
             } else {
                 self.voice.enabled = false;
             }
         } else {
             self.stop_voice();
-            self.status = Some("Voz apagada".into());
+            self.status = Some(tr("Voz apagada").into());
         }
     }
 
@@ -527,7 +528,7 @@ impl PulseApp {
         self.voice.teaching = Some(drum);
         self.voice.taught = 0;
         self.tell_voice();
-        self.status = Some(format!("{}: haz {} {TEACH} veces, como lo harías tocando", drum.name(), drum.sound()));
+        self.status = Some(fill(tr("{}: haz {} {} veces, como lo harías tocando"), &[&drum.name(), &drum.sound(), &TEACH]));
     }
 
     /// Forgets the sounds taught: back to the built-in ones.
@@ -536,7 +537,7 @@ impl PulseApp {
         settings.beatbox = Examples::default();
         self.set_settings(settings);
         self.tell_voice();
-        self.status = Some("Sonidos olvidados: el bombo, la caja y el charles vuelven a ser «pum», «pf» y «ts»".into());
+        self.status = Some(tr("Sonidos olvidados: el bombo, la caja y el charles vuelven a ser «pum», «pf» y «ts»").into());
     }
 
     /// Gives the voice's thread the settings now, not at the next frame: the
@@ -570,9 +571,9 @@ impl PulseApp {
         if self.voice.taught >= TEACH {
             self.voice.teaching = None;
             self.tell_voice();
-            self.status = Some(format!("{} aprendido: ya suena con tu {}", drum.name(), drum.sound()));
+            self.status = Some(fill(tr("{} aprendido: ya suena con tu {}"), &[&drum.name(), &drum.sound()]));
         } else {
-            self.status = Some(format!("{}: {} de {TEACH}", drum.name(), self.voice.taught));
+            self.status = Some(fill(tr("{}: {} de {}"), &[&drum.name(), &self.voice.taught, &TEACH]));
         }
     }
 

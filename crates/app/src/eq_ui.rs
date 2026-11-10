@@ -5,6 +5,7 @@
 //! each band), so the points follow automation and override it like the knobs.
 
 use crate::devices::Action;
+use crate::i18n::{fill, tr};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets;
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Pos2, Rect, Sense, Stroke};
@@ -40,6 +41,20 @@ pub const COLORS: [Color32; EQ_BANDS] = [
 ];
 
 /// Where frequency `hz` is across the graph, 0..1.
+/// A band's shape, as the band's menu says it.
+fn shape_name(shape: EqShape) -> &'static str {
+    match shape {
+        EqShape::LowCut48 => tr("Corte graves 48"),
+        EqShape::LowCut12 => tr("Corte graves 12"),
+        EqShape::LowShelf => tr("Estante graves"),
+        EqShape::Bell => tr("Campana"),
+        EqShape::Notch => shape.label(),
+        EqShape::HighShelf => tr("Estante agudos"),
+        EqShape::HighCut12 => tr("Corte agudos 12"),
+        EqShape::HighCut48 => tr("Corte agudos 48"),
+    }
+}
+
 fn x_of(hz: f32) -> f32 {
     ((hz / LOW_HZ).ln() / (HIGH_HZ / LOW_HZ).ln()).clamp(0.0, 1.0)
 }
@@ -185,7 +200,7 @@ pub(crate) fn body(
                 let color = if band.on { COLORS[b] } else { TEXT_DIM };
                 let text = egui::RichText::new(format!("{}", b + 1)).color(color).size(11.0);
                 let button = egui::Button::selectable(chosen == b, text).min_size(vec2(GRAPH.x / EQ_BANDS as f32 - 2.0, 18.0));
-                if ui.add(button).on_hover_text(format!("Banda {}: {}{}", b + 1, band.shape.label(), if band.on { "" } else { " (apagada)" })).clicked() {
+                if ui.add(button).on_hover_text(fill(if band.on { tr("Banda {}: {}") } else { tr("Banda {}: {} (apagada)") }, &[&(b + 1), &shape_name(band.shape)])).clicked() {
                     chosen = b;
                 }
             }
@@ -196,21 +211,21 @@ pub(crate) fn body(
     ui.vertical(|ui| {
         ui.set_width(104.0);
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new(format!("Banda {}", chosen + 1)).color(COLORS[chosen]).strong().size(11.0));
-            ui.checkbox(&mut band.on, "").on_hover_text("Encender o apagar la banda (también con doble clic en su punto)");
+            ui.label(egui::RichText::new(fill(tr("Banda {}"), &[&(chosen + 1)])).color(COLORS[chosen]).strong().size(11.0));
+            ui.checkbox(&mut band.on, "").on_hover_text(tr("Encender o apagar la banda (también con doble clic en su punto)"));
         });
-        egui::ComboBox::from_id_salt(("eq8_shape", target, device)).selected_text(band.shape.label()).width(100.0).show_ui(ui, |ui| {
+        egui::ComboBox::from_id_salt(("eq8_shape", target, device)).selected_text(shape_name(band.shape)).width(100.0).show_ui(ui, |ui| {
             for shape in EqShape::ALL {
-                ui.selectable_value(&mut band.shape, shape, shape.label());
+                ui.selectable_value(&mut band.shape, shape, shape_name(shape));
             }
         });
         let hint = match band.shape {
-            EqShape::LowCut48 | EqShape::LowCut12 => "Quita lo que hay por debajo de la frecuencia (48 o 12 dB por octava). Q por encima de 0,71 resalta el corte",
-            EqShape::HighCut48 | EqShape::HighCut12 => "Quita lo que hay por encima de la frecuencia (48 o 12 dB por octava). Q por encima de 0,71 resalta el corte",
-            EqShape::LowShelf => "Sube o baja todo lo que hay por debajo de la frecuencia. Q por encima de 0,71 resalta el borde",
-            EqShape::HighShelf => "Sube o baja todo lo que hay por encima de la frecuencia. Q por encima de 0,71 resalta el borde",
-            EqShape::Bell => "Sube o baja alrededor de la frecuencia; Q, cuánto de estrecho",
-            EqShape::Notch => "Quita una frecuencia muy concreta (un zumbido, un pitido); Q, cuánto de estrecho",
+            EqShape::LowCut48 | EqShape::LowCut12 => tr("Quita lo que hay por debajo de la frecuencia (48 o 12 dB por octava). Q por encima de 0,71 resalta el corte"),
+            EqShape::HighCut48 | EqShape::HighCut12 => tr("Quita lo que hay por encima de la frecuencia (48 o 12 dB por octava). Q por encima de 0,71 resalta el corte"),
+            EqShape::LowShelf => tr("Sube o baja todo lo que hay por debajo de la frecuencia. Q por encima de 0,71 resalta el borde"),
+            EqShape::HighShelf => tr("Sube o baja todo lo que hay por encima de la frecuencia. Q por encima de 0,71 resalta el borde"),
+            EqShape::Bell => tr("Sube o baja alrededor de la frecuencia; Q, cuánto de estrecho"),
+            EqShape::Notch => tr("Quita una frecuencia muy concreta (un zumbido, un pitido); Q, cuánto de estrecho"),
         };
         ui.label(egui::RichText::new(hint).color(TEXT_DIM).size(9.5));
     });
@@ -387,9 +402,9 @@ fn graph(
         Some(b) => {
             let band = shown.bands[b];
             let gain = if band.shape.has_gain() { format!(" · {:+.1} dB", band.gain_db) } else { String::new() };
-            format!("Banda {} · {} · {}{gain} · Q {:.2}", b + 1, band.shape.label(), widgets::format_param(&EQ_EIGHT_PARAMS[0], band.freq), band.q)
+            fill(tr("Banda {} · {} · {}{} · Q {}"), &[&(b + 1), &shape_name(band.shape), &widgets::format_param(&EQ_EIGHT_PARAMS[0], band.freq), &gain, &format!("{:.2}", band.q)])
         }
-        None => theme::keys("Arrastra un punto: izquierda y derecha, la frecuencia; arriba y abajo, la ganancia · con ⌥, arriba y abajo cambia la Q · doble clic enciende o apaga la banda"),
+        None => theme::keys(tr("Arrastra un punto: izquierda y derecha, la frecuencia; arriba y abajo, la ganancia · con ⌥, arriba y abajo cambia la Q · doble clic enciende o apaga la banda")),
     };
     response.on_hover_text(tip);
     picked

@@ -1335,7 +1335,7 @@ pub struct Opening {
 impl Opening {
     fn describe(&self) -> String {
         let side = fill(tr("panorama {} % {}"), &[&format!("{:.0}", self.pan.abs() * 100.0), &if self.pan < 0.0 { tr("izquierda") } else { tr("derecha") }]);
-        format!("«{}» ({}): {side}{}", self.name, self.role.label(), if self.chorus { tr(" y un Chorus suave para abrirla") } else { "" })
+        fill(tr("«{}» ({}): {}{}"), &[&self.name, &self.role.label(), &side, &if self.chorus { tr(" y un Chorus suave para abrirla") } else { "" }])
     }
 }
 
@@ -1902,7 +1902,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
                 fill(tr("«{}» suena a {} LU de «{}»: no crece, y la canción no llega a ningún sitio. Bajar el master en lo que lleva a él lo deja {} LU por encima"), &[&peak_name, &db(peak - lead_lufs), &lead, &num(GROW_LU)]),
                 Some(Fix::Grow { cuts: cuts.iter().map(|&(i, d)| { let s = &report.sections[i]; (s.name.clone(), s.start, s.end, d) }).collect() }),
             );
-            a.details = cuts.iter().map(|&(i, d)| format!("«{}»: {} dB", report.sections[i].name, db(-d as f64))).collect();
+            a.details = cuts.iter().map(|&(i, d)| fill(tr("«{}»: {} dB"), &[&report.sections[i].name, &db(-d as f64)])).collect();
             out.push(a);
         }
     }
@@ -3004,7 +3004,7 @@ impl PulseApp {
             }
             Fix::TrackGain { track, name, db } if track_ok(self, *track, name) => {
                 louder(&mut self.project.tracks[*track], *db);
-                self.status = Some(format!("«{name}» {:+.1} dB", db));
+                self.status = Some(fill(tr("«{}» {} dB"), &[&name, &format!("{:+.1}", db)]));
             }
             Fix::Duck { track, name, source, source_name } if track_ok(self, *track, name) => {
                 // Listening to the drums; a quarter of a beat to come back.
@@ -3274,7 +3274,7 @@ fn contents(app: &mut PulseApp, ui: &mut egui::Ui) {
                 ui.label(fill(tr("Midiendo «{}»…"), &[&job.name]));
             }
             (Some((name, m)), None) => {
-                ui.label(RichText::new(format!("«{name}»: {} LUFS", m.lufs.map_or("—".into(), num))).color(TEXT));
+                ui.label(RichText::new(fill(tr("«{}»: {} LUFS"), &[&name, &m.lufs.map_or("—".into(), num)])).color(TEXT));
                 if ui.small_button(tr("Quitar")).clicked() {
                     app.mix.reference = None;
                     if app.mix.target == Target::Reference {
@@ -3465,7 +3465,7 @@ fn fix_hint(fix: &Fix) -> String {
         Fix::MasterEq { low, mid, high } => fill(tr("EQ Three en el master: graves {}, medios {}, agudos {} dB"), &[&format!("{:+.1}", low), &format!("{:+.1}", mid), &format!("{:+.1}", high)]),
         Fix::Carve { name, hz, for_name, .. } => fill(tr("Baja {} dB «{}» en {} (un EQ Eight, campana estrecha) para que «{}» se oiga ahí"), &[&-CARVE_DB, &name, &freq_label(*hz), &for_name]),
         Fix::Compress { name, params, .. } => fill(tr("Añade un Compressor a «{}»: umbral {} dB, ratio {}:1, ataque {} ms, release {} ms (una semicorchea al tempo; el bajo, una corchea) y {} dB de ganancia para que siga igual de fuerte"), &[&name, &format!("{:.1}", params.threshold_db), &params.ratio, &format!("{:.0}", params.attack_ms), &format!("{:.0}", params.release_ms), &format!("{:+.1}", params.makeup_db)]),
-        Fix::Glue { track, name, params } => fill(tr("Añade un Compresor de bus a {}: umbral {} dB, ratio {}, ataque {} ms, release automático, y el detector sin graves por debajo de {} Hz (el bombo no lo hace bombear)"), &[&if track.is_some() { format!("«{name}»") } else { tr("el master, antes del limitador").into() }, &format!("{:.1}", params.threshold_db), &params.ratio.label(), &format!("{:.0}", params.attack_ms), &format!("{:.0}", params.sidechain_hpf_hz)]),
+        Fix::Glue { track, name, params } => fill(tr("Añade un Compresor de bus a {}: umbral {} dB, ratio {}, ataque {} ms, release automático, y el detector sin graves por debajo de {} Hz (el bombo no lo hace bombear)"), &[&if track.is_some() { fill(tr("«{}»"), &[&name]) } else { tr("el master, antes del limitador").into() }, &format!("{:.1}", params.threshold_db), &params.ratio.label(), &format!("{:.0}", params.attack_ms), &format!("{:.0}", params.sidechain_hpf_hz)]),
         Fix::Space { .. } => tr("Pone los envíos de cada pista a la reverb y al delay según su papel (y crea esos retornos si faltan): un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo").into(),
         Fix::Balance(_) => tr("Mueve volúmenes y panoramas y pone un EQ Eight con corte de graves donde dice: un punto de partida para seguir mezclando a oído. ⌘Z lo deshace todo").into(),
         Fix::Widen(_) => tr("Mueve el panorama de esas pistas, una a cada lado por turnos, y a las de notas que suenan en mono les pone un Chorus suave (35 %) para que sus dos lados no sean iguales; el bombo, el bajo, la caja y la voz se quedan en el centro. ⌘Z lo deshace todo").into(),

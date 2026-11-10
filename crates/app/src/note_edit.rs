@@ -3,6 +3,7 @@
 //! Selections are sets of indices into `notes`. Operations that add notes append
 //! them and return the new indices, so callers can select what was just created.
 
+use crate::i18n::tr;
 use engine::model::{AutomationPoint, ControlLane, MidiControl, Note};
 use std::collections::BTreeSet;
 
@@ -140,9 +141,9 @@ impl Ramp {
 
     pub fn label(self) -> &'static str {
         match self {
-            Ramp::Up => "Crece",
-            Ramp::Down => "Se apaga",
-            Ramp::Flat => "Plana",
+            Ramp::Up => tr("Crece"),
+            Ramp::Down => tr("Se apaga"),
+            Ramp::Flat => tr("Plana"),
         }
     }
 }
@@ -195,6 +196,17 @@ pub fn roll(notes: &mut Vec<Note>, indices: &[usize], step: f64, ramp: Ramp) -> 
 /// The pitch ramps a roll can have on the drums: semitones its last hit goes
 /// (0: none).
 pub const PITCH_RAMPS: [(f32, &str); 4] = [(0.0, "Igual"), (5.0, "Sube 5"), (12.0, "Sube 12"), (-12.0, "Baja 12")];
+
+/// A pitch ramp's name (from [`PITCH_RAMPS`]) in the interface's language.
+pub fn pitch_ramp_name(name: &'static str) -> &'static str {
+    match name {
+        "Igual" => tr("Igual"),
+        "Sube 5" => tr("Sube 5"),
+        "Sube 12" => tr("Sube 12"),
+        "Baja 12" => tr("Baja 12"),
+        other => other,
+    }
+}
 
 /// A pitch ramp over the rolls among `added` (as [`roll`] returns them): the
 /// clip's pitch bend lane goes from rest at each roll's first hit to `value`

@@ -3,6 +3,7 @@
 //! play with (see `engine::model::GrooveTemplate`).
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::project::SavedGroove;
 use engine::model::{Clip, Groove, GrooveTemplate, GROOVE_STEPS};
 
@@ -57,14 +58,17 @@ pub fn extract(hits: &[(f64, f32)]) -> Option<Groove> {
 /// How a groove sounds, in a few words: its grid and how late its in-between
 /// steps come (% of a step).
 pub fn describe(groove: &Groove) -> String {
-    let grid = if groove.grid < 0.375 { "semicorcheas" } else { "corcheas" };
-    let Some(t) = groove.template else { return grid.to_string() };
+    let sixteenths = groove.grid < 0.375;
+    let Some(t) = groove.template else { return if sixteenths { tr("semicorcheas") } else { tr("corcheas") }.to_string() };
     let off: Vec<f32> = (1..GROOVE_STEPS).step_by(2).map(|k| t.shift[k]).collect();
     let late = off.iter().sum::<f32>() / off.len() as f32;
-    match (late * 100.0).round() as i32 {
-        0 => format!("recto, en {grid}"),
-        l if l > 0 => format!("en {grid}, los contratiempos un {l} % de paso tarde"),
-        l => format!("en {grid}, los contratiempos un {} % de paso pronto", -l),
+    match ((late * 100.0).round() as i32, sixteenths) {
+        (0, true) => tr("recto, en semicorcheas").to_string(),
+        (0, false) => tr("recto, en corcheas").to_string(),
+        (l, true) if l > 0 => fill(tr("en semicorcheas, los contratiempos un {} % de paso tarde"), &[&l]),
+        (l, false) if l > 0 => fill(tr("en corcheas, los contratiempos un {} % de paso tarde"), &[&l]),
+        (l, true) => fill(tr("en semicorcheas, los contratiempos un {} % de paso pronto"), &[&-l]),
+        (l, false) => fill(tr("en corcheas, los contratiempos un {} % de paso pronto"), &[&-l]),
     }
 }
 
@@ -75,7 +79,7 @@ impl PulseApp {
         let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { return };
         let sample = self.sample(&audio.sample);
         if sample.frames() == 0 {
-            self.status = Some("No se encuentra el audio del clip".into());
+            self.status = Some(tr("No se encuentra el audio del clip").into());
             return;
         }
         let tempo = self.project.tempo;
@@ -84,7 +88,7 @@ impl PulseApp {
         let to = audio.source_seconds(audio.length, tempo).min(sample.duration());
         let (a, b) = ((from * rate as f64) as usize, ((to * rate as f64) as usize).min(sample.frames()));
         if b <= a + 64 {
-            self.status = Some("El clip es demasiado corto para sacar su groove".into());
+            self.status = Some(tr("El clip es demasiado corto para sacar su groove").into());
             return;
         }
         let (left, right) = (&sample.left[a..b], &sample.right[a..b]);
@@ -102,7 +106,7 @@ impl PulseApp {
             .filter(|&(beat, _)| beat > -0.25 && beat < audio.length)
             .collect();
         let Some(groove) = extract(&hits) else {
-            self.status = Some(format!("En «{}» no hay golpes suficientes para sacar un groove", audio.name));
+            self.status = Some(fill(tr("En «{}» no hay golpes suficientes para sacar un groove"), &[&audio.name]));
             return;
         };
         // Its name: the clip's, numbered if there is one already.
@@ -112,7 +116,7 @@ impl PulseApp {
             name = format!("{} {n}", audio.name);
             n += 1;
         }
-        self.status = Some(format!("Groove «{name}» guardado ({}): elígelo en Groove de cualquier clip MIDI", describe(&groove)));
+        self.status = Some(fill(tr("Groove «{}» guardado ({}): elígelo en Groove de cualquier clip MIDI"), &[&name, &describe(&groove)]));
         self.project.grooves.push(SavedGroove { name, groove });
     }
 }

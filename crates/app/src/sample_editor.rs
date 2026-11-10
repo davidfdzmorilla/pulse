@@ -1,6 +1,7 @@
 //! Clip view for audio clips: waveform, warp settings, start, length, gain and transposition.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::theme::{self, ACCENT, TEXT_DIM};
 use crate::widgets::{self, Knob};
 use eframe::egui::{self, pos2, vec2, Align2, Color32, Rect, Sense, Stroke};
@@ -43,6 +44,15 @@ fn label(ui: &mut egui::Ui, text: &str) {
 /// `playhead` is the position inside the clip in beats, when it is playing.
 /// `envelope`: the clip envelope the lane at the bottom shows (its parameter, what
 /// it is and its own value), if not the velocities (audio clips have none).
+/// How «Trocear» cuts, as its menu says it.
+fn slice_label(mode: SliceMode) -> &'static str {
+    match mode {
+        SliceMode::Transients => tr("Transitorios"),
+        SliceMode::Grid(_) if mode.label() == "Rejilla" => tr("Rejilla"),
+        _ => mode.label(),
+    }
+}
+
 pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: Option<f64>, envelope: Option<(engine::model::Param, engine::model::ParamInfo, f32)>) {
     let tempo = app.project.tempo;
     let Some(Clip::Audio(before)) = app.clip(clip_ref).cloned() else { return };
@@ -66,7 +76,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         let details = if sample.frames() > 0 {
             format!("{file} · {:.2} s · {:.0} Hz", sample.duration(), sample.sample_rate)
         } else {
-            format!("{file} · no encontrado")
+            fill(tr("{} · no encontrado"), &[&file])
         };
         ui.label(egui::RichText::new(details).color(TEXT_DIM).size(10.5))
             .on_hover_text(&clip.sample);
@@ -84,7 +94,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 }
             });
             ui.horizontal(|ui| {
-                label(ui, "BPM original");
+                label(ui, tr("BPM original"));
                 let enabled = clip.warp != WarpMode::Off;
                 // Through set_original_bpm, so warp markers keep their points.
                 let mut bpm = clip.original_bpm;
@@ -100,56 +110,56 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 }
             });
             ui.horizontal(|ui| {
-                label(ui, "Longitud");
+                label(ui, tr("Longitud"));
                 ui.add(egui::DragValue::new(&mut clip.length).range(0.25..=512.0).speed(0.25).suffix(" beats"));
-                if ui.button("Ajustar al archivo").on_hover_text("Longitud = lo que dura el archivo desde el inicio").clicked() {
+                if ui.button(tr("Ajustar al archivo")).on_hover_text(tr("Longitud = lo que dura el archivo desde el inicio")).clicked() {
                     let beats = clip.beats_until(sample.duration(), tempo).max(0.0);
                     clip.length = ((beats * 4.0).round() / 4.0).max(0.25);
                 }
             });
             ui.horizontal(|ui| {
-                label(ui, "Ver");
-                ui.selectable_value(&mut app.sample_view_whole, false, "El clip").on_hover_text("Solo lo que suena el clip");
-                ui.selectable_value(&mut app.sample_view_whole, true, "Archivo entero").on_hover_text("Todo el audio, con el trozo del clip resaltado");
+                label(ui, tr("Ver"));
+                ui.selectable_value(&mut app.sample_view_whole, false, tr("El clip")).on_hover_text(tr("Solo lo que suena el clip"));
+                ui.selectable_value(&mut app.sample_view_whole, true, tr("Archivo entero")).on_hover_text(tr("Todo el audio, con el trozo del clip resaltado"));
             });
             ui.horizontal(|ui| {
-                label(ui, "Inicio");
+                label(ui, tr("Inicio"));
                 // Below 0: the clip starts before the file (a bar line before its first downbeat).
                 ui.add(egui::DragValue::new(&mut clip.offset).range(-8.0..=sample.duration().max(0.0)).speed(0.005).suffix(" s").fixed_decimals(3));
             });
             ui.horizontal(|ui| {
-                label(ui, "Fundidos");
+                label(ui, tr("Fundidos"));
                 // In the Arrangement also with the handles at the clip's top corners.
-                ui.add(egui::DragValue::new(&mut clip.fades.fade_in).range(0.0..=64.0).speed(0.05).fixed_decimals(2).prefix("entrada ").suffix(" beats"))
-                    .on_hover_text("Cuánto tarda en entrar desde el silencio");
-                ui.add(egui::DragValue::new(&mut clip.fades.fade_out).range(0.0..=64.0).speed(0.05).fixed_decimals(2).prefix("salida ").suffix(" beats"))
-                    .on_hover_text("Cuánto tarda en irse al silencio al final");
+                ui.add(egui::DragValue::new(&mut clip.fades.fade_in).range(0.0..=64.0).speed(0.05).fixed_decimals(2).prefix(tr("entrada ")).suffix(" beats"))
+                    .on_hover_text(tr("Cuánto tarda en entrar desde el silencio"));
+                ui.add(egui::DragValue::new(&mut clip.fades.fade_out).range(0.0..=64.0).speed(0.05).fixed_decimals(2).prefix(tr("salida ")).suffix(" beats"))
+                    .on_hover_text(tr("Cuánto tarda en irse al silencio al final"));
             });
             ui.horizontal(|ui| {
-                label(ui, "Marcadores");
+                label(ui, tr("Marcadores"));
                 let count = clip.warp_markers.len();
-                ui.label(egui::RichText::new(if count == 0 { "ninguno".to_string() } else { count.to_string() }).size(10.5));
+                ui.label(egui::RichText::new(if count == 0 { tr("ninguno").to_string() } else { count.to_string() }).size(10.5));
                 if ui
-                    .add_enabled(count > 0, egui::Button::new("Quitar"))
-                    .on_hover_text("El clip vuelve a un solo tempo, el BPM original")
+                    .add_enabled(count > 0, egui::Button::new(tr("Quitar")))
+                    .on_hover_text(tr("El clip vuelve a un solo tempo, el BPM original"))
                     .clicked()
                 {
                     clip.warp_markers.clear();
                 }
             });
             ui.horizontal(|ui| {
-                label(ui, "Trocear");
+                label(ui, tr("Trocear"));
                 egui::ComboBox::from_id_salt("slice_mode")
-                    .selected_text(app.slice_mode.label())
+                    .selected_text(slice_label(app.slice_mode))
                     .width(92.0)
                     .show_ui(ui, |ui| {
                         for mode in SliceMode::ALL {
-                            ui.selectable_value(&mut app.slice_mode, mode, mode.label());
+                            ui.selectable_value(&mut app.slice_mode, mode, slice_label(mode));
                         }
                     });
                 slice = ui
-                    .button("A Drum Pads")
-                    .on_hover_text("Corta la región del clip en golpes, uno por pad, en una pista MIDI nueva con un clip que los toca en orden")
+                    .button(tr("A Drum Pads"))
+                    .on_hover_text(tr("Corta la región del clip en golpes, uno por pad, en una pista MIDI nueva con un clip que los toca en orden"))
                     .clicked();
             });
             if app.slice_mode == SliceMode::Transients {
@@ -157,8 +167,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     label(ui, "");
                     let mut percent = app.slice_sensitivity * 100.0;
                     let response = ui
-                        .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5).fixed_decimals(0).prefix("sensibilidad ").suffix(" %"))
-                        .on_hover_text("Más alta, más trozos: corta también en los golpes suaves; más baja, solo en los fuertes. En un loop de acordes corta además donde cambia el acorde. Para acordes tenidos, mejor una rejilla (1/4, 1/8)");
+                        .add(egui::DragValue::new(&mut percent).range(0.0..=100.0).speed(0.5).fixed_decimals(0).prefix(tr("sensibilidad ")).suffix(" %"))
+                        .on_hover_text(tr("Más alta, más trozos: corta también en los golpes suaves; más baja, solo en los fuertes. En un loop de acordes corta además donde cambia el acorde. Para acordes tenidos, mejor una rejilla (1/4, 1/8)"));
                     if response.changed() {
                         app.slice_sensitivity = percent / 100.0;
                     }
@@ -166,71 +176,71 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             }
             ui.horizontal(|ui| {
                 label(ui, "");
-                ui.checkbox(&mut app.show_cuts, "Editar cortes").on_hover_text("Muestra dónde se cortará, bajo la forma de onda: arrastra un corte para moverlo, doble clic para añadir o quitar uno (hasta 16, uno por pad)");
+                ui.checkbox(&mut app.show_cuts, tr("Editar cortes")).on_hover_text(tr("Muestra dónde se cortará, bajo la forma de onda: arrastra un corte para moverlo, doble clic para añadir o quitar uno (hasta 16, uno por pad)"));
             });
             ui.horizontal(|ui| {
                 label(ui, "Tempo");
-                if ui.add_enabled(!app.tempo.busy(), egui::Button::new("Detectar")).on_hover_text("Busca el tempo y los compases del audio para que siga el del proyecto").clicked() {
+                if ui.add_enabled(!app.tempo.busy(), egui::Button::new(tr("Detectar"))).on_hover_text(tr("Busca el tempo y los compases del audio para que siga el del proyecto")).clicked() {
                     detect = true;
                 }
-                if ui.add_enabled(clip.warp != WarpMode::Off, egui::Button::new("Usar en el proyecto")).on_hover_text("Pone el proyecto al tempo de este clip").clicked() {
+                if ui.add_enabled(clip.warp != WarpMode::Off, egui::Button::new(tr("Usar en el proyecto"))).on_hover_text(tr("Pone el proyecto al tempo de este clip")).clicked() {
                     use_tempo = true;
                 }
             });
             ui.horizontal(|ui| {
-                label(ui, "Tonalidad");
+                label(ui, tr("Tonalidad"));
                 match clip.key {
                     Some(k) => {
                         let own = stems::key::Key { tonic: k.tonic, minor: k.minor };
                         ui.label(egui::RichText::new(crate::i18n::music(&own.name())).size(10.5));
                         let mut follow = k.follow;
                         let hint = match project_key {
-                            Some(p) => format!("Transpone el clip a la escala del proyecto ({}) por el camino más corto, y lo sigue si cambia", p.name()),
-                            None => "Transpone el clip a la escala del proyecto cuando la elijas (barra de transporte)".to_string(),
+                            Some(p) => fill(tr("Transpone el clip a la escala del proyecto ({}) por el camino más corto, y lo sigue si cambia"), &[&crate::i18n::music(&p.name())]),
+                            None => tr("Transpone el clip a la escala del proyecto cuando la elijas (barra de transporte)").to_string(),
                         };
-                        if ui.checkbox(&mut follow, "Seguir la escala").on_hover_text(hint).changed() {
+                        if ui.checkbox(&mut follow, tr("Seguir la escala")).on_hover_text(hint).changed() {
                             follow_to = Some(follow);
                         }
                     }
                     None => {
-                        ui.label(egui::RichText::new("sin detectar").color(TEXT_DIM).size(10.5));
+                        ui.label(egui::RichText::new(tr("sin detectar")).color(TEXT_DIM).size(10.5));
                     }
                 }
-                if ui.button("Detectar").on_hover_text("Busca la tonalidad del audio (o la lee de su nombre, como «Pad_Am»)").clicked() {
+                if ui.button(tr("Detectar")).on_hover_text(tr("Busca la tonalidad del audio (o la lee de su nombre, como «Pad_Am»)")).clicked() {
                     detect_key = true;
                 }
             });
             ui.horizontal(|ui| {
-                label(ui, "Afinación");
+                label(ui, tr("Afinación"));
                 let tuned = app.tuning_of(clip_ref).is_some();
-                if ui.button(if tuned { "Editar notas… ✓" } else { "Editar notas…" }).on_hover_text("Las notas de la voz sobre el teclado: arrastra cada una a otra nota, afínala o quítale el vibrato (como Melodyne)").clicked() {
+                if ui.button(if tuned { tr("Editar notas… ✓") } else { tr("Editar notas…") }).on_hover_text(tr("Las notas de la voz sobre el teclado: arrastra cada una a otra nota, afínala o quítale el vibrato (como Melodyne)")).clicked() {
                     app.open_tuning(clip_ref);
                 }
             });
             ui.horizontal(|ui| {
                 label(ui, "Stems");
                 separate = ui
-                    .add_enabled(app.stems.is_none(), egui::Button::new("Separar en stems"))
-                    .on_hover_text("Batería, bajo, resto y voz, cada uno en una pista de audio nueva bajo esta; esta queda desactivada")
+                    .add_enabled(app.stems.is_none(), egui::Button::new(tr("Separar en stems")))
+                    .on_hover_text(tr("Batería, bajo, resto y voz, cada uno en una pista de audio nueva bajo esta; esta queda desactivada"))
                     .clicked();
             });
             ui.horizontal(|ui| {
-                label(ui, "Letra");
+                label(ui, tr("Letra"));
                 let has = app.lyrics_of(&clip.sample).is_some();
-                let transcribe = if has { "Transcribir otra vez…" } else { "Transcribir…" };
-                if ui.add_enabled(app.lyrics_ui.job.is_none(), egui::Button::new(transcribe)).on_hover_text("Saca el texto que se canta en el clip, con el tiempo de cada frase; sale bajo la forma de onda").clicked() {
+                let transcribe = if has { tr("Transcribir otra vez…") } else { tr("Transcribir…") };
+                if ui.add_enabled(app.lyrics_ui.job.is_none(), egui::Button::new(transcribe)).on_hover_text(tr("Saca el texto que se canta en el clip, con el tiempo de cada frase; sale bajo la forma de onda")).clicked() {
                     lyrics_command = Some(crate::lyrics_ui::Command::Transcribe);
                 }
-                if has && ui.button("Editar…").on_hover_text("La letra frase a frase, para corregirla, copiarla o exportarla (.txt, .lrc)").clicked() {
+                if has && ui.button(tr("Editar…")).on_hover_text(tr("La letra frase a frase, para corregirla, copiarla o exportarla (.txt, .lrc)")).clicked() {
                     lyrics_command = Some(crate::lyrics_ui::Command::Edit);
                 }
             });
             ui.label(
                 egui::RichText::new(match clip.warp {
-                    WarpMode::Off => "Off: suena a su velocidad original, sin seguir el tempo.",
-                    WarpMode::Repitch => "Re-Pitch: sigue el tempo cambiando la velocidad y el tono.",
-                    WarpMode::Stretch => "Stretch: sigue el tempo manteniendo el tono.",
-                    WarpMode::Beats => "Beats: para baterías. Cada golpe empieza donde le toca y suena a su velocidad, sin eco.",
+                    WarpMode::Off => tr("Off: suena a su velocidad original, sin seguir el tempo."),
+                    WarpMode::Repitch => tr("Re-Pitch: sigue el tempo cambiando la velocidad y el tono."),
+                    WarpMode::Stretch => tr("Stretch: sigue el tempo manteniendo el tono."),
+                    WarpMode::Beats => tr("Beats: para baterías. Cada golpe empieza donde le toca y suena a su velocidad, sin eco."),
                 })
                 .color(TEXT_DIM)
                 .size(10.5),
@@ -245,7 +255,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                     .bipolar()
                     .format(|v| format!("{:+.0} st", v.round()))
                     .show(ui)
-                    .on_disabled_hover_text("La transposición se aplica en modo Stretch");
+                    .on_disabled_hover_text(tr("La transposición se aplica en modo Stretch"));
             });
             clip.transpose = clip.transpose.round();
             // Moved by hand, it no longer follows the project's key.
@@ -280,7 +290,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
         painter.rect_filled(rect, 2.0, theme::SLOT);
         let duration = sample.duration();
         if duration <= 0.0 {
-            painter.text(rect.center(), Align2::CENTER_CENTER, "Muestra no encontrada", theme::body(), TEXT_DIM);
+            painter.text(rect.center(), Align2::CENTER_CENTER, tr("Muestra no encontrada"), theme::body(), TEXT_DIM);
             return;
         }
         let whole = app.sample_view_whole;
@@ -340,7 +350,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 ));
             }
             if clip.warp_markers.is_empty() {
-                painter.text(strip.center(), Align2::CENTER_CENTER, "Doble clic aquí: marcador de warp", theme::small(), TEXT_DIM);
+                painter.text(strip.center(), Align2::CENTER_CENTER, tr("Doble clic aquí: marcador de warp"), theme::small(), TEXT_DIM);
             }
         }
         // The cuts: where each pad's slice begins, numbered.
@@ -352,7 +362,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                 painter.text(pos2(x + 3.0, rect.top() + 2.0), Align2::LEFT_TOP, (i + 1).to_string(), theme::small(), CUT);
             }
             if cuts.is_empty() {
-                painter.text(cut_strip.center(), Align2::CENTER_CENTER, "Doble clic aquí: un corte", theme::small(), TEXT_DIM);
+                painter.text(cut_strip.center(), Align2::CENTER_CENTER, tr("Doble clic aquí: un corte"), theme::small(), TEXT_DIM);
             }
         }
         if let Some(beats) = playhead {
@@ -429,7 +439,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
                         Some(i) => {
                             list.remove(i);
                         }
-                        None if list.len() >= engine::model::RACK_PADS => app.status = Some(format!("Hasta {} cortes: uno por pad del Drum Pads", engine::model::RACK_PADS)),
+                        None if list.len() >= engine::model::RACK_PADS => app.status = Some(fill(tr("Hasta {} cortes: uno por pad del Drum Pads"), &[&engine::model::RACK_PADS])),
                         None => list.push(seconds_at(pos.x).clamp(start, end)),
                     }
                 } else if let (Some(i), true) = (grabbed, cut_response.dragged()) {
@@ -441,7 +451,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             if cut_response.hover_pos().is_some_and(|pos| near(pos, list).is_some()) {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
             }
-            cut_response.clone().on_hover_text("Cortes: cada uno empieza el trozo de un pad · arrastrar: moverlo · doble clic: añadir o quitar uno");
+            cut_response.clone().on_hover_text(tr("Cortes: cada uno empieza el trozo de un pad · arrastrar: moverlo · doble clic: añadir o quitar uno"));
         }
         if let Some(pos) = response.interact_pointer_pos() {
             if whole && (response.clicked() || response.dragged()) {
@@ -458,9 +468,9 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             crate::lyrics_ui::strip(app, ui, lyrics_strip, &clip.sample, &x_of);
         }
         if warped {
-            strip_response.on_hover_text("Marcadores de warp · doble clic: añadir uno o quitarlo · arrastrar: que ese punto del audio caiga en su tiempo");
+            strip_response.on_hover_text(tr("Marcadores de warp · doble clic: añadir uno o quitarlo · arrastrar: que ese punto del audio caiga en su tiempo"));
         }
-        response.on_hover_text(if whole { "Clic o arrastra para mover el inicio del clip" } else { "Lo que suena el clip. «Archivo entero» muestra el resto del audio (y ahí un clic mueve el inicio)" });
+        response.on_hover_text(if whole { tr("Clic o arrastra para mover el inicio del clip") } else { tr("Lo que suena el clip. «Archivo entero» muestra el resto del audio (y ahí un clic mueve el inicio)") });
     });
 
     // The clip's envelopes, across the clip's length.
@@ -475,11 +485,11 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui, clip_ref: ClipRef, playhead: 
             let beat_of = |x: f32| ((x - left) / beat_w) as f64;
             let length = clip.length;
             crate::clip_envelope::lane(ui, choice, &mut clip.envelopes, length, param, &info, value, lane, left, &x_of, &beat_of, 0.25, theme::METER_RED)
-                .on_hover_text("Clic: añadir un punto · arrastrar: moverlo · doble clic: borrarlo");
+                .on_hover_text(tr("Clic: añadir un punto · arrastrar: moverlo · doble clic: borrarlo"));
         }
         None => {
             ui.painter().rect_filled(lane, 2.0, theme::SLOT);
-            ui.painter().text(lane.center(), Align2::CENTER_CENTER, "Elige arriba un parámetro para ver o dibujar su envolvente en el clip", theme::small(), TEXT_DIM);
+            ui.painter().text(lane.center(), Align2::CENTER_CENTER, tr("Elige arriba un parámetro para ver o dibujar su envolvente en el clip"), theme::small(), TEXT_DIM);
         }
     }
 

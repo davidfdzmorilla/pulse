@@ -23,6 +23,7 @@
 //! Credential Manager.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
 use serde::Deserialize;
@@ -228,7 +229,7 @@ pub(crate) fn spawn_curl(url: &str, token: Option<&str>, accept: &str, to: Optio
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| format!("No se pudo ejecutar curl: {e}"))?;
+        .map_err(|e| fill(tr("No se pudo ejecutar curl: {}"), &[&e]))?;
     if let Some(mut stdin) = child.stdin.take() {
         use std::io::Write;
         let config = curl_config(token, accept);
@@ -272,13 +273,13 @@ pub(crate) fn refused(error: &str) -> bool {
 /// curl's error, in words.
 pub(crate) fn curl_error(error: &str) -> String {
     if error.contains("404") {
-        format!("No se encontró en {REPOSITORY}")
+        fill(tr("No se encontró en {}"), &[&REPOSITORY])
     } else if refused(error) {
-        "GitHub no responde a más consultas por ahora (tiene un límite por hora): prueba dentro de un rato, o pega un token en «Acceso a GitHub»".to_string()
+        tr("GitHub no responde a más consultas por ahora (tiene un límite por hora): prueba dentro de un rato, o pega un token en «Acceso a GitHub»").to_string()
     } else if error.contains("resolve host") || error.contains("connect") {
-        "Sin conexión con GitHub".to_string()
+        tr("Sin conexión con GitHub").to_string()
     } else {
-        format!("Error al hablar con GitHub: {}", error.trim())
+        fill(tr("Error al hablar con GitHub: {}"), &[&error.trim()])
     }
 }
 
@@ -289,7 +290,7 @@ fn latest_release(token: Option<&str>) -> Result<Release, String> {
 /// `which`: "latest" or "tags/v1.2.3".
 pub(crate) fn release_at(token: Option<&str>, which: &str) -> Result<Release, String> {
     let body = curl(&format!("https://api.github.com/repos/{REPOSITORY}/releases/{which}"), token, "application/vnd.github+json", None)?;
-    serde_json::from_slice(&body).map_err(|e| format!("Respuesta de GitHub no válida: {e}"))
+    serde_json::from_slice(&body).map_err(|e| fill(tr("Respuesta de GitHub no válida: {}"), &[&e]))
 }
 
 // ----- Installing --------------------------------------------------------------------
@@ -318,10 +319,10 @@ use system::bundle_version;
 /// one (it has no signature to check otherwise); macOS checks it when there is.
 fn check_digest(file: &Path, asset: &Asset) -> Result<(), String> {
     let Some(expected) = asset.digest.as_deref().and_then(|d| d.strip_prefix("sha256:")) else {
-        return if cfg!(windows) { Err("GitHub no da la huella (SHA-256) de la descarga: no se instala".into()) } else { Ok(()) };
+        return if cfg!(windows) { Err(tr("GitHub no da la huella (SHA-256) de la descarga: no se instala").into()) } else { Ok(()) };
     };
     let actual = crate::stems_ui::sha256(file)?;
-    if actual.eq_ignore_ascii_case(expected) { Ok(()) } else { Err("La descarga no coincide con la publicada (SHA-256 distinto): no se instala".into()) }
+    if actual.eq_ignore_ascii_case(expected) { Ok(()) } else { Err(tr("La descarga no coincide con la publicada (SHA-256 distinto): no se instala").into()) }
 }
 
 /// Whether `zip` is signed by Pulse's own key (`signature`, the text of its
@@ -335,8 +336,8 @@ fn check_signature(zip: &Path, signature: &str) -> Result<(), String> {
 /// [`check_signature`] against the key `public`.
 #[cfg_attr(not(windows), allow(dead_code))]
 fn check_signature_with(public: &[u8; 32], zip: &Path, signature: &str) -> Result<(), String> {
-    let data = std::fs::read(zip).map_err(|e| format!("No se pudo leer la descarga: {e}"))?;
-    firma::verify(public, &data, signature).map_err(|e| format!("{e}: no se instala"))
+    let data = std::fs::read(zip).map_err(|e| fill(tr("No se pudo leer la descarga: {}"), &[&e]))?;
+    firma::verify(public, &data, signature).map_err(|e| fill(tr("{}: no se instala"), &[&e]))
 }
 
 /// Who signed a bundle ("adhoc" for ad hoc signatures), if the signature is valid.
@@ -351,7 +352,7 @@ fn signer(bundle: &Path, strict: bool) -> Result<String, String> {
     }
     let verify = verify.arg(bundle).output().map_err(|e| e.to_string())?;
     if !verify.status.success() {
-        return Err(format!("La firma de {} no es válida", bundle.display()));
+        return Err(fill(tr("La firma de {} no es válida"), &[&bundle.display()]));
     }
     let details = Command::new("/usr/bin/codesign").args(["-dvv"]).arg(bundle).output().map_err(|e| e.to_string())?;
     let text = String::from_utf8_lossy(&details.stderr);
@@ -370,18 +371,18 @@ fn signer(bundle: &Path, strict: bool) -> Result<String, String> {
 fn same_signer(ours: &Path, new: &Path) -> Result<(), String> {
     let theirs = signer(new, true)?;
     // A broken signature here must not open the door to any download.
-    let mine = signer(ours, false).map_err(|e| format!("No se puede comprobar esta versión de Pulse: {e}"))?;
+    let mine = signer(ours, false).map_err(|e| fill(tr("No se puede comprobar esta versión de Pulse: {}"), &[&e]))?;
     if mine == "adhoc" {
         let pulse = Command::new("/usr/bin/codesign")
             .args(["--verify", &format!("-R=identifier \"{BUNDLE_ID}\"")])
             .arg(new)
             .output()
             .map_err(|e| e.to_string())?;
-        return if pulse.status.success() { Ok(()) } else { Err("La descarga no es Pulse (otro identificador de firma): no se instala".into()) };
+        return if pulse.status.success() { Ok(()) } else { Err(tr("La descarga no es Pulse (otro identificador de firma): no se instala").into()) };
     }
     let requirement = output(Command::new("/usr/bin/codesign").args(["-d", "-r-"]).arg(ours))
         .and_then(|text| text.lines().find_map(|l| l.strip_prefix("designated => ").map(str::to_string)))
-        .ok_or("No se pudo leer la firma de esta versión de Pulse")?;
+        .ok_or(tr("No se pudo leer la firma de esta versión de Pulse"))?;
     let check = Command::new("/usr/bin/codesign")
         .args(["--verify", "--strict"])
         .arg(format!("-R={requirement}"))
@@ -391,7 +392,7 @@ fn same_signer(ours: &Path, new: &Path) -> Result<(), String> {
     if check.status.success() {
         Ok(())
     } else {
-        Err(format!("La versión descargada está firmada por «{theirs}» con otro certificado que esta: no se instala"))
+        Err(fill(tr("La versión descargada está firmada por «{}» con otro certificado que esta: no se instala"), &[&theirs]))
     }
 }
 
@@ -405,7 +406,7 @@ pub fn swap_in(current: &Path, new: &Path) -> Result<(), String> {
     let _ = remove(&older);
     let had_previous = previous.exists();
     if had_previous {
-        std::fs::rename(&previous, &older).map_err(|e| format!("No se pudo apartar la versión anterior guardada: {e}"))?;
+        std::fs::rename(&previous, &older).map_err(|e| fill(tr("No se pudo apartar la versión anterior guardada: {}"), &[&e]))?;
     }
     let undo_previous = || {
         if had_previous {
@@ -414,12 +415,12 @@ pub fn swap_in(current: &Path, new: &Path) -> Result<(), String> {
     };
     if let Err(e) = std::fs::rename(current, &previous) {
         undo_previous();
-        return Err(format!("No se pudo apartar esta versión: {e}"));
+        return Err(fill(tr("No se pudo apartar esta versión: {}"), &[&e]));
     }
     if let Err(e) = std::fs::rename(new, current) {
         let _ = std::fs::rename(&previous, current);
         undo_previous();
-        return Err(format!("No se pudo instalar la nueva versión: {e}"));
+        return Err(fill(tr("No se pudo instalar la nueva versión: {}"), &[&e]));
     }
     let _ = remove(&older);
     Ok(())
@@ -429,7 +430,7 @@ pub fn swap_in(current: &Path, new: &Path) -> Result<(), String> {
 pub fn swap_back(current: &Path) -> Result<(), String> {
     let previous = current.with_file_name(PREVIOUS);
     if !previous.exists() {
-        return Err("No hay ninguna versión anterior guardada".into());
+        return Err(tr("No hay ninguna versión anterior guardada").into());
     }
     let parked = current.with_file_name(PARKED);
     let _ = remove(&parked);
@@ -448,13 +449,13 @@ fn remove(path: &Path) -> std::io::Result<()> {
 
 /// Downloads a release and installs it over `bundle`. Returns the new version.
 fn install(release: &Release, bundle: &Path, token: Option<&str>) -> Result<String, String> {
-    let asset = release.zip().ok_or("La versión publicada no tiene ningún .zip")?;
+    let asset = release.zip().ok_or(tr("La versión publicada no tiene ningún .zip"))?;
     replaceable(bundle)?;
     // Next to the bundle, so the final move stays on the same disk (one per
     // process: two Pulses open don't share it).
     let work = bundle.with_file_name(format!(".pulse-update-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&work);
-    std::fs::create_dir_all(&work).map_err(|e| format!("No se pudo preparar la descarga: {e}"))?;
+    std::fs::create_dir_all(&work).map_err(|e| fill(tr("No se pudo preparar la descarga: {}"), &[&e]))?;
     let result = (|| {
         let zip = work.join(&asset.name);
         curl(&asset.url, token, "application/octet-stream", Some(&zip))?;
@@ -462,15 +463,15 @@ fn install(release: &Release, bundle: &Path, token: Option<&str>) -> Result<Stri
         // On Windows, signed by Pulse's key or not installed.
         #[cfg(windows)]
         {
-            let signature = release.signature().ok_or("La versión publicada no está firmada por Pulse: no se instala")?;
+            let signature = release.signature().ok_or(tr("La versión publicada no está firmada por Pulse: no se instala"))?;
             let text = curl(&signature.url, token, "application/octet-stream", None)?;
             check_signature(&zip, &String::from_utf8_lossy(&text))?;
         }
         system::unzip(&zip, &work)?;
         let new = work.join(system::IN_PACKAGE);
-        let version = bundle_version(&new).ok_or(format!("La descarga no contiene {}", system::IN_PACKAGE))?;
+        let version = bundle_version(&new).ok_or(fill(tr("La descarga no contiene {}"), &[&system::IN_PACKAGE]))?;
         if version != release.version() {
-            return Err(format!("La descarga es la versión {version}, no la {}", release.version()));
+            return Err(fill(tr("La descarga es la versión {}, no la {}"), &[&version, &release.version()]));
         }
         #[cfg(not(windows))]
         same_signer(bundle, &new)?;
@@ -491,16 +492,16 @@ fn install(release: &Release, bundle: &Path, token: Option<&str>) -> Result<Stri
 /// a folder this user can't write.
 fn replaceable(bundle: &Path) -> Result<(), String> {
     if bundle.to_string_lossy().contains("/AppTranslocation/") {
-        return Err("Pulse se está ejecutando desde una copia temporal de macOS (se abrió sin moverlo de Descargas): muévelo a Aplicaciones, ábrelo desde ahí y vuelve a intentarlo".into());
+        return Err(tr("Pulse se está ejecutando desde una copia temporal de macOS (se abrió sin moverlo de Descargas): muévelo a Aplicaciones, ábrelo desde ahí y vuelve a intentarlo").into());
     }
-    let dir = bundle.parent().ok_or("No se sabe dónde está Pulse")?;
+    let dir = bundle.parent().ok_or(tr("No se sabe dónde está Pulse"))?;
     let probe = dir.join(format!(".pulse-escritura-{}", std::process::id()));
     match std::fs::write(&probe, b"") {
         Ok(()) => {
             let _ = std::fs::remove_file(&probe);
             Ok(())
         }
-        Err(_) => Err(format!("No se puede escribir en {} (la carpeta de Pulse): instala Pulse en una carpeta tuya, como Aplicaciones de tu usuario, o actualiza a mano", dir.display())),
+        Err(_) => Err(fill(tr("No se puede escribir en {} (la carpeta de Pulse): instala Pulse en una carpeta tuya, como Aplicaciones de tu usuario, o actualiza a mano"), &[&dir.display()])),
     }
 }
 
@@ -532,7 +533,7 @@ mod system {
         use std::io::Write;
         // GitHub's tokens are letters, digits and underscores; anything else isn't one.
         if token.is_empty() || !token.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
-            return Err("Eso no parece un token de GitHub".into());
+            return Err(crate::i18n::tr("Eso no parece un token de GitHub").into());
         }
         let mut child = Command::new("/usr/bin/security").arg("-i").stdin(Stdio::piped()).stdout(Stdio::null()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())?;
         if let Some(mut stdin) = child.stdin.take() {
@@ -540,7 +541,7 @@ mod system {
         }
         let out = child.wait_with_output().map_err(|e| e.to_string())?;
         // `-i` exits well whatever the command did: its complaints are on stderr.
-        if out.status.success() && out.stderr.is_empty() { Ok(()) } else { Err("No se pudo guardar el token en el llavero".into()) }
+        if out.status.success() && out.stderr.is_empty() { Ok(()) } else { Err(crate::i18n::tr("No se pudo guardar el token en el llavero").into()) }
     }
 
     /// The bundle's version, from its Info.plist.
@@ -550,7 +551,7 @@ mod system {
 
     pub fn unzip(zip: &Path, to: &Path) -> Result<(), String> {
         let unzip = Command::new("/usr/bin/ditto").args(["-x", "-k"]).arg(zip).arg(to).status().map_err(|e| e.to_string())?;
-        if unzip.success() { Ok(()) } else { Err("No se pudo descomprimir la descarga".to_string()) }
+        if unzip.success() { Ok(()) } else { Err(crate::i18n::tr("No se pudo descomprimir la descarga").to_string()) }
     }
 
     /// Opens `bundle` once this process has quit.
@@ -617,7 +618,7 @@ mod system {
             TargetAlias: std::ptr::null_mut(),
             UserName: user.as_ptr() as *mut u16,
         };
-        if unsafe { CredWriteW(&credential, 0) } != 0 { Ok(()) } else { Err("No se pudo guardar el token en el Administrador de credenciales".into()) }
+        if unsafe { CredWriteW(&credential, 0) } != 0 { Ok(()) } else { Err(crate::i18n::tr("No se pudo guardar el token en el Administrador de credenciales").into()) }
     }
 
     /// A program's version, from its version resource (see the app's build.rs).
@@ -661,9 +662,9 @@ mod system {
             if target.exists() {
                 let old = target.with_extension("dll.anterior");
                 let _ = std::fs::remove_file(&old);
-                std::fs::rename(&target, &old).map_err(|e| format!("No se pudo apartar {}: {e}", target.display()))?;
+                std::fs::rename(&target, &old).map_err(|e| crate::i18n::fill(crate::i18n::tr("No se pudo apartar {}: {}"), &[&target.display(), &e]))?;
             }
-            std::fs::copy(&new, &target).map_err(|e| format!("No se pudo copiar {}: {e}", target.display()))?;
+            std::fs::copy(&new, &target).map_err(|e| crate::i18n::fill(crate::i18n::tr("No se pudo copiar {}: {}"), &[&target.display(), &e]))?;
         }
         Ok(())
     }
@@ -671,7 +672,7 @@ mod system {
     /// With the tar that comes with Windows 10 and 11 (it reads zips).
     pub fn unzip(zip: &Path, to: &Path) -> Result<(), String> {
         let unzip = command(system32("tar.exe")).arg("-xf").arg(zip).arg("-C").arg(to).status().map_err(|e| e.to_string())?;
-        if unzip.success() { Ok(()) } else { Err("No se pudo descomprimir la descarga".to_string()) }
+        if unzip.success() { Ok(()) } else { Err(crate::i18n::tr("No se pudo descomprimir la descarga").to_string()) }
     }
 
     /// Starts `program` once this process has quit (PowerShell waits for it).
@@ -766,7 +767,7 @@ impl PulseApp {
 
     fn install_update(&mut self, release: Release) {
         let Some(bundle) = running_bundle() else {
-            self.updates.set(State::Failed("Pulse no se está ejecutando como aplicación (Pulse.app): no hay nada que reemplazar".into()));
+            self.updates.set(State::Failed(tr("Pulse no se está ejecutando como aplicación (Pulse.app): no hay nada que reemplazar").into()));
             return;
         };
         self.updates.set(State::Downloading(release.clone()));
@@ -792,7 +793,7 @@ impl PulseApp {
                 self.quitting = true;
                 ctx.send_viewport_cmd(egui::ViewportCommand::Close);
             }
-            Err(e) => self.updates.set(State::Failed(format!("No se pudo reiniciar: {e}"))),
+            Err(e) => self.updates.set(State::Failed(fill(tr("No se pudo reiniciar: {}"), &[&e]))),
         }
     }
 
@@ -800,9 +801,9 @@ impl PulseApp {
     pub fn update_badge(&mut self, ui: &mut egui::Ui) {
         let label = match self.updates.state() {
             State::Available(release) if self.settings.skipped_version.as_deref() != Some(release.version()) => {
-                format!("↑ Pulse {} disponible", release.version())
+                fill(tr("↑ Pulse {} disponible"), &[&release.version()])
             }
-            State::Installed(version) => format!("↻ Reinicia para usar Pulse {version}"),
+            State::Installed(version) => fill(tr("↻ Reinicia para usar Pulse {}"), &[&version]),
             _ => return,
         };
         if ui.small_button(label).clicked() {
@@ -819,50 +820,50 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = true;
     let state = app.updates.state();
     let mut action = None;
-    egui::Window::new("Actualizaciones").open(&mut open).resizable(false).collapsible(false).default_width(460.0).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
-        ui.label(format!("Versión instalada: Pulse {VERSION}"));
-        ui.label(egui::RichText::new(format!("Las versiones se publican en github.com/{REPOSITORY}")).color(TEXT_DIM).size(10.5));
+    egui::Window::new(tr("Actualizaciones")).open(&mut open).resizable(false).collapsible(false).default_width(460.0).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
+        ui.label(fill(tr("Versión instalada: Pulse {}"), &[&VERSION]));
+        ui.label(egui::RichText::new(fill(tr("Las versiones se publican en github.com/{}"), &[&REPOSITORY])).color(TEXT_DIM).size(10.5));
         ui.separator();
         match &state {
             State::Idle => {
-                ui.label("Pulse busca versiones nuevas cada vez que arranca, y cada 6 horas si sigue abierto.");
+                ui.label(tr("Pulse busca versiones nuevas cada vez que arranca, y cada 6 horas si sigue abierto."));
             }
             State::Checking => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label("Buscando…");
+                    ui.label(tr("Buscando…"));
                 });
             }
             State::UpToDate => {
-                ui.label("✓ Tienes la última versión.");
+                ui.label(tr("✓ Tienes la última versión."));
             }
             State::Available(release) => {
-                ui.heading(format!("Pulse {} disponible", release.version()));
+                ui.heading(fill(tr("Pulse {} disponible"), &[&release.version()]));
                 if let Some(asset) = release.zip() {
                     ui.label(egui::RichText::new(format!("{:.1} MB", asset.size as f64 / 1e6)).color(TEXT_DIM).size(10.5));
                 }
-                ui.label("Novedades:");
+                ui.label(tr("Novedades:"));
                 egui::ScrollArea::vertical().max_height(220.0).show(ui, |ui| {
-                    ui.label(release.body.as_deref().filter(|b| !b.trim().is_empty()).unwrap_or("(sin notas)"));
+                    ui.label(release.body.as_deref().filter(|b| !b.trim().is_empty()).unwrap_or(tr("(sin notas)")));
                 });
                 if running_bundle().is_some() {
                     ui.horizontal(|ui| {
-                        if ui.button("Descargar e instalar").clicked() {
+                        if ui.button(tr("Descargar e instalar")).clicked() {
                             action = Some(Action::Install(release.clone()));
                         }
-                        if ui.button("Más tarde").clicked() {
+                        if ui.button(tr("Más tarde")).clicked() {
                             action = Some(Action::Later);
                         }
-                        if ui.button("Omitir esta versión").on_hover_text("No volver a avisar de esta versión (sí de las siguientes)").clicked() {
+                        if ui.button(tr("Omitir esta versión")).on_hover_text(tr("No volver a avisar de esta versión (sí de las siguientes)")).clicked() {
                             action = Some(Action::Skip(release.version().to_string()));
                         }
                     });
-                    ui.label(egui::RichText::new("Esta versión se guarda como «Pulse (anterior)» para poder volver a ella.").color(TEXT_DIM).size(10.5));
+                    ui.label(egui::RichText::new(tr("Esta versión se guarda como «Pulse (anterior)» para poder volver a ella.")).color(TEXT_DIM).size(10.5));
                 } else {
                     let outside = if cfg!(windows) {
-                        "Este Pulse no es una versión publicada (se compiló aquí): no se puede instalar desde aquí."
+                        tr("Este Pulse no es una versión publicada (se compiló aquí): no se puede instalar desde aquí.")
                     } else {
-                        "Pulse se está ejecutando fuera de Pulse.app (desde el terminal): no se puede instalar desde aquí."
+                        tr("Pulse se está ejecutando fuera de Pulse.app (desde el terminal): no se puede instalar desde aquí.")
                     };
                     ui.label(egui::RichText::new(outside).color(TEXT_DIM).size(10.5));
                 }
@@ -870,21 +871,21 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             State::Downloading(release) => {
                 ui.horizontal(|ui| {
                     ui.spinner();
-                    ui.label(format!("Descargando e instalando Pulse {}…", release.version()));
+                    ui.label(fill(tr("Descargando e instalando Pulse {}…"), &[&release.version()]));
                 });
             }
             State::Installed(version) => {
-                ui.label(format!("✓ Pulse {version} está instalado. Se usará al reiniciar."));
-                if ui.button("Reiniciar ahora").clicked() {
+                ui.label(fill(tr("✓ Pulse {} está instalado. Se usará al reiniciar."), &[&version]));
+                if ui.button(tr("Reiniciar ahora")).clicked() {
                     action = Some(Action::Restart);
                 }
             }
             State::WhatsNew(release) => {
-                ui.heading(format!("Novedades de Pulse {}", release.version()));
+                ui.heading(fill(tr("Novedades de Pulse {}"), &[&release.version()]));
                 egui::ScrollArea::vertical().max_height(260.0).show(ui, |ui| {
-                    ui.label(release.body.as_deref().filter(|b| !b.trim().is_empty()).unwrap_or("(sin notas)"));
+                    ui.label(release.body.as_deref().filter(|b| !b.trim().is_empty()).unwrap_or(tr("(sin notas)")));
                 });
-                if ui.button("Cerrar").clicked() {
+                if ui.button(tr("Cerrar")).clicked() {
                     action = Some(Action::Later);
                 }
             }
@@ -895,31 +896,31 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         ui.separator();
         ui.horizontal(|ui| {
             let busy = matches!(state, State::Checking | State::Downloading(_));
-            if ui.add_enabled(!busy, egui::Button::new("Buscar ahora")).clicked() {
+            if ui.add_enabled(!busy, egui::Button::new(tr("Buscar ahora"))).clicked() {
                 action = Some(Action::Check);
             }
             let previous = running_bundle().is_some_and(|b| b.with_file_name(PREVIOUS).exists());
-            if ui.add_enabled(previous && !busy, egui::Button::new("Volver a la versión anterior")).clicked() {
+            if ui.add_enabled(previous && !busy, egui::Button::new(tr("Volver a la versión anterior"))).clicked() {
                 action = Some(Action::Back);
             }
         });
         let mut check = app.settings.check_updates;
-        if ui.checkbox(&mut check, "Buscar actualizaciones al arrancar").changed() {
+        if ui.checkbox(&mut check, tr("Buscar actualizaciones al arrancar")).changed() {
             action = Some(Action::CheckOnStart(check));
         }
-        ui.collapsing("Acceso a GitHub (opcional)", |ui| {
+        ui.collapsing(tr("Acceso a GitHub (opcional)"), |ui| {
             ui.label(
                 egui::RichText::new(if cfg!(windows) {
-                    "No hace falta: el repositorio es público. Solo si GitHub dice que hay demasiadas consultas: Pulse usa la sesión de GitHub CLI («gh auth login») o un token que pegues aquí (se guarda en el Administrador de credenciales de Windows)."
+                    tr("No hace falta: el repositorio es público. Solo si GitHub dice que hay demasiadas consultas: Pulse usa la sesión de GitHub CLI («gh auth login») o un token que pegues aquí (se guarda en el Administrador de credenciales de Windows).")
                 } else {
-                    "No hace falta: el repositorio es público. Solo si GitHub dice que hay demasiadas consultas: Pulse usa la sesión de GitHub CLI («gh auth login») o un token que pegues aquí (se guarda en el llavero)."
+                    tr("No hace falta: el repositorio es público. Solo si GitHub dice que hay demasiadas consultas: Pulse usa la sesión de GitHub CLI («gh auth login») o un token que pegues aquí (se guarda en el llavero).")
                 })
                     .color(TEXT_DIM)
                     .size(10.5),
             );
             ui.horizontal(|ui| {
                 ui.add(egui::TextEdit::singleline(&mut app.updates.token_input).password(true).desired_width(280.0));
-                if ui.button("Guardar token").clicked() && !app.updates.token_input.trim().is_empty() {
+                if ui.button(tr("Guardar token")).clicked() && !app.updates.token_input.trim().is_empty() {
                     action = Some(Action::SaveToken);
                 }
             });

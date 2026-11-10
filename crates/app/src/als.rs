@@ -9,6 +9,7 @@
 //! with their tracks inside (and their mixer settings). The parser is
 //! lenient: anything missing falls back to a default instead of failing.
 
+use crate::i18n::{fill, tr};
 use crate::project::{Mixer, Project, Track, PALETTE};
 use engine::model::{
     rack_pad, ArrangementClip, AudioClip, Clip, InstrumentKind, MidiClip, Note, RackParams, SamplerParams, SynthParams, WarpMarker, WarpMode, RACK_FIRST_NOTE,
@@ -36,22 +37,22 @@ pub struct ImportReport {
 
 impl ImportReport {
     pub fn summary(&self) -> String {
-        let mut text = format!(
-            "Importadas {} pistas MIDI y {} de audio, {} clips de sesión y {} del Arrangement",
-            self.midi_tracks, self.audio_tracks, self.session_clips, self.arrangement_clips
+        let mut text = fill(
+            tr("Importadas {} pistas MIDI y {} de audio, {} clips de sesión y {} del Arrangement"),
+            &[&self.midi_tracks, &self.audio_tracks, &self.session_clips, &self.arrangement_clips],
         );
         let mut notes = Vec::new();
         if self.missing_samples > 0 {
-            notes.push(format!("{} muestras no encontradas", self.missing_samples));
+            notes.push(fill(tr("{} muestras no encontradas"), &[&self.missing_samples]));
         }
         if self.group_tracks > 0 {
-            notes.push(format!("{} grupo(s) con sus pistas", self.group_tracks));
+            notes.push(fill(tr("{} grupo(s) con sus pistas"), &[&self.group_tracks]));
         }
         if self.dropped_tracks > 0 {
-            notes.push(format!("{} pistas omitidas por encima del máximo de {MAX_TRACKS}", self.dropped_tracks));
+            notes.push(fill(tr("{} pistas omitidas por encima del máximo de {}"), &[&self.dropped_tracks, &MAX_TRACKS]));
         }
         if self.dropped_clips > 0 {
-            notes.push(format!("{} clips omitidos más allá de la escena {NUM_SCENES}", self.dropped_clips));
+            notes.push(fill(tr("{} clips omitidos más allá de la escena {}"), &[&self.dropped_clips, &NUM_SCENES]));
         }
         if !notes.is_empty() {
             text.push_str(&format!(" · {}", notes.join(", ")));
@@ -64,20 +65,20 @@ impl ImportReport {
 const MAX_XML: u64 = 256 << 20;
 
 pub fn import(path: &Path) -> Result<(Project, ImportReport), String> {
-    let bytes = std::fs::read(path).map_err(|e| format!("No se pudo leer: {e}"))?;
+    let bytes = std::fs::read(path).map_err(|e| fill(tr("No se pudo leer: {}"), &[&e]))?;
     let xml = if bytes.starts_with(&[0x1f, 0x8b]) {
         // Up to a limit: a few KB can unpack to gigabytes (and fill the memory).
         let mut text = String::new();
         flate2::read::GzDecoder::new(bytes.as_slice())
             .take(MAX_XML + 1)
             .read_to_string(&mut text)
-            .map_err(|e| format!("No se pudo descomprimir el set: {e}"))?;
+            .map_err(|e| fill(tr("No se pudo descomprimir el set: {}"), &[&e]))?;
         if text.len() as u64 > MAX_XML {
-            return Err(format!("El set descomprimido pasa de {} MB: no parece un set de Live", MAX_XML >> 20));
+            return Err(fill(tr("El set descomprimido pasa de {} MB: no parece un set de Live"), &[&(MAX_XML >> 20)]));
         }
         text
     } else {
-        String::from_utf8(bytes).map_err(|_| "El archivo no es un set de Ableton Live".to_string())?
+        String::from_utf8(bytes).map_err(|_| tr("El archivo no es un set de Ableton Live").to_string())?
     };
     parse_in(&xml, path.parent())
 }
@@ -96,10 +97,10 @@ struct Context<'a> {
 
 /// Parses a set; `base` is the folder it lives in, used to find its samples.
 pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport), String> {
-    let doc = Document::parse(xml).map_err(|e| format!("XML no válido: {e}"))?;
+    let doc = Document::parse(xml).map_err(|e| fill(tr("XML no válido: {}"), &[&e]))?;
     let root = doc.root_element();
     if root.tag_name().name() != "Ableton" {
-        return Err("El archivo no es un set de Ableton Live".into());
+        return Err(tr("El archivo no es un set de Ableton Live").into());
     }
     let set = child(root, "LiveSet").ok_or("El set no contiene LiveSet")?;
     let mut report = ImportReport::default();
@@ -196,7 +197,7 @@ pub fn parse_in(xml: &str, base: Option<&Path>) -> Result<(Project, ImportReport
     }
 
     if project.tracks.iter().all(|t| t.is_group()) {
-        return Err("El set no tiene pistas MIDI ni de audio que importar".into());
+        return Err(tr("El set no tiene pistas MIDI ni de audio que importar").into());
     }
     Ok((project, report))
 }

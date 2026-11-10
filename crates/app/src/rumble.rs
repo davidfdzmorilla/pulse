@@ -4,6 +4,7 @@
 //! the kick: what is left is a low, distorted tail that breathes between the
 //! kicks and rings out for about a bar after the last one.
 
+use crate::i18n::{fill, tr};
 use crate::app::PulseApp;
 use crate::project::{Monitor, Track};
 use engine::model::{AutoFilterParams, Device, DuckerParams, Effect, FilterMode, KickDrive, ReverbParams, SaturatorParams};
@@ -21,7 +22,7 @@ impl PulseApp {
             return;
         }
         if self.project.tracks.len() >= engine::MAX_TRACKS {
-            self.status = Some(format!("Máximo de {} pistas", engine::MAX_TRACKS));
+            self.status = Some(fill(tr("Máximo de {} pistas"), &[&engine::MAX_TRACKS]));
             return;
         }
         let before = self.project.clone();
@@ -40,7 +41,7 @@ impl PulseApp {
         self.history.commit(&self.project, false);
         // The tracks after it moved: those go again; the rest play on.
         self.sync_from(&before);
-        self.status = Some(format!("«{}» toca lo que suena en «{}» por una reverb, saturación Tube y un filtro de 24 dB a 180 Hz, y se aparta en cada golpe", self.project.tracks[t + 1].name, self.project.tracks[t].name));
+        self.status = Some(fill(tr("«{}» toca lo que suena en «{}» por una reverb, saturación Tube y un filtro de 24 dB a 180 Hz, y se aparta en cada golpe"), &[&self.project.tracks[t + 1].name, &self.project.tracks[t].name]));
     }
 }
 

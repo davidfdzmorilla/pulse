@@ -8,7 +8,7 @@
 //! the rest of the chain still loads. Plugins go with their saved state.
 
 use crate::app::PulseApp;
-use crate::i18n::tr;
+use crate::i18n::{fill, tr};
 use crate::project::PluginRef;
 use crate::theme::TEXT_DIM;
 use eframe::egui;
@@ -236,9 +236,9 @@ pub fn list(root: &Path) -> Vec<Chain> {
 /// Saves (or replaces) a chain in `root`; returns its file.
 pub fn save(root: &Path, chain: &Chain) -> Result<PathBuf, String> {
     if chain.name.trim().is_empty() {
-        return Err("La cadena necesita un nombre".into());
+        return Err(tr("La cadena necesita un nombre").into());
     }
-    std::fs::create_dir_all(root).map_err(|e| format!("No se pudo crear {}: {e}", root.display()))?;
+    std::fs::create_dir_all(root).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&root.display(), &e]))?;
     let path = root.join(file_name(&chain.name));
     crate::store::write_json(&path, chain)?;
     Ok(path)
@@ -246,7 +246,7 @@ pub fn save(root: &Path, chain: &Chain) -> Result<PathBuf, String> {
 
 pub fn delete(root: &Path, name: &str) -> Result<(), String> {
     let path = root.join(file_name(name));
-    std::fs::remove_file(&path).map_err(|e| format!("No se pudo borrar {}: {e}", path.display()))
+    std::fs::remove_file(&path).map_err(|e| fill(tr("No se pudo borrar {}: {}"), &[&path.display(), &e]))
 }
 
 /// «Guardar cadena…» at the end of a chain: its name and whether the
@@ -299,7 +299,7 @@ impl PulseApp {
                 Effect::Plugin(id) => match self.project.plugin(id) {
                     Some(p) => Some(SavedPlugin::of(p)),
                     None => {
-                        notes.push("un plugin que no se pudo cargar".to_string());
+                        notes.push(tr("un plugin que no se pudo cargar").to_string());
                         continue;
                     }
                 },
@@ -312,7 +312,7 @@ impl PulseApp {
             devices.push(Link { effect: serde_json::to_value(effect).unwrap_or_default(), enabled: device.enabled, plugin });
         }
         if sidechains {
-            notes.push("los sidechain (apuntan a pistas de este proyecto)".to_string());
+            notes.push(tr("los sidechain (apuntan a pistas de este proyecto)").to_string());
         }
         let instrument = match target {
             Target::Track(t) if with_instrument => {
@@ -338,8 +338,8 @@ impl PulseApp {
     pub fn save_chain(&mut self, target: Target, name: &str, with_instrument: bool) {
         let (chain, left_out) = self.chain_of(target, name, with_instrument);
         self.status = Some(match save(&user_root(), &chain) {
-            Ok(_) if left_out.is_empty() => format!("Cadena guardada: {name}"),
-            Ok(_) => format!("Cadena guardada: {name} (sin {})", left_out.join(" ni ")),
+            Ok(_) if left_out.is_empty() => fill(tr("Cadena guardada: {}"), &[&name]),
+            Ok(_) => fill(tr("Cadena guardada: {} (sin {})"), &[&name, &left_out.join(tr(" ni "))]),
             Err(error) => error,
         });
         self.browser.forget_index();
@@ -347,7 +347,7 @@ impl PulseApp {
 
     pub fn delete_chain(&mut self, name: &str) {
         self.status = Some(match delete(&user_root(), name) {
-            Ok(()) => format!("Cadena borrada: {name}"),
+            Ok(()) => fill(tr("Cadena borrada: {}"), &[&name]),
             Err(error) => error,
         });
         self.browser.forget_index();
@@ -361,8 +361,8 @@ impl PulseApp {
         let effects = chain.effects();
         match chain.unreadable() {
             0 => {}
-            1 => skipped.push("un efecto que esta versión de Pulse no conoce".into()),
-            n => skipped.push(format!("{n} efectos que esta versión de Pulse no conoce")),
+            1 => skipped.push(tr("un efecto que esta versión de Pulse no conoce").into()),
+            n => skipped.push(fill(tr("{} efectos que esta versión de Pulse no conoce"), &[&n])),
         }
         if replace {
             for index in (0..self.devices(target).len()).rev() {
@@ -372,7 +372,7 @@ impl PulseApp {
         if let Some(voice) = &chain.instrument {
             match target {
                 Target::Track(t) if !self.project.tracks[t].is_audio() && !self.project.tracks[t].is_group() => self.load_voice(t, voice, replace, &mut skipped),
-                _ => skipped.push("el instrumento (el destino no es una pista MIDI)".into()),
+                _ => skipped.push(tr("el instrumento (el destino no es una pista MIDI)").into()),
             }
         }
         let mut added = 0;
@@ -388,7 +388,7 @@ impl PulseApp {
                     }
                     Err(why) => skipped.push(why),
                 },
-                (Effect::Plugin(_), None) => skipped.push("un plugin sin sus datos".into()),
+                (Effect::Plugin(_), None) => skipped.push(tr("un plugin sin sus datos").into()),
                 _ => {
                     self.add_device(target, device);
                     added += 1;
@@ -397,12 +397,12 @@ impl PulseApp {
         }
         self.detail = crate::app::Detail::Devices;
         let what = match added {
-            1 => "1 efecto".to_string(),
-            n => format!("{n} efectos"),
+            1 => tr("1 efecto").to_string(),
+            n => fill(tr("{} efectos"), &[&n]),
         };
-        let mut status = format!("Cadena «{}» en {}: {what}", chain.name, self.target_name(target));
+        let mut status = fill(tr("Cadena «{}» en {}: {}"), &[&if chain.factory { crate::i18n::tr_name(&chain.name).into_owned() } else { chain.name.clone() }, &self.target_name(target), &what]);
         if !skipped.is_empty() {
-            status += &format!(" · sin {}", skipped.join(", "));
+            status += &fill(tr(" · sin {}"), &[&skipped.join(", ")]);
         }
         self.status = Some(status);
     }
@@ -417,17 +417,17 @@ impl PulseApp {
                     Some(InstrumentKind::Plugin(id))
                 }
                 Some(saved) => {
-                    skipped.push(format!("«{}» (no está instalado)", saved.name));
+                    skipped.push(fill(tr("«{}» (no está instalado)"), &[&saved.name]));
                     None
                 }
                 None => {
-                    skipped.push("un plugin sin sus datos".into());
+                    skipped.push(tr("un plugin sin sus datos").into());
                     None
                 }
             },
             Ok(kind) => Some(kind),
             Err(_) => {
-                skipped.push("el instrumento, que esta versión de Pulse no conoce".into());
+                skipped.push(tr("el instrumento, que esta versión de Pulse no conoce").into());
                 None
             }
         };
@@ -454,7 +454,7 @@ impl PulseApp {
     /// A plugin of a chain, back with its state, as a new instance.
     fn restore_plugin(&mut self, saved: &SavedPlugin) -> Result<(PluginId, engine::plugin::PluginProcessor), String> {
         if !Path::new(&saved.path).exists() {
-            return Err(format!("«{}» (no está instalado)", saved.name));
+            return Err(fill(tr("«{}» (no está instalado)"), &[&saved.name]));
         }
         let id = self.project.new_plugin_id();
         self.project.plugins.push(PluginRef { id, path: saved.path.clone(), cid: saved.cid.clone(), name: saved.name.clone(), vendor: saved.vendor.clone(), state: saved.state.clone(), sidechain: None });
@@ -465,7 +465,7 @@ impl PulseApp {
                 self.project.plugins.retain(|p| p.id != id);
                 let why = self.samples.errors.pop().unwrap_or_default();
                 self.samples.errors.clear();
-                Err(format!("«{}» ({why})", saved.name))
+                Err(fill(tr("«{}» ({})"), &[&saved.name, &why]))
             }
         }
     }

@@ -9,6 +9,7 @@
 //! files in the project's Recordings/Stems folder.
 
 use crate::app::{ClipRef, PulseApp};
+use crate::i18n::{fill, tr};
 use crate::theme::TEXT_DIM;
 use eframe::egui;
 use engine::model::{ArrangementClip, AudioClip, Clip};
@@ -60,12 +61,12 @@ impl PulseApp {
     /// Starts separating the audio clip `clip`.
     pub fn separate_stems(&mut self, clip: ClipRef) {
         if self.stems.is_some() {
-            self.notify("Separar en stems", "Ya hay una separación en marcha: espera a que termine.");
+            self.notify(tr("Separar en stems"), tr("Ya hay una separación en marcha: espera a que termine."));
             return;
         }
         let Some(Clip::Audio(audio)) = self.clip(clip).cloned() else { return };
         if self.project.tracks.len() + NAMES.len() > MAX_TRACKS {
-            self.notify("Separar en stems", &format!("Hacen falta {} pistas libres para los stems y el máximo es {MAX_TRACKS}. Elimina alguna pista y vuelve a intentarlo.", NAMES.len()));
+            self.notify(tr("Separar en stems"), &fill(tr("Hacen falta {} pistas libres para los stems y el máximo es {}. Elimina alguna pista y vuelve a intentarlo."), &[&NAMES.len(), &MAX_TRACKS]));
             return;
         }
         let stage = Arc::new(Mutex::new(Stage::Separate(0.0)));
@@ -88,23 +89,23 @@ impl PulseApp {
             let job = self.stems.take().expect("checked above");
             match result {
                 Ok(paths) => self.place_stems(job.clip, &job.audio, &paths),
-                Err(e) if e == CANCELLED => self.status = Some(e),
-                Err(e) => self.notify("No se pudo separar en stems", &e),
+                Err(e) if e == CANCELLED => self.status = Some(tr("Separación cancelada").into()),
+                Err(e) => self.notify(tr("No se pudo separar en stems"), &e),
             }
             return;
         }
         ctx.request_repaint_after(std::time::Duration::from_millis(100));
         let mut cancel = false;
-        egui::Window::new("Separar en stems").collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        egui::Window::new(tr("Separar en stems")).id(egui::Id::new("stems")).collapsible(false).resizable(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
             let (text, fraction) = match stage {
-                Stage::Download(f) => ("Descargando el modelo de separación (174 MB, solo la primera vez)…".to_string(), f),
-                Stage::Separate(f) => (format!("Separando «{}» en batería, bajo, resto y voz…", job.audio.name), f),
+                Stage::Download(f) => (tr("Descargando el modelo de separación (174 MB, solo la primera vez)…").to_string(), f),
+                Stage::Separate(f) => (fill(tr("Separando «{}» en batería, bajo, resto y voz…"), &[&job.audio.name]), f),
                 Stage::Done(_) => (String::new(), 1.0),
             };
             ui.label(text);
             ui.add(egui::ProgressBar::new(fraction).show_percentage().desired_width(360.0));
-            ui.label(egui::RichText::new("Se hace en este Mac, sin enviar nada a internet. Puedes seguir trabajando.").color(TEXT_DIM).size(10.5));
-            cancel = ui.button("Cancelar").clicked();
+            ui.label(egui::RichText::new(tr("Se hace en este Mac, sin enviar nada a internet. Puedes seguir trabajando.")).color(TEXT_DIM).size(10.5));
+            cancel = ui.button(tr("Cancelar")).clicked();
         });
         if cancel {
             job.cancel.store(true, Ordering::Relaxed);
@@ -120,7 +121,7 @@ impl PulseApp {
         let still_there = matches!(self.clip(clip), Some(Clip::Audio(a)) if a.sample == audio.sample);
         if self.project.tracks.len() + NAMES.len() > MAX_TRACKS {
             let folder = paths[0].parent().map_or(String::new(), |p| p.display().to_string());
-            self.notify("Separar en stems", &format!("Los stems están en {folder}, pero no caben más pistas (el máximo es {MAX_TRACKS})."));
+            self.notify(tr("Separar en stems"), &fill(tr("Los stems están en {}, pero no caben más pistas (el máximo es {})."), &[&folder, &MAX_TRACKS]));
             return;
         }
         let first = self.project.tracks.len();
@@ -172,9 +173,9 @@ impl PulseApp {
         };
         self.select_clip(first_clip);
         self.status = Some(if still_there {
-            format!("Stems de «{}» en 4 pistas nuevas; la pista original queda desactivada", audio.name)
+            fill(tr("Stems de «{}» en 4 pistas nuevas; la pista original queda desactivada"), &[&audio.name])
         } else {
-            format!("Stems de «{}» en 4 pistas nuevas al final", audio.name)
+            fill(tr("Stems de «{}» en 4 pistas nuevas al final"), &[&audio.name])
         });
     }
 }
@@ -200,7 +201,7 @@ fn separate(source: &Path, out_dir: &Path, base: &str, stage: &Mutex<Stage>, can
             !cancel.load(Ordering::Relaxed)
         })
         .map_err(|e| if cancel.load(Ordering::Relaxed) { CANCELLED.to_string() } else { e })?;
-    std::fs::create_dir_all(out_dir).map_err(|e| format!("No se pudo crear {}: {e}", out_dir.display()))?;
+    std::fs::create_dir_all(out_dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&out_dir.display(), &e]))?;
     let mut paths: [PathBuf; 4] = Default::default();
     for (i, stem) in separated.iter().enumerate() {
         // Claimed: two separations of one song at once never write the same file.
@@ -215,10 +216,10 @@ fn separate(source: &Path, out_dir: &Path, base: &str, stage: &Mutex<Stage>, can
 fn download_model(dest: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Result<(), String> {
     set(stage, Stage::Download(0.0));
     let token = crate::updates::token();
-    let release = crate::updates::release_at(token.as_deref(), &format!("tags/{MODEL_TAG}")).map_err(|e| format!("No se encontró el modelo de separación: {e}"))?;
-    let asset = release.assets.iter().find(|a| a.name == MODEL_FILE).ok_or("La publicación del modelo no tiene el archivo")?;
-    let dir = dest.parent().ok_or("Carpeta del modelo no válida")?;
-    std::fs::create_dir_all(dir).map_err(|e| format!("No se pudo crear {}: {e}", dir.display()))?;
+    let release = crate::updates::release_at(token.as_deref(), &format!("tags/{MODEL_TAG}")).map_err(|e| fill(tr("No se encontró el modelo de separación: {}"), &[&e]))?;
+    let asset = release.assets.iter().find(|a| a.name == MODEL_FILE).ok_or(tr("La publicación del modelo no tiene el archivo"))?;
+    let dir = dest.parent().ok_or(tr("Carpeta del modelo no válida"))?;
+    std::fs::create_dir_all(dir).map_err(|e| fill(tr("No se pudo crear {}: {}"), &[&dir.display(), &e]))?;
     // What an earlier try left is kept: the download goes on from there.
     let partial = dest.with_extension("part");
     // Unless it is all there already (or more: something else, found below).
@@ -229,7 +230,7 @@ fn download_model(dest: &Path, stage: &Mutex<Stage>, cancel: &AtomicBool) -> Res
     let hash = sha256(&partial)?;
     if size != MODEL_SIZE || hash != MODEL_SHA256 {
         let _ = std::fs::remove_file(&partial);
-        return Err("El modelo descargado no es el esperado (tamaño o huella distintos); vuelve a intentarlo".into());
+        return Err(tr("El modelo descargado no es el esperado (tamaño o huella distintos); vuelve a intentarlo").into());
     }
     std::fs::rename(&partial, dest).map_err(|e| e.to_string())
 }
@@ -267,15 +268,15 @@ fn fetch(url: &str, token: Option<&str>, partial: &Path, stage: &Mutex<Stage>, c
         Err(e) if token.is_some() && crate::updates::refused(&e) => attempt(None)?,
         result => result,
     }
-    .map_err(|e| format!("No se pudo descargar el modelo (se seguirá desde aquí la próxima vez): {}", crate::updates::curl_error(&e)))
+    .map_err(|e| fill(tr("No se pudo descargar el modelo (se seguirá desde aquí la próxima vez): {}"), &[&crate::updates::curl_error(&e)]))
 }
 
 /// A file's SHA-256, in hex.
 pub(crate) fn sha256(path: &Path) -> Result<String, String> {
     use sha2::Digest;
-    let mut file = std::fs::File::open(path).map_err(|e| format!("No se pudo comprobar {}: {e}", path.display()))?;
+    let mut file = std::fs::File::open(path).map_err(|e| fill(tr("No se pudo comprobar {}: {}"), &[&path.display(), &e]))?;
     let mut hasher = sha2::Sha256::new();
-    std::io::copy(&mut file, &mut hasher).map_err(|e| format!("No se pudo comprobar {}: {e}", path.display()))?;
+    std::io::copy(&mut file, &mut hasher).map_err(|e| fill(tr("No se pudo comprobar {}: {}"), &[&path.display(), &e]))?;
     Ok(hasher.finalize().iter().map(|b| format!("{b:02x}")).collect())
 }
 

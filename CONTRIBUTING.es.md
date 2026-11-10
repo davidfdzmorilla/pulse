@@ -35,8 +35,11 @@ una dependencia, ejecuta `python3 scripts/notices.py` para actualizar
   interfaz fallan por una aserción de egui).
 - El código mantiene su estilo a mano: no pases `cargo fmt` por todo el
   repositorio.
-- Si cambias algo que se ve o se usa en la app, actualiza también la guía
-  (`docs/guia.md`), que la app muestra en Ayuda → Guía de Pulse.
+- Si cambias algo que se ve o se usa en la app, actualiza también la guía en
+  los dos idiomas (`docs/guia.md` y `docs/guide.md`), que la app muestra en
+  Ayuda → Guía de Pulse. Las dos tienen los mismos temas, apartados, plegados
+  y avisos en el mismo orden; los tests de `guide.rs` lo comprueban. Si no
+  puedes escribir una de las dos, dilo en el pull request y te ayudamos.
 - Compilar en Windows: [docs/BUILD_WINDOWS.md](docs/BUILD_WINDOWS.md).
 
 ## Contribuciones con ayuda de IA

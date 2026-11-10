@@ -35,11 +35,11 @@ Security problems go through [SECURITY.md](SECURITY.md), not public issues.
 
 ## Language
 
-The app's interface and its user guide (`docs/guia.md`) are written in
-**Spanish (Spain)**. The interface is being translated into English a part at
-a time (**Ajustes › Idioma · Language**; see
-[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)): the menus, Settings and the
-welcome window so far.
+The app's interface and its user guide are written in **Spanish (Spain)**
+first, with an English version: the interface follows **Ajustes › Idioma ·
+Language** (see [docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)), and the guide is
+`docs/guia.md` in Spanish and `docs/guide.md` in English. Most of the
+interface is translated; some editors and messages still show in Spanish.
 
 - **Code comments:** English, short and useful.
 - **UI text and the guide:** Spanish, informal (*tú*) and direct. New UI text
@@ -139,9 +139,12 @@ More detail, with the audio flow and threading rules: [docs/DEVELOPMENT.md](docs
    `arreglo/<topic>` for a fix. Any name works on your fork.
 2. Make your change with as many commits as you like, each signed off
    (`git commit -s`, see below).
-3. If you changed something visible or usable in the app, update
-   [`docs/guia.md`](docs/guia.md). The app shows it under Ayuda → Guía de
-   Pulse, and `guide.rs` tests check its links.
+3. If you changed something visible or usable in the app, update the guide
+   in both languages: [`docs/guia.md`](docs/guia.md) and
+   [`docs/guide.md`](docs/guide.md). The app shows it under Help → Pulse
+   Guide. Both must keep the same topics, headings, folds and callouts in the
+   same order; `guide.rs` tests check that and their links. If you can't
+   write one of the two, say so in the pull request and we'll help.
 4. If it's user-facing, add a line to [`CHANGELOG.md`](CHANGELOG.md) under
    **Unreleased**.
 5. Open a pull request to `main` and fill in the template. Nothing is pushed

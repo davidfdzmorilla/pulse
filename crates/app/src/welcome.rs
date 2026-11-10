@@ -463,7 +463,7 @@ mod tests {
             assert!(!s.has("Grabar voz") && !s.has("1. Tu primer ritmo"));
             s.click("1. Your first beat");
             s.frames(4);
-            for text in ["Your first beat", "Create a MIDI track", "Give it drums", "0 of 5", "More in the guide (in Spanish): Generar ritmos"] {
+            for text in ["Your first beat", "Create a MIDI track", "Give it drums", "0 of 5", "More in the guide: Generating beats"] {
                 assert!(s.has(text), "falta «{text}»");
             }
             let shot = s.shot("leccion-en");

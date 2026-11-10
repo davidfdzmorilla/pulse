@@ -1,21 +1,86 @@
 //! Ayuda → Guía de Pulse: everything the app does, by area and topic, on a page
 //! of its own over the whole window.
 //!
-//! The text is `docs/guia.md`, built into the app, in a small Markdown:
+//! The text is `docs/guia.md` (in English, `docs/guide.md`: the same topics and
+//! headings in the same order, so the code and links name them in Spanish and
+//! the English ones are found by their place), built into the app, in a small
+//! Markdown:
 //! - `# Área` groups topics in the side bar; `## Tema` is a page, and its first
 //!   paragraph is the lead; `### Apartado` goes in the page's index, `####` is a
 //!   smaller heading.
 //! - `1. ` steps, `- ` points (two spaces deeper per level), `| a | b |` tables.
-//! - `> Consejo: …`, `> Nota: …`, `> Atención: …` callouts.
+//! - `> Consejo: …`, `> Nota: …`, `> Atención: …` callouts (`> Tip:`, `> Note:`,
+//!   `> Warning:` in English).
 //! - `+++ Título` … `+++` a block folded away until clicked.
 //! - Inside lines: **bold**, `code`, `{⌘T}` keys (written as this system writes
 //!   them), `[[Tema]]`, `[[Tema|texto]]`, `[[Tema#Apartado]]` and `[[#Apartado]]` links.
 
 use crate::app::PulseApp;
+use crate::i18n::{fill, tr, Language};
 use crate::theme::{self, ACCENT, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, vec2, text::LayoutJob, Align2, Color32, CornerRadius, FontId, Rect, Sense, Stroke, TextFormat};
 
 const TEXT_MD: &str = include_str!("../../../docs/guia.md");
+const TEXT_EN_MD: &str = include_str!("../../../docs/guide.md");
+
+/// The guide's text in `language`.
+fn text(language: Language) -> &'static str {
+    match language {
+        Language::Spanish => TEXT_MD,
+        Language::English => TEXT_EN_MD,
+    }
+}
+
+/// The Spanish guide's topics, which the code and the links name.
+fn spanish() -> &'static [Section] {
+    static SECTIONS: std::sync::OnceLock<Vec<Section>> = std::sync::OnceLock::new();
+    SECTIONS.get_or_init(|| parse(TEXT_MD))
+}
+
+/// A topic's title (the code names it in Spanish) as the guide shows it in the
+/// interface's language.
+pub fn topic_title(spanish_title: &'static str) -> &'static str {
+    static ENGLISH: std::sync::OnceLock<Vec<Section>> = std::sync::OnceLock::new();
+    if crate::i18n::current() == Language::Spanish {
+        return spanish_title;
+    }
+    let english = ENGLISH.get_or_init(|| parse(TEXT_EN_MD));
+    spanish().iter().position(|s| s.title == spanish_title).and_then(|i| english.get(i)).map_or(spanish_title, |s| s.title.as_str())
+}
+
+/// The words in a `{key}` («⌥ + rueda», «Espacio») in the interface's language.
+fn key_words(keys: &str) -> String {
+    if crate::i18n::current() == Language::Spanish {
+        return keys.to_string();
+    }
+    let words = [("doble clic", "double-click"), ("clic", "click"), ("Rueda", "Wheel"), ("rueda", "wheel"), ("arrastrar", "drag"), ("Espacio", "Space"), ("Intro", "Return"), ("teclas", "keys")];
+    let mut out = String::new();
+    let mut rest = keys;
+    'next: while !rest.is_empty() {
+        for (spanish, english) in words {
+            if let Some(after) = rest.strip_prefix(spanish) {
+                out.push_str(english);
+                rest = after;
+                continue 'next;
+            }
+        }
+        let c = rest.chars().next().unwrap_or(' ');
+        out.push(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
+}
+
+/// The `###` and `####` headings of a topic, in order (also inside folds).
+fn headings(blocks: &[Block], out: &mut Vec<String>) {
+    for block in blocks {
+        match block {
+            Block::Heading(h) | Block::Minor(h) => out.push(plain(h)),
+            Block::Fold(_, inner) => headings(inner, out),
+            _ => {}
+        }
+    }
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 enum Callout {
@@ -59,6 +124,8 @@ pub struct Guide {
     searched: String,
     section: usize,
     sections: Vec<Section>,
+    /// The language `sections` are in.
+    language: Option<Language>,
     back: Vec<usize>,
     forward: Vec<usize>,
     /// A heading to bring into view (from the index or a link), once laid out.
@@ -69,8 +136,13 @@ pub struct Guide {
 
 impl Guide {
     fn sections(&mut self) -> &[Section] {
-        if self.sections.is_empty() {
-            self.sections = parse(TEXT_MD);
+        let language = crate::i18n::current();
+        if self.sections.is_empty() || self.language != Some(language) {
+            // Both have the same topics in the same order: the page stays.
+            self.sections = parse(text(language));
+            self.language = Some(language);
+            self.section = self.section.min(self.sections.len().saturating_sub(1));
+            self.scroll_to = None;
         }
         &self.sections
     }
@@ -90,9 +162,21 @@ impl Guide {
     fn follow(&mut self, target: &str) {
         let (title, heading) = target.split_once('#').map_or((target, None), |(t, h)| (t, Some(h)));
         let section = if title.is_empty() { Some(self.section) } else { self.sections.iter().position(|s| s.title == title) };
-        if let Some(section) = section {
+        // Not here: a Spanish name (the code's), for the topic in its place.
+        let spanish_place = section.is_none().then(|| spanish().iter().position(|s| s.title == title)).flatten().filter(|&i| i < self.sections.len());
+        if let Some(section) = section.or(spanish_place) {
+            let heading = heading.map(|h| {
+                let mut here = Vec::new();
+                headings(&self.sections[section].blocks, &mut here);
+                if here.iter().any(|x| x == h) {
+                    return h.to_string();
+                }
+                let mut there = Vec::new();
+                headings(&spanish()[section].blocks, &mut there);
+                there.iter().position(|x| x == h).and_then(|i| here.get(i).cloned()).unwrap_or_else(|| h.to_string())
+            });
             self.go(section);
-            self.scroll_to = heading.map(str::to_string);
+            self.scroll_to = heading;
         }
     }
 
@@ -192,7 +276,7 @@ fn parse(text: &str) -> Vec<Section> {
                     }
                 }
             } else {
-                let kinds = [("Consejo:", Callout::Tip), ("Nota:", Callout::Note), ("Atención:", Callout::Warning)];
+                let kinds = [("Consejo:", Callout::Tip), ("Nota:", Callout::Note), ("Atención:", Callout::Warning), ("Tip:", Callout::Tip), ("Note:", Callout::Note), ("Warning:", Callout::Warning)];
                 let (kind, said) = kinds.iter().find_map(|(label, kind)| said.strip_prefix(label).map(|rest| (*kind, rest))).unwrap_or((Callout::Note, said));
                 let mut said: Vec<char> = said.trim().chars().collect();
                 if let Some(first) = said.first_mut() {
@@ -335,7 +419,7 @@ fn runs(text: &str) -> Vec<Run> {
             }
             if let Some((inside, after)) = rest.strip_prefix('{').and_then(|r| r.split_once('}')) {
                 flush(&mut current, &mut runs);
-                runs.push(Run { text: theme::keys(inside), key: true, ..Default::default() });
+                runs.push(Run { text: theme::keys(&key_words(inside)), key: true, ..Default::default() });
                 rest = after;
                 continue;
             }
@@ -528,9 +612,9 @@ const RULE: Color32 = Color32::from_rgb(0x2e, 0x2e, 0x2e);
 impl Callout {
     fn look(self) -> (&'static str, Color32) {
         match self {
-            Callout::Tip => ("Consejo", Color32::from_rgb(0x4c, 0xc9, 0xa8)),
-            Callout::Note => ("Nota", Color32::from_rgb(0x7a, 0xa7, 0xe8)),
-            Callout::Warning => ("Atención", ACCENT),
+            Callout::Tip => (tr("Consejo"), Color32::from_rgb(0x4c, 0xc9, 0xa8)),
+            Callout::Note => (tr("Nota"), Color32::from_rgb(0x7a, 0xa7, 0xe8)),
+            Callout::Warning => (tr("Atención"), ACCENT),
         }
     }
 }
@@ -768,13 +852,13 @@ fn sidebar(ui: &mut egui::Ui, guide: &mut Guide, found: &[usize], words: &[Strin
     ui.add_space(18.0);
     ui.horizontal(|ui| {
         ui.add_space(18.0);
-        ui.label(egui::RichText::new("Guía de Pulse").font(theme::bold(17.0)).color(Color32::WHITE));
+        ui.label(egui::RichText::new(tr("Guía de Pulse")).font(theme::bold(17.0)).color(Color32::WHITE));
     });
     ui.add_space(12.0);
     ui.horizontal(|ui| {
         ui.add_space(14.0);
         let field = egui::TextEdit::singleline(&mut guide.search)
-            .hint_text("Buscar en la guía")
+            .hint_text(tr("Buscar en la guía"))
             .font(FontId::proportional(13.5))
             .margin(vec2(10.0, 7.0))
             .background_color(Color32::from_rgb(0x2b, 0x2b, 0x2b))
@@ -793,9 +877,9 @@ fn sidebar(ui: &mut egui::Ui, guide: &mut Guide, found: &[usize], words: &[Strin
             ui.horizontal(|ui| {
                 ui.add_space(18.0);
                 let said = match found.len() {
-                    0 => "Nada encontrado".to_string(),
-                    1 => "1 tema".to_string(),
-                    n => format!("{n} temas"),
+                    0 => tr("Nada encontrado").to_string(),
+                    1 => tr("1 tema").to_string(),
+                    n => fill(tr("{} temas"), &[&n]),
                 };
                 ui.label(egui::RichText::new(said).font(theme::small()).color(TEXT_DIM));
             });
@@ -949,14 +1033,14 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         // The bar on top: back, forward, where you are, close.
         let bar = Rect::from_min_size(main.min, vec2(main.width(), 52.0));
         let mut bar_ui = ui.new_child(egui::UiBuilder::new().max_rect(bar.shrink2(vec2(16.0, 12.0))).layout(egui::Layout::left_to_right(egui::Align::Center)));
-        if arrow_button(&mut bar_ui, true, !guide.back.is_empty(), "Atrás") {
+        if arrow_button(&mut bar_ui, true, !guide.back.is_empty(), tr("Atrás")) {
             if let Some(previous) = guide.back.pop() {
                 guide.forward.push(guide.section);
                 guide.section = previous;
                 guide.to_top = true;
             }
         }
-        if arrow_button(&mut bar_ui, false, !guide.forward.is_empty(), "Adelante") {
+        if arrow_button(&mut bar_ui, false, !guide.forward.is_empty(), tr("Adelante")) {
             if let Some(next) = guide.forward.pop() {
                 guide.back.push(guide.section);
                 guide.section = next;
@@ -970,7 +1054,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
             bar_ui.label(egui::RichText::new(&section.title).font(FontId::proportional(13.0)).color(TEXT));
         }
         bar_ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let close = ui.add(egui::Button::new(egui::RichText::new("Volver a Pulse").font(FontId::proportional(13.0))).min_size(vec2(0.0, 28.0)).corner_radius(CornerRadius::same(6)));
+            let close = ui.add(egui::Button::new(egui::RichText::new(tr("Volver a Pulse")).font(FontId::proportional(13.0))).min_size(vec2(0.0, 28.0)).corner_radius(CornerRadius::same(6)));
             let close = close.on_hover_text(theme::keys("Esc"));
             if close.clicked() {
                 guide.open = false;
@@ -1015,7 +1099,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                             let fill = if response.hovered() { Color32::from_rgb(0x24, 0x24, 0x24) } else { Color32::from_rgb(0x1c, 0x1c, 0x1c) };
                             ui.painter().rect(rect, CornerRadius::same(6), fill, Stroke::new(1.0, RULE), egui::StrokeKind::Inside);
                             let (align, x) = if i == 0 { (Align2::LEFT_CENTER, rect.left() + 16.0) } else { (Align2::RIGHT_CENTER, rect.right() - 16.0) };
-                            ui.painter().text(pos2(x, rect.top() + 19.0), align, if i == 0 { "‹ Anterior" } else { "Siguiente ›" }, FontId::proportional(11.5), TEXT_DIM);
+                            ui.painter().text(pos2(x, rect.top() + 19.0), align, if i == 0 { tr("‹ Anterior") } else { tr("Siguiente ›") }, FontId::proportional(11.5), TEXT_DIM);
                             ui.painter().text(pos2(x, rect.top() + 39.0), align, &guide.sections[n].title, theme::semibold(14.0), if response.hovered() { ACCENT } else { Color32::WHITE });
                             if response.hovered() {
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
@@ -1041,7 +1125,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
         if show_index && !wanted.headings.is_empty() {
             let index = Rect::from_min_size(pos2(left + column_width + 48.0, body.top() + 40.0), vec2(INDEX_WIDTH - 40.0, body.height() - 40.0));
             let mut index_ui = ui.new_child(egui::UiBuilder::new().max_rect(index));
-            index_ui.label(egui::RichText::new("EN ESTA PÁGINA").font(theme::semibold(10.5)).color(Color32::from_rgb(0x78, 0x78, 0x78)).extra_letter_spacing(0.8));
+            index_ui.label(egui::RichText::new(tr("EN ESTA PÁGINA")).font(theme::semibold(10.5)).color(Color32::from_rgb(0x78, 0x78, 0x78)).extra_letter_spacing(0.8));
             index_ui.add_space(8.0);
             let reading_line = body.top() + 90.0;
             let current = wanted.headings.iter().rposition(|(_, r)| r.top() <= reading_line).unwrap_or(0);
@@ -1124,20 +1208,18 @@ mod tests {
         assert_eq!(plain("Pulsa {⌘T} en [[Acordes|los acordes]]"), format!("Pulsa {} en los acordes", theme::keys("⌘T")));
     }
 
-    /// Every [[link]] goes to a topic (and heading) there is, and every fold closes.
+    /// Every [[link]] goes to a topic (and heading) there is, and every fold
+    /// closes, in both guides.
     #[test]
     fn every_link_goes_somewhere() {
-        let sections = parse(TEXT_MD);
-        let mut broken = Vec::new();
-        fn headings(blocks: &[Block], out: &mut Vec<String>) {
-            for block in blocks {
-                match block {
-                    Block::Heading(h) | Block::Minor(h) => out.push(plain(h)),
-                    Block::Fold(_, inner) => headings(inner, out),
-                    _ => {}
-                }
-            }
+        for language in Language::ALL {
+            links_go_somewhere(text(language));
         }
+    }
+
+    fn links_go_somewhere(text: &str) {
+        let sections = parse(text);
+        let mut broken = Vec::new();
         for section in &sections {
             let mut text = section.lead.clone();
             text.push_str(&section.folded_source());
@@ -1156,7 +1238,65 @@ mod tests {
             }
         }
         assert!(broken.is_empty(), "enlaces rotos:\n{}", broken.join("\n"));
-        assert_eq!(TEXT_MD.lines().filter(|l| l.trim_start().starts_with("+++")).count() % 2, 0, "un +++ sin cerrar");
+        assert_eq!(text.lines().filter(|l| l.trim_start().starts_with("+++")).count() % 2, 0, "un +++ sin cerrar");
+    }
+
+    /// The English guide has the Spanish one's areas, topics, headings, folds
+    /// and callouts in the same places: the code and the links find them by it.
+    #[test]
+    fn both_guides_have_the_same_shape() {
+        fn shape(blocks: &[Block], out: &mut Vec<String>) {
+            for block in blocks {
+                match block {
+                    Block::Heading(_) => out.push("###".into()),
+                    Block::Minor(_) => out.push("####".into()),
+                    Block::Callout(kind, _) => out.push(format!("{kind:?}")),
+                    Block::Fold(_, inner) => {
+                        out.push("+++".into());
+                        shape(inner, out);
+                        out.push("+++".into());
+                    }
+                    _ => {}
+                }
+            }
+        }
+        let (es, en) = (parse(TEXT_MD), parse(TEXT_EN_MD));
+        assert_eq!(es.len(), en.len(), "temas");
+        for (i, (a, b)) in es.iter().zip(&en).enumerate() {
+            let new_area = |s: &[Section]| i == 0 || s[i - 1].area != s[i].area;
+            assert_eq!(new_area(&es), new_area(&en), "«{}» / «{}»: el área", a.title, b.title);
+            let (mut x, mut y) = (Vec::new(), Vec::new());
+            shape(&a.blocks, &mut x);
+            shape(&b.blocks, &mut y);
+            assert_eq!(x, y, "«{}» / «{}»", a.title, b.title);
+            assert!(!b.lead.is_empty(), "«{}» no empieza con una entradilla", b.title);
+        }
+    }
+
+    /// In English, the code's Spanish names open the English topic in their
+    /// place: the welcome's, the lessons' and a heading's.
+    #[test]
+    fn spanish_names_open_the_english_guide() {
+        crate::i18n::with(Language::English, || {
+            let mut guide = Guide::default();
+            guide.open_at("Primeros pasos");
+            assert_eq!(guide.section, spanish().iter().position(|s| s.title == "Primeros pasos").unwrap());
+            assert_eq!(guide.sections[guide.section].title, parse(TEXT_EN_MD)[guide.section].title);
+            for lesson in crate::lessons::LESSONS {
+                guide.open_at(lesson.topic);
+                let place = spanish().iter().position(|s| s.title == lesson.topic).unwrap();
+                assert_eq!(guide.section, place, "{}", lesson.topic);
+            }
+            guide.follow("Grabar#Punch in / out");
+            let grabar = spanish().iter().position(|s| s.title == "Grabar").unwrap();
+            assert_eq!(guide.section, grabar);
+            let mut es = Vec::new();
+            headings(&spanish()[grabar].blocks, &mut es);
+            let mut en = Vec::new();
+            headings(&guide.sections[grabar].blocks, &mut en);
+            let at = es.iter().position(|h| h == "Punch in / out").unwrap();
+            assert_eq!(guide.scroll_to.as_deref(), Some(en[at].as_str()));
+        });
     }
 
     #[test]
@@ -1175,12 +1315,29 @@ mod tests {
 
     #[test]
     fn every_shortcut_is_in_the_guide() {
-        let folded = fold(TEXT_MD);
-        for (keys, what) in crate::commands::SHORTCUTS {
-            for key in keys.split(" / ") {
-                assert!(folded.contains(&fold(key)), "falta el atajo {key} ({what}) en docs/guia.md");
+        for (name, text) in [("docs/guia.md", TEXT_MD), ("docs/guide.md", TEXT_EN_MD)] {
+            let folded = fold(text);
+            for (keys, what) in crate::commands::SHORTCUTS {
+                for key in keys.split(" / ") {
+                    // Shortcuts with words («Arrastrar cabecera») are written
+                    // in English there.
+                    if name == "docs/guide.md" && key.chars().any(|c| c.is_lowercase()) {
+                        continue;
+                    }
+                    assert!(folded.contains(&fold(key)), "falta el atajo {key} ({what}) en {name}");
+                }
             }
         }
+    }
+
+    #[test]
+    fn keys_read_in_english() {
+        crate::i18n::with(Language::English, || {
+            assert_eq!(key_words("⌥ + doble clic"), "⌥ + double-click");
+            assert_eq!(key_words("⇧ clic"), "⇧ click");
+            assert_eq!(key_words("Espacio"), "Space");
+        });
+        assert_eq!(key_words("⇧ clic"), "⇧ clic");
     }
 
     #[test]
@@ -1224,7 +1381,17 @@ mod tests {
             ("keys", 1440.0, 900.0, "Pulse Keys", "", vec![]),
             ("keys-organo", 1440.0, 900.0, "Pulse Keys", "", vec!["scroll"]),
         ];
+        // In English too, with `PULSE_GUIDE_EN=1`: the same pages, «-en».
+        let english = std::env::var_os("PULSE_GUIDE_EN").is_some();
         for (name, w, h, topic, search, actions) in shots {
+            let language = if english { Language::English } else { Language::Spanish };
+            let name = if english { format!("{name}-en") } else { name.to_string() };
+            crate::i18n::with(language, || shot(&dir, &name, w, h, topic, search, &actions));
+        }
+    }
+
+    fn shot(dir: &std::path::Path, name: &str, w: f32, h: f32, topic: &str, search: &str, actions: &[&str]) {
+        {
             let ctx = egui::Context::default();
             theme::apply(&ctx);
             let mut app = crate::app::PulseApp::headless(crate::project::Project::empty());

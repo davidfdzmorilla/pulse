@@ -339,7 +339,7 @@ fn lesson(app: &mut PulseApp, ui: &mut egui::Ui, index: usize) {
             }
         }
     }
-    if ui.button(fill(tr("Más en la guía: {}"), &[&lesson.topic])).on_hover_text(tr("Abre el tema de la guía con todos los detalles")).clicked() {
+    if ui.button(fill(tr("Más en la guía: {}"), &[&crate::guide::topic_title(lesson.topic)])).on_hover_text(tr("Abre el tema de la guía con todos los detalles")).clicked() {
         app.guide.open_at(lesson.topic);
     }
 }

@@ -2781,18 +2781,47 @@ pub const EN: &[(&str, &str)] = &[
     ("«{}» está bloqueado y no se carga: su pista queda en silencio. Lo desbloqueas en Ajustes → Plugins.", "\"{}\" is blocked and isn't loaded: its track stays silent. You can unblock it in Settings → Plugins."),
     ("«{}» no se carga hasta que cierres Pulse (cerró Pulse la última vez).", "\"{}\" won't load until you quit Pulse (it crashed Pulse last time)."),
     ("«{}» ({})", "\"{}\" ({})"),
+    // Names Pulse gives what it creates (see `example`, `templates`, `arrange`).
+    ("Bombo y charles", "Kick & Hats"),
+    ("Bombo y palmas", "Kick & Claps"),
+    ("Voz principal", "Lead Vocal"),
+    ("Transiciones", "Transitions"),
+    ("A Espacio", "A Space"),
+    ("A Sala", "A Room"),
+    ("Base", "Instrumental"),
+    ("Atmósfera", "Atmosphere"),
+    ("Música", "Music"),
+    ("Voz 1", "Voice 1"),
+    ("Voz 2", "Voice 2"),
+    ("Redoble de charles", "Hi-hat roll"),
     // The `i18n` tests.
     ("una frase que no está en la tabla", "una frase que no está en la tabla"),
 ];
 
+/// Names Pulse gives what it makes (`i18n::named`) whose English as a name is
+/// not the interface's for the same word: a «Subida» section is a Build, the
+/// transition a Riser; a «Voz» track, Vocals, the voice tools' Voice.
+pub const NAMES: &[(&str, &str)] = &[("Subida", "Build"), ("Voz", "Vocals"), ("Hueco", "Gap")];
+
 #[cfg(test)]
 mod tests {
-    use super::EN;
+    use super::{EN, NAMES};
     use std::collections::BTreeSet;
 
     /// The Spanish texts the code shows through `tr`: `tr("…")` literals, and
     /// the menu bar's titles (kept in `native_menu::MENUS`).
     fn used() -> BTreeSet<String> {
+        literals("tr(")
+    }
+
+    /// The `named("…")` literals: names Pulse gives what it makes.
+    fn names_used() -> BTreeSet<String> {
+        literals("named(")
+    }
+
+    /// The literals the code passes to `call` (`tr(`, `named(`), and, for
+    /// `tr`, the menu bar's titles.
+    fn literals(call: &str) -> BTreeSet<String> {
         let mut used = BTreeSet::new();
         let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
         for entry in std::fs::read_dir(&dir).unwrap() {
@@ -2802,9 +2831,9 @@ mod tests {
             }
             let source = std::fs::read_to_string(&path).unwrap();
             let mut rest = source.as_str();
-            while let Some(at) = rest.find("tr(") {
+            while let Some(at) = rest.find(call) {
                 let before = rest[..at].chars().last();
-                rest = &rest[at + 3..];
+                rest = &rest[at + call.len()..];
                 if before.is_some_and(|c| c.is_alphanumeric() || c == '_') {
                     continue;
                 }
@@ -2813,6 +2842,9 @@ mod tests {
                     used.insert(unescape(literal));
                 }
             }
+        }
+        if call != "tr(" {
+            return used;
         }
         for (title, items) in crate::native_menu::MENUS {
             used.insert(title.to_string());
@@ -2936,6 +2968,15 @@ mod tests {
         let table: BTreeSet<String> = EN.iter().map(|(es, _)| es.to_string()).collect();
         let missing: Vec<&String> = used.difference(&table).collect();
         assert!(missing.is_empty(), "sin inglés en en.rs: {missing:#?}");
+        // The names, with their English here or in `NAMES`; each of those in use, once.
+        let names = names_used();
+        let own: BTreeSet<String> = NAMES.iter().map(|(es, _)| es.to_string()).collect();
+        let missing: Vec<&String> = names.iter().filter(|n| !table.contains(*n) && !own.contains(*n)).collect();
+        assert!(missing.is_empty(), "nombres sin inglés en en.rs: {missing:#?}");
+        let unused: Vec<&String> = own.difference(&names).collect();
+        assert!(unused.is_empty(), "en NAMES pero sin `named`: {unused:#?}");
+        assert_eq!(own.len(), NAMES.len(), "a name twice in NAMES");
+        let used: BTreeSet<String> = used.union(&names).cloned().collect();
         let templates: BTreeSet<String> = crate::templates::BUILT_IN.iter().map(|n| n.to_string()).collect();
         let shown: BTreeSet<String> = used.union(&engine_names()).chain(&templates).cloned().collect();
         let unused: Vec<&String> = table.difference(&shown).collect();

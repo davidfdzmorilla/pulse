@@ -10,8 +10,14 @@ use crate::i18n::{fill, tr};
 use engine::model::{ArrangementClip, AudioClip, Clip, WarpMode};
 use std::f32::consts::PI;
 
-/// The name of the track they go on.
+/// The name of the track they go on, in Spanish (see [`track_name`]).
 pub const TRACK: &str = "Transiciones";
+
+/// The name of the track they go on, in the interface's language when it's
+/// made: a project keeps the one it has («Transiciones», «Transitions»).
+pub fn track_name() -> &'static str {
+    crate::i18n::named("Transiciones")
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Kind {
@@ -33,8 +39,9 @@ impl Kind {
         }
     }
 
-    /// Its name in the interface's language (`label` names its clip and file).
-    fn shown(self) -> &'static str {
+    /// Its name in the interface's language, and its new clip's (`label`
+    /// names its file).
+    pub(crate) fn shown(self) -> &'static str {
         match self {
             Kind::Riser => tr("Subida"),
             Kind::Downlifter => tr("Bajada"),
@@ -204,13 +211,14 @@ pub fn render(kind: Kind, seconds: f64, rate: f32, tonic: u8) -> (Vec<f32>, Vec<
 }
 
 impl PulseApp {
-    /// The track transitions go on: the one called so, or a new one.
+    /// The track transitions go on: the one called so (in either language),
+    /// or a new one.
     fn transitions_track(&mut self) -> Option<usize> {
-        if let Some(t) = self.project.tracks.iter().position(|t| t.is_audio() && t.name == TRACK) {
+        if let Some(t) = self.project.tracks.iter().position(|t| t.is_audio() && crate::i18n::is_named(&t.name, TRACK)) {
             return Some(t);
         }
         let t = self.add_audio_track()?;
-        self.project.tracks[t].name = TRACK.into();
+        self.project.tracks[t].name = track_name().into();
         Some(t)
     }
 
@@ -236,9 +244,10 @@ impl PulseApp {
         let tonic = self.project.key.map_or(9, |k| k.tonic);
         let (left, right) = render(kind, beats * 60.0 / tempo, rate, tonic);
         let dir = self.media_dir(crate::library::TRANSITIONS);
-        let name = format!("{} {}", kind.label(), bars_label(bars));
+        let name = format!("{} {}", kind.shown(), bars_shown(bars));
+        let file = format!("{} {}", kind.label(), bars_label(bars));
         let written = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| {
-            let path = crate::library::claim(&dir.join(format!("{name}.wav")));
+            let path = crate::library::claim(&dir.join(format!("{file}.wav")));
             crate::export::write(&path, &left, &right, rate as u32, crate::export::BitDepth::Float32, 1.0).map(|_| path)
         });
         let path = match written {
@@ -273,7 +282,7 @@ impl PulseApp {
         let index = lane.len() - 1;
         self.sync_arrangement(track);
         self.select_clip(ClipRef::Arrangement { track, index });
-        self.status = Some(fill(tr("{} en la pista «{}»"), &[&kind.shown(), &TRACK]));
+        self.status = Some(fill(tr("{} en la pista «{}»"), &[&kind.shown(), &self.project.tracks[track].name]));
     }
 }
 
@@ -301,12 +310,12 @@ pub fn menu(app: &mut PulseApp, ui: &mut eframe::egui::Ui, at: f64) {
     });
 }
 
-/// The same, as the menu shows it.
-fn bars_shown(bars: u32) -> String {
+/// The same, as the menu shows it, and a new clip's name has it.
+pub(crate) fn bars_shown(bars: u32) -> String {
     if bars == 1 { tr("1 compás").into() } else { fill(tr("{} compases"), &[&bars]) }
 }
 
-/// «1 compás», «4 compases», for its clip's name.
+/// «1 compás», «4 compases», for its file's name.
 fn bars_label(bars: u32) -> String {
     if bars == 1 { "1 compás".into() } else { format!("{bars} compases") }
 }
@@ -387,5 +396,24 @@ mod tests {
         app.add_transition(Kind::ReverseCymbal, 1, 0.0);
         assert_eq!(app.project.tracks[t].arrangement.len(), 3, "nothing fits before the start");
         let _ = std::fs::remove_dir_all(app.media_dir(crate::library::TRANSITIONS));
+    }
+
+    /// Made in English, the track and its clips are named in English; in
+    /// Spanish afterwards, the next one still finds that track.
+    #[test]
+    fn the_transitions_track_is_named_when_made_and_found_in_either_language() {
+        let mut app = PulseApp::headless(Project::demo());
+        let dir = std::env::temp_dir().join(format!("pulse-transitions-named-{}", std::process::id()));
+        app.file = Some(dir.join("Song.pulse"));
+        let tracks = app.project.tracks.len();
+        crate::i18n::with(crate::i18n::Language::English, || app.add_transition(Kind::Riser, 4, 32.0));
+        let t = app.project.tracks.len() - 1;
+        assert_eq!(app.project.tracks[t].name, "Transitions");
+        assert_eq!(app.project.tracks[t].arrangement[0].clip.name(), "Riser 4 bars");
+        app.add_transition(Kind::Impact, 2, 32.0);
+        assert_eq!(app.project.tracks.len(), tracks + 1, "the same track");
+        assert_eq!(app.project.tracks[t].name, "Transitions", "kept as it was made");
+        assert_eq!(app.project.tracks[t].arrangement[1].clip.name(), "Impacto 2 compases");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

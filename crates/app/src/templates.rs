@@ -8,7 +8,7 @@
 
 use crate::app::PulseApp;
 use crate::example::{effect, instrument};
-use crate::i18n::{fill, tr};
+use crate::i18n::{fill, named, tr};
 use crate::project::{Project, Track, PALETTE};
 use engine::model::{AcidParams, BitcrusherParams, CompressorParams, DeEsserParams, DelayParams, Device, DrumModel, DrumParams, DuckerParams, Effect, Eq3Params, FmParams, GateParams, InstrumentKind, KeysParams, KickParams, LimiterParams, SaturatorParams, SuperSawParams, SynthParams, UtilityParams, WaveParams};
 use std::path::PathBuf;
@@ -155,7 +155,7 @@ fn returns(project: &mut Project, space: &str, delay: f64, feedback: f32) {
     if let Effect::Convolution(c) = &mut reverb {
         c.mix = 1.0;
     }
-    project.returns[0].name = "A Espacio".into();
+    project.returns[0].name = named("A Espacio").into();
     project.returns[0].devices = vec![Device::new(reverb)];
     project.returns[1].name = "B Delay".into();
     project.returns[1].devices = vec![Device::new(Effect::Delay(DelayParams { time_beats: delay, feedback, mix: 1.0, ping_pong: true, ..Default::default() }))];
@@ -177,12 +177,12 @@ fn built_in(name: &str) -> Result<Project, String> {
     match name {
         "Beat" => {
             project.tempo = 124.0;
-            let mut drums = Track::new("Batería", PALETTE[1], InstrumentKind::DrumMachine(DrumParams { model: DrumModel::Tr909, ..Default::default() }));
+            let mut drums = Track::new(named("Batería"), PALETTE[1], InstrumentKind::DrumMachine(DrumParams { model: DrumModel::Tr909, ..Default::default() }));
             drums.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -14.0, ratio: 3.0, attack_ms: 8.0, release_ms: 90.0, makeup_db: 1.5, sidechain: None })));
-            let mut bass = Track::new("Bajo", PALETTE[9], InstrumentKind::Acid(AcidParams::default()));
-            let mut chords = Track::new("Acordes", PALETTE[6], InstrumentKind::SuperSaw(SuperSawParams { gain: 0.3, ..Default::default() }));
+            let mut bass = Track::new(named("Bajo"), PALETTE[9], InstrumentKind::Acid(AcidParams::default()));
+            let mut chords = Track::new(named("Acordes"), PALETTE[6], InstrumentKind::SuperSaw(SuperSawParams { gain: 0.3, ..Default::default() }));
             chords.sends[0] = 0.3;
-            let mut lead = Track::new("Melodía", PALETTE[11], InstrumentKind::Fm(FmParams::default()));
+            let mut lead = Track::new(named("Melodía"), PALETTE[11], InstrumentKind::Fm(FmParams::default()));
             lead.sends[..2].copy_from_slice(&[0.15, 0.25]);
             // Headroom from the start: the drums at -7 dB, the rest under them
             // as a mix starts (the accompaniments made from the chords follow
@@ -195,15 +195,15 @@ fn built_in(name: &str) -> Result<Project, String> {
         }
         "Grabar voz" => {
             project.tempo = 90.0;
-            let backing = crate::project::Track::new_audio("Base", PALETTE[9]);
-            project.tracks = vec![backing, voice("Voz", 0, 0.2), voice("Coros", 4, 0.35)];
+            let backing = crate::project::Track::new_audio(named("Base"), PALETTE[9]);
+            project.tracks = vec![backing, voice(named("Voz"), 0, 0.2), voice(named("Coros"), 4, 0.35)];
         }
         "House" => {
             project.tempo = 124.0;
-            let drums = kit("Batería", "House", -6.0)?;
-            let mut bass = track("Bajo", 9, instrument(InstrumentKind::Synth(SynthParams::default()), "Bajo · Triángulo cálido"), -6.0);
+            let drums = kit(named("Batería"), "House", -6.0)?;
+            let mut bass = track(named("Bajo"), 9, instrument(InstrumentKind::Synth(SynthParams::default()), "Bajo · Triángulo cálido"), -6.0);
             pump(&mut bass, 0.5);
-            let mut organ = track("Órgano", 6, instrument(InstrumentKind::Keys(KeysParams::default()), "Órgano · House"), -12.0);
+            let mut organ = track(named("Órgano"), 6, instrument(InstrumentKind::Keys(KeysParams::default()), "Órgano · House"), -12.0);
             organ.sends[0] = 0.2;
             pump(&mut organ, 0.7);
             let mut pad = track("Pad", 11, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Pad · Aire"), -15.0);
@@ -217,14 +217,14 @@ fn built_in(name: &str) -> Result<Project, String> {
         }
         "Techno" => {
             project.tempo = 130.0;
-            let mut drums = kit("Batería", "Techno", -8.0)?;
+            let mut drums = kit(named("Batería"), "Techno", -8.0)?;
             drums.sends[0] = 0.08;
-            let bass = track("Bajo", 9, instrument(InstrumentKind::Acid(AcidParams::default()), "Bajo · Techno rodante"), -14.0);
+            let bass = track(named("Bajo"), 9, instrument(InstrumentKind::Acid(AcidParams::default()), "Bajo · Techno rodante"), -14.0);
             let mut acid = track("Acid", 3, instrument(InstrumentKind::Acid(AcidParams::default()), "Acid · Clásico"), -13.0);
             acid.sends[1] = 0.2;
             let mut stab = track("Stab", 6, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Acordes · Stab menor 7"), -18.0);
             stab.sends[..2].copy_from_slice(&[0.3, 0.3]);
-            let mut atmosphere = track("Atmósfera", 11, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Pad · Oscuro de cine"), -20.0);
+            let mut atmosphere = track(named("Atmósfera"), 11, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Pad · Oscuro de cine"), -20.0);
             atmosphere.sends[0] = 0.4;
             project.tracks = vec![drums, bass, acid, stab, atmosphere];
             returns(&mut project, "Pads · Sala grande", 0.75, 0.45);
@@ -232,51 +232,51 @@ fn built_in(name: &str) -> Result<Project, String> {
         }
         "Trap" => {
             project.tempo = 140.0;
-            let drums = kit("Batería", "Trap", -6.0)?;
+            let drums = kit(named("Batería"), "Trap", -6.0)?;
             let mut sub = track("808", 9, instrument(InstrumentKind::Kick(KickParams::default()), "808 · Largo"), -14.0);
             device(&mut sub, Effect::Saturator(SaturatorParams { drive_db: 6.0, output_db: -4.0, mix: 0.6, ..Default::default() }));
-            let mut bells = track("Campanas", 6, instrument(InstrumentKind::Fm(FmParams::default()), "Campanas · Caja de música"), -9.0);
+            let mut bells = track(named("Campanas"), 6, instrument(InstrumentKind::Fm(FmParams::default()), "Campanas · Caja de música"), -9.0);
             bells.sends[..2].copy_from_slice(&[0.3, 0.2]);
             let mut pad = track("Pad", 11, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Pad · Oscuro de cine"), -18.0);
             pad.sends[0] = 0.3;
-            project.tracks = vec![drums, sub, bells, pad, voice("Voz", 0, 0.15)];
+            project.tracks = vec![drums, sub, bells, pad, voice(named("Voz"), 0, 0.15)];
             returns(&mut project, "Voces · Placa brillante", 0.5, 0.35);
             club_master(&mut project, 1.0);
         }
         "Reggaetón" => {
             project.tempo = 95.0;
-            let drums = drum_machine("Batería", "Reggaetón · Dembow", -6.0);
-            let bass = track("Bajo", 9, instrument(InstrumentKind::Synth(SynthParams::default()), "Bajo · Sub puro"), -6.0);
+            let drums = drum_machine(named("Batería"), "Reggaetón · Dembow", -6.0);
+            let bass = track(named("Bajo"), 9, instrument(InstrumentKind::Synth(SynthParams::default()), "Bajo · Sub puro"), -6.0);
             let mut marimba = track("Marimba", 6, instrument(InstrumentKind::Fm(FmParams::default()), "Pluck · Marimba"), -7.0);
             marimba.sends[..2].copy_from_slice(&[0.15, 0.15]);
             let mut lead = track("Lead", 7, instrument(InstrumentKind::Synth(SynthParams::default()), "Lead · Flauta suave"), -10.0);
             lead.sends[..2].copy_from_slice(&[0.2, 0.25]);
-            project.tracks = vec![drums, bass, marimba, lead, voice("Voz", 0, 0.2)];
+            project.tracks = vec![drums, bass, marimba, lead, voice(named("Voz"), 0, 0.2)];
             returns(&mut project, "Voces · Sala cálida", 0.5, 0.3);
             club_master(&mut project, 1.5);
         }
         "Pop" => {
             project.tempo = 110.0;
-            let mut drums = drum_machine("Batería", "Synthwave · Ochentera", -4.0);
+            let mut drums = drum_machine(named("Batería"), "Synthwave · Ochentera", -4.0);
             drums.sends[0] = 0.1;
-            let bass = track("Bajo", 9, instrument(InstrumentKind::Fm(FmParams::default()), "Bajo · FM de los 80"), -4.0);
+            let bass = track(named("Bajo"), 9, instrument(InstrumentKind::Fm(FmParams::default()), "Bajo · FM de los 80"), -4.0);
             let mut piano = track("Piano", 6, instrument(InstrumentKind::Keys(KeysParams::default()), "Piano · Pop"), -4.0);
             piano.sends[0] = 0.2;
             let mut pad = track("Pad", 11, instrument(InstrumentKind::SuperSaw(SuperSawParams::default()), "Pad · Ancho"), -12.0);
             pad.sends[0] = 0.3;
-            project.tracks = vec![drums, bass, piano, pad, voice("Voz", 0, 0.2), voice("Coros", 4, 0.35)];
+            project.tracks = vec![drums, bass, piano, pad, voice(named("Voz"), 0, 0.2), voice(named("Coros"), 4, 0.35)];
             returns(&mut project, "Voces · Placa brillante", 0.75, 0.3);
             club_master(&mut project, 1.0);
         }
         "Lo-Fi" => {
             project.tempo = 85.0;
             project.swing = 0.3;
-            let mut drums = kit("Batería", "Lo-Fi", -3.0)?;
+            let mut drums = kit(named("Batería"), "Lo-Fi", -3.0)?;
             device(&mut drums, Effect::Bitcrusher(BitcrusherParams { bits: 12.0, downsample: 2.0, mix: 0.4 }));
             let mut keys = track("Piano", 6, instrument(InstrumentKind::Keys(KeysParams::default()), "Piano · Lo-fi"), -1.0);
             keys.sends[..2].copy_from_slice(&[0.25, 0.15]);
-            let bass = track("Bajo", 9, instrument(InstrumentKind::Synth(SynthParams::default()), "Bajo · Triángulo cálido"), -6.0);
-            let mut pad = track("Textura", 11, instrument(InstrumentKind::Synth(SynthParams::default()), "Pad · Niebla"), -13.0);
+            let bass = track(named("Bajo"), 9, instrument(InstrumentKind::Synth(SynthParams::default()), "Bajo · Triángulo cálido"), -6.0);
+            let mut pad = track(named("Textura"), 11, instrument(InstrumentKind::Synth(SynthParams::default()), "Pad · Niebla"), -13.0);
             pad.sends[0] = 0.3;
             project.tracks = vec![drums, keys, bass, pad];
             returns(&mut project, "Voces · Muelle vintage", 0.75, 0.35);
@@ -287,7 +287,7 @@ fn built_in(name: &str) -> Result<Project, String> {
         }
         "Drum & Bass" => {
             project.tempo = 174.0;
-            let drums = kit("Batería", "Drum & Bass", -6.0)?;
+            let drums = kit(named("Batería"), "Drum & Bass", -6.0)?;
             let mut reese = track("Reese", 3, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Bajo · Reese oscuro"), -13.0);
             // Its lows are the sub's.
             device(&mut reese, Effect::Eq3(Eq3Params { low_db: -12.0, low_freq: 120.0, ..Default::default() }));
@@ -308,15 +308,15 @@ fn built_in(name: &str) -> Result<Project, String> {
                 track.devices.push(Device::new(Effect::DeEsser(DeEsserParams::default())));
                 track
             };
-            let mut music = Track::new_audio("Música", PALETTE[9]);
+            let mut music = Track::new_audio(named("Música"), PALETTE[9]);
             music.mixer.gain = gain(-12.0);
-            project.tracks = vec![talker("Voz 1", 0), talker("Voz 2", 4), music];
+            project.tracks = vec![talker(named("Voz 1"), 0), talker(named("Voz 2"), 4), music];
             project.assign_ids();
             // The music steps aside while the first voice talks.
             let first = project.tracks[0].id;
             project.tracks[2].devices.push(Device::new(Effect::Ducker(DuckerParams { depth: 0.6, sidechain: Some(first), ..Default::default() })));
             project.returns.truncate(1);
-            project.returns[0].name = "A Sala".into();
+            project.returns[0].name = named("A Sala").into();
             project.returns[0].devices = vec![Device::new(effect(Effect::Convolution(Default::default()), "Retorno · Habitación"))];
             // Voices in the middle, and the level podcasts are heard at.
             project.master.devices.push(Device::new(Effect::Utility(UtilityParams { width: 0.0, ..Default::default() })));
@@ -421,6 +421,31 @@ mod tests {
             assert_eq!(again.tracks.len(), project.tracks.len());
         }
         assert!(built_in("Nada").is_err());
+    }
+
+    /// A template opened in English names its tracks and returns in English
+    /// (in Spanish, as ever), and what reads a track's role by its name reads
+    /// it in both.
+    #[test]
+    fn templates_are_named_in_the_language_they_are_opened_in() {
+        use crate::i18n::{with, Language};
+        let names = |p: &Project| p.tracks.iter().map(|t| t.name.clone()).chain(p.returns.iter().map(|r| r.name.clone())).collect::<Vec<_>>();
+        let pop = |language| with(language, || built_in("Pop").unwrap());
+        assert_eq!(names(&pop(Language::Spanish)), ["Batería", "Bajo", "Piano", "Pad", "Voz", "Coros", "A Espacio", "B Delay"]);
+        assert_eq!(names(&pop(Language::English)), ["Drums", "Bass", "Piano", "Pad", "Vocals", "Backing vocals", "A Space", "B Delay"]);
+        let podcast = with(Language::English, || built_in("Podcast").unwrap());
+        assert_eq!(names(&podcast), ["Voice 1", "Voice 2", "Music", "A Room"]);
+        let record = with(Language::English, || built_in("Grabar voz").unwrap());
+        assert_eq!(names(&record), ["Instrumental", "Vocals", "Backing vocals", "A Reverb", "B Delay"]);
+        for name in BUILT_IN {
+            let (spanish, english) = (with(Language::Spanish, || built_in(name).unwrap()), with(Language::English, || built_in(name).unwrap()));
+            for (es, en) in spanish.tracks.iter().zip(&english.tracks) {
+                // (The English may say more: «Atmosphere» is a pad, «Atmósfera» says nothing.)
+                let (role, english_role) = (crate::mix_assist::track_role(es), crate::mix_assist::track_role(en));
+                assert!(role.is_none() || role == english_role, "{name}: {} {role:?} / {} {english_role:?}", es.name, en.name);
+                assert_eq!(crate::arrange::role(es), crate::arrange::role(en), "{name}: {} / {}", es.name, en.name);
+            }
+        }
     }
 
     /// What a user would write first in a template: the drums' basic beat,

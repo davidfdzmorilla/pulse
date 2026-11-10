@@ -153,7 +153,7 @@ guía en el mismo pull request.
 
 *El asistente de mezcla y master: mide sonoridad, picos y estéreo, y propone cambios que aplicas con un clic.*
 
-Las capturas salen de un proyecto de ejemplo que monta una prueba, sin abrir la app. Se regeneran con `cargo test --release -p app readme_shots -- --ignored`.
+Las capturas salen de un proyecto de ejemplo que monta una prueba, sin abrir la app. Se regeneran con `cargo test --release -p app readme_shots -- --ignored` (en castellano en `docs/capturas/`, en inglés en `docs/screenshots/`).
 
 ## Compilar y ejecutar
 

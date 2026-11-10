@@ -685,7 +685,7 @@ impl SpaceChange {
         if let Some(d) = self.delay.filter(|&d| d > 0.0) {
             parts.push(format!("delay {}", pct(d)));
         }
-        format!("«{}» ({}): {}", self.name, self.role.label(), parts.join(", "))
+        fill(tr("«{}» ({}): {}"), &[&self.name, &self.role.label(), &parts.join(", ")])
     }
 
     /// Gives it some room (not takes it away).
@@ -1159,7 +1159,7 @@ impl Change {
         if let Some(hz) = self.low_cut {
             parts.push(fill(tr("sin graves bajo {} Hz"), &[&format!("{:.0}", hz)]));
         }
-        format!("«{}» ({}): {}", self.name, self.role.label(), parts.join(", "))
+        fill(tr("«{}» ({}): {}"), &[&self.name, &self.role.label(), &parts.join(", ")])
     }
 }
 
@@ -1575,15 +1575,15 @@ fn clock(seconds: f64) -> String {
 }
 
 fn db(x: f64) -> String {
-    format!("{x:+.1}").replace('.', ",")
+    crate::i18n::decimal(format!("{x:+.1}"))
 }
 
 fn num(x: f64) -> String {
-    format!("{x:.1}").replace('.', ",")
+    crate::i18n::decimal(format!("{x:.1}"))
 }
 
 fn num2(x: f64) -> String {
-    format!("{x:.2}").replace('.', ",")
+    crate::i18n::decimal(format!("{x:.2}"))
 }
 
 /// A level below which a track is not playing in the low end (dB of power).
@@ -1839,7 +1839,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
     let fix = Fix::Space { reverb: report.space.reverb, delay: report.space.delay, changes: changes.clone() };
     let dry: Vec<&SpaceChange> = changes.iter().filter(|c| c.wet()).collect();
     if !dry.is_empty() {
-        let names: Vec<String> = dry.iter().take(3).map(|c| format!("«{}»", c.name)).collect();
+        let names: Vec<String> = dry.iter().take(3).map(|c| fill(tr("«{}»"), &[&c.name])).collect();
         let more = if dry.len() > 3 { fill(tr(" y {} más"), &[&(dry.len() - 3)]) } else { String::new() };
         let made = match (report.space.reverb.is_none() && changes.iter().any(|c| c.reverb.unwrap_or(0.0) > 0.0), report.space.delay.is_none() && changes.iter().any(|c| c.delay.unwrap_or(0.0) > 0.0)) {
             (true, true) => tr(". Crea un retorno de reverb y otro de delay"),
@@ -1953,7 +1953,7 @@ pub fn advise(report: &Report, target: Target, reference: Option<&Measures>) -> 
             parts.push(fill(if parts.is_empty() { tr("tiene los graves abiertos en estéreo: en un club o un móvil (en mono) se pierden o retumban distinto. Ponerlos en mono por debajo de {} Hz los asienta") } else { tr("y tiene los graves abiertos en estéreo: en un club o un móvil (en mono) se pierden o retumban distinto. Ponerlos en mono por debajo de {} Hz los asienta") }, &[&STEREO_LOW]));
         }
         let level = if fix.flip_right != was.flip_right || fix.width != was.width { Level::Warning } else { Level::Note };
-        out.push(advice(level, format!("«{}» {}", t.name, parts.join("; ")), Some(Fix::Stereo { track: t.index, name: t.name.clone(), params: fix })));
+        out.push(advice(level, fill(tr("«{}» {}"), &[&t.name, &parts.join("; ")]), Some(Fix::Stereo { track: t.index, name: t.name.clone(), params: fix })));
     }
     // Dynamics.
     match mix.range {

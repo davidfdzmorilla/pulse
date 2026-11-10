@@ -144,7 +144,8 @@ plugin processing, worker tasks):
 - **UI tests without a window.** `PulseApp::headless(project)` plus
   `egui::Context::run_ui` with simulated input, and `crate::offscreen::Canvas`
   to render PNGs. `crates/app/src/readme_shots.rs` makes the README
-  screenshots this way:
+  screenshots this way, in English (`docs/screenshots/`) and Spanish
+  (`docs/capturas/`):
   `cargo test --release -p app readme_shots -- --ignored`.
 - `PULSE_SCRIPT=<file>` (`script.rs`) drives the real app from a script.
   CI's Windows job uses it (`scripts/ci/arranque.txt`).

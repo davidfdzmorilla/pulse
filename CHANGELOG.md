@@ -55,9 +55,13 @@ still in `0.x`, so any release may change things.
   2026-10-29 the failing tests had kept them from running at all. A failed
   window start now shows as a warning on the run's page.
 - macOS CI: the test package is built even when a test fails, as on Windows.
+- The README's screenshots are in English (`docs/screenshots/`), with the
+  Spanish ones kept for `README.es.md` (`docs/capturas/`).
 
 ### Fixed
 
+- In English, the mix assistant and the master meter write decimals with a
+  point ("-13.3 LUFS") and track names in plain quotes.
 - Audio to MIDI (Basic Pitch): the start of a note could move by one frame
   (≈12 ms) depending on the processor or the number of threads, when the
   largest jump and the onset peak fell on neighbouring frames. It's now the

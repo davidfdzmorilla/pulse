@@ -2781,6 +2781,8 @@ pub const EN: &[(&str, &str)] = &[
     ("«{}» está bloqueado y no se carga: su pista queda en silencio. Lo desbloqueas en Ajustes → Plugins.", "\"{}\" is blocked and isn't loaded: its track stays silent. You can unblock it in Settings → Plugins."),
     ("«{}» no se carga hasta que cierres Pulse (cerró Pulse la última vez).", "\"{}\" won't load until you quit Pulse (it crashed Pulse last time)."),
     ("«{}» ({})", "\"{}\" ({})"),
+    ("«{}» ({}): {}", "\"{}\" ({}): {}"),
+    ("«{}» {}", "\"{}\" {}"),
     // Names Pulse gives what it creates (see `example`, `templates`, `arrange`).
     ("Bombo y charles", "Kick & Hats"),
     ("Bombo y palmas", "Kick & Claps"),

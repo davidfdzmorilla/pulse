@@ -40,7 +40,8 @@ stems y análisis de la mezcla. Todo corre en tu ordenador, sin conexión y sin 
 
 > **Estado: primera versión pública, en desarrollo activo.** macOS (Apple
 > Silicon) es el sistema soportado; Windows es experimental. La interfaz y la
-> guía están en español; el inglés llega en la próxima versión.
+> guía están en castellano y en inglés (Ajustes › Idioma; por defecto, el del
+> sistema).
 
 ## Sistemas
 

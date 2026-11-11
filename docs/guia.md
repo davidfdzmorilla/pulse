@@ -999,7 +999,7 @@ Todo sigue la automatización de tempo: los clips MIDI, los audios en Stretch, B
 Automatización dentro de un clip, que se repite con él cada vez que suena.
 
 1. Abre el clip en el editor.
-2. En el desplegable **Carril**, elige **Envolventes del clip** (la otra opción es **Velocidad**).
+2. En el desplegable **Carril**, elige **Envolventes del clip** (la otra opción es **Velocidad**; en un clip de audio, **Ninguno**).
 3. Dibuja como en la pista: clic añade un punto, arrastrar lo mueve, doble clic lo borra, {⌥ + arrastrar} un tramo lo curva y {⌥ + doble clic} lo endereza.
 
 - **Borrar envolvente** la quita.
@@ -3638,7 +3638,7 @@ Todos los atajos de Pulse en una página. **Ayuda › Atajos de teclado** muestr
 | {Tab} | Cambiar entre Session y Arrangement |
 | {⇧Tab} | Cambiar entre el clip y los dispositivos |
 | {⇧⌘E} | Maximizar el editor de clips o devolverlo a su altura (también doble clic en el borde del panel) |
-| {⌃⌘F} | Pantalla completa |
+| {⌃⌘F} | Entrar o salir de pantalla completa |
 | {Espacio} | Reproducir / Parar |
 | {F9} | Grabar en el Arrangement |
 | {⇧⌘C} | Capturar MIDI: un clip con lo último que has tocado |
@@ -3647,7 +3647,7 @@ Todos los atajos de Pulse en una página. **Ayuda › Atajos de teclado** muestr
 
 | Atajo | Qué hace |
 |---|---|
-| {⌘A} | Seleccionar todas las notas |
+| {⌘A} | Seleccionar todas las notas del clip |
 | {⌘U} | Cuantizar notas |
 | {B} | Lápiz |
 | {R} | Redoble de las notas seleccionadas, como el último |

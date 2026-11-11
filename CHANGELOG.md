@@ -60,6 +60,13 @@ still in `0.x`, so any release may change things.
 
 ### Fixed
 
+- Layout: the Drum Machine device keeps the device panel's height (rows 3–4
+  of its sounds fell below it): two rows of four in sight, the other eight a
+  scroll below, with the machine choice in a column beside them; the Keyboard
+  Shortcuts window scrolls, so its title stays on screen at 1440×900 and
+  smaller; an audio clip's envelope lane reads "None" instead of
+  "Velocity"; the shortcuts window writes "Select all the clip's notes" and
+  "Enter or leave full screen" in sentence case, like its other rows.
 - In English, the mix assistant and the master meter write decimals with a
   point ("-13.3 LUFS") and track names in plain quotes.
 - In English, factory sounds on pads, drum rows and samplers, and factory

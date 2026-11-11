@@ -433,8 +433,9 @@ impl PulseApp {
 pub fn shortcuts_window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = app.show_shortcuts;
     // Taller than most screens: the list scrolls, so the title stays in sight.
+    // Anchored in the middle: placed with its real size from the first frame.
     let screen = ctx.content_rect();
-    egui::Window::new(tr("Atajos de teclado")).open(&mut open).resizable(false).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(screen.center()).show(ctx, |ui| {
+    egui::Window::new(tr("Atajos de teclado")).open(&mut open).resizable(false).collapsible(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
         // A solid bar: on a short screen, the rows below show there is more.
         ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
         egui::ScrollArea::vertical().max_height((screen.height() - 140.0).max(160.0)).show(ui, |ui| {

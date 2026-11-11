@@ -212,6 +212,12 @@ pub fn tr_name(name: &str) -> std::borrow::Cow<'_, str> {
     Cow::Owned(name.split(" · ").map(|part| table.get(part).copied().unwrap_or(part)).collect::<Vec<_>>().join(" · "))
 }
 
+/// A number written with `format!`, with a decimal comma in Spanish («-13,3»)
+/// and a point in English («-13.3»).
+pub fn decimal(number: String) -> String {
+    if current() == Language::Spanish { number.replace('.', ",") } else { number }
+}
+
 /// `template` with each `{}` replaced by the next value.
 pub fn fill(template: &str, values: &[&dyn std::fmt::Display]) -> String {
     let mut out = String::with_capacity(template.len() + 16);

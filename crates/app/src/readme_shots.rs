@@ -3,8 +3,11 @@
 //! lyrics, a drum group, two returns), with a longer arrangement with
 //! sections and automation, drawn without a window and saved as PNG. Fixed
 //! seeds and no clock: the same pictures every run.
-//! `cargo test --release -p app readme_shots -- --ignored` writes them in
-//! `docs/capturas/` (or in `PULSE_SHOTS`).
+//! `cargo test --release -p app readme_shots -- --ignored` writes them twice:
+//! in Spanish in `docs/capturas/` (README.es.md) and in English in
+//! `docs/screenshots/` (README.md), or in `PULSE_SHOTS`/`capturas` and
+//! `PULSE_SHOTS`/`screenshots`. Each language's song is made in that language,
+//! so its tracks and markers carry that language's names.
 
 use crate::app::{ClipRef, Detail, PulseApp, View};
 use crate::example::{BREAK, DROP};
@@ -15,10 +18,14 @@ use engine::model::{ArrangementClip, AutomationLane, AutomationPoint, MidiContro
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
-/// Where the pictures go.
-fn out_dir() -> PathBuf {
-    std::env::var_os("PULSE_SHOTS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs/capturas"))
+/// Where one language's pictures go (`capturas` or `screenshots`).
+fn out_dir(folder: &str) -> PathBuf {
+    std::env::var_os("PULSE_SHOTS").map(PathBuf::from).unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs")).join(folder)
 }
+
+/// The pictures' file names, in the order they are taken.
+const SPANISH: [&str; 6] = ["arrangement", "session", "piano-roll", "dispositivos", "editor-de-audio-con-letra", "asistente-de-mezcla"];
+const ENGLISH: [&str; 6] = ["arrangement", "session", "piano-roll", "devices", "audio-editor-with-lyrics", "mix-assistant"];
 
 /// The song: the example's tracks, scenes and mix, before its arrangement.
 fn project(voice: &Path) -> (Project, (), f64) {
@@ -61,9 +68,15 @@ fn arrange(app: &mut PulseApp, voice_beats: f64) {
 #[test]
 #[ignore]
 fn readme_shots() {
-    let out = out_dir();
-    std::fs::create_dir_all(&out).unwrap();
-    let work = std::env::temp_dir().join(format!("pulse-readme-{}", std::process::id()));
+    use crate::i18n::Language;
+    crate::i18n::with(Language::Spanish, || shots(&out_dir("capturas"), SPANISH, "es"));
+    crate::i18n::with(Language::English, || shots(&out_dir("screenshots"), ENGLISH, "en"));
+}
+
+/// The six pictures, in the language of the moment.
+fn shots(out: &Path, names: [&str; 6], language: &str) {
+    std::fs::create_dir_all(out).unwrap();
+    let work = std::env::temp_dir().join(format!("pulse-readme-{}-{language}", std::process::id()));
     std::fs::create_dir_all(&work).unwrap();
     let (project, _, voice_beats) = project(&work.join("Voz principal.wav"));
     let mut app = PulseApp::headless(project);
@@ -91,7 +104,7 @@ fn readme_shots() {
     s.frames(10);
     panel_to(&mut s, 650.0);
     s.dump("arrangement");
-    save(&mut s, "arrangement");
+    save(&mut s, names[0]);
 
     // 2. The Session, with the mixer and the returns.
     s.app.show_browser = true;
@@ -101,7 +114,7 @@ fn readme_shots() {
     s.frames(10);
     panel_to(&mut s, 600.0);
     s.dump("session");
-    save(&mut s, "session");
+    save(&mut s, names[1]);
 
     // 3. The piano roll: the melody and its brightness.
     let lead = s.app.project.tracks.iter().position(|t| crate::i18n::is_named(&t.name, "Melodía")).unwrap();
@@ -113,7 +126,7 @@ fn readme_shots() {
     s.app.piano_roll.recenter();
     s.frames(10);
     s.dump("piano-roll");
-    save(&mut s, "piano-roll");
+    save(&mut s, names[2]);
 
     // 4. Devices: the drum bus's chain, the browser away to see all of it.
     s.app.selected_clip = None;
@@ -123,7 +136,7 @@ fn readme_shots() {
     s.frames(10);
     panel_to(&mut s, 590.0);
     s.dump("dispositivos");
-    save(&mut s, "dispositivos");
+    save(&mut s, names[3]);
 
     // 5. The voice's editor with its lyrics; the pad's automation folded, so
     // the voice's row shows above the editor.
@@ -135,24 +148,24 @@ fn readme_shots() {
     s.frames(10);
     panel_to(&mut s, 520.0);
     s.dump("letra");
-    save(&mut s, "editor-de-audio-con-letra");
+    save(&mut s, names[4]);
 
     // 6. The mix assistant and its report.
     s.app.selected_clip = None;
     s.app.detail = Detail::Devices;
     s.menu(crate::commands::Command::MixAssistant);
-    s.click("Analizar la mezcla");
+    s.click(crate::i18n::tr("Analizar la mezcla"));
     s.wait_for("el análisis", 300.0, |app| app.mix.report.is_some());
     s.move_to(pos2(1430.0, 890.0), Modifiers::NONE);
     s.frames(5);
     s.dump("asistente");
-    save(&mut s, "asistente-de-mezcla");
+    save(&mut s, names[5]);
     std::fs::remove_dir_all(&work).ok();
 }
 
 /// The detail panel's top (above its tabs) dragged to `y`.
 fn panel_to(s: &mut Studio, y: f32) {
-    let tabs = s.seen.iter().filter(|w| w.text == "Dispositivos" && w.role == "Button").map(|w| w.rect).next().expect("las pestañas del panel");
+    let tabs = s.seen.iter().filter(|w| w.text == crate::i18n::tr("Dispositivos") && w.role == "Button").map(|w| w.rect).next().expect("las pestañas del panel");
     s.drag(pos2(900.0, tabs.top() - 6.0), pos2(900.0, y), Modifiers::NONE);
     s.move_to(pos2(1435.0, 895.0), Modifiers::NONE);
     s.frames(10);

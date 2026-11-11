@@ -391,12 +391,12 @@ pub fn master_meter(ui: &mut egui::Ui, meters: &mut crate::app::Meters) {
     let over = hold > 1.0;
     let hold_db = 20.0 * hold.max(1e-6).log10();
     let lufs = match meters.master_lufs {
-        Some(l) => format!("{} LUFS", format!("{l:.1}").replace('.', ",")),
+        Some(l) => format!("{} LUFS", crate::i18n::decimal(format!("{l:.1}"))),
         None => "— LUFS".to_string(),
     };
     // Right to left: the loudness, the peak, the meter.
     ui.label(RichText::new(lufs.clone()).size(10.5).color(TEXT)).on_hover_text(tr("Sonoridad a corto plazo: los últimos 3 s del master, en LUFS (como la mide el Asistente de mezcla y master)"));
-    let peak_text = if hold <= 1e-6 { "—".to_string() } else { format!("{hold_db:+.1}").replace('.', ",") };
+    let peak_text = if hold <= 1e-6 { "—".to_string() } else { crate::i18n::decimal(format!("{hold_db:+.1}")) };
     let peak = ui.add(egui::Label::new(RichText::new(peak_text.clone()).size(10.5).strong().color(if over { theme::METER_RED } else { TEXT_DIM })).sense(Sense::click()));
     let (rect, meter) = ui.allocate_exact_size(vec2(70.0, 8.0), Sense::click());
     widgets::paint_horizontal_meter(ui.painter(), rect, meters.master);

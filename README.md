@@ -34,7 +34,7 @@ mix analysis. They all run on your computer, offline and with no accounts.
 
 <p align="center"><strong>English</strong> · <a href="README.es.md">Español</a></p>
 
-![The Pulse Arrangement with a full track](docs/capturas/arrangement.png)
+![The Pulse Arrangement with a full track](docs/screenshots/arrangement.png)
 
 *The Arrangement: a full track with its sections, MIDI and audio clips, transitions and filter automation. ([More screenshots](#screenshots))*
 
@@ -133,27 +133,27 @@ the guide in the same pull request.
 
 ## Screenshots
 
-![The Session view](docs/capturas/session.png)
+![The Session view](docs/screenshots/session.png)
 
 *The Session view: clips and scenes to jam with, plus the mixer, sends and the Space and Delay returns.*
 
-![The piano roll](docs/capturas/piano-roll.png)
+![The piano roll](docs/screenshots/piano-roll.png)
 
 *The piano roll: a melody written by Accompany over the chords, with its expression lane (brightness).*
 
-![Devices](docs/capturas/dispositivos.png)
+![Devices](docs/screenshots/devices.png)
 
 *Devices: the drum bus with the bus compressor and the Space convolution reverb.*
 
-![The audio editor](docs/capturas/editor-de-audio-con-letra.png)
+![The audio editor](docs/screenshots/audio-editor-with-lyrics.png)
 
 *The audio editor: the vocal with its transcribed lyrics, word by word, under the waveform.*
 
-![The mix and master assistant](docs/capturas/asistente-de-mezcla.png)
+![The mix and master assistant](docs/screenshots/mix-assistant.png)
 
 *The mix and master assistant: it measures loudness, peaks and stereo, and suggests fixes you apply in one click.*
 
-The screenshots come from a sample project built by a test, without opening the app. Regenerate them with `cargo test --release -p app readme_shots -- --ignored`.
+The screenshots come from a sample project built by a test, without opening the app. Regenerate them with `cargo test --release -p app readme_shots -- --ignored` (English in `docs/screenshots/`, Spanish in `docs/capturas/`).
 
 ## Build and run
 

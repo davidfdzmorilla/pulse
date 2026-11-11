@@ -48,9 +48,9 @@ Don't show Windows unless it has been tested on real hardware by then.
 
 ## Screenshots needed (for the thumbnail and the README)
 
-Already in `docs/capturas/` (made by `cargo test --release -p app readme_shots -- --ignored`):
-`arrangement.png`, `session.png`, `piano-roll.png`, `dispositivos.png`,
-`editor-de-audio-con-letra.png`, `asistente-de-mezcla.png`.
+Already in `docs/screenshots/` in English and `docs/capturas/` in Spanish (made by `cargo test --release -p app readme_shots -- --ignored`):
+`arrangement.png`, `session.png`, `piano-roll.png`, `devices.png` / `dispositivos.png`,
+`audio-editor-with-lyrics.png` / `editor-de-audio-con-letra.png`, `mix-assistant.png` / `asistente-de-mezcla.png`.
 
 To capture during recording:
 - a thumbnail frame: the Arrangement mid-playback, with the logo;

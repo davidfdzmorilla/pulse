@@ -240,7 +240,8 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
         }
         readout(ui, &format_position(&app.project.meter, app.project.loop_start), 84.0);
         let loop_bars = bars_label(bars_between(&app.project.meter, app.project.loop_start, app.project.loop_end));
-        readout(ui, &fill(tr("{} c."), &[&loop_bars.trim_end_matches(" c.")]), 54.0);
+        let bars = loop_bars.trim_end_matches(" c.");
+        readout(ui, &if bars == "1" { tr("1 c.").to_string() } else { fill(tr("{} c."), &[&bars]) }, 54.0);
         if icon_button(ui, "punch in", app.project.punch_in, theme::METER_RED, tr("Punch in: al grabar en el Arrangement, empieza a grabar en el inicio del loop (lo de antes solo suena)")).clicked() {
             app.project.punch_in = !app.project.punch_in;
         }

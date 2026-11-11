@@ -1283,7 +1283,7 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                 ui.vertical(|ui| {
                     let track = &app.project.tracks[t];
                     let note = RACK_FIRST_NOTE + pad as u8;
-                    let name = track.sample_name(pad).unwrap_or_else(|| tr("Vacío").into());
+                    let name = track.shown_sample_name(pad).unwrap_or_else(|| tr("Vacío").into());
                     ui.label(egui::RichText::new(format!("Pad {} · {}", pad + 1, crate::project::note_name(note))).color(TEXT_DIM).size(10.5));
                     ui.label(egui::RichText::new(name).strong());
                     ui.horizontal(|ui| {
@@ -1541,7 +1541,7 @@ fn keymap(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams, r
     let pitch = response.hover_pos().map(|p| ((p.x - rect.left()) / key_w).clamp(0.0, 127.0) as u8);
     if let Some(pitch) = pitch {
         let track = &app.project.tracks[t];
-        let names: Vec<String> = params.zones().iter().enumerate().filter(|(_, z)| (z.lo..=z.hi).contains(&pitch)).map(|(i, z)| format!("{} ({}–{} · vel {}–{})", track.sample_name(i).unwrap_or_default(), crate::project::note_name(z.lo), crate::project::note_name(z.hi), z.vel_lo, z.vel_hi)).collect();
+        let names: Vec<String> = params.zones().iter().enumerate().filter(|(_, z)| (z.lo..=z.hi).contains(&pitch)).map(|(i, z)| format!("{} ({}–{} · vel {}–{})", track.shown_sample_name(i).unwrap_or_default(), crate::project::note_name(z.lo), crate::project::note_name(z.hi), z.vel_lo, z.vel_hi)).collect();
         let text = fill(tr("{}: {}\nClic: escucharla"), &[&crate::project::note_name(pitch), &if names.is_empty() { tr("nada").to_string() } else { names.join(", ") }]);
         response.clone().on_hover_text(text);
     }
@@ -1567,7 +1567,7 @@ fn zone_menu(app: &PulseApp, ui: &mut egui::Ui, t: usize, params: &SamplerParams
                 ui.end_row();
                 let count = edited.zone_count as usize;
                 for (i, zone) in edited.zones[..count].iter_mut().enumerate() {
-                    let name = app.project.tracks[t].sample_name(i).unwrap_or_default();
+                    let name = app.project.tracks[t].shown_sample_name(i).unwrap_or_default();
                     ui.add_sized([170.0, 18.0], egui::Label::new(name).truncate()).on_hover_text(tr("Las notas desde-hasta y las velocidades que la tocan; Raíz es la nota a la que suena tal cual"));
                     note(ui, &mut zone.lo);
                     note(ui, &mut zone.hi);
@@ -1604,7 +1604,7 @@ fn waveform(app: &PulseApp, ui: &egui::Ui, t: usize, slot: usize, rect: Rect, st
     }
     let x = rect.left() + rect.width() * start;
     painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, ACCENT));
-    let name = track.sample_name(slot).unwrap_or_default();
+    let name = track.shown_sample_name(slot).unwrap_or_default();
     painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, name, theme::small(), theme::TEXT);
 }
 
@@ -1620,7 +1620,7 @@ fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, action
         let rect = Rect::from_min_size(min, PAD);
         zones.push((rect, t, pad));
         let response = ui.interact(rect, ui.id().with(("pad", pad)), Sense::click());
-        let name = track.sample_name(pad);
+        let name = track.shown_sample_name(pad);
         widgets::name(&response, egui::WidgetType::Button, format!("Pad {}", pad + 1));
         let fill = match (pad == selected, name.is_some(), response.hovered()) {
             (true, ..) => theme::CONTROL_HOVER,
@@ -1639,7 +1639,7 @@ fn pad_grid(app: &PulseApp, ui: &mut egui::Ui, t: usize, selected: usize, action
             let short: String = name.chars().take(11).collect();
             painter.text(rect.left_bottom() + vec2(4.0, -3.0), Align2::LEFT_BOTTOM, short, theme::small(), theme::TEXT);
         }
-        let response = response.on_hover_text(track.sample_name(pad).unwrap_or_else(|| tr("Pad vacío: arrastra una muestra").into()));
+        let response = response.on_hover_text(track.shown_sample_name(pad).unwrap_or_else(|| tr("Pad vacío: arrastra una muestra").into()));
         if response.clicked() {
             actions.push(Action::SelectPad(pad));
             actions.push(Action::Preview(note));
@@ -1726,7 +1726,7 @@ pub(crate) fn click_slot(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &
         if files_hovering(ui) {
             painter.rect_stroke(rect, 2.0, Stroke::new(1.5, ACCENT), egui::StrokeKind::Inside);
         }
-        let text = match track.sample_name(0) {
+        let text = match track.shown_sample_name(0) {
             Some(name) => format!("Click: {name}"),
             None => tr("Click: sintetizado").into(),
         };

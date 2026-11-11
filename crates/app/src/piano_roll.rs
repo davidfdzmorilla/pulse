@@ -374,6 +374,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
     let is_drums = app.project.tracks[t].is_drums();
     // One row per drum sound or pad, the lowest note at the bottom.
     let drum_rows = if is_drums { app.project.tracks[t].drum_rows() } else { Vec::new() };
+    let drum_labels: Vec<String> = drum_rows.iter().map(|(pitch, name)| app.project.tracks[t].shown_drum_row(*pitch, name)).collect();
     let key = app.project.key.filter(|_| !is_drums);
     let drum_machine = match app.project.tracks[t].instrument {
         engine::model::InstrumentKind::DrumMachine(params) => Some(params),
@@ -554,7 +555,7 @@ pub fn show(app: &mut PulseApp, ui: &mut egui::Ui) {
                 painter.rect_filled(Rect::from_min_size(piano_key.right_top() - vec2(4.0, 0.0), vec2(4.0, piano_key.height())), 0.0, ACCENT);
             }
             let text = if is_drums {
-                drum_rows[row].1.clone()
+                drum_labels[row].clone()
             } else if pitch % 12 == 0 || tonic || walk.is_some() {
                 note_name(pitch)
             } else {
@@ -1495,7 +1496,7 @@ fn drum_menu(ui: &mut egui::Ui, state: &mut State, clip: &mut MidiClip, clip_ref
             ui.horizontal(|ui| {
                 ui.label(egui::RichText::new(tr("Largo")).color(TEXT_DIM).size(10.5));
                 for bars in [1, 2, 4, 8] {
-                    ui.selectable_value(&mut settings.bars, bars, fill(tr("{} c."), &[&bars])).on_hover_text(tr("Compases del clip: con 4, el cuarto da la vuelta a la frase; con 8, redoble al final"));
+                    ui.selectable_value(&mut settings.bars, bars, if bars == 1 { tr("1 c.").to_string() } else { fill(tr("{} c."), &[&bars]) }).on_hover_text(tr("Compases del clip: con 4, el cuarto da la vuelta a la frase; con 8, redoble al final"));
                 }
             });
             ui.label(egui::RichText::new(tr("Sonidos")).color(TEXT_DIM).size(10.5));

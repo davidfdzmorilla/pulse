@@ -298,6 +298,25 @@ impl Track {
         Some(path.file_stem().map_or_else(|| path.display().to_string(), |s| s.to_string_lossy().into_owned()))
     }
 
+    /// [`Self::sample_name`] as the interface shows it: a factory sound's in the
+    /// interface's language («Tom electrónico», «Electronic tom»), the user's
+    /// own files as they are.
+    pub fn shown_sample_name(&self, slot: usize) -> Option<String> {
+        let name = self.sample_name(slot)?;
+        let factory = self.sample(slot).is_some_and(|path| Path::new(path).starts_with(crate::factory_sounds::root()));
+        Some(if factory { crate::i18n::tr_name(&name).into_owned() } else { name })
+    }
+
+    /// A row of [`Self::drum_rows`] as the clip editor names it: the Drum
+    /// Machine's sounds and the factory samples in the interface's language.
+    pub fn shown_drum_row(&self, pitch: u8, name: &str) -> String {
+        match self.instrument {
+            InstrumentKind::DrumRack(_) if pitch >= RACK_FIRST_NOTE + RACK_PADS as u8 => crate::i18n::fill(crate::i18n::tr("{} cromático"), &[&note_name(pitch)]),
+            InstrumentKind::DrumRack(_) => self.shown_sample_name((pitch - RACK_FIRST_NOTE) as usize).unwrap_or_else(|| name.to_string()),
+            _ => crate::i18n::tr_name(name).into_owned(),
+        }
+    }
+
     /// Piano roll rows for drum instruments, top to bottom: (note, name), the
     /// Drum Machine's in Spanish (see [`voice_name`]).
     pub fn drum_rows(&self) -> Vec<(u8, String)> {

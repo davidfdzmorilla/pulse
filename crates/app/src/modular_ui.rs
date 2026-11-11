@@ -233,12 +233,17 @@ fn sync_choice(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, module: &e
 }
 
 /// The global unison: the whole stack once per unison voice.
+/// «1 voz», «3 voces».
+fn voices(n: u8) -> String {
+    if n == 1 { tr("1 voz").to_string() } else { fill(tr("{} voces"), &[&n]) }
+}
+
 fn unison_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, p: ModularParams, actions: &mut Vec<Action>) {
     let mut unison = p.unison;
     ui.label(egui::RichText::new(tr("UNÍSONO")).color(TEXT_DIM).size(10.0).strong());
-    egui::ComboBox::from_id_salt(("modular_unison_voices", t)).selected_text(fill(tr("{} voces"), &[&unison.voices])).width(66.0).show_ui(ui, |ui| {
+    egui::ComboBox::from_id_salt(("modular_unison_voices", t)).selected_text(voices(unison.voices)).width(66.0).show_ui(ui, |ui| {
         for v in 1..=MOD_UNISON_VOICES as u8 {
-            ui.selectable_value(&mut unison.voices, v, fill(tr("{} voces"), &[&v]));
+            ui.selectable_value(&mut unison.voices, v, voices(v));
         }
     });
     egui::ComboBox::from_id_salt(("modular_unison_mode", t)).selected_text(unison.mode.label()).width(110.0).show_ui(ui, |ui| {
@@ -307,7 +312,7 @@ fn module_card(app: &PulseApp, ui: &mut egui::Ui, t: usize, i: usize, p: Modular
                     choice_combo(ui, ("mm_wave", t, i), &mut next.choice[0], &ANALOG_WAVES, 72.0);
                 }
                 ModuleKind::Wavetable => {
-                    let name = if module.table == WAVE_USER_TABLE { app.project.tracks[t].sample_name(i).unwrap_or_else(|| tr("Archivo").into()) } else { BUILTIN.get(module.table as usize).copied().unwrap_or(BUILTIN[0]).to_string() };
+                    let name = if module.table == WAVE_USER_TABLE { app.project.tracks[t].shown_sample_name(i).unwrap_or_else(|| tr("Archivo").into()) } else { BUILTIN.get(module.table as usize).copied().unwrap_or(BUILTIN[0]).to_string() };
                     egui::ComboBox::from_id_salt(("mm_table", t, i)).selected_text(name).width(120.0).show_ui(ui, |ui| {
                         for (k, label) in BUILTIN.iter().enumerate() {
                             ui.selectable_value(&mut next.table, k as u8, *label);

@@ -133,7 +133,7 @@ pub(crate) fn table_view(ui: &mut egui::Ui, table: Option<&Arc<Wavetable>>, posi
 fn table_name(app: &PulseApp, t: usize, o: usize, params: &WaveParams) -> String {
     let index = params.osc[o].table;
     if index == WAVE_USER_TABLE {
-        app.project.tracks[t].sample_name(o).unwrap_or_else(|| tr("Archivo").into())
+        app.project.tracks[t].shown_sample_name(o).unwrap_or_else(|| tr("Archivo").into())
     } else {
         BUILTIN.get(index as usize).copied().unwrap_or(BUILTIN[0]).to_string()
     }
@@ -186,7 +186,7 @@ pub(crate) fn sample_view(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize,
     }
     let x = x_of(osc.position);
     painter.line_segment([pos2(x, rect.top()), pos2(x, rect.bottom())], Stroke::new(1.5, ACCENT));
-    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, track.sample_name(o).unwrap_or_default(), theme::small(), theme::TEXT);
+    painter.text(rect.left_top() + vec2(4.0, 3.0), Align2::LEFT_TOP, track.shown_sample_name(o).unwrap_or_default(), theme::small(), theme::TEXT);
 }
 
 pub(crate) fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, base: WaveParams, shown: &WaveParams, actions: &mut Vec<Action>) {

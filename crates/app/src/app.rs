@@ -1652,7 +1652,7 @@ impl PulseApp {
         self.project.tracks[track].set_sample(osc, Some(path));
         self.sync_samples(track);
         self.sync_tables(track);
-        self.status = Some(fill(tr("Muestra del oscilador: {}"), &[&self.project.tracks[track].sample_name(osc).unwrap_or_default()]));
+        self.status = Some(fill(tr("Muestra del oscilador: {}"), &[&self.project.tracks[track].shown_sample_name(osc).unwrap_or_default()]));
     }
 
     pub fn sync_samples(&mut self, track: usize) {
@@ -1690,7 +1690,7 @@ impl PulseApp {
         }
         if loaded > 0 {
             self.sync_samples(track);
-            let name = self.project.tracks[track].sample_name(slot).unwrap_or_default();
+            let name = self.project.tracks[track].shown_sample_name(slot).unwrap_or_default();
             self.status = Some(if loaded == 1 { fill(tr("Cargado: {}"), &[&name]) } else { fill(tr("{} muestras cargadas"), &[&loaded]) });
         }
     }

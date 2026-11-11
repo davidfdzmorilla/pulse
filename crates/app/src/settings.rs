@@ -248,7 +248,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 }
             });
         });
-        ui.label(egui::RichText::new(tr("La traducción al inglés está en marcha: lo que aún no está traducido sale en castellano.")).color(TEXT_DIM).size(10.5));
+        ui.label(egui::RichText::new(tr("Tus proyectos se abren igual en los dos idiomas: lo que Pulse crea se nombra en el idioma de ese momento.")).color(TEXT_DIM).size(10.5));
 
         ui.separator();
         ui.heading("Audio");

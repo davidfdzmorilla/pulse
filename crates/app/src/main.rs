@@ -121,6 +121,8 @@ mod browser_tests;
 mod scroll_tests;
 #[cfg(test)]
 mod readme_shots;
+#[cfg(test)]
+mod english_review;
 mod project;
 mod recording;
 mod recovery;

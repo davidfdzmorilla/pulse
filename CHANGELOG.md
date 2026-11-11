@@ -62,6 +62,10 @@ still in `0.x`, so any release may change things.
 
 - In English, the mix assistant and the master meter write decimals with a
   point ("-13.3 LUFS") and track names in plain quotes.
+- In English, factory sounds on pads, drum rows and samplers, and factory
+  chains in the browser, show their English names; "1 bar", "1 voice" and
+  "1 cent" in the singular (the modular's "1 voz" in Spanish too); lessons
+  no longer name buttons in Spanish.
 - Audio to MIDI (Basic Pitch): the start of a note could move by one frame
   (≈12 ms) depending on the processor or the number of threads, when the
   largest jump and the onset peak fell on neighbouring frames. It's now the

@@ -430,7 +430,9 @@ fn chains(app: &mut PulseApp, ui: &mut egui::Ui, favs: &Favs) {
         let What::Chain(chain) = &found.what else { continue };
         let key = &found.key;
         let hint = fill(tr("{}\nClic: añade sus efectos al final de la cadena del destino · ⌥ clic: sustituye los que hay"), &[&chain.summary()]);
-        let response = item_with(ui, favs, key, "⛓", &chain.name, &hint, |ui| {
+        // Pulse's in the interface's language; the user's as they named them.
+        let name = if chain.factory { crate::i18n::tr_name(&chain.name).into_owned() } else { chain.name.clone() };
+        let response = item_with(ui, favs, key, "⛓", &name, &hint, |ui| {
             if !chain.factory && ui.button(tr("Borrar la cadena")).clicked() {
                 delete = Some(chain.name.clone());
                 ui.close();

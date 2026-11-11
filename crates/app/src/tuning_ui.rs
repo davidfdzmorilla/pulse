@@ -27,7 +27,7 @@ fn tuned(pitch: f32, key: Option<stems::key::Key>) -> f32 {
 fn describe(pitch: f32) -> String {
     let note = pitch.round().clamp(0.0, 127.0) as u8;
     let cents = ((pitch - pitch.round()) * 100.0).round() as i32;
-    if cents == 0 { music(&crate::project::note_name(note)) } else { format!("{} {cents:+} cents", music(&crate::project::note_name(note))) }
+    if cents == 0 { music(&crate::project::note_name(note)) } else { if cents.abs() == 1 { format!("{} {cents:+} cent", music(&crate::project::note_name(note))) } else { format!("{} {cents:+} cents", music(&crate::project::note_name(note))) } }
 }
 
 impl PulseApp {

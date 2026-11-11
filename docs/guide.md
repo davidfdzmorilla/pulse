@@ -1121,7 +1121,7 @@ Choose **Velocity** on the bottom lane and drag up or down near a note. Selected
 - **Loop**: 1, 2, 4, 8 or 16 bars (from the bar where the clip is), or any number of sixteenths in the **/16** field. A 3/16, 5/16 or 7/16 clip over 4/4 shifts every bar: good for polyrhythms.
 - **Grid** (1/4 to 1/64, with 1/8, 1/16 and 1/32 triplets) and **Note** (the length of new notes). Each clip remembers its own: if you set 1/16T on the hi-hats, the bass stays at 1/16. A clip you haven't opened yet takes the grid its notes are written in.
 - **Draw** ({B}): pencil mode.
-- **Quantize** ({⌘U}) with its **Strength** (%) and **ends** (also quantizes note ends). It acts on the selected notes or, if none, on all of them.
+- **Quantize** ({⌘U}) with its **Strength** (%) and **note ends** (also quantizes the end of the notes). It acts on the selected notes or, if none, on all of them.
 - **Chance** (%): on how many loop passes each note plays (see "Notes that don't always play", below).
 - **-12, -1, +1, +12**: transpose. **×2**: doubles the loop by copying the notes. **Roll**: see [[MIDI editor#Rolls]]. **Transform**: see [[MIDI editor#Transforming notes]]. **Zoom** (the width of the beats) and **Height** (the height of the rows).
 - **⋯**: whatever doesn't fit on the bar. Hover over it to see what's inside.

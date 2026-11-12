@@ -16,6 +16,8 @@ use engine::model::{
 use engine::{Command, Target};
 
 const DEVICE_HEIGHT: f32 = 168.0;
+/// The drum machine's sounds in each row of its device (two rows in sight).
+const DRUM_COLUMNS: usize = 4;
 
 fn beats_label(beats: f64) -> String {
     match beats {
@@ -1121,9 +1123,9 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
         }
         InstrumentKind::Drums | InstrumentKind::DrumMachine(_) => {
             device_frame(ui, kind.label(), 700.0, None, |ui| preset_menu(app, ui, t, &mut head), |ui| {
-                // Which machine it sounds like.
+                // Which machine it sounds like, in a column beside the sounds.
                 if let InstrumentKind::DrumMachine(params) = kind {
-                    ui.horizontal(|ui| {
+                    ui.vertical(|ui| {
                         ui.label(egui::RichText::new(tr("Máquina")).color(TEXT_DIM).size(10.5));
                         for model in engine::model::DrumModel::ALL {
                             let hint = match model {
@@ -1137,34 +1139,43 @@ fn instrument_device(app: &PulseApp, ui: &mut egui::Ui, t: usize, actions: &mut 
                         }
                     });
                 }
-                egui::Grid::new("drum_machine").spacing([8.0, 2.0]).show(ui, |ui| {
-                    for (voice, (pitch, _)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
-                        let name = tr(crate::project::voice_name(voice));
-                        ui.vertical(|ui| {
-                            // A sound on a track of its own (see `drum_split`): marked, and where.
-                            let elsewhere = app.sound_track(t, voice);
-                            let label = if elsewhere.is_some() { format!("{name} →") } else { name.to_string() };
-                            let pad = egui::Button::new(egui::RichText::new(label).size(10.5)).min_size(vec2(136.0, 16.0));
-                            let hint = match elsewhere {
-                                Some(track) => fill(tr("{} · clic para escuchar · suena en «{}», con sus efectos"), &[&crate::project::note_name(pitch), &track]),
-                                None => fill(tr("{} · clic para escuchar"), &[&crate::project::note_name(pitch)]),
-                            };
-                            if ui.add(pad).on_hover_text(hint).clicked() {
-                                actions.push(Action::Preview(pitch));
-                            }
-                            ui.horizontal(|ui| {
-                                ui.spacing_mut().item_spacing.x = 0.0;
-                                for (k, label) in ["Tune", "Decay", "Level"].into_iter().enumerate() {
-                                    knob(ui, actions, voice * 3 + k, label, 18.0);
+                // Sixteen sounds, four rows of four: the first two (its eight
+                // sounds before it had sixteen) in sight, the rest a scroll below,
+                // so the device keeps its height and the chain its width.
+                let height = ui.available_height();
+                // A solid bar, always there, so the rows below are seen to be there.
+                ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+                egui::ScrollArea::vertical().id_salt(("drum_sounds", t)).max_height(height).auto_shrink([true, false]).scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible).show(ui, |ui| {
+                    egui::Grid::new("drum_machine").spacing([8.0, 0.0]).show(ui, |ui| {
+                        for (voice, (pitch, _)) in engine::model::DRUM_VOICES.into_iter().enumerate() {
+                            let name = tr(crate::project::voice_name(voice));
+                            ui.vertical(|ui| {
+                                ui.spacing_mut().item_spacing.y = 1.0;
+                                // A sound on a track of its own (see `drum_split`): marked, and where.
+                                let elsewhere = app.sound_track(t, voice);
+                                let label = if elsewhere.is_some() { format!("{name} →") } else { name.to_string() };
+                                let pad = egui::Button::new(egui::RichText::new(label).size(10.5)).min_size(vec2(136.0, 16.0));
+                                let hint = match elsewhere {
+                                    Some(track) => fill(tr("{} · clic para escuchar · suena en «{}», con sus efectos"), &[&crate::project::note_name(pitch), &track]),
+                                    None => fill(tr("{} · clic para escuchar"), &[&crate::project::note_name(pitch)]),
+                                };
+                                if ui.add(pad).on_hover_text(hint).clicked() {
+                                    actions.push(Action::Preview(pitch));
                                 }
-                                knob(ui, actions, engine::model::DRUM_SOUNDS * 3 + voice, "Drive", 18.0);
-                                knob(ui, actions, engine::model::DRUM_SOUNDS * 4 + voice, "Bend", 18.0);
+                                ui.horizontal(|ui| {
+                                    ui.spacing_mut().item_spacing.x = 0.0;
+                                    for (k, label) in ["Tune", "Decay", "Level"].into_iter().enumerate() {
+                                        knob(ui, actions, voice * 3 + k, label, 18.0);
+                                    }
+                                    knob(ui, actions, engine::model::DRUM_SOUNDS * 3 + voice, "Drive", 18.0);
+                                    knob(ui, actions, engine::model::DRUM_SOUNDS * 4 + voice, "Bend", 18.0);
+                                });
                             });
-                        });
-                        if voice % 4 == 3 {
-                            ui.end_row();
+                            if voice % DRUM_COLUMNS == DRUM_COLUMNS - 1 {
+                                ui.end_row();
+                            }
                         }
-                    }
+                    });
                 });
             });
         }
@@ -1872,6 +1883,40 @@ mod tests {
         for space in [ReverbSpace::Room, ReverbSpace::Hall, ReverbSpace::Plate, ReverbSpace::Infinite] {
             let (_, image) = draw_convolution(space, 4);
             image.save_png(&dir.join(format!("espacio-{}.png", space.label()))).unwrap();
+        }
+    }
+    /// The drum machine keeps the device's height, at 1440×900 and 1000×720:
+    /// its first eight sounds in sight, the other eight a scroll below.
+    #[test]
+    fn the_drum_machine_fits_its_device() {
+        for size in [vec2(1440.0, 900.0), vec2(1000.0, 720.0)] {
+            let mut app = PulseApp::headless(Project::demo());
+            app.set_instrument(0, InstrumentKind::DrumMachine(Default::default()));
+            app.selected_target = Target::Track(0);
+            app.selected_clip = None;
+            app.detail = crate::app::Detail::Devices;
+            let mut s = crate::produccion::Studio::new(app, std::env::temp_dir());
+            s.size = size;
+            s.frames(6);
+            // The title bar is 20 high, the device DEVICE_HEIGHT.
+            let title = s.seen.iter().find(|w| w.role == "Label" && w.text == "Drum Machine").map(|w| w.rect).expect("the device's title");
+            let device = Rect::from_min_size(pos2(title.left() - 8.0, title.center().y - 10.0), vec2(600.0, DEVICE_HEIGHT));
+            let knobs = |s: &crate::produccion::Studio| -> Vec<Rect> {
+                s.seen.iter().filter(|w| w.role == "Slider" && ["Tune", "Decay", "Level", "Drive", "Bend"].contains(&w.text.as_str())).map(|w| w.rect).collect()
+            };
+            let in_sight = |knobs: &[Rect]| knobs.iter().filter(|r| r.top() >= device.top() && r.bottom() <= device.bottom() + 0.5).count();
+            assert_eq!(knobs(&s).len(), engine::model::DRUM_SOUNDS * 5, "at {size:?}, every knob drawn");
+            assert_eq!(in_sight(&knobs(&s)), 8 * 5, "at {size:?}, two rows of four in sight");
+            // The wheel over the sounds brings the last two rows.
+            s.move_to(pos2(device.left() + 300.0, device.center().y + 20.0), egui::Modifiers::NONE);
+            for _ in 0..6 {
+                s.frame_with(vec![egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: vec2(0.0, -100.0), phase: egui::TouchPhase::Move, modifiers: egui::Modifiers::NONE }], egui::Modifiers::NONE);
+            }
+            s.frames(4);
+            let knobs = knobs(&s);
+            let lowest = knobs.iter().map(|r| r.bottom()).fold(0.0, f32::max);
+            assert!(lowest <= device.bottom() + 0.5, "at {size:?}: knobs down to {lowest}, the device ends at {}", device.bottom());
+            assert_eq!(in_sight(&knobs), 8 * 5, "at {size:?}, the last two rows in sight");
         }
     }
 }

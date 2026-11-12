@@ -71,8 +71,10 @@ pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<Au
     ui.horizontal(|ui| {
         ui.label(egui::RichText::new(tr("Carril")).color(TEXT_DIM).size(10.5));
         let has = |p: Param| envelopes.iter().any(|l| l.param == p && !l.points.is_empty());
+        // No envelope chosen: a MIDI clip's lane shows the velocities; an audio clip's, nothing.
+        let nothing = if controls.is_some() { tr("Velocidad") } else { tr("Ninguno") };
         let label = |p: Option<Param>| match p {
-            None => tr("Velocidad").to_string(),
+            None => nothing.to_string(),
             Some(p) => format!("{}{}", if has(p) { "● " } else { "" }, choice.name(p)),
         };
         let present: Vec<MidiControl> = controls.as_deref().map_or(Vec::new(), |c| c.iter().filter(|l| !l.points.is_empty()).map(|l| l.control).collect());
@@ -87,7 +89,7 @@ pub fn header(ui: &mut egui::Ui, choice: &mut LaneChoice, envelopes: &mut Vec<Au
         };
         let mut cc = choice.expression.cc;
         egui::ComboBox::from_id_salt("clip_lane").selected_text(selected).width(220.0).height(420.0).show_ui(ui, |ui| {
-            ui.selectable_value(&mut shown, Shown::Envelope(None), tr("Velocidad"));
+            ui.selectable_value(&mut shown, Shown::Envelope(None), nothing);
             if controls.is_some() {
                 ui.separator();
                 ui.label(egui::RichText::new(tr("Expresión MIDI del clip")).color(TEXT_DIM).size(10.5));
@@ -273,6 +275,7 @@ pub fn lane(
 #[cfg(test)]
 mod tests {
     use crate::app::{ClipRef, PulseApp};
+    use crate::i18n::tr;
     use crate::tracks::tests::{click, drag};
     use eframe::egui::{self, pos2, Modifiers};
     use engine::model::{Clip, Param};
@@ -387,6 +390,38 @@ mod tests {
         let ctx = egui::Context::default();
         let _ = ctx.run_ui(Default::default(), |ui| editor(&mut app, ui));
         assert_eq!(app.piano_roll.lane.shown, Some(Param::Pan), "an audio track's pan can be shown");
+    }
+    /// With no envelope chosen, a MIDI clip's lane shows the velocities and an
+    /// audio clip's says so: nothing (an audio clip has no velocities).
+    #[test]
+    fn an_audio_clips_lane_does_not_offer_velocities() {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        let track = app.add_audio_track().unwrap();
+        let audio = engine::model::AudioClip { hard_start: false, fades: Default::default(),
+            name: "a".into(),
+            color: [1, 2, 3],
+            sample: "/no/such.wav".into(),
+            length: 4.0,
+            offset: 0.0,
+            warp: engine::model::WarpMode::Off,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            takes: Vec::new(),
+            key: None,
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: Vec::new(), muted: false,
+        };
+        app.set_clip(track, 0, Some(Clip::Audio(audio)));
+        app.detail = crate::app::Detail::Clip;
+        let mut s = crate::produccion::Studio::new(app, std::env::temp_dir());
+        let lane = |s: &crate::produccion::Studio| s.seen.iter().find(|w| w.role == "ComboBox" && (w.text == tr("Velocidad") || w.text == tr("Ninguno"))).map(|w| w.text.clone());
+        for (clip, shown) in [(ClipRef::Session { track, slot: 0 }, "Ninguno"), (ClipRef::Session { track: 0, slot: 0 }, "Velocidad")] {
+            s.app.select_clip(clip);
+            s.app.piano_roll.lane.shown = None;
+            s.frames(6);
+            assert_eq!(lane(&s).as_deref(), Some(tr(shown)), "{clip:?}");
+        }
     }
 }
 

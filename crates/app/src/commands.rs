@@ -112,7 +112,7 @@ pub const SHORTCUTS: [(&str, &str); 41] = [
     ("⌘E / ⌘J", "Dividir el clip donde hiciste clic / unir clips (Arrangement)"),
     ("0", "Desactivar o activar los clips seleccionados"),
     ("⌫", "Eliminar"),
-    ("⌘A", "Seleccionar todas las notas"),
+    ("⌘A", "Seleccionar todas las notas del clip"),
     ("⌘T / ⇧⌘T", "Nueva pista MIDI / de audio"),
     ("⌥⌘T", "Nuevo retorno"),
     ("⌘G", "Agrupar las pistas seleccionadas"),
@@ -127,7 +127,7 @@ pub const SHORTCUTS: [(&str, &str); 41] = [
     ("⇧Tab", "Cambiar entre el clip y los dispositivos"),
     ("⇧⌘E / doble clic en el borde", "Maximizar el editor de clips o devolverlo a su altura"),
     ("⌘F", "Buscar en el navegador"),
-    ("⌃⌘F", "Pantalla completa"),
+    ("⌃⌘F", "Entrar o salir de pantalla completa"),
     ("Espacio", "Reproducir / Parar"),
     ("F9", "Grabar en el Arrangement"),
     ("⇧⌘C", "Capturar MIDI: un clip con lo último que has tocado"),
@@ -432,13 +432,20 @@ impl PulseApp {
 /// The help window with every keyboard shortcut.
 pub fn shortcuts_window(app: &mut PulseApp, ctx: &egui::Context) {
     let mut open = app.show_shortcuts;
-    egui::Window::new(tr("Atajos de teclado")).open(&mut open).resizable(false).collapsible(false).pivot(egui::Align2::CENTER_CENTER).default_pos(ctx.content_rect().center()).show(ctx, |ui| {
-        egui::Grid::new("shortcuts").num_columns(2).striped(true).show(ui, |ui| {
-            for (keys, what) in SHORTCUTS {
-                ui.label(egui::RichText::new(crate::theme::keys(tr(keys))).strong());
-                ui.label(tr(what));
-                ui.end_row();
-            }
+    // Taller than most screens: the list scrolls, so the title stays in sight.
+    // Anchored in the middle: placed with its real size from the first frame.
+    let screen = ctx.content_rect();
+    egui::Window::new(tr("Atajos de teclado")).open(&mut open).resizable(false).collapsible(false).anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0]).show(ctx, |ui| {
+        // A solid bar: on a short screen, the rows below show there is more.
+        ui.spacing_mut().scroll = egui::style::ScrollStyle::solid();
+        egui::ScrollArea::vertical().max_height((screen.height() - 140.0).max(160.0)).show(ui, |ui| {
+            egui::Grid::new("shortcuts").num_columns(2).striped(true).show(ui, |ui| {
+                for (keys, what) in SHORTCUTS {
+                    ui.label(egui::RichText::new(crate::theme::keys(tr(keys))).strong());
+                    ui.label(tr(what));
+                    ui.end_row();
+                }
+            });
         });
         let note = if app.has_menu_bar() { tr("Los atajos con ⌘ también están en la barra de menús.") } else { tr("Los atajos con Ctrl también están en los menús de la barra de arriba.") };
         ui.label(egui::RichText::new(note).color(TEXT_DIM).size(10.5));
@@ -653,5 +660,19 @@ mod tests {
                 assert!(!s.has(text), "sobra «{text}»");
             }
         });
+    }
+    /// The shortcuts window fits the screen, its title in sight, at 1440×900 and smaller.
+    #[test]
+    fn the_shortcuts_window_fits_the_screen() {
+        for size in [egui::vec2(1440.0, 900.0), egui::vec2(1000.0, 720.0), egui::vec2(800.0, 600.0)] {
+            let mut app = app();
+            app.show_shortcuts = true;
+            let mut s = crate::produccion::Studio::new(app, std::env::temp_dir());
+            s.size = size;
+            s.frames(6);
+            let window = s.seen.iter().find(|w| w.role == "Window" && w.text == tr("Atajos de teclado")).map(|w| w.rect).expect("the window");
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+            assert!(screen.contains_rect(window), "at {size:?} the window is {window:?}");
+        }
     }
 }

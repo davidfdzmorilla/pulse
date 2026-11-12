@@ -1000,7 +1000,7 @@ Everything follows tempo automation: MIDI clips, audio in Stretch, Beats or Re-P
 Automation inside a clip, which repeats with it every time it plays.
 
 1. Open the clip in the editor.
-2. In the **Lane** dropdown, choose **Clip envelopes** (the other option is **Velocity**).
+2. In the **Lane** dropdown, choose **Clip envelopes** (the other option is **Velocity**; in an audio clip, **None**).
 3. Draw as on the track: click adds a point, dragging moves it, double-clicking deletes it, {⌥ + arrastrar} on a segment curves it and {⌥ + doble clic} straightens it.
 
 - **Clear envelope** removes it.
@@ -3635,7 +3635,7 @@ All of Pulse's shortcuts on one page. **Help › Keyboard Shortcuts** shows this
 | {Tab} | Switch between Session and Arrangement |
 | {⇧Tab} | Switch between the clip and the devices |
 | {⇧⌘E} | Maximize the clip editor or restore its height (also double-click the panel's edge) |
-| {⌃⌘F} | Full screen |
+| {⌃⌘F} | Enter or leave full screen |
 | {Espacio} | Play / Stop |
 | {F9} | Record into the Arrangement |
 | {⇧⌘C} | Capture MIDI: a clip with what you just played |
@@ -3644,7 +3644,7 @@ All of Pulse's shortcuts on one page. **Help › Keyboard Shortcuts** shows this
 
 | Shortcut | What it does |
 |---|---|
-| {⌘A} | Select all notes |
+| {⌘A} | Select all the clip's notes |
 | {⌘U} | Quantize notes |
 | {B} | Pencil |
 | {R} | Roll the selected notes, like the last one |

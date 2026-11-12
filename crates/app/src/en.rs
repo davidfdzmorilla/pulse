@@ -2799,6 +2799,9 @@ pub const EN: &[(&str, &str)] = &[
     // Visual review (see `english_review`).
     ("{} cromático", "{} chromatic"),
     ("1 voz", "1 voice"),
+    // Layout fixes (see `devices`, `commands`, `sample_editor`).
+    ("Seleccionar todas las notas del clip", "Select all the clip's notes"),
+    ("Entrar o salir de pantalla completa", "Enter or leave full screen"),
     // The `i18n` tests.
     ("una frase que no está en la tabla", "una frase que no está en la tabla"),
 ];

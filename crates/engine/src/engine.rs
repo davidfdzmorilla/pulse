@@ -2226,7 +2226,15 @@ pub struct Engine {
     share_above: std::time::Duration,
     /// What waits for what in a shared block (see [`Engine::plan_block`]).
     plan: Box<crate::workers::Plan>,
+    /// How long each task has taken lately (ns, smoothed), so shared blocks
+    /// start with the costliest: written by the task itself.
+    task_cost: Box<[std::sync::atomic::AtomicU64; TASKS]>,
+    /// Shared blocks so far (one in [`COST_EVERY`] notes its costs).
+    shared_blocks: u32,
 }
+
+/// How often a shared block notes what its tasks cost (one block in this many).
+const COST_EVERY: u32 = 8;
 
 /// How long the tracks of a block take on one thread before blocks are
 /// shared among the workers (see [`Engine::set_threads`]): a song this light
@@ -2397,6 +2405,8 @@ struct Job {
     shared: *const SharedState,
     /// The master's tempo lane, if it has one.
     tempo_lane: *const AutomationLane,
+    /// Where tasks note their cost (null: this block they don't).
+    task_cost: *const [std::sync::atomic::AtomicU64; TASKS],
 }
 
 /// Tasks of a block: each track, then each return.
@@ -2406,10 +2416,19 @@ const TASKS: usize = crate::workers::TASKS;
 /// `job` is a live [`Job`], and `task` runs as the graph above allows.
 unsafe fn run_task(job: *const (), task: usize) {
     let job = unsafe { &*(job as *const Job) };
+    let started = (!job.task_cost.is_null()).then(std::time::Instant::now);
     if task < MAX_TRACKS {
         unsafe { process_track(job, task) }
     } else {
         unsafe { process_return(job, task - MAX_TRACKS) }
+    }
+    if let Some(started) = started {
+        // Only this task writes its slot, and only the audio thread reads it,
+        // after the block: the order of the next blocks, never the sound.
+        let slot = unsafe { &(*job.task_cost)[task] };
+        let took = started.elapsed().as_nanos().min(u64::MAX as u128) as u64;
+        let old = slot.load(std::sync::atomic::Ordering::Relaxed);
+        slot.store((old * 3 + took) / 4, std::sync::atomic::Ordering::Relaxed);
     }
 }
 
@@ -2796,6 +2815,8 @@ impl Engine {
             sharing: false,
             share_above: SHARE_ABOVE,
             plan: Box::new(crate::workers::Plan::new()),
+            task_cost: Box::new(std::array::from_fn(|_| std::sync::atomic::AtomicU64::new(0))),
+            shared_blocks: 0,
         };
         (engine, shared)
     }
@@ -3641,6 +3662,21 @@ impl Engine {
                 plan.pinned |= 1 << (MAX_TRACKS + r);
             }
         }
+        // The costliest tracks first, each after those it waits for: a long
+        // one started late would end the block alone. Any order sounds the
+        // same (each task waits for what it reads); untimed, the song's order.
+        let cost = |t: usize| self.task_cost[t].load(std::sync::atomic::Ordering::Relaxed);
+        let mut by_cost = self.order;
+        by_cost.sort_unstable_by_key(|&t| (std::cmp::Reverse(cost(t)), at[t]));
+        let (mut placed, mut taken): (Mask, u64) = (0, 0);
+        for k in 0..MAX_TRACKS {
+            let ready = (0..MAX_TRACKS).find(|&p| taken >> p & 1 == 0 && plan.deps[by_cost[p]] & !placed == 0);
+            // Something is always ready (the song's order is valid); if not, the next one.
+            let p = ready.unwrap_or_else(|| (0..MAX_TRACKS).find(|&p| taken >> p & 1 == 0).unwrap_or(k));
+            taken |= 1 << p;
+            placed |= 1 << by_cost[p];
+            plan.queue[k] = by_cost[p] as u8;
+        }
     }
 
     /// How late the song comes out of the effects (samples): see [`Engine::compensate`].
@@ -3764,6 +3800,10 @@ impl Engine {
         if sharing {
             self.plan_block(&wants, &children, &senders);
         }
+        let note_costs = sharing && self.shared_blocks.is_multiple_of(COST_EVERY);
+        if sharing {
+            self.shared_blocks = self.shared_blocks.wrapping_add(1);
+        }
         let job_timing = self.shared.cpu.detail();
         let job = Job {
             mix: Mix { n, ctx, any_solo, soloed, silenced, mutes: self.mutes, ids: self.ids, parents: self.parents, order: self.order, apart, children, senders, late, rendered: self.rendered, timing: job_timing },
@@ -3778,6 +3818,7 @@ impl Engine {
             return_delays: self.return_delays.as_mut_ptr(),
             shared: &*self.shared,
             tempo_lane: self.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty()).map_or(std::ptr::null(), |l| l as *const _),
+            task_cost: if note_costs { &*self.task_cost } else { std::ptr::null() },
         };
         let at = &job as *const Job as *const ();
         let started = self.workers.as_ref().map(|_| std::time::Instant::now());

@@ -968,7 +968,7 @@ impl WaveSynth {
     /// Moves voice `v`'s modulation a period (`block` seconds) on, and works
     /// out its modulated parameters and frequency for the period (kept).
     fn modulate(&mut self, v: usize, base: &[f32; PARAMS], amounts: &[f32; WAVE_SLOTS], block: f32) -> ([f32; PARAMS], f32) {
-        let p = self.params;
+        let p = &self.params;
         let pitch = self.pitch;
         // Modulation sources at the start of the period.
         let mut lfos = [0f32; 4];
@@ -1032,7 +1032,6 @@ impl WaveSynth {
 
     #[allow(clippy::too_many_arguments)]
     fn render_voice(&mut self, v: usize, samples: &[Arc<Sample>], tables: &[Arc<Wavetable>], base: &[f32; PARAMS], amounts: &[f32; WAVE_SLOTS], left: &mut [f32], right: &mut [f32]) {
-        let p = self.params;
         let sr = self.sample_rate;
         let dt = 1.0 / sr;
         // Modulation moves a whole period at a time, at the period's first
@@ -1040,6 +1039,8 @@ impl WaveSynth {
         let block = CONTROL as f32 * dt;
         let fresh = self.voices[v].snap_period != self.period;
         let (m, freq) = if fresh { self.modulate(v, base, amounts, block) } else { self.voices[v].snap };
+        // Borrowed, not copied: this runs per voice every control period.
+        let p = &self.params;
         let voice = &mut self.voices[v];
 
         let mut oscs: [Option<OscBlock>; 2] = [None, None];

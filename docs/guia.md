@@ -3521,7 +3521,7 @@ Toda la interfaz está traducida al inglés: menús, ventanas, editores, disposi
 - **Latencias medidas**, también la de los **efectos**.
 - **Ajuste fino de la grabación** y **Compensar la latencia de los efectos** (ver [[Grabar]]).
 
-Cuando el proyecto pesa, Pulse reparte las pistas y los retornos entre varios núcleos del procesador (hasta la mitad de los que tiene, y como mucho seis). Así caben muchas más pistas, instrumentos y efectos sin cortes, y suena exactamente igual que en un solo núcleo (así exporta): lo que oyes es lo que exportas. Con poco que procesar, lo hace todo en uno y los demás descansan.
+Cuando el proyecto pesa, Pulse reparte las pistas y los retornos entre varios núcleos del procesador (hasta la mitad de los que tiene, y como mucho seis). Así caben muchas más pistas, instrumentos y efectos sin cortes, y suena exactamente igual que en un solo núcleo (así exporta): lo que oyes es lo que exportas. Con poco que procesar, lo hace todo en uno y los demás descansan. Empieza por las pistas que más gastan, para que una pesada no se quede sola al final.
 
 ### MIDI
 

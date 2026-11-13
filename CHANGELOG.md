@@ -57,6 +57,9 @@ still in `0.x`, so any release may change things.
 - macOS CI: the test package is built even when a test fails, as on Windows.
 - The README's screenshots are in English (`docs/screenshots/`), with the
   Spanish ones kept for `README.es.md` (`docs/capturas/`).
+- The engine is lighter: the Modular, Wavetable and Polychrome synths no
+  longer copy their settings for each voice, and shared blocks start with
+  the costliest tracks. The sound is the same, sample for sample.
 
 ### Fixed
 

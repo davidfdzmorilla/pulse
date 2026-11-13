@@ -1467,14 +1467,16 @@ impl ModSynth {
         sideband: &mut [[f32; CONTROL]; 2],
         n: usize,
     ) -> bool {
-        let p = self.params;
+        // Borrowed, not copied: the settings are ~19 KB, and this runs per voice
+        // every control period.
+        let p = &self.params;
         let sr = self.sample_rate;
         let tempo = self.tempo as f32;
         let dt = 1.0 / sr;
         let block = n as f32 * dt;
         let mut m = *base;
         let inputs = ModInputs { tempo, clock: self.clock, legato: p.mono && p.legato, globals: &self.globals, tables, bend: self.bend, pressure: self.pressure };
-        modulate(&p, &mut self.voices[v], &inputs, &mut m, block);
+        modulate(p, &mut self.voices[v], &inputs, &mut m, block);
         let bend = self.bend * p.bend_range as f32 + m[MOD_PITCH] + m[MOD_FINE] / 100.0;
 
         let Self { voices, blocks, .. } = self;

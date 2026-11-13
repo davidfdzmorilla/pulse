@@ -439,6 +439,84 @@ fn bench_big_project() {
     }
 }
 
+/// Dropouts on this computer's real output, with the helper threads in the
+/// device's audio work group (macOS) and without, while other threads keep
+/// every core busy. The master is at zero: nothing is heard.
+///   PULSE_BENCH_TRACKS=40 PULSE_BENCH_SECONDS=20 PULSE_BENCH_BUSY=10
+#[test]
+#[ignore = "benchmark on the audio device: run with --ignored --nocapture"]
+fn bench_device_workgroup() {
+    let env = |name: &str, default: usize| std::env::var(name).ok().and_then(|v| v.parse().ok()).unwrap_or(default);
+    let (tracks, seconds, busy) = (env("PULSE_BENCH_TRACKS", 40), env("PULSE_BENCH_SECONDS", 20), env("PULSE_BENCH_BUSY", 10));
+    let settings = engine::AudioSettings { buffer: Some(env("PULSE_BENCH_BUFFER", 128) as u32), ..Default::default() };
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let hogs: Vec<_> = (0..busy)
+        .map(|_| {
+            let stop = stop.clone();
+            std::thread::spawn(move || {
+                let mut x = 1u64;
+                while !stop.load(Ordering::Relaxed) {
+                    for _ in 0..10_000 {
+                        x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+                    }
+                    std::hint::black_box(x);
+                }
+            })
+        })
+        .collect();
+    println!("{tracks} pistas, búfer {:?}, {seconds} s, {busy} hilos ocupando la CPU", settings.buffer);
+    let order = if std::env::var_os("PULSE_BENCH_REVERSE").is_some() { ["0", "1"] } else { ["1", "0"] };
+    for group in order {
+        // SAFETY: nothing else reads the environment meanwhile (one test at a time).
+        unsafe { std::env::set_var("PULSE_WORKGROUP", group) };
+        let (output, mut handle) = engine::start_with(&settings).expect("an audio output");
+        let rate = handle.sample_rate;
+        // A few hundred commands: the queue holds them all.
+        let mut sent = |command: Command| assert!(handle.send(command), "the command queue is full");
+        sent(Command::SetGain { target: Target::Master, gain: 0.0 });
+        sent(Command::SetTempo(124.0));
+        sent(Command::SetLoop { enabled: true, start: 0.0, end: 32.0 });
+        let tables: Vec<Arc<Wavetable>> = vec![Arc::new(builtin(0)), Arc::new(builtin(3))];
+        for t in 0..tracks {
+            let kind = instrument_for(t);
+            sent(Command::set_instrument(t, kind, rate));
+            sent(Command::SetWavetables { track: t, tables: Box::new(tables.clone()) });
+            sent(Command::ReplaceChain { target: Target::Track(t), chain: build_chain(&track_devices(t), rate) });
+            let clip = busy_clip(36 + (t % 4) as u8 * 12, is_drums(&kind));
+            sent(Command::SetArrangement { track: t, clips: Box::new(vec![PlacedClip::new(0.0, 32.0, PlayClip::Midi(clip))]) });
+        }
+        sent(Command::Play);
+        std::thread::sleep(std::time::Duration::from_secs(3));
+        let state = handle.state.clone();
+        let cpu = &state.cpu;
+        let (dropouts, late) = (cpu.dropouts(), cpu.late_blocks());
+        cpu.take_load();
+        let mut peaks = Vec::new();
+        let mut mean = 0f32;
+        for _ in 0..seconds * 4 {
+            std::thread::sleep(std::time::Duration::from_millis(250));
+            let load = cpu.take_load();
+            peaks.push(load.peak);
+            mean = load.mean;
+            handle.collect_garbage();
+        }
+        peaks.sort_by(f32::total_cmp);
+        println!(
+            "grupo de trabajo {:>2}: cortes {:>4} (bloques tarde {:>4}) · carga media {:>3.0} % · pico mediano {:>3.0} % · pico máx {:>4.0} %",
+            if group == "1" { "sí" } else { "no" },
+            cpu.dropouts() - dropouts,
+            cpu.late_blocks() - late,
+            mean * 100.0,
+            peaks[peaks.len() / 2] * 100.0,
+            peaks[peaks.len() - 1] * 100.0
+        );
+        drop(output);
+        std::thread::sleep(std::time::Duration::from_millis(500));
+    }
+    stop.store(true, Ordering::Relaxed);
+    hogs.into_iter().for_each(|h| h.join().unwrap());
+}
+
 /// Time per 128-frame callback with 8, 32 and 64 loaded tracks (instruments,
 /// 4–8 effects each, sends to two returns, automation, a master chain), on 1
 /// to 8 threads (PULSE_BENCH_THREADS=1,4 for others). PULSE_BENCH_PACED=1 waits

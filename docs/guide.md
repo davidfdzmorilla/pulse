@@ -3515,10 +3515,11 @@ The whole interface is in English: menus, windows, editors, devices, messages an
 
 - **Output** and **Input (audio recording)** (the input is the one used for recording).
 - **Sample rate** and **Buffer size**: smaller responds sooner; if you hear dropouts, raise it.
+- **Cores for audio**: how many cores Pulse spreads the work across (see below). **Automatic** is usually best.
 - **Measured latencies**, including that of the **effects**.
 - **Recording offset** and **Compensate for effect latency** (see [[Recording]]).
 
-When the project gets heavy, Pulse spreads the tracks and returns across several processor cores (up to half of the ones it has, and at most six). That way many more tracks, instruments and effects fit without dropouts, and it sounds exactly the same as on a single core (that's how it exports): what you hear is what you export. With little to process, it does everything on one and lets the others rest. It starts with the tracks that cost the most, so a heavy one isn't left running alone at the end.
+When the project gets heavy, Pulse spreads the tracks and returns across several processor cores (up to half of the ones it has, and at most six). That way many more tracks, instruments and effects fit without dropouts, and it sounds exactly the same as on a single core (that's how it exports): what you hear is what you export. With little to process, it does everything on one and lets the others rest. It starts with the tracks that cost the most, so a heavy one isn't left running alone at the end. By default it uses up to half the cores, and at most six; in **Cores for audio** you can choose another number. On macOS, the helper cores work in step with the sound card, like the audio one, so they hold up without dropouts even when other programs keep the computer busy.
 
 ### MIDI
 

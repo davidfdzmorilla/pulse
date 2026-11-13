@@ -124,6 +124,40 @@ pub struct AudioSettings {
     pub sample_rate: Option<u32>,
     /// Frames per buffer: lower is less latency, higher is safer.
     pub buffer: Option<u32>,
+    /// Threads each block is shared among, the audio thread included (None:
+    /// [`crate::default_threads`]).
+    pub threads: Option<usize>,
+}
+
+/// Threads blocks are shared among with these settings: theirs, else
+/// `PULSE_THREADS`, else the default.
+pub fn threads_for(settings: &AudioSettings) -> usize {
+    let env = || std::env::var("PULSE_THREADS").ok().and_then(|t| t.parse().ok());
+    settings.threads.or_else(env).unwrap_or_else(crate::workers::default_threads).clamp(1, crate::workers::MAX_THREADS)
+}
+
+/// What each thread helping the audio thread runs as it starts. On macOS it
+/// becomes a real-time thread in the output device's audio work group (see
+/// [`crate::workgroup`]), unless `PULSE_WORKGROUP=0`.
+#[cfg(target_os = "macos")]
+fn worker_init(device: &cpal::Device, sample_rate: f32, buffer: Option<u32>) -> Option<crate::WorkerInit> {
+    if std::env::var("PULSE_WORKGROUP").is_ok_and(|v| v == "0") {
+        return None;
+    }
+    let uid = device.id().ok()?.id().to_string();
+    let group = crate::workgroup::Workgroup::of_device(&uid)?;
+    let frames = buffer.or_else(|| crate::workgroup::buffer_frames(&uid))?;
+    let period = std::time::Duration::from_secs_f64(frames as f64 / sample_rate.max(1.0) as f64);
+    Some(std::sync::Arc::new(move || {
+        if crate::workgroup::make_realtime(period) {
+            group.join();
+        }
+    }))
+}
+
+#[cfg(not(target_os = "macos"))]
+fn worker_init(_: &cpal::Device, _: f32, _: Option<u32>) -> Option<crate::WorkerInit> {
+    None
 }
 
 /// An audio device and what it can do.
@@ -221,9 +255,8 @@ pub fn start_with(settings: &AudioSettings) -> Result<(AudioOutput, EngineHandle
     };
 
     let (mut engine, mut handle) = detached(sample_rate);
-    // The tracks are shared among several cores (PULSE_THREADS=1: all on the audio thread).
-    let threads = std::env::var("PULSE_THREADS").ok().and_then(|t| t.parse().ok()).unwrap_or_else(crate::workers::default_threads);
-    engine.set_threads(threads);
+    // The tracks are shared among several cores (1: all on the audio thread).
+    engine.set_threads_with(threads_for(settings), worker_init(&device, sample_rate, buffer));
     handle.device_name = device_name;
     handle.buffer = buffer;
 
@@ -314,6 +347,16 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_settings_choose_the_threads_within_what_the_engine_takes() {
+        let with = |threads| threads_for(&AudioSettings { threads, ..Default::default() });
+        assert_eq!(with(Some(3)), 3);
+        assert_eq!(with(Some(1)), 1);
+        assert_eq!(with(Some(0)), 1, "at least the audio thread");
+        assert_eq!(with(Some(99)), crate::workers::MAX_THREADS);
+        assert!((1..=crate::workers::MAX_THREADS).contains(&with(None)));
+    }
 
     #[test]
     #[ignore = "diagnostic: lists this computer's audio devices"]

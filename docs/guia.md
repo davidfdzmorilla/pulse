@@ -3518,10 +3518,11 @@ Toda la interfaz está traducida al inglés: menús, ventanas, editores, disposi
 
 - **Salida** y **entrada** (la entrada es la que se usa para grabar).
 - **Frecuencia** y **tamaño del búfer**: más pequeño responde antes; si oyes cortes, súbelo.
+- **Núcleos para el audio**: entre cuántos núcleos reparte Pulse el trabajo (ver abajo). **Automático** suele ser lo mejor.
 - **Latencias medidas**, también la de los **efectos**.
 - **Ajuste fino de la grabación** y **Compensar la latencia de los efectos** (ver [[Grabar]]).
 
-Cuando el proyecto pesa, Pulse reparte las pistas y los retornos entre varios núcleos del procesador (hasta la mitad de los que tiene, y como mucho seis). Así caben muchas más pistas, instrumentos y efectos sin cortes, y suena exactamente igual que en un solo núcleo (así exporta): lo que oyes es lo que exportas. Con poco que procesar, lo hace todo en uno y los demás descansan. Empieza por las pistas que más gastan, para que una pesada no se quede sola al final.
+Cuando el proyecto pesa, Pulse reparte las pistas y los retornos entre varios núcleos del procesador (hasta la mitad de los que tiene, y como mucho seis). Así caben muchas más pistas, instrumentos y efectos sin cortes, y suena exactamente igual que en un solo núcleo (así exporta): lo que oyes es lo que exportas. Con poco que procesar, lo hace todo en uno y los demás descansan. Empieza por las pistas que más gastan, para que una pesada no se quede sola al final. Por defecto usa hasta la mitad de los núcleos, y como mucho seis; en **Núcleos para el audio** puedes elegir otro número. En macOS, los núcleos que ayudan trabajan al ritmo de la tarjeta de sonido, como el del audio, así que aguantan sin cortes aunque otros programas tengan el ordenador ocupado.
 
 ### MIDI
 

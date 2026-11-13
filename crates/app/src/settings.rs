@@ -286,6 +286,20 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 }
             });
             ui.end_row();
+            ui.label(tr("Núcleos para el audio")).on_hover_text(tr("Cuando el proyecto pesa, Pulse reparte las pistas entre estos núcleos. Suena igual con cualquier número; con más caben más pistas, y quedan menos para el resto del ordenador"));
+            let label = |t: Option<usize>| match t {
+                None => fill(tr("Automático ({})"), &[&engine::default_threads()]),
+                Some(1) => tr("1 (solo el del audio)").to_string(),
+                Some(t) => t.to_string(),
+            };
+            let cores = std::thread::available_parallelism().map_or(1, |n| n.get()).min(engine::MAX_THREADS);
+            egui::ComboBox::from_id_salt("audio_threads").selected_text(label(next.audio.threads)).width(200.0).show_ui(ui, |ui| {
+                ui.selectable_value(&mut next.audio.threads, None, label(None));
+                for t in 1..=cores {
+                    ui.selectable_value(&mut next.audio.threads, Some(t), label(Some(t)));
+                }
+            });
+            ui.end_row();
         });
         ui.label(egui::RichText::new(tr("Un búfer menor responde antes al tocar; si oyes cortes, súbelo.")).color(TEXT_DIM).size(10.5));
         ui.add_space(4.0);
@@ -446,7 +460,7 @@ mod tests {
         let settings: Settings = serde_json::from_str("{}").unwrap();
         assert_eq!(settings, Settings::default());
         assert!(settings.reopen_last);
-        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128) }, reopen_last: false, welcome_at_start: false, lessons_done: vec!["ritmo".into()], plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), blocked_plugins: vec![crate::plugin_guard::PluginKey { name: "Roto".into(), path: "/x/Roto.vst3".into(), cid: "AB".into() }], language: Some(crate::i18n::Language::English), unknown: Default::default() };
+        let custom = Settings { audio: AudioSettings { output: Some("Altavoces".into()), input: None, sample_rate: Some(44_100), buffer: Some(128), threads: Some(3) }, reopen_last: false, welcome_at_start: false, lessons_done: vec!["ritmo".into()], plugin_folders: vec![PathBuf::from("/x")], check_updates: false, skipped_version: Some("0.2.0".into()), last_version: Some("0.1.2".into()), automation_arm: false, browser_folders: vec![PathBuf::from("/Volumes/Muestras")], library: Some("/Volumes/Musica/Pulse".into()), count_in_bars: 2, record_offset_ms: -3.5, loops_follow_key: false, preview_in_tempo: false, new_from: Some("Beat".into()), export: Default::default(), beatbox: crate::beatbox::Examples(vec![(crate::beatbox::Drum::Hat, [-30.0, -20.5, -10.0, -3.0, -1.0])]), compensate: false, new_clip_bars: 2, detail_share: Some(0.55), blocked_plugins: vec![crate::plugin_guard::PluginKey { name: "Roto".into(), path: "/x/Roto.vst3".into(), cid: "AB".into() }], language: Some(crate::i18n::Language::English), unknown: Default::default() };
         let text = serde_json::to_string(&custom).unwrap();
         assert_eq!(serde_json::from_str::<Settings>(&text).unwrap(), custom);
     }

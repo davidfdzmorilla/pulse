@@ -31,6 +31,7 @@ mod transition;
 mod tuner;
 mod voice;
 mod workers;
+mod workgroup;
 pub use workers::{default_threads, WorkerInit, MAX_THREADS};
 pub use tuner::scale_bits;
 pub mod wavetable;
@@ -38,7 +39,7 @@ mod wavesynth;
 mod modsynth;
 pub use wavesynth::preview_cycle;
 
-pub use audio::{detached, input_devices, output_devices, start, start_with, AudioOutput, AudioSettings, DeviceInfo, EngineHandle, HeardNote, HeardQueue, LiveInput};
+pub use audio::{detached, input_devices, output_devices, start, start_with, threads_for, AudioOutput, AudioSettings, DeviceInfo, EngineHandle, HeardNote, HeardQueue, LiveInput};
 pub use dsp::fft;
 pub use effects::{eq_band_response_db, eq_eight_response_db, render_effects, OfflineLimiter};
 pub use instruments::render_drum_hit;

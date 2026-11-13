@@ -22,6 +22,8 @@ still in `0.x`, so any release may change things.
 
 ### Added
 
+- Settings → Audio: **Cores for audio**, how many cores the engine spreads
+  the tracks across (Automatic by default, as before).
 - Launch documentation: English `README.md` (Spanish in `README.es.md`),
   `CONTRIBUTING.md` in English (original Spanish kept in
   `CONTRIBUTING.es.md`), `docs/DOWNLOADS.md`, `docs/DEVELOPMENT.md`,
@@ -60,6 +62,9 @@ still in `0.x`, so any release may change things.
 - The engine is lighter: the Modular, Wavetable and Polychrome synths no
   longer copy their settings for each voice, and shared blocks start with
   the costliest tracks. The sound is the same, sample for sample.
+- macOS: the threads that help the audio thread are real-time threads in
+  the output device's audio work group, so a busy computer no longer holds
+  them back (dropouts under load went from hundreds to none in our tests).
 
 ### Fixed
 

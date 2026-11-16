@@ -517,6 +517,38 @@ fn bench_device_workgroup() {
     hogs.into_iter().for_each(|h| h.join().unwrap());
 }
 
+/// How long 20 s of 8, 16, 32 and 64 loaded tracks take to render with no
+/// device, in the blocks of [`engine::OfflineRenderer`] (1024 frames), on 1
+/// to 10 threads (PULSE_BENCH_THREADS=1,4 for others).
+#[test]
+#[ignore = "benchmark: run with --ignored --nocapture bench_offline"]
+fn bench_offline() {
+    let frames = 1024;
+    let seconds: f64 = std::env::var("PULSE_BENCH_SECONDS").ok().and_then(|v| v.parse().ok()).unwrap_or(20.0);
+    let threads: Vec<usize> = std::env::var("PULSE_BENCH_THREADS").ok().map_or(vec![1, 2, 4, 6, 8, 10], |v| v.split(',').filter_map(|t| t.trim().parse().ok()).collect());
+    println!("{:>6} {:>6} {:>9} {:>9} {:>8}", "pistas", "hilos", "tarda", "× real", "× 1 hilo");
+    for tracks in [8usize, 16, 32, 64] {
+        let mut alone = 0.0;
+        for &threads in &threads {
+            let (mut engine, mut handle) = detached(SR);
+            engine.set_threads(threads);
+            load_big_project(&mut engine, &mut handle, tracks);
+            let mut out = vec![0f32; frames * 2];
+            let start = Instant::now();
+            for _ in 0..(seconds * SR as f64 / frames as f64) as usize {
+                engine.process(&mut out, 2);
+                handle.collect_garbage();
+            }
+            let took = start.elapsed().as_secs_f64();
+            assert!(finite(&out));
+            if threads == 1 {
+                alone = took;
+            }
+            println!("{tracks:>6} {threads:>6} {took:>8.2}s {:>8.1}× {:>7.2}×", seconds / took, if alone > 0.0 { alone / took } else { 0.0 });
+        }
+    }
+}
+
 /// Time per 128-frame callback with 8, 32 and 64 loaded tracks (instruments,
 /// 4–8 effects each, sends to two returns, automation, a master chain), on 1
 /// to 8 threads (PULSE_BENCH_THREADS=1,4 for others). PULSE_BENCH_PACED=1 waits

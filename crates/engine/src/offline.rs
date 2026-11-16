@@ -37,6 +37,17 @@ impl OfflineRenderer {
         }
     }
 
+    /// Shares the work among `threads` (see [`Engine::set_threads`]): the
+    /// samples are the same on any number, and a heavy song renders sooner.
+    pub fn set_threads(&mut self, threads: usize) {
+        self.engine.set_threads(threads);
+    }
+
+    /// Threads it renders on.
+    pub fn threads(&self) -> usize {
+        self.engine.threads()
+    }
+
     /// Queues a command; if the queue is full the engine applies what is pending first.
     pub fn send(&mut self, command: Command) {
         let mut command = command;
@@ -87,5 +98,57 @@ impl OfflineRenderer {
             done += n;
             self.collect_garbage();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::engine::{PlacedClip, PlayClip};
+    use crate::model::{InstrumentKind, MidiClip, Note};
+
+    /// A song rendered on four threads is the one rendered on one, sample by sample.
+    #[test]
+    fn threads_render_the_same_samples() {
+        const SR: f32 = 48_000.0;
+        let render = |threads: usize| {
+            let mut renderer = OfflineRenderer::new(SR);
+            renderer.set_threads(threads);
+            assert_eq!(renderer.threads(), threads);
+            renderer.engine.share_always();
+            let catalog = InstrumentKind::catalog();
+            for t in 0..12 {
+                renderer.send(Command::set_instrument(t, catalog[t % catalog.len()], SR));
+                let mut clip = MidiClip::new("c", 4.0, [0, 0, 0]);
+                for k in 0..8 {
+                    clip.notes.push(Note { start: k as f64 * 0.5, length: 0.4, pitch: 36 + ((t * 5 + k * 3) % 36) as u8, velocity: 0.8, chance: 1.0 });
+                }
+                renderer.send(Command::SetArrangement { track: t, clips: Box::new(vec![PlacedClip::new(0.0, 8.0, PlayClip::Midi(clip))]) });
+                renderer.send(Command::SetSend { track: t, send: 0, amount: 0.3 });
+            }
+            renderer.send(Command::SetOutputLimit(false));
+            renderer.send(Command::Play);
+            let (mut left, mut right) = (Vec::new(), Vec::new());
+            // Sizes that aren't whole blocks, too.
+            for frames in [48_000, 1, 1023, 30_000, 17_000] {
+                renderer.render(frames, &mut left, &mut right);
+            }
+            (left, right, renderer.engine.helped())
+        };
+        let (left, right, _) = render(1);
+        assert!(left.iter().any(|s| s.abs() > 0.01), "it sounds");
+        // A busy machine may keep the workers asleep through a whole render:
+        // it is made again until they take part.
+        let mut tries = 0;
+        let (shared_left, shared_right, helped) = loop {
+            let made = render(4);
+            tries += 1;
+            if made.2 > 0 || tries == 20 {
+                break made;
+            }
+        };
+        assert!(helped > 0, "the other threads did nothing");
+        let same = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+        assert!(same(&left, &shared_left) && same(&right, &shared_right), "four threads sound otherwise");
     }
 }

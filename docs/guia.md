@@ -3493,6 +3493,7 @@ Si el proyecto tiene versiones con nombre (ver [[Versiones del proyecto]]), marc
 +++ Cómo funciona
 - **Dither**: en WAV de 16 bits es distinto en cada archivo, para que el ruido de los stems no se sume en fase.
 - **MP3 sin huecos**: lleva la información para reproducirse sin huecos. Empieza y acaba en la misma muestra que el WAV, sin el silencio que añade el codificador, así que encaja en una sesión o en un loop.
+- **La mezcla, entre núcleos**: una canción con muchas pistas reparte su trabajo entre varios núcleos del procesador, uno por cada cuatro pistas que suenan, así que exportarla tarda menos. El archivo es idéntico, muestra a muestra, al que saldría con un solo núcleo.
 - **Stems a la vez**: se renderizan a la vez, uno por núcleo del procesador, y cada uno solo con lo que puede sonar en él (su pista, sus grupos y las pistas que escuchan sus sidechains). 16 stems tardan poco más que la canción una vez. Suenan exactamente igual que en solo.
 - **Plugins**: si el proyecto tiene plugins, los stems se renderizan de uno en uno, y sus copias se cierran en el hilo principal de Pulse, como piden los plugins VST3 (algunos se cierran de golpe si no).
 - **Secciones**: cada sección empieza con lo que ya sonaba (también una nota larga que empezó muchos compases antes) y acaba con su cola. Empieza y acaba justo en sus marcadores, aunque el tempo esté automatizado. Una pista que no suena en una sección no tiene stem de ella, en vez de un archivo en silencio; al terminar, el aviso dice cuántos se han omitido.

@@ -293,7 +293,7 @@ pub fn window(app: &mut PulseApp, ctx: &egui::Context) {
                 Some(t) => t.to_string(),
             };
             let cores = std::thread::available_parallelism().map_or(1, |n| n.get()).min(engine::MAX_THREADS);
-            egui::ComboBox::from_id_salt("audio_threads").selected_text(label(next.audio.threads)).width(200.0).show_ui(ui, |ui| {
+            egui::ComboBox::from_id_salt("audio_threads").selected_text(label(next.audio.threads)).width(200.0).height(400.0).show_ui(ui, |ui| {
                 ui.selectable_value(&mut next.audio.threads, None, label(None));
                 for t in 1..=cores {
                     ui.selectable_value(&mut next.audio.threads, Some(t), label(Some(t)));
@@ -490,5 +490,97 @@ mod tests {
         assert!(!app.settings.reopen_last);
         assert!(app.plugin_folders().len() >= 2);
         assert!(app.audio_summary().contains("kHz"));
+    }
+
+    fn app_with_settings_open() -> PulseApp {
+        let mut app = PulseApp::headless(crate::project::Project::demo());
+        app.show_settings = true;
+        app.devices = Devices { outputs: vec![DeviceInfo { name: "Altavoces".into(), rates: vec![44_100, 48_000], buffers: vec![128, 256] }], inputs: Vec::new() };
+        app
+    }
+
+    fn input(events: Vec<egui::Event>) -> egui::RawInput {
+        egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(1600.0, 1400.0))), events, ..Default::default() }
+    }
+
+    /// Every text drawn, with where.
+    fn texts(output: &egui::FullOutput) -> Vec<(String, egui::Rect)> {
+        fn collect(shape: &egui::Shape, texts: &mut Vec<(String, egui::Rect)>) {
+            match shape {
+                egui::Shape::Text(t) => texts.push((t.galley.text().to_string(), t.galley.rect.translate(t.pos.to_vec2()))),
+                egui::Shape::Vec(shapes) => shapes.iter().for_each(|s| collect(s, texts)),
+                _ => {}
+            }
+        }
+        let mut out = Vec::new();
+        output.shapes.iter().for_each(|s| collect(&s.shape, &mut out));
+        out
+    }
+
+    fn click(at: egui::Pos2) -> Vec<egui::Event> {
+        vec![
+            egui::Event::PointerMoved(at),
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: true, modifiers: Default::default() },
+            egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed: false, modifiers: Default::default() },
+        ]
+    }
+
+    /// Opens the combo showing `shown` in the row labelled `row`: what its
+    /// open list draws (only what fits; the rest would need scrolling).
+    fn open_combo(app: &mut PulseApp, ctx: &egui::Context, row: &str, shown: &str) -> Vec<(String, egui::Rect)> {
+        let frame = |app: &mut PulseApp, events| ctx.run_ui(input(events), |ui| window(app, ui.ctx()));
+        let _ = frame(app, Vec::new());
+        let drawn = texts(&frame(app, Vec::new()));
+        let row = drawn.iter().find(|(t, _)| t == row).unwrap_or_else(|| panic!("no «{row}» in {drawn:?}")).1;
+        let combo = drawn.iter().find(|(t, r)| t == shown && (r.center().y - row.center().y).abs() < 8.0).unwrap_or_else(|| panic!("no «{shown}» next to the row")).1;
+        let _ = frame(app, click(combo.center()));
+        texts(&frame(app, Vec::new())).into_iter().filter(|(_, r)| r.min.y > combo.max.y - 1.0 && (r.min.x - combo.min.x).abs() < 40.0).collect()
+    }
+
+    /// What the cores combo should list on this computer.
+    fn core_choices(auto: &str, only: &str) -> Vec<String> {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get()).min(engine::MAX_THREADS);
+        let mut want = vec![auto.replace("{}", &engine::default_threads().to_string()), only.to_string()];
+        want.extend((2..=cores).map(|t| t.to_string()));
+        want
+    }
+
+    /// Every choice fits without scrolling (with 10 cores the last one used to
+    /// hide), and picking one changes the setting.
+    #[test]
+    fn the_cores_combo_shows_every_choice_and_picks() {
+        let ctx = egui::Context::default();
+        let mut app = app_with_settings_open();
+        let row = "Núcleos para el audio";
+        let auto = format!("Automático ({})", engine::default_threads());
+        let want = core_choices("Automático ({})", "1 (solo el del audio)");
+        let list = open_combo(&mut app, &ctx, row, &auto);
+        let shown: Vec<String> = list.iter().map(|(t, _)| t.clone()).filter(|t| want.contains(t)).collect();
+        assert_eq!(shown, want);
+        let at = |list: &[(String, egui::Rect)], pick: &str| list.iter().find(|(t, _)| t == pick).unwrap_or_else(|| panic!("no «{pick}»")).1.center();
+        if want.len() > 2 {
+            let _ = ctx.run_ui(input(click(at(&list, "2"))), |ui| window(&mut app, ui.ctx()));
+            assert_eq!(app.settings.audio.threads, Some(2));
+            let list = open_combo(&mut app, &ctx, row, "2");
+            let _ = ctx.run_ui(input(click(at(&list, "1 (solo el del audio)"))), |ui| window(&mut app, ui.ctx()));
+        } else {
+            let _ = ctx.run_ui(input(click(at(&list, "1 (solo el del audio)"))), |ui| window(&mut app, ui.ctx()));
+        }
+        assert_eq!(app.settings.audio.threads, Some(1));
+        let list = open_combo(&mut app, &ctx, row, "1 (solo el del audio)");
+        let _ = ctx.run_ui(input(click(at(&list, &auto))), |ui| window(&mut app, ui.ctx()));
+        assert_eq!(app.settings.audio.threads, None);
+    }
+
+    #[test]
+    fn the_cores_combo_in_english() {
+        crate::i18n::with(crate::i18n::Language::English, || {
+            let ctx = egui::Context::default();
+            let mut app = app_with_settings_open();
+            let auto = format!("Automatic ({})", engine::default_threads());
+            let want = core_choices("Automatic ({})", "1 (the audio one only)");
+            let shown: Vec<String> = open_combo(&mut app, &ctx, "Cores for audio", &auto).into_iter().map(|(t, _)| t).filter(|t| want.contains(t)).collect();
+            assert_eq!(shown, want);
+        });
     }
 }

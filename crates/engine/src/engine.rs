@@ -3596,13 +3596,26 @@ impl Engine {
     /// all on that one, as an export does), whenever blocks take long enough
     /// to need them. The sound is the same, sample for sample. Call it off the
     /// audio thread, before the engine goes there.
+    ///
+    /// For an engine no sound card calls (an export, a test): the workers
+    /// run as any thread does. See [`Engine::set_device_threads`].
     pub fn set_threads(&mut self, threads: usize) {
         self.set_threads_with(threads, None);
     }
 
     /// [`Engine::set_threads`], with something each worker runs as it starts.
     pub fn set_threads_with(&mut self, threads: usize, init: Option<crate::workers::WorkerInit>) {
-        self.workers = (threads > 1).then(|| crate::workers::Workers::new(threads, init)).filter(|w| w.threads() > 1);
+        self.start_workers(threads, init, false);
+    }
+
+    /// [`Engine::set_threads_with`] for the engine a sound card's thread
+    /// calls: the workers run at that thread's priority.
+    pub fn set_device_threads(&mut self, threads: usize, init: Option<crate::workers::WorkerInit>) {
+        self.start_workers(threads, init, true);
+    }
+
+    fn start_workers(&mut self, threads: usize, init: Option<crate::workers::WorkerInit>, urgent: bool) {
+        self.workers = (threads > 1).then(|| crate::workers::Workers::new(threads, init, urgent)).filter(|w| w.threads() > 1);
     }
 
     /// Threads each block is shared among.

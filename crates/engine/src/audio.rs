@@ -256,7 +256,7 @@ pub fn start_with(settings: &AudioSettings) -> Result<(AudioOutput, EngineHandle
 
     let (mut engine, mut handle) = detached(sample_rate);
     // The tracks are shared among several cores (1: all on the audio thread).
-    engine.set_threads_with(threads_for(settings), worker_init(&device, sample_rate, buffer));
+    engine.set_device_threads(threads_for(settings), worker_init(&device, sample_rate, buffer));
     handle.device_name = device_name;
     handle.buffer = buffer;
 

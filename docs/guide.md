@@ -3490,6 +3490,7 @@ If the project has named versions (see [[Project versions]]), tick under **Versi
 +++ How it works
 - **Dither**: in 16-bit WAV it's different in each file, so the noise of the stems doesn't add up in phase.
 - **Gapless MP3**: it carries the information to play back without gaps. It starts and ends on the same sample as the WAV, without the silence the encoder adds, so it fits in a session or a loop.
+- **The mix, across cores**: a song with many tracks spreads its work across several processor cores, one for every four tracks that play, so exporting it takes less. The file is identical, sample for sample, to the one a single core would make.
 - **Stems in parallel**: they're rendered at the same time, one per processor core, and each one only with what can sound in it (its track, its groups and the tracks its sidechains listen to). 16 stems take little more than the song once. They sound exactly the same as soloed.
 - **Plugins**: if the project has plugins, stems are rendered one at a time, and their copies are closed on Pulse's main thread, as VST3 plugins require (some crash otherwise).
 - **Sections**: each section starts with what was already sounding (including a long note that started many bars earlier) and ends with its tail. It starts and ends exactly on its markers, even if the tempo is automated. A track that doesn't play in a section gets no stem for it, instead of a silent file; at the end, the message says how many were skipped.

@@ -52,6 +52,9 @@ still in `0.x`, so any release may change things.
 
 ### Changed
 
+- Export: the mix of a song with many tracks renders on several cores
+  (one for every four tracks that play), with the same samples as on one.
+  A 36-track song exports about three times sooner on a 10-core Mac.
 - Windows CI: packaging, checksums, the render, the window start and the
   installer now run even when a test fails (the job still fails). Since
   2026-10-29 the failing tests had kept them from running at all. A failed

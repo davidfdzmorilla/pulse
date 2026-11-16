@@ -586,6 +586,22 @@ pub fn render(
 /// the way: with tempo automation, where each beat fell in the file.
 pub fn render_mapped(
     commands: Vec<Command>,
+    range: (f64, f64),
+    song: Song,
+    sample_rate: f32,
+    cancel: &AtomicBool,
+    progress: &dyn Fn(f32),
+    map: &mut Vec<(f64, usize)>,
+) -> Option<(Vec<f32>, Vec<f32>)> {
+    render_on(1, commands, range, song, sample_rate, cancel, progress, map)
+}
+
+/// [`render_mapped`] with the engine's work shared among `threads`: the same
+/// samples, sooner when the song is heavy.
+#[allow(clippy::too_many_arguments)]
+fn render_on(
+    threads: usize,
+    commands: Vec<Command>,
     (start, end): (f64, f64),
     song: Song,
     sample_rate: f32,
@@ -594,8 +610,10 @@ pub fn render_mapped(
     map: &mut Vec<(f64, usize)>,
 ) -> Option<(Vec<f32>, Vec<f32>)> {
     let tempo = song.tempo;
+    let mut renderer = OfflineRenderer::new(sample_rate);
+    renderer.set_threads(threads);
     // Its plugins are ended on the UI thread, whatever this one is.
-    let mut renderer = OnUi::new(OfflineRenderer::new(sample_rate), song.plugins);
+    let mut renderer = OnUi::new(renderer, song.plugins);
     for command in commands {
         renderer.send(command);
     }
@@ -1017,6 +1035,27 @@ fn threads(renders: &[Render]) -> usize {
     std::thread::available_parallelism().map_or(1, |n| n.get()).min(renders.len()).max(1)
 }
 
+/// The most threads the engine of each render shares its blocks among, with
+/// `at_once` renders going: what a song playing gets by default, while three
+/// quarters of the cores hold them all (a thread on a slow core holds its
+/// whole block up, so the last cores make a render slower, not faster).
+fn engine_threads(at_once: usize) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+    ((cores - cores / 4) / at_once.max(1)).clamp(1, engine::default_threads())
+}
+
+/// Threads for the engine of the render these `commands` set up, of at most
+/// `most`: one for every four tracks that play (with fewer tracks than that
+/// the threads wait for each other more than they help). A stem is one
+/// track and what it listens to: one thread.
+fn threads_for(commands: &[Command], stem: bool, most: usize) -> usize {
+    if stem {
+        return 1;
+    }
+    let playing = commands.iter().filter(|c| matches!(c, Command::SetArrangement { clips, .. } if !clips.is_empty())).count();
+    ((playing + 2) / 4).clamp(1, most.max(1))
+}
+
 /// Renders each of `renders` (on [`threads`] threads) and hands it to `each`
 /// as it finishes, with what it was. The results in the order of `renders`, or
 /// the first error: a cancellation, or one `each` returned (which stops the rest).
@@ -1030,6 +1069,7 @@ pub fn render_each<T: Send>(
     const CANCELLED: &str = "Cancelado";
     let count = renders.len().max(1);
     let threads = threads(&renders);
+    let engine_threads = engine_threads(threads);
     // How far each render has got, 0..1, to add up into the progress.
     let done: Vec<AtomicU32> = (0..count).map(|_| AtomicU32::new(0)).collect();
     let next = std::sync::atomic::AtomicUsize::new(0);
@@ -1044,7 +1084,7 @@ pub fn render_each<T: Send>(
             progress.store((total / count as f32).to_bits(), Ordering::Relaxed);
         };
         let commands = std::mem::take(&mut render.commands);
-        let result = match self::render(commands, render.range, render.song, sample_rate, cancel, &step) {
+        let result = match render_on(threads_for(&commands, render.track.is_some(), engine_threads), commands, render.range, render.song, sample_rate, cancel, &step, &mut Vec::new()) {
             None => Err(CANCELLED.to_string()),
             Some((left, right)) => each(&render, left, right),
         };
@@ -1723,6 +1763,88 @@ mod tests {
             assert_eq!(l1.len(), l2.len(), "track {t}");
             let difference = l1.iter().zip(&l2).chain(r1.iter().zip(&r2)).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
             assert!(difference == 0.0, "track {t}: differs by {difference}");
+        }
+    }
+
+    /// A render shared among the engine's threads is the one made on one,
+    /// sample by sample (groups, sidechains and a master that listens).
+    #[test]
+    fn a_render_on_several_threads_is_the_same() {
+        let project = tangled_demo();
+        let range = beat_range(&project, Range::Loop).unwrap();
+        let on = |threads: usize| {
+            let commands = sync::project_commands(&project, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+            render_on(threads, commands, range, Song::of(&project), 48_000.0, &AtomicBool::new(false), &|_| {}, &mut Vec::new()).unwrap()
+        };
+        let (left, right) = on(1);
+        assert!(peak(&left, &right) > 0.01, "it sounds");
+        for threads in [2, 4] {
+            let (l, r) = on(threads);
+            let same = |a: &[f32], b: &[f32]| a.len() == b.len() && a.iter().zip(b).all(|(x, y)| x.to_bits() == y.to_bits());
+            assert!(same(&left, &l) && same(&right, &r), "{threads} threads sound otherwise");
+        }
+    }
+
+    /// How long the example song takes to render, as it is and with its
+    /// tracks four times over, on one thread and on those an export uses.
+    #[test]
+    #[ignore = "benchmark: run with --ignored --nocapture bench_render_threads"]
+    fn bench_render_threads() {
+        let song = crate::example::song().unwrap();
+        let mut big = song.clone();
+        for _ in 0..3 {
+            big.tracks.extend(song.tracks.iter().cloned());
+        }
+        big.assign_ids();
+        for (name, project) in [("la canción de ejemplo", &song), ("cuatro veces sus pistas", &big)] {
+            let range = beat_range(project, Range::Song).unwrap();
+            let mut alone = (0.0, Vec::new());
+            let commands = || sync::project_commands(project, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+            let chosen = threads_for(&commands(), false, engine_threads(1));
+            println!("{name}: una exportación usa {chosen} hilos");
+            for threads in [1, 2, 3, engine_threads(1)] {
+                let commands = commands();
+                let start = std::time::Instant::now();
+                let (left, _) = render_on(threads, commands, range, Song::of(project), 48_000.0, &AtomicBool::new(false), &|_| {}, &mut Vec::new()).unwrap();
+                let took = start.elapsed().as_secs_f64();
+                if threads == 1 {
+                    alone = (took, left.clone());
+                }
+                let same = left.iter().zip(&alone.1).all(|(a, b)| a.to_bits() == b.to_bits());
+                println!("{name} ({} pistas, {:.0} s): {threads} hilos {took:.2} s · ×{:.2} · {}", project.tracks.len(), left.len() as f64 / 48_000.0, alone.0 / took, if same { "igual" } else { "DISTINTO" });
+                assert!(same);
+            }
+        }
+    }
+
+    /// The mix gets a thread for every four tracks that play, up to its
+    /// most; a stem, one.
+    #[test]
+    fn a_render_gets_threads_for_the_tracks_that_play() {
+        let project = tangled_demo();
+        let commands = sync::project_commands(&project, &mut SampleCache::default(), 48_000.0, &HashSet::new());
+        let playing = project.tracks.iter().filter(|t| !t.arrangement.is_empty()).count();
+        assert!(playing >= 2, "the demo plays");
+        assert_eq!(threads_for(&commands, false, 16), ((playing + 2) / 4).max(1));
+        assert_eq!(threads_for(&commands, false, 1), 1);
+        assert_eq!(threads_for(&commands, true, 16), 1);
+        assert_eq!(threads_for(&[], false, 16), 1);
+        let many: Vec<Command> = (0..40).map(|track| Command::SetArrangement { track, clips: Box::new(vec![engine::PlacedClip::new(0.0, 4.0, engine::PlayClip::Midi(engine::model::MidiClip::new("c", 4.0, [0, 0, 0])))]) }).collect();
+        assert_eq!(threads_for(&many, false, 5), 5);
+        assert_eq!(threads_for(&many[..9], false, 5), 2);
+    }
+
+    /// One render gets what a song playing gets at most; many at once share
+    /// the cores and never ask for more threads than there are.
+    #[test]
+    fn renders_at_once_share_the_cores() {
+        let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
+        assert_eq!(engine_threads(1), engine::default_threads().min((cores - cores / 4).max(1)));
+        assert_eq!(engine_threads(cores), 1);
+        assert_eq!(engine_threads(1000), 1);
+        for at_once in 1..=cores {
+            let each = engine_threads(at_once);
+            assert!(each >= 1 && (each == 1 || each * at_once <= cores), "{at_once} renders on {each} threads each with {cores} cores");
         }
     }
 

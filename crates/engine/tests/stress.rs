@@ -1265,3 +1265,66 @@ fn a_reloaded_plugin_instrument_is_the_one_that_plays() {
         assert!(after < before * 0.1, "the engine still plays the old instance; the UI controls a silent one");
     }
 }
+
+/// Threads in this process now (`ps -M`: a line per thread under a header).
+fn process_threads() -> usize {
+    let out = std::process::Command::new("ps").args(["-M", "-p", &std::process::id().to_string()]).output().expect("ps runs");
+    String::from_utf8_lossy(&out.stdout).lines().count() - 1
+}
+
+/// Starting and stopping the real output with each «Cores for audio» value,
+/// as the app does when it changes: the transport runs, each start has its
+/// workers and no more, and none stay behind. Run on macOS with
+/// `cargo test --release -p engine --test stress -- --ignored the_device_restarts --nocapture`.
+#[test]
+#[ignore = "needs the audio device; counts threads with ps -M"]
+fn the_device_restarts_with_each_thread_count_and_leaves_no_threads() {
+    let load = |handle: &mut EngineHandle, tracks: usize| {
+        let rate = handle.sample_rate;
+        assert!(handle.send(Command::SetGain { target: Target::Master, gain: 0.0 }));
+        assert!(handle.send(Command::SetLoop { enabled: true, start: 0.0, end: 32.0 }));
+        for t in 0..tracks {
+            let kind = instrument_for(t);
+            assert!(handle.send(Command::set_instrument(t, kind, rate)));
+            assert!(handle.send(Command::ReplaceChain { target: Target::Track(t), chain: build_chain(&track_devices(t), rate) }));
+            let clip = busy_clip(36 + (t % 4) as u8 * 12, is_drums(&kind));
+            assert!(handle.send(Command::SetArrangement { track: t, clips: Box::new(vec![PlacedClip::new(0.0, 32.0, PlayClip::Midi(clip))]) }));
+        }
+        assert!(handle.send(Command::Play));
+    };
+    let pause = |ms| std::thread::sleep(std::time::Duration::from_millis(ms));
+    // CoreAudio starts threads of its own the first time and keeps one: a
+    // start and stop before counting.
+    drop(engine::start_with(&engine::AudioSettings { buffer: Some(128), threads: Some(1), ..Default::default() }).expect("audio starts"));
+    pause(300);
+    let before = process_threads();
+    let values = [Some(1), Some(2), Some(4), Some(16), None];
+    let workers = |t| engine::threads_for(&engine::AudioSettings { threads: t, ..Default::default() }) as isize;
+    let mut base = None;
+    let mut failures = Vec::new();
+    for cycle in 0..10 {
+        for i in 0..values.len() {
+            // Every other cycle backwards, so each change goes to a different value.
+            let threads = values[if cycle % 2 == 0 { i } else { values.len() - 1 - i }];
+            let (output, mut handle) = engine::start_with(&engine::AudioSettings { buffer: Some(128), threads, ..Default::default() }).expect("audio starts");
+            load(&mut handle, 24);
+            pause(400);
+            let (position, running) = (handle.state.position(), process_threads());
+            let (dropouts, late) = (handle.state.cpu.dropouts(), handle.state.cpu.late_blocks());
+            drop(output);
+            drop(handle);
+            pause(300);
+            let base = *base.get_or_insert(running as isize - workers(threads));
+            println!("ciclo {cycle} · {threads:?}: posición {position:.2}, hilos {running}, cortes {dropouts}, tarde {late}");
+            if position <= 0.1 {
+                failures.push(format!("cycle {cycle} {threads:?}: the transport did not move"));
+            }
+            if running as isize - base != workers(threads) {
+                failures.push(format!("cycle {cycle} {threads:?}: {} threads above the base, {} expected", running as isize - base, workers(threads)));
+            }
+        }
+    }
+    pause(1000);
+    assert!(failures.is_empty(), "{failures:#?}");
+    assert_eq!(process_threads(), before, "threads left behind");
+}

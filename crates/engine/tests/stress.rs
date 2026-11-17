@@ -1360,3 +1360,27 @@ fn the_device_restarts_with_each_thread_count_and_leaves_no_threads() {
     assert!(failures.is_empty(), "{failures:#?}");
     assert_eq!(process_threads(), before, "threads left behind");
 }
+
+/// What a piano costs while the wheel and the pitch bend move (every sounding
+/// string is designed again at each step of the grid), at 256 frames.
+#[test]
+#[ignore = "benchmark: run with --ignored --nocapture bench_piano_bend"]
+fn bench_piano_bend() {
+    use engine::model::*;
+    let (frames, seconds) = (256, 20.0);
+    let (mut engine, mut handle) = detached(SR);
+    let kind = InstrumentKind::catalog().into_iter().find(|k| matches!(k, InstrumentKind::Keys(_))).unwrap();
+    send(&mut engine, &mut handle, Command::set_instrument(0, kind, SR));
+    send(&mut engine, &mut handle, Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 1e6, PlayClip::Midi(busy_clip(48, false)))]) });
+    send(&mut engine, &mut handle, Command::Play);
+    let mut out = vec![0f32; frames * 2];
+    for _ in 0..400 {
+        engine.process(&mut out, 2);
+    }
+    let start = Instant::now();
+    for _ in 0..(seconds * SR as f64 / frames as f64) as usize {
+        engine.process(&mut out, 2);
+    }
+    assert!(finite(&out));
+    println!("Pulse Keys, con la rueda y el bend en marcha: {:.2} % de un núcleo", start.elapsed().as_secs_f64() / seconds * 100.0);
+}

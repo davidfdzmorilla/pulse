@@ -4492,8 +4492,9 @@ mod tests {
     }
 
     /// The same song rendered in callbacks of any size sounds the same, sample
-    /// for sample: every instrument (the Polychrome too, its glides, random and
-    /// drift) and every effect, also the ones whose settings move.
+    /// for sample: every instrument with each of its factory sounds (the
+    /// Polychrome too, its glides, random and drift) and every effect, also
+    /// the ones whose settings move.
     #[test]
     fn the_buffer_size_never_changes_the_sound() {
         use crate::model::{AutoFilterParams, Device, Effect, Groove};
@@ -4530,20 +4531,36 @@ mod tests {
             out
         };
         let odd = [1usize, 63, 64, 500, 1024, 4096, 37];
-        let mut differ = Vec::new();
+        // Every factory sound: the modulation, sequences and effects they use.
+        let mut cases: Vec<(String, Option<InstrumentKind>, Vec<Device>)> = Vec::new();
         for kind in InstrumentKind::catalog() {
-            if render(Some(kind), vec![], &[1024]) != render(Some(kind), vec![], &odd) {
-                differ.push(kind.label().to_string());
+            for (name, sound) in std::iter::once(("", kind)).chain(kind.factory_presets()) {
+                cases.push((format!("{} {name}", kind.label()), Some(sound), vec![]));
             }
         }
         let filter = Device::new(Effect::AutoFilter(AutoFilterParams { steep: true, resonance: 0.9, drive_db: 6.0, lfo_amount: 2.0, lfo_beats: 0.5, ..Default::default() }));
         // Repeating from the start (on from the first frame).
         let repeat = Device::new(Effect::Transition(crate::model::TransitionParams { mode: crate::model::TransitionMode::Repeat, active: 1.0, grid_beats: 1.0 / 3.0, pitch: -2.0, gate: 0.6, ..Default::default() }));
         for effect in Effect::catalog().into_iter().map(Device::new).chain([filter, repeat]) {
-            if render(None, vec![effect], &[1024]) != render(None, vec![effect], &odd) {
-                differ.push(effect.effect.label().to_string());
-            }
+            cases.push((effect.effect.label().to_string(), None, vec![effect]));
         }
+        // Hundreds of renders: shared out among the cores.
+        let threads = std::thread::available_parallelism().map_or(1, |n| n.get()).min(8);
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let found = std::sync::Mutex::new(Vec::new());
+        std::thread::scope(|scope| {
+            for _ in 0..threads {
+                scope.spawn(|| {
+                    while let Some((label, kind, chain)) = cases.get(next.fetch_add(1, std::sync::atomic::Ordering::Relaxed)) {
+                        if render(*kind, chain.clone(), &[1024]) != render(*kind, chain.clone(), &odd) {
+                            found.lock().unwrap().push(label.clone());
+                        }
+                    }
+                });
+            }
+        });
+        let mut differ = found.into_inner().unwrap();
+        differ.sort();
         assert!(differ.is_empty(), "depend on the buffer size: {differ:?}");
     }
 

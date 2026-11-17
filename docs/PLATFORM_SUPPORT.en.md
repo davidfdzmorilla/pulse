@@ -75,7 +75,21 @@ threads started in 81 of 82 repetitions. Now the thread that creates them raises
 their priority immediately after creating them (`crates/engine/src/workers.rs`).
 Pulse's cpal audio thread already runs at maximum priority.
 
-One slowdown remains: the engine stress tests take about 27 minutes in Windows
-CI; by themselves, the allocation test takes 34 seconds, and all of them
-together on macOS take 82 seconds. They pass; see
-[FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-ci-make-the-engine-stress-tests-fast-again).
+**The slow stress tests (fixed in #240, 2026-11-16).** The engine stress
+tests took 27–29 minutes in Windows CI (82 seconds on macOS). The cause:
+helper threads always ran at maximum priority, also in tests and exports,
+where the thread they help runs at normal priority. While they waited for a
+task that thread held, they kept the processors busy and Windows gave it no
+turn. Now they only take the audio priority when a sound card calls the
+engine (`Engine::set_device_threads`); in an export or a test they run like
+any thread, and the engine waits until they are up before it starts (at
+normal priority, on a busy machine a new thread waits for its first turn,
+and a short render ended without them).
+
+| Windows CI | Before | After (two runs) |
+|---|---|---|
+| Engine stress tests | 1741 s | 258 s and 314 s |
+| "Tests" step | 44 min | 17 and 20 min |
+| Whole job | 57 min | 29 and 33 min |
+
+No test was changed.

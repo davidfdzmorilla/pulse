@@ -71,6 +71,22 @@ ninguno de los 3 hilos llegó a arrancar. Ahora el hilo que los crea les sube
 la prioridad nada más crearlos (`crates/engine/src/workers.rs`). En Pulse el
 hilo de audio de cpal ya corre con prioridad máxima.
 
-Queda una lentitud: las pruebas de estrés del motor tardan unos 27 minutos
-en la CI de Windows; a solas, la de reservas de memoria tarda 34 segundos,
-y todas juntas en macOS, 82 segundos. Pasan; ver [FIRST_CONTRIBUTIONS.md](FIRST_CONTRIBUTIONS.md#3-windows-ci-make-the-engine-stress-tests-fast-again).
+**La lentitud de las pruebas de estrés (arreglada en #240, 16-11-2026).**
+Las pruebas de estrés del motor tardaban 27–29 minutos en la CI de Windows
+(en macOS, 82 segundos). La causa: los hilos de ayuda iban siempre a la
+prioridad máxima, también en las pruebas y al exportar, donde el hilo al
+que ayudan tiene prioridad normal. Mientras esperaban una tarea que tenía
+ese hilo, ocupaban los procesadores y Windows no le daba turno. Ahora solo
+suben a la prioridad del audio cuando el motor lo llama una tarjeta de
+sonido (`Engine::set_device_threads`); en una exportación o una prueba
+corren como cualquier hilo, y el motor espera a que hayan arrancado antes
+de empezar (a prioridad normal, en una máquina cargada un hilo nuevo tarda
+en recibir su primer turno, y un render corto acababa sin ellos).
+
+| CI de Windows | Antes | Después (dos ejecuciones) |
+|---|---|---|
+| Pruebas de estrés del motor | 1741 s | 258 s y 314 s |
+| Paso «Tests» | 44 min | 17 y 20 min |
+| Trabajo completo | 57 min | 29 y 33 min |
+
+No se cambió ninguna prueba.

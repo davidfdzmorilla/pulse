@@ -35,6 +35,9 @@ pub const MAX_THREADS: usize = 16;
 /// How long an idle worker spins before it sleeps.
 const SPIN: Duration = Duration::from_micros(250);
 
+/// The longest [`Workers::new`] waits for its threads to be up.
+const START_WAIT: Duration = Duration::from_secs(5);
+
 /// A set of tasks, one bit each.
 pub(crate) type Mask = u128;
 
@@ -67,6 +70,8 @@ struct Shared {
     finished: AtomicUsize,
     /// Tasks the workers have run, in all.
     helped: AtomicU64,
+    /// Workers that are up and looking for work.
+    started: AtomicUsize,
     job: AtomicPtr<()>,
     run: AtomicUsize,
     sleeping: Box<[AtomicBool]>,
@@ -201,8 +206,14 @@ pub struct Workers {
 pub type WorkerInit = Arc<dyn Fn() + Send + Sync>;
 
 impl Workers {
-    /// Starts `threads - 1` workers (at most [`MAX_THREADS`] in all). Call off the audio thread.
-    pub fn new(threads: usize, init: Option<WorkerInit>) -> Self {
+    /// Starts `threads - 1` workers (at most [`MAX_THREADS`] in all) and
+    /// waits until they are up. Call off the audio thread.
+    ///
+    /// `urgent`: they help a sound card's thread, and run at its priority.
+    /// Otherwise (an export, a test) they run as any thread does, like the
+    /// one they help: at the audio priority they would keep it off the
+    /// processors while they wait for it.
+    pub fn new(threads: usize, init: Option<WorkerInit>, urgent: bool) -> Self {
         let count = threads.clamp(1, MAX_THREADS) - 1;
         let shared = Arc::new(Shared {
             epoch: AtomicU32::new(0),
@@ -213,6 +224,7 @@ impl Workers {
             done: std::array::from_fn(|_| AtomicU32::new(0)),
             finished: AtomicUsize::new(0),
             helped: AtomicU64::new(0),
+            started: AtomicUsize::new(0),
             job: AtomicPtr::new(std::ptr::null_mut()),
             run: AtomicUsize::new(0),
             sleeping: (0..count).map(|_| AtomicBool::new(false)).collect(),
@@ -224,7 +236,7 @@ impl Workers {
                 let (shared, init) = (shared.clone(), init.clone());
                 std::thread::Builder::new()
                     .name(format!("pulse-audio-{}", me + 1))
-                    .spawn(move || worker(shared, me, init))
+                    .spawn(move || worker(shared, me, init, urgent))
                     .ok()
                     .map(|handle| {
                         // On Windows a new thread starts at normal priority and
@@ -232,7 +244,7 @@ impl Workers {
                         // machine (time-critical threads spinning on every core)
                         // may take seconds: raised from here, it starts as it will run.
                         #[cfg(windows)]
-                        {
+                        if urgent {
                             use std::os::windows::io::AsRawHandle;
                             raise_priority_of(handle.as_raw_handle());
                         }
@@ -240,6 +252,13 @@ impl Workers {
                     })
             })
             .collect();
+        // Until they are all up (the system may take a while to run a new
+        // thread on a busy machine): a short render would be over before
+        // they could help. Not for ever, should one never come up.
+        let asked = Instant::now();
+        while shared.started.load(Ordering::Acquire) < threads.len() && asked.elapsed() < START_WAIT {
+            std::thread::sleep(Duration::from_micros(200));
+        }
         // A worker that failed to start is never woken nor waited for.
         let _ = shared.threads.set(threads);
         Self { shared }
@@ -299,12 +318,15 @@ impl Drop for Workers {
     }
 }
 
-fn worker(shared: Arc<Shared>, me: usize, init: Option<WorkerInit>) {
+fn worker(shared: Arc<Shared>, me: usize, init: Option<WorkerInit>, urgent: bool) {
     crate::engine::flush_denormals();
-    raise_priority();
+    if urgent {
+        raise_priority();
+    }
     if let Some(init) = init {
         init();
     }
+    shared.started.fetch_add(1, Ordering::Release);
     let mut seen = 0;
     while let Some(epoch) = shared.next(me, seen) {
         seen = epoch;
@@ -351,4 +373,63 @@ fn raise_priority_of(thread: *mut std::ffi::c_void) {
 pub fn default_threads() -> usize {
     let cores = std::thread::available_parallelism().map_or(1, |n| n.get());
     (cores / 2).clamp(1, 6)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// How the system runs this thread: Windows' thread priority, macOS's
+    /// quality of service class.
+    fn priority() -> i32 {
+        #[cfg(windows)]
+        {
+            unsafe extern "system" {
+                fn GetCurrentThread() -> *mut std::ffi::c_void;
+                fn GetThreadPriority(thread: *mut std::ffi::c_void) -> i32;
+            }
+            unsafe { GetThreadPriority(GetCurrentThread()) }
+        }
+        #[cfg(target_os = "macos")]
+        {
+            unsafe extern "C" {
+                fn qos_class_self() -> u32;
+            }
+            unsafe { qos_class_self() as i32 }
+        }
+        #[cfg(not(any(windows, target_os = "macos")))]
+        0
+    }
+
+    /// A pool's threads are up when it is made: a render that starts right
+    /// away has them from its first block.
+    #[test]
+    fn the_workers_are_up_when_the_pool_is_made() {
+        for threads in [2, 4, MAX_THREADS] {
+            let pool = Workers::new(threads, None, false);
+            assert_eq!(pool.shared.started.load(Ordering::Acquire), threads - 1);
+        }
+    }
+
+    /// The workers of a sound card's engine run at the audio priority; those
+    /// of an export or a test, as the thread they help does (at the audio
+    /// priority they would keep it off the processors while they wait for it).
+    #[test]
+    fn only_a_devices_workers_run_at_the_audio_priority() {
+        let of_a_worker = |urgent: bool| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let tx = std::sync::Mutex::new(tx);
+            let _pool = Workers::new(2, Some(Arc::new(move || drop(tx.lock().map(|tx| tx.send(priority()))))), urgent);
+            rx.recv_timeout(Duration::from_secs(30)).expect("the worker starts")
+        };
+        let (urgent, plain) = (of_a_worker(true), of_a_worker(false));
+        let here = std::thread::spawn(priority).join().unwrap();
+        println!("urgent {urgent}, plain {plain}, a thread started here {here}");
+        // THREAD_PRIORITY_TIME_CRITICAL, and a new thread's THREAD_PRIORITY_NORMAL.
+        #[cfg(windows)]
+        assert_eq!((urgent, plain), (15, 0));
+        // QOS_CLASS_USER_INTERACTIVE, and what a thread started here gets.
+        #[cfg(target_os = "macos")]
+        assert_eq!((urgent, plain), (0x21, here));
+    }
 }

@@ -91,6 +91,9 @@ fn loss_gain(g: f64, a: f64, w: f64) -> f64 {
     g * (1.0 + a) / (1.0 + 2.0 * a * w.cos() + a * a).sqrt()
 }
 
+/// How far either side of a bent string's dispersion its new one is looked for first.
+const AROUND: f64 = 0.004;
+
 /// One string: its delay line lives in the voice's slice of [`crate::keys::Keys`]' lines.
 #[derive(Clone, Copy, Default)]
 pub(crate) struct PianoString {
@@ -116,6 +119,17 @@ impl PianoString {
     /// whose partials near 5 kHz in `t60.1`, with overtones stretched as `stretch(n)`
     /// says (the n-th over the fundamental). `max` is the longest delay it may have.
     fn design(freq: f64, t60: (f64, f64), stretch: impl Fn(f64) -> f64, sample_rate: f64, max: usize) -> PianoString {
+        Self::design_as(freq, t60, stretch, sample_rate, max, None)
+    }
+
+    /// [`PianoString::design`], or, with `near`, the design of a string already
+    /// sounding that a bend retunes (every string of every note, at each step
+    /// of the wheel's vibrato), whose dispersion was `near`: the same string
+    /// to what a search can tell, found in a fraction of the steps. A struck
+    /// string is always searched for in full, so a note that isn't bent is the
+    /// same samples as ever.
+    fn design_as(freq: f64, t60: (f64, f64), stretch: impl Fn(f64) -> f64, sample_rate: f64, max: usize, near: Option<f64>) -> PianoString {
+        let quick = near.is_some();
         let period = (sample_rate / freq).min(max as f64 - 4.0);
         let w0 = 2.0 * PI * freq / sample_rate;
         // Loss: the decay at the fundamental, and at a high partial.
@@ -124,20 +138,31 @@ impl PianoString {
         let (low, high) = (gain_for(t60.0), gain_for(t60.1).min(gain_for(t60.0) * 0.9999));
         // The filter's shape sets how much faster the highs die than the fundamental
         // (falling as a goes from 0 to −1); g then sets the fundamental's decay.
-        let ratio = |a: f64| loss_gain(1.0, a, wh) / loss_gain(1.0, a, w0);
-        let (mut lo, mut hi) = (-0.999, 0.0);
-        for _ in 0..50 {
-            let mid = 0.5 * (lo + hi);
-            if ratio(mid) > high / low { hi = mid } else { lo = mid }
-        }
         // Never so steep that the fundamental can't keep its decay (high notes, where the
         // highs are close above it).
-        let (mut floor_lo, mut floor_hi) = (-0.999, 0.0);
-        for _ in 0..50 {
-            let mid = 0.5 * (floor_lo + floor_hi);
-            if loss_gain(1.0, mid, w0) < low / 0.99999 { floor_lo = mid } else { floor_hi = mid }
-        }
-        let loss_a = (0.5 * (lo + hi)).max(floor_hi);
+        let loss_a = if quick {
+            // Where the two searches below end, each a root of a² + 2βa + 1:
+            // gain(wh) / gain(w0) = high / low, and gain(w0) = low / 0.99999.
+            let (c0, ch) = (w0.cos(), wh.cos());
+            let root = |beta: f64| if beta > 1.0 { (-1.0 / (beta + (beta * beta - 1.0).sqrt())).max(-0.999) } else { -0.999 };
+            let shape = (high / low) * (high / low);
+            let kept = (low / 0.99999) * (low / 0.99999);
+            let floor = if kept < 1.0 { root((1.0 - kept * c0) / (1.0 - kept)) } else { 0.0 };
+            root((c0 - shape * ch) / (1.0 - shape)).max(floor)
+        } else {
+            let ratio = |a: f64| loss_gain(1.0, a, wh) / loss_gain(1.0, a, w0);
+            let (mut lo, mut hi) = (-0.999, 0.0);
+            for _ in 0..50 {
+                let mid = 0.5 * (lo + hi);
+                if ratio(mid) > high / low { hi = mid } else { lo = mid }
+            }
+            let (mut floor_lo, mut floor_hi) = (-0.999, 0.0);
+            for _ in 0..50 {
+                let mid = 0.5 * (floor_lo + floor_hi);
+                if loss_gain(1.0, mid, w0) < low / 0.99999 { floor_lo = mid } else { floor_hi = mid }
+            }
+            (0.5 * (lo + hi)).max(floor_hi)
+        };
         let g = (low / loss_gain(1.0, loss_a, w0)).min(0.99999);
         // Dispersion: as many allpasses as the period has room for, set so a high partial
         // lands where the stiff string puts it.
@@ -161,7 +186,62 @@ impl PianoString {
             let q = ((period - 6.0) / stages as f64).max(1.0001);
             ((1.0 - q) / (1.0 + q)).max(-0.9)
         };
-        let dispersion = if stages == 0 || n_ref < 2.0 || error(0.0) <= 0.0 {
+        let dispersion = if stages == 0 || n_ref < 2.0 {
+            0.0
+        } else if quick {
+            // The same error, each allpass's delay from one angle and not two
+            // (its numerator is its denominator's mirror), what doesn't depend
+            // on `a` worked out once.
+            let (at0, at_n) = ((w0.cos(), w0.sin()), (wn.cos(), wn.sin()));
+            let (loss0, loss_n) = (loss_delay(loss_a, w0), loss_delay(loss_a, wn));
+            let delay = |a: f64, w: f64, (c, s): (f64, f64)| 1.0 - 2.0 * (a * s).atan2(1.0 + a * c) / w;
+            let error = |a: f64| {
+                let rest = period - stages as f64 * delay(a, w0, at0) - loss0;
+                let length = (rest - 0.5).floor();
+                let d = rest - length;
+                let total = length + stages as f64 * delay(a, wn, at_n) + loss_n + delay((1.0 - d) / (1.0 + d), wn, at_n);
+                wn * total - 2.0 * PI * n_ref
+            };
+            // First just around where it was (a bend moves it little): if it
+            // isn't between those, between the ends.
+            let around = near.filter(|&a| a > floor_a && a < 0.0).map(|a| ((a - AROUND).max(floor_a), (a + AROUND).min(0.0)));
+            let ends = |(lo, hi): (f64, f64)| (lo, hi, error(lo), error(hi));
+            let found = around.map(ends).filter(|&(_, _, under, over)| under <= 0.0 && over > 0.0);
+            let (mut lo, mut hi, mut under, mut over) = found.unwrap_or_else(|| ends((floor_a, 0.0)));
+            if over <= 0.0 {
+                0.0
+            } else if under > 0.0 {
+                floor_a
+            } else {
+                // Between floor_a (too little) and 0 (too much): each guess where a
+                // straight line through the ends crosses, the end that stays put
+                // counting half each time it does (so both close in).
+                let (mut a, mut last) = (0.5 * (lo + hi), 0);
+                for _ in 0..40 {
+                    let guess = (lo * over - hi * under) / (over - under);
+                    let next = if guess > lo && guess < hi { guess } else { 0.5 * (lo + hi) };
+                    let moved = (next - a).abs();
+                    a = next;
+                    let e = error(a);
+                    if e > 0.0 {
+                        if last == 1 {
+                            under *= 0.5;
+                        }
+                        (hi, over, last) = (a, e, 1);
+                    } else {
+                        if last == -1 {
+                            over *= 0.5;
+                        }
+                        (lo, under, last) = (a, e, -1);
+                    }
+                    // As fine as the coefficient is kept.
+                    if moved < 1e-8 || hi - lo < 1e-8 || e == 0.0 {
+                        break;
+                    }
+                }
+                a
+            }
+        } else if error(0.0) <= 0.0 {
             0.0
         } else if error(floor_a) > 0.0 {
             floor_a
@@ -338,13 +418,14 @@ impl PianoVoice {
         }
     }
 
-    /// Redesigns the strings for a bend (pitch bend, vibrato).
+    /// Redesigns the strings for a bend (pitch bend, vibrato). Back at no bend,
+    /// they are the strings that were struck.
     pub(crate) fn bend(&mut self, ratio: f32, sample_rate: f32) {
         let (string_len, _) = line_size(sample_rate);
         let b = self.stretch_b;
         for string in self.strings.iter_mut().take(self.count) {
             let base = string.freq;
-            let mut bent = PianoString::design(base * ratio as f64, string.t60, |n| crate::keys::partial(n as f32, b) as f64, sample_rate as f64, string_len);
+            let mut bent = PianoString::design_as(base * ratio as f64, string.t60, |n| crate::keys::partial(n as f32, b) as f64, sample_rate as f64, string_len, (ratio != 1.0).then_some(string.dispersion as f64));
             bent.freq = base;
             bent.write = string.write;
             bent.thiran_state = string.thiran_state;
@@ -445,6 +526,94 @@ mod tests {
             assert_eq!(voice_size(sr), STRINGS * string + comb);
             assert!(string as f32 > sr / 27.5 && string.is_power_of_two() && comb.is_power_of_two());
             assert!(comb as f32 > sr / 27.5 / 7.0, "the strike point of the lowest string fits");
+        }
+    }
+
+    /// Every string the keyboard can ask for at three rates, bent five ways,
+    /// with four decays.
+    fn every_string(mut each: impl FnMut(f64, f64, (f64, f64), f32, f64, usize)) {
+        for sr in [44100.0, 48000.0, 96000.0] {
+            let (max, _) = line_size(sr as f32);
+            for pitch in 21..=108u8 {
+                let freq = 440.0 * 2f64.powf((pitch as f64 - 69.0) / 12.0);
+                let b = crate::keys::inharmonicity(pitch);
+                for (bend, t60) in [(1.0, (12.0, 1.5)), (0.9716, (12.0, 1.5)), (1.0293, (3.0, 0.4)), (1.1225, (0.2, 0.1)), (0.8909, (25.0, 2.0))] {
+                    each(freq, bend, t60, b, sr, max);
+                }
+            }
+        }
+    }
+
+    /// A struck string is designed as it always was: every coefficient of
+    /// every string, folded into one number.
+    #[test]
+    fn a_struck_string_is_the_one_it_was() {
+        let mut hash = 0xcbf29ce484222325u64;
+        every_string(|freq, bend, t60, b, sr, max| {
+            let s = PianoString::design(freq * bend, t60, |n| crate::keys::partial(n as f32, b) as f64, sr, max);
+            for x in [s.length as u64, s.stages as u64, s.thiran.to_bits() as u64, s.dispersion.to_bits() as u64, s.loss_g.to_bits() as u64, s.loss_a.to_bits() as u64] {
+                hash = (hash ^ x).wrapping_mul(0x100000001b3);
+            }
+        });
+        assert_eq!(hash, 0xbe5acae1282d9d87);
+    }
+
+    /// A bent string, designed quickly, is the string the full search finds:
+    /// the same decays, as much in tune, its overtones stretched the same. (Or
+    /// its twin: where the search ends between two lengths of line, either
+    /// side is the answer, a sample more of line for a sample less of
+    /// fractional delay.)
+    #[test]
+    fn a_quick_design_is_the_same_string() {
+        let (mut strings, mut twins) = (0, 0);
+        let mut worst = [0f64; 3];
+        every_string(|freq, bend, t60, b, sr, max| {
+            let stretch = |n: f64| crate::keys::partial(n as f32, b) as f64;
+            let full = PianoString::design(freq * bend, t60, stretch, sr, max);
+            // The round trip (samples) at a frequency.
+            let trip = |s: &PianoString, w: f64| s.length as f64 + s.stages as f64 * allpass_delay(s.dispersion as f64, w) + loss_delay(s.loss_a as f64, w) + allpass_delay(s.thiran as f64, w);
+            let w0 = 2.0 * PI * freq * bend / sr;
+            let cents = |a: f64, b: f64| (1200.0 * (a / b).log2()).abs();
+            // Found around where it was, and with nothing near to start from.
+            for near in [full.dispersion as f64 + 0.001, -1e-9] {
+                let quick = PianoString::design_as(freq * bend, t60, stretch, sr, max, Some(near));
+                let at = format!("{:.1} Hz at {sr}, from {near}", freq * bend);
+                assert_eq!((quick.loss_g.to_bits(), quick.loss_a.to_bits(), quick.stages), (full.loss_g.to_bits(), full.loss_a.to_bits(), full.stages), "{at}");
+                worst[0] = worst[0].max((quick.dispersion - full.dispersion).abs() as f64);
+                worst[1] = worst[1].max(cents(trip(&quick, w0), sr / (freq * bend)) - cents(trip(&full, w0), sr / (freq * bend)));
+                strings += 1;
+                if quick.length != full.length {
+                    twins += 1;
+                    assert_eq!(quick.length.abs_diff(full.length), 1, "{at}");
+                } else if stretch(4.0) * w0 < PI * 0.7 {
+                    let w4 = stretch(4.0) * w0;
+                    worst[2] = worst[2].max(cents(trip(&quick, w4), trip(&full, w4)));
+                }
+            }
+        });
+        assert!(worst[0] < 1e-5, "dispersion {} apart", worst[0]);
+        assert!(worst[1] < 0.01, "{} cents further out of tune", worst[1]);
+        assert!(worst[2] < 0.01, "the 4th overtone {} cents apart", worst[2]);
+        assert!(twins * 10 < strings, "{twins} twins of {strings}");
+    }
+
+    /// A bend that comes back leaves the strings that were struck, to the bit.
+    #[test]
+    fn a_bend_and_back_is_the_string_that_was_struck() {
+        let sr = 48000.0;
+        let (string, comb) = line_size(sr);
+        let mut lines = vec![0.0; STRINGS * string + comb];
+        for pitch in [28u8, 45, 60, 77, 96, 105] {
+            let strike = Strike { pitch, freq: 440.0 * 2f64.powf((pitch as f64 - 69.0) / 12.0), velocity: 0.8, gain: 1.0, tone: 0.5, knock: 0.3, detune: 0.2, t60: 9.0, inharmonicity: crate::keys::inharmonicity(pitch), seed: 7 };
+            let mut voice = PianoVoice::strike(&strike, sr, &mut lines);
+            let coefficients = |v: &PianoVoice| v.strings.map(|s| (s.length, s.stages, s.thiran.to_bits(), s.dispersion.to_bits(), s.loss_g.to_bits(), s.loss_a.to_bits()));
+            let struck = coefficients(&voice);
+            for cents in [30.0f32, 200.0, -200.0, 5.0] {
+                voice.bend(2f32.powf(cents / 1200.0), sr);
+                assert_ne!(coefficients(&voice), struck, "key {pitch} bent {cents} cents");
+            }
+            voice.bend(1.0, sr);
+            assert_eq!(coefficients(&voice), struck, "key {pitch}");
         }
     }
 }

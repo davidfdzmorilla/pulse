@@ -52,6 +52,10 @@ still in `0.x`, so any release may change things.
 
 ### Changed
 
+- Pulse Keys: a piano costs under a third of the processor it did while
+  the pitch bend or the modulation wheel moves (each sounding string is
+  retuned many times a second). Notes that aren't bent play the same
+  samples as before.
 - Windows: the engine's helper threads run at the audio priority only when
   they help a sound card's thread. In an export they run at normal
   priority, like the thread they help, and no longer hold processors at

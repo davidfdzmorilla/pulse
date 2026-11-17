@@ -106,8 +106,8 @@ cargo check --release --target x86_64-pc-windows-msvc --workspace --all-targets
 For every pull request, CI builds and tests Pulse natively on Windows
 (`.github/workflows/windows.yml`, which also packages and installs it) and on
 Apple Silicon (`.github/workflows/macos.yml`, which packages only on
-`main`). Both are green on `main`. The Windows job takes about an hour,
-most of it in the engine's stress tests.
+`main`). Both are green on `main`. The Windows job takes about half an
+hour.
 
 ## Formatting and lints
 

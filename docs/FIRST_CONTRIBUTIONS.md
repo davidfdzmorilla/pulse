@@ -11,7 +11,7 @@ don't do the same work. Done tasks stay listed, marked as done.
 |---|---|---|---|---|---|
 | 1 | ~~[English versions of the install and platform docs](#1-english-versions-of-the-install-and-platform-docs)~~ Done in [#219](https://github.com/davidfdzmorilla/pulse/pull/219) | [#214](https://github.com/davidfdzmorilla/pulse/issues/214) | Documentation | Easy | ✅ |
 | 2 | [Readable dim text: fix `TEXT_DIM` contrast](#2-readable-dim-text-fix-text_dim-contrast) | [#215](https://github.com/davidfdzmorilla/pulse/issues/215) | UX / accessibility | Easy | ✅ |
-| 3 | [Windows CI: make the engine stress tests fast again](#3-windows-ci-make-the-engine-stress-tests-fast-again) | [#213](https://github.com/davidfdzmorilla/pulse/issues/213) | Tests / CI | Medium | |
+| 3 | ~~[Windows CI: make the engine stress tests fast again](#3-windows-ci-make-the-engine-stress-tests-fast-again)~~ Done in [#240](https://github.com/davidfdzmorilla/pulse/pull/240) | [#213](https://github.com/davidfdzmorilla/pulse/issues/213) | Tests / CI | Medium | |
 | 4 | [`cargo check` on Linux](#4-cargo-check-on-linux) | [#216](https://github.com/davidfdzmorilla/pulse/issues/216) | Platform | Medium | |
 | 5 | [`pulse --help` and errors for unknown flags](#5-pulse---help-and-errors-for-unknown-flags) | [#217](https://github.com/davidfdzmorilla/pulse/issues/217) | App / CLI | Easy | ✅ |
 | 6 | [CI: move `actions/checkout` and `actions/upload-artifact` to Node.js 24](#6-ci-move-actionscheckout-and-actionsupload-artifact-to-nodejs-24) | [#224](https://github.com/davidfdzmorilla/pulse/issues/224) | CI | Easy | ✅ |
@@ -109,6 +109,8 @@ passes. The screenshots show the change.
 ---
 
 ## 3. Windows CI: make the engine stress tests fast again
+
+**Done** in [#240](https://github.com/davidfdzmorilla/pulse/pull/240) (2026-11-16): from 1741 s to about 5 minutes. The cause and the measurements are in [PLATFORM_SUPPORT.en.md](PLATFORM_SUPPORT.en.md#windows-helper-threads).
 
 **Labels:** `windows`, `performance`, `help wanted`
 

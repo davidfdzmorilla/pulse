@@ -12,7 +12,7 @@ each version: [CHANGELOG](../CHANGELOG.md).
 
 | Item | State | Source |
 |---|---|---|
-| Windows test suite green on CI | ✅ Green on `main` since 2026-11-05 (red from 2026-10-29). The engine's stress tests still take about 27 minutes there | [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci), [FIRST_CONTRIBUTIONS.md #3](FIRST_CONTRIBUTIONS.md#3-windows-ci-make-the-engine-stress-tests-fast-again) |
+| Windows test suite green on CI | ✅ Green on `main` since 2026-11-05 (red from 2026-10-29). The engine's stress tests take about 5 minutes there since 2026-11-16 (they took 27) | [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci), [FIRST_CONTRIBUTIONS.md #3](FIRST_CONTRIBUTIONS.md#3-windows-ci-make-the-engine-stress-tests-fast-again) |
 | Scripted window start on Windows CI | ✅ Passes since 2026-11-05 (it overflowed the 1 MB main-thread stack; Pulse now links with 8 MB) | [PLATFORM_SUPPORT.md](PLATFORM_SUPPORT.md#pruebas-de-windows-en-la-ci) |
 | Windows tested on real hardware (audio, MIDI, plugins, display scaling) | Not done | [WINDOWS_SUPPORT.md](WINDOWS_SUPPORT.md#pendiente-de-verificar-en-windows) |
 | Windows packages attached to releases | Not yet | [BUILD_WINDOWS.md](BUILD_WINDOWS.md) |

@@ -98,6 +98,9 @@ still in `0.x`, so any release may change things.
   (≈12 ms) depending on the processor or the number of threads, when the
   largest jump and the onset peak fell on neighbouring frames. It's now the
   same on every machine.
+- Switching an effect on or off in a track, a return or the master no longer
+  clicks (it cross-fades for 10 ms), and an effect switched off forgets its
+  tail: a reverb or delay turned back on no longer plays the old one.
 - Windows CI packages carried the placeholder version `0.1.3`, because the
   checkout had no tags. They now get the real version.
 - Two tests failed on Windows because their expected paths put a `/` inside

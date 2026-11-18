@@ -85,6 +85,9 @@ still in `0.x`, so any release may change things.
   aren't a multiple of 32 samples.
 - Settings → Audio: the **Cores for audio** list shows every choice
   without scrolling (on a 10-core Mac the last one was hidden).
+- EQ Eight: moving a band's frequency, gain or Q, or automating it, no
+  longer makes zipper noise. The band glides to the new place in about
+  8 ms.
 - Layout: the Drum Machine device keeps the device panel's height (rows 3–4
   of its sounds fell below it): two rows of four in sight, the other eight a
   scroll below, with the machine choice in a column beside them; the Keyboard

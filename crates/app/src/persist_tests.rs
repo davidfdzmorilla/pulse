@@ -120,7 +120,7 @@ pub(crate) fn rich_project(media: &Path) -> Project {
         Effect::EqEight(eq),
         Effect::Gate(engine::model::GateParams { threshold_db: -33.0, hold_ms: 45.0, ..Default::default() }),
         Effect::Transient(engine::model::TransientParams { attack: 0.4, sustain: -0.3, output_db: -1.0 }),
-        Effect::DeEsser(engine::model::DeEsserParams { freq_hz: 7200.0, threshold_db: -27.0, range_db: 6.0 }),
+        Effect::DeEsser(engine::model::DeEsserParams { freq_hz: 7200.0, threshold_db: -27.0, range_db: 6.0, steep: true }),
         Effect::Tuner(engine::model::TunerParams { speed_ms: 40.0, humanize: 0.3, amount: 0.8, scale: engine::model::TunerScale::Key { tonic: 4, minor: true } }),
         Effect::Compressor(Default::default()),
         Effect::Glue(engine::model::GlueParams { threshold_db: -20.0, ratio: engine::model::GlueRatio::Ten, auto_release: false, soft_clip: true, sidechain_hpf_hz: 120.0, ..Default::default() }),

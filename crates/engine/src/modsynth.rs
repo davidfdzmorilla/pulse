@@ -24,7 +24,7 @@
 
 use crate::effects::{EffectProcessor, ProcessContext};
 use crate::model::Effect;
-use crate::instruments::{saw, Gate};
+use crate::instruments::{saw, Declick, Gate, Taken, Watch};
 use crate::engine::Controller;
 use crate::model::{
     chord_note, chord_size, module_slot, modulator_slot, mslot, slot, AudioParam, CurveInput, LfoMode, ModularParams, Modulator, ModuleKind, ModulatorKind,
@@ -405,6 +405,13 @@ struct Voice {
     peak: f32,
     /// The control period its modulation was last worked out in.
     snap_period: u64,
+    /// What it last sent to each lane (after the lane's effects, for a lane
+    /// of its own) and, last, straight to the output: taken or cut while it
+    /// sounds, that is faded instead of clicking.
+    taken: [Taken; MOD_LANES + 1],
+    /// A note played again while it sounded fades in under the old one
+    /// fading out: samples into that, per lane (`u32::MAX`: not fading).
+    fade: [u32; MOD_LANES],
     /// Lane gains, effect settings and mixes as this voice's modulators set them.
     lane_gains: [f32; MOD_LANES],
     lane_values: [f32; LANE_VALUES],
@@ -657,6 +664,39 @@ fn process_lane(chain: &mut FxChain, l: usize, values: &[f32; LANE_VALUES], buf:
     }
 }
 
+/// Where the click of voice output `k` being cut is faded out (see
+/// [`Declick`]): `k` is a lane, or `MOD_LANES` for what a voice sends
+/// straight to the output; the answer is the shared lane it goes into, or
+/// `MOD_LANES` for the output. None for a lane not heard, or heard through
+/// another of the voice's own lanes.
+fn declick_for(p: &ModularParams, polys: usize, k: usize) -> Option<usize> {
+    if k >= polys {
+        return Some(k);
+    }
+    if !p.lane_audible(k) {
+        return None;
+    }
+    let dest = p.lanes[k].dest as usize;
+    if p.lanes[k].dest != MOD_NO_LANE && dest > k && dest < MOD_LANES {
+        return (dest >= polys).then_some(dest);
+    }
+    Some(MOD_LANES)
+}
+
+/// Fades a voice's new note in over the first `n` samples of `own`, from
+/// `at` samples into the fade (see `Voice::fade`).
+fn fade_in(at: &mut u32, own: &mut [[f32; CONTROL]; 2], n: usize, sample_rate: f32) {
+    for i in 0..n {
+        if *at == u32::MAX {
+            return;
+        }
+        let rest = 1.0 - Declick::weight(*at, sample_rate);
+        own[0][i] *= rest;
+        own[1][i] *= rest;
+        *at = if rest >= 1.0 { u32::MAX } else { *at + 1 };
+    }
+}
+
 pub struct ModSynth {
     params: ModularParams,
     sample_rate: f32,
@@ -674,6 +714,9 @@ pub struct ModSynth {
     frames: u64,
     period: u64,
     period_at: usize,
+    /// The fades of voices taken or cut, into each shared lane and, last,
+    /// into the output.
+    declicks: [Declick; MOD_LANES + 1],
     held: [u8; 16],
     held_count: usize,
     last_note: Option<f32>,
@@ -963,6 +1006,8 @@ impl ModSynth {
                 quiet: 0.0,
                 peak: 0.0,
                 snap_period: u64::MAX,
+                taken: [Taken::NONE; MOD_LANES + 1],
+                fade: [u32::MAX; MOD_LANES],
                 lane_gains: [1.0; MOD_LANES],
                 lane_values: [0.0; LANE_VALUES],
             }
@@ -982,6 +1027,7 @@ impl ModSynth {
             frames: 0,
             period: 0,
             period_at: 0,
+            declicks: [Declick::default(); MOD_LANES + 1],
             held: [0; 16],
             held_count: 0,
             last_note: None,
@@ -1080,6 +1126,7 @@ impl ModSynth {
         // In a legato phrase, untriggered modulators carry on from the newest held note.
         let donor = self.voices.iter().enumerate().filter(|&(k, v)| k != index && v.active && v.gate.open_for(0)).max_by_key(|(_, v)| v.gate.age).map(|(_, v)| v.mods);
         let phrase = self.phrase;
+        let polys = (0..MOD_LANES).take_while(|&l| p.lane_poly(l)).count();
         if !self.voices[index].active {
             for (processor, _) in self.poly[index].iter_mut().flatten().flatten() {
                 processor.reset();
@@ -1095,6 +1142,21 @@ impl ModSynth {
         voice.unison = j;
         voice.unisons = count;
         if !was_active || retrigger {
+            // Played again while it sounds: the old note fades out as the
+            // new one fades in.
+            for k in 0..MOD_LANES {
+                match declick_for(&p, polys, k).filter(|_| was_active) {
+                    Some(d) => {
+                        voice.taken[k].cut(&mut self.declicks[d], self.sample_rate);
+                        voice.fade[k] = 0;
+                    }
+                    None => {
+                        voice.taken[k] = Taken::NONE;
+                        voice.fade[k] = u32::MAX;
+                    }
+                }
+            }
+            voice.taken[MOD_LANES].take(was_active);
             voice.note = glide_from.unwrap_or(pitch as f32);
             voice.random = random;
             voice.age = 0.0;
@@ -1165,6 +1227,24 @@ impl ModSynth {
         self.voices.iter().any(|v| v.active && v.gate.open_for(margin))
     }
 
+    /// Stops voice `v` where it is (stolen, or a unison voice no longer
+    /// used): what it was playing fades out instead of clicking.
+    fn cut_voice(&mut self, v: usize) {
+        if !self.voices[v].active {
+            return;
+        }
+        let p = self.params;
+        let polys = (0..MOD_LANES).take_while(|&l| p.lane_poly(l)).count();
+        let voice = &mut self.voices[v];
+        voice.active = false;
+        for (k, taken) in voice.taken.iter_mut().enumerate() {
+            match declick_for(&p, polys, k) {
+                Some(d) => taken.cut(&mut self.declicks[d], self.sample_rate),
+                None => *taken = Taken::NONE,
+            }
+        }
+    }
+
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
         let count = self.unisons();
         let randoms = self.note_randoms();
@@ -1182,8 +1262,8 @@ impl ModSynth {
             for j in 0..count {
                 self.start_voice(j, pitch, velocity, gate, !legato, (j, count), &randoms);
             }
-            for v in &mut self.voices[count..] {
-                v.active = false;
+            for v in count..VOICES {
+                self.cut_voice(v);
             }
             self.last_note = Some(pitch as f32);
             return;
@@ -1203,8 +1283,10 @@ impl ModSynth {
             }
             // Steal the oldest note, with all its unison voices.
             let Some(oldest) = self.voices.iter().filter(|v| v.active).map(|v| v.gate.age).min() else { break };
-            for v in self.voices.iter_mut().filter(|v| v.active && v.gate.age == oldest) {
-                v.active = false;
+            for v in 0..VOICES {
+                if self.voices[v].active && self.voices[v].gate.age == oldest {
+                    self.cut_voice(v);
+                }
             }
         }
         let mut j = 0;
@@ -1302,7 +1384,10 @@ impl ModSynth {
                     continue;
                 }
                 let mut own = [[[0f32; CONTROL]; 2]; MOD_LANES];
+                let watch = Watch::before(&master[0][..n], &master[1][..n]);
                 let alive = !self.voices[v].tail && self.render_voice(v, samples, tables, &base, &mut own, &mut master, &mut sideband, n);
+                // What it sends straight to the output.
+                self.voices[v].taken[MOD_LANES].rendered(watch, &master[0][..n], &master[1][..n], &mut self.declicks[MOD_LANES], self.sample_rate);
                 if !self.voices[v].tail && newest.is_none_or(|(_, age)| self.voices[v].gate.age > age) {
                     newest = Some((v, self.voices[v].gate.age));
                 }
@@ -1310,6 +1395,8 @@ impl ModSynth {
                 let mut peak = 0f32;
                 for l in 0..MOD_LANES {
                     if l >= polys {
+                        fade_in(&mut voice.fade[l], &mut own[l], n, self.sample_rate);
+                        voice.taken[l].rendered(Watch::before(&[], &[]), &own[l][0][..n], &own[l][1][..n], &mut self.declicks[l], self.sample_rate);
                         for (to, from) in bus[l].iter_mut().zip(own[l].iter()) {
                             for (a, b) in to[..n].iter_mut().zip(&from[..n]) {
                                 *a += b;
@@ -1324,6 +1411,13 @@ impl ModSynth {
                     let gain = voice.lane_gains[l];
                     let dest = p.lanes[l].dest as usize;
                     let into = (p.lanes[l].dest != MOD_NO_LANE && dest > l && dest < MOD_LANES).then_some(dest);
+                    // What the lane sends on, after its effects (a lane into
+                    // another of the voice's own is heard through that one).
+                    if let Some(d) = declick_for(&p, polys, l) {
+                        fade_in(&mut voice.fade[l], &mut own[l], n, self.sample_rate);
+                        let at = |i: usize| [own[l][0][i] * gain, own[l][1][i] * gain];
+                        voice.taken[l].seen(at(0), at(n - 1), &mut self.declicks[d], self.sample_rate);
+                    }
                     for i in 0..n {
                         let (a, b) = (own[l][0][i] * gain, own[l][1][i] * gain);
                         peak = peak.max(a.abs()).max(b.abs());
@@ -1374,6 +1468,10 @@ impl ModSynth {
                 }
             };
             for lane in polys..MOD_LANES {
+                {
+                    let [l, r] = &mut bus[lane];
+                    self.declicks[lane].render(&mut l[..n], &mut r[..n], self.sample_rate);
+                }
                 process_lane(&mut self.lanes[lane], lane, &values, &mut bus[lane], n, &ctx);
                 if !p.lane_audible(lane) {
                     bus[lane] = [[0.0; CONTROL]; 2];
@@ -1396,6 +1494,10 @@ impl ModSynth {
                         }
                     }
                 }
+            }
+            {
+                let [l, r] = &mut master;
+                self.declicks[MOD_LANES].render(&mut l[..n], &mut r[..n], self.sample_rate);
             }
             self.listen(&base, &bus, &master, &sideband, n, ends);
             let gain = base[MOD_MASTER];
@@ -2157,6 +2259,44 @@ mod tests {
 
     pub(super) fn output() -> Module {
         Module::new(ModuleKind::Output)
+    }
+
+    /// A note that takes the place of one still sounding (the polyphony all
+    /// in use, or a mono patch played again) doesn't click: the sound moves
+    /// no faster across that sample than within the notes. With the old
+    /// note's voice cut and with it played again; in a shared lane and in a
+    /// lane of the voice's own.
+    #[test]
+    fn a_note_that_takes_the_place_of_another_does_not_click() {
+        let steepest = |x: &[f32]| x.windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
+        let table = Arc::new(crate::wavetable::builtin(0));
+        let tables: Vec<Arc<Wavetable>> = (0..MOD_MODULES).map(|_| table.clone()).collect();
+        let frames = SR as usize / 4;
+        for (name, mono, poly_lane) in [("stolen", false, false), ("stolen, a lane of its own", false, true), ("mono", true, false), ("mono, a lane of its own", true, true)] {
+            let mut out = output();
+            out.set(slot::SUSTAIN, 1.0);
+            let mut p = stack(&[group(), sine(), out]);
+            p.mono = mono;
+            p.polyphony = 2;
+            p.lanes[0].poly = poly_lane;
+            let mut synth = ModSynth::new(p, SR);
+            let mut run = |synth: &mut ModSynth| {
+                let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+                for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                    synth.render(&[], &tables, a, b);
+                }
+                l
+            };
+            synth.note_on(50, 1.0, HELD);
+            synth.note_on(57, 1.0, HELD);
+            let before = run(&mut synth);
+            synth.note_on(62, 1.0, HELD);
+            let after = run(&mut synth);
+            let across = (after[0] - before[frames - 1]).abs();
+            let within = steepest(&before[frames / 2..]).max(steepest(&after[frames / 2..]));
+            println!("{name}: {across:.4} across the new note, {within:.4} within the notes");
+            assert!(within > 0.0 && across <= within * 1.5, "{name}: {across} {within}");
+        }
     }
 
     #[test]

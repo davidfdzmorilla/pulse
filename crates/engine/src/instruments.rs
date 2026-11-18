@@ -157,6 +157,13 @@ impl Declick {
         0.5 + 0.5 * (PI * (self.at as f32 / total).min(1.0)).cos()
     }
 
+    /// How much of a jump is left `at` samples into its fade, 1 to 0: a
+    /// voice that can fade its new note in by the rest (see [`Taken::cut`])
+    /// cross-fades, and never sounds louder than the louder of the two.
+    pub(crate) fn weight(at: u32, sample_rate: f32) -> f32 {
+        0.5 + 0.5 * (PI * (at as f32 / (DECLICK * sample_rate)).min(1.0)).cos()
+    }
+
     /// A voice jumped by `-jump` on the sample about to be played.
     pub(crate) fn push(&mut self, jump: [f32; 2], sample_rate: f32) {
         let now = self.shape(DECLICK * sample_rate);
@@ -225,11 +232,25 @@ impl Taken {
             return;
         }
         let (first, last) = watch.after(left, right);
+        self.seen(first, last, declick, sample_rate);
+    }
+
+    /// The same, told the voice's `first` and `last` samples.
+    pub(crate) fn seen(&mut self, first: [f32; 2], last: [f32; 2], declick: &mut Declick, sample_rate: f32) {
         if self.taken {
             declick.push([self.out[0] - first[0], self.out[1] - first[1]], sample_rate);
             self.taken = false;
         }
         self.out = last;
+    }
+
+    /// The voice is cut off where it is, with no note taking it: what it
+    /// was playing fades out through `declick`.
+    pub(crate) fn cut(&mut self, declick: &mut Declick, sample_rate: f32) {
+        if self.out != [0.0; 2] {
+            declick.push(self.out, sample_rate);
+        }
+        *self = Self::NONE;
     }
 }
 
@@ -304,20 +325,6 @@ pub(crate) fn steal_voice(voices: impl Iterator<Item = (usize, bool, bool, u64)>
     best.0
 }
 
-/// Picks the voice to (re)use: an idle one, else the oldest.
-pub(crate) fn free_voice(idle: impl Iterator<Item = (usize, bool, u64)>) -> usize {
-    let mut best = (0, false, u64::MAX);
-    for (index, is_idle, age) in idle {
-        if is_idle {
-            return index;
-        }
-        if age < best.2 {
-            best = (index, false, age);
-        }
-    }
-    best.0
-}
-
 // ----- Super Saw ------------------------------------------------------------------------
 
 const SAW_VOICES: usize = 8;
@@ -335,6 +342,7 @@ struct SawVoice {
     filters: [Svf; 2],
     /// The filter's coefficient for its control period (below zero: not found yet).
     g: f32,
+    taken: Taken,
 }
 
 pub struct SuperSaw {
@@ -349,12 +357,13 @@ pub struct SuperSaw {
     bright: f32,
     /// How far into a control period the last buffer ended.
     period_at: usize,
+    declick: Declick,
 }
 
 impl SuperSaw {
     pub fn new(params: SuperSawParams, sample_rate: f32) -> Self {
-        let voice = SawVoice { gate: Gate::OFF, env: Adsr::IDLE, phases: [0.0; UNISON], filters: [Svf::default(); 2], g: -1.0 };
-        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0, bright: 1.0, period_at: 0 }
+        let voice = SawVoice { gate: Gate::OFF, env: Adsr::IDLE, phases: [0.0; UNISON], filters: [Svf::default(); 2], g: -1.0, taken: Taken::NONE };
+        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0, bright: 1.0, period_at: 0, declick: Declick::default() }
     }
 
     /// Starts its luck over (the transport starts): the song's notes start
@@ -391,7 +400,7 @@ impl SuperSaw {
 
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
         self.counter += 1;
-        let index = free_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.gate.age)));
+        let index = steal_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.env.stage != Stage::Release, v.gate.age)));
         // Free-running, random phases are what makes unison saws sound wide.
         let mut phases = [0.0; UNISON];
         for phase in &mut phases {
@@ -403,6 +412,7 @@ impl SuperSaw {
         if voice.env.stage == Stage::Idle {
             voice.filters = [Svf::default(); 2];
         }
+        voice.taken.take(voice.env.stage != Stage::Idle);
         voice.gate = Gate::new(pitch, velocity, gate, self.counter);
         voice.phases = phases;
         voice.g = -1.0;
@@ -443,6 +453,7 @@ impl SuperSaw {
                 let angle = (position * p.spread + 1.0) * std::f32::consts::FRAC_PI_4;
                 gains[u] = (angle.cos() * norm, angle.sin() * norm);
             }
+            let watch = Watch::before(left, right);
             let (mut offset, mut at) = (0, self.period_at);
             while offset < left.len() {
                 let n = (left.len() - offset).min(CONTROL - at);
@@ -478,7 +489,9 @@ impl SuperSaw {
                     *out_r += fr * amp;
                 }
             }
+            voice.taken.rendered(watch, left, right, &mut self.declick, sr);
         }
+        self.declick.render(left, right, sr);
         self.period_at = (self.period_at + left.len()) % CONTROL;
     }
 }
@@ -1135,6 +1148,16 @@ mod tests {
         fm.note_on(41, 1.0, HELD);
         let (after, _) = run(&mut |l, r| fm.render(l, r), frames);
         check("fm", &before, &after);
+
+        // One saw a voice, far under the filter: close to a sine.
+        let mut saws = SuperSaw::new(SuperSawParams { voices: 1.0, cutoff: 150.0, env_amount: 0.0, sustain: 1.0, ..Default::default() }, SR);
+        for k in 0..SAW_VOICES as u8 {
+            saws.note_on(64 + k, 1.0, HELD);
+        }
+        let (before, _) = run(&mut |l, r| saws.render(l, r), frames);
+        saws.note_on(65, 1.0, HELD);
+        let (after, _) = run(&mut |l, r| saws.render(l, r), frames);
+        check("super saw", &before, &after);
 
         let params = crate::model::SynthParams { waveform: crate::model::Waveform::Sine, sustain: 1.0, cutoff: 20_000.0, ..Default::default() };
         let mut synth = crate::synth::PolySynth::new(params, SR);

@@ -98,6 +98,10 @@ still in `0.x`, so any release may change things.
   synth: a note that takes a voice still sounding (all voices busy, or a
   mono sound played again) no longer clicks, and with all voices busy the
   new note takes one already released before a key still held.
+- Super Saw and Modular Synth: a note that takes the place of one still
+  sounding (all voices busy, the Modular's polyphony all in use, or a mono
+  patch played again) no longer clicks, and the Super Saw takes a voice
+  already released before a key still held.
 - In English, factory sounds on pads, drum rows and samplers, and factory
   chains in the browser, show their English names; "1 bar", "1 voice" and
   "1 cent" in the singular (the modular's "1 voz" in Spanish too); lessons

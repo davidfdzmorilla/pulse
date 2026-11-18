@@ -77,13 +77,20 @@ pub enum Target {
 pub struct ChainSlot {
     processor: Box<EffectProcessor>,
     enabled: bool,
+    /// How much of the effect is heard, 0 to 1: switching it on or off
+    /// cross-fades over `SWITCH_FADE` seconds instead of jumping.
+    wet: f32,
 }
+
+/// The cross-fade when a device is switched on or off, in seconds.
+const SWITCH_FADE: f32 = 0.01;
 
 impl ChainSlot {
     pub fn new(device: &Device, sample_rate: f32) -> Self {
         Self {
             processor: Box::new(EffectProcessor::new(&device.effect, sample_rate)),
             enabled: device.enabled,
+            wet: if device.enabled { 1.0 } else { 0.0 },
         }
     }
 
@@ -93,7 +100,7 @@ impl ChainSlot {
             Effect::Plugin(id) => id,
             _ => PluginId(0),
         };
-        Self { processor: Box::new(EffectProcessor::Plugin(id, Some(Box::new(plugin)))), enabled: device.enabled }
+        Self { processor: Box::new(EffectProcessor::Plugin(id, Some(Box::new(plugin)))), enabled: device.enabled, wet: if device.enabled { 1.0 } else { 0.0 } }
     }
 }
 
@@ -1593,6 +1600,9 @@ struct Channel {
     mute: bool,
     left: Vec<f32>,
     right: Vec<f32>,
+    /// The sound before a device that is being switched on or off, to
+    /// cross-fade with.
+    dry: [Vec<f32>; 2],
     automation: Box<Vec<AutomationLane>>,
     /// Pan/fader gains reached at the end of the last block, ramped from to avoid
     /// zipper noise. None until the first block, which starts at its gains: a new
@@ -1612,6 +1622,7 @@ impl Channel {
             mute: false,
             left: vec![0.0; MAX_BLOCK],
             right: vec![0.0; MAX_BLOCK],
+            dry: [vec![0.0; MAX_BLOCK], vec![0.0; MAX_BLOCK]],
             automation: Box::default(),
             last_gains: None,
         }
@@ -1685,12 +1696,33 @@ impl Channel {
     fn run_chain(&mut self, n: usize, ctx: &ProcessContext, target: Target, analyzer: &Analyzer, timing: Option<&crate::cpu::Cpu>) -> bool {
         let tap = analyzer.device(target);
         let (left, right) = (&mut self.left[..n], &mut self.right[..n]);
+        let [dry_left, dry_right] = &mut self.dry;
+        let step = 1.0 / (SWITCH_FADE * ctx.sample_rate).max(1.0);
         for (i, slot) in self.chain.iter_mut().enumerate() {
-            if slot.enabled {
+            let goal = if slot.enabled { 1.0 } else { 0.0 };
+            // Just switched: it keeps running while it fades.
+            let fading = slot.wet != goal;
+            if fading {
+                dry_left[..n].copy_from_slice(left);
+                dry_right[..n].copy_from_slice(right);
+            }
+            if slot.enabled || fading {
                 let started = timing.map(|_| std::time::Instant::now());
                 slot.processor.process(left, right, ctx);
                 if let Some(cpu) = timing {
                     cpu.add_device(target, i, crate::cpu::since(started));
+                }
+            }
+            if fading {
+                for k in 0..n {
+                    slot.wet = if slot.enabled { (slot.wet + step).min(1.0) } else { (slot.wet - step).max(0.0) };
+                    left[k] = dry_left[k] + (left[k] - dry_left[k]) * slot.wet;
+                    right[k] = dry_right[k] + (right[k] - dry_right[k]) * slot.wet;
+                }
+                // Off: its tail (a reverb's, a delay's) is not heard when it
+                // comes back on.
+                if slot.wet == 0.0 {
+                    slot.processor.reset();
                 }
             }
             if let Some(meter) = slot.processor.meter() {
@@ -6757,6 +6789,57 @@ mod tests {
         }
         let at = h.shared.position();
         assert!((at - 6.0).abs() < 0.05, "{at}");
+    }
+
+    /// Switching a device off or on cross-fades for 10 ms instead of jumping
+    /// (a click), and a device switched off forgets its tail: a reverb turned
+    /// off over a note doesn't play that note's tail when it comes back on.
+    #[test]
+    fn switching_a_device_fades_and_drops_its_tail() {
+        use crate::model::UtilityParams;
+        let peak = |audio: &[f32]| audio.iter().fold(0f32, |m, s| m.max(s.abs()));
+        // A Utility 60 dB down, switched off over a held note: the sound
+        // comes back up over the fade.
+        let render = |device: Option<Device>| {
+            let mut h = Harness::new();
+            if let Some(device) = &device {
+                h.send(Command::InsertDevice { target: Target::Master, index: 0, slot: ChainSlot::new(device, SR) });
+            }
+            h.send(Command::SetInputTrack(Some(2)));
+            h.play_note(48, 0.9);
+            let mut out = h.run_beats(1.0);
+            if let Some(device) = device {
+                h.send(Command::UpdateDevice { target: Target::Master, index: 0, device: Device { enabled: false, ..device } });
+            }
+            let at = out.len();
+            out.extend(h.run_beats(0.25));
+            (out, at)
+        };
+        let quiet = Device::new(Effect::Utility(UtilityParams { gain_db: -60.0, ..Default::default() }));
+        let ((dry, at), (switched, _)) = (render(None), render(Some(quiet)));
+        let fade = (SWITCH_FADE * SR) as usize * 2;
+        assert!(peak(&dry[at..at + fade / 5]) > 0.01, "the note sounds");
+        // A fifth of the way in: no more than a fifth of the sound (and the Utility's).
+        for (a, b) in switched[at..at + fade / 5].iter().zip(&dry[at..]) {
+            assert!(a.abs() <= b.abs() * 0.21 + 1e-6, "{a} {b}");
+        }
+        assert_ne!(switched[at + fade / 2..at + fade], dry[at + fade / 2..at + fade], "still fading");
+        assert_eq!(switched[at + fade + 2..], dry[at + fade + 2..], "off: the sound as it came");
+
+        // A long reverb switched off while a note rings, and on again in silence.
+        let mut h = Harness::new();
+        let reverb = Device::new(Effect::Reverb(crate::model::ReverbParams { size: 1.0, mix: 1.0, ..Default::default() }));
+        h.send(Command::InsertDevice { target: Target::Master, index: 0, slot: ChainSlot::new(&reverb, SR) });
+        h.send(Command::SetInputTrack(Some(2)));
+        h.play_note(48, 0.9);
+        h.run_beats(1.0);
+        h.send(Command::UpdateDevice { target: Target::Master, index: 0, device: Device { enabled: false, ..reverb } });
+        h.run_beats(0.25);
+        h.play_note(48, 0.0);
+        h.run_beats(8.0);
+        assert_eq!(peak(&h.run_beats(0.25)), 0.0, "the note is over");
+        h.send(Command::UpdateDevice { target: Target::Master, index: 0, device: reverb });
+        assert_eq!(peak(&h.run_beats(1.0)), 0.0, "no tail from before");
     }
 
     #[test]

@@ -139,7 +139,7 @@ fn drum_machine(name: &str, preset: &str, db: f32) -> Track {
 /// A voice: less rumble and mud, a little more presence, an even level.
 fn voice(name: &str, color: usize, reverb: f32) -> Track {
     let mut track = Track::new_audio(name, PALETTE[color]);
-    track.devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -6.0, high_db: 2.0, low_freq: 150.0, ..Default::default() })));
+    track.devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -6.0, high_db: 2.0, low_freq: 150.0, ..Eq3Params::gentle() })));
     track.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -20.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 4.0, sidechain: None })));
     track.sends[0] = reverb;
     track
@@ -282,7 +282,7 @@ fn built_in(name: &str) -> Result<Project, String> {
             returns(&mut project, "Voces · Muelle vintage", 0.75, 0.35);
             // The tape: a little warmth and a softer top, then the limiter.
             project.master.devices.push(Device::new(Effect::Saturator(SaturatorParams { drive_db: 3.0, output_db: -2.0, mix: 0.5, ..Default::default() })));
-            project.master.devices.push(Device::new(Effect::Eq3(Eq3Params { high_db: -2.5, ..Default::default() })));
+            project.master.devices.push(Device::new(Effect::Eq3(Eq3Params { high_db: -2.5, ..Eq3Params::gentle() })));
             project.master.devices.push(Device::new(Effect::Limiter(LimiterParams { gain_db: 1.0, ..Default::default() })));
         }
         "Drum & Bass" => {
@@ -290,7 +290,7 @@ fn built_in(name: &str) -> Result<Project, String> {
             let drums = kit(named("Batería"), "Drum & Bass", -6.0)?;
             let mut reese = track("Reese", 3, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Bajo · Reese oscuro"), -13.0);
             // Its lows are the sub's.
-            device(&mut reese, Effect::Eq3(Eq3Params { low_db: -12.0, low_freq: 120.0, ..Default::default() }));
+            device(&mut reese, Effect::Eq3(Eq3Params { low_db: -12.0, low_freq: 120.0, ..Eq3Params::gentle() }));
             let sub = track("Sub", 9, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Bajo · Sub"), -13.0);
             let mut pad = track("Pad", 11, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Pad · Aire"), -11.0);
             pad.sends[0] = 0.4;
@@ -303,7 +303,7 @@ fn built_in(name: &str) -> Result<Project, String> {
                 let mut track = Track::new_audio(name, PALETTE[color]);
                 // Quiet between words, no rumble, even and without hiss.
                 track.devices.push(Device::new(Effect::Gate(GateParams { threshold_db: -50.0, floor_db: -20.0, ..Default::default() })));
-                track.devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -12.0, low_freq: 90.0, high_db: 1.5, ..Default::default() })));
+                track.devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -12.0, low_freq: 90.0, high_db: 1.5, ..Eq3Params::gentle() })));
                 track.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -22.0, ratio: 3.5, attack_ms: 8.0, release_ms: 120.0, makeup_db: 6.0, sidechain: None })));
                 track.devices.push(Device::new(Effect::DeEsser(DeEsserParams::default())));
                 track

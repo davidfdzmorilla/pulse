@@ -22,6 +22,11 @@ still in `0.x`, so any release may change things.
 
 ### Added
 
+- EQ Three: a **24 dB** switch. With it, the bands are split 24 dB an
+  octave apart and a band turned all the way down is really gone, as on a
+  DJ mixer (before, it still leaked 6 dB an octave). A new EQ Three comes
+  with it on. Those already in a project, in the templates and the ones
+  the mix assistant adds keep the gentle 12 dB bands.
 - Settings → Audio: **Cores for audio**, how many cores the engine spreads
   the tracks across (Automatic by default, as before).
 - Launch documentation: English `README.md` (Spanish in `README.es.md`),

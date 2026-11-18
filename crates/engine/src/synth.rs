@@ -1,5 +1,6 @@
 //! Real-time safe sound generators. Nothing in here allocates.
 
+use crate::instruments::{Declick, Taken, Watch};
 use crate::model::{SynthParams, Waveform};
 use std::f32::consts::{PI, TAU};
 
@@ -69,6 +70,7 @@ struct Voice {
     gate_remaining: u32,
     age: u64,
     filter: Svf,
+    taken: Taken,
 }
 
 impl Voice {
@@ -84,6 +86,7 @@ impl Voice {
         gate_remaining: 0,
         age: 0,
         filter: Svf { ic1: 0.0, ic2: 0.0 },
+        taken: Taken::NONE,
     };
 
     fn release(&mut self, params: &SynthParams, sr: f32) {
@@ -104,6 +107,7 @@ pub struct PolySynth {
     pitch: f32,
     /// What the controllers do to the cutoff, as a ratio (see [`Self::set_brightness`]).
     bright: f32,
+    declick: Declick,
 }
 
 impl PolySynth {
@@ -115,6 +119,7 @@ impl PolySynth {
             note_counter: 0,
             pitch: 1.0,
             bright: 1.0,
+            declick: Declick::default(),
         }
     }
 
@@ -163,7 +168,10 @@ impl PolySynth {
             });
         let v = &mut self.voices[index];
         let retrigger = v.stage != Stage::Idle;
+        let mut taken = v.taken;
+        taken.take(retrigger);
         *v = Voice {
+            taken,
             stage: Stage::Attack,
             pitch,
             held: gate_samples == HELD,
@@ -207,6 +215,7 @@ impl PolySynth {
         let pitch = self.pitch;
 
         for v in self.voices.iter_mut().filter(|v| v.stage != Stage::Idle) {
+            let watch = Watch::before(out, out);
             for sample in out.iter_mut() {
                 if !v.held && v.gate_remaining > 0 {
                     v.gate_remaining -= 1;
@@ -261,7 +270,9 @@ impl PolySynth {
                 let filtered = v.filter.lowpass(osc, g, k);
                 *sample += filtered * v.level * v.velocity * p.gain;
             }
+            v.taken.rendered(watch, out, out, &mut self.declick, sr);
         }
+        self.declick.render_mono(out, sr);
     }
 }
 

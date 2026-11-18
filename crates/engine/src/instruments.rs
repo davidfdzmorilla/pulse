@@ -649,6 +649,8 @@ struct FmVoice {
     carrier: f32,
     modulator: f32,
     last_mod: f32,
+    /// The modulator's sample before `last_mod`.
+    older_mod: f32,
     mod_env: f32,
     taken: Taken,
 }
@@ -669,7 +671,7 @@ pub struct FmSynth {
 
 impl FmSynth {
     pub fn new(params: FmParams, sample_rate: f32) -> Self {
-        let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, mod_env: 0.0, taken: Taken::default() };
+        let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, older_mod: 0.0, mod_env: 0.0, taken: Taken::default() };
         Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0, target: (1.0, 0.0), depth: (1.0, 0.0), declick: Declick::default() }
     }
 
@@ -749,7 +751,11 @@ impl FmSynth {
                     break;
                 }
                 voice.mod_env = p.mod_sustain + (voice.mod_env - p.mod_sustain) * mod_decay;
-                let modulator = (TAU * voice.modulator + p.feedback * PI * voice.last_mod).sin();
+                // The mean of its last two samples: a feedback loop of one
+                // sample turns to noise at half the sample rate.
+                let fed = if p.feedback_smooth { 0.5 * (voice.last_mod + voice.older_mod) } else { voice.last_mod };
+                let modulator = (TAU * voice.modulator + p.feedback * PI * fed).sin();
+                voice.older_mod = voice.last_mod;
                 voice.last_mod = modulator;
                 let amount = if still {
                     index * voice.mod_env
@@ -1155,6 +1161,46 @@ mod tests {
         }
         fm.note_on(100, 1.0, HELD);
         assert!(fm.voices.iter().any(|v| v.gate.held && v.gate.pitch == 40), "the held note went");
+    }
+
+    /// The FM's feedback stays a clean pitched sound half of the way up (a
+    /// sine that turns to a saw), and from there gets rougher little by
+    /// little, instead of turning to noise a third of the way: the wave
+    /// repeats from one cycle to the next. A sound made before keeps the
+    /// feedback it had.
+    #[test]
+    fn fm_feedback_stays_pitched() {
+        // A2 at 48 kHz: 110 Hz, a cycle of 436.4 samples; five cycles are 2182.
+        let lag = 2182;
+        let repeats = |feedback: f32, feedback_smooth: bool| {
+            let params = FmParams { ratio: 1.0, index: 2.0, mod_decay: 5.0, mod_sustain: 1.0, sustain: 1.0, feedback, feedback_smooth, ..Default::default() };
+            let mut fm = FmSynth::new(params, SR);
+            fm.note_on(45, 1.0, HELD);
+            let (l, _) = run(&mut |l, r| fm.render(l, r), SR as usize);
+            let x = &l[SR as usize / 2..];
+            let (mut ab, mut aa, mut bb) = (0f64, 0f64, 0f64);
+            for i in 0..x.len() - lag {
+                let (a, b) = (x[i] as f64, x[i + lag] as f64);
+                ab += a * b;
+                aa += a * a;
+                bb += b * b;
+            }
+            (ab / (aa * bb).sqrt()) as f32
+        };
+        for feedback in [0.0, 0.2, 0.35, 0.5, 0.7, 0.85, 1.0] {
+            println!("feedback {feedback}: repeats {:.3} (before: {:.3})", repeats(feedback, true), repeats(feedback, false));
+        }
+        for feedback in [0.2, 0.35, 0.5] {
+            assert!(repeats(feedback, true) > 0.98, "{feedback}: {}", repeats(feedback, true));
+        }
+        assert!(repeats(0.7, true) > 0.9 && repeats(1.0, true) > 0.8, "rougher, still pitched");
+        assert!(repeats(0.5, false) < 0.85 && repeats(0.7, false) < 0.65, "the old feedback was noise by then");
+        // A project saved before has no such setting: the old feedback. So
+        // do the factory sounds, made with it.
+        let mut saved = serde_json::to_value(FmParams::default()).unwrap();
+        assert_eq!(saved.as_object_mut().unwrap().remove("feedback_smooth"), Some(true.into()));
+        assert!(!serde_json::from_value::<FmParams>(saved).unwrap().feedback_smooth);
+        assert!(FmParams::presets().iter().all(|(name, p)| !p.feedback_smooth || *name == "Init"));
     }
 
     #[test]

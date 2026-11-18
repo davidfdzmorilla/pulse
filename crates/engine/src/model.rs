@@ -734,7 +734,7 @@ impl Default for SynthParams {
             release: 0.2,
             cutoff: 4000.0,
             resonance: 0.2,
-            gain: 0.5,
+            gain: 0.317,
         }
     }
 }
@@ -751,19 +751,19 @@ impl SynthParams {
             ("Init", base),
             ("Bajo · Sub puro", SynthParams { attack: 0.002, decay: 0.3, sustain: 1.0, release: 0.08, ..tone(Sine, 18000.0, 0.0, 0.22) }),
             ("Bajo · Triángulo cálido", SynthParams { attack: 0.002, decay: 0.4, sustain: 0.8, release: 0.1, ..tone(Triangle, 900.0, 0.1, 0.33) }),
-            ("Bajo · Sierra con mordida", SynthParams { attack: 0.001, decay: 0.25, sustain: 0.55, release: 0.06, ..tone(Saw, 850.0, 0.55, 0.29) }),
+            ("Bajo · Sierra con mordida", SynthParams { attack: 0.001, decay: 0.25, sustain: 0.55, release: 0.06, ..tone(Saw, 850.0, 0.55, 0.26) }),
             ("Bajo · Pulso corto", SynthParams { attack: 0.001, decay: 0.22, sustain: 0.3, release: 0.06, ..tone(Square, 700.0, 0.2, 0.29) }),
             ("Lead · Sierra brillante", SynthParams { attack: 0.004, decay: 0.3, sustain: 0.8, release: 0.25, ..tone(Saw, 7000.0, 0.15, 0.27) }),
             ("Lead · Chip cuadrado", SynthParams { attack: 0.001, decay: 0.05, sustain: 1.0, release: 0.03, ..tone(Square, 18000.0, 0.0, 0.16) }),
             ("Lead · Flauta suave", SynthParams { attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.3, ..tone(Triangle, 3000.0, 0.0, 0.27) }),
-            ("Lead · Resonante", SynthParams { attack: 0.003, decay: 0.4, sustain: 0.75, release: 0.2, ..tone(Saw, 1800.0, 0.65, 0.22) }),
-            ("Pluck · Corto", SynthParams { attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.2, ..tone(Saw, 3000.0, 0.3, 0.35) }),
-            ("Pluck · Marimba", SynthParams { attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.3, ..tone(Triangle, 5000.0, 0.0, 0.35) }),
-            ("Pluck · Arpegio de 8 bits", SynthParams { attack: 0.001, decay: 0.12, sustain: 0.0, release: 0.05, ..tone(Square, 6000.0, 0.0, 0.3) }),
+            ("Lead · Resonante", SynthParams { attack: 0.003, decay: 0.4, sustain: 0.75, release: 0.2, ..tone(Saw, 1800.0, 0.65, 0.212) }),
+            ("Pluck · Corto", SynthParams { attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.2, ..tone(Saw, 3000.0, 0.3, 0.319) }),
+            ("Pluck · Marimba", SynthParams { attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.3, ..tone(Triangle, 5000.0, 0.0, 0.324) }),
+            ("Pluck · Arpegio de 8 bits", SynthParams { attack: 0.001, decay: 0.12, sustain: 0.0, release: 0.05, ..tone(Square, 6000.0, 0.0, 0.293) }),
             ("Pad · Cálido", SynthParams { attack: 0.8, decay: 1.0, sustain: 0.8, release: 1.5, ..tone(Saw, 1200.0, 0.1, 0.35) }),
             ("Pad · Hueco", SynthParams { attack: 1.2, decay: 1.0, sustain: 0.85, release: 2.0, ..tone(Square, 900.0, 0.2, 0.23) }),
             ("Pad · Niebla", SynthParams { attack: 1.5, decay: 1.0, sustain: 1.0, release: 2.5, ..tone(Triangle, 1500.0, 0.0, 0.36) }),
-            ("Acordes · Stab de house", SynthParams { attack: 0.001, decay: 0.3, sustain: 0.15, release: 0.15, ..tone(Saw, 2200.0, 0.35, 0.33) }),
+            ("Acordes · Stab de house", SynthParams { attack: 0.001, decay: 0.3, sustain: 0.15, release: 0.15, ..tone(Saw, 2200.0, 0.35, 0.304) }),
             ("Acordes · Órgano cuadrado", SynthParams { attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.05, ..tone(Square, 2500.0, 0.0, 0.13) }),
         ]
     }
@@ -1790,12 +1790,12 @@ impl SuperSawParams {
             ("Acordes · Stab de house", SuperSawParams { cutoff: 1200.0, resonance: 0.3, env_amount: 2.0, attack: 0.001, decay: 0.25, sustain: 0.2, release: 0.15, ..saws(5.0, 0.25, 0.6, 0.44) }),
             ("Acordes · Rave de los 90", SuperSawParams { cutoff: 2500.0, resonance: 0.2, env_amount: 1.0, attack: 0.001, decay: 0.3, sustain: 0.6, release: 0.2, ..saws(7.0, 0.6, 0.8, 0.38) }),
             ("Pluck · Trance", SuperSawParams { cutoff: 600.0, resonance: 0.25, env_amount: 3.0, attack: 0.001, decay: 0.25, sustain: 0.0, release: 0.25, ..saws(7.0, 0.35, 0.8, 0.48) }),
-            ("Pluck · Corto y brillante", SuperSawParams { cutoff: 2000.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.16, sustain: 0.0, release: 0.1, ..saws(3.0, 0.2, 0.6, 0.5) }),
+            ("Pluck · Corto y brillante", SuperSawParams { cutoff: 2000.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.16, sustain: 0.0, release: 0.1, ..saws(3.0, 0.2, 0.6, 0.465) }),
             ("Pluck · Largo", SuperSawParams { cutoff: 900.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.8, sustain: 0.0, release: 0.5, ..saws(5.0, 0.3, 0.9, 0.33) }),
             ("Bajo · Sierra única", SuperSawParams { cutoff: 700.0, resonance: 0.3, env_amount: 1.5, attack: 0.001, decay: 0.3, sustain: 0.5, release: 0.08, ..saws(1.0, 0.0, 0.0, 0.52) }),
-            ("Bajo · Progressive", SuperSawParams { cutoff: 400.0, resonance: 0.2, env_amount: 2.0, attack: 0.001, decay: 0.2, sustain: 0.5, release: 0.1, ..saws(3.0, 0.12, 0.2, 0.57) }),
+            ("Bajo · Progressive", SuperSawParams { cutoff: 400.0, resonance: 0.2, env_amount: 2.0, attack: 0.001, decay: 0.2, sustain: 0.5, release: 0.1, ..saws(3.0, 0.12, 0.2, 0.544) }),
             ("Bajo · Reese", SuperSawParams { cutoff: 500.0, resonance: 0.1, env_amount: 0.5, attack: 0.003, decay: 0.5, sustain: 1.0, release: 0.15, ..saws(2.0, 0.25, 0.0, 0.4) }),
-            ("Bajo · Rebotado", SuperSawParams { cutoff: 250.0, resonance: 0.35, env_amount: 3.0, attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.08, ..saws(2.0, 0.06, 0.0, 0.75) }),
+            ("Bajo · Rebotado", SuperSawParams { cutoff: 250.0, resonance: 0.35, env_amount: 3.0, attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.08, ..saws(2.0, 0.06, 0.0, 0.705) }),
             ("Textura · Enjambre", SuperSawParams { cutoff: 1800.0, resonance: 0.5, env_amount: 0.0, attack: 1.2, decay: 1.0, sustain: 1.0, release: 3.0, ..saws(7.0, 1.0, 1.0, 0.36) }),
             ("FX · Barrido", SuperSawParams { cutoff: 150.0, resonance: 0.6, env_amount: 4.0, attack: 1.5, decay: 1.0, sustain: 1.0, release: 1.5, ..saws(7.0, 0.5, 1.0, 0.41) }),
         ]
@@ -1891,7 +1891,7 @@ impl Default for FmParams {
             decay: 1.2,
             sustain: 0.0,
             release: 0.6,
-            gain: 0.45,
+            gain: 0.327,
         }
     }
 }
@@ -1913,20 +1913,20 @@ impl FmParams {
             ("Campanas · Caja de música", FmParams { ratio: 5.0, index: 1.5, mod_decay: 0.3, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 1.5, sustain: 0.0, release: 0.8, gain: 0.24 }),
             ("Pluck · Marimba", FmParams { ratio: 4.0, index: 3.0, mod_decay: 0.03, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.6, sustain: 0.0, release: 0.3, gain: 0.3 }),
             ("Pluck · Vibráfono", FmParams { ratio: 4.0, index: 1.5, mod_decay: 0.25, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 0.8, gain: 0.17 }),
-            ("Pluck · Metálico", FmParams { ratio: 3.17, index: 6.0, mod_decay: 0.12, mod_sustain: 0.0, feedback: 0.2, attack: 0.001, decay: 0.4, sustain: 0.0, release: 0.2, gain: 0.33 }),
+            ("Pluck · Metálico", FmParams { ratio: 3.17, index: 6.0, mod_decay: 0.12, mod_sustain: 0.0, feedback: 0.2, attack: 0.001, decay: 0.4, sustain: 0.0, release: 0.2, gain: 0.325 }),
             ("Pluck · Arpegio digital", FmParams { ratio: 2.0, index: 4.0, mod_decay: 0.1, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.15, gain: 0.31 }),
-            ("Bajo · FM de los 80", FmParams { ratio: 1.0, index: 4.0, mod_decay: 0.18, mod_sustain: 0.2, feedback: 0.3, attack: 0.001, decay: 0.6, sustain: 0.5, release: 0.08, gain: 0.31 }),
-            ("Bajo · Slap", FmParams { ratio: 2.0, index: 5.0, mod_decay: 0.04, mod_sustain: 0.1, feedback: 0.2, attack: 0.001, decay: 0.5, sustain: 0.3, release: 0.08, gain: 0.31 }),
+            ("Bajo · FM de los 80", FmParams { ratio: 1.0, index: 4.0, mod_decay: 0.18, mod_sustain: 0.2, feedback: 0.3, attack: 0.001, decay: 0.6, sustain: 0.5, release: 0.08, gain: 0.304 }),
+            ("Bajo · Slap", FmParams { ratio: 2.0, index: 5.0, mod_decay: 0.04, mod_sustain: 0.1, feedback: 0.2, attack: 0.001, decay: 0.5, sustain: 0.3, release: 0.08, gain: 0.298 }),
             ("Bajo · Sub FM", FmParams { ratio: 1.0, index: 0.6, mod_decay: 0.3, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 0.5, sustain: 0.8, release: 0.1, gain: 0.31 }),
             ("Bajo · Gruñido", FmParams { ratio: 1.0, index: 6.0, mod_decay: 0.5, mod_sustain: 0.6, feedback: 0.7, attack: 0.002, decay: 0.3, sustain: 0.8, release: 0.1, gain: 0.28 }),
             ("Lead · Feedback", FmParams { ratio: 1.0, index: 2.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.85, attack: 0.005, decay: 0.3, sustain: 0.8, release: 0.2, gain: 0.27 }),
-            ("Lead · Flauta FM", FmParams { ratio: 1.0, index: 0.8, mod_decay: 0.15, mod_sustain: 0.3, feedback: 0.0, attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.2, gain: 0.32 }),
+            ("Lead · Flauta FM", FmParams { ratio: 1.0, index: 0.8, mod_decay: 0.15, mod_sustain: 0.3, feedback: 0.0, attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.2, gain: 0.31 }),
             ("Metales · Stab FM", FmParams { ratio: 1.0, index: 3.5, mod_decay: 0.25, mod_sustain: 0.45, feedback: 0.4, attack: 0.015, decay: 0.4, sustain: 0.6, release: 0.15, gain: 0.37 }),
             ("Pad · Cristal lento", FmParams { ratio: 3.0, index: 1.2, mod_decay: 4.0, mod_sustain: 0.6, feedback: 0.0, attack: 1.2, decay: 2.0, sustain: 0.8, release: 2.5, gain: 0.23 }),
             ("Textura · Inarmónica", FmParams { ratio: 2.71, index: 5.0, mod_decay: 3.0, mod_sustain: 0.5, feedback: 0.0, attack: 0.6, decay: 2.0, sustain: 0.7, release: 2.0, gain: 0.183 }),
             ("Textura · Metal oxidado", FmParams { ratio: 0.73, index: 7.0, mod_decay: 2.0, mod_sustain: 0.6, feedback: 0.5, attack: 0.3, decay: 3.0, sustain: 0.6, release: 2.0, gain: 0.163 }),
             ("FX · Gong", FmParams { ratio: 0.586, index: 8.0, mod_decay: 4.0, mod_sustain: 0.1, feedback: 0.0, attack: 0.001, decay: 8.0, sustain: 0.0, release: 4.0, gain: 0.125 }),
-            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.33 }),
+            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.315 }),
         ]
     }
 }
@@ -5166,7 +5166,7 @@ impl Default for WaveParams {
             mono: false,
             legato: false,
             glide: 0.0,
-            gain: 0.5,
+            gain: 0.402,
             fx: [None; WAVE_FX],
             arp: ArpParams::default(),
             arp_gate: default_arp_gate(),
@@ -5188,6 +5188,7 @@ impl WaveParams {
         p.osc[0].position = 2.0 / 3.0;
         p.osc[0].drift = 0.2;
         p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 6000.0, resonance: 0.15, ..p.filter };
+        p.gain = 0.5;
         p
     }
 
@@ -5600,7 +5601,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Env2, 0, 0.5);
         p.matrix[1] = slot(ModSource::Velocity, 0, 0.15);
         p.fx[0] = delay(0.75, 0.2);
-        p.gain = 0.75;
+        p.gain = 0.68;
         list.push(("Harmonic · Pluck hueco", p));
 
         // Talking wah: formants sweep from "i" to "a" on each note, smoothed by a
@@ -5630,7 +5631,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Lfo1, 104, 1.0);
         p.env[0] = env(0.3, 1.0, 1.0, 1.0);
         p.fx[0] = reverb(0.7, 0.25);
-        p.gain = 0.66;
+        p.gain = 0.544;
         list.push(("Doble filtro · LP/HP cruzado", p));
 
         // Plucked string: a burst of noise rings a comb tuned to the note (key
@@ -5875,7 +5876,7 @@ impl WaveParams {
         p.env[0] = env(0.001, 0.35, 0.0, 0.25);
         p.env[1] = env(0.001, 0.3, 0.0, 0.2);
         p.matrix[0] = slot(ModSource::Env2, 0, 0.6);
-        p.gain = 0.6;
+        p.gain = 0.547;
         list.push(("Pluck · Digital", p));
 
         let mut p = init;
@@ -5909,14 +5910,14 @@ impl WaveParams {
         p.lfo[0] = WaveLfo { rate: 0.08, shape: triangle, ..init.lfo[0] };
         p.matrix[0] = slot(ModSource::Lfo1, 0, 0.7);
         p.env[0] = env(1.2, 1.0, 1.0, 2.0);
-        p.gain = 0.5;
+        p.gain = 0.473;
                 p.fx[0] = reverb(0.9, 0.4);
         list.push(("Pad · Espectral", p));
 
         let mut p = init;
         p.osc[0] = WaveOsc { table: 8, position: 0.7, random_phase: 0.0, ..WaveOsc::default() };
         p.env[0] = env(0.003, 0.2, 1.0, 0.06);
-        p.gain = 0.55;
+        p.gain = 0.541;
         list.push(("Teclas · Órgano", p));
 
         let mut p = init;
@@ -5924,7 +5925,7 @@ impl WaveParams {
         p.env[0] = env(0.001, 2.0, 0.0, 1.5);
         p.env[1] = env(0.001, 0.8, 0.0, 0.5);
         p.matrix[0] = slot(ModSource::Env2, 0, 0.35);
-        p.gain = 0.43;
+        p.gain = 0.423;
                 p.fx[0] = reverb(0.7, 0.25);
         list.push(("Teclas · Campana", p));
 
@@ -6091,7 +6092,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Env2, 32, 0.18);
         p.matrix[1] = slot(ModSource::Velocity, 32, 0.1);
         p.matrix[2] = slot(ModSource::Lfo1, 0, 0.25);
-        p.gain = 0.7;
+        p.gain = 0.683;
         p.fx[0] = delay(0.75, 0.22);
         p.fx[1] = reverb(0.8, 0.3);
         list.push(("Lead · Trance brillante", p));
@@ -6213,7 +6214,7 @@ impl WaveParams {
         p.matrix[2] = bi(ModSource::Lfo3, 104, 0.3);
         // Macro 1: brightness.
         p.matrix[3] = slot(ModSource::Macro1, 32, 0.3);
-        p.gain = 1.0;
+        p.gain = 0.712;
         p.fx[0] = chorus;
         p.fx[1] = delay(1.5, 0.15);
         p.fx[2] = reverb(0.9, 0.38);
@@ -6342,7 +6343,7 @@ impl WaveParams {
         p.env[1] = env(0.001, 0.25, 0.0, 0.1);
         p.matrix[0] = slot(ModSource::Env2, 0, -1.0);
         p.matrix[1] = slot(ModSource::Env2, 12, 0.9);
-        p.gain = 0.8;
+        p.gain = 0.755;
         p.fx[0] = delay(0.5, 0.3);
         p.fx[1] = reverb(0.6, 0.2);
         list.push(("FX · Láser", p));
@@ -7945,7 +7946,7 @@ impl ModularParams {
         let mut p = build(&[group, sine(&[]), out(0.002, 1.5, 0.3, 0.6), group, sine(&[(slot::HARMONIC, 2.0)])]);
         let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
         p.audio[c].amount = 0.35;
-        p.gain = 0.35;
+        p.gain = 0.322;
         list.push(("FM · Dos grupos", p));
 
         let mut p = build(&[group, sine(&[]), out(0.002, 3.0, 0.0, 2.0), group, sine(&[(slot::HARMONIC, 3.5)])]);
@@ -7965,7 +7966,7 @@ impl ModularParams {
         let c = p.connect_audio(4, 1, AudioParam::Level).unwrap();
         p.audio[c].amount = 1.0;
         p.lanes[0].fx[0] = delay(0.75, 0.3);
-        p.gain = 0.7;
+        p.gain = 0.533;
         list.push(("Anillo · Metálico", p));
 
         let mut p = build(&[
@@ -7983,7 +7984,7 @@ impl ModularParams {
         env.targets[0] = target(3, slot::CUTOFF, 0.3);
         p.modulators[0] = env;
         p.lanes[0].fx[0] = reverb(0.5, 0.15);
-        p.gain = 0.4;
+        p.gain = 0.373;
         list.push(("Capas · Sierras desafinadas", p));
 
         // Group 2's oscillator reaches group 1's filter through an Aux.
@@ -8063,7 +8064,7 @@ impl ModularParams {
         let mut p = build(&[group, saw(&[(slot::LEVEL, 0.8)]), sine(&[(slot::SEMI, -12.0)]), filter(0, 3000.0, 0.7, false), out(0.02, 1.0, 0.9, 0.6)]);
         p.unison = unison(3, UnisonMode::PitchStack, 0.1, 0.8, 0.5, 0.0);
         p.lanes[0].fx[0] = delay(0.75, 0.25);
-        p.gain = 0.25;
+        p.gain = 0.234;
         list.push(("Unísono · Octavas apiladas", p));
 
         let mut p = build(&[group, saw(&[]), filter(0, 2500.0, 1.2, true), out(0.003, 0.5, 0.0, 0.3)]);
@@ -8310,7 +8311,7 @@ impl ModularParams {
         random.targets[0] = ModTarget::new(ModularParams::lane_fx_param(0, 0, 0), 0.3);
         p.modulators[0] = random;
         p.modules[4].set(slot::LEVEL, 1.8);
-        p.gain = 1.0;
+        p.gain = 0.923;
         list.push(("Carriles · Pluck con eco por voz", p));
 
         // ----- Sounds only a modular stack makes -----
@@ -8373,7 +8374,7 @@ impl ModularParams {
         p.modulators[..3].copy_from_slice(&[strike, fade, velocity]);
         p.lanes[0].fx[0] = fx(Effect::Chorus(ChorusParams { rate: 0.5, depth: 0.3, delay_ms: 7.0, mix: 0.35 }));
         p.lanes[0].fx[1] = reverb(0.55, 0.18);
-        p.gain = 0.55;
+        p.gain = 0.493;
         list.push(("FM · Piano eléctrico", p));
 
         // Hard sync swept by an LFO, ring modulated by a sine a slightly detuned
@@ -8404,7 +8405,7 @@ impl ModularParams {
         velocity.targets[0] = target(2, slot::DRIVE, 0.15);
         p.modulators[..2].copy_from_slice(&[hit, velocity]);
         p.lanes[0].fx[0] = delay(0.5, 0.2);
-        p.gain = 0.53;
+        p.gain = 0.427;
         list.push(("Nonlinear · Plegado vivo", p));
 
         // A stepped LFO walks the harmonic from 1 to 4 (root, octave, fifth, octave)
@@ -8531,7 +8532,7 @@ impl ModularParams {
         bounce.curve = Shape::from_points(&[(0.0, 0.0, 0.0), (0.01, 1.0, 0.0), (0.25, 0.0, 0.7), (0.26, 0.6, 0.0), (0.44, 0.0, 0.7), (0.45, 0.35, 0.0), (0.58, 0.0, 0.7), (1.0, 0.0, 0.0)]);
         let mut p = build(&[group, module(K::Analog, &[], 2), sine(&[(slot::HARMONIC, 2.0), (slot::LEVEL, 0.3)]), filter(0, 3500.0, 0.7, false), bounce]);
         p.lanes[0].fx[0] = reverb(0.6, 0.2);
-        p.gain = 0.56;
+        p.gain = 0.416;
         list.push(("Curve · Pelota que rebota", p));
 
         // Feedback: the distortion at the bottom feeds back into an Aux at the top

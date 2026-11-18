@@ -137,6 +137,119 @@ impl Adsr {
     }
 }
 
+/// Takes the click out of a voice that starts a new note while it still
+/// sounds (stolen, or a mono voice played again): its output would jump from
+/// where the old note was to where the new one starts. That jump is added
+/// back and faded out over `DECLICK` seconds, so the sound stays continuous.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Declick {
+    /// The jump being faded, per channel.
+    jump: [f32; 2],
+    /// Samples of the fade done.
+    at: u32,
+}
+
+/// How long a jump takes to fade, in seconds.
+const DECLICK: f32 = 0.003;
+
+impl Declick {
+    fn shape(&self, total: f32) -> f32 {
+        0.5 + 0.5 * (PI * (self.at as f32 / total).min(1.0)).cos()
+    }
+
+    /// A voice jumped by `-jump` on the sample about to be played.
+    pub(crate) fn push(&mut self, jump: [f32; 2], sample_rate: f32) {
+        let now = self.shape(DECLICK * sample_rate);
+        self.jump = [self.jump[0] * now + jump[0], self.jump[1] * now + jump[1]];
+        self.at = 0;
+    }
+
+    /// What it adds to the next sample.
+    fn next(&mut self, total: f32) -> [f32; 2] {
+        let shape = self.shape(total);
+        let add = [self.jump[0] * shape, self.jump[1] * shape];
+        self.at += 1;
+        if self.at as f32 >= total {
+            *self = Self::default();
+        }
+        add
+    }
+
+    pub(crate) fn render(&mut self, left: &mut [f32], right: &mut [f32], sample_rate: f32) {
+        let total = DECLICK * sample_rate;
+        for (l, r) in left.iter_mut().zip(right.iter_mut()) {
+            if self.jump == [0.0; 2] {
+                return;
+            }
+            let add = self.next(total);
+            *l += add[0];
+            *r += add[1];
+        }
+    }
+
+    /// The same for an instrument with one channel.
+    pub(crate) fn render_mono(&mut self, out: &mut [f32], sample_rate: f32) {
+        let total = DECLICK * sample_rate;
+        for sample in out.iter_mut() {
+            if self.jump == [0.0; 2] {
+                return;
+            }
+            *sample += self.next(total)[0];
+        }
+    }
+}
+
+/// What a voice needs to be taken without a click: its last output, and
+/// whether a new note just took it while it sounded.
+#[derive(Clone, Copy, Default)]
+pub(crate) struct Taken {
+    out: [f32; 2],
+    taken: bool,
+}
+
+impl Taken {
+    pub(crate) const NONE: Taken = Taken { out: [0.0; 2], taken: false };
+
+    /// A new note starts on the voice, which was `sounding` or not.
+    pub(crate) fn take(&mut self, sounding: bool) {
+        self.taken = sounding;
+        if !sounding {
+            self.out = [0.0; 2];
+        }
+    }
+
+    /// After the voice rendered into `left`/`right`, watched from before:
+    /// the jump of a voice just taken goes to `declick`.
+    pub(crate) fn rendered(&mut self, watch: Watch, left: &[f32], right: &[f32], declick: &mut Declick, sample_rate: f32) {
+        if left.is_empty() {
+            return;
+        }
+        let (first, last) = watch.after(left, right);
+        if self.taken {
+            declick.push([self.out[0] - first[0], self.out[1] - first[1]], sample_rate);
+            self.taken = false;
+        }
+        self.out = last;
+    }
+}
+
+/// A voice's output watched from outside its render: what it added to the
+/// first and last samples of a buffer the voices add into.
+pub(crate) struct Watch([f32; 2], [f32; 2]);
+
+impl Watch {
+    pub(crate) fn before(left: &[f32], right: &[f32]) -> Self {
+        let n = left.len().max(1) - 1;
+        Self([left.first().copied().unwrap_or(0.0), right.first().copied().unwrap_or(0.0)], [left.get(n).copied().unwrap_or(0.0), right.get(n).copied().unwrap_or(0.0)])
+    }
+
+    /// After the voice rendered: (its first sample, its last).
+    pub(crate) fn after(&self, left: &[f32], right: &[f32]) -> ([f32; 2], [f32; 2]) {
+        let now = Self::before(left, right);
+        ([now.0[0] - self.0[0], now.0[1] - self.0[1]], [now.1[0] - self.1[0], now.1[1] - self.1[1]])
+    }
+}
+
 /// Note bookkeeping shared by the polyphonic instruments.
 #[derive(Clone, Copy)]
 pub(crate) struct Gate {
@@ -174,6 +287,21 @@ impl Gate {
         self.remaining -= 1;
         self.remaining == 0
     }
+}
+
+/// Picks the voice to (re)use: an idle one, else the oldest already let go,
+/// else the oldest. Each voice says (index, idle, still held, age).
+pub(crate) fn steal_voice(voices: impl Iterator<Item = (usize, bool, bool, u64)>) -> usize {
+    let mut best = (0, true, u64::MAX);
+    for (index, is_idle, held, age) in voices {
+        if is_idle {
+            return index;
+        }
+        if (held, age) < (best.1, best.2) {
+            best = (index, held, age);
+        }
+    }
+    best.0
 }
 
 /// Picks the voice to (re)use: an idle one, else the oldest.
@@ -522,6 +650,7 @@ struct FmVoice {
     modulator: f32,
     last_mod: f32,
     mod_env: f32,
+    taken: Taken,
 }
 
 pub struct FmSynth {
@@ -535,12 +664,13 @@ pub struct FmSynth {
     /// asked (see [`Self::set_expression`]) and as now, gliding to it.
     target: (f32, f32),
     depth: (f32, f32),
+    declick: Declick,
 }
 
 impl FmSynth {
     pub fn new(params: FmParams, sample_rate: f32) -> Self {
-        let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, mod_env: 0.0 };
-        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0, target: (1.0, 0.0), depth: (1.0, 0.0) }
+        let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, mod_env: 0.0, taken: Taken::default() };
+        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0, target: (1.0, 0.0), depth: (1.0, 0.0), declick: Declick::default() }
     }
 
     /// Brightness (`tone`, -1..1, at rest 0: CC 74) scales the modulation index
@@ -566,8 +696,9 @@ impl FmSynth {
 
     pub fn note_on(&mut self, pitch: u8, velocity: f32, gate: u32) {
         self.counter += 1;
-        let index = free_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.gate.age)));
+        let index = steal_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.env.stage != Stage::Release, v.gate.age)));
         let voice = &mut self.voices[index];
+        voice.taken.take(voice.env.stage != Stage::Idle);
         *voice = FmVoice { gate: Gate::new(pitch, velocity, gate, self.counter), mod_env: 1.0, ..*voice };
         voice.env.trigger();
     }
@@ -608,6 +739,7 @@ impl FmSynth {
             let (carrier_inc, mod_inc) = (freq / sr, freq * p.ratio / sr);
             let index = p.index * (1.0 - FM_VELOCITY_INDEX * (1.0 - voice.gate.velocity.clamp(0.0, 1.0)));
             let mut depth = start;
+            let watch = Watch::before(left, right);
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.gate.tick() {
                     voice.env.release(p.release, sr);
@@ -632,7 +764,9 @@ impl FmSynth {
                 *out_l += s;
                 *out_r += s;
             }
+            voice.taken.rendered(watch, left, right, &mut self.declick, sr);
         }
+        self.declick.render(left, right, sr);
         // The glide moves on with the frames, sounding or not.
         if !still {
             for _ in 0..left.len() {
@@ -970,6 +1104,57 @@ mod tests {
         }
         assert!(l.iter().chain(&r).all(|s| s.is_finite() && s.abs() < 4.0));
         (l, r)
+    }
+
+    /// With every voice busy, the note that takes one doesn't click: the
+    /// sound moves no faster across that sample than within the notes. And
+    /// it takes a voice already let go before a key still held.
+    #[test]
+    fn a_stolen_voice_does_not_click_and_held_keys_stay() {
+        let steepest = |x: &[f32]| x.windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
+        let frames = SR as usize / 4;
+        let check = |name: &str, before: &[f32], after: &[f32]| {
+            let across = (after[0] - before[frames - 1]).abs();
+            let within = steepest(&before[frames / 2..]).max(steepest(&after[frames / 2..]));
+            println!("{name}: {across:.4} across the new note, {within:.4} within the notes");
+            assert!(within > 0.0 && across <= within * 1.5, "{name}: {across} {within}");
+        };
+        // Sines once the modulation has died away, so the notes themselves
+        // move slowly; a new note brings the modulation back at once.
+        let mut fm = FmSynth::new(FmParams { index: 3.0, mod_decay: 0.02, mod_sustain: 0.0, sustain: 1.0, ..Default::default() }, SR);
+        for k in 0..FM_VOICES as u8 {
+            fm.note_on(40 + k, 1.0, HELD);
+        }
+        let (before, _) = run(&mut |l, r| fm.render(l, r), frames);
+        fm.note_on(41, 1.0, HELD);
+        let (after, _) = run(&mut |l, r| fm.render(l, r), frames);
+        check("fm", &before, &after);
+
+        let params = crate::model::SynthParams { waveform: crate::model::Waveform::Sine, sustain: 1.0, cutoff: 20_000.0, ..Default::default() };
+        let mut synth = crate::synth::PolySynth::new(params, SR);
+        let mono = |synth: &mut crate::synth::PolySynth| {
+            let mut out = vec![0.0; frames];
+            out.chunks_mut(512).for_each(|chunk| synth.render(chunk));
+            out
+        };
+        for k in 0..16 {
+            synth.note_on(40 + k, 1.0, HELD);
+        }
+        let before = mono(&mut synth);
+        synth.note_on(41, 1.0, HELD);
+        check("synth", &before, &mono(&mut synth));
+
+        // The oldest key held, the rest let go and still ringing.
+        let mut fm = FmSynth::new(FmParams { release: 2.0, ..Default::default() }, SR);
+        for k in 0..FM_VOICES as u8 {
+            fm.note_on(40 + k, 1.0, HELD);
+        }
+        run(&mut |l, r| fm.render(l, r), 512);
+        for k in 1..FM_VOICES as u8 {
+            fm.note_off(40 + k);
+        }
+        fm.note_on(100, 1.0, HELD);
+        assert!(fm.voices.iter().any(|v| v.gate.held && v.gate.pitch == 40), "the held note went");
     }
 
     #[test]

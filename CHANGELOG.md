@@ -94,6 +94,10 @@ still in `0.x`, so any release may change things.
   "Enter or leave full screen" in sentence case, like its other rows.
 - In English, the mix assistant and the master meter write decimals with a
   point ("-13.3 LUFS") and track names in plain quotes.
+- Wavetable Synth, Polychrome, FM Synth, Sampler, Drum Rack and the basic
+  synth: a note that takes a voice still sounding (all voices busy, or a
+  mono sound played again) no longer clicks, and with all voices busy the
+  new note takes one already released before a key still held.
 - In English, factory sounds on pads, drum rows and samplers, and factory
   chains in the browser, show their English names; "1 bar", "1 voice" and
   "1 cent" in the singular (the modular's "1 voz" in Spanish too); lessons

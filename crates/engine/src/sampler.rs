@@ -4,7 +4,7 @@
 //! never allocates or frees memory on the audio thread. Voices only keep indices
 //! and positions, and fall silent if their sample disappears.
 
-use crate::instruments::{Adsr, Gate, Stage, Svf, free_voice, semitones, svf_g};
+use crate::instruments::{Adsr, Declick, Gate, Stage, Svf, Taken, Watch, semitones, steal_voice, svf_g};
 use crate::model::{RACK_FULL_LENGTH, RackParams, SamplerParams, rack_pad};
 use crate::sample::Sample;
 use crate::synth::HELD;
@@ -46,6 +46,7 @@ struct SamplerVoice {
     target: f32,
     /// Its sample's rate at its own pitch.
     native: f64,
+    taken: Taken,
 }
 
 impl SamplerVoice {
@@ -70,6 +71,7 @@ pub struct Sampler {
     held_count: usize,
     /// Mono: the last note played, where a Mono glide starts.
     last_note: Option<f32>,
+    declick: Declick,
 }
 
 impl Sampler {
@@ -85,8 +87,9 @@ impl Sampler {
             note: 60.0,
             target: 60.0,
             native: 1.0,
+            taken: Taken::default(),
         };
-        Self { params, voices: [voice; SAMPLER_VOICES], sample_rate, counter: 0, pitch: 1.0, bright: 1.0, held: [0; 16], held_count: 0, last_note: None }
+        Self { params, voices: [voice; SAMPLER_VOICES], sample_rate, counter: 0, pitch: 1.0, bright: 1.0, held: [0; 16], held_count: 0, last_note: None, declick: Declick::default() }
     }
 
     /// Bends every note by `ratio` (a frequency multiplier: pitch bend and vibrato).
@@ -171,8 +174,9 @@ impl Sampler {
         let Some(sample) = samples.get(slot).filter(|s| s.frames() > 0) else { return };
         let p = self.params;
         self.counter += 1;
-        let index = free_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.gate.age)));
+        let index = steal_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.env.stage != Stage::Release, v.gate.age)));
         let voice = &mut self.voices[index];
+        voice.taken.take(voice.env.stage != Stage::Idle);
         voice.slot = slot;
         voice.gate = Gate::new(pitch, velocity, gate, self.counter);
         voice.position = (p.start.clamp(0.0, 0.99) as f64) * sample.frames() as f64;
@@ -240,6 +244,7 @@ impl Sampler {
             };
             let frames = sample.frames() as f64;
             let loop_start = p.start.clamp(0.0, 0.99) as f64 * frames;
+            let watch = Watch::before(left, right);
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.gate.tick() {
                     voice.env.release(p.release, sr);
@@ -275,7 +280,9 @@ impl Sampler {
                 *out_l += l * amp;
                 *out_r += r * amp;
             }
+            voice.taken.rendered(watch, left, right, &mut self.declick, sr);
         }
+        self.declick.render(left, right, sr);
     }
 }
 
@@ -299,6 +306,7 @@ struct PadVoice {
     /// Played by a note outside the pads (see [`RackParams::chromatic`]).
     chromatic: bool,
     age: u64,
+    taken: Taken,
 }
 
 pub struct DrumRack {
@@ -308,6 +316,7 @@ pub struct DrumRack {
     counter: u64,
     /// Pitch bend now, -1..1 (see [`RackParams::bend`]).
     bend: f32,
+    declick: Declick,
 }
 
 impl DrumRack {
@@ -323,8 +332,9 @@ impl DrumRack {
             fading: false,
             chromatic: false,
             age: 0,
+            taken: Taken::default(),
         };
-        Self { params, voices: [voice; RACK_VOICES], sample_rate, counter: 0, bend: 0.0 }
+        Self { params, voices: [voice; RACK_VOICES], sample_rate, counter: 0, bend: 0.0, declick: Declick::default() }
     }
 
     /// Pitch bend, -1..1: the hits that start from now on take it, each pad
@@ -359,7 +369,10 @@ impl DrumRack {
             }
         }
         self.counter += 1;
-        let index = free_voice(self.voices.iter().enumerate().map(|(i, v)| (i, !v.active, v.age)));
+        // A free voice, else the oldest already fading, else the oldest.
+        let index = steal_voice(self.voices.iter().enumerate().map(|(i, v)| (i, !v.active, !v.fading, v.age)));
+        let mut taken = self.voices[index].taken;
+        taken.take(self.voices[index].active);
         // Constant-power pan; centre is unity on both sides.
         let angle = (p.pan[pad].clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
         let amp = velocity * p.level[pad] * std::f32::consts::SQRT_2;
@@ -376,6 +389,7 @@ impl DrumRack {
             fading: false,
             chromatic,
             age: self.counter,
+            taken,
         };
     }
 
@@ -387,6 +401,7 @@ impl DrumRack {
                 continue;
             };
             let frames = sample.frames() as f64;
+            let watch = Watch::before(left, right);
             for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
                 if voice.position >= frames {
                     voice.active = false;
@@ -409,7 +424,9 @@ impl DrumRack {
                 *out_l += l * voice.gain.0 * voice.fade;
                 *out_r += r * voice.gain.1 * voice.fade;
             }
+            voice.taken.rendered(watch, left, right, &mut self.declick, self.sample_rate);
         }
+        self.declick.render(left, right, self.sample_rate);
     }
 }
 
@@ -435,6 +452,37 @@ mod tests {
         let (mut l, mut r) = (vec![0.0; block], vec![0.0; block]);
         f(&mut l, &mut r);
         (l, r)
+    }
+
+    /// With every voice busy, the note that takes one doesn't click: the
+    /// level doesn't jump (here, a steady sample: any jump is a click).
+    #[test]
+    fn a_stolen_voice_does_not_click() {
+        let samples = [constant(SR as usize * 4, 0.5)];
+        let mut sampler = Sampler::new(SamplerParams::default(), SR);
+        for k in 0..SAMPLER_VOICES as u8 {
+            sampler.note_on(&samples, 60 + k % 5, 1.0, HELD);
+        }
+        let (before, _) = render(4800, |l, r| sampler.render(&samples, l, r));
+        sampler.note_on(&samples, 60, 1.0, HELD);
+        let (after, _) = render(4800, |l, r| sampler.render(&samples, l, r));
+        let voice = before[4799] / SAMPLER_VOICES as f32;
+        assert!(voice > 0.1);
+        let across = (after[0] - before[4799]).abs();
+        assert!(across < voice * 0.05, "{across} (a voice: {voice})");
+
+        let mut rack = DrumRack::new(RackParams::default(), SR);
+        for _ in 0..RACK_VOICES {
+            rack.note_on(&samples, RACK_FIRST_NOTE, 1.0);
+        }
+        let (before, _) = render(4800, |l, r| rack.render(&samples, l, r));
+        // A softer hit takes the voice of a louder one.
+        rack.note_on(&samples, RACK_FIRST_NOTE, 0.2);
+        let (after, _) = render(4800, |l, r| rack.render(&samples, l, r));
+        let voice = before[4799] / RACK_VOICES as f32;
+        assert!(voice > 0.1);
+        let across = (after[0] - before[4799]).abs();
+        assert!(across < voice * 0.05, "rack: {across} (a voice: {voice})");
     }
 
     #[test]

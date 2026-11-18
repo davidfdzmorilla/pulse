@@ -79,6 +79,10 @@ still in `0.x`, so any release may change things.
 
 ### Fixed
 
+- Modular Synth and Super Saw: a sound with modulation (LFOs, envelopes,
+  random, glide, the Super Saw's filter envelope) plays the same whatever
+  the sound card's buffer size. Before, it could change with buffers that
+  aren't a multiple of 32 samples.
 - Settings → Audio: the **Cores for audio** list shows every choice
   without scrolling (on a 10-core Mac the last one was hidden).
 - Layout: the Drum Machine device keeps the device panel's height (rows 3–4
@@ -102,6 +106,9 @@ still in `0.x`, so any release may change things.
   (≈12 ms) depending on the processor or the number of threads, when the
   largest jump and the onset peak fell on neighbouring frames. It's now the
   same on every machine.
+- Switching an effect on or off in a track, a return or the master no longer
+  clicks (it cross-fades for 10 ms), and an effect switched off forgets its
+  tail: a reverb or delay turned back on no longer plays the old one.
 - Windows CI packages carried the placeholder version `0.1.3`, because the
   checkout had no tags. They now get the real version.
 - Two tests failed on Windows because their expected paths put a `/` inside

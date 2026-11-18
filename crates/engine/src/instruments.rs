@@ -322,6 +322,9 @@ pub(crate) fn free_voice(idle: impl Iterator<Item = (usize, bool, u64)>) -> usiz
 
 const SAW_VOICES: usize = 8;
 const UNISON: usize = 7;
+/// The Super Saw's filter follows its envelope every `CONTROL` samples,
+/// counted from the synth's start (not from each buffer's), so the sound
+/// doesn't depend on the buffer.
 const CONTROL: usize = 32;
 
 #[derive(Clone, Copy)]
@@ -330,6 +333,8 @@ struct SawVoice {
     env: Adsr,
     phases: [f32; UNISON],
     filters: [Svf; 2],
+    /// The filter's coefficient for its control period (below zero: not found yet).
+    g: f32,
 }
 
 pub struct SuperSaw {
@@ -342,12 +347,14 @@ pub struct SuperSaw {
     pitch: f32,
     /// What the controllers do to the cutoff, as a ratio.
     bright: f32,
+    /// How far into a control period the last buffer ended.
+    period_at: usize,
 }
 
 impl SuperSaw {
     pub fn new(params: SuperSawParams, sample_rate: f32) -> Self {
-        let voice = SawVoice { gate: Gate::OFF, env: Adsr::IDLE, phases: [0.0; UNISON], filters: [Svf::default(); 2] };
-        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0, bright: 1.0 }
+        let voice = SawVoice { gate: Gate::OFF, env: Adsr::IDLE, phases: [0.0; UNISON], filters: [Svf::default(); 2], g: -1.0 };
+        Self { params, voices: [voice; SAW_VOICES], sample_rate, counter: 0, seed: 0x2545_F491, pitch: 1.0, bright: 1.0, period_at: 0 }
     }
 
     /// Starts its luck over (the transport starts): the song's notes start
@@ -398,6 +405,7 @@ impl SuperSaw {
         }
         voice.gate = Gate::new(pitch, velocity, gate, self.counter);
         voice.phases = phases;
+        voice.g = -1.0;
         voice.env.trigger();
     }
 
@@ -435,9 +443,19 @@ impl SuperSaw {
                 let angle = (position * p.spread + 1.0) * std::f32::consts::FRAC_PI_4;
                 gains[u] = (angle.cos() * norm, angle.sin() * norm);
             }
-            for (block_l, block_r) in left.chunks_mut(CONTROL).zip(right.chunks_mut(CONTROL)) {
-                let cutoff = p.cutoff * self.bright * 2f32.powf(p.env_amount * voice.env.level);
-                let g = svf_g(cutoff, sr);
+            let (mut offset, mut at) = (0, self.period_at);
+            while offset < left.len() {
+                let n = (left.len() - offset).min(CONTROL - at);
+                // The cutoff moves at the start of a period (or of a note); a
+                // period cut in two by the end of a buffer keeps it.
+                if at == 0 || voice.g < 0.0 {
+                    let cutoff = p.cutoff * self.bright * 2f32.powf(p.env_amount * voice.env.level);
+                    voice.g = svf_g(cutoff, sr);
+                }
+                let g = voice.g;
+                let (block_l, block_r) = (&mut left[offset..offset + n], &mut right[offset..offset + n]);
+                offset += n;
+                at = (at + n) % CONTROL;
                 for (out_l, out_r) in block_l.iter_mut().zip(block_r.iter_mut()) {
                     if voice.gate.tick() {
                         voice.env.release(p.release, sr);
@@ -461,6 +479,7 @@ impl SuperSaw {
                 }
             }
         }
+        self.period_at = (self.period_at + left.len()) % CONTROL;
     }
 }
 

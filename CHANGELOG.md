@@ -111,6 +111,9 @@ still in `0.x`, so any release may change things.
   tail: a reverb or delay turned back on no longer plays the old one.
 - Windows CI packages carried the placeholder version `0.1.3`, because the
   checkout had no tags. They now get the real version.
+- EQ Three (band gains), Compressor (make-up), Limiter (input gain) and
+  Utility (gain and width): turning the knob, or automating it, no longer
+  makes zipper noise. The level glides to the new value in 64 samples.
 - Two tests failed on Windows because their expected paths put a `/` inside
   one `Path::join` (`factory_sounds_tests`, `lyrics`). They now build the
   path part by part. Pulse's own behaviour was already right. They pass on

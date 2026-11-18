@@ -74,18 +74,29 @@ pub struct Eq3 {
     params: Eq3Params,
     low: [Svf; 2],
     high: [Svf; 2],
+    /// The bands' gains (low, mid, high), gliding when turned.
+    gains: [Glide; 3],
 }
 
 impl Eq3 {
+    fn new(params: Eq3Params) -> Self {
+        let gains = [params.low_db, params.mid_db, params.high_db].map(|db| Glide::new(Self::gain(db)));
+        Self { params, low: Default::default(), high: Default::default(), gains }
+    }
+
+    /// At the bottom of the range a band is fully killed, as on a DJ mixer.
+    fn gain(db: f32) -> f32 {
+        if db <= -40.0 { 0.0 } else { db_to_gain(db) }
+    }
+
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
         let p = self.params;
         let low_c = SvfCoefs::new(p.low_freq, BUTTERWORTH_K, sr);
         let high_c = SvfCoefs::new(p.high_freq, BUTTERWORTH_K, sr);
-        // At the bottom of the range a band is fully killed, as on a DJ mixer.
-        let gain = |db: f32| if db <= -40.0 { 0.0 } else { db_to_gain(db) };
-        let (gl, gm, gh) = (gain(p.low_db), gain(p.mid_db), gain(p.high_db));
-        for (ch, buf) in [l, r].into_iter().enumerate() {
-            for s in buf.iter_mut() {
+        let targets = [Self::gain(p.low_db), Self::gain(p.mid_db), Self::gain(p.high_db)];
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let [gl, gm, gh] = [0, 1, 2].map(|band| self.gains[band].next(targets[band]));
+            for (ch, s) in [a, b].into_iter().enumerate() {
                 let x = *s;
                 let (low, _, _) = self.low[ch].tick(x, &low_c);
                 let (_, _, high) = self.high[ch].tick(x, &high_c);
@@ -324,6 +335,8 @@ pub struct Compressor {
     params: CompressorParams,
     envelope_db: f32,
     key: Key,
+    /// The make-up gain, gliding when turned.
+    makeup: Glide,
 }
 
 /// The sound of a sidechain's source for this block (the louder channel, and
@@ -384,7 +397,7 @@ impl Compressor {
             let target = self.gain_reduction_db(20.0 * peak.log10());
             let coef = if target < self.envelope_db { attack } else { release };
             self.envelope_db = target + coef * (self.envelope_db - target);
-            let g = db_to_gain(self.envelope_db) * makeup;
+            let g = db_to_gain(self.envelope_db) * self.makeup.next(makeup);
             *a *= g;
             *b *= g;
         }
@@ -1144,6 +1157,8 @@ use crate::dsp::{true_peak_taps, TP_DELAY, TP_PHASES, TP_TAPS};
 /// well, without clicks. Adds 2 ms (and 6 samples) of latency to its channel.
 pub struct Limiter {
     params: LimiterParams,
+    /// The input gain, gliding when turned.
+    input: Glide,
     /// The input (times its gain) on its way out, both channels.
     delay: [Vec<f32>; 2],
     position: usize,
@@ -1173,6 +1188,7 @@ impl Limiter {
         let hold_len = lookahead + 2;
         let mut fx = Self {
             params,
+            input: Glide::new(db_to_gain(params.gain_db)),
             delay: [vec![0.0; lookahead + TP_DELAY], vec![0.0; lookahead + TP_DELAY]],
             position: 0,
             history: [[0.0; 2 * TP_TAPS]; 2],
@@ -1219,6 +1235,7 @@ impl Limiter {
         let lookahead = self.average.len();
         let capacity = self.hold.len();
         for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let input = self.input.next(input);
             let (x, y) = (*a * input, *b * input);
             // The true peak around the sample TP_DELAY back: it and the
             // points between it and the one before.
@@ -1480,11 +1497,15 @@ pub struct Utility {
     high: Biquad,
     /// The middle's low and high halves, the side's high one.
     states: [[BiquadState; 2]; 3],
+    /// The gain and the width, gliding when turned.
+    gain: Glide,
+    width: Glide,
 }
 
 impl Utility {
     fn new(params: UtilityParams) -> Self {
-        Self { params, made: None, low: Biquad::IDENTITY, high: Biquad::IDENTITY, states: Default::default() }
+        let (gain, width) = (Glide::new(db_to_gain(params.gain_db)), Glide::new(params.width.clamp(0.0, 2.0)));
+        Self { params, made: None, low: Biquad::IDENTITY, high: Biquad::IDENTITY, states: Default::default(), gain, width }
     }
 
     /// Runs `x` through two of `s` (a 24 dB Linkwitz-Riley), with their states.
@@ -1524,7 +1545,8 @@ impl Utility {
                 mid = (Self::twice(&self.low, mid_low, m) + Self::twice(&self.high, mid_high, m)) as f32;
                 side = Self::twice(&self.high, side_high, x) as f32;
             }
-            side *= width;
+            let gain = self.gain.next(gain);
+            side *= self.width.next(width);
             *a = (mid + side) * gain;
             *b = (mid - side) * gain;
         }
@@ -1563,16 +1585,13 @@ impl EffectProcessor {
     /// Allocates the effect's buffers; call off the audio thread.
     pub fn new(effect: &Effect, sample_rate: f32) -> Self {
         match *effect {
-            Effect::Eq3(params) => Self::Eq3(Eq3 {
-                params,
-                low: Default::default(),
-                high: Default::default(),
-            }),
+            Effect::Eq3(params) => Self::Eq3(Eq3::new(params)),
             Effect::EqEight(params) => Self::EqEight(Box::new(EqEight::new(params))),
             Effect::Compressor(params) => Self::Compressor(Compressor {
                 params,
                 envelope_db: 0.0,
                 key: Key::new(),
+                makeup: Glide::new(db_to_gain(params.makeup_db)),
             }),
             Effect::Gate(params) => Self::Gate(Gate::new(params)),
             Effect::Transient(params) => Self::Transient(Transient::new(params)),
@@ -1896,6 +1915,37 @@ mod tests {
         let rms = |x: &[f32]| (x.iter().map(|s| s * s).sum::<f32>() / x.len() as f32).sqrt();
         let tail = n / 2;
         20.0 * (rms(&l[tail..]) / rms(&input[tail..])).log10()
+    }
+
+    /// Turning a gain doesn't click: the level glides there over a few
+    /// dozen samples instead of jumping at the next block.
+    #[test]
+    fn turned_gains_glide() {
+        use crate::model::{CompressorParams, Eq3Params, LimiterParams, UtilityParams};
+        let cases: [(&str, Effect, Effect); 4] = [
+            ("eq3", Effect::Eq3(Eq3Params::default()), Effect::Eq3(Eq3Params { low_db: 12.0, ..Default::default() })),
+            ("compressor", Effect::Compressor(CompressorParams::default()), Effect::Compressor(CompressorParams { makeup_db: 12.0, ..Default::default() })),
+            ("limiter", Effect::Limiter(LimiterParams::default()), Effect::Limiter(LimiterParams { gain_db: 12.0, ..Default::default() })),
+            ("utility", Effect::Utility(UtilityParams::default()), Effect::Utility(UtilityParams { gain_db: 12.0, ..Default::default() })),
+        ];
+        for (name, before, after) in cases {
+            let mut fx = EffectProcessor::new(&before, 48_000.0);
+            // A steady, quiet level: all that moves is the gain.
+            let mut run = |fx: &mut EffectProcessor| {
+                let (mut l, mut r) = (vec![0.05f32; 4800], vec![0.05f32; 4800]);
+                for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                    fx.process(a, b, &ctx());
+                }
+                l
+            };
+            let settled = run(&mut fx);
+            fx.set_params(&after);
+            let turned = run(&mut fx);
+            let (from, to) = (settled[4799], turned[4799]);
+            assert!((to / from - db_to_gain(12.0)).abs() < 0.05, "{name}: {from} {to}");
+            let steepest = std::iter::once(&from).chain(&turned).collect::<Vec<_>>().windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
+            assert!(steepest < (to - from) / 30.0, "{name}: a step of {steepest} on the way from {from} to {to}");
+        }
     }
 
     /// What an EQ Eight does to the sound is what it draws, for every shape.

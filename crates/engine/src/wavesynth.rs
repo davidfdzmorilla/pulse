@@ -6,7 +6,7 @@
 //! and handed to the audio thread ready to play; rendering never allocates.
 
 use crate::effects::{EffectProcessor, ProcessContext};
-use crate::instruments::{saw, square, svf_g, Gate, Svf};
+use crate::instruments::{saw, square, svf_g, Declick, Gate, Svf, Taken, Watch};
 use crate::synth::HELD;
 use crate::model::{
     wave_is_target, ArpMode, SEQ_STEPS, WAVE_BALANCE, WAVE_FILTER2, WAVE_OSC_EXTRA, WAVE_RANDOM_RATE, KickWave, LfoMode, ModSource, OscKind, OscWarp, ParamInfo, WaveEnv, WaveFilter, WaveParams,
@@ -326,6 +326,7 @@ struct Voice {
     /// it, a note starting in it) plays each piece with the same.
     snap: ([f32; PARAMS], f32),
     snap_period: u64,
+    taken: Taken,
 }
 
 impl Voice {
@@ -358,6 +359,7 @@ impl Voice {
             filter2: [FilterState::new(), FilterState::new()],
             snap: ([0.0; PARAMS], 0.0),
             snap_period: u64::MAX,
+            taken: Taken::default(),
         }
     }
 
@@ -498,6 +500,7 @@ pub struct WaveSynth {
     sine: Vec<f32>,
     /// The voice the last note started on (for sequencer slides).
     last_voice: usize,
+    declick: Declick,
     /// Pitch bend and vibrato, as a frequency ratio.
     pitch: f32,
     /// What the controllers do to the filters' cutoffs, as a ratio.
@@ -564,6 +567,7 @@ impl WaveSynth {
             seq: Seq { keys: [(0, 0.0); 16], count: 0, step: 0, wait: 0.0, value: 0.0, sliding: false },
             sine: (0..HARMONIC_TABLE).map(|i| (i as f32 / HARMONIC_TABLE as f32 * TAU).sin()).collect(),
             last_voice: 0,
+            declick: Declick::default(),
             pitch: 1.0,
             bright: 1.0,
         }
@@ -620,6 +624,7 @@ impl WaveSynth {
         voice.target = pitch as f32;
         voice.velocity = velocity;
         if !was_active || retrigger {
+            voice.taken.take(was_active);
             voice.note = glide_from.unwrap_or(pitch as f32);
             voice.random = random;
             voice.age = 0.0;
@@ -808,9 +813,10 @@ impl WaveSynth {
             self.start_voice(0, pitch, velocity, gate, !legato);
             return;
         }
+        // A free voice, else the oldest already let go, else the oldest.
         let index = (0..VOICES)
             .find(|&i| !self.voices[i].active)
-            .unwrap_or_else(|| (0..VOICES).min_by_key(|&i| self.voices[i].gate.age).unwrap_or(0));
+            .unwrap_or_else(|| (0..VOICES).min_by_key(|&i| (self.voices[i].gate.open_for(0), self.voices[i].gate.age)).unwrap_or(0));
         self.start_voice(index, pitch, velocity, gate, true);
     }
 
@@ -930,9 +936,12 @@ impl WaveSynth {
                 let [l, r] = &mut scratch;
                 for v in 0..VOICES {
                     if self.voices[v].active {
+                        let watch = Watch::before(&l[..n], &r[..n]);
                         self.render_voice(v, samples, tables, &base, &amounts, &mut l[..n], &mut r[..n]);
+                        self.voices[v].taken.rendered(watch, &l[..n], &r[..n], &mut self.declick, self.sample_rate);
                     }
                 }
+                self.declick.render(&mut l[..n], &mut r[..n], self.sample_rate);
             }
             if has_fx {
                 let tempo = self.tempo;
@@ -1380,6 +1389,60 @@ mod tests {
 
     fn rms(x: &[f32]) -> f32 {
         (x.iter().map(|s| s * s).sum::<f32>() / x.len().max(1) as f32).sqrt()
+    }
+
+    /// A voice that starts a new note while it sounds (a mono voice played
+    /// again, a voice stolen with all of them busy) doesn't click: the sound
+    /// moves no faster across that sample than it does within the notes.
+    #[test]
+    fn a_voice_taken_while_it_sounds_does_not_click() {
+        let steepest = |x: &[f32]| x.windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
+        let t = tables();
+        let frames = SR as usize / 4;
+        let run = |synth: &mut WaveSynth| {
+            let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                synth.render(&[], &t, a, b);
+            }
+            l
+        };
+        for mono in [true, false] {
+            let mut synth = WaveSynth::new(WaveParams { mono, ..Default::default() }, SR);
+            let held = if mono { 1 } else { VOICES };
+            for k in 0..held {
+                synth.note_on(48 + k as u8 % 12, 1.0, HELD);
+            }
+            let before = run(&mut synth);
+            synth.note_on(55, 1.0, HELD);
+            let after = run(&mut synth);
+            let across = (after[0] - before[frames - 1]).abs();
+            let within = steepest(&before[frames / 2..]).max(steepest(&after[frames / 2..]));
+            println!("mono {mono}: {across:.4} across the new note, {within:.4} within the notes");
+            assert!(within > 0.0);
+            assert!(across <= within * 1.5, "mono {mono}: {across} {within}");
+        }
+    }
+
+    /// With every voice busy, a new note takes one already let go before a
+    /// key still held.
+    #[test]
+    fn a_new_note_takes_a_released_voice_before_a_held_one() {
+        let t = tables();
+        let mut params = WaveParams::default();
+        params.env[0].release = 2.0;
+        let mut synth = WaveSynth::new(params, SR);
+        // The oldest note stays held; the rest are let go and ring on.
+        for k in 0..VOICES as u8 {
+            synth.note_on(40 + k, 1.0, HELD);
+        }
+        let (mut l, mut r) = (vec![0.0; 256], vec![0.0; 256]);
+        synth.render(&[], &t, &mut l, &mut r);
+        for k in 1..VOICES as u8 {
+            synth.note_off(40 + k);
+        }
+        synth.note_on(100, 1.0, HELD);
+        assert!(synth.voices.iter().any(|v| v.active && v.gate.held && v.gate.pitch == 40), "the held note went");
+        assert!(synth.voices.iter().any(|v| v.active && v.gate.pitch == 100));
     }
 
     /// The comb's ringing to an impulse, `seconds` long, tuned to `hz` at full resonance.

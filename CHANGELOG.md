@@ -94,6 +94,10 @@ still in `0.x`, so any release may change things.
   "Enter or leave full screen" in sentence case, like its other rows.
 - In English, the mix assistant and the master meter write decimals with a
   point ("-13.3 LUFS") and track names in plain quotes.
+- Wavetable Synth, Polychrome, FM Synth, Sampler, Drum Rack and the basic
+  synth: a note that takes a voice still sounding (all voices busy, or a
+  mono sound played again) no longer clicks, and with all voices busy the
+  new note takes one already released before a key still held.
 - In English, factory sounds on pads, drum rows and samplers, and factory
   chains in the browser, show their English names; "1 bar", "1 voice" and
   "1 cent" in the singular (the modular's "1 voz" in Spanish too); lessons
@@ -107,6 +111,9 @@ still in `0.x`, so any release may change things.
   tail: a reverb or delay turned back on no longer plays the old one.
 - Windows CI packages carried the placeholder version `0.1.3`, because the
   checkout had no tags. They now get the real version.
+- EQ Three (band gains), Compressor (make-up), Limiter (input gain) and
+  Utility (gain and width): turning the knob, or automating it, no longer
+  makes zipper noise. The level glides to the new value in 64 samples.
 - Two tests failed on Windows because their expected paths put a `/` inside
   one `Path::join` (`factory_sounds_tests`, `lyrics`). They now build the
   path part by part. Pulse's own behaviour was already right. They pass on

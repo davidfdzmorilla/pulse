@@ -79,6 +79,10 @@ still in `0.x`, so any release may change things.
 
 ### Fixed
 
+- Modular Synth and Super Saw: a sound with modulation (LFOs, envelopes,
+  random, glide, the Super Saw's filter envelope) plays the same whatever
+  the sound card's buffer size. Before, it could change with buffers that
+  aren't a multiple of 32 samples.
 - Settings → Audio: the **Cores for audio** list shows every choice
   without scrolling (on a 10-core Mac the last one was hidden).
 - Layout: the Drum Machine device keeps the device panel's height (rows 3–4

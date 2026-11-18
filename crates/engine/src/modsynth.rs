@@ -45,6 +45,8 @@ const UNISON: usize = 8;
 /// Grains per voice, shared by its granular modules.
 const GRAINS: usize = 32;
 const NO_GRAIN: u8 = u8::MAX;
+/// Modulation is evaluated every `CONTROL` samples, counted from the synth's
+/// start (not from each buffer's), so the sound doesn't depend on the buffer.
 const CONTROL: usize = 32;
 const PARAMS: usize = MODULAR_PARAMS.len();
 /// How long a looping curve output takes to fade out after the note ends.
@@ -398,8 +400,11 @@ struct Voice {
     outputs: [f32; MOD_MODULES],
     /// Its modules have finished; only its poly lanes' effects still ring.
     tail: bool,
-    /// Seconds its tail has been silent.
+    /// Seconds its tail has been silent, and its peak in this control period.
     quiet: f32,
+    peak: f32,
+    /// The control period its modulation was last worked out in.
+    snap_period: u64,
     /// Lane gains, effect settings and mixes as this voice's modulators set them.
     lane_gains: [f32; MOD_LANES],
     lane_values: [f32; LANE_VALUES],
@@ -659,8 +664,16 @@ pub struct ModSynth {
     voices: Vec<Voice>,
     /// Per-block module settings, reused from voice to voice.
     blocks: Box<[Block; MOD_MODULES]>,
+    /// Per voice, the modulated settings of its control period: a period cut
+    /// in two by the end of a buffer plays its second piece with them.
+    snaps: Vec<[f32; PARAMS]>,
     counter: u64,
     clock: f64,
+    /// Samples played, control periods since it started and how far into the
+    /// current one the last buffer ended.
+    frames: u64,
+    period: u64,
+    period_at: usize,
     held: [u8; 16],
     held_count: usize,
     last_note: Option<f32>,
@@ -948,6 +961,8 @@ impl ModSynth {
                 outputs: [0.0; MOD_MODULES],
                 tail: false,
                 quiet: 0.0,
+                peak: 0.0,
+                snap_period: u64::MAX,
                 lane_gains: [1.0; MOD_LANES],
                 lane_values: [0.0; LANE_VALUES],
             }
@@ -961,8 +976,12 @@ impl ModSynth {
             tempo: 120.0,
             voices: (0..VOICES).map(voice).collect(),
             blocks: Box::new([Block::NONE; MOD_MODULES]),
+            snaps: vec![[0.0; PARAMS]; VOICES],
             counter: 0,
             clock: 0.0,
+            frames: 0,
+            period: 0,
+            period_at: 0,
             held: [0; 16],
             held_count: 0,
             last_note: None,
@@ -1069,6 +1088,7 @@ impl ModSynth {
         let voice = &mut self.voices[index];
         let was_active = voice.active;
         voice.tail = false;
+        voice.snap_period = u64::MAX;
         voice.gate = Gate::new(pitch, velocity, gate, counter);
         voice.target = pitch as f32;
         voice.velocity = velocity;
@@ -1265,11 +1285,15 @@ impl ModSynth {
         let dt = 1.0 / self.sample_rate;
         let mut offset = 0;
         while offset < left.len() {
-            let n = (left.len() - offset).min(CONTROL);
+            let n = (left.len() - offset).min(CONTROL - self.period_at);
+            // The piece that ends the control period.
+            let ends = self.period_at + n == CONTROL;
             let mut bus = [[[0f32; CONTROL]; 2]; MOD_LANES];
             let mut master = [[0f32; CONTROL]; 2];
             let mut sideband = [[0f32; CONTROL]; 2];
-            self.update_globals(&base, n as f32 / self.sample_rate);
+            if self.period_at == 0 {
+                self.update_globals(&base, CONTROL as f32 * dt);
+            }
             let tempo = self.tempo;
             let ctx = ProcessContext { sample_rate: self.sample_rate, tempo, beat: self.clock * tempo / 60.0, beats_per_sample: tempo / 60.0 / self.sample_rate as f64, scale: 0, meter: Default::default() };
             let mut newest: Option<(usize, u64)> = None;
@@ -1316,11 +1340,17 @@ impl ModSynth {
                     }
                 }
                 if voice.tail {
-                    voice.age += n as f32 * dt;
-                    voice.quiet = if peak < TAIL_SILENCE { voice.quiet + n as f32 * dt } else { 0.0 };
-                    if voice.quiet > hold || voice.age > TAIL_MAX {
-                        voice.tail = false;
-                        voice.active = false;
+                    // Whole periods at a time, so it ends on the same sample
+                    // whatever the buffers.
+                    voice.peak = voice.peak.max(peak);
+                    if ends {
+                        voice.age += CONTROL as f32 * dt;
+                        voice.quiet = if voice.peak < TAIL_SILENCE { voice.quiet + CONTROL as f32 * dt } else { 0.0 };
+                        voice.peak = 0.0;
+                        if voice.quiet > hold || voice.age > TAIL_MAX {
+                            voice.tail = false;
+                            voice.active = false;
+                        }
                     }
                 } else if !alive {
                     // Its effects ring on after the modules finish, as long as they sound.
@@ -1328,6 +1358,7 @@ impl ModSynth {
                         voice.tail = true;
                         voice.age = 0.0;
                         voice.quiet = 0.0;
+                        voice.peak = 0.0;
                     } else {
                         voice.active = false;
                     }
@@ -1366,13 +1397,19 @@ impl ModSynth {
                     }
                 }
             }
-            self.listen(&base, &bus, &master, &sideband, n);
+            self.listen(&base, &bus, &master, &sideband, n, ends);
             let gain = base[MOD_MASTER];
             for i in 0..n {
                 left[offset + i] += master[0][i] * gain;
                 right[offset + i] += master[1][i] * gain;
             }
-            self.clock += n as f64 / self.sample_rate as f64;
+            self.frames += n as u64;
+            self.clock = self.frames as f64 / self.sample_rate as f64;
+            self.period_at += n;
+            if ends {
+                self.period_at = 0;
+                self.period += 1;
+            }
             offset += n;
         }
     }
@@ -1404,7 +1441,7 @@ impl ModSynth {
     }
 
     /// Follows the level and pitch of the lanes, the master and the sideband (this block's).
-    fn listen(&mut self, base: &[f32; PARAMS], bus: &[[[f32; CONTROL]; 2]; MOD_LANES], master: &[[f32; CONTROL]; 2], sideband: &[[f32; CONTROL]; 2], n: usize) {
+    fn listen(&mut self, base: &[f32; PARAMS], bus: &[[[f32; CONTROL]; 2]; MOD_LANES], master: &[[f32; CONTROL]; 2], sideband: &[[f32; CONTROL]; 2], n: usize, ends: bool) {
         let sr = self.sample_rate;
         let channel = |input: usize| match input {
             i if i < MOD_LANES => &bus[i],
@@ -1440,6 +1477,9 @@ impl ModSynth {
             };
             self.tracker.push(std::array::from_fn(mono));
         }
+        if !ends {
+            return;
+        }
         self.tracker.blocks += 1;
         if self.tracker.blocks < TRACK_EVERY {
             return;
@@ -1473,24 +1513,34 @@ impl ModSynth {
         let sr = self.sample_rate;
         let tempo = self.tempo as f32;
         let dt = 1.0 / sr;
-        let block = n as f32 * dt;
-        let mut m = *base;
-        let inputs = ModInputs { tempo, clock: self.clock, legato: p.mono && p.legato, globals: &self.globals, tables, bend: self.bend, pressure: self.pressure };
-        modulate(p, &mut self.voices[v], &inputs, &mut m, block);
-        let bend = self.bend * p.bend_range as f32 + m[MOD_PITCH] + m[MOD_FINE] / 100.0;
+        // Modulation moves at the period's first piece (or a note's) by the
+        // time left until the next period; the rest of the period plays with
+        // what was found then.
+        let block = (CONTROL - self.period_at) as f32 * dt;
+        let fresh = self.voices[v].snap_period != self.period;
+        if fresh {
+            self.snaps[v] = *base;
+            let inputs = ModInputs { tempo, clock: self.clock, legato: p.mono && p.legato, globals: &self.globals, tables, bend: self.bend, pressure: self.pressure };
+            modulate(p, &mut self.voices[v], &inputs, &mut self.snaps[v], block);
+            self.voices[v].snap_period = self.period;
+        }
+        let bend = self.bend * p.bend_range as f32 + self.snaps[v][MOD_PITCH] + self.snaps[v][MOD_FINE] / 100.0;
 
-        let Self { voices, blocks, .. } = self;
+        let Self { voices, blocks, snaps, .. } = self;
+        let m = &snaps[v];
         let voice = &mut voices[v];
         voice.lane_values.copy_from_slice(&m[MOD_LANE_FX_PARAMS..MOD_PITCH]);
         voice.lane_gains = [0, 1, 2].map(|l| m[MOD_LANE_GAIN + l]);
         let glide = m[MOD_GLIDE];
-        if glide > 0.0 && voice.note != voice.target {
-            voice.note += (voice.target - voice.note) * (1.0 - (-block * 3000.0 / glide).exp());
-            if (voice.note - voice.target).abs() < 0.001 {
+        if fresh {
+            if glide > 0.0 && voice.note != voice.target {
+                voice.note += (voice.target - voice.note) * (1.0 - (-block * 3000.0 / glide).exp());
+                if (voice.note - voice.target).abs() < 0.001 {
+                    voice.note = voice.target;
+                }
+            } else {
                 voice.note = voice.target;
             }
-        } else {
-            voice.note = voice.target;
         }
 
         // This voice's place in the global unison.
@@ -1897,11 +1947,9 @@ impl ModSynth {
                 }
             }
             if !sounding {
-                voice.age += block;
                 return false;
             }
         }
-        voice.age += block;
         true
     }
 

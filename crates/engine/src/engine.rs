@@ -4307,6 +4307,20 @@ mod tests {
                 notes.push((beat * 5 + i * beat / 4, pitch, 0.6 + (i % 3) as f32 * 0.15, beat / 5));
             }
         }
+        play(kind, &notes)
+    }
+
+    /// Four notes at once as hard as a key can be hit, held two beats.
+    pub(crate) fn full_chord(kind: InstrumentKind) -> (Vec<f32>, Vec<f32>) {
+        let beat = (SR * 0.5) as usize;
+        play(kind, &[48, 55, 60, 64].map(|pitch| (0, pitch, 1.0, beat * 2)))
+    }
+
+    /// `kind` playing `notes` (start, pitch, velocity, length; in samples)
+    /// and three beats more.
+    fn play(kind: InstrumentKind, notes: &[(usize, u8, f32, usize)]) -> (Vec<f32>, Vec<f32>) {
+        flush_denormals();
+        let beat = (SR * 0.5) as usize;
         let total = notes.iter().map(|n| n.0 + n.3).max().unwrap_or(0) + beat * 3;
         // The built-in wavetables its oscillators ask for, as the app sends them.
         let table = |index: f32| Arc::new(crate::wavetable::builtin((index.max(0.0) as usize).min(crate::wavetable::BUILTIN.len() - 1)));
@@ -4324,7 +4338,7 @@ mod tests {
         instrument.set_tempo(120.0);
         let (mut l, mut r) = (vec![0.0f32; total], vec![0.0f32; total]);
         let mut at = 0;
-        for &(start, pitch, velocity, length) in &notes {
+        for &(start, pitch, velocity, length) in notes {
             while at < start {
                 let n = (start - at).min(256);
                 instrument.render(&[], &tables, &mut l[at..at + n], &mut r[at..at + n]);
@@ -4354,6 +4368,44 @@ mod tests {
     const PRESET_RMS_DB: (f32, f32) = (-30.0, -9.0);
     /// The same for drums and kicks, whose long booms are loud by nature.
     const PRESET_RMS_DB_DRUMS: (f32, f32) = (-30.0, -5.0);
+
+    /// Highest peak a factory preset may reach on a full chord, in dBFS:
+    /// some room over full scale, which the track's fader or the master's
+    /// limiter takes, but no more.
+    const PRESET_CHORD_PEAK_DB: f32 = 1.5;
+
+    /// No factory preset overloads when four keys are hit at once as hard
+    /// as they go, «Init» (the instrument as it comes) included. (Drums and
+    /// kicks don't play chords.)
+    #[test]
+    fn no_factory_preset_overloads_on_a_full_chord() {
+        let presets: Vec<(String, InstrumentKind)> = InstrumentKind::catalog()
+            .into_iter()
+            .flat_map(|kind| kind.factory_presets().into_iter().map(move |(name, p)| (format!("{} · {name}", kind.label()), p)))
+            .filter(|(_, p)| !p.is_drums() && !matches!(p, InstrumentKind::Kick(_)))
+            .collect();
+        let threads = std::thread::available_parallelism().map_or(4, |n| n.get());
+        let problems: Vec<String> = std::thread::scope(|scope| {
+            let presets = &presets;
+            let handles: Vec<_> = (0..threads)
+                .map(|t| {
+                    scope.spawn(move || {
+                        let mut problems = Vec::new();
+                        for (name, preset) in presets.iter().skip(t).step_by(threads) {
+                            let (l, r) = full_chord(*preset);
+                            let (peak, _) = peak_and_rms(&l, &r);
+                            if peak > PRESET_CHORD_PEAK_DB {
+                                problems.push(format!("{name}: peak {peak:.1} dB"));
+                            }
+                        }
+                        problems
+                    })
+                })
+                .collect();
+            handles.into_iter().flat_map(|h| h.join().unwrap()).collect()
+        });
+        assert!(problems.is_empty(), "factory presets too loud on a chord:\n{}", problems.join("\n"));
+    }
 
     /// Every factory preset of every instrument sounds, stays finite, leaves headroom
     /// and sits at a loudness close to the others. («Init» is the instrument as it

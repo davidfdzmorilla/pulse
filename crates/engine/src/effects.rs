@@ -506,6 +506,10 @@ pub struct Delay {
     write: usize,
     /// Smoothed delay time in samples, to avoid zipper noise on tempo changes.
     current: f32,
+    /// The delay time it is fading over to (a jump of the time), and the
+    /// samples left of the fade (0: none).
+    next: f32,
+    fade: u32,
     damping: [f32; 2],
 }
 
@@ -519,9 +523,19 @@ impl Delay {
             lines: [vec![0.0; len], vec![0.0; len]],
             write: 0,
             current: 0.0,
+            next: 0.0,
+            fade: 0,
             damping: [0.0; 2],
         }
     }
+
+    /// A jump of the delay time fades from the old echo to the new one over
+    /// this long (seconds): gliding there would play the line several times
+    /// faster or backwards (a squeal).
+    const FADE: f32 = 0.05;
+    /// The time glides while it moves less than this (seconds): a tempo
+    /// ramp bends the echoes' pitch a little, as a tape would.
+    const GLIDE: f32 = 0.0015;
 
     fn read(line: &[f32], write: usize, delay: f32) -> f32 {
         let len = line.len();
@@ -544,10 +558,27 @@ impl Delay {
         let smooth = 1.0 - (-1.0 / (0.05 * sr)).exp();
         let damp = (-TAU * p.filter_hz.clamp(200.0, 20000.0) / sr).exp();
         let feedback = p.feedback.clamp(0.0, 0.95);
+        let fade = (Self::FADE * sr) as u32;
         for (a, b) in l.iter_mut().zip(r.iter_mut()) {
-            self.current += (target - self.current) * smooth;
-            let wet_l = Self::read(&self.lines[0], self.write, self.current);
-            let wet_r = Self::read(&self.lines[1], self.write, self.current);
+            if self.fade == 0 {
+                if (target - self.current).abs() > Self::GLIDE * sr {
+                    self.next = target;
+                    self.fade = fade;
+                } else {
+                    self.current += (target - self.current) * smooth;
+                }
+            }
+            let mut wet_l = Self::read(&self.lines[0], self.write, self.current);
+            let mut wet_r = Self::read(&self.lines[1], self.write, self.current);
+            if self.fade > 0 {
+                self.fade -= 1;
+                let t = 0.5 - 0.5 * (PI * (1.0 - self.fade as f32 / fade as f32)).cos();
+                wet_l += (Self::read(&self.lines[0], self.write, self.next) - wet_l) * t;
+                wet_r += (Self::read(&self.lines[1], self.write, self.next) - wet_r) * t;
+                if self.fade == 0 {
+                    self.current = self.next;
+                }
+            }
             self.damping[0] = wet_l + damp * (self.damping[0] - wet_l);
             self.damping[1] = wet_r + damp * (self.damping[1] - wet_r);
             let (fb_l, fb_r) = (self.damping[0] * feedback, self.damping[1] * feedback);
@@ -2007,6 +2038,7 @@ impl EffectProcessor {
                 fx.lines.iter_mut().for_each(|line| line.fill(0.0));
                 fx.write = 0;
                 fx.current = 0.0;
+                fx.fade = 0;
                 fx.damping = [0.0; 2];
             }
             Self::Reverb(fx) => {
@@ -2982,6 +3014,38 @@ mod tests {
             fx.process(&mut l, &mut r, &ctx());
             let level = level_at(&l[4_800..], freq) / 0.05;
             assert!((0.9..1.1).contains(&level), "{freq} Hz: {level}");
+        }
+    }
+
+    /// Changing the Delay's time doesn't squeal: the echo of a steady note
+    /// stays that note while it moves to the new time. (Gliding there, it
+    /// played the line several times faster.) A slow tempo ramp still
+    /// glides.
+    #[test]
+    fn a_new_delay_time_does_not_squeal() {
+        let sr = 48_000.0;
+        let off_note = |from: f64, to: f64| {
+            let params = DelayParams { time_beats: from, feedback: 0.0, mix: 1.0, ping_pong: false, filter_hz: 18_000.0 };
+            let mut fx = EffectProcessor::new(&Effect::Delay(params), sr);
+            let mut l = sine(440.0, 3 * 48_000, 0.5);
+            let mut r = l.clone();
+            for (i, (a, b)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+                if i * 256 == 96_000 {
+                    fx.set_params(&Effect::Delay(DelayParams { time_beats: to, ..params }));
+                }
+                fx.process(a, b, &ctx());
+            }
+            // The half second after the change: what isn't the note.
+            let after = &l[96_000..120_000];
+            let total = after.iter().map(|s| s * s).sum::<f32>() / after.len() as f32;
+            let note = level_at(after, 440.0).powi(2) * 0.5;
+            (10.0 * ((total - note).max(1e-12) / total).log10(), l[143_000..].iter().fold(0f32, |m, s| m.max(s.abs())))
+        };
+        for (from, to) in [(1.0, 0.25), (0.25, 1.0), (0.75, 0.5)] {
+            let (stray, settled) = off_note(from, to);
+            println!("Delay de {from} a {to} tiempos: {stray:.1} dB fuera de la nota");
+            assert!(stray < -12.0, "{from} to {to}: {stray:.1} dB off the note");
+            assert!((settled - 0.5).abs() < 0.01, "{from} to {to}: the echo is back whole, {settled}");
         }
     }
 

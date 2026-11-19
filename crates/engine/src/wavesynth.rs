@@ -173,6 +173,11 @@ pub(crate) struct FilterCoefs {
     k: f32,
     ladder_g: f32,
     ladder_feedback: f32,
+    /// The tuned Ladder (see [`Self::tuned`]): each stage's share of its
+    /// input, and that to the fourth.
+    ladder_tuned: bool,
+    ladder_share: f32,
+    ladder_loop: f32,
     /// The comb's delay in whole samples, and its taps over delays
     /// `comb_delay - 2 ..= comb_delay + 3` (see `comb_taps`).
     comb_delay: usize,
@@ -205,6 +210,9 @@ impl FilterCoefs {
             k: (2.0 - 1.98 * resonance).max(0.02),
             ladder_g: 1.0 - (-TAU * cutoff / sr).exp(),
             ladder_feedback: resonance * 4.2,
+            ladder_tuned: false,
+            ladder_share: svf_g(cutoff, sr) / (1.0 + svf_g(cutoff, sr)),
+            ladder_loop: (svf_g(cutoff, sr) / (1.0 + svf_g(cutoff, sr))).powi(4),
             comb_delay: comb_delay(cutoff, sr) as usize,
             comb_taps: comb_taps(comb_delay(cutoff, sr)),
             comb_feedback: resonance * 0.97,
@@ -213,6 +221,17 @@ impl FilterCoefs {
             drive,
             mix,
         }
+    }
+
+    /// The Ladder with its feedback solved within the sample (no sample of
+    /// delay round the loop): the resonance sits on the cutoff wherever it
+    /// is, and it starts to ring by itself at the same Res all the way up.
+    /// Without it, the one made before: its resonance goes sharp as the
+    /// cutoff rises (almost five semitones at 10 kHz) and it no longer rings
+    /// by itself over a few hundred Hz.
+    pub(crate) fn tuned(mut self, tuned: bool) -> Self {
+        self.ladder_tuned = tuned;
+        self
     }
 
     pub(crate) fn process(&self, s: &mut FilterState, x: f32) -> f32 {
@@ -238,6 +257,19 @@ impl FilterCoefs {
             WaveFilter::Notch => {
                 let (low, _, high) = s.svf[0].tick(input, self.g, self.k);
                 low + high
+            }
+            WaveFilter::Ladder if self.ladder_tuned => {
+                let (share, keep) = (self.ladder_share, 1.0 - self.ladder_share);
+                // What the four stages hold comes out whatever goes in now.
+                let held = keep * (share * (share * (share * s.ladder[0] + s.ladder[1]) + s.ladder[2]) + s.ladder[3]);
+                let mut y = ((input - self.ladder_feedback * held) / (1.0 + self.ladder_feedback * self.ladder_loop)).tanh();
+                for stage in &mut s.ladder {
+                    let v = (y - *stage) * share;
+                    y = v + *stage;
+                    *stage = y + v;
+                }
+                // Make up for the level the feedback takes away.
+                y * (1.0 + self.ladder_feedback * 0.4)
             }
             WaveFilter::Ladder => {
                 let g = self.ladder_g;
@@ -1142,10 +1174,10 @@ impl WaveSynth {
         }
 
         let cutoff = m[FILTER] * self.bright * 2f32.powf((voice.note - 60.0) / 12.0 * m[FILTER + 4]);
-        let coefs = p.filter.on.then(|| FilterCoefs::new(p.filter.mode, cutoff, m[FILTER + 1], m[FILTER + 2], m[FILTER + 3], sr));
+        let coefs = p.filter.on.then(|| FilterCoefs::new(p.filter.mode, cutoff, m[FILTER + 1], m[FILTER + 2], m[FILTER + 3], sr).tuned(p.filter.tuned));
         let routes = p.filter.routes;
         let cutoff2 = m[WAVE_FILTER2] * self.bright * 2f32.powf((voice.note - 60.0) / 12.0 * m[WAVE_FILTER2 + 4]);
-        let coefs2 = p.filter2.on.then(|| FilterCoefs::new(p.filter2.mode, cutoff2, m[WAVE_FILTER2 + 1], m[WAVE_FILTER2 + 2], m[WAVE_FILTER2 + 3], sr));
+        let coefs2 = p.filter2.on.then(|| FilterCoefs::new(p.filter2.mode, cutoff2, m[WAVE_FILTER2 + 1], m[WAVE_FILTER2 + 2], m[WAVE_FILTER2 + 3], sr).tuned(p.filter2.tuned));
         let balance = m[WAVE_BALANCE].clamp(0.0, 1.0);
         let parallel = p.filter_parallel && coefs.is_some() && coefs2.is_some();
         if fresh {
@@ -1542,6 +1574,66 @@ mod tests {
         let side = rms(&l.iter().zip(&r).map(|(a, b)| a - b).collect::<Vec<_>>());
         assert!(side > 0.05, "detuned unison is wide: {side}");
         assert!(rms(&l) < 1.0, "unison is normalised: {}", rms(&l));
+    }
+
+    /// The tuned Ladder resonates on its cutoff wherever it is, and starts
+    /// ringing by itself at the same Res all the way up. (The one before goes
+    /// sharp as the cutoff rises, more than a semitone by 3 kHz, and stops
+    /// ringing by itself.) A new sound
+    /// has it; the factory sounds and a saved one that says nothing don't.
+    #[test]
+    fn the_tuned_ladder_resonates_on_its_cutoff() {
+        // Where the resonance peaks, just under where it rings by itself:
+        // the strongest frequency of what an impulse leaves, looked for a
+        // fifth either side of the cutoff.
+        let peak = |tuned: bool, cutoff: f32| {
+            let c = FilterCoefs::new(WaveFilter::Ladder, cutoff, 0.94, 0.0, 1.0, SR).tuned(tuned);
+            let mut s = FilterState::new();
+            let h: Vec<f32> = (0..48_000).map(|i| c.process(&mut s, if i == 0 { 0.01 } else { 0.0 })).collect();
+            let level = |hz: f32| {
+                let (re, im) = h.iter().enumerate().fold((0f64, 0f64), |(re, im), (i, v)| {
+                    let a = (TAU * hz * i as f32 / SR) as f64;
+                    (re + *v as f64 * a.cos(), im + *v as f64 * a.sin())
+                });
+                re * re + im * im
+            };
+            let cents = (-700..=700).step_by(10).max_by(|a, b| level(cutoff * 2f32.powf(*a as f32 / 1200.0)).total_cmp(&level(cutoff * 2f32.powf(*b as f32 / 1200.0)))).unwrap();
+            cents as f32
+        };
+        let rings_from = |tuned: bool, cutoff: f32| {
+            (60..=100).map(|r| r as f32 * 0.01).find(|&res| {
+                let c = FilterCoefs::new(WaveFilter::Ladder, cutoff, res, 0.0, 1.0, SR).tuned(tuned);
+                let mut s = FilterState::new();
+                let h: Vec<f32> = (0..48_000).map(|i| c.process(&mut s, if i == 0 { 0.1 } else { 0.0 })).collect();
+                rms(&h[40_000..]) > 1e-4
+            })
+        };
+        let mut worst_before = 0f32;
+        for cutoff in [100.0f32, 300.0, 1000.0, 3000.0, 6000.0, 10_000.0] {
+            let (before, now) = (peak(false, cutoff), peak(true, cutoff));
+            let (rings_before, rings) = (rings_from(false, cutoff), rings_from(true, cutoff));
+            println!("corte {cutoff} Hz: resuena a {before:+.0} cents antes y {now:+.0} ahora; oscila solo desde Res {rings_before:?} antes y {rings:?} ahora");
+            assert!(now.abs() <= 30.0, "{cutoff} Hz: {now} cents off");
+            assert!(rings.is_some_and(|r| (0.94..=0.97).contains(&r)), "{cutoff} Hz: rings by itself from {rings:?}");
+            worst_before = worst_before.max(before.abs());
+        }
+        assert!(worst_before > 100.0, "the one before was off by {worst_before} cents");
+        // It never runs away.
+        let c = FilterCoefs::new(WaveFilter::Ladder, 2000.0, 1.0, 1.0, 1.0, SR).tuned(true);
+        let mut s = FilterState::new();
+        let loud = (0..48_000).map(|i| c.process(&mut s, ((i * 7919) % 200) as f32 / 100.0 - 1.0)).fold(0f32, |m, v| m.max(v.abs()));
+        assert!(loud.is_finite() && loud < 8.0, "{loud}");
+        // Who has it.
+        assert!(WaveParams::default().filter.tuned && WaveParams::polychrome().filter.tuned);
+        for (name, p) in WaveParams::presets().into_iter().chain(WaveParams::polychrome_presets()) {
+            assert_eq!(p.filter.tuned, name == "Init", "{name}");
+        }
+        let mut old = serde_json::to_value(WaveParams::polychrome()).unwrap();
+        old["filter"].as_object_mut().unwrap().remove("tuned");
+        let old: WaveParams = serde_json::from_value(old).unwrap();
+        assert!(!old.filter.tuned);
+        let again: WaveParams = serde_json::from_str(&serde_json::to_string(&WaveParams::polychrome()).unwrap()).unwrap();
+        assert!(again.filter.tuned);
     }
 
     #[test]

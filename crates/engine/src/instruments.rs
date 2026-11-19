@@ -334,6 +334,21 @@ const UNISON: usize = 7;
 /// doesn't depend on the buffer.
 const CONTROL: usize = 32;
 
+/// How far a saw sits from the note, -1..1, for its place in the row
+/// (-1..1, evenly). Uneven: closer towards the middle, and by a different
+/// curve and a little short above it, so no two pairs of saws beat at the
+/// same rate and the beating doesn't come round. (The curves are the ones
+/// that repeat least, of those tried, with four to seven saws.)
+fn saw_offset(position: f32, uneven: bool) -> f32 {
+    if !uneven {
+        position
+    } else if position > 0.0 {
+        0.93 * position.powf(1.2)
+    } else {
+        -(-position).powf(1.3)
+    }
+}
+
 #[derive(Clone, Copy)]
 struct SawVoice {
     gate: Gate,
@@ -449,7 +464,7 @@ impl SuperSaw {
             let mut gains = [(0f32, 0f32); UNISON];
             for u in 0..count {
                 let position = if count == 1 { 0.0 } else { u as f32 / (count - 1) as f32 * 2.0 - 1.0 };
-                incs[u] = freq * semitones(position * p.detune * 0.5) / sr;
+                incs[u] = freq * semitones(saw_offset(position, p.uneven) * p.detune * 0.5) / sr;
                 let angle = (position * p.spread + 1.0) * std::f32::consts::FRAC_PI_4;
                 gains[u] = (angle.cos() * norm, angle.sin() * norm);
             }
@@ -1252,6 +1267,49 @@ mod tests {
             let (tail, _) = run(&mut |l, r| drums.render(l, r), 48_000 * 6);
             assert!(energy(&tail[tail.len() - 4800..]) < 1e-6, "{name} should fade out");
         }
+    }
+
+    /// A new Super Saw's saws sit at uneven distances, so a held note's
+    /// beating never comes round; evenly spaced (the factory sounds and a
+    /// saved one that says nothing), it repeats in a loop.
+    #[test]
+    fn a_new_supersaw_does_not_beat_in_a_loop() {
+        // How alike a held note's loudness curve is to itself some time
+        // later, at the lag where it is most alike (0.2 to 3 s): 1 is a loop.
+        let looping = |uneven: bool, voices: f32| {
+            let mut synth = SuperSaw::new(SuperSawParams { voices, uneven, attack: 0.001, sustain: 1.0, cutoff: 18_000.0, resonance: 0.0, ..Default::default() }, SR);
+            synth.note_on(69, 1.0, 480_000);
+            let (l, r) = run(&mut |l, r| synth.render(l, r), 432_000);
+            let curve: Vec<f32> = l.chunks(480).zip(r.chunks(480)).skip(10).map(|(l, r)| (energy(l) + energy(r)).sqrt()).collect();
+            let mean = curve.iter().sum::<f32>() / curve.len() as f32;
+            let curve: Vec<f32> = curve.iter().map(|v| v - mean).collect();
+            let span = curve.len() - 300;
+            let alike = |lag: usize| curve[..span].iter().zip(&curve[lag..]).map(|(a, b)| a * b).sum::<f32>() / (energy(&curve[..span]) * energy(&curve[lag..lag + span])).sqrt();
+            (20..=300).map(alike).fold(f32::MIN, f32::max)
+        };
+        for voices in [3.0f32, 4.0, 5.0, 6.0, 7.0] {
+            let (before, now) = (looping(false, voices), looping(true, voices));
+            println!("{voices} sierras: se parece a sí misma {before:.2} antes y {now:.2} ahora");
+            assert!(before > 0.9, "{voices} saws evenly spaced: {before}");
+            // Three saws only have two distances to tell apart: they still
+            // come round, slowly changing.
+            assert!(voices < 4.0 || now < 0.75, "{voices} saws: {now}");
+        }
+        // As wide as before, and the same with one saw.
+        assert_eq!((saw_offset(-1.0, true), saw_offset(0.0, true)), (-1.0, 0.0));
+        assert!((0.9..1.0).contains(&saw_offset(1.0, true)));
+
+        // Who has it.
+        assert!(SuperSawParams::default().uneven && !SuperSawParams::old().uneven);
+        for (name, p) in SuperSawParams::presets() {
+            assert_eq!(p.uneven, name == "Init", "{name}");
+        }
+        let mut old = serde_json::to_value(SuperSawParams::default()).unwrap();
+        old.as_object_mut().unwrap().remove("uneven");
+        let old: SuperSawParams = serde_json::from_value(old).unwrap();
+        assert_eq!(old, SuperSawParams::old());
+        let again: SuperSawParams = serde_json::from_str(&serde_json::to_string(&SuperSawParams::default()).unwrap()).unwrap();
+        assert!(again.uneven);
     }
 
     #[test]

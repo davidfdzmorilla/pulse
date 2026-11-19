@@ -1877,6 +1877,12 @@ pub struct FmParams {
     pub sustain: f32,
     pub release: f32,
     pub gain: f32,
+    /// The modulator feeds back the mean of its last two samples, as on a
+    /// DX7: the feedback stays clean half of the way up (a sine that turns
+    /// to a saw) and gets rougher from there. Without it (sounds made
+    /// before this), it turns to noise above about a third of the way.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub feedback_smooth: bool,
 }
 
 impl Default for FmParams {
@@ -1892,6 +1898,7 @@ impl Default for FmParams {
             sustain: 0.0,
             release: 0.6,
             gain: 0.327,
+            feedback_smooth: true,
         }
     }
 }
@@ -1900,35 +1907,37 @@ impl FmParams {
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, FmParams)> {
         let base = FmParams::default();
+        // As they were made: with the feedback as it was (see `feedback_smooth`).
+        let old = FmParams { feedback_smooth: false, ..base };
         vec![
             ("Init", base),
-            ("Teclas · Piano eléctrico", FmParams { ratio: 1.0, index: 1.8, mod_decay: 0.8, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 3.0, sustain: 0.0, release: 0.4, gain: 0.3 }),
-            ("Teclas · Púa brillante", FmParams { ratio: 14.0, index: 1.2, mod_decay: 0.08, mod_sustain: 0.0, feedback: 0.0, attack: 0.002, decay: 2.5, sustain: 0.0, release: 0.4, gain: 0.24 }),
-            ("Teclas · Funky percusivo", FmParams { ratio: 1.0, index: 3.0, mod_decay: 0.15, mod_sustain: 0.25, feedback: 0.4, attack: 0.001, decay: 0.8, sustain: 0.2, release: 0.12, gain: 0.38 }),
-            ("Teclas · Órgano FM", FmParams { ratio: 2.0, index: 1.0, mod_decay: 4.0, mod_sustain: 1.0, feedback: 0.0, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.08, gain: 0.18 }),
-            ("Teclas · Órgano saturado", FmParams { ratio: 1.0, index: 1.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.35, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.1, gain: 0.27 }),
-            ("Campanas · Tubular", FmParams { ratio: 3.5, index: 4.0, mod_decay: 2.5, mod_sustain: 0.2, feedback: 0.0, attack: 0.001, decay: 6.0, sustain: 0.0, release: 2.0, gain: 0.17 }),
-            ("Campanas · Iglesia", FmParams { ratio: 1.4, index: 5.0, mod_decay: 3.0, mod_sustain: 0.15, feedback: 0.0, attack: 0.001, decay: 7.0, sustain: 0.0, release: 3.0, gain: 0.15 }),
-            ("Campanas · Cristal", FmParams { ratio: 7.07, index: 2.0, mod_decay: 0.6, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 1.5, gain: 0.19 }),
-            ("Campanas · Caja de música", FmParams { ratio: 5.0, index: 1.5, mod_decay: 0.3, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 1.5, sustain: 0.0, release: 0.8, gain: 0.24 }),
-            ("Pluck · Marimba", FmParams { ratio: 4.0, index: 3.0, mod_decay: 0.03, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.6, sustain: 0.0, release: 0.3, gain: 0.3 }),
-            ("Pluck · Vibráfono", FmParams { ratio: 4.0, index: 1.5, mod_decay: 0.25, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 0.8, gain: 0.17 }),
-            ("Pluck · Metálico", FmParams { ratio: 3.17, index: 6.0, mod_decay: 0.12, mod_sustain: 0.0, feedback: 0.2, attack: 0.001, decay: 0.4, sustain: 0.0, release: 0.2, gain: 0.325 }),
-            ("Pluck · Arpegio digital", FmParams { ratio: 2.0, index: 4.0, mod_decay: 0.1, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.15, gain: 0.31 }),
-            ("Bajo · FM de los 80", FmParams { ratio: 1.0, index: 4.0, mod_decay: 0.18, mod_sustain: 0.2, feedback: 0.3, attack: 0.001, decay: 0.6, sustain: 0.5, release: 0.08, gain: 0.304 }),
-            ("Bajo · Slap", FmParams { ratio: 2.0, index: 5.0, mod_decay: 0.04, mod_sustain: 0.1, feedback: 0.2, attack: 0.001, decay: 0.5, sustain: 0.3, release: 0.08, gain: 0.298 }),
-            ("Bajo · Sub FM", FmParams { ratio: 1.0, index: 0.6, mod_decay: 0.3, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 0.5, sustain: 0.8, release: 0.1, gain: 0.31 }),
-            ("Bajo · Gruñido", FmParams { ratio: 1.0, index: 6.0, mod_decay: 0.5, mod_sustain: 0.6, feedback: 0.7, attack: 0.002, decay: 0.3, sustain: 0.8, release: 0.1, gain: 0.28 }),
-            ("Lead · Feedback", FmParams { ratio: 1.0, index: 2.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.85, attack: 0.005, decay: 0.3, sustain: 0.8, release: 0.2, gain: 0.27 }),
-            ("Lead · Flauta FM", FmParams { ratio: 1.0, index: 0.8, mod_decay: 0.15, mod_sustain: 0.3, feedback: 0.0, attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.2, gain: 0.31 }),
-            ("Metales · Stab FM", FmParams { ratio: 1.0, index: 3.5, mod_decay: 0.25, mod_sustain: 0.45, feedback: 0.4, attack: 0.015, decay: 0.4, sustain: 0.6, release: 0.15, gain: 0.37 }),
-            ("Pad · Cristal lento", FmParams { ratio: 3.0, index: 1.2, mod_decay: 4.0, mod_sustain: 0.6, feedback: 0.0, attack: 1.2, decay: 2.0, sustain: 0.8, release: 2.5, gain: 0.23 }),
-            ("Textura · Inarmónica", FmParams { ratio: 2.71, index: 5.0, mod_decay: 3.0, mod_sustain: 0.5, feedback: 0.0, attack: 0.6, decay: 2.0, sustain: 0.7, release: 2.0, gain: 0.183 }),
-            ("Textura · Metal oxidado", FmParams { ratio: 0.73, index: 7.0, mod_decay: 2.0, mod_sustain: 0.6, feedback: 0.5, attack: 0.3, decay: 3.0, sustain: 0.6, release: 2.0, gain: 0.163 }),
-            ("FX · Gong", FmParams { ratio: 0.586, index: 8.0, mod_decay: 4.0, mod_sustain: 0.1, feedback: 0.0, attack: 0.001, decay: 8.0, sustain: 0.0, release: 4.0, gain: 0.125 }),
+            ("Teclas · Piano eléctrico", FmParams { ratio: 1.0, index: 1.8, mod_decay: 0.8, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 3.0, sustain: 0.0, release: 0.4, gain: 0.3, ..old }),
+            ("Teclas · Púa brillante", FmParams { ratio: 14.0, index: 1.2, mod_decay: 0.08, mod_sustain: 0.0, feedback: 0.0, attack: 0.002, decay: 2.5, sustain: 0.0, release: 0.4, gain: 0.24, ..old }),
+            ("Teclas · Funky percusivo", FmParams { ratio: 1.0, index: 3.0, mod_decay: 0.15, mod_sustain: 0.25, feedback: 0.4, attack: 0.001, decay: 0.8, sustain: 0.2, release: 0.12, gain: 0.38, ..old }),
+            ("Teclas · Órgano FM", FmParams { ratio: 2.0, index: 1.0, mod_decay: 4.0, mod_sustain: 1.0, feedback: 0.0, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.08, gain: 0.18, ..old }),
+            ("Teclas · Órgano saturado", FmParams { ratio: 1.0, index: 1.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.35, attack: 0.005, decay: 0.1, sustain: 1.0, release: 0.1, gain: 0.27, ..old }),
+            ("Campanas · Tubular", FmParams { ratio: 3.5, index: 4.0, mod_decay: 2.5, mod_sustain: 0.2, feedback: 0.0, attack: 0.001, decay: 6.0, sustain: 0.0, release: 2.0, gain: 0.17, ..old }),
+            ("Campanas · Iglesia", FmParams { ratio: 1.4, index: 5.0, mod_decay: 3.0, mod_sustain: 0.15, feedback: 0.0, attack: 0.001, decay: 7.0, sustain: 0.0, release: 3.0, gain: 0.15, ..old }),
+            ("Campanas · Cristal", FmParams { ratio: 7.07, index: 2.0, mod_decay: 0.6, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 1.5, gain: 0.19, ..old }),
+            ("Campanas · Caja de música", FmParams { ratio: 5.0, index: 1.5, mod_decay: 0.3, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 1.5, sustain: 0.0, release: 0.8, gain: 0.24, ..old }),
+            ("Pluck · Marimba", FmParams { ratio: 4.0, index: 3.0, mod_decay: 0.03, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.6, sustain: 0.0, release: 0.3, gain: 0.3, ..old }),
+            ("Pluck · Vibráfono", FmParams { ratio: 4.0, index: 1.5, mod_decay: 0.25, mod_sustain: 0.05, feedback: 0.0, attack: 0.001, decay: 2.5, sustain: 0.0, release: 0.8, gain: 0.17, ..old }),
+            ("Pluck · Metálico", FmParams { ratio: 3.17, index: 6.0, mod_decay: 0.12, mod_sustain: 0.0, feedback: 0.2, attack: 0.001, decay: 0.4, sustain: 0.0, release: 0.2, gain: 0.325, ..old }),
+            ("Pluck · Arpegio digital", FmParams { ratio: 2.0, index: 4.0, mod_decay: 0.1, mod_sustain: 0.0, feedback: 0.0, attack: 0.001, decay: 0.35, sustain: 0.0, release: 0.15, gain: 0.31, ..old }),
+            ("Bajo · FM de los 80", FmParams { ratio: 1.0, index: 4.0, mod_decay: 0.18, mod_sustain: 0.2, feedback: 0.3, attack: 0.001, decay: 0.6, sustain: 0.5, release: 0.08, gain: 0.304, ..old }),
+            ("Bajo · Slap", FmParams { ratio: 2.0, index: 5.0, mod_decay: 0.04, mod_sustain: 0.1, feedback: 0.2, attack: 0.001, decay: 0.5, sustain: 0.3, release: 0.08, gain: 0.298, ..old }),
+            ("Bajo · Sub FM", FmParams { ratio: 1.0, index: 0.6, mod_decay: 0.3, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 0.5, sustain: 0.8, release: 0.1, gain: 0.31, ..old }),
+            ("Bajo · Gruñido", FmParams { ratio: 1.0, index: 6.0, mod_decay: 0.5, mod_sustain: 0.6, feedback: 0.7, attack: 0.002, decay: 0.3, sustain: 0.8, release: 0.1, gain: 0.28, ..old }),
+            ("Lead · Feedback", FmParams { ratio: 1.0, index: 2.5, mod_decay: 1.0, mod_sustain: 0.8, feedback: 0.85, attack: 0.005, decay: 0.3, sustain: 0.8, release: 0.2, gain: 0.27, ..old }),
+            ("Lead · Flauta FM", FmParams { ratio: 1.0, index: 0.8, mod_decay: 0.15, mod_sustain: 0.3, feedback: 0.0, attack: 0.04, decay: 0.3, sustain: 0.9, release: 0.2, gain: 0.31, ..old }),
+            ("Metales · Stab FM", FmParams { ratio: 1.0, index: 3.5, mod_decay: 0.25, mod_sustain: 0.45, feedback: 0.4, attack: 0.015, decay: 0.4, sustain: 0.6, release: 0.15, gain: 0.37, ..old }),
+            ("Pad · Cristal lento", FmParams { ratio: 3.0, index: 1.2, mod_decay: 4.0, mod_sustain: 0.6, feedback: 0.0, attack: 1.2, decay: 2.0, sustain: 0.8, release: 2.5, gain: 0.23, ..old }),
+            ("Textura · Inarmónica", FmParams { ratio: 2.71, index: 5.0, mod_decay: 3.0, mod_sustain: 0.5, feedback: 0.0, attack: 0.6, decay: 2.0, sustain: 0.7, release: 2.0, gain: 0.183, ..old }),
+            ("Textura · Metal oxidado", FmParams { ratio: 0.73, index: 7.0, mod_decay: 2.0, mod_sustain: 0.6, feedback: 0.5, attack: 0.3, decay: 3.0, sustain: 0.6, release: 2.0, gain: 0.163, ..old }),
+            ("FX · Gong", FmParams { ratio: 0.586, index: 8.0, mod_decay: 4.0, mod_sustain: 0.1, feedback: 0.0, attack: 0.001, decay: 8.0, sustain: 0.0, release: 4.0, gain: 0.125, ..old }),
             // Noise: its peak on a chord moves a dB with the last bit of a sine
             // (another system, another peak), so it sits well under the limit.
-            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.28 }),
+            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.28, ..old }),
         ]
     }
 }
@@ -2212,6 +2221,12 @@ pub struct Eq3Params {
     pub high_db: f32,
     pub low_freq: f32,
     pub high_freq: f32,
+    /// The bands are cut 24 dB an octave apart (the «24 dB» switch): a band
+    /// at the bottom of its range is really gone, as on a DJ mixer. Without
+    /// it (an EQ Three made before this), 12 dB an octave, and a band
+    /// turned all the way down still leaks 6 dB an octave.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub steep: bool,
 }
 
 impl Default for Eq3Params {
@@ -2222,7 +2237,16 @@ impl Default for Eq3Params {
             high_db: 0.0,
             low_freq: 250.0,
             high_freq: 2500.0,
+            steep: true,
         }
+    }
+}
+
+impl Eq3Params {
+    /// A new EQ Three with the gentle bands (see [`Self::steep`]): what the
+    /// templates and the mix assistant's corrections were made with.
+    pub fn gentle() -> Self {
+        Self { steep: false, ..Self::default() }
     }
 }
 
@@ -2420,11 +2444,17 @@ pub struct DeEsserParams {
     pub freq_hz: f32,
     pub threshold_db: f32,
     pub range_db: f32,
+    /// It listens to what is over `freq_hz` through a steep filter (24 dB
+    /// an octave), so only esses set it off. Without it (De-essers made
+    /// before this), it hears the mids 18 dB down at a twelfth of
+    /// `freq_hz`, and a loud voice sets it off on every vowel.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub steep: bool,
 }
 
 impl Default for DeEsserParams {
     fn default() -> Self {
-        Self { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }
+        Self { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0, steep: true }
     }
 }
 

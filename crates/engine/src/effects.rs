@@ -76,12 +76,20 @@ pub struct Eq3 {
     high: [Svf; 2],
     /// The bands' gains (low, mid, high), gliding when turned.
     gains: [Glide; 3],
+    /// The steep crossovers (see `Eq3Params::steep`): the low-pass and the
+    /// high-pass at each of the two frequencies, and what they were made for.
+    steep: [[Biquad; 2]; 2],
+    made: Option<(f32, f32, f32)>,
+    /// Their states for each channel: the lows and the rest at the first
+    /// frequency, the rest's mids and highs at the second, and the lows
+    /// through both halves of the second (to keep them in phase).
+    states: [[[BiquadState; 2]; 6]; 2],
 }
 
 impl Eq3 {
     fn new(params: Eq3Params) -> Self {
         let gains = [params.low_db, params.mid_db, params.high_db].map(|db| Glide::new(Self::gain(db)));
-        Self { params, low: Default::default(), high: Default::default(), gains }
+        Self { params, low: Default::default(), high: Default::default(), gains, steep: [[Biquad::IDENTITY; 2]; 2], made: None, states: Default::default() }
     }
 
     /// At the bottom of the range a band is fully killed, as on a DJ mixer.
@@ -89,7 +97,38 @@ impl Eq3 {
         if db <= -40.0 { 0.0 } else { db_to_gain(db) }
     }
 
+    /// The steep bands: 24 dB an octave Linkwitz-Riley crossovers, so a
+    /// band at the bottom of its range is really gone. With every band at
+    /// 0 dB the level is what came in (the phase turns at the crossovers).
+    fn process_steep(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        if self.made != Some((p.low_freq, p.high_freq, sr)) {
+            let half = |shape, freq: f32| band_sections(&EqBand { on: true, shape, freq: freq.clamp(20.0, sr * 0.45), gain_db: 0.0, q: std::f32::consts::FRAC_1_SQRT_2 }, sr).0[0];
+            self.steep = [p.low_freq, p.high_freq].map(|freq| [half(EqShape::HighCut12, freq), half(EqShape::LowCut12, freq)]);
+            self.made = Some((p.low_freq, p.high_freq, sr));
+        }
+        let targets = [Self::gain(p.low_db), Self::gain(p.mid_db), Self::gain(p.high_db)];
+        let [[low_1, high_1], [low_2, high_2]] = self.steep;
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let [gl, gm, gh] = [0, 1, 2].map(|band| self.gains[band].next(targets[band]));
+            for (ch, s) in [a, b].into_iter().enumerate() {
+                let [lows, rest, mids, highs, lows_low, lows_high] = &mut self.states[ch];
+                let x = *s as f64;
+                let low = Utility::twice(&low_1, lows, x);
+                let over = Utility::twice(&high_1, rest, x);
+                let mid = Utility::twice(&low_2, mids, over);
+                let high = Utility::twice(&high_2, highs, over);
+                // The lows, turned as the second crossover turns the rest.
+                let low = Utility::twice(&low_2, lows_low, low) + Utility::twice(&high_2, lows_high, low);
+                *s = (low * gl as f64 + mid * gm as f64 + high * gh as f64) as f32;
+            }
+        }
+    }
+
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        if self.params.steep {
+            return self.process_steep(l, r, sr);
+        }
         let p = self.params;
         let low_c = SvfCoefs::new(p.low_freq, BUTTERWORTH_K, sr);
         let high_c = SvfCoefs::new(p.high_freq, BUTTERWORTH_K, sr);
@@ -269,13 +308,23 @@ pub fn eq_eight_response_db(params: &EqEightParams, sample_rate: f32, freq: f32)
 
 pub struct EqEight {
     params: EqEightParams,
-    /// The settings the sections were made from (None: make them).
+    /// The settings the sections were made from (None: make them): the
+    /// bands as they sound now, gliding to `params` when a band is moved.
     made: Option<(EqEightParams, f32)>,
     sections: [([Biquad; EQ_STAGES], usize); EQ_BANDS],
     states: [[[BiquadState; EQ_STAGES]; EQ_BANDS]; 2],
     /// The output gain.
     gain: Glide,
+    /// Samples into the current glide step.
+    at: usize,
 }
+
+/// A moved band glides to where it was put in steps this many samples long
+/// (counted from the first sample, whatever the blocks are cut into), each
+/// taking it `EQ_GLIDE` of the rest of the way: there in about 8 ms, with
+/// no zipper noise.
+const EQ_STEP: usize = 32;
+const EQ_GLIDE: f32 = 0.35;
 
 impl EqEight {
     fn new(params: EqEightParams) -> Self {
@@ -285,40 +334,77 @@ impl EqEight {
             sections: [([Biquad::IDENTITY; EQ_STAGES], 0); EQ_BANDS],
             states: Default::default(),
             gain: Glide::new(db_to_gain(params.output_db)),
+            at: 0,
         }
+    }
+
+    /// A glide step: the bands that were moved go some of the way to where
+    /// they were put, and their sections are made again.
+    fn step(&mut self, sr: f32) {
+        let p = self.params;
+        // Another sample rate: made from scratch.
+        let before = self.made.filter(|&(_, rate)| rate == sr).map(|(m, _)| m);
+        if before == Some(p) {
+            return;
+        }
+        let near = |from: f32, to: f32, close: f32| {
+            let next = from + (to - from) * EQ_GLIDE;
+            if (to - next).abs() < close { to } else { next }
+        };
+        let mut now = p;
+        for (b, band) in p.bands.iter().enumerate() {
+            let old = before.map(|m| m.bands[b]);
+            // A band that comes on, or changes shape, starts where it is put.
+            let restart = old.is_none_or(|m| m.on != band.on || m.shape != band.shape);
+            let mut sounds = *band;
+            if let Some(old) = old.filter(|_| !restart && band.on) {
+                sounds.gain_db = near(old.gain_db, band.gain_db, 0.01);
+                sounds.q = near(old.q, band.q, 0.001);
+                // Frequencies glide in octaves.
+                sounds.freq = if old.freq > 0.0 && band.freq > 0.0 { band.freq * 2f32.powf(near((old.freq / band.freq).log2(), 0.0, 0.001)) } else { band.freq };
+            }
+            now.bands[b] = sounds;
+            if old == Some(sounds) {
+                continue;
+            }
+            self.sections[b] = if sounds.on { band_sections(&sounds, sr) } else { ([Biquad::IDENTITY; EQ_STAGES], 0) };
+            // Starting from silence; so does a band left out (flat: a flat
+            // filter's state is 0 anyway).
+            if restart || self.sections[b].1 == 0 {
+                self.states[0][b] = Default::default();
+                self.states[1][b] = Default::default();
+            }
+        }
+        self.made = Some((now, sr));
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
         let p = self.params;
-        if self.made != Some((p, sr)) {
-            for (b, band) in p.bands.iter().enumerate() {
-                let before = self.made.map(|(m, _)| m.bands[b]);
-                self.sections[b] = if band.on { band_sections(band, sr) } else { ([Biquad::IDENTITY; EQ_STAGES], 0) };
-                // A band that comes on, or changes shape, starts from silence; so
-                // does one left out (flat: a flat filter's state is 0 anyway).
-                if before.is_none_or(|m| m.on != band.on || m.shape != band.shape) || self.sections[b].1 == 0 {
-                    self.states[0][b] = Default::default();
-                    self.states[1][b] = Default::default();
-                }
+        let mut offset = 0;
+        while offset < l.len() {
+            let n = (l.len() - offset).min(EQ_STEP - self.at);
+            if self.at == 0 || self.made.is_none() {
+                self.step(sr);
             }
-            self.made = Some((p, sr));
-        }
-        for (ch, buf) in [&mut *l, &mut *r].into_iter().enumerate() {
-            for (b, (sections, used)) in self.sections.iter().enumerate() {
-                let state = &mut self.states[ch][b];
-                for (c, s) in sections[..*used].iter().zip(state.iter_mut()) {
-                    // In locals: kept in registers, not written back every sample.
-                    let (mut s1, mut s2) = (s.s1, s.s2);
-                    for x in buf.iter_mut() {
-                        let input = *x as f64;
-                        let y = c.b0 * input + s1;
-                        s1 = c.b1 * input - c.a1 * y + s2;
-                        s2 = c.b2 * input - c.a2 * y;
-                        *x = y as f32;
+            for (ch, buf) in [&mut l[offset..offset + n], &mut r[offset..offset + n]].into_iter().enumerate() {
+                for (b, (sections, used)) in self.sections.iter().enumerate() {
+                    let state = &mut self.states[ch][b];
+                    for (c, s) in sections[..*used].iter().zip(state.iter_mut()) {
+                        // In locals: kept in registers, not written back every sample.
+                        let (mut s1, mut s2) = (s.s1, s.s2);
+                        for x in buf.iter_mut() {
+                            let input = *x as f64;
+                            let y = c.b0 * input + s1;
+                            s1 = c.b1 * input - c.a1 * y + s2;
+                            s2 = c.b2 * input - c.a2 * y;
+                            *x = y as f32;
+                        }
+                        *s = BiquadState { s1, s2 };
                     }
-                    *s = BiquadState { s1, s2 };
                 }
             }
+            self.at = (self.at + n) % EQ_STEP;
+            offset += n;
         }
         let target = db_to_gain(p.output_db);
         if !(self.gain.at(1.0) && target == 1.0) {
@@ -1442,6 +1528,10 @@ pub struct DeEsser {
     split: Biquad,
     made: Option<(f32, f32)>,
     states: [BiquadState; 2],
+    /// The high-pass it listens through, run twice (see
+    /// `DeEsserParams::steep`), and its states for each channel.
+    listen: Biquad,
+    heard: [[BiquadState; 2]; 2],
     /// The top part's level (a peak falling in 60 ms), and the gain taken off it (dB).
     level: f32,
     cut_db: f32,
@@ -1449,7 +1539,7 @@ pub struct DeEsser {
 
 impl DeEsser {
     fn new(params: DeEsserParams) -> Self {
-        Self { params, split: Biquad::IDENTITY, made: None, states: Default::default(), level: 0.0, cut_db: 0.0 }
+        Self { params, split: Biquad::IDENTITY, made: None, states: Default::default(), listen: Biquad::IDENTITY, heard: Default::default(), level: 0.0, cut_db: 0.0 }
     }
 
     /// How much it takes off the top part (dB, ≤ 0) for its level.
@@ -1463,12 +1553,16 @@ impl DeEsser {
         if self.made != Some((freq, sr)) {
             let band = EqBand { on: true, shape: EqShape::HighCut12, freq, gain_db: 0.0, q: std::f32::consts::FRAC_1_SQRT_2 };
             self.split = band_sections(&band, sr).0[0];
+            self.listen = band_sections(&EqBand { shape: EqShape::LowCut12, ..band }, sr).0[0];
             self.made = Some((freq, sr));
         }
         let (fall, attack, release) = (smoothing(60.0, sr), smoothing(0.5, sr), smoothing(60.0, sr));
         let s = self.split;
+        let steep = self.params.steep;
         for (a, b) in l.iter_mut().zip(r.iter_mut()) {
             let mut tops = [0f32; 2];
+            // What sets it off: the top part, or what the steep filter lets through.
+            let mut loud = 0f32;
             for (c, x) in [&mut *a, &mut *b].into_iter().enumerate() {
                 let st = &mut self.states[c];
                 let input = *x as f64;
@@ -1476,8 +1570,10 @@ impl DeEsser {
                 st.s1 = s.b1 * input - s.a1 * low + st.s2;
                 st.s2 = s.b2 * input - s.a2 * low;
                 tops[c] = (input - low) as f32;
+                let heard = if steep { Utility::twice(&self.listen, &mut self.heard[c], input) as f32 } else { tops[c] };
+                loud = loud.max(heard.abs());
             }
-            self.level = tops[0].abs().max(tops[1].abs()).max(self.level * fall);
+            self.level = loud.max(self.level * fall);
             let target = self.cut_for(self.level);
             let coef = if target < self.cut_db { attack } else { release };
             self.cut_db = target + coef * (self.cut_db - target);
@@ -1549,6 +1645,60 @@ impl Utility {
             side *= self.width.next(width);
             *a = (mid + side) * gain;
             *b = (mid - side) * gain;
+        }
+    }
+}
+
+/// The cross-fade when an effect is switched on or off, in seconds.
+pub(crate) const SWITCH_FADE: f32 = 0.01;
+
+/// An effect inside an instrument, with its on/off switch: switching it
+/// cross-fades over [`SWITCH_FADE`] instead of jumping (a click), and once
+/// off it forgets its tail, so a reverb turned back on doesn't play the old
+/// one. (A track's devices do the same in the engine.)
+pub(crate) struct Switched {
+    pub(crate) processor: EffectProcessor,
+    pub(crate) on: bool,
+    /// How much of the effect is heard, 0 to 1.
+    wet: f32,
+}
+
+impl Switched {
+    /// The most samples [`Self::process`] takes at once.
+    const BLOCK: usize = 64;
+
+    pub(crate) fn new(effect: &Effect, on: bool, sample_rate: f32) -> Self {
+        Self { processor: EffectProcessor::new(effect, sample_rate), on, wet: if on { 1.0 } else { 0.0 } }
+    }
+
+    /// On, or still fading out.
+    pub(crate) fn sounds(&self) -> bool {
+        self.on || self.wet > 0.0
+    }
+
+    /// Runs it over a short block (an instrument's control period).
+    pub(crate) fn process(&mut self, left: &mut [f32], right: &mut [f32], ctx: &ProcessContext) {
+        let n = left.len().min(Self::BLOCK);
+        debug_assert!(left.len() <= Self::BLOCK);
+        let goal = if self.on { 1.0 } else { 0.0 };
+        if self.wet == goal {
+            if self.on {
+                self.processor.process(left, right, ctx);
+            }
+            return;
+        }
+        let mut dry = [[0f32; Self::BLOCK]; 2];
+        dry[0][..n].copy_from_slice(&left[..n]);
+        dry[1][..n].copy_from_slice(&right[..n]);
+        self.processor.process(left, right, ctx);
+        let step = 1.0 / (SWITCH_FADE * ctx.sample_rate).max(1.0);
+        for i in 0..n {
+            self.wet = if self.on { (self.wet + step).min(1.0) } else { (self.wet - step).max(0.0) };
+            left[i] = dry[0][i] + (left[i] - dry[0][i]) * self.wet;
+            right[i] = dry[1][i] + (right[i] - dry[1][i]) * self.wet;
+        }
+        if self.wet == 0.0 {
+            self.processor.reset();
         }
     }
 }
@@ -1785,6 +1935,7 @@ impl EffectProcessor {
             Self::Eq3(fx) => {
                 fx.low = Default::default();
                 fx.high = Default::default();
+                fx.states = Default::default();
             }
             Self::EqEight(fx) => {
                 fx.states = Default::default();
@@ -1946,6 +2097,36 @@ mod tests {
             let steepest = std::iter::once(&from).chain(&turned).collect::<Vec<_>>().windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
             assert!(steepest < (to - from) / 30.0, "{name}: a step of {steepest} on the way from {from} to {to}");
         }
+    }
+
+    /// A band of an EQ Eight that is moved glides to where it was put (no
+    /// zipper noise): the level doesn't jump there at the next block, and
+    /// gets there in a few milliseconds.
+    #[test]
+    fn a_moved_eq_eight_band_glides() {
+        use crate::model::EqEightParams;
+        let flat = EqEightParams::default();
+        // Band 4: a bell at 800 Hz, here 12 dB up.
+        let mut up = flat;
+        up.bands[3].gain_db = 12.0;
+        let mut fx = EffectProcessor::new(&Effect::EqEight(flat), 48_000.0);
+        let tone = |from: usize, n: usize| -> Vec<f32> { (from..from + n).map(|i| (TAU * 800.0 * i as f32 / 48_000.0).sin() * 0.1).collect() };
+        let mut run = |fx: &mut EffectProcessor, from: usize, n: usize| {
+            let (mut l, mut r) = (tone(from, n), tone(from, n));
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                fx.process(a, b, &ctx());
+            }
+            l
+        };
+        let peak = |x: &[f32]| x.iter().fold(0f32, |m, s| m.max(s.abs()));
+        run(&mut fx, 0, 4800);
+        fx.set_params(&Effect::EqEight(up));
+        let moved = run(&mut fx, 4800, 4800);
+        let (first, later, settled) = (peak(&moved[..32]), peak(&moved[32..96]), peak(&moved[2400..]));
+        println!("first step {first:.3}, the next two {later:.3}, settled {settled:.3}");
+        assert!((settled / 0.1 - db_to_gain(12.0)).abs() < 0.05, "{settled}");
+        assert!(first < 0.2 && later < 0.33, "{first} {later}");
+        assert!(peak(&moved[480..]) > 0.39, "there within 10 ms");
     }
 
     /// What an EQ Eight does to the sound is what it draws, for every shape.
@@ -2238,9 +2419,38 @@ mod tests {
         }
     }
 
+    /// With «24 dB» a band turned all the way down is really gone: an
+    /// octave inside it, more than 20 dB down (the gentle bands leave it
+    /// some 6 dB down), and the other bands keep their level. With every
+    /// band at 0 dB the level is what came in, at any frequency.
+    #[test]
+    fn a_killed_eq3_band_is_gone_with_the_steep_bands() {
+        let kill = |steep: bool, freq: f32| {
+            let params = Eq3Params { low_db: -40.0, steep, ..Default::default() };
+            sine_gain_db(&mut EffectProcessor::new(&Effect::Eq3(params), 48_000.0), freq)
+        };
+        // The lows end at 250 Hz.
+        let (steep, gentle) = (kill(true, 125.0), kill(false, 125.0));
+        println!("lows killed, at 125 Hz: {steep:.1} dB with 24 dB, {gentle:.1} dB without");
+        assert!(steep < -20.0, "{steep}");
+        assert!(gentle > -12.0, "the gentle bands leak: {gentle}");
+        assert!(kill(true, 60.0) < -40.0, "{}", kill(true, 60.0));
+        for freq in [1000.0, 5000.0] {
+            assert!(kill(true, freq).abs() < 0.3, "{freq} Hz: {}", kill(true, freq));
+        }
+        for freq in [40.0, 125.0, 250.0, 700.0, 2500.0, 5000.0, 12_000.0] {
+            let flat = sine_gain_db(&mut EffectProcessor::new(&Effect::Eq3(Default::default()), 48_000.0), freq);
+            assert!(flat.abs() < 0.1, "{freq} Hz: {flat}");
+        }
+        // The same with the highs: gone an octave over 2.5 kHz.
+        let params = Eq3Params { high_db: -40.0, ..Default::default() };
+        let highs = sine_gain_db(&mut EffectProcessor::new(&Effect::Eq3(params), 48_000.0), 5000.0);
+        assert!(highs < -20.0, "{highs}");
+    }
+
     #[test]
     fn eq3_is_transparent_at_unity() {
-        let mut fx = EffectProcessor::new(&Effect::Eq3(Default::default()), 48_000.0);
+        let mut fx = EffectProcessor::new(&Effect::Eq3(Eq3Params::gentle()), 48_000.0);
         let input: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
         let mut l = input.clone();
         let mut r = input.clone();
@@ -2696,6 +2906,44 @@ mod tests {
         }
     }
 
+    /// A loud voice doesn't set the De-esser off: a strong 500 Hz tone with
+    /// a faint hiss under the threshold leaves the hiss alone. (One made
+    /// before heard the tone in the top part and took the hiss down.) A
+    /// loud hiss still comes down by the range.
+    #[test]
+    fn the_de_esser_is_not_set_off_by_the_mids() {
+        let sr = 48_000.0;
+        let n = 48_000;
+        let level = |x: &[f32], hz: f32| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &v) in x.iter().enumerate() {
+                let w = std::f64::consts::TAU * hz as f64 * i as f64 / sr as f64;
+                re += v as f64 * w.cos();
+                im += v as f64 * w.sin();
+            }
+            (2.0 * (re * re + im * im).sqrt() / x.len() as f64) as f32
+        };
+        // How much it takes off an 8 kHz hiss of `hiss` under a 500 Hz tone at -6 dBFS.
+        let taken = |steep: bool, hiss: f32| {
+            let sound: Vec<f32> = (0..n).map(|i| i as f32 / sr).map(|t| 0.5 * (TAU * 500.0 * t).sin() + hiss * (TAU * 8000.0 * t).sin()).collect();
+            let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { steep, ..Default::default() }), sr);
+            let (mut l, mut r) = (sound.clone(), sound);
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                fx.process(a, b, &ctx());
+            }
+            20.0 * (level(&l[n / 2..], 8000.0) / hiss).log10()
+        };
+        // -40 dBFS: 10 dB under the threshold.
+        let (now, before) = (taken(true, 0.01), taken(false, 0.01));
+        println!("a faint hiss under a loud tone: {now:.1} dB (before: {before:.1} dB)");
+        assert!(now.abs() < 0.2, "{now}");
+        assert!(before < -5.0, "the old one took it down: {before}");
+        let loud = taken(true, 0.3);
+        println!("a loud hiss: {loud:.1} dB");
+        // About the range: just over the split, the top part is a little louder than the sound.
+        assert!((-10.0..-6.5).contains(&loud), "{loud}");
+    }
+
     /// Under its threshold it changes nothing; a hiss over it comes down
     /// about its range, and a low tone with it is left as it was.
     #[test]
@@ -2704,14 +2952,14 @@ mod tests {
         let n = 48_000;
         // A 220 Hz tone, quiet: nothing to take.
         let tone: Vec<f32> = (0..n).map(|i| 0.3 * (std::f32::consts::TAU * 220.0 * i as f32 / sr).sin()).collect();
-        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }), sr);
+        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0, steep: false }), sr);
         let (mut l, mut r) = (tone.clone(), tone.clone());
         fx.process(&mut l, &mut r, &ctx());
         let worst = l.iter().zip(&tone).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(worst < 1e-4, "untouched: {worst}");
         // The tone and a loud 9 kHz whistle (an «s»): the whistle comes down, the tone stays.
         let mixed: Vec<f32> = (0..n).map(|i| i as f32 / sr).map(|t| 0.3 * (std::f32::consts::TAU * 220.0 * t).sin() + 0.3 * (std::f32::consts::TAU * 9000.0 * t).sin()).collect();
-        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }), sr);
+        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0, steep: false }), sr);
         let (mut l, mut r) = (mixed.clone(), mixed.clone());
         fx.process(&mut l, &mut r, &ctx());
         let level = |x: &[f32], hz: f32| {

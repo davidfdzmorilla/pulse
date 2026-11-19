@@ -22,7 +22,7 @@
 //! each voice detuned, stacked or tuned to a chord. Lane effects are allocated
 //! when the synth is built, on the UI thread; rendering never allocates.
 
-use crate::effects::{EffectProcessor, ProcessContext};
+use crate::effects::{ProcessContext, Switched};
 use crate::model::Effect;
 use crate::instruments::{saw, Declick, Gate, Taken, Watch};
 use crate::engine::Controller;
@@ -631,28 +631,28 @@ fn spawn_grain(grains: &mut [Grain; GRAINS], state: &mut ModuleState, b: &Block,
 }
 
 /// A lane's effects, each with whether it is on.
-type FxChain = Vec<Option<(EffectProcessor, bool)>>;
+type FxChain = Vec<Option<Switched>>;
 
 /// Allocates lane `l`'s effects; call off the audio thread.
 fn lane_processors(params: &ModularParams, l: usize, sample_rate: f32) -> FxChain {
-    params.lanes[l].fx.iter().map(|slot| slot.map(|d| (EffectProcessor::new(&d.effect, sample_rate), d.enabled))).collect()
+    params.lanes[l].fx.iter().map(|slot| slot.map(|d| Switched::new(&d.effect, d.enabled, sample_rate))).collect()
 }
 
 /// Runs lane `l`'s effects over `buf` with its settings `values` (see [`LANE_VALUES`]),
 /// then blends in the dry signal by the lane's mix.
 fn process_lane(chain: &mut FxChain, l: usize, values: &[f32; LANE_VALUES], buf: &mut [[f32; CONTROL]; 2], n: usize, ctx: &ProcessContext) {
-    if chain.iter().flatten().all(|(_, on)| !on) {
+    if chain.iter().flatten().all(|fx| !fx.sounds()) {
         return;
     }
     let dry = *buf;
     let [left, right] = buf;
-    for (slot, (processor, _)) in chain.iter_mut().enumerate().filter_map(|(k, fx)| fx.as_mut().filter(|(_, on)| *on).map(|fx| (k, fx))) {
+    for (slot, fx) in chain.iter_mut().enumerate().filter_map(|(k, fx)| fx.as_mut().filter(|fx| fx.sounds()).map(|fx| (k, fx))) {
         let at = ModularParams::lane_fx_param(l, slot, 0) - MOD_LANE_FX_PARAMS;
-        let settings = processor.effect().params().len();
+        let settings = fx.processor.effect().params().len();
         for k in 0..settings {
-            processor.set_param(k, values[at + k]);
+            fx.processor.set_param(k, values[at + k]);
         }
-        processor.process(&mut left[..n], &mut right[..n], ctx);
+        fx.process(&mut left[..n], &mut right[..n], ctx);
     }
     let mix = values[MOD_LANE_MIX - MOD_LANE_FX_PARAMS + l].clamp(0.0, 1.0);
     if mix < 1.0 {
@@ -1070,9 +1070,9 @@ impl ModSynth {
         for lanes in std::iter::once(&mut self.lanes).chain(self.poly.iter_mut()) {
             for (lane, settings) in lanes.iter_mut().zip(params.lanes.iter()) {
                 for (slot, device) in lane.iter_mut().zip(settings.fx.iter()) {
-                    if let (Some((processor, enabled)), Some(device)) = (slot.as_mut(), device) {
-                        processor.set_params(&device.effect);
-                        *enabled = device.enabled;
+                    if let (Some(fx), Some(device)) = (slot.as_mut(), device) {
+                        fx.processor.set_params(&device.effect);
+                        fx.on = device.enabled;
                     }
                 }
             }
@@ -1128,8 +1128,8 @@ impl ModSynth {
         let phrase = self.phrase;
         let polys = (0..MOD_LANES).take_while(|&l| p.lane_poly(l)).count();
         if !self.voices[index].active {
-            for (processor, _) in self.poly[index].iter_mut().flatten().flatten() {
-                processor.reset();
+            for fx in self.poly[index].iter_mut().flatten().flatten() {
+                fx.processor.reset();
             }
         }
         let voice = &mut self.voices[index];
@@ -2504,6 +2504,46 @@ mod tests {
         p.audio[0] = AudioMod { source: 4, target: 1, param: AudioParam::Input, amount: 1.0 };
         let (fed, _) = play(p, &[57], 9600);
         assert!(rms(&silent) < 1e-6 && rms(&fed[2400..]) > 0.1);
+    }
+
+    /// Switching a lane's effect off cross-fades for 10 ms (no click): a
+    /// fifth of the way in, an effect 36 dB down (as far as a lane's Utility
+    /// goes) still lets little over a fifth of the sound through. In a
+    /// shared lane and in a lane of the voice's own.
+    #[test]
+    fn switching_a_lane_effect_fades() {
+        let table = Arc::new(crate::wavetable::builtin(0));
+        let tables: Vec<Arc<Wavetable>> = (0..MOD_MODULES).map(|_| table.clone()).collect();
+        let run = |synth: &mut ModSynth| {
+            let (mut l, mut r) = (vec![0.0; 9600], vec![0.0; 9600]);
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                synth.render(&[], &tables, a, b);
+            }
+            l
+        };
+        for poly in [false, true] {
+            let mut out = output();
+            out.set(slot::SUSTAIN, 1.0);
+            let mut plain = stack(&[group(), sine(), out]);
+            plain.lanes[0].poly = poly;
+            let mut quiet = plain;
+            quiet.lanes[0].fx[0] = Some(Device::new(Effect::Utility(UtilityParams { gain_db: -36.0, ..Default::default() })));
+            let (mut dry, mut wet) = (ModSynth::new(plain, SR), ModSynth::new(quiet, SR));
+            dry.note_on(60, 1.0, HELD);
+            wet.note_on(60, 1.0, HELD);
+            run(&mut dry);
+            run(&mut wet);
+            quiet.lanes[0].fx[0] = quiet.lanes[0].fx[0].map(|d| Device { enabled: false, ..d });
+            wet.set_params(quiet);
+            let (plain, switched) = (run(&mut dry), run(&mut wet));
+            let fade = (crate::effects::SWITCH_FADE * SR) as usize;
+            assert!(plain[..fade / 5].iter().any(|s| s.abs() > 0.01));
+            for (a, b) in switched[..fade / 5].iter().zip(&plain) {
+                assert!(a.abs() <= b.abs() * 0.22 + 1e-6, "poly {poly}: {a} {b}");
+            }
+            let off = switched[fade + 2..].iter().zip(&plain[fade + 2..]).fold(0f32, |m, (a, b)| m.max((a - b).abs()));
+            assert!(off < 1e-6, "poly {poly}: off, the sound as it came ({off})");
+        }
     }
 
     #[test]

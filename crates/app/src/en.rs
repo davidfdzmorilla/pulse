@@ -224,6 +224,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Se abre solo cuando suena esa pista: un pad que corta al ritmo de los charles, o un bajo que suena solo con el bombo", "Opens only when that track plays: a pad chopped to the hi-hats, or a bass that only plays with the kick"),
     ("Fase", "Phase"),
     ("Invertir R", "Invert R"),
+    ("Pendiente", "Slope"),
+    ("Separa las bandas con 24 dB por octava: una banda bajada del todo desaparece de verdad, como en una mesa de DJ. Sin marcar, 12 dB por octava: más suave, y una banda bajada del todo aún deja pasar algo", "Splits the bands 24 dB an octave apart: a band turned all the way down is really gone, as on a DJ mixer. Unticked, 12 dB an octave: gentler, and a band turned all the way down still lets some through"),
     ("Da la vuelta al canal derecho: arregla una pista grabada con un canal al revés, que en mono casi desaparece", "Flips the right channel: fixes a track recorded with one channel reversed, which almost disappears in mono"),
     ("Del proyecto", "Project's"),
     ("Cromática", "Chromatic"),

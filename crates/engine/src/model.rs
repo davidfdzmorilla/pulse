@@ -1751,6 +1751,11 @@ pub struct SuperSawParams {
     pub sustain: f32,
     pub release: f32,
     pub gain: f32,
+    /// The saws sit at uneven distances, closer towards the middle, so
+    /// their beating never comes round. Without it (a sound made before
+    /// this) they are evenly spaced, and the beating repeats in a loop.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub uneven: bool,
 }
 
 impl Default for SuperSawParams {
@@ -1767,19 +1772,26 @@ impl Default for SuperSawParams {
             sustain: 0.8,
             release: 0.35,
             gain: 0.35,
+            uneven: true,
         }
     }
 }
 
 impl SuperSawParams {
+    /// As it was before its saws were spaced unevenly: what the factory
+    /// sounds keep.
+    pub fn old() -> Self {
+        Self { uneven: false, ..Self::default() }
+    }
+
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, SuperSawParams)> {
-        let base = SuperSawParams::default();
+        let base = SuperSawParams::old();
         // The filter envelope follows the amplitude envelope: with sustain 0 a note
         // closes its filter as it fades (plucks), a slow attack opens it (swells).
         let saws = |voices, detune, spread, gain| SuperSawParams { voices, detune, spread, gain, ..base };
         vec![
-            ("Init", base),
+            ("Init", SuperSawParams::default()),
             ("Lead · Trance clásico", SuperSawParams { cutoff: 5000.0, resonance: 0.1, env_amount: 0.0, attack: 0.005, decay: 0.5, sustain: 0.85, release: 0.3, ..saws(7.0, 0.4, 0.8, 0.45) }),
             ("Lead · Estrecho", SuperSawParams { cutoff: 3500.0, resonance: 0.25, env_amount: 1.0, attack: 0.003, decay: 0.4, sustain: 0.7, release: 0.2, ..saws(5.0, 0.2, 0.3, 0.42) }),
             ("Lead · Rave desafinado", SuperSawParams { cutoff: 8000.0, resonance: 0.05, env_amount: 0.0, attack: 0.002, decay: 0.3, sustain: 0.9, release: 0.25, ..saws(7.0, 0.9, 1.0, 0.4) }),

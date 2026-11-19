@@ -79,6 +79,11 @@ still in `0.x`, so any release may change things.
   10 kHz) and rings by itself from the same Res (95 %) all the way up. The
   factory sounds and the ones already in a project keep the Ladder they
   had; choosing Ladder again in the filter's list gives the new one.
+- Super Saw: the saws of a new Super Saw sit at uneven distances, closer
+  towards the middle, so a held note's beating no longer repeats in a
+  loop (with four saws or more). The factory sounds and the Super Saws
+  already in a project keep the even spacing; the **Init** sound has the
+  new one.
 - Pulse Keys: a piano costs under a third of the processor it did while
   the pitch bend or the modulation wheel moves (each sounding string is
   retuned many times a second). Notes that aren't bent play the same

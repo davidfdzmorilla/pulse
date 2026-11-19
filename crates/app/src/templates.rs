@@ -180,7 +180,7 @@ fn built_in(name: &str) -> Result<Project, String> {
             let mut drums = Track::new(named("Batería"), PALETTE[1], InstrumentKind::DrumMachine(DrumParams { model: DrumModel::Tr909, ..Default::default() }));
             drums.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -14.0, ratio: 3.0, attack_ms: 8.0, release_ms: 90.0, makeup_db: 1.5, sidechain: None, detector: false })));
             let mut bass = Track::new(named("Bajo"), PALETTE[9], InstrumentKind::Acid(AcidParams::old()));
-            let mut chords = Track::new(named("Acordes"), PALETTE[6], InstrumentKind::SuperSaw(SuperSawParams { gain: 0.3, ..Default::default() }));
+            let mut chords = Track::new(named("Acordes"), PALETTE[6], InstrumentKind::SuperSaw(SuperSawParams { gain: 0.3, ..SuperSawParams::old() }));
             chords.sends[0] = 0.3;
             let mut lead = Track::new(named("Melodía"), PALETTE[11], InstrumentKind::Fm(FmParams::default()));
             lead.sends[..2].copy_from_slice(&[0.15, 0.25]);

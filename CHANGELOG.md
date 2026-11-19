@@ -106,6 +106,10 @@ still in `0.x`, so any release may change things.
   chains in the browser, show their English names; "1 bar", "1 voice" and
   "1 cent" in the singular (the modular's "1 voz" in Spanish too); lessons
   no longer name buttons in Spanish.
+- FM Synth: on a new FM Synth, Feedback stays a clean pitched sound up to
+  half of its range and gets rougher from there. Before, it turned to
+  noise above about a third. Factory sounds and FM Synths already in a
+  project keep the feedback they had.
 - Audio to MIDI (Basic Pitch): the start of a note could move by one frame
   (≈12 ms) depending on the processor or the number of threads, when the
   largest jump and the onset peak fell on neighbouring frames. It's now the

@@ -229,7 +229,7 @@ fn high_shelf(hz: f32, db: f32) -> (EqShape, f32, f32, f32) {
 }
 
 fn drive(kind: KickDrive, drive_db: f32) -> Effect {
-    Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, mix: 1.0, kind, oversample: true })
+    Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, mix: 1.0, kind, oversample: true, centre: false })
 }
 
 fn crush(bits: f32, downsample: f32, mix: f32) -> Effect {

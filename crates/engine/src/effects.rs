@@ -669,37 +669,75 @@ pub struct Saturator {
     /// The dry signal, as late as the oversampled wet (its filters' delay).
     dry: [[f32; Oversampler::LATENCY]; 2],
     at: usize,
+    drive: Glide,
+    output: Glide,
+    mix: Glide,
+    /// The centring filter's last input and output, per channel, and its pole.
+    centre: [[f32; 2]; 2],
+    pole: f32,
 }
 
+/// Where the filter that centres Tube's sound starts cutting: under any
+/// note, over the DC.
+const CENTRE_HZ: f32 = 5.0;
+
 impl Saturator {
-    fn new(params: SaturatorParams) -> Self {
-        Self { params, over: [Oversampler::new(), Oversampler::new()], dry: [[0.0; Oversampler::LATENCY]; 2], at: 0 }
+    fn new(params: SaturatorParams, sr: f32) -> Self {
+        Self {
+            params,
+            over: [Oversampler::new(), Oversampler::new()],
+            dry: [[0.0; Oversampler::LATENCY]; 2],
+            at: 0,
+            drive: Glide::new(db_to_gain(params.drive_db)),
+            output: Glide::new(db_to_gain(params.output_db)),
+            mix: Glide::new(params.mix),
+            centre: [[0.0; 2]; 2],
+            pole: 1.0 - TAU * CENTRE_HZ / sr,
+        }
+    }
+
+    fn reset(&mut self) {
+        self.over = [Oversampler::new(), Oversampler::new()];
+        self.dry = [[0.0; Oversampler::LATENCY]; 2];
+        self.centre = [[0.0; 2]; 2];
+        self.drive = Glide::new(db_to_gain(self.params.drive_db));
+        self.output = Glide::new(db_to_gain(self.params.output_db));
+        self.mix = Glide::new(self.params.mix);
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         let p = self.params;
-        let drive = db_to_gain(p.drive_db);
-        let out = db_to_gain(p.output_db);
+        let (drive_to, output_to) = (db_to_gain(p.drive_db), db_to_gain(p.output_db));
         let steps = crush_steps(p.drive_db);
-        if !p.oversample {
-            for s in l.iter_mut().chain(r.iter_mut()) {
-                let wet = shape(*s, p.kind, drive, steps) * out;
-                *s += (wet - *s) * p.mix;
-            }
-            return;
+        let centred = p.centre && p.kind == KickDrive::Tube;
+        if !centred {
+            self.centre = [[0.0; 2]; 2];
         }
         for i in 0..l.len() {
+            let (drive, out, mix) = (self.drive.next(drive_to), self.output.next(output_to), self.mix.next(p.mix));
             for (ch, buf) in [&mut *l, &mut *r].into_iter().enumerate() {
                 let x = buf[i];
-                let mut up = self.over[ch].up(x);
-                for y in &mut up {
-                    *y = shape(*y, p.kind, drive, steps);
+                let (mut wet, dry) = if p.oversample {
+                    let mut up = self.over[ch].up(x);
+                    for y in &mut up {
+                        *y = shape(*y, p.kind, drive, steps);
+                    }
+                    (self.over[ch].down(up), std::mem::replace(&mut self.dry[ch][self.at], x))
+                } else {
+                    (shape(x, p.kind, drive, steps), x)
+                };
+                if centred {
+                    let [before, was] = self.centre[ch];
+                    let y = wet - before + self.pole * was;
+                    // Its tail would decay into denormals.
+                    self.centre[ch] = [wet, if y.abs() < 1e-20 { 0.0 } else { y }];
+                    wet = y;
                 }
-                let wet = self.over[ch].down(up) * out;
-                let dry = std::mem::replace(&mut self.dry[ch][self.at], x);
-                buf[i] = dry + (wet - dry) * p.mix;
+                buf[i] = dry + (wet * out - dry) * mix;
             }
-            self.at = (self.at + 1) % Oversampler::LATENCY;
+            if p.oversample {
+                self.at = (self.at + 1) % Oversampler::LATENCY;
+            }
         }
     }
 }
@@ -1761,7 +1799,7 @@ impl EffectProcessor {
             Effect::Delay(params) => Self::Delay(Delay::new(params, sample_rate)),
             Effect::Reverb(params) => Self::Reverb(Reverb::new(params, sample_rate)),
             Effect::Convolution(params) => Self::Convolution(Box::new(Convolution::new(params, sample_rate))),
-            Effect::Saturator(params) => Self::Saturator(Saturator::new(params)),
+            Effect::Saturator(params) => Self::Saturator(Saturator::new(params, sample_rate)),
             Effect::AutoFilter(params) => Self::AutoFilter(AutoFilter {
                 params,
                 filters: Default::default(),
@@ -2006,10 +2044,7 @@ impl EffectProcessor {
             }
             Self::Limiter(fx) => fx.reset(),
             Self::Ducker(fx) => fx.hits = Hits::IDLE,
-            Self::Saturator(fx) => {
-                fx.over = [Oversampler::new(), Oversampler::new()];
-                fx.dry = [[0.0; Oversampler::LATENCY]; 2];
-            }
+            Self::Saturator(fx) => fx.reset(),
             Self::Utility(fx) => fx.states = Default::default(),
             Self::Glue(fx) => fx.reset(),
             Self::Multiband(fx) => fx.reset(),
@@ -2920,7 +2955,7 @@ mod tests {
     #[test]
     fn oversampling_keeps_aliases_out() {
         let aliases = |oversample: bool| {
-            let p = SaturatorParams { drive_db: 30.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Hard, oversample };
+            let p = SaturatorParams { drive_db: 30.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Hard, oversample, centre: false };
             let mut fx = EffectProcessor::new(&Effect::Saturator(p), 48_000.0);
             let mut l = sine(5000.0, 48_000, 0.5);
             let mut r = l.clone();
@@ -2939,7 +2974,7 @@ mod tests {
     /// doesn't comb-filter (a quiet sine goes through almost untouched).
     #[test]
     fn oversampled_dry_and_wet_line_up() {
-        let p = SaturatorParams { drive_db: 0.0, output_db: 0.0, mix: 0.5, kind: KickDrive::Soft, oversample: true };
+        let p = SaturatorParams { drive_db: 0.0, output_db: 0.0, mix: 0.5, kind: KickDrive::Soft, oversample: true, centre: false };
         let mut fx = EffectProcessor::new(&Effect::Saturator(p), 48_000.0);
         for freq in [1000.0, 8000.0, 15_000.0] {
             let mut l = sine(freq, 24_000, 0.05);
@@ -2947,6 +2982,74 @@ mod tests {
             fx.process(&mut l, &mut r, &ctx());
             let level = level_at(&l[4_800..], freq) / 0.05;
             assert!((0.9..1.1).contains(&level), "{freq} Hz: {level}");
+        }
+    }
+
+    /// Tube bends each half of the wave its own way, which leaves the sound
+    /// off centre; a Saturator made now centres it and leaves the bass
+    /// alone. One made before keeps its offset, and what a file says nothing
+    /// about is the old way.
+    #[test]
+    fn a_tube_saturator_comes_out_centred() {
+        let offset = |centre: bool, oversample: bool| {
+            let p = SaturatorParams { drive_db: 18.0, output_db: 0.0, mix: 1.0, kind: KickDrive::Tube, oversample, centre };
+            let mut fx = EffectProcessor::new(&Effect::Saturator(p), 48_000.0);
+            let mut l = sine(110.0, 96_000, 0.5);
+            let mut r = l.clone();
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                fx.process(a, b, &ctx());
+            }
+            let tail = &l[48_000..];
+            (tail.iter().sum::<f32>() / tail.len() as f32, level_at(tail, 110.0))
+        };
+        for oversample in [false, true] {
+            let ((old, old_level), (new, new_level)) = (offset(false, oversample), offset(true, oversample));
+            println!("Tube 18 dB, 4× {oversample}: continua {old:.3} antes, {new:.5} ahora; fundamental {old_level:.3} y {new_level:.3}");
+            assert!(old.abs() > 0.2, "the old one sits off centre: {old}");
+            assert!(new.abs() < 0.002, "centred: {new}");
+            assert!((new_level / old_level - 1.0).abs() < 0.01, "the note itself is untouched: {old_level} {new_level}");
+        }
+        // The other shapes have nothing to centre: the setting does nothing.
+        let soft = |centre: bool| {
+            let p = SaturatorParams { drive_db: 18.0, kind: KickDrive::Soft, centre, ..SaturatorParams::old() };
+            let mut fx = EffectProcessor::new(&Effect::Saturator(p), 48_000.0);
+            let mut l = sine(110.0, 4_800, 0.5);
+            let mut r = l.clone();
+            fx.process(&mut l, &mut r, &ctx());
+            l
+        };
+        assert_eq!(soft(false), soft(true));
+        // A new one is centred and works at 4×; a saved one that says nothing is neither.
+        let new = SaturatorParams::default();
+        assert!(new.centre && new.oversample);
+        let saved: SaturatorParams = serde_json::from_str(r#"{"drive_db":6.0,"output_db":-3.0,"mix":1.0}"#).unwrap();
+        assert_eq!(saved, SaturatorParams::old());
+        let again: SaturatorParams = serde_json::from_str(&serde_json::to_string(&new).unwrap()).unwrap();
+        assert_eq!(again, new);
+    }
+
+    /// Turning the Saturator's knobs glides: no step in the sound.
+    #[test]
+    fn a_turned_saturator_glides() {
+        let quiet = SaturatorParams { drive_db: 0.0, output_db: 0.0, ..SaturatorParams::old() };
+        let low = SaturatorParams { output_db: -12.0, ..quiet };
+        for (name, before, after) in [("drive", quiet, SaturatorParams { drive_db: 12.0, ..quiet }), ("output", quiet, low), ("mix", low, SaturatorParams { mix: 0.0, ..low })] {
+            let mut fx = EffectProcessor::new(&Effect::Saturator(before), 48_000.0);
+            // A steady, quiet level: all that moves is the knob.
+            let mut run = |fx: &mut EffectProcessor| {
+                let (mut l, mut r) = (vec![0.05f32; 4800], vec![0.05f32; 4800]);
+                for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                    fx.process(a, b, &ctx());
+                }
+                l
+            };
+            let from = run(&mut fx)[4799];
+            fx.set_params(&Effect::Saturator(after));
+            let turned = run(&mut fx);
+            let to = turned[4799];
+            assert!((to - from).abs() > 0.02, "{name}: it moved ({from} to {to})");
+            let steepest = std::iter::once(&from).chain(&turned).collect::<Vec<_>>().windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
+            assert!(steepest < (to - from).abs() / 30.0, "{name}: a step of {steepest} on the way from {from} to {to}");
         }
     }
 

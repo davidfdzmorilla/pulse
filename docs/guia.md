@@ -2422,13 +2422,13 @@ Hace que la pista **bombee**: baja el volumen y vuelve, al ritmo.
 - **Chorus**: duplica el sonido con pequeñas variaciones; lo ensancha y lo mueve.
 - **Phaser**: un barrido que da vueltas, como un remolino.
 - **Delay**: eco con tiempo sincronizado (de 1/16 a un compás), **Ping Pong** (rebota de un lado a otro), feedback (cuántas repeticiones) y filtro.
-- **Reverb**: sala, con tamaño, amortiguación y anchura.
+- **Reverb**: sala, con tamaño, amortiguación y anchura. Con **Densa** (como viene una nueva) la cola se espesa enseguida y no suena metálica; sin marcar es la reverb clásica de Pulse, que es la que conservan los proyectos, las plantillas y los sonidos de fábrica anteriores. Las dos duran y suenan igual de fuerte con los mismos knobs.
 
 +++ Todos los parámetros
 - Chorus: Rate 0,05–5 Hz, Depth, Delay 2–20 ms, Dry/Wet.
 - Phaser: Rate 0,05–8 Hz, Depth, Freq 100–4000 Hz, Feedback, Dry/Wet.
 - Delay: Feedback (hasta 95 %), Filter 500–18 000 Hz, Dry/Wet.
-- Reverb: Size, Damping, Width, Dry/Wet.
+- Reverb: Size (de 0,6 a 10 s de cola), Damping, Width, Dry/Wet, y la casilla Densa.
 +++
 
 #### Espacio (reverb de convolución)

@@ -1140,7 +1140,7 @@ mod tests {
         let x = noise(4 * SR as usize, 2);
         let tail = 2 * SR as usize..;
         let dry = rms_db(&x[tail.clone()]);
-        let mut old = EffectProcessor::new(&Effect::Reverb(ReverbParams { mix: 1.0, ..Default::default() }), SR);
+        let mut old = EffectProcessor::new(&Effect::Reverb(ReverbParams { mix: 1.0, ..ReverbParams::classic() }), SR);
         let (mut l, mut r) = (x.clone(), x.clone());
         for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
             old.process(a, b, &ctx);
@@ -1262,16 +1262,18 @@ mod tests {
         through(&snare, "caja", &[Ambience, Room, Studio, Plate, Hall], 0.35);
         through(&voice, "voz", &[Plate, Hall, Spring, BigHall], 0.3);
         through(&pad, "pad", &[Cathedral, BigHall, Infinite], 0.45);
-        // The old Reverb, to compare.
+        // The Reverb, classic and dense, to compare.
         use crate::effects::{EffectProcessor, ProcessContext};
         let ctx = ProcessContext { sample_rate: SR, tempo: 120.0, beat: 0.0, beats_per_sample: 0.0, scale: 0, meter: Default::default() };
         for (dry, name, mix) in [(&snare, "caja", 0.35), (&voice, "voz", 0.3), (&pad, "pad", 0.45)] {
-            let mut old = EffectProcessor::new(&crate::model::Effect::Reverb(crate::model::ReverbParams { mix, ..Default::default() }), SR);
-            let (mut l, mut r) = (dry.clone(), dry.clone());
-            for (a, b) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
-                old.process(a, b, &ctx);
+            for (dense, which) in [(false, "Reverb antigua (Freeverb)"), (true, "Reverb densa")] {
+                let mut old = EffectProcessor::new(&crate::model::Effect::Reverb(crate::model::ReverbParams { mix, dense, ..Default::default() }), SR);
+                let (mut l, mut r) = (dry.clone(), dry.clone());
+                for (a, b) in l.chunks_mut(128).zip(r.chunks_mut(128)) {
+                    old.process(a, b, &ctx);
+                }
+                write(&format!("{name} - {which}"), &l, &r);
             }
-            write(&format!("{name} - Reverb antigua (Freeverb)"), &l, &r);
         }
     }
 

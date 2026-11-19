@@ -22,6 +22,11 @@ still in `0.x`, so any release may change things.
 
 ### Added
 
+- Reverb: a **Dense** switch, on in a new Reverb. Its tail thickens at
+  once and has no metallic ring, and it lasts as long and sounds as loud
+  as before at the same knobs. Those already in a project, the demo's and
+  the ones in the factory sounds keep the classic reverb; untick it to get
+  that one back.
 - EQ Three: a **24 dB** switch. With it, the bands are split 24 dB an
   octave apart and a band turned all the way down is really gone, as on a
   DJ mixer (before, it still leaked 6 dB an octave). A new EQ Three comes

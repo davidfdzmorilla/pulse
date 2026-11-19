@@ -2519,6 +2519,10 @@ pub struct ReverbParams {
     pub damping: f32,
     pub width: f32,
     pub mix: f32,
+    /// The dense reverb: a tail that thickens at once and has no metallic
+    /// ring. Without it (a Reverb made before this), the classic one.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub dense: bool,
 }
 
 impl Default for ReverbParams {
@@ -2528,7 +2532,16 @@ impl Default for ReverbParams {
             damping: 0.5,
             width: 1.0,
             mix: 0.3,
+            dense: true,
         }
+    }
+}
+
+impl ReverbParams {
+    /// A Reverb as they were before the dense one (see [`Self::dense`]):
+    /// what the factory sounds, chains and templates were made with.
+    pub fn classic() -> Self {
+        Self { dense: false, ..Self::default() }
     }
 }
 
@@ -5248,7 +5261,7 @@ impl WaveParams {
         let env = |attack, decay, sustain, release| WaveEnv { attack, hold: 0.0, decay, sustain, release };
         let fx = |effect: Effect| Some(Device::new(effect));
         let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
-        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::classic() }));
         let chorus = fx(Effect::Chorus(ChorusParams::default()));
         let analog = |position: f32| WaveOsc { kind: OscKind::Analog, position, random_phase: 1.0, ..WaveOsc::default() };
         let harmonic = |partials: f32, tilt: f32, parity: f32| WaveOsc { kind: OscKind::Harmonic, partials, tilt, parity, random_phase: 0.0, ..WaveOsc::default() };
@@ -5824,7 +5837,7 @@ impl WaveParams {
         let mut list = vec![("Init", init)];
         let fx = |effect: Effect| Some(Device::new(effect));
         let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
-        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::classic() }));
         let chorus = fx(Effect::Chorus(ChorusParams::default()));
         let drive = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, ..SaturatorParams::default() }));
 
@@ -7984,7 +7997,7 @@ impl ModularParams {
             f
         };
         let fx = |effect: Effect| Some(Device::new(effect));
-        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::classic() }));
         let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
         let lfo_rate = |hz: f32| (hz / 0.02).ln() / 2000f32.ln();
         let target = |m: usize, s: usize, depth: f32| ModTarget::new(ModularParams::module_param(m, s), depth);

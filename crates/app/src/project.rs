@@ -1042,6 +1042,12 @@ impl Project {
                 n => n.to_string(),
             })
             .collect();
+        // The demo keeps the reverb it was made with.
+        for device in &mut project.returns[0].devices {
+            if let Effect::Reverb(p) = &mut device.effect {
+                p.dense = false;
+            }
+        }
         project
     }
 }

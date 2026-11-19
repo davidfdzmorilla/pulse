@@ -269,13 +269,23 @@ pub fn eq_eight_response_db(params: &EqEightParams, sample_rate: f32, freq: f32)
 
 pub struct EqEight {
     params: EqEightParams,
-    /// The settings the sections were made from (None: make them).
+    /// The settings the sections were made from (None: make them): the
+    /// bands as they sound now, gliding to `params` when a band is moved.
     made: Option<(EqEightParams, f32)>,
     sections: [([Biquad; EQ_STAGES], usize); EQ_BANDS],
     states: [[[BiquadState; EQ_STAGES]; EQ_BANDS]; 2],
     /// The output gain.
     gain: Glide,
+    /// Samples into the current glide step.
+    at: usize,
 }
+
+/// A moved band glides to where it was put in steps this many samples long
+/// (counted from the first sample, whatever the blocks are cut into), each
+/// taking it `EQ_GLIDE` of the rest of the way: there in about 8 ms, with
+/// no zipper noise.
+const EQ_STEP: usize = 32;
+const EQ_GLIDE: f32 = 0.35;
 
 impl EqEight {
     fn new(params: EqEightParams) -> Self {
@@ -285,40 +295,77 @@ impl EqEight {
             sections: [([Biquad::IDENTITY; EQ_STAGES], 0); EQ_BANDS],
             states: Default::default(),
             gain: Glide::new(db_to_gain(params.output_db)),
+            at: 0,
         }
+    }
+
+    /// A glide step: the bands that were moved go some of the way to where
+    /// they were put, and their sections are made again.
+    fn step(&mut self, sr: f32) {
+        let p = self.params;
+        // Another sample rate: made from scratch.
+        let before = self.made.filter(|&(_, rate)| rate == sr).map(|(m, _)| m);
+        if before == Some(p) {
+            return;
+        }
+        let near = |from: f32, to: f32, close: f32| {
+            let next = from + (to - from) * EQ_GLIDE;
+            if (to - next).abs() < close { to } else { next }
+        };
+        let mut now = p;
+        for (b, band) in p.bands.iter().enumerate() {
+            let old = before.map(|m| m.bands[b]);
+            // A band that comes on, or changes shape, starts where it is put.
+            let restart = old.is_none_or(|m| m.on != band.on || m.shape != band.shape);
+            let mut sounds = *band;
+            if let Some(old) = old.filter(|_| !restart && band.on) {
+                sounds.gain_db = near(old.gain_db, band.gain_db, 0.01);
+                sounds.q = near(old.q, band.q, 0.001);
+                // Frequencies glide in octaves.
+                sounds.freq = if old.freq > 0.0 && band.freq > 0.0 { band.freq * 2f32.powf(near((old.freq / band.freq).log2(), 0.0, 0.001)) } else { band.freq };
+            }
+            now.bands[b] = sounds;
+            if old == Some(sounds) {
+                continue;
+            }
+            self.sections[b] = if sounds.on { band_sections(&sounds, sr) } else { ([Biquad::IDENTITY; EQ_STAGES], 0) };
+            // Starting from silence; so does a band left out (flat: a flat
+            // filter's state is 0 anyway).
+            if restart || self.sections[b].1 == 0 {
+                self.states[0][b] = Default::default();
+                self.states[1][b] = Default::default();
+            }
+        }
+        self.made = Some((now, sr));
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
         let p = self.params;
-        if self.made != Some((p, sr)) {
-            for (b, band) in p.bands.iter().enumerate() {
-                let before = self.made.map(|(m, _)| m.bands[b]);
-                self.sections[b] = if band.on { band_sections(band, sr) } else { ([Biquad::IDENTITY; EQ_STAGES], 0) };
-                // A band that comes on, or changes shape, starts from silence; so
-                // does one left out (flat: a flat filter's state is 0 anyway).
-                if before.is_none_or(|m| m.on != band.on || m.shape != band.shape) || self.sections[b].1 == 0 {
-                    self.states[0][b] = Default::default();
-                    self.states[1][b] = Default::default();
-                }
+        let mut offset = 0;
+        while offset < l.len() {
+            let n = (l.len() - offset).min(EQ_STEP - self.at);
+            if self.at == 0 || self.made.is_none() {
+                self.step(sr);
             }
-            self.made = Some((p, sr));
-        }
-        for (ch, buf) in [&mut *l, &mut *r].into_iter().enumerate() {
-            for (b, (sections, used)) in self.sections.iter().enumerate() {
-                let state = &mut self.states[ch][b];
-                for (c, s) in sections[..*used].iter().zip(state.iter_mut()) {
-                    // In locals: kept in registers, not written back every sample.
-                    let (mut s1, mut s2) = (s.s1, s.s2);
-                    for x in buf.iter_mut() {
-                        let input = *x as f64;
-                        let y = c.b0 * input + s1;
-                        s1 = c.b1 * input - c.a1 * y + s2;
-                        s2 = c.b2 * input - c.a2 * y;
-                        *x = y as f32;
+            for (ch, buf) in [&mut l[offset..offset + n], &mut r[offset..offset + n]].into_iter().enumerate() {
+                for (b, (sections, used)) in self.sections.iter().enumerate() {
+                    let state = &mut self.states[ch][b];
+                    for (c, s) in sections[..*used].iter().zip(state.iter_mut()) {
+                        // In locals: kept in registers, not written back every sample.
+                        let (mut s1, mut s2) = (s.s1, s.s2);
+                        for x in buf.iter_mut() {
+                            let input = *x as f64;
+                            let y = c.b0 * input + s1;
+                            s1 = c.b1 * input - c.a1 * y + s2;
+                            s2 = c.b2 * input - c.a2 * y;
+                            *x = y as f32;
+                        }
+                        *s = BiquadState { s1, s2 };
                     }
-                    *s = BiquadState { s1, s2 };
                 }
             }
+            self.at = (self.at + n) % EQ_STEP;
+            offset += n;
         }
         let target = db_to_gain(p.output_db);
         if !(self.gain.at(1.0) && target == 1.0) {
@@ -1946,6 +1993,36 @@ mod tests {
             let steepest = std::iter::once(&from).chain(&turned).collect::<Vec<_>>().windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
             assert!(steepest < (to - from) / 30.0, "{name}: a step of {steepest} on the way from {from} to {to}");
         }
+    }
+
+    /// A band of an EQ Eight that is moved glides to where it was put (no
+    /// zipper noise): the level doesn't jump there at the next block, and
+    /// gets there in a few milliseconds.
+    #[test]
+    fn a_moved_eq_eight_band_glides() {
+        use crate::model::EqEightParams;
+        let flat = EqEightParams::default();
+        // Band 4: a bell at 800 Hz, here 12 dB up.
+        let mut up = flat;
+        up.bands[3].gain_db = 12.0;
+        let mut fx = EffectProcessor::new(&Effect::EqEight(flat), 48_000.0);
+        let tone = |from: usize, n: usize| -> Vec<f32> { (from..from + n).map(|i| (TAU * 800.0 * i as f32 / 48_000.0).sin() * 0.1).collect() };
+        let mut run = |fx: &mut EffectProcessor, from: usize, n: usize| {
+            let (mut l, mut r) = (tone(from, n), tone(from, n));
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                fx.process(a, b, &ctx());
+            }
+            l
+        };
+        let peak = |x: &[f32]| x.iter().fold(0f32, |m, s| m.max(s.abs()));
+        run(&mut fx, 0, 4800);
+        fx.set_params(&Effect::EqEight(up));
+        let moved = run(&mut fx, 4800, 4800);
+        let (first, later, settled) = (peak(&moved[..32]), peak(&moved[32..96]), peak(&moved[2400..]));
+        println!("first step {first:.3}, the next two {later:.3}, settled {settled:.3}");
+        assert!((settled / 0.1 - db_to_gain(12.0)).abs() < 0.05, "{settled}");
+        assert!(first < 0.2 && later < 0.33, "{first} {later}");
+        assert!(peak(&moved[480..]) > 0.39, "there within 10 ms");
     }
 
     /// What an EQ Eight does to the sound is what it draws, for every shape.

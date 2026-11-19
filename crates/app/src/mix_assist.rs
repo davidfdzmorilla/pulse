@@ -2949,7 +2949,7 @@ impl PulseApp {
         if !clipped {
             let drive = (CLIP_DB - peak.unwrap_or(0.0).min(0.0) as f32).clamp(CLIP_DB, 24.0);
             let drive = (drive * 10.0).round() / 10.0;
-            let clipper = SaturatorParams { drive_db: drive, output_db: -drive, mix: 1.0, kind: KickDrive::Hard, oversample: true };
+            let clipper = SaturatorParams { drive_db: drive, output_db: -drive, mix: 1.0, kind: KickDrive::Hard, oversample: true, centre: false };
             devices.insert(limiter, Device::new(Effect::Saturator(clipper)));
         }
     }

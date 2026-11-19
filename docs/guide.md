@@ -2382,12 +2382,14 @@ The **Saturator** has **Drive** (how hard it pushes), **Output** and five **type
 - **Tube**: asymmetric and warm, like a valve.
 - **Crush**: bit reduction.
 
-The **4×** button keeps heavy drive from dirtying the highs.
+The **4×** button keeps heavy drive from dirtying the highs. A new Saturator comes with it on.
 
 The **Bitcrusher** reduces the **bits** and the sample rate (**Downsample**): the sound of old digital machines.
 
 +++ Details
 - **4×** works at four times the sample rate to avoid aliasing (the false highs that appear with heavy saturation). It uses a bit more CPU, under 1 % of a core per track, and adds 36 samples of latency.
+- **Tube** comes out centred: bending each half of the wave its own way pushes it off centre (a DC offset, which eats headroom before clipping), and a new Saturator centres it again without touching the lows.
+- The Saturators already in a project, and those of the templates, chains and factory sounds, stay as they were: without 4× if they didn't have it and with Tube left off centre.
 - Saturator: Drive 0–36 dB (6), Output −36 to +6 dB (−3), Dry/Wet.
 - Bitcrusher: Bits 2–16 (8), Downsample 1–40× (4), Dry/Wet.
 +++

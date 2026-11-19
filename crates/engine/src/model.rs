@@ -2675,6 +2675,11 @@ pub struct SaturatorParams {
     /// Works at four times the sample rate: high drives without aliasing.
     #[serde(default, skip_serializing_if = "is_default")]
     pub oversample: bool,
+    /// Tube bends each half of the wave its own way and leaves it off
+    /// centre (a DC offset that eats headroom); with this it comes out
+    /// centred. Off in a Saturator made before this.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub centre: bool,
 }
 
 fn soft_drive() -> KickDrive {
@@ -2696,8 +2701,18 @@ impl Default for SaturatorParams {
             output_db: -3.0,
             mix: 1.0,
             kind: KickDrive::Soft,
-            oversample: false,
+            oversample: true,
+            centre: true,
         }
+    }
+}
+
+impl SaturatorParams {
+    /// A Saturator as they were made before the 4× and the centred Tube
+    /// were what a new one comes with: what the factory sounds, chains and
+    /// templates were made with.
+    pub fn old() -> Self {
+        Self { oversample: false, centre: false, ..Self::default() }
     }
 }
 
@@ -5473,7 +5488,7 @@ impl WaveParams {
         let swing = |source, dest: usize, amount| ModSlot { source, dest: dest as u8, amount, bipolar: true };
         let ramp = Shape::from_points(&[(0.0, 0.0, 0.0), (1.0, 1.0, 0.0)]);
         let phaser = |rate: f32, mix: f32| fx(Effect::Phaser(PhaserParams { rate, mix, ..PhaserParams::default() }));
-        let saturator = |kind: KickDrive, drive_db: f32, output_db: f32| fx(Effect::Saturator(SaturatorParams { kind, drive_db, output_db, ..SaturatorParams::default() }));
+        let saturator = |kind: KickDrive, drive_db: f32, output_db: f32| fx(Effect::Saturator(SaturatorParams { kind, drive_db, output_db, ..SaturatorParams::old() }));
         let echo = |time_beats: f64, feedback: f32, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback, mix, ping_pong: true, ..DelayParams::default() }));
 
         // Bright poly brass: saw and pulse, a filter swell that opens with velocity
@@ -5839,7 +5854,7 @@ impl WaveParams {
         let delay = |time_beats: f64, mix: f32| fx(Effect::Delay(DelayParams { time_beats, feedback: 0.35, mix, ping_pong: true, ..DelayParams::default() }));
         let reverb = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::classic() }));
         let chorus = fx(Effect::Chorus(ChorusParams::default()));
-        let drive = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, ..SaturatorParams::default() }));
+        let drive = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, ..SaturatorParams::old() }));
 
         let mut p = init;
         p.osc[0] = WaveOsc { position: saw, unison: 7.0, detune: 0.35, blend: 0.7, ..WaveOsc::default() };
@@ -6008,8 +6023,8 @@ impl WaveParams {
         let pulse_lfo = Shape::from_points(&[(0.0, 1.0, 0.0), (0.49, 1.0, 0.0), (0.5, 0.0, 0.0), (1.0, 0.0, 0.0)]);
         // Four held steps, for rhythmic jumps of the filter.
         let steps = Shape::from_points(&[(0.0, 0.1, 0.0), (0.249, 0.1, 0.0), (0.25, 0.8, 0.0), (0.499, 0.8, 0.0), (0.5, 0.35, 0.0), (0.749, 0.35, 0.0), (0.75, 1.0, 0.0), (1.0, 1.0, 0.0)]);
-        let hard = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.6, kind: KickDrive::Hard, oversample: true, ..SaturatorParams::default() }));
-        let tube = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, kind: KickDrive::Tube, ..SaturatorParams::default() }));
+        let hard = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.6, kind: KickDrive::Hard, oversample: true, ..SaturatorParams::old() }));
+        let tube = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, kind: KickDrive::Tube, ..SaturatorParams::old() }));
         let glue = fx(Effect::Compressor(CompressorParams { threshold_db: -16.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 2.0, ..CompressorParams::old() }));
         let phaser = |rate: f32, mix: f32| fx(Effect::Phaser(PhaserParams { rate, depth: 0.6, center: 700.0, feedback: 0.45, mix }));
         let duck = |depth: f32| fx(Effect::Ducker(DuckerParams { depth, release: 0.55, rate_beats: 1.0, ..DuckerParams::default() }));
@@ -8319,7 +8334,7 @@ impl ModularParams {
         // Poly lane: each note of the chord is driven on its own, so chords stay clean
         // (no intermodulation); velocity drives harder. A shared reverb lane after it.
         let mut p = build(&[group, saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.2)]), filter(0, 3200.0, 0.9, false), out(0.01, 0.8, 0.8, 0.5)]);
-        p.lanes[0].fx[0] = fx(Effect::Saturator(SaturatorParams { drive_db: 16.0, output_db: -10.0, mix: 1.0, ..Default::default() }));
+        p.lanes[0].fx[0] = fx(Effect::Saturator(SaturatorParams { drive_db: 16.0, output_db: -10.0, mix: 1.0, ..SaturatorParams::old() }));
         p.lanes[0].poly = true;
         p.lanes[0].dest = 2;
         p.lanes[2].fx[0] = reverb(0.8, 0.3);

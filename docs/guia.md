@@ -2383,12 +2383,14 @@ El **Saturator** tiene **Drive** (cuánto empuja), **Output** y cinco **tipos**:
 - **Tube**: asimétrico y cálido, como una válvula.
 - **Crush**: reducción de bits.
 
-El botón **4×** hace que mucho drive no ensucie los agudos.
+El botón **4×** hace que mucho drive no ensucie los agudos. Un Saturator nuevo viene con él puesto.
 
 El **Bitcrusher** reduce los **bits** y la frecuencia de muestreo (**Downsample**): el sonido de las máquinas digitales antiguas.
 
 +++ Detalles
 - **4×** trabaja a cuatro veces la frecuencia de muestreo para evitar el aliasing (los agudos falsos que aparecen al saturar mucho). Gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras.
+- **Tube** sale centrado: al doblar cada mitad de la onda de una forma, la descentra (corriente continua, que quita margen antes del recorte), y un Saturator nuevo la vuelve a centrar sin tocar los graves.
+- Los Saturator que ya estaban en un proyecto, y los de las plantillas, las cadenas y los sonidos de fábrica, siguen como eran: sin 4× si no lo tenían y con el Tube sin centrar.
 - Saturator: Drive 0–36 dB (6), Output −36 a +6 dB (−3), Dry/Wet.
 - Bitcrusher: Bits 2–16 (8), Downsample 1–40× (4), Dry/Wet.
 +++

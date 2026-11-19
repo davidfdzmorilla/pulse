@@ -140,7 +140,7 @@ fn drum_machine(name: &str, preset: &str, db: f32) -> Track {
 fn voice(name: &str, color: usize, reverb: f32) -> Track {
     let mut track = Track::new_audio(name, PALETTE[color]);
     track.devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -6.0, high_db: 2.0, low_freq: 150.0, ..Eq3Params::gentle() })));
-    track.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -20.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 4.0, sidechain: None })));
+    track.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -20.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 4.0, sidechain: None, detector: false })));
     track.sends[0] = reverb;
     track
 }
@@ -178,7 +178,7 @@ fn built_in(name: &str) -> Result<Project, String> {
         "Beat" => {
             project.tempo = 124.0;
             let mut drums = Track::new(named("Batería"), PALETTE[1], InstrumentKind::DrumMachine(DrumParams { model: DrumModel::Tr909, ..Default::default() }));
-            drums.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -14.0, ratio: 3.0, attack_ms: 8.0, release_ms: 90.0, makeup_db: 1.5, sidechain: None })));
+            drums.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -14.0, ratio: 3.0, attack_ms: 8.0, release_ms: 90.0, makeup_db: 1.5, sidechain: None, detector: false })));
             let mut bass = Track::new(named("Bajo"), PALETTE[9], InstrumentKind::Acid(AcidParams::default()));
             let mut chords = Track::new(named("Acordes"), PALETTE[6], InstrumentKind::SuperSaw(SuperSawParams { gain: 0.3, ..Default::default() }));
             chords.sends[0] = 0.3;
@@ -304,7 +304,7 @@ fn built_in(name: &str) -> Result<Project, String> {
                 // Quiet between words, no rumble, even and without hiss.
                 track.devices.push(Device::new(Effect::Gate(GateParams { threshold_db: -50.0, floor_db: -20.0, ..Default::default() })));
                 track.devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -12.0, low_freq: 90.0, high_db: 1.5, ..Eq3Params::gentle() })));
-                track.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -22.0, ratio: 3.5, attack_ms: 8.0, release_ms: 120.0, makeup_db: 6.0, sidechain: None })));
+                track.devices.push(Device::new(Effect::Compressor(CompressorParams { threshold_db: -22.0, ratio: 3.5, attack_ms: 8.0, release_ms: 120.0, makeup_db: 6.0, sidechain: None, detector: false })));
                 track.devices.push(Device::new(Effect::DeEsser(DeEsserParams::default())));
                 track
             };

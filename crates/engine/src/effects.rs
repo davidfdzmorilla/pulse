@@ -419,6 +419,8 @@ impl EqEight {
 
 pub struct Compressor {
     params: CompressorParams,
+    /// The level it follows (see `CompressorParams::detector`).
+    level: f32,
     envelope_db: f32,
     key: Key,
     /// The make-up gain, gliding when turned.
@@ -480,9 +482,17 @@ impl Compressor {
         for (i, (a, b)) in l.iter_mut().zip(r.iter_mut()).enumerate() {
             // Stereo-linked peak detection, of the sidechain's sound if it has one.
             let peak = if keyed { self.key.level[i] } else { a.abs().max(b.abs()) }.max(1e-6);
-            let target = self.gain_reduction_db(20.0 * peak.log10());
-            let coef = if target < self.envelope_db { attack } else { release };
-            self.envelope_db = target + coef * (self.envelope_db - target);
+            if self.params.detector {
+                // The level: the peaks, falling with the release. The gain
+                // comes down with the attack and back up as the level falls.
+                self.level = peak.max(self.level * release);
+                let target = self.gain_reduction_db(20.0 * self.level.log10());
+                self.envelope_db = if target < self.envelope_db { target + attack * (self.envelope_db - target) } else { target };
+            } else {
+                let target = self.gain_reduction_db(20.0 * peak.log10());
+                let coef = if target < self.envelope_db { attack } else { release };
+                self.envelope_db = target + coef * (self.envelope_db - target);
+            }
             let g = db_to_gain(self.envelope_db) * self.makeup.next(makeup);
             *a *= g;
             *b *= g;
@@ -1739,6 +1749,7 @@ impl EffectProcessor {
             Effect::EqEight(params) => Self::EqEight(Box::new(EqEight::new(params))),
             Effect::Compressor(params) => Self::Compressor(Compressor {
                 params,
+                level: 0.0,
                 envelope_db: 0.0,
                 key: Key::new(),
                 makeup: Glide::new(db_to_gain(params.makeup_db)),
@@ -1941,7 +1952,10 @@ impl EffectProcessor {
                 fx.states = Default::default();
                 fx.gain = Glide::new(db_to_gain(fx.params.output_db));
             }
-            Self::Compressor(fx) => fx.envelope_db = 0.0,
+            Self::Compressor(fx) => {
+                fx.envelope_db = 0.0;
+                fx.level = 0.0;
+            }
             Self::Gate(fx) => {
                 fx.level = 0.0;
                 fx.open = false;
@@ -2097,6 +2111,36 @@ mod tests {
             let steepest = std::iter::once(&from).chain(&turned).collect::<Vec<_>>().windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
             assert!(steepest < (to - from) / 30.0, "{name}: a step of {steepest} on the way from {from} to {to}");
         }
+    }
+
+    /// The Compressor takes off what its ratio says: a steady tone 24 dB
+    /// over the threshold comes out 24 dB over it divided by the ratio. (One
+    /// made before follows the wave and lets go between its crests.)
+    #[test]
+    fn the_compressor_takes_off_what_its_ratio_says() {
+        use crate::model::CompressorParams;
+        // -6 dBFS (0.5 at the peak) with the threshold at -30.
+        let ratio_of = |detector: bool, ratio: f32, freq: f32| {
+            let params = CompressorParams { threshold_db: -30.0, ratio, detector, ..Default::default() };
+            let mut fx = EffectProcessor::new(&Effect::Compressor(params), 48_000.0);
+            let n = 96_000;
+            let (mut l, mut r): (Vec<f32>, Vec<f32>) = (0..n).map(|i| 0.5 * (TAU * freq * i as f32 / 48_000.0).sin()).map(|s| (s, s)).unzip();
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                fx.process(a, b, &ctx());
+            }
+            let peak = l[n / 2..].iter().fold(0f32, |m, s| m.max(s.abs()));
+            24.0 / (20.0 * peak.log10() + 30.0)
+        };
+        for (ratio, freq) in [(4.0, 1000.0), (20.0, 1000.0), (4.0, 100.0), (20.0, 100.0)] {
+            let (now, before) = (ratio_of(true, ratio, freq), ratio_of(false, ratio, freq));
+            println!("{ratio}:1 at {freq} Hz: {now:.1}:1 (before: {before:.1}:1)");
+            // A low tone's level falls a little between its crests: a few
+            // tenths of a dB less taken off, more of the ratio the higher it is.
+            let close = if freq < 500.0 { 0.25 } else { 0.1 };
+            assert!((now / ratio - 1.0).abs() < close, "{ratio}:1 at {freq} Hz: {now}");
+            assert!(now > before, "{ratio}:1 at {freq} Hz: {now} {before}");
+        }
+        assert!(ratio_of(false, 20.0, 1000.0) < 16.0, "the old one took off less");
     }
 
     /// A band of an EQ Eight that is moved glides to where it was put (no

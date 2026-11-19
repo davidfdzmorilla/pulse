@@ -95,6 +95,10 @@ still in `0.x`, so any release may change things.
   smaller; an audio clip's envelope lane reads "None" instead of
   "Velocity"; the shortcuts window writes "Select all the clip's notes" and
   "Enter or leave full screen" in sentence case, like its other rows.
+- De-esser: a new De-esser is set off only by esses. Before, a loud voice
+  could set it off on its vowels, and it took their highs down too.
+  De-essers already in a project, and the one the mix assistant adds,
+  work as before.
 - In English, the mix assistant and the master meter write decimals with a
   point ("-13.3 LUFS") and track names in plain quotes.
 - Wavetable Synth, Polychrome, FM Synth, Sampler, Drum Rack and the basic

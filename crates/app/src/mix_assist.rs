@@ -495,7 +495,8 @@ pub fn deessing(t: &TrackMeasures) -> Option<(DeEsserParams, f32)> {
     if takes < 3.0 {
         return None;
     }
-    Some((DeEsserParams { freq_hz: e.freq, threshold_db: threshold, range_db: DEESS_RANGE }, takes))
+    // Its threshold is worked out for what the old De-esser hears.
+    Some((DeEsserParams { freq_hz: e.freq, threshold_db: threshold, range_db: DEESS_RANGE, steep: false }, takes))
 }
 
 // ----- Riding the voice -----------------------------------------------------------------

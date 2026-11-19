@@ -2427,11 +2427,17 @@ pub struct DeEsserParams {
     pub freq_hz: f32,
     pub threshold_db: f32,
     pub range_db: f32,
+    /// It listens to what is over `freq_hz` through a steep filter (24 dB
+    /// an octave), so only esses set it off. Without it (De-essers made
+    /// before this), it hears the mids 18 dB down at a twelfth of
+    /// `freq_hz`, and a loud voice sets it off on every vowel.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub steep: bool,
 }
 
 impl Default for DeEsserParams {
     fn default() -> Self {
-        Self { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }
+        Self { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0, steep: true }
     }
 }
 

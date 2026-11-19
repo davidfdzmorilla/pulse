@@ -1489,6 +1489,10 @@ pub struct DeEsser {
     split: Biquad,
     made: Option<(f32, f32)>,
     states: [BiquadState; 2],
+    /// The high-pass it listens through, run twice (see
+    /// `DeEsserParams::steep`), and its states for each channel.
+    listen: Biquad,
+    heard: [[BiquadState; 2]; 2],
     /// The top part's level (a peak falling in 60 ms), and the gain taken off it (dB).
     level: f32,
     cut_db: f32,
@@ -1496,7 +1500,7 @@ pub struct DeEsser {
 
 impl DeEsser {
     fn new(params: DeEsserParams) -> Self {
-        Self { params, split: Biquad::IDENTITY, made: None, states: Default::default(), level: 0.0, cut_db: 0.0 }
+        Self { params, split: Biquad::IDENTITY, made: None, states: Default::default(), listen: Biquad::IDENTITY, heard: Default::default(), level: 0.0, cut_db: 0.0 }
     }
 
     /// How much it takes off the top part (dB, ≤ 0) for its level.
@@ -1510,12 +1514,16 @@ impl DeEsser {
         if self.made != Some((freq, sr)) {
             let band = EqBand { on: true, shape: EqShape::HighCut12, freq, gain_db: 0.0, q: std::f32::consts::FRAC_1_SQRT_2 };
             self.split = band_sections(&band, sr).0[0];
+            self.listen = band_sections(&EqBand { shape: EqShape::LowCut12, ..band }, sr).0[0];
             self.made = Some((freq, sr));
         }
         let (fall, attack, release) = (smoothing(60.0, sr), smoothing(0.5, sr), smoothing(60.0, sr));
         let s = self.split;
+        let steep = self.params.steep;
         for (a, b) in l.iter_mut().zip(r.iter_mut()) {
             let mut tops = [0f32; 2];
+            // What sets it off: the top part, or what the steep filter lets through.
+            let mut loud = 0f32;
             for (c, x) in [&mut *a, &mut *b].into_iter().enumerate() {
                 let st = &mut self.states[c];
                 let input = *x as f64;
@@ -1523,8 +1531,10 @@ impl DeEsser {
                 st.s1 = s.b1 * input - s.a1 * low + st.s2;
                 st.s2 = s.b2 * input - s.a2 * low;
                 tops[c] = (input - low) as f32;
+                let heard = if steep { Utility::twice(&self.listen, &mut self.heard[c], input) as f32 } else { tops[c] };
+                loud = loud.max(heard.abs());
             }
-            self.level = tops[0].abs().max(tops[1].abs()).max(self.level * fall);
+            self.level = loud.max(self.level * fall);
             let target = self.cut_for(self.level);
             let coef = if target < self.cut_db { attack } else { release };
             self.cut_db = target + coef * (self.cut_db - target);
@@ -2773,6 +2783,44 @@ mod tests {
         }
     }
 
+    /// A loud voice doesn't set the De-esser off: a strong 500 Hz tone with
+    /// a faint hiss under the threshold leaves the hiss alone. (One made
+    /// before heard the tone in the top part and took the hiss down.) A
+    /// loud hiss still comes down by the range.
+    #[test]
+    fn the_de_esser_is_not_set_off_by_the_mids() {
+        let sr = 48_000.0;
+        let n = 48_000;
+        let level = |x: &[f32], hz: f32| {
+            let (mut re, mut im) = (0.0f64, 0.0f64);
+            for (i, &v) in x.iter().enumerate() {
+                let w = std::f64::consts::TAU * hz as f64 * i as f64 / sr as f64;
+                re += v as f64 * w.cos();
+                im += v as f64 * w.sin();
+            }
+            (2.0 * (re * re + im * im).sqrt() / x.len() as f64) as f32
+        };
+        // How much it takes off an 8 kHz hiss of `hiss` under a 500 Hz tone at -6 dBFS.
+        let taken = |steep: bool, hiss: f32| {
+            let sound: Vec<f32> = (0..n).map(|i| i as f32 / sr).map(|t| 0.5 * (TAU * 500.0 * t).sin() + hiss * (TAU * 8000.0 * t).sin()).collect();
+            let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { steep, ..Default::default() }), sr);
+            let (mut l, mut r) = (sound.clone(), sound);
+            for (a, b) in l.chunks_mut(256).zip(r.chunks_mut(256)) {
+                fx.process(a, b, &ctx());
+            }
+            20.0 * (level(&l[n / 2..], 8000.0) / hiss).log10()
+        };
+        // -40 dBFS: 10 dB under the threshold.
+        let (now, before) = (taken(true, 0.01), taken(false, 0.01));
+        println!("a faint hiss under a loud tone: {now:.1} dB (before: {before:.1} dB)");
+        assert!(now.abs() < 0.2, "{now}");
+        assert!(before < -5.0, "the old one took it down: {before}");
+        let loud = taken(true, 0.3);
+        println!("a loud hiss: {loud:.1} dB");
+        // About the range: just over the split, the top part is a little louder than the sound.
+        assert!((-10.0..-6.5).contains(&loud), "{loud}");
+    }
+
     /// Under its threshold it changes nothing; a hiss over it comes down
     /// about its range, and a low tone with it is left as it was.
     #[test]
@@ -2781,14 +2829,14 @@ mod tests {
         let n = 48_000;
         // A 220 Hz tone, quiet: nothing to take.
         let tone: Vec<f32> = (0..n).map(|i| 0.3 * (std::f32::consts::TAU * 220.0 * i as f32 / sr).sin()).collect();
-        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }), sr);
+        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0, steep: false }), sr);
         let (mut l, mut r) = (tone.clone(), tone.clone());
         fx.process(&mut l, &mut r, &ctx());
         let worst = l.iter().zip(&tone).map(|(a, b)| (a - b).abs()).fold(0.0, f32::max);
         assert!(worst < 1e-4, "untouched: {worst}");
         // The tone and a loud 9 kHz whistle (an «s»): the whistle comes down, the tone stays.
         let mixed: Vec<f32> = (0..n).map(|i| i as f32 / sr).map(|t| 0.3 * (std::f32::consts::TAU * 220.0 * t).sin() + 0.3 * (std::f32::consts::TAU * 9000.0 * t).sin()).collect();
-        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0 }), sr);
+        let mut fx = EffectProcessor::new(&Effect::DeEsser(DeEsserParams { freq_hz: 6000.0, threshold_db: -30.0, range_db: 8.0, steep: false }), sr);
         let (mut l, mut r) = (mixed.clone(), mixed.clone());
         fx.process(&mut l, &mut r, &ctx());
         let level = |x: &[f32], hz: f32| {

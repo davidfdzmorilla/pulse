@@ -141,6 +141,9 @@ still in `0.x`, so any release may change things.
   one `Path::join` (`factory_sounds_tests`, `lyrics`). They now build the
   path part by part. Pulse's own behaviour was already right. They pass on
   macOS and on Windows CI (run 41808950553, 2026-11-04).
+- FM Synth: the factory sound «FX · Ruido digital» is 1 dB quieter. It is
+  noise, and its peak on a loud chord differs from one system to another:
+  it passed the level test on macOS and failed it on Windows.
 - Windows status docs said CI could not run and nothing had run on Windows.
   In fact CI built, tested, ran and installed Pulse on Windows in October
   2026 (last complete run: 2026-10-29).

@@ -67,6 +67,12 @@ still in `0.x`, so any release may change things.
   ate headroom). Drive, Output and Dry/Wet glide when turned instead of
   stepping. Those already in a project, in the templates, the chains and
   the factory sounds keep the sound they had.
+- Acid Bass: the filter of a new Acid resonates on its cutoff all the way
+  up a sweep. Before, the resonance went sharp as the cutoff rose (three
+  semitones at 10 kHz) and, with an accent throwing the cutoff to the top,
+  the filter rang by itself at the edge of hearing for a moment. The
+  factory sounds and the Acids already in a project keep the filter they
+  had; the **Init** sound has the new one.
 - Wavetable Synth and Polychrome Synth: the **Ladder** filter of a new
   sound resonates on its cutoff wherever it is (before, the resonance went
   sharp as the cutoff rose: over a semitone at 3 kHz, almost five at

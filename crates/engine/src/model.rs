@@ -1830,6 +1830,11 @@ pub struct AcidParams {
     pub glide_ms: f32,
     pub drive: f32,
     pub gain: f32,
+    /// The resonance sits on the cutoff wherever it is. Without it (a sound
+    /// made before this), it goes sharp as the cutoff rises and, at the very
+    /// top of a sweep, rings by itself.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tuned: bool,
 }
 
 impl Default for AcidParams {
@@ -1844,31 +1849,37 @@ impl Default for AcidParams {
             glide_ms: 60.0,
             drive: 0.3,
             gain: 0.5,
+            tuned: true,
         }
     }
 }
 
 impl AcidParams {
+    /// As it was before the filter was tuned: what the factory sounds keep.
+    pub fn old() -> Self {
+        Self { tuned: false, ..Self::default() }
+    }
+
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, AcidParams)> {
-        let base = AcidParams::default();
+        let base = AcidParams::old();
         vec![
-            ("Init", base),
+            ("Init", AcidParams::default()),
             ("Acid · Clásico", AcidParams { cutoff: 320.0, resonance: 0.8, env_mod: 0.6, decay: 0.35, accent: 0.7, glide_ms: 60.0, drive: 0.25, gain: 0.5, ..base }),
             ("Acid · Squelch", AcidParams { cutoff: 180.0, resonance: 0.92, env_mod: 0.85, decay: 0.22, accent: 0.9, glide_ms: 50.0, drive: 0.35, gain: 0.445, ..base }),
-            ("Acid · Cuadrada hueca", AcidParams { square: true, cutoff: 260.0, resonance: 0.78, env_mod: 0.55, decay: 0.3, accent: 0.6, glide_ms: 60.0, drive: 0.2, gain: 0.4 }),
+            ("Acid · Cuadrada hueca", AcidParams { square: true, cutoff: 260.0, resonance: 0.78, env_mod: 0.55, decay: 0.3, accent: 0.6, glide_ms: 60.0, drive: 0.2, gain: 0.4, ..base }),
             ("Acid · Gritón", AcidParams { cutoff: 400.0, resonance: 0.9, env_mod: 0.7, decay: 0.4, accent: 1.0, glide_ms: 60.0, drive: 1.0, gain: 0.25, ..base }),
             ("Acid · Glide largo", AcidParams { cutoff: 300.0, resonance: 0.85, env_mod: 0.5, decay: 0.6, accent: 0.6, glide_ms: 250.0, drive: 0.3, gain: 0.5, ..base }),
-            ("Acid · Burbuja", AcidParams { square: true, cutoff: 500.0, resonance: 0.95, env_mod: 0.4, decay: 0.12, accent: 0.5, glide_ms: 30.0, drive: 0.15, gain: 0.4 }),
+            ("Acid · Burbuja", AcidParams { square: true, cutoff: 500.0, resonance: 0.95, env_mod: 0.4, decay: 0.12, accent: 0.5, glide_ms: 30.0, drive: 0.15, gain: 0.4, ..base }),
             ("Acid · Barrido lento", AcidParams { cutoff: 120.0, resonance: 0.88, env_mod: 0.8, decay: 1.5, accent: 0.5, glide_ms: 80.0, drive: 0.3, gain: 0.5, ..base }),
             ("Acid · Solo acentos", AcidParams { cutoff: 250.0, resonance: 0.85, env_mod: 0.25, decay: 0.3, accent: 1.0, glide_ms: 60.0, drive: 0.4, gain: 0.42, ..base }),
             ("Bajo · Sub oscuro", AcidParams { cutoff: 80.0, resonance: 0.6, env_mod: 0.25, decay: 0.2, accent: 0.4, glide_ms: 40.0, drive: 0.2, gain: 0.8, ..base }),
             ("Bajo · Techno rodante", AcidParams { cutoff: 220.0, resonance: 0.55, env_mod: 0.45, decay: 0.15, accent: 0.5, glide_ms: 20.0, drive: 0.5, gain: 0.5, ..base }),
-            ("Bajo · Minimal seco", AcidParams { square: true, cutoff: 350.0, resonance: 0.4, env_mod: 0.35, decay: 0.08, accent: 0.4, glide_ms: 5.0, drive: 0.1, gain: 0.5 }),
+            ("Bajo · Minimal seco", AcidParams { square: true, cutoff: 350.0, resonance: 0.4, env_mod: 0.35, decay: 0.08, accent: 0.4, glide_ms: 5.0, drive: 0.1, gain: 0.5, ..base }),
             ("Bajo · Gordo saturado", AcidParams { cutoff: 600.0, resonance: 0.35, env_mod: 0.3, decay: 0.3, accent: 0.5, glide_ms: 30.0, drive: 0.8, gain: 0.32, ..base }),
-            ("Bajo · Pulso hueco", AcidParams { square: true, cutoff: 700.0, resonance: 0.15, env_mod: 0.1, decay: 0.3, accent: 0.3, glide_ms: 30.0, drive: 0.1, gain: 0.42 }),
+            ("Bajo · Pulso hueco", AcidParams { square: true, cutoff: 700.0, resonance: 0.15, env_mod: 0.1, decay: 0.3, accent: 0.3, glide_ms: 30.0, drive: 0.1, gain: 0.42, ..base }),
             ("Lead · Chillón", AcidParams { cutoff: 1200.0, resonance: 0.88, env_mod: 0.6, decay: 0.5, accent: 0.8, glide_ms: 80.0, drive: 0.7, gain: 0.32, ..base }),
-            ("Lead · Silbido", AcidParams { square: true, cutoff: 900.0, resonance: 0.96, env_mod: 0.2, decay: 0.8, accent: 0.4, glide_ms: 120.0, drive: 0.1, gain: 0.5 }),
+            ("Lead · Silbido", AcidParams { square: true, cutoff: 900.0, resonance: 0.96, env_mod: 0.2, decay: 0.8, accent: 0.4, glide_ms: 120.0, drive: 0.1, gain: 0.5, ..base }),
             ("FX · Láser", AcidParams { cutoff: 60.0, resonance: 0.95, env_mod: 1.0, decay: 0.08, accent: 1.0, glide_ms: 400.0, drive: 0.5, gain: 0.4, ..base }),
         ]
     }

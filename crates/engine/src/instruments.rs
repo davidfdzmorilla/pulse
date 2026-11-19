@@ -625,15 +625,31 @@ impl AcidBass {
             self.filter_env *= env_decay;
             let sweep = 4.0 * p.env_mod * (1.0 + self.accent) * self.filter_env;
             let cutoff = (p.cutoff * self.bright * 2f32.powf(sweep)).clamp(20.0, sr * 0.4);
-            let g = 1.0 - (-TAU * cutoff / sr).exp();
             // Four one-pole stages with resonant feedback and a saturating input.
-            let input = (osc * drive - feedback * self.ladder[3]).tanh();
-            self.ladder[0] += g * (input - self.ladder[0]);
-            self.ladder[1] += g * (self.ladder[0] - self.ladder[1]);
-            self.ladder[2] += g * (self.ladder[1] - self.ladder[2]);
-            self.ladder[3] += g * (self.ladder[2] - self.ladder[3]);
+            let filtered = if p.tuned {
+                // The feedback takes what the stages give this very sample,
+                // so the resonance stays on the cutoff all the way up.
+                let g = (PI * cutoff / sr).tan();
+                let (share, keep) = (g / (1.0 + g), 1.0 / (1.0 + g));
+                let held = keep * (share * (share * (share * self.ladder[0] + self.ladder[1]) + self.ladder[2]) + self.ladder[3]);
+                let mut y = ((osc * drive - feedback * held) / (1.0 + feedback * share.powi(4))).tanh();
+                for stage in &mut self.ladder {
+                    let v = (y - *stage) * share;
+                    y = v + *stage;
+                    *stage = y + v;
+                }
+                y
+            } else {
+                let g = 1.0 - (-TAU * cutoff / sr).exp();
+                let input = (osc * drive - feedback * self.ladder[3]).tanh();
+                self.ladder[0] += g * (input - self.ladder[0]);
+                self.ladder[1] += g * (self.ladder[0] - self.ladder[1]);
+                self.ladder[2] += g * (self.ladder[1] - self.ladder[2]);
+                self.ladder[3] += g * (self.ladder[2] - self.ladder[3]);
+                self.ladder[3]
+            };
             // Resonance thins the low end; compensate a little.
-            let out = self.ladder[3] * (1.0 + p.resonance) * self.amp * level;
+            let out = filtered * (1.0 + p.resonance) * self.amp * level;
             *out_l += out;
             *out_r += out;
             // Stopping on the sample it falls silent, not at the end of
@@ -1348,6 +1364,67 @@ mod tests {
         bass.note_on(48, 0.7, 24_000);
         run(&mut |l, r| bass.render(l, r), 4_800);
         assert!(bass.freq < midi_to_freq(46), "a long glide is still sliding after 100 ms");
+    }
+
+    /// A new Acid's resonance sits on its cutoff wherever the sweep takes it;
+    /// the one before went sharp on the way up and, with the cutoff at the
+    /// top, rang by itself at the edge of hearing. The factory sounds and a
+    /// saved one that says nothing keep that.
+    #[test]
+    fn a_new_acid_resonates_on_its_cutoff() {
+        // The loudest harmonic of a low held note, the saw's own slope taken
+        // out, against the cutoff: in cents.
+        let peak = |tuned: bool, cutoff: f32| {
+            let mut bass = AcidBass::new(AcidParams { cutoff, resonance: 0.95, env_mod: 0.0, accent: 0.0, drive: 0.0, tuned, ..Default::default() }, SR);
+            bass.note_on(24, 0.5, 48_000);
+            let heard = run(&mut |l, r| bass.render(l, r), 24_000).0;
+            let f0 = midi_to_freq(24);
+            let level = |n: usize| {
+                let (re, im) = heard[4_800..].iter().enumerate().fold((0f64, 0f64), |(re, im), (i, v)| {
+                    let a = (TAU * f0 * n as f32 / SR) as f64 * i as f64;
+                    (re + *v as f64 * a.cos(), im + *v as f64 * a.sin())
+                });
+                (re * re + im * im).sqrt() * n as f64
+            };
+            let (low, high) = ((cutoff * 0.5 / f0) as usize, ((cutoff * 2.0).min(SR * 0.49) / f0) as usize);
+            let n = (low.max(1)..=high).max_by(|a, b| level(*a).total_cmp(&level(*b))).unwrap();
+            1200.0 * (n as f32 * f0 / cutoff).log2()
+        };
+        let mut worst_before = 0f32;
+        for cutoff in [300.0f32, 1000.0, 3000.0, 6000.0, 10_000.0] {
+            let (before, now) = (peak(false, cutoff), peak(true, cutoff));
+            println!("corte {cutoff} Hz: resuena a {before:+.0} cents antes y {now:+.0} ahora");
+            assert!(now.abs() <= 60.0, "{cutoff} Hz: {now} cents off");
+            worst_before = worst_before.max(before.abs());
+        }
+        assert!(worst_before > 250.0, "the one before was off by {worst_before} cents");
+
+        // An accented note of «Gritón» throws the cutoff to the top: how much
+        // of its first 10 ms is at the very top of the band (the share of
+        // the energy that changes sign from one sample to the next).
+        let top = |tuned: bool| {
+            let mut bass = AcidBass::new(AcidParams { tuned, ..acid_preset("Acid · Gritón") }, SR);
+            bass.note_on(36, 1.0, 24_000);
+            let heard = run(&mut |l, r| bass.render(l, r), 480).0;
+            let jumps: f32 = heard.windows(2).map(|w| (w[1] - w[0]).powi(2)).sum();
+            assert!(heard.iter().all(|v| v.is_finite() && v.abs() < 4.0));
+            jumps / (4.0 * energy(&heard))
+        };
+        let (before, now) = (top(false), top(true));
+        println!("«Gritón» acentuado, parte en lo más alto: {before:.3} antes, {now:.3} ahora");
+        assert!(before > 0.1 && now < 0.2 * before, "{before} before, {now} now");
+
+        // Who has it.
+        assert!(AcidParams::default().tuned && !AcidParams::old().tuned);
+        for (name, p) in AcidParams::presets() {
+            assert_eq!(p.tuned, name == "Init", "{name}");
+        }
+        let mut old = serde_json::to_value(AcidParams::default()).unwrap();
+        old.as_object_mut().unwrap().remove("tuned");
+        let old: AcidParams = serde_json::from_value(old).unwrap();
+        assert_eq!(old, AcidParams::old());
+        let again: AcidParams = serde_json::from_str(&serde_json::to_string(&AcidParams::default()).unwrap()).unwrap();
+        assert!(again.tuned);
     }
 
     #[test]

@@ -6,7 +6,7 @@
 //! [`Engine::process`] allocates or locks; anything the engine replaces is
 //! handed back to the UI thread as [`Garbage`] to be freed there.
 
-use crate::effects::{EffectProcessor, ProcessContext};
+use crate::effects::{EffectProcessor, ProcessContext, SWITCH_FADE};
 use crate::model::{db_to_gain, AudioClip, AutomationLane, Fades, Device, Effect, Groove, InstrumentKind, MidiClip, MidiControl, Param, PluginId, WarpMode, MIDI_CONTROLS};
 use crate::plugin::PluginProcessor;
 use crate::sample::Sample;
@@ -82,8 +82,6 @@ pub struct ChainSlot {
     wet: f32,
 }
 
-/// The cross-fade when a device is switched on or off, in seconds.
-const SWITCH_FADE: f32 = 0.01;
 
 impl ChainSlot {
     pub fn new(device: &Device, sample_rate: f32) -> Self {

@@ -1610,6 +1610,60 @@ impl Utility {
     }
 }
 
+/// The cross-fade when an effect is switched on or off, in seconds.
+pub(crate) const SWITCH_FADE: f32 = 0.01;
+
+/// An effect inside an instrument, with its on/off switch: switching it
+/// cross-fades over [`SWITCH_FADE`] instead of jumping (a click), and once
+/// off it forgets its tail, so a reverb turned back on doesn't play the old
+/// one. (A track's devices do the same in the engine.)
+pub(crate) struct Switched {
+    pub(crate) processor: EffectProcessor,
+    pub(crate) on: bool,
+    /// How much of the effect is heard, 0 to 1.
+    wet: f32,
+}
+
+impl Switched {
+    /// The most samples [`Self::process`] takes at once.
+    const BLOCK: usize = 64;
+
+    pub(crate) fn new(effect: &Effect, on: bool, sample_rate: f32) -> Self {
+        Self { processor: EffectProcessor::new(effect, sample_rate), on, wet: if on { 1.0 } else { 0.0 } }
+    }
+
+    /// On, or still fading out.
+    pub(crate) fn sounds(&self) -> bool {
+        self.on || self.wet > 0.0
+    }
+
+    /// Runs it over a short block (an instrument's control period).
+    pub(crate) fn process(&mut self, left: &mut [f32], right: &mut [f32], ctx: &ProcessContext) {
+        let n = left.len().min(Self::BLOCK);
+        debug_assert!(left.len() <= Self::BLOCK);
+        let goal = if self.on { 1.0 } else { 0.0 };
+        if self.wet == goal {
+            if self.on {
+                self.processor.process(left, right, ctx);
+            }
+            return;
+        }
+        let mut dry = [[0f32; Self::BLOCK]; 2];
+        dry[0][..n].copy_from_slice(&left[..n]);
+        dry[1][..n].copy_from_slice(&right[..n]);
+        self.processor.process(left, right, ctx);
+        let step = 1.0 / (SWITCH_FADE * ctx.sample_rate).max(1.0);
+        for i in 0..n {
+            self.wet = if self.on { (self.wet + step).min(1.0) } else { (self.wet - step).max(0.0) };
+            left[i] = dry[0][i] + (left[i] - dry[0][i]) * self.wet;
+            right[i] = dry[1][i] + (right[i] - dry[1][i]) * self.wet;
+        }
+        if self.wet == 0.0 {
+            self.processor.reset();
+        }
+    }
+}
+
 pub enum EffectProcessor {
     Eq3(Eq3),
     EqEight(Box<EqEight>),

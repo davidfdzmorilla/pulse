@@ -83,6 +83,9 @@ still in `0.x`, so any release may change things.
   random, glide, the Super Saw's filter envelope) plays the same whatever
   the sound card's buffer size. Before, it could change with buffers that
   aren't a multiple of 32 samples.
+- Wavetable Synth, Polychrome Synth and Modular Synth: switching one of
+  their own effects on or off no longer clicks (it cross-fades for 10 ms),
+  and an effect switched off forgets its tail, as a track's effects do.
 - Settings → Audio: the **Cores for audio** list shows every choice
   without scrolling (on a 10-core Mac the last one was hidden).
 - EQ Eight: moving a band's frequency, gain or Q, or automating it, no

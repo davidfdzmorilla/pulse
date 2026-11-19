@@ -5,7 +5,7 @@
 //! The synth is built on the UI thread (it owns per-voice comb-filter buffers)
 //! and handed to the audio thread ready to play; rendering never allocates.
 
-use crate::effects::{EffectProcessor, ProcessContext};
+use crate::effects::{ProcessContext, Switched};
 use crate::instruments::{saw, square, svf_g, Declick, Gate, Svf, Taken, Watch};
 use crate::synth::HELD;
 use crate::model::{
@@ -492,7 +492,7 @@ pub struct WaveSynth {
     last_note: Option<f32>,
     seed: u32,
     /// The synth's effects rack, built with the synth (allocation happens here).
-    fx: Vec<Option<(EffectProcessor, bool)>>,
+    fx: Vec<Option<Switched>>,
     scratch: [[f32; CONTROL]; 2],
     arp: Arp,
     seq: Seq,
@@ -546,7 +546,7 @@ impl WaveSynth {
 
     pub fn new(params: WaveParams, sample_rate: f32) -> Self {
         let voices = (0..VOICES).map(|i| Voice::new(voice_seed(i))).collect();
-        let fx = params.fx.iter().map(|slot| slot.map(|d| (EffectProcessor::new(&d.effect, sample_rate), d.enabled))).collect();
+        let fx = params.fx.iter().map(|slot| slot.map(|d| Switched::new(&d.effect, d.enabled, sample_rate))).collect();
         Self {
             params,
             sample_rate,
@@ -585,9 +585,9 @@ impl WaveSynth {
         }
         self.params = params;
         for (slot, device) in self.fx.iter_mut().zip(params.fx.iter()) {
-            if let (Some((processor, enabled)), Some(device)) = (slot.as_mut(), device) {
-                processor.set_params(&device.effect);
-                *enabled = device.enabled;
+            if let (Some(fx), Some(device)) = (slot.as_mut(), device) {
+                fx.processor.set_params(&device.effect);
+                fx.on = device.enabled;
             }
         }
     }
@@ -921,7 +921,7 @@ impl WaveSynth {
             *value = params.param_mut(i).map_or(0.0, |v| *v);
         }
         let amounts: [f32; WAVE_SLOTS] = std::array::from_fn(|s| self.params.matrix[s].amount);
-        let has_fx = self.fx.iter().any(|slot| matches!(slot, Some((_, true))));
+        let has_fx = self.fx.iter().flatten().any(|fx| fx.sounds());
         let mut offset = 0;
         while offset < left.len() {
             let n = (left.len() - offset).min(CONTROL - self.period_at);
@@ -954,8 +954,8 @@ impl WaveSynth {
                     meter: Default::default(),
                 };
                 let [l, r] = &mut scratch;
-                for (processor, _) in self.fx.iter_mut().flatten().filter(|(_, enabled)| *enabled) {
-                    processor.process(&mut l[..n], &mut r[..n], &ctx);
+                for fx in self.fx.iter_mut().flatten() {
+                    fx.process(&mut l[..n], &mut r[..n], &ctx);
                 }
             }
             for i in 0..n {
@@ -1869,6 +1869,41 @@ mod phase2_tests {
         wet.set_params(off);
         let ratio = rms(&render(&mut wet, &[], 9600).0) / rms(&render(&mut dry, &[], 9600).0);
         assert!((ratio - 1.0).abs() < 0.05, "{ratio}");
+
+        // Switching it cross-fades for 10 ms (no click): a fifth of the way
+        // in, an effect 60 dB down still lets under a fifth of the sound through.
+        let mut quiet = WaveParams::default();
+        quiet.fx[0] = Some(Device::new(Effect::Utility(UtilityParams { gain_db: -60.0, ..Default::default() })));
+        let (mut dry, mut wet) = (WaveSynth::new(WaveParams::default(), SR), WaveSynth::new(quiet, SR));
+        dry.note_on(60, 1.0, HELD);
+        wet.note_on(60, 1.0, HELD);
+        render(&mut dry, &[], 9600);
+        render(&mut wet, &[], 9600);
+        quiet.fx[0] = quiet.fx[0].map(|d| Device { enabled: false, ..d });
+        wet.set_params(quiet);
+        let (plain, switched) = (render(&mut dry, &[], 9600).0, render(&mut wet, &[], 9600).0);
+        let fade = (crate::effects::SWITCH_FADE * SR) as usize;
+        assert!(plain[..fade / 5].iter().any(|s| s.abs() > 0.01));
+        for (a, b) in switched[..fade / 5].iter().zip(&plain) {
+            assert!(a.abs() <= b.abs() * 0.21 + 1e-6, "{a} {b}");
+        }
+        assert_eq!(switched[fade + 2..], plain[fade + 2..], "off: the sound as it came");
+
+        // Off, it forgets its tail: a reverb turned back on in silence is silent.
+        let mut hall = WaveParams::default();
+        hall.fx[0] = Some(Device::new(Effect::Reverb(crate::model::ReverbParams { size: 1.0, mix: 1.0, ..Default::default() })));
+        let mut synth = WaveSynth::new(hall, SR);
+        synth.note_on(60, 1.0, HELD);
+        render(&mut synth, &[], 9600);
+        let mut hall_off = hall;
+        hall_off.fx[0] = hall_off.fx[0].map(|d| Device { enabled: false, ..d });
+        synth.set_params(hall_off);
+        render(&mut synth, &[], 2400);
+        synth.note_off(60);
+        render(&mut synth, &[], SR as usize * 2);
+        synth.set_params(hall);
+        let back = render(&mut synth, &[], 9600).0;
+        assert!(back.iter().all(|s| s.abs() < 1e-6), "no tail from before");
 
         let with_fx = InstrumentKind::Wavetable(p);
         assert!(InstrumentKind::Wavetable(WaveParams::default()).needs_rebuild(&with_fx), "adding an effect rebuilds");

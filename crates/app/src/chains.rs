@@ -154,7 +154,7 @@ pub fn factory() -> Vec<Chain> {
             "Voz · Radio",
             vec![
                 eq(&[(0, EqShape::LowCut48, 350.0, 0.0), (3, EqShape::Bell, 1500.0, 5.0), (7, EqShape::HighCut48, 3500.0, 0.0)]),
-                Effect::Saturator(SaturatorParams { drive_db: 12.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Tube, oversample: false }),
+                Effect::Saturator(SaturatorParams { drive_db: 12.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Tube, oversample: false, centre: false }),
                 Effect::Compressor(CompressorParams { threshold_db: -26.0, ratio: 8.0, attack_ms: 2.0, release_ms: 60.0, makeup_db: 10.5, sidechain: None, detector: false }),
                 Effect::Utility(UtilityParams { width: 0.0, ..Default::default() }),
                 // The compressor's makeup and the saturator's edge left a hot voice
@@ -169,14 +169,14 @@ pub fn factory() -> Vec<Chain> {
                 glue("Batería · Pegada (ataque lento)"),
                 // Its output takes back what the bus compressor and the drive add: more
                 // punch, not more level (to judge it by ear, not by loudness).
-                Effect::Saturator(SaturatorParams { drive_db: 4.0, output_db: -3.5, mix: 0.5, kind: KickDrive::Tube, oversample: false }),
+                Effect::Saturator(SaturatorParams { drive_db: 4.0, output_db: -3.5, mix: 0.5, kind: KickDrive::Tube, oversample: false, centre: false }),
             ],
         ),
         Chain::of(
             "Bajo · Sidechain y saturación",
             vec![
                 eq(&[(0, EqShape::LowCut12, 30.0, 0.0)]),
-                Effect::Saturator(SaturatorParams { drive_db: 8.0, output_db: -4.0, mix: 0.7, kind: KickDrive::Tube, oversample: false }),
+                Effect::Saturator(SaturatorParams { drive_db: 8.0, output_db: -4.0, mix: 0.7, kind: KickDrive::Tube, oversample: false, centre: false }),
                 // Pumps with the beat: no track to listen to (see the guide).
                 Effect::Ducker(DuckerParams { depth: 0.75, release: 0.6, rate_beats: 1.0, ..Default::default() }),
                 Effect::Utility(UtilityParams { bass_mono_hz: 120.0, ..Default::default() }),

@@ -57,6 +57,11 @@ still in `0.x`, so any release may change things.
 
 ### Changed
 
+- Saturator: a new one works at **4×** (heavy drive no longer dirties the
+  highs) and its **Tube** type comes out centred (it left a DC offset that
+  ate headroom). Drive, Output and Dry/Wet glide when turned instead of
+  stepping. Those already in a project, in the templates, the chains and
+  the factory sounds keep the sound they had.
 - Wavetable Synth and Polychrome Synth: the **Ladder** filter of a new
   sound resonates on its cutoff wherever it is (before, the resonance went
   sharp as the cutoff rose: over a semitone at 3 kHz, almost five at

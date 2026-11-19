@@ -921,7 +921,7 @@ impl Project {
             detector: false,
         })));
 
-        let mut bass = Track::new("Bass", bass_color, InstrumentKind::Acid(AcidParams::default()));
+        let mut bass = Track::new("Bass", bass_color, InstrumentKind::Acid(AcidParams::old()));
         // An acid line over Am - F - C - G: accents (velocity 1.0) and one slide per bar,
         // where a long note overlaps the next.
         let roots = [45u8, 41, 48, 43];

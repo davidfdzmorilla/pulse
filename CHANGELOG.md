@@ -57,6 +57,11 @@ still in `0.x`, so any release may change things.
 
 ### Changed
 
+- Saturator: a new one works at **4×** (heavy drive no longer dirties the
+  highs) and its **Tube** type comes out centred (it left a DC offset that
+  ate headroom). Drive, Output and Dry/Wet glide when turned instead of
+  stepping. Those already in a project, in the templates, the chains and
+  the factory sounds keep the sound they had.
 - Pulse Keys: a piano costs under a third of the processor it did while
   the pitch bend or the modulation wheel moves (each sounding string is
   retuned many times a second). Notes that aren't bent play the same

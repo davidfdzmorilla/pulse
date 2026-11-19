@@ -234,7 +234,7 @@ fn built_in(name: &str) -> Result<Project, String> {
             project.tempo = 140.0;
             let drums = kit(named("Batería"), "Trap", -6.0)?;
             let mut sub = track("808", 9, instrument(InstrumentKind::Kick(KickParams::default()), "808 · Largo"), -14.0);
-            device(&mut sub, Effect::Saturator(SaturatorParams { drive_db: 6.0, output_db: -4.0, mix: 0.6, ..Default::default() }));
+            device(&mut sub, Effect::Saturator(SaturatorParams { drive_db: 6.0, output_db: -4.0, mix: 0.6, ..SaturatorParams::old() }));
             let mut bells = track(named("Campanas"), 6, instrument(InstrumentKind::Fm(FmParams::default()), "Campanas · Caja de música"), -9.0);
             bells.sends[..2].copy_from_slice(&[0.3, 0.2]);
             let mut pad = track("Pad", 11, instrument(InstrumentKind::Wavetable(WaveParams::default()), "Pad · Oscuro de cine"), -18.0);
@@ -281,7 +281,7 @@ fn built_in(name: &str) -> Result<Project, String> {
             project.tracks = vec![drums, keys, bass, pad];
             returns(&mut project, "Voces · Muelle vintage", 0.75, 0.35);
             // The tape: a little warmth and a softer top, then the limiter.
-            project.master.devices.push(Device::new(Effect::Saturator(SaturatorParams { drive_db: 3.0, output_db: -2.0, mix: 0.5, ..Default::default() })));
+            project.master.devices.push(Device::new(Effect::Saturator(SaturatorParams { drive_db: 3.0, output_db: -2.0, mix: 0.5, ..SaturatorParams::old() })));
             project.master.devices.push(Device::new(Effect::Eq3(Eq3Params { high_db: -2.5, ..Eq3Params::gentle() })));
             project.master.devices.push(Device::new(Effect::Limiter(LimiterParams { gain_db: 1.0, ..Default::default() })));
         }

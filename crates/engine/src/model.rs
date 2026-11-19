@@ -2219,6 +2219,12 @@ pub struct Eq3Params {
     pub high_db: f32,
     pub low_freq: f32,
     pub high_freq: f32,
+    /// The bands are cut 24 dB an octave apart (the «24 dB» switch): a band
+    /// at the bottom of its range is really gone, as on a DJ mixer. Without
+    /// it (an EQ Three made before this), 12 dB an octave, and a band
+    /// turned all the way down still leaks 6 dB an octave.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub steep: bool,
 }
 
 impl Default for Eq3Params {
@@ -2229,7 +2235,16 @@ impl Default for Eq3Params {
             high_db: 0.0,
             low_freq: 250.0,
             high_freq: 2500.0,
+            steep: true,
         }
+    }
+}
+
+impl Eq3Params {
+    /// A new EQ Three with the gentle bands (see [`Self::steep`]): what the
+    /// templates and the mix assistant's corrections were made with.
+    pub fn gentle() -> Self {
+        Self { steep: false, ..Self::default() }
     }
 }
 

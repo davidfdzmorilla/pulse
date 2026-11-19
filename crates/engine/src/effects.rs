@@ -76,12 +76,20 @@ pub struct Eq3 {
     high: [Svf; 2],
     /// The bands' gains (low, mid, high), gliding when turned.
     gains: [Glide; 3],
+    /// The steep crossovers (see `Eq3Params::steep`): the low-pass and the
+    /// high-pass at each of the two frequencies, and what they were made for.
+    steep: [[Biquad; 2]; 2],
+    made: Option<(f32, f32, f32)>,
+    /// Their states for each channel: the lows and the rest at the first
+    /// frequency, the rest's mids and highs at the second, and the lows
+    /// through both halves of the second (to keep them in phase).
+    states: [[[BiquadState; 2]; 6]; 2],
 }
 
 impl Eq3 {
     fn new(params: Eq3Params) -> Self {
         let gains = [params.low_db, params.mid_db, params.high_db].map(|db| Glide::new(Self::gain(db)));
-        Self { params, low: Default::default(), high: Default::default(), gains }
+        Self { params, low: Default::default(), high: Default::default(), gains, steep: [[Biquad::IDENTITY; 2]; 2], made: None, states: Default::default() }
     }
 
     /// At the bottom of the range a band is fully killed, as on a DJ mixer.
@@ -89,7 +97,38 @@ impl Eq3 {
         if db <= -40.0 { 0.0 } else { db_to_gain(db) }
     }
 
+    /// The steep bands: 24 dB an octave Linkwitz-Riley crossovers, so a
+    /// band at the bottom of its range is really gone. With every band at
+    /// 0 dB the level is what came in (the phase turns at the crossovers).
+    fn process_steep(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        let p = self.params;
+        if self.made != Some((p.low_freq, p.high_freq, sr)) {
+            let half = |shape, freq: f32| band_sections(&EqBand { on: true, shape, freq: freq.clamp(20.0, sr * 0.45), gain_db: 0.0, q: std::f32::consts::FRAC_1_SQRT_2 }, sr).0[0];
+            self.steep = [p.low_freq, p.high_freq].map(|freq| [half(EqShape::HighCut12, freq), half(EqShape::LowCut12, freq)]);
+            self.made = Some((p.low_freq, p.high_freq, sr));
+        }
+        let targets = [Self::gain(p.low_db), Self::gain(p.mid_db), Self::gain(p.high_db)];
+        let [[low_1, high_1], [low_2, high_2]] = self.steep;
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let [gl, gm, gh] = [0, 1, 2].map(|band| self.gains[band].next(targets[band]));
+            for (ch, s) in [a, b].into_iter().enumerate() {
+                let [lows, rest, mids, highs, lows_low, lows_high] = &mut self.states[ch];
+                let x = *s as f64;
+                let low = Utility::twice(&low_1, lows, x);
+                let over = Utility::twice(&high_1, rest, x);
+                let mid = Utility::twice(&low_2, mids, over);
+                let high = Utility::twice(&high_2, highs, over);
+                // The lows, turned as the second crossover turns the rest.
+                let low = Utility::twice(&low_2, lows_low, low) + Utility::twice(&high_2, lows_high, low);
+                *s = (low * gl as f64 + mid * gm as f64 + high * gh as f64) as f32;
+            }
+        }
+    }
+
     fn process(&mut self, l: &mut [f32], r: &mut [f32], sr: f32) {
+        if self.params.steep {
+            return self.process_steep(l, r, sr);
+        }
         let p = self.params;
         let low_c = SvfCoefs::new(p.low_freq, BUTTERWORTH_K, sr);
         let high_c = SvfCoefs::new(p.high_freq, BUTTERWORTH_K, sr);
@@ -1896,6 +1935,7 @@ impl EffectProcessor {
             Self::Eq3(fx) => {
                 fx.low = Default::default();
                 fx.high = Default::default();
+                fx.states = Default::default();
             }
             Self::EqEight(fx) => {
                 fx.states = Default::default();
@@ -2379,9 +2419,38 @@ mod tests {
         }
     }
 
+    /// With «24 dB» a band turned all the way down is really gone: an
+    /// octave inside it, more than 20 dB down (the gentle bands leave it
+    /// some 6 dB down), and the other bands keep their level. With every
+    /// band at 0 dB the level is what came in, at any frequency.
+    #[test]
+    fn a_killed_eq3_band_is_gone_with_the_steep_bands() {
+        let kill = |steep: bool, freq: f32| {
+            let params = Eq3Params { low_db: -40.0, steep, ..Default::default() };
+            sine_gain_db(&mut EffectProcessor::new(&Effect::Eq3(params), 48_000.0), freq)
+        };
+        // The lows end at 250 Hz.
+        let (steep, gentle) = (kill(true, 125.0), kill(false, 125.0));
+        println!("lows killed, at 125 Hz: {steep:.1} dB with 24 dB, {gentle:.1} dB without");
+        assert!(steep < -20.0, "{steep}");
+        assert!(gentle > -12.0, "the gentle bands leak: {gentle}");
+        assert!(kill(true, 60.0) < -40.0, "{}", kill(true, 60.0));
+        for freq in [1000.0, 5000.0] {
+            assert!(kill(true, freq).abs() < 0.3, "{freq} Hz: {}", kill(true, freq));
+        }
+        for freq in [40.0, 125.0, 250.0, 700.0, 2500.0, 5000.0, 12_000.0] {
+            let flat = sine_gain_db(&mut EffectProcessor::new(&Effect::Eq3(Default::default()), 48_000.0), freq);
+            assert!(flat.abs() < 0.1, "{freq} Hz: {flat}");
+        }
+        // The same with the highs: gone an octave over 2.5 kHz.
+        let params = Eq3Params { high_db: -40.0, ..Default::default() };
+        let highs = sine_gain_db(&mut EffectProcessor::new(&Effect::Eq3(params), 48_000.0), 5000.0);
+        assert!(highs < -20.0, "{highs}");
+    }
+
     #[test]
     fn eq3_is_transparent_at_unity() {
-        let mut fx = EffectProcessor::new(&Effect::Eq3(Default::default()), 48_000.0);
+        let mut fx = EffectProcessor::new(&Effect::Eq3(Eq3Params::gentle()), 48_000.0);
         let input: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
         let mut l = input.clone();
         let mut r = input.clone();

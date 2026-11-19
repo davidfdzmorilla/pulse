@@ -3014,7 +3014,7 @@ impl PulseApp {
                 self.status = Some(fill(tr("Ducker en «{}» con sidechain de «{}»: se aparta cada vez que suena"), &[&name, &source_name]));
             }
             Fix::CutLows { track, name } if track_ok(self, *track, name) => {
-                self.project.tracks[*track].devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -9.0, low_freq: 150.0, ..Default::default() })));
+                self.project.tracks[*track].devices.push(Device::new(Effect::Eq3(Eq3Params { low_db: -9.0, low_freq: 150.0, ..Eq3Params::gentle() })));
                 self.status = Some(fill(tr("Graves de «{}» recortados (EQ Three)"), &[&name]));
             }
             Fix::MasterEq { low, mid, high } => {
@@ -3027,7 +3027,7 @@ impl PulseApp {
                         e.mid_db = (e.mid_db + mid).clamp(-15.0, 15.0);
                         e.high_db = (e.high_db + high).clamp(-15.0, 15.0);
                     }
-                    None => self.insert_master(at, Device::new(Effect::Eq3(Eq3Params { low_db: *low, mid_db: *mid, high_db: *high, ..Default::default() }))),
+                    None => self.insert_master(at, Device::new(Effect::Eq3(Eq3Params { low_db: *low, mid_db: *mid, high_db: *high, ..Eq3Params::gentle() }))),
                 }
                 self.status = Some(tr("EQ Three del master ajustado a la referencia").into());
             }

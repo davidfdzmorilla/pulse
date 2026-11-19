@@ -2252,7 +2252,7 @@ If you click an instrument in the browser, it replaces the one on the selected M
 
 | Effect | What it's for |
 |---|---|
-| **EQ Three** | Boosting or cutting lows, mids and highs, fast. |
+| **EQ Three** | Boosting or cutting lows, mids and highs, fast. With **24 dB** ticked, a band turned all the way down is really gone, as on a DJ mixer. |
 | **EQ Eight** | Precise EQ: removing excess low end, a ringing frequency, adding brightness. |
 | **Compressor** | Evening out loud and soft parts so the track neither gets lost nor jumps out. |
 | **Bus Compressor** | Gluing a drum kit, a group or the whole mix (see [[Bus Compressor]]). |

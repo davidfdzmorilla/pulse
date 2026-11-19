@@ -167,6 +167,7 @@ fn comb_taps(delay: f32) -> [f32; 6] {
 }
 
 /// Filter settings for a control block.
+#[derive(Clone, Copy, PartialEq)]
 pub(crate) struct FilterCoefs {
     mode: WaveFilter,
     g: f32,
@@ -232,6 +233,26 @@ impl FilterCoefs {
     pub(crate) fn tuned(mut self, tuned: bool) -> Self {
         self.ladder_tuned = tuned;
         self
+    }
+
+    /// The filter `t` (0..1) of the way from `from` to `to`: what moves
+    /// smoothly does (the comb's length, a whole number of samples, is `to`'s).
+    fn between(from: &Self, to: &Self, t: f32) -> Self {
+        let mix = |a: f32, b: f32| a + (b - a) * t;
+        Self {
+            g: mix(from.g, to.g),
+            k: mix(from.k, to.k),
+            ladder_g: mix(from.ladder_g, to.ladder_g),
+            ladder_feedback: mix(from.ladder_feedback, to.ladder_feedback),
+            ladder_share: mix(from.ladder_share, to.ladder_share),
+            ladder_loop: mix(from.ladder_loop, to.ladder_loop),
+            comb_feedback: mix(from.comb_feedback, to.comb_feedback),
+            formants: std::array::from_fn(|i| (mix(from.formants[i].0, to.formants[i].0), to.formants[i].1)),
+            formant_k: mix(from.formant_k, to.formant_k),
+            drive: mix(from.drive, to.drive),
+            mix: mix(from.mix, to.mix),
+            ..*to
+        }
     }
 
     pub(crate) fn process(&self, s: &mut FilterState, x: f32) -> f32 {
@@ -318,6 +339,24 @@ impl Grain {
     const IDLE: Grain = Grain { active: false, position: 0.0, rate: 1.0, age: 0, length: 1, gain: (0.0, 0.0) };
 }
 
+/// What a voice's modulation sets once per control period and is heard as
+/// a step if it jumps: its levels and pans, where its oscillators are in
+/// their tables and how warped, and its filters.
+#[derive(Clone, Copy)]
+struct Levels {
+    gains: [[(f32, f32); UNISON]; 2],
+    positions: [f32; 2],
+    warps: [f32; 2],
+    sub: (f32, f32),
+    noise: (f32, f32),
+    master: f32,
+    filters: [Option<FilterCoefs>; 2],
+}
+
+impl Levels {
+    const NONE: Levels = Levels { gains: [[(0.0, 0.0); UNISON]; 2], positions: [0.0; 2], warps: [0.0; 2], sub: (0.0, 0.0), noise: (0.0, 0.0), master: 0.0, filters: [None; 2] };
+}
+
 #[derive(Clone)]
 struct Voice {
     active: bool,
@@ -358,6 +397,10 @@ struct Voice {
     /// it, a note starting in it) plays each piece with the same.
     snap: ([f32; PARAMS], f32),
     snap_period: u64,
+    /// Its levels and filters when this control period started, and this
+    /// period's: it moves from the ones to the others along the period.
+    was: Levels,
+    now: Levels,
     taken: Taken,
 }
 
@@ -391,6 +434,8 @@ impl Voice {
             filter2: [FilterState::new(), FilterState::new()],
             snap: ([0.0; PARAMS], 0.0),
             snap_period: u64::MAX,
+            was: Levels::NONE,
+            now: Levels::NONE,
             taken: Taken::default(),
         }
     }
@@ -1079,6 +1124,9 @@ impl WaveSynth {
         // piece (or a note's); the rest of it plays with what was found then.
         let block = CONTROL as f32 * dt;
         let fresh = self.voices[v].snap_period != self.period;
+        // A note that starts has nowhere to come from.
+        let starting = self.voices[v].snap_period == u64::MAX;
+        let at = self.period_at;
         let (m, freq) = if fresh { self.modulate(v, base, amounts, block) } else { self.voices[v].snap };
         // Borrowed, not copied: this runs per voice every control period.
         let p = &self.params;
@@ -1190,8 +1238,47 @@ impl WaveSynth {
         let noise_angle = (m[NOISE + 2].clamp(-1.0, 1.0) + 1.0) * std::f32::consts::FRAC_PI_4;
         let noise_gain = (noise_angle.cos() * m[NOISE] * std::f32::consts::SQRT_2, noise_angle.sin() * m[NOISE] * std::f32::consts::SQRT_2);
         let master = m[MASTER];
+        let now = Levels { gains: std::array::from_fn(|o| oscs[o].as_ref().map_or([(0.0, 0.0); UNISON], |b| b.gains)), positions: std::array::from_fn(|o| oscs[o].as_ref().map_or(0.0, |b| b.position)), warps: std::array::from_fn(|o| oscs[o].as_ref().map_or(0.0, |b| b.amount)), sub: sub_gain, noise: noise_gain, master, filters: [coefs, coefs2] };
+        if fresh {
+            voice.was = if starting { now } else { voice.now };
+        }
+        voice.now = now;
+        let was = voice.was;
+        // How far each level has to go in the period (nothing, if nothing moves it).
+        let far = |a: (f32, f32), b: (f32, f32)| (b.0 - a.0, b.1 - a.1);
+        let gains_far: [[(f32, f32); UNISON]; 2] = std::array::from_fn(|o| std::array::from_fn(|u| far(was.gains[o][u], now.gains[o][u])));
+        let (sub_far, noise_far, master_far) = (far(was.sub, now.sub), far(was.noise, now.noise), master - was.master);
+        let moving: [Option<(FilterCoefs, FilterCoefs)>; 2] = std::array::from_fn(|f| was.filters[f].zip(now.filters[f]).filter(|(a, b)| a != b));
 
-        for (out_l, out_r) in left.iter_mut().zip(right.iter_mut()) {
+        // Nothing moves this period (most of them): nothing to work out
+        // per sample.
+        let still = moving.iter().all(|m| m.is_none())
+            && gains_far.iter().flatten().all(|g| *g == (0.0, 0.0))
+            && (sub_far, noise_far, master_far) == ((0.0, 0.0), (0.0, 0.0), 0.0)
+            && was.positions == now.positions
+            && was.warps == now.warps;
+        let counts: [usize; 2] = std::array::from_fn(|o| oscs[o].as_ref().map_or(0, |b| b.count));
+        // Where they are on this sample.
+        let mut live = now;
+        for (i, (out_l, out_r)) in left.iter_mut().zip(right.iter_mut()).enumerate() {
+            if !still {
+                let t = (at + i + 1) as f32 / CONTROL as f32;
+                for o in 0..2 {
+                    for u in 0..counts[o] {
+                        live.gains[o][u] = (was.gains[o][u].0 + gains_far[o][u].0 * t, was.gains[o][u].1 + gains_far[o][u].1 * t);
+                    }
+                    live.positions[o] = was.positions[o] + (now.positions[o] - was.positions[o]) * t;
+                    live.warps[o] = was.warps[o] + (now.warps[o] - was.warps[o]) * t;
+                    if let Some((a, b)) = &moving[o] {
+                        live.filters[o] = Some(FilterCoefs::between(a, b, t));
+                    }
+                }
+                live.sub = (was.sub.0 + sub_far.0 * t, was.sub.1 + sub_far.1 * t);
+                live.noise = (was.noise.0 + noise_far.0 * t, was.noise.1 + noise_far.1 * t);
+                live.master = was.master + master_far * t;
+            }
+            let (sub_gain, noise_gain, master) = (live.sub, live.noise, live.master);
+            let (coefs, coefs2) = (live.filters[0].as_ref(), live.filters[1].as_ref());
             if voice.gate.tick() {
                 for env in &mut voice.envs {
                     env.release();
@@ -1208,6 +1295,8 @@ impl WaveSynth {
             let (mut wet_l, mut wet_r, mut dry_l, mut dry_r) = (0.0, 0.0, 0.0, 0.0);
             for o in 0..2 {
                 let Some(block) = &oscs[o] else { continue };
+                let gain = |u: usize| live.gains[o][u];
+                let (position, warp) = (live.positions[o], live.warps[o]);
                 let (mut l, mut r, mut mono) = (0.0, 0.0, 0.0);
                 match block.kind {
                     OscKind::Sample => {
@@ -1226,8 +1315,8 @@ impl WaveSynth {
                             }
                             let (a, b) = sample.read(*position);
                             *position += block.rates[u];
-                            l += a * block.gains[u].0;
-                            r += b * block.gains[u].1;
+                            l += a * gain(u).0;
+                            r += b * gain(u).1;
                             mono += (a + b) * 0.5;
                         }
                     }
@@ -1268,9 +1357,9 @@ impl WaveSynth {
                         }
                     }
                     OscKind::Analog => {
-                        let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * block.amount * 0.5 } else { 0.0 };
-                        let morph = block.position.clamp(0.0, 1.0) * 3.0;
-                        let width = 0.5 - block.amount.clamp(0.0, 1.0) * 0.45;
+                        let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * warp * 0.5 } else { 0.0 };
+                        let morph = position.clamp(0.0, 1.0) * 3.0;
+                        let width = 0.5 - warp.clamp(0.0, 1.0) * 0.45;
                         for u in 0..block.count {
                             let phase = voice.phases[o][u];
                             let inc = block.incs[u];
@@ -1287,13 +1376,13 @@ impl WaveSynth {
                             };
                             let next = phase + inc;
                             voice.phases[o][u] = next - next.floor();
-                            l += value * block.gains[u].0;
-                            r += value * block.gains[u].1;
+                            l += value * gain(u).0;
+                            r += value * gain(u).1;
                             mono += value;
                         }
                     }
                     OscKind::Harmonic => {
-                        let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * block.amount * 0.5 } else { 0.0 };
+                        let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * warp * 0.5 } else { 0.0 };
                         let table = &voice.harmonic[o];
                         for u in 0..block.count {
                             let phase = voice.phases[o][u];
@@ -1303,26 +1392,26 @@ impl WaveSynth {
                             let value = a + (table[(i + 1) % HARMONIC_TABLE] - a) * (x - x.floor());
                             let next = phase + block.incs[u];
                             voice.phases[o][u] = next - next.floor();
-                            l += value * block.gains[u].0;
-                            r += value * block.gains[u].1;
+                            l += value * gain(u).0;
+                            r += value * gain(u).1;
                             mono += value;
                         }
                     }
                     OscKind::Wavetable | OscKind::Spectral => {
                 let table = &tables[o];
-                let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * block.amount * 0.5 } else { 0.0 };
+                let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * warp * 0.5 } else { 0.0 };
                 for u in 0..block.count {
                     let phase = voice.phases[o][u];
-                    let read = warp_phase(block.warp, block.amount, (phase + fm).rem_euclid(1.0));
-                    let mut s = table.read(block.level, block.position, read);
-                    if block.warp == OscWarp::Quantize && block.amount > 0.0 {
-                        let steps = 2f32.powf(1.0 + (1.0 - block.amount) * 7.0);
+                    let read = warp_phase(block.warp, warp, (phase + fm).rem_euclid(1.0));
+                    let mut s = table.read(block.level, position, read);
+                    if block.warp == OscWarp::Quantize && warp > 0.0 {
+                        let steps = 2f32.powf(1.0 + (1.0 - warp) * 7.0);
                         s = (s * steps).round() / steps;
                     }
                     let next = phase + block.incs[u];
                     voice.phases[o][u] = next - next.floor();
-                    l += s * block.gains[u].0;
-                    r += s * block.gains[u].1;
+                    l += s * gain(u).0;
+                    r += s * gain(u).1;
                     mono += s;
                 }
                     }
@@ -1369,17 +1458,17 @@ impl WaveSynth {
                 }
             }
             if parallel {
-                let (c1, c2) = (coefs.as_ref().unwrap(), coefs2.as_ref().unwrap());
+                let (c1, c2) = (coefs.unwrap(), coefs2.unwrap());
                 let (a_l, a_r) = (c1.process(&mut voice.filter[0], wet_l), c1.process(&mut voice.filter[1], wet_r));
                 let (b_l, b_r) = (c2.process(&mut voice.filter2[0], wet_l), c2.process(&mut voice.filter2[1], wet_r));
                 wet_l = a_l + (b_l - a_l) * balance;
                 wet_r = a_r + (b_r - a_r) * balance;
             } else {
-                if let Some(c) = &coefs {
+                if let Some(c) = coefs {
                     wet_l = c.process(&mut voice.filter[0], wet_l);
                     wet_r = c.process(&mut voice.filter[1], wet_r);
                 }
-                if let Some(c) = &coefs2 {
+                if let Some(c) = coefs2 {
                     wet_l = c.process(&mut voice.filter2[0], wet_l);
                     wet_r = c.process(&mut voice.filter2[1], wet_r);
                 }
@@ -1678,6 +1767,55 @@ mod tests {
         let (l, _) = play(p, &[48], 48_000);
         let highs = |x: &[f32]| rms(&x.windows(2).map(|w| w[1] - w[0]).collect::<Vec<_>>());
         assert!(highs(&l[4800..19_200]) > highs(&l[28_800..43_200]) * 3.0, "open while the LFO is up");
+    }
+
+    /// How much of a held sine is the modulation's steps: what is left from
+    /// 1 to 4 kHz (the steps come 1500 times a second), against the whole.
+    fn steps(dest: usize, amount: f32, filter: bool) -> f32 {
+        let l = swept(57, dest, amount, filter);
+        let window = |i: usize| 0.5 - 0.5 * (TAU * i as f32 / 8192.0).cos();
+        let (mut re, mut im) = (l[8_000..16_192].iter().enumerate().map(|(i, v)| v * window(i)).collect::<Vec<_>>(), vec![0.0; 8192]);
+        crate::dsp::fft(&mut re, &mut im);
+        let band = |from: f32, to: f32| ((from * 8192.0 / SR) as usize..(to * 8192.0 / SR) as usize).map(|k| re[k] * re[k] + im[k] * im[k]).sum::<f32>();
+        20.0 * (band(1000.0, 4000.0) / band(20.0, 4000.0)).sqrt().log10()
+    }
+
+    /// A held `note` with an 8 Hz triangle LFO on `dest`.
+    fn swept(note: u8, dest: usize, amount: f32, filter: bool) -> Vec<f32> {
+        let mut p = WaveParams::default();
+        p.osc[0].position = 0.0;
+        p.osc[0].random_phase = 0.0;
+        p.filter.on = filter;
+        p.filter.mode = WaveFilter::Lp12;
+        p.filter.cutoff = 300.0;
+        p.lfo[0].shape = Shape::from_points(&[(0.0, 0.0, 0.0), (0.5, 1.0, 0.0), (1.0, 0.0, 0.0)]);
+        p.lfo[0].mode = LfoMode::Retrig;
+        p.lfo[0].rate = 8.0;
+        p.matrix[0] = ModSlot { source: ModSource::Lfo1, dest: dest as u8, amount, bipolar: false };
+        play(p, &[note], 24_000).0
+    }
+
+    /// What the modulation sets once per control period (levels, pans, the
+    /// place in the table, the filters) moves along the period, not in a
+    /// step at its start: the steps, 1500 a second, were a buzz 40 dB under
+    /// the note.
+    #[test]
+    fn modulation_moves_without_steps() {
+        for (name, dest, amount, filter, under) in [("nivel", 4, -1.0, false, -60.0), ("pan", 5, 1.0, false, -60.0), ("corte", FILTER, 0.5, true, -75.0), ("master", MASTER, -1.0, false, -60.0)] {
+            let heard = steps(dest, amount, filter);
+            println!("{name}: {heard:.1} dB");
+            assert!(heard < under, "{name}: {heard} dB");
+        }
+        // Moving along the table changes the wave itself, so its steps are
+        // looked for where they fall: how much the wave bends where a
+        // period starts (every 32 samples), against anywhere else, on a
+        // low note (which bends little by itself).
+        let l = swept(33, 0, 0.1, false);
+        let bend = |n: usize| (l[n] - 2.0 * l[n - 1] + l[n - 2]).abs();
+        let (at_starts, elsewhere) = (8_000..16_000).fold((0f32, 0f32), |(a, b), n| if n % CONTROL == 0 { (a.max(bend(n)), b) } else { (a, b.max(bend(n))) });
+        println!("posición: se dobla {at_starts:.5} donde empieza un periodo y {elsewhere:.5} en lo demás");
+        // (In steps it bent half as much there as at its worst elsewhere.)
+        assert!(at_starts < 0.2 * elsewhere, "{at_starts} where a period starts, {elsewhere} elsewhere");
     }
 
     #[test]

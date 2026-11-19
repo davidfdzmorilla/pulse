@@ -431,7 +431,7 @@ pub(crate) fn effect_width(effect: &Effect) -> f32 {
         Effect::Tuner(_) => (3, 1),
         Effect::DeEsser(_) => (3, 0),
         Effect::Delay(_) => (3, 1),
-        Effect::Reverb(_) => (4, 0),
+        Effect::Reverb(_) => (4, 1),
         // Space and presets, the drawing, then Decay and Size and the five knobs.
         Effect::Convolution(_) => return 7.0 * 52.0 + 100.0 + SKETCH.x + 32.0,
         Effect::Saturator(_) => (3, 0),
@@ -976,13 +976,17 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 ui.checkbox(&mut p.steep, "24 dB").on_hover_text(tr("Separa las bandas con 24 dB por octava: una banda bajada del todo desaparece de verdad, como en una mesa de DJ. Sin marcar, 12 dB por octava: más suave, y una banda bajada del todo aún deja pasar algo"));
             });
         }
+        Effect::Reverb(p) => {
+            ui.vertical(|ui| {
+                ui.checkbox(&mut p.dense, tr("Densa")).on_hover_text(tr("La reverb nueva: la cola se espesa enseguida y no tiene timbre metálico. Sin marcar, la reverb clásica de Pulse, la que llevan los proyectos y los sonidos anteriores"));
+            });
+        }
         Effect::EqEight(_)
         | Effect::Multiband(_)
         | Effect::Compressor(_)
         | Effect::Gate(_)
         | Effect::Transient(_)
         | Effect::DeEsser(_)
-        | Effect::Reverb(_)
         | Effect::Chorus(_)
         | Effect::Phaser(_)
         | Effect::Bitcrusher(_)

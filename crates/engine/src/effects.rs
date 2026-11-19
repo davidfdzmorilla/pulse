@@ -642,11 +642,204 @@ impl Allpass {
     }
 }
 
-/// Freeverb-style Schroeder/Moorer reverb.
+/// A delay line read a fixed or a moving time back.
+struct Line {
+    buffer: Vec<f32>,
+    write: usize,
+}
+
+impl Line {
+    fn new(len: usize) -> Self {
+        Self { buffer: vec![0.0; len.max(2)], write: 0 }
+    }
+
+    /// What went in `delay` samples ago (at least 1, under its length).
+    #[inline]
+    fn read(&self, delay: usize) -> f32 {
+        let len = self.buffer.len();
+        self.buffer[(self.write + len - delay) % len]
+    }
+
+    /// The same at a time between two samples.
+    #[inline]
+    fn read_between(&self, delay: f32) -> f32 {
+        let whole = delay as usize;
+        let (a, b) = (self.read(whole), self.read(whole + 1));
+        a + (b - a) * (delay - whole as f32)
+    }
+
+    #[inline]
+    fn push(&mut self, x: f32) {
+        self.buffer[self.write] = x;
+        self.write = (self.write + 1) % self.buffer.len();
+    }
+
+    fn clear(&mut self) {
+        self.buffer.fill(0.0);
+        self.write = 0;
+    }
+}
+
+/// A diffusing allpass: it smears a hit into a burst without colouring it.
+struct Diffuser {
+    line: Line,
+    delay: usize,
+}
+
+impl Diffuser {
+    const GAIN: f32 = 0.6;
+
+    fn new(delay: usize) -> Self {
+        Self { line: Line::new(delay + 1), delay: delay.max(1) }
+    }
+
+    #[inline]
+    fn tick(&mut self, x: f32) -> f32 {
+        let delayed = self.line.read(self.delay);
+        let into = x + Self::GAIN * delayed;
+        self.line.push(into);
+        delayed - Self::GAIN * into
+    }
+}
+
+/// The dense reverb: both sides diffused, then eight delay lines that feed
+/// each other through a Hadamard matrix (every echo comes back on all of
+/// them, so the tail thickens at once and has no pitch of its own). Half of
+/// the lines drift slowly, which keeps a long tail from ringing.
+struct Dense {
+    diffusers: [[Diffuser; DENSE_DIFFUSERS]; 2],
+    lines: [Line; DENSE_LINES],
+    /// Each line's length (samples), and the damping filter's state.
+    lengths: [f32; DENSE_LINES],
+    damped: [f32; DENSE_LINES],
+    /// The drifting lines' place in their cycle (0..1) and step per sample.
+    phases: [f32; DENSE_LINES / 2],
+    rates: [f32; DENSE_LINES / 2],
+    /// How far they drift, samples.
+    depth: f32,
+    sr: f32,
+    mix: Glide,
+    width: Glide,
+}
+
+const DENSE_LINES: usize = 8;
+const DENSE_DIFFUSERS: usize = 4;
+/// The lines' lengths, ms: none a multiple of another, so their echoes
+/// never pile up.
+const DENSE_MS: [f32; DENSE_LINES] = [31.71, 37.13, 41.87, 47.29, 53.93, 59.27, 67.09, 73.69];
+/// Each side's diffusers, ms.
+const DENSE_DIFFUSE_MS: [[f32; DENSE_DIFFUSERS]; 2] = [[8.93, 6.11, 4.27, 2.13], [9.41, 5.83, 4.51, 1.97]];
+/// The drift of every other line: cycles per second, and how far (ms).
+const DENSE_DRIFT_HZ: [f32; DENSE_LINES / 2] = [0.31, 0.47, 0.73, 1.07];
+const DENSE_DRIFT_MS: f32 = 0.12;
+/// How much of the diffused sound goes straight out: the first
+/// reflections, before the lines' echoes arrive.
+const DENSE_EARLY: f32 = 0.35;
+
+impl Dense {
+    fn new(params: ReverbParams, sr: f32) -> Self {
+        let samples = |ms: f32| (ms * 0.001 * sr).round();
+        let depth = DENSE_DRIFT_MS * 0.001 * sr;
+        Self {
+            diffusers: DENSE_DIFFUSE_MS.map(|side| side.map(|ms| Diffuser::new(samples(ms) as usize))),
+            lines: DENSE_MS.map(|ms| Line::new(samples(ms) as usize + 2 * depth as usize + 4)),
+            lengths: DENSE_MS.map(samples),
+            damped: [0.0; DENSE_LINES],
+            phases: [0.0, 0.25, 0.5, 0.75],
+            rates: DENSE_DRIFT_HZ.map(|hz| hz / sr),
+            depth,
+            sr,
+            mix: Glide::new(params.mix),
+            width: Glide::new(params.width),
+        }
+    }
+
+    fn reset(&mut self, params: ReverbParams) {
+        self.diffusers.iter_mut().flatten().for_each(|d| d.line.clear());
+        self.lines.iter_mut().for_each(Line::clear);
+        self.damped = [0.0; DENSE_LINES];
+        self.phases = [0.0, 0.25, 0.5, 0.75];
+        self.mix = Glide::new(params.mix);
+        self.width = Glide::new(params.width);
+    }
+
+    /// Seconds the tail takes to fall 60 dB at `size`: what the classic
+    /// reverb's Size gives (0.6 s at the bottom, 10 s at the top).
+    fn decay(size: f32) -> f32 {
+        3.0 * 0.0312 / -(0.7 + 0.28 * size.clamp(0.0, 1.0)).log10()
+    }
+
+    fn process(&mut self, l: &mut [f32], r: &mut [f32], p: ReverbParams) {
+        let seconds = Self::decay(p.size);
+        // Each line loses what its length takes of the decay; the highs up
+        // to five times sooner with the damping all the way up.
+        let highs = 4.0 * p.damping.clamp(0.0, 1.0);
+        let mut gains = [0f32; DENSE_LINES];
+        let mut damps = [0f32; DENSE_LINES];
+        for i in 0..DENSE_LINES {
+            gains[i] = 10f32.powf(-3.0 * self.lengths[i] / (self.sr * seconds));
+            let top = gains[i].powf(highs);
+            damps[i] = (1.0 - top) / (1.0 + top);
+        }
+        let norm = (DENSE_LINES as f32).sqrt().recip();
+        for (a, b) in l.iter_mut().zip(r.iter_mut()) {
+            let (mut left, mut right) = (*a, *b);
+            for k in 0..DENSE_DIFFUSERS {
+                left = self.diffusers[0][k].tick(left);
+                right = self.diffusers[1][k].tick(right);
+            }
+            let mut v = [0f32; DENSE_LINES];
+            for i in 0..DENSE_LINES {
+                let out = if i % 2 == 0 {
+                    self.lines[i].read(self.lengths[i] as usize)
+                } else {
+                    let k = i / 2;
+                    self.phases[k] += self.rates[k];
+                    if self.phases[k] >= 1.0 {
+                        self.phases[k] -= 1.0;
+                    }
+                    // A parabola each half cycle: close to a sine, -1..1.
+                    let t = 2.0 * self.phases[k] - 1.0;
+                    let drift = 4.0 * t * (1.0 - t.abs());
+                    self.lines[i].read_between(self.lengths[i] + self.depth * (1.0 + drift))
+                };
+                self.damped[i] = out + damps[i] * (self.damped[i] - out);
+                v[i] = self.damped[i] * gains[i];
+            }
+            let (wet_l, wet_r) = (v[0] - v[3] + v[4] - v[7] + DENSE_EARLY * left, v[1] - v[2] + v[5] - v[6] + DENSE_EARLY * right);
+            // The Hadamard matrix, as three rounds of sums and differences.
+            let mut span = 1;
+            while span < DENSE_LINES {
+                for i in (0..DENSE_LINES).step_by(2 * span) {
+                    for j in i..i + span {
+                        let (x, y) = (v[j], v[j + span]);
+                        v[j] = x + y;
+                        v[j + span] = x - y;
+                    }
+                }
+                span *= 2;
+            }
+            for i in 0..DENSE_LINES {
+                let dry = if i < DENSE_LINES / 2 { left } else { right };
+                self.lines[i].push(v[i] * norm + dry);
+            }
+            let (mix, width) = (self.mix.next(p.mix), self.width.next(p.width));
+            let (wet1, wet2) = (0.5 * (1.0 + width), 0.5 * (1.0 - width));
+            *a += (wet_l * wet1 + wet_r * wet2 - *a) * mix;
+            *b += (wet_r * wet1 + wet_l * wet2 - *b) * mix;
+        }
+    }
+}
+
+/// The reverb: the dense one, or the classic Freeverb-style
+/// Schroeder/Moorer one (see [`ReverbParams::dense`]).
 pub struct Reverb {
     params: ReverbParams,
     combs: [Vec<Comb>; 2],
     allpasses: [Vec<Allpass>; 2],
+    dense: Dense,
+    /// Which one it ran last: the other starts from silence.
+    was_dense: bool,
 }
 
 impl Reverb {
@@ -663,11 +856,33 @@ impl Reverb {
             params,
             combs,
             allpasses,
+            dense: Dense::new(params, sr),
+            was_dense: params.dense,
         }
+    }
+
+    fn reset(&mut self) {
+        for comb in self.combs.iter_mut().flatten() {
+            comb.buffer.fill(0.0);
+            comb.index = 0;
+            comb.store = 0.0;
+        }
+        for allpass in self.allpasses.iter_mut().flatten() {
+            allpass.buffer.fill(0.0);
+            allpass.index = 0;
+        }
+        self.dense.reset(self.params);
     }
 
     fn process(&mut self, l: &mut [f32], r: &mut [f32]) {
         let p = self.params;
+        if p.dense != self.was_dense {
+            self.was_dense = p.dense;
+            self.reset();
+        }
+        if p.dense {
+            return self.dense.process(l, r, p);
+        }
         let feedback = 0.7 + 0.28 * p.size.clamp(0.0, 1.0);
         let damp = 0.4 * p.damping.clamp(0.0, 1.0);
         let wet1 = 0.5 * (1.0 + p.width);
@@ -2041,17 +2256,7 @@ impl EffectProcessor {
                 fx.fade = 0;
                 fx.damping = [0.0; 2];
             }
-            Self::Reverb(fx) => {
-                for comb in fx.combs.iter_mut().flatten() {
-                    comb.buffer.fill(0.0);
-                    comb.index = 0;
-                    comb.store = 0.0;
-                }
-                for allpass in fx.allpasses.iter_mut().flatten() {
-                    allpass.buffer.fill(0.0);
-                    allpass.index = 0;
-                }
-            }
+            Self::Reverb(fx) => fx.reset(),
             Self::Convolution(fx) => fx.reset(),
             Self::AutoFilter(fx) => {
                 fx.filters = Default::default();
@@ -3115,6 +3320,85 @@ mod tests {
             let steepest = std::iter::once(&from).chain(&turned).collect::<Vec<_>>().windows(2).fold(0f32, |m, w| m.max((w[1] - w[0]).abs()));
             assert!(steepest < (to - from).abs() / 30.0, "{name}: a step of {steepest} on the way from {from} to {to}");
         }
+    }
+
+    /// The dense reverb: as long and as loud as the classic one at the same
+    /// knobs, with a tail that is noise and not a handful of echoes ringing
+    /// (its samples spread as a bell curve does: a kurtosis near 3). It
+    /// sounds the same whatever the blocks, dies out, and a saved Reverb
+    /// that says nothing is the classic one.
+    #[test]
+    fn the_dense_reverb_has_a_smooth_tail() {
+        use crate::model::ReverbParams;
+        let sr = 48_000.0f32;
+        let mut seed = 12345u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / 8388608.0 - 1.0
+        };
+        let x: Vec<f32> = (0..2 * 48_000).map(|_| noise() * 0.25).collect();
+        let run = |p: ReverbParams, input: &[f32], n: usize, block: usize| {
+            let mut fx = EffectProcessor::new(&Effect::Reverb(p), sr);
+            let mut l = input.to_vec();
+            l.resize(n, 0.0);
+            let mut r = l.clone();
+            for (a, b) in l.chunks_mut(block).zip(r.chunks_mut(block)) {
+                fx.process(a, b, &ctx());
+            }
+            (l, r)
+        };
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        let wet = |dense: bool, size: f32| ReverbParams { size, mix: 1.0, dense, ..Default::default() };
+        // As loud: a steady noise through each.
+        let level = |dense: bool| 20.0 * (rms(&run(wet(dense, 0.75), &x, x.len(), 256).0[48_000..]) / rms(&x[48_000..])).log10();
+        let (classic, dense) = (level(false), level(true));
+        println!("ruido continuo: clásica {classic:+.1} dB, densa {dense:+.1} dB");
+        assert!((classic - dense).abs() < 2.0, "{classic} {dense}");
+        // As long: the time a burst's tail takes to fall 30 dB.
+        for size in [0.25, 0.5, 0.75] {
+            let fall = |dense: bool| {
+                let (tail, _) = run(wet(dense, size), &x[..9600], 4 * 48_000, 256);
+                let levels: Vec<f32> = tail.chunks(1200).map(|c| 20.0 * rms(c).max(1e-12).log10()).collect();
+                levels.iter().skip(8).position(|&v| v < levels[8] - 30.0).expect("it never fell") as f32 * 1200.0 / sr
+            };
+            let (classic, dense) = (fall(false), fall(true));
+            println!("size {size}: cae 30 dB en {classic:.2} s (clásica) y {dense:.2} s (densa); el knob pide {:.2} s", Dense::decay(size) / 2.0);
+            assert!((dense / (Dense::decay(size) / 2.0) - 1.0).abs() < 0.3, "size {size}: {dense} s");
+        }
+        // A smooth tail: an impulse's, between 100 and 200 ms and later on.
+        let kurtosis = |dense: bool, from: usize, to: usize| {
+            let (h, _) = run(ReverbParams { damping: 0.0, ..wet(dense, 0.75) }, &[1.0], 48_000, 256);
+            let s = &h[from..to];
+            let m2 = s.iter().map(|v| v * v).sum::<f32>() / s.len() as f32;
+            s.iter().map(|v| v.powi(4)).sum::<f32>() / s.len() as f32 / (m2 * m2)
+        };
+        for (from, to) in [(4_800, 9_600), (24_000, 36_000)] {
+            let (classic, dense) = (kurtosis(false, from, to), kurtosis(true, from, to));
+            println!("cola de {} a {} ms: curtosis {classic:.1} (clásica), {dense:.1} (densa)", from / 48, to / 48);
+            assert!(dense < 4.5 && dense < classic - 1.0, "{classic} {dense}");
+        }
+        // The same whatever the blocks.
+        assert_eq!(run(wet(true, 0.75), &x, x.len(), 64), run(wet(true, 0.75), &x, x.len(), 500));
+        // At the longest it still dies out.
+        let (tail, _) = run(wet(true, 1.0), &x[..9600], 40 * 48_000, 512);
+        let end = rms(&tail[39 * 48_000..]);
+        assert!(end < 1e-4 && end.is_finite(), "{end}");
+        // Switching between the two starts the other from silence.
+        let mut fx = EffectProcessor::new(&Effect::Reverb(wet(true, 0.75)), sr);
+        let (mut l, mut r) = (x.clone(), x.clone());
+        fx.process(&mut l, &mut r, &ctx());
+        fx.set_params(&Effect::Reverb(wet(false, 0.75)));
+        fx.process(&mut [0.0; 256], &mut [0.0; 256], &ctx());
+        fx.set_params(&Effect::Reverb(wet(true, 0.75)));
+        let (mut l, mut r) = ([0.0f32; 256], [0.0f32; 256]);
+        fx.process(&mut l, &mut r, &ctx());
+        assert_eq!(l, [0.0; 256], "no old tail");
+        // A new one is dense; a saved one that says nothing is the classic.
+        assert!(ReverbParams::default().dense);
+        let saved: ReverbParams = serde_json::from_str(r#"{"size":0.75,"damping":0.5,"width":1.0,"mix":0.3}"#).unwrap();
+        assert_eq!(saved, ReverbParams::classic());
+        let again: ReverbParams = serde_json::from_str(&serde_json::to_string(&ReverbParams::default()).unwrap()).unwrap();
+        assert!(again.dense);
     }
 
     /// A loud voice doesn't set the De-esser off: a strong 500 Hz tone with

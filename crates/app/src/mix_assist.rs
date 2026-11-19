@@ -4322,6 +4322,14 @@ mod tests {
         app.project.tracks[0].mixer.active = false;
         app.project.tracks[2].mixer.gain *= 4.0;
         app.project.tracks[3].mixer.gain *= 0.1;
+        // With the classic reverb on the return, the mix ends quiet enough
+        // to need the master's limiter (the step this test wants to see);
+        // with the dense one it lands within 1 LU of the target without it.
+        for device in &mut app.project.returns[0].devices {
+            if let Effect::Reverb(p) = &mut device.effect {
+                p.dense = false;
+            }
+        }
         for t in &mut app.project.tracks {
             t.sends = [0.0; MAX_RETURNS];
         }

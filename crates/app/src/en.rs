@@ -225,6 +225,8 @@ pub const EN: &[(&str, &str)] = &[
     ("Fase", "Phase"),
     ("Invertir R", "Invert R"),
     ("Pendiente", "Slope"),
+    ("Densa", "Dense"),
+    ("La reverb nueva: la cola se espesa enseguida y no tiene timbre metálico. Sin marcar, la reverb clásica de Pulse, la que llevan los proyectos y los sonidos anteriores", "The new reverb: the tail thickens at once and has no metallic ring. Unticked, Pulse's classic reverb, the one earlier projects and sounds have"),
     ("Separa las bandas con 24 dB por octava: una banda bajada del todo desaparece de verdad, como en una mesa de DJ. Sin marcar, 12 dB por octava: más suave, y una banda bajada del todo aún deja pasar algo", "Splits the bands 24 dB an octave apart: a band turned all the way down is really gone, as on a DJ mixer. Unticked, 12 dB an octave: gentler, and a band turned all the way down still lets some through"),
     ("Da la vuelta al canal derecho: arregla una pista grabada con un canal al revés, que en mono casi desaparece", "Flips the right channel: fixes a track recorded with one channel reversed, which almost disappears in mono"),
     ("Del proyecto", "Project's"),

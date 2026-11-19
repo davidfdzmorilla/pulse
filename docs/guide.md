@@ -2423,13 +2423,13 @@ Makes the track **pump**: it drops the volume and brings it back, in time.
 - **Chorus**: doubles the sound with small variations; widens it and makes it move.
 - **Phaser**: a swirling sweep, like a whirlpool.
 - **Delay**: echo with a synced time (from 1/16 to one bar), **Ping Pong** (bounces from side to side), feedback (how many repeats) and filter.
-- **Reverb**: room, with size, damping and width.
+- **Reverb**: room, with size, damping and width. With **Dense** (how a new one comes) the tail thickens at once and doesn't sound metallic; unticked it is Pulse's classic reverb, the one earlier projects, templates and factory sounds keep. Both last as long and sound as loud at the same knobs.
 
 +++ All parameters
 - Chorus: Rate 0.05–5 Hz, Depth, Delay 2–20 ms, Dry/Wet.
 - Phaser: Rate 0.05–8 Hz, Depth, Freq 100–4000 Hz, Feedback, Dry/Wet.
 - Delay: Feedback (up to 95 %), Filter 500–18,000 Hz, Dry/Wet.
-- Reverb: Size, Damping, Width, Dry/Wet.
+- Reverb: Size (a tail of 0.6 to 10 s), Damping, Width, Dry/Wet, and the Dense checkbox.
 +++
 
 #### Space (convolution reverb)

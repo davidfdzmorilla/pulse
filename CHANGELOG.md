@@ -91,6 +91,10 @@ still in `0.x`, so any release may change things.
 - Wavetable Synth, Polychrome Synth and Modular Synth: switching one of
   their own effects on or off no longer clicks (it cross-fades for 10 ms),
   and an effect switched off forgets its tail, as a track's effects do.
+- Delay: choosing another time, or a jump of the tempo, no longer squeals
+  (the echoes played several times faster or backwards on the way). It
+  fades from the old echo to the new one in 50 ms. A slow tempo ramp still
+  bends the echoes a little, as before.
 - Settings → Audio: the **Cores for audio** list shows every choice
   without scrolling (on a 10-core Mac the last one was hidden).
 - EQ Eight: moving a band's frequency, gain or Q, or automating it, no

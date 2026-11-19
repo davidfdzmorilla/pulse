@@ -954,7 +954,7 @@ impl Project {
                 sustain: 0.8,
                 release: 0.4,
                 gain: 0.3,
-                ..Default::default()
+                ..SuperSawParams::old()
             }),
         );
         let chords: [[u8; 3]; 4] = [[57, 60, 64], [53, 57, 60], [55, 60, 64], [55, 59, 62]];

@@ -918,6 +918,7 @@ impl Project {
             release_ms: 90.0,
             makeup_db: 1.5,
             sidechain: None,
+            detector: false,
         })));
 
         let mut bass = Track::new("Bass", bass_color, InstrumentKind::Acid(AcidParams::default()));

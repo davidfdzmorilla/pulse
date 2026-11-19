@@ -808,7 +808,7 @@ pub fn compression(t: &TrackMeasures, tempo: f64) -> Option<CompressorParams> {
     let note = if t.role == Role::Bass { 0.5 } else { 0.25 };
     let release = (note * 60.0 / tempo.max(1.0) * 1000.0).clamp(50.0, 250.0) as f32;
     let round = |x: f32| (x * 2.0).round() / 2.0;
-    Some(CompressorParams { threshold_db: round(threshold), ratio, attack_ms, release_ms: release.round(), makeup_db: round(reduce * 0.5), sidechain: None })
+    Some(CompressorParams { threshold_db: round(threshold), ratio, attack_ms, release_ms: release.round(), makeup_db: round(reduce * 0.5), sidechain: None, detector: false })
 }
 
 /// A bus compressor to start from (a Glue): on a drum group, «Bus de

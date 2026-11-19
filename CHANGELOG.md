@@ -102,6 +102,11 @@ still in `0.x`, so any release may change things.
   sounding (all voices busy, the Modular's polyphony all in use, or a mono
   patch played again) no longer clicks, and the Super Saw takes a voice
   already released before a key still held.
+- Compressor: a new Compressor follows the level of the sound and takes
+  off what its ratio says (20:1 on a steady tone measured 9:1 before, and
+  now 19.5:1). Compressors already in a project, and those in the factory
+  sounds, chains and templates and the ones the mix assistant sets, work
+  as before.
 - In English, factory sounds on pads, drum rows and samplers, and factory
   chains in the browser, show their English names; "1 bar", "1 voice" and
   "1 cent" in the singular (the modular's "1 voz" in Spanish too); lessons

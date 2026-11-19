@@ -2324,6 +2324,12 @@ pub struct CompressorParams {
     /// Sidechain: the track (by its id) whose sound it listens to, instead of its own.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sidechain: Option<u32>,
+    /// It follows the level of the sound (its peaks, falling with the
+    /// release), so it takes off what the ratio says. Without it (a
+    /// Compressor made before this), it follows every sample of the wave,
+    /// lets go between its crests and takes off less than the ratio says.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub detector: bool,
 }
 
 impl Default for CompressorParams {
@@ -2335,7 +2341,17 @@ impl Default for CompressorParams {
             release_ms: 120.0,
             makeup_db: 0.0,
             sidechain: None,
+            detector: true,
         }
+    }
+}
+
+impl CompressorParams {
+    /// A Compressor as they were before the level detector (see
+    /// [`Self::detector`]): what the factory sounds, chains and templates
+    /// and the mix assistant's settings were made with.
+    pub fn old() -> Self {
+        Self { detector: false, ..Self::default() }
     }
 }
 
@@ -5949,7 +5965,7 @@ impl WaveParams {
         let steps = Shape::from_points(&[(0.0, 0.1, 0.0), (0.249, 0.1, 0.0), (0.25, 0.8, 0.0), (0.499, 0.8, 0.0), (0.5, 0.35, 0.0), (0.749, 0.35, 0.0), (0.75, 1.0, 0.0), (1.0, 1.0, 0.0)]);
         let hard = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.6, kind: KickDrive::Hard, oversample: true, ..SaturatorParams::default() }));
         let tube = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, kind: KickDrive::Tube, ..SaturatorParams::default() }));
-        let glue = fx(Effect::Compressor(CompressorParams { threshold_db: -16.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 2.0, ..CompressorParams::default() }));
+        let glue = fx(Effect::Compressor(CompressorParams { threshold_db: -16.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 2.0, ..CompressorParams::old() }));
         let phaser = |rate: f32, mix: f32| fx(Effect::Phaser(PhaserParams { rate, depth: 0.6, center: 700.0, feedback: 0.45, mix }));
         let duck = |depth: f32| fx(Effect::Ducker(DuckerParams { depth, release: 0.55, rate_beats: 1.0, ..DuckerParams::default() }));
         let wide_chorus = fx(Effect::Chorus(ChorusParams { rate: 0.35, depth: 0.6, delay_ms: 12.0, mix: 0.45 }));

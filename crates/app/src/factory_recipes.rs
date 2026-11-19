@@ -246,7 +246,7 @@ fn transient(attack: f32, sustain: f32) -> Effect {
 }
 
 fn squeeze(threshold_db: f32, ratio: f32, attack_ms: f32, release_ms: f32) -> Effect {
-    Effect::Compressor(CompressorParams { threshold_db, ratio, attack_ms, release_ms, makeup_db: 0.0, sidechain: None })
+    Effect::Compressor(CompressorParams { threshold_db, ratio, attack_ms, release_ms, makeup_db: 0.0, sidechain: None, detector: false })
 }
 
 fn echo(time_beats: f64, feedback: f32, mix: f32, filter_hz: f32) -> Effect {

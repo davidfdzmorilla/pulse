@@ -143,7 +143,7 @@ pub fn factory() -> Vec<Chain> {
                 eq(&[(0, EqShape::LowCut48, 90.0, 0.0), (4, EqShape::Bell, 3000.0, 2.0), (6, EqShape::HighShelf, 10_000.0, 2.5)]),
                 // Makeup for what the compressor, the de-esser and the sends take: the
                 // voice comes out as loud as it went in (measured on a spoken voice).
-                Effect::Compressor(CompressorParams { threshold_db: -20.0, ratio: 4.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 7.5, sidechain: None }),
+                Effect::Compressor(CompressorParams { threshold_db: -20.0, ratio: 4.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 7.5, sidechain: None, detector: false }),
                 Effect::DeEsser(DeEsserParams::default()),
                 ott("Voces · Voz de cerca"),
                 Effect::Delay(DelayParams { time_beats: 0.5, feedback: 0.25, mix: 0.12, ping_pong: true, filter_hz: 4000.0 }),
@@ -155,7 +155,7 @@ pub fn factory() -> Vec<Chain> {
             vec![
                 eq(&[(0, EqShape::LowCut48, 350.0, 0.0), (3, EqShape::Bell, 1500.0, 5.0), (7, EqShape::HighCut48, 3500.0, 0.0)]),
                 Effect::Saturator(SaturatorParams { drive_db: 12.0, output_db: -6.0, mix: 1.0, kind: KickDrive::Tube, oversample: false }),
-                Effect::Compressor(CompressorParams { threshold_db: -26.0, ratio: 8.0, attack_ms: 2.0, release_ms: 60.0, makeup_db: 10.5, sidechain: None }),
+                Effect::Compressor(CompressorParams { threshold_db: -26.0, ratio: 8.0, attack_ms: 2.0, release_ms: 60.0, makeup_db: 10.5, sidechain: None, detector: false }),
                 Effect::Utility(UtilityParams { width: 0.0, ..Default::default() }),
                 // The compressor's makeup and the saturator's edge left a hot voice
                 // over 0 dBFS: held at -1 dB of true peak.

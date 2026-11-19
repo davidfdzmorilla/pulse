@@ -2253,7 +2253,7 @@ Si haces clic en un instrumento del navegador, sustituye al de la pista MIDI sel
 
 | Efecto | Para qué sirve |
 |---|---|
-| **EQ Three** | Subir o bajar graves, medios y agudos, rápido. |
+| **EQ Three** | Subir o bajar graves, medios y agudos, rápido. Con **24 dB** marcado, una banda bajada del todo desaparece de verdad, como en una mesa de DJ. |
 | **EQ Eight** | Ecualizar con precisión: quitar graves que sobran, una frecuencia que pita, dar brillo. |
 | **Compressor** | Igualar lo fuerte y lo suave para que la pista no se pierda ni salte. |
 | **Compresor de bus** | Pegar una batería, un grupo o la mezcla entera (ver [[Compresor de bus]]). |

@@ -326,7 +326,7 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
     let mut vocal = Track::new_audio(named("Voz"), color(0));
     vocal.mixer.gain = 0.5;
     vocal.sends[..2].copy_from_slice(&[0.3, 0.22]);
-    vocal.devices.push(Device::new(Effect::Eq3(engine::model::Eq3Params { low_db: -6.0, high_db: 2.0, low_freq: 150.0, ..Default::default() })));
+    vocal.devices.push(Device::new(Effect::Eq3(engine::model::Eq3Params { low_db: -6.0, high_db: 2.0, low_freq: 150.0, ..engine::model::Eq3Params::gentle() })));
     vocal.devices.push(Device::new(Effect::Compressor(engine::model::CompressorParams { threshold_db: -20.0, ratio: 3.0, attack_ms: 5.0, release_ms: 80.0, makeup_db: 4.0, sidechain: None, detector: false })));
     let beats = seconds * TEMPO / 60.0;
     vocal.clips[BREAK] = Some(audio_clip(named("Voz principal"), color(0), voice, beats, WarpMode::Off));

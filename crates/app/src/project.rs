@@ -989,6 +989,7 @@ impl Project {
                 decay: 1.5,
                 release: 0.8,
                 gain: 0.2,
+                feedback_smooth: false,
                 ..Default::default()
             }),
         );

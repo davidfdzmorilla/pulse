@@ -423,7 +423,7 @@ pub(crate) fn apply(app: &mut PulseApp, target: Target, actions: Vec<Action>) {
 pub(crate) fn effect_width(effect: &Effect) -> f32 {
     // Knobs are 46 px wide plus spacing; option columns (combos, radios) take about 96 px.
     let (knobs, columns) = match effect {
-        Effect::Eq3(_) => (5, 0),
+        Effect::Eq3(_) => (5, 1),
         Effect::EqEight(_) => return crate::eq_ui::WIDTH,
         Effect::Compressor(_) => (5, 1),
         Effect::Gate(_) => (6, 1),
@@ -970,8 +970,13 @@ pub(crate) fn discrete_controls(ui: &mut egui::Ui, effect: &mut Effect, index: u
                 ui.label("32 ms").on_hover_text(tr("Lo que tarda en sonar, con cualquier ajuste: Pulse retrasa lo mismo las demás pistas para que todo siga a tiempo"));
             });
         }
-        Effect::Eq3(_)
-        | Effect::EqEight(_)
+        Effect::Eq3(p) => {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new(tr("Pendiente")).color(TEXT_DIM).size(10.5));
+                ui.checkbox(&mut p.steep, "24 dB").on_hover_text(tr("Separa las bandas con 24 dB por octava: una banda bajada del todo desaparece de verdad, como en una mesa de DJ. Sin marcar, 12 dB por octava: más suave, y una banda bajada del todo aún deja pasar algo"));
+            });
+        }
+        Effect::EqEight(_)
         | Effect::Multiband(_)
         | Effect::Compressor(_)
         | Effect::Gate(_)

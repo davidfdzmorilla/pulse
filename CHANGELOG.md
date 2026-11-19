@@ -22,6 +22,11 @@ still in `0.x`, so any release may change things.
 
 ### Added
 
+- EQ Three: a **24 dB** switch. With it, the bands are split 24 dB an
+  octave apart and a band turned all the way down is really gone, as on a
+  DJ mixer (before, it still leaked 6 dB an octave). A new EQ Three comes
+  with it on. Those already in a project, in the templates and the ones
+  the mix assistant adds keep the gentle 12 dB bands.
 - Settings → Audio: **Cores for audio**, how many cores the engine spreads
   the tracks across (Automatic by default, as before).
 - Launch documentation: English `README.md` (Spanish in `README.es.md`),
@@ -83,8 +88,14 @@ still in `0.x`, so any release may change things.
   random, glide, the Super Saw's filter envelope) plays the same whatever
   the sound card's buffer size. Before, it could change with buffers that
   aren't a multiple of 32 samples.
+- Wavetable Synth, Polychrome Synth and Modular Synth: switching one of
+  their own effects on or off no longer clicks (it cross-fades for 10 ms),
+  and an effect switched off forgets its tail, as a track's effects do.
 - Settings → Audio: the **Cores for audio** list shows every choice
   without scrolling (on a 10-core Mac the last one was hidden).
+- EQ Eight: moving a band's frequency, gain or Q, or automating it, no
+  longer makes zipper noise. The band glides to the new place in about
+  8 ms.
 - Layout: the Drum Machine device keeps the device panel's height (rows 3–4
   of its sounds fell below it): two rows of four in sight, the other eight a
   scroll below, with the machine choice in a column beside them; the Keyboard
@@ -92,6 +103,10 @@ still in `0.x`, so any release may change things.
   smaller; an audio clip's envelope lane reads "None" instead of
   "Velocity"; the shortcuts window writes "Select all the clip's notes" and
   "Enter or leave full screen" in sentence case, like its other rows.
+- De-esser: a new De-esser is set off only by esses. Before, a loud voice
+  could set it off on its vowels, and it took their highs down too.
+  De-essers already in a project, and the one the mix assistant adds,
+  work as before.
 - In English, the mix assistant and the master meter write decimals with a
   point ("-13.3 LUFS") and track names in plain quotes.
 - Wavetable Synth, Polychrome, FM Synth, Sampler, Drum Rack and the basic
@@ -111,6 +126,10 @@ still in `0.x`, so any release may change things.
   chains in the browser, show their English names; "1 bar", "1 voice" and
   "1 cent" in the singular (the modular's "1 voz" in Spanish too); lessons
   no longer name buttons in Spanish.
+- FM Synth: on a new FM Synth, Feedback stays a clean pitched sound up to
+  half of its range and gets rougher from there. Before, it turned to
+  noise above about a third. Factory sounds and FM Synths already in a
+  project keep the feedback they had.
 - Audio to MIDI (Basic Pitch): the start of a note could move by one frame
   (≈12 ms) depending on the processor or the number of threads, when the
   largest jump and the onset peak fell on neighbouring frames. It's now the

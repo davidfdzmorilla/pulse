@@ -276,6 +276,8 @@ pub(crate) fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, b
                 if warp != osc.warp {
                     let mut p = base;
                     p.osc[o].warp = warp;
+                    // A warp chosen now is the clean one (see `WaveOsc::clean`).
+                    p.osc[o].clean = true;
                     set(actions, p);
                 }
                 knob(app, ui, t, k(12), "Amount", 24.0, actions);

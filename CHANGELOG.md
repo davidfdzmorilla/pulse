@@ -67,6 +67,13 @@ still in `0.x`, so any release may change things.
   ate headroom). Drive, Output and Dry/Wet glide when turned instead of
   stepping. Those already in a project, in the templates, the chains and
   the factory sounds keep the sound they had.
+- Wavetable Synth and Polychrome Synth: the warps of a new sound (**Sync**,
+  **Bend+**, **Bend-**, **PWM**, **Mirror**) stay clean on high notes.
+  Before, a warped wave folded back from the top of the band as a harsh,
+  out-of-tune dirt (a few dB under the note with Sync high up); now it is
+  20 to 30 dB lower. The factory sounds and the ones already in a project
+  keep the warp they had; choosing the warp again in its list gives the
+  new one.
 - Acid Bass: the filter of a new Acid resonates on its cutoff all the way
   up a sweep. Before, the resonance went sharp as the cutoff rose (three
   semitones at 10 kHz) and, with an accent throwing the cutoff to the top,

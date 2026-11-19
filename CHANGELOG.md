@@ -100,6 +100,11 @@ still in `0.x`, so any release may change things.
 
 ### Fixed
 
+- Wavetable Synth and Polychrome Synth: modulating a level, a pan, the
+  position in the table, the warp, the filter or the master no longer buzzes. The
+  modulation is worked out 1500 times a second and those values jumped
+  each time, which left a buzz some 40 dB under the note; now they move
+  smoothly from one to the next.
 - Modular Synth and Super Saw: a sound with modulation (LFOs, envelopes,
   random, glide, the Super Saw's filter envelope) plays the same whatever
   the sound card's buffer size. Before, it could change with buffers that

@@ -1926,7 +1926,9 @@ impl FmParams {
             ("Textura · Inarmónica", FmParams { ratio: 2.71, index: 5.0, mod_decay: 3.0, mod_sustain: 0.5, feedback: 0.0, attack: 0.6, decay: 2.0, sustain: 0.7, release: 2.0, gain: 0.183 }),
             ("Textura · Metal oxidado", FmParams { ratio: 0.73, index: 7.0, mod_decay: 2.0, mod_sustain: 0.6, feedback: 0.5, attack: 0.3, decay: 3.0, sustain: 0.6, release: 2.0, gain: 0.163 }),
             ("FX · Gong", FmParams { ratio: 0.586, index: 8.0, mod_decay: 4.0, mod_sustain: 0.1, feedback: 0.0, attack: 0.001, decay: 8.0, sustain: 0.0, release: 4.0, gain: 0.125 }),
-            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.315 }),
+            // Noise: its peak on a chord moves a dB with the last bit of a sine
+            // (another system, another peak), so it sits well under the limit.
+            ("FX · Ruido digital", FmParams { ratio: 13.7, index: 10.0, mod_decay: 0.3, mod_sustain: 0.2, feedback: 1.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.2, gain: 0.28 }),
         ]
     }
 }

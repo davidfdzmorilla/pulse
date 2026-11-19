@@ -539,6 +539,8 @@ pub(crate) fn filter_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: Wa
             if mode != base.filter.mode {
                 let mut p = base;
                 p.filter.mode = mode;
+                // A Ladder chosen now is the tuned one (see `WaveFilterParams::tuned`).
+                p.filter.tuned |= mode == WaveFilter::Ladder;
                 set(actions, p);
             }
         });

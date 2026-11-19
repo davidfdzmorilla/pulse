@@ -5045,6 +5045,11 @@ pub struct WaveFilterParams {
     pub mix: f32,
     /// How much the cutoff follows the played note (1: one octave per octave).
     pub key_track: f32,
+    /// The Ladder's resonance sits on the cutoff wherever it is. Without it
+    /// (a sound made before this), it goes sharp as the cutoff rises and
+    /// stops ringing by itself up there.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub tuned: bool,
 }
 
 /// Attack-hold-decay-sustain-release envelope; times in seconds.
@@ -5167,7 +5172,7 @@ impl Default for SeqParams {
 }
 
 fn default_filter2() -> WaveFilterParams {
-    WaveFilterParams { on: false, mode: WaveFilter::Hp12, routes: [true; 4], cutoff: 120.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0 }
+    WaveFilterParams { on: false, mode: WaveFilter::Hp12, routes: [true; 4], cutoff: 120.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0, tuned: true }
 }
 
 fn default_random_rate() -> f32 {
@@ -5234,7 +5239,7 @@ impl Default for WaveParams {
             osc: [WaveOsc::default(), WaveOsc { on: false, ..WaveOsc::default() }],
             sub: WaveSub { on: false, wave: KickWave::Sine, octave: -1.0, level: 0.75, pan: 0.0 },
             noise: WaveNoise { on: false, level: 0.5, color: 20000.0, pan: 0.0 },
-            filter: WaveFilterParams { on: false, mode: WaveFilter::Lp12, routes: [true; 4], cutoff: 18000.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0 },
+            filter: WaveFilterParams { on: false, mode: WaveFilter::Lp12, routes: [true; 4], cutoff: 18000.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0, tuned: true },
             env: [env, mod_env, mod_env],
             lfo: [lfo; WAVE_LFOS],
             macros: [0.0; WAVE_MACROS],
@@ -5266,6 +5271,17 @@ impl WaveParams {
         p.filter = WaveFilterParams { on: true, mode: WaveFilter::Ladder, cutoff: 6000.0, resonance: 0.15, ..p.filter };
         p.gain = 0.5;
         p
+    }
+
+    /// The factory sounds keep the Ladder they were made with (see
+    /// [`WaveFilterParams::tuned`]); «Init» is a new sound.
+    fn keep_ladders(list: &mut [(&'static str, WaveParams)]) {
+        for (name, p) in list {
+            if !name.starts_with("Init") {
+                p.filter.tuned = false;
+                p.filter2.tuned = false;
+            }
+        }
     }
 
     /// Factory presets of the polychrome synth.
@@ -5838,6 +5854,7 @@ impl WaveParams {
         p.fx[1] = reverb(0.8, 0.35);
         p.gain = 0.95;
         list.push(("FX · Subida de ruido", p));
+        Self::keep_ladders(&mut list);
         list
     }
 
@@ -6438,6 +6455,7 @@ impl WaveParams {
         p.gain = 0.75;
         p.fx[0] = reverb(0.9, 0.4);
         list.push(("FX · Viento", p));
+        Self::keep_ladders(&mut list);
         list
     }
 

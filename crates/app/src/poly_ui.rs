@@ -29,6 +29,7 @@ fn filter2_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, base: WaveParams, 
             if mode != base.filter2.mode {
                 let mut p = base;
                 p.filter2.mode = mode;
+                p.filter2.tuned |= mode == WaveFilter::Ladder;
                 set(actions, p);
             }
         });

@@ -67,6 +67,12 @@ still in `0.x`, so any release may change things.
   ate headroom). Drive, Output and Dry/Wet glide when turned instead of
   stepping. Those already in a project, in the templates, the chains and
   the factory sounds keep the sound they had.
+- Wavetable Synth and Polychrome Synth: the **Ladder** filter of a new
+  sound resonates on its cutoff wherever it is (before, the resonance went
+  sharp as the cutoff rose: over a semitone at 3 kHz, almost five at
+  10 kHz) and rings by itself from the same Res (95 %) all the way up. The
+  factory sounds and the ones already in a project keep the Ladder they
+  had; choosing Ladder again in the filter's list gives the new one.
 - Pulse Keys: a piano costs under a third of the processor it did while
   the pitch bend or the modulation wheel moves (each sounding string is
   retuned many times a second). Notes that aren't bent play the same

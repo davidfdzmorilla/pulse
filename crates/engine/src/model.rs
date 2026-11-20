@@ -4991,6 +4991,12 @@ pub struct WaveOsc {
     /// How much the start phase is randomised per voice.
     pub random_phase: f32,
     pub warp_amount: f32,
+    /// Its warp (Sync, Bend, PWM, Mirror) is read several times a sample
+    /// and from a table with the harmonics the warped wave has room for,
+    /// so it stays clean on high notes. Without it (a sound made before
+    /// this), one read a sample: harsher, dirty high up.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub clean: bool,
 }
 
 fn default_grain_size() -> f32 {
@@ -5034,6 +5040,7 @@ impl Default for WaveOsc {
             phase: 0.0,
             random_phase: 1.0,
             warp_amount: 0.0,
+            clean: true,
         }
     }
 }
@@ -5296,13 +5303,16 @@ impl WaveParams {
         p
     }
 
-    /// The factory sounds keep the Ladder they were made with (see
-    /// [`WaveFilterParams::tuned`]); «Init» is a new sound.
+    /// The factory sounds keep the Ladder and the warps they were made with
+    /// (see [`WaveFilterParams::tuned`] and [`WaveOsc::clean`]); «Init» is a
+    /// new sound.
     fn keep_ladders(list: &mut [(&'static str, WaveParams)]) {
         for (name, p) in list {
             if !name.starts_with("Init") {
                 p.filter.tuned = false;
                 p.filter2.tuned = false;
+                p.osc[0].clean = false;
+                p.osc[1].clean = false;
             }
         }
     }

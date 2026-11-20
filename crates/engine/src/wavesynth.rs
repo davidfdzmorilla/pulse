@@ -455,6 +455,8 @@ struct OscBlock {
     incs: [f32; UNISON],
     gains: [(f32, f32); UNISON],
     level: usize,
+    /// The level a clean warp reads (see [`warp_stretch`]), if it has one.
+    clean: Option<usize>,
     position: f32,
     warp: OscWarp,
     amount: f32,
@@ -530,6 +532,24 @@ pub fn preview_cycle(osc: &crate::model::WaveOsc, points: usize) -> Vec<f32> {
         }
     }
 }
+
+/// How many times faster than the note a warp reads the table at its
+/// fastest: what its harmonics are multiplied by. (Bend+ starts faster
+/// still, for an instant.) The warps that bend the phase only.
+fn warp_stretch(warp: OscWarp, amount: f32) -> Option<f32> {
+    match warp {
+        OscWarp::Sync => Some(1.0 + amount * 15.0),
+        OscWarp::BendPlus | OscWarp::BendMinus => Some(1.0 + amount * 4.0),
+        OscWarp::Pwm => Some(0.5 / (0.5 - amount * 0.49)),
+        OscWarp::Mirror => Some(1.0 + amount),
+        OscWarp::Off | OscWarp::Quantize | OscWarp::Fm => None,
+    }
+}
+
+/// Reads a clean warp takes per sample, spread over a sample either side
+/// of its place and weighed as a triangle: what the warp puts over the top
+/// of the band is averaged out, not folded back down.
+const WARP_READS: usize = 8;
 
 fn warp_phase(warp: OscWarp, amount: f32, phase: f32) -> f32 {
     match warp {
@@ -1205,6 +1225,7 @@ impl WaveSynth {
                 incs,
                 gains,
                 level: Wavetable::level_for(top, sr),
+                clean: warp_stretch(osc.warp, at(12)).filter(|_| osc.clean && at(12) > 0.0).map(|stretch| Wavetable::level_for(top * stretch, sr)),
                 position: at(0),
                 warp: osc.warp,
                 amount: at(12),
@@ -1402,8 +1423,19 @@ impl WaveSynth {
                 let fm = if block.warp == OscWarp::Fm { voice.last[1 - o] * warp * 0.5 } else { 0.0 };
                 for u in 0..block.count {
                     let phase = voice.phases[o][u];
-                    let read = warp_phase(block.warp, warp, (phase + fm).rem_euclid(1.0));
-                    let mut s = table.read(block.level, position, read);
+                    let mut s = match block.clean {
+                        Some(level) => {
+                            let mut sum = 0.0;
+                            for k in 0..WARP_READS {
+                                let off = (k as f32 + 0.5) / WARP_READS as f32 * 2.0 - 1.0;
+                                let read = warp_phase(block.warp, warp, (phase + off * block.incs[u]).rem_euclid(1.0));
+                                sum += (1.0 - off.abs()) * table.read(level, position, read);
+                            }
+                            // The weights add up to half the reads.
+                            sum * (2.0 / WARP_READS as f32)
+                        }
+                        None => table.read(block.level, position, warp_phase(block.warp, warp, (phase + fm).rem_euclid(1.0))),
+                    };
                     if block.warp == OscWarp::Quantize && warp > 0.0 {
                         let steps = 2f32.powf(1.0 + (1.0 - warp) * 7.0);
                         s = (s * steps).round() / steps;
@@ -2220,6 +2252,68 @@ mod polychrome_tests {
         let mut synth = WaveSynth::new(p, SR);
         synth.note_on(note, 1.0, HELD);
         render(&mut synth, frames)
+    }
+
+    /// What of a held note at `f0` is not one of its harmonics, in dB under
+    /// the whole: what folded back from over the top of the band.
+    fn dirt(signal: &[f32], f0: f32) -> f32 {
+        const N: usize = 32_768;
+        let window = |i: usize| 0.5 - 0.5 * (TAU * i as f32 / N as f32).cos();
+        let (mut re, mut im) = (signal[signal.len() - N..].iter().enumerate().map(|(i, v)| v * window(i)).collect::<Vec<_>>(), vec![0.0; N]);
+        fft(&mut re, &mut im);
+        let (mut clean, mut dirty) = (0f64, 0f64);
+        for k in 8..N / 2 {
+            let hz = k as f32 * SR / N as f32;
+            let off = (hz / f0 - (hz / f0).round()).abs() * f0 / (SR / N as f32);
+            let e = (re[k] * re[k] + im[k] * im[k]) as f64;
+            if off <= 4.0 {
+                clean += e
+            } else {
+                dirty += e
+            }
+        }
+        (10.0 * (dirty / (clean + dirty)).log10()) as f32
+    }
+
+    /// A new sound's warps stay clean on high notes: read several times a
+    /// sample, from a table with the harmonics the warped wave has room for.
+    /// The factory sounds and a saved one that says nothing keep one read
+    /// a sample.
+    #[test]
+    fn a_new_sounds_warps_stay_clean_up_high() {
+        let warped = |warp: OscWarp, amount: f32, clean: bool| {
+            let mut p = engine(OscKind::Wavetable);
+            p.osc[0].position = 2.0 / 3.0;
+            p.osc[0].warp = warp;
+            p.osc[0].warp_amount = amount;
+            p.osc[0].clean = clean;
+            p
+        };
+        for (name, warp, amount) in [("Sync 0,3", OscWarp::Sync, 0.3), ("Bend+ 0,7", OscWarp::BendPlus, 0.7), ("Bend- 0,7", OscWarp::BendMinus, 0.7), ("PWM 0,7", OscWarp::Pwm, 0.7), ("Mirror 1", OscWarp::Mirror, 1.0)] {
+            for note in [60u8, 84, 96] {
+                let f0 = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+                let (before, now) = (dirt(&play(warped(warp, amount, false), note, 48_000).0, f0), dirt(&play(warped(warp, amount, true), note, 48_000).0, f0));
+                let (loud_before, loud) = (rms(&play(warped(warp, amount, false), note, 48_000).0), rms(&play(warped(warp, amount, true), note, 48_000).0));
+                println!("{name}, nota {note}: {before:.1} dB antes, {now:.1} ahora; nivel {:+.1} dB", 20.0 * (loud / loud_before).log10());
+                assert!(now < -28.0 && now < before + 1.0, "{name}, note {note}: {now} dB ({before} before)");
+            }
+        }
+        // Without a warp, or with none of it, it plays as it did.
+        let plain = |clean: bool| {
+            let mut p = warped(OscWarp::Sync, 0.0, clean);
+            p.osc[0].unison = 3.0;
+            play(p, 72, 4_800).0
+        };
+        assert_eq!(plain(true), plain(false));
+        // Who has it.
+        assert!(crate::model::WaveOsc::default().clean && WaveParams::default().osc[0].clean && WaveParams::polychrome().osc[1].clean);
+        for (name, p) in WaveParams::presets().into_iter().chain(WaveParams::polychrome_presets()) {
+            assert_eq!((p.osc[0].clean, p.osc[1].clean), (name == "Init", name == "Init"), "{name}");
+        }
+        let mut old = serde_json::to_value(WaveParams::default()).unwrap();
+        old["osc"][0].as_object_mut().unwrap().remove("clean");
+        let old: WaveParams = serde_json::from_value(old).unwrap();
+        assert!(!old.osc[0].clean && old.osc[1].clean);
     }
 
     #[test]

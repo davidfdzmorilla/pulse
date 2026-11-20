@@ -696,7 +696,37 @@ struct FmVoice {
     /// The modulator's sample before `last_mod`.
     older_mod: f32,
     mod_env: f32,
+    /// Its last samples at twice the rate (see [`FmParams::oversample`]),
+    /// in a ring, and where the next goes.
+    twice: [f32; FM_RING],
+    twice_at: usize,
     taken: Taken,
+}
+
+/// The low-pass that brings a voice worked out at twice the rate down to
+/// the sample rate: a half-band windowed sinc (Kaiser), flat to 20 kHz and
+/// some 70 dB down from 28 kHz at 48 kHz. Half of its taps are zero: the
+/// centre one is a half, and these are the others, from the centre out.
+const FM_DOWN_TAPS: usize = 12;
+const FM_RING: usize = 64;
+
+fn fm_down_taps() -> [f32; FM_DOWN_TAPS] {
+    // Zeroth-order modified Bessel function, for the Kaiser window.
+    let bessel = |x: f64| {
+        let (mut sum, mut term) = (1.0, 1.0);
+        for k in 1..30 {
+            term *= (x / (2.0 * k as f64)).powi(2);
+            sum += term;
+        }
+        sum
+    };
+    let (beta, reach) = (7.0, (2 * FM_DOWN_TAPS) as f64);
+    std::array::from_fn(|k| {
+        let n = (2 * k + 1) as f64;
+        let sinc = (std::f64::consts::FRAC_PI_2 * n).sin() / (std::f64::consts::PI * n);
+        let window = bessel(beta * (1.0 - (n / reach).powi(2)).max(0.0).sqrt()) / bessel(beta);
+        (sinc * window) as f32
+    })
 }
 
 pub struct FmSynth {
@@ -711,12 +741,14 @@ pub struct FmSynth {
     target: (f32, f32),
     depth: (f32, f32),
     declick: Declick,
+    /// See [`fm_down_taps`].
+    down: [f32; FM_DOWN_TAPS],
 }
 
 impl FmSynth {
     pub fn new(params: FmParams, sample_rate: f32) -> Self {
-        let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, older_mod: 0.0, mod_env: 0.0, taken: Taken::default() };
-        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0, target: (1.0, 0.0), depth: (1.0, 0.0), declick: Declick::default() }
+        let voice = FmVoice { gate: Gate::OFF, env: Adsr::IDLE, carrier: 0.0, modulator: 0.0, last_mod: 0.0, older_mod: 0.0, mod_env: 0.0, twice: [0.0; FM_RING], twice_at: 0, taken: Taken::default() };
+        Self { params, voices: [voice; FM_VOICES], sample_rate, counter: 0, pitch: 1.0, target: (1.0, 0.0), depth: (1.0, 0.0), declick: Declick::default(), down: fm_down_taps() }
     }
 
     /// Brightness (`tone`, -1..1, at rest 0: CC 74) scales the modulation index
@@ -744,6 +776,10 @@ impl FmSynth {
         self.counter += 1;
         let index = steal_voice(self.voices.iter().enumerate().map(|(i, v)| (i, v.env.stage == Stage::Idle, v.env.stage != Stage::Release, v.gate.age)));
         let voice = &mut self.voices[index];
+        // A voice at rest starts clean of its last note's tail.
+        if voice.env.stage == Stage::Idle {
+            voice.twice = [0.0; FM_RING];
+        }
         voice.taken.take(voice.env.stage != Stage::Idle);
         *voice = FmVoice { gate: Gate::new(pitch, velocity, gate, self.counter), mod_env: 1.0, ..*voice };
         voice.env.trigger();
@@ -774,6 +810,7 @@ impl FmSynth {
         // At rest the index is the preset's, untouched.
         let still = start == target && target == (1.0, 0.0);
         let spread = 1.0 / p.ratio.max(1.0);
+        let down = self.down;
         let glide = 1.0 - (-1.0 / (FM_GLIDE * sr)).exp();
         let step = |(scale, add): (f32, f32)| -> (f32, f32) {
             let next = (scale + (target.0 - scale) * glide, add + (target.1 - add) * glide);
@@ -795,19 +832,42 @@ impl FmSynth {
                     break;
                 }
                 voice.mod_env = p.mod_sustain + (voice.mod_env - p.mod_sustain) * mod_decay;
-                // The mean of its last two samples: a feedback loop of one
-                // sample turns to noise at half the sample rate.
-                let fed = if p.feedback_smooth { 0.5 * (voice.last_mod + voice.older_mod) } else { voice.last_mod };
-                let modulator = (TAU * voice.modulator + p.feedback * PI * fed).sin();
-                voice.older_mod = voice.last_mod;
-                voice.last_mod = modulator;
                 let amount = if still {
                     index * voice.mod_env
                 } else {
                     depth = step(depth);
                     index * voice.mod_env * depth.0 + depth.1 * spread
                 };
-                let out = (TAU * voice.carrier + amount * modulator).sin();
+                // The mean of its last two samples: a feedback loop of one
+                // sample turns to noise at half the sample rate.
+                let fed = if p.feedback_smooth { 0.5 * (voice.last_mod + voice.older_mod) } else { voice.last_mod };
+                let out = if p.oversample {
+                    // Two samples at twice the rate, the feedback as it is
+                    // at the sample rate (it moves once per sample).
+                    for half in 0..2 {
+                        let at = half as f32 * 0.5;
+                        let modulator = (TAU * (voice.modulator + at * mod_inc) + p.feedback * PI * fed).sin();
+                        if half == 0 {
+                            voice.older_mod = voice.last_mod;
+                            voice.last_mod = modulator;
+                        }
+                        voice.twice[voice.twice_at] = (TAU * (voice.carrier + at * carrier_inc) + amount * modulator).sin();
+                        voice.twice_at = (voice.twice_at + 1) % FM_RING;
+                    }
+                    // The centre of the low-pass is the sample worked out
+                    // `2 * FM_DOWN_TAPS` half samples ago.
+                    let centre = voice.twice_at + FM_RING - 2 * FM_DOWN_TAPS;
+                    let mut sum = 0.5 * voice.twice[centre % FM_RING];
+                    for (k, tap) in down.iter().enumerate() {
+                        sum += tap * (voice.twice[(centre + 2 * k + 1) % FM_RING] + voice.twice[(centre + FM_RING - 2 * k - 1) % FM_RING]);
+                    }
+                    sum
+                } else {
+                    let modulator = (TAU * voice.modulator + p.feedback * PI * fed).sin();
+                    voice.older_mod = voice.last_mod;
+                    voice.last_mod = modulator;
+                    (TAU * voice.carrier + amount * modulator).sin()
+                };
                 voice.carrier = (voice.carrier + carrier_inc) % 1.0;
                 voice.modulator = (voice.modulator + mod_inc) % 1.0;
                 let s = out * level * voice.gate.velocity * p.gain;
@@ -1222,12 +1282,61 @@ mod tests {
     /// little, instead of turning to noise a third of the way: the wave
     /// repeats from one cycle to the next. A sound made before keeps the
     /// feedback it had.
+    /// What of a held note at `f0` is not one of its harmonics, in dB under
+    /// the whole: what folded back from over the top of the band.
+    fn dirt(signal: &[f32], f0: f32) -> f32 {
+        const N: usize = 32_768;
+        let window = |i: usize| 0.5 - 0.5 * (TAU * i as f32 / N as f32).cos();
+        let (mut re, mut im) = (signal[signal.len() - N..].iter().enumerate().map(|(i, v)| v * window(i)).collect::<Vec<_>>(), vec![0.0; N]);
+        crate::dsp::fft(&mut re, &mut im);
+        let (mut clean, mut dirty) = (0f64, 0f64);
+        for k in 8..N / 2 {
+            let hz = k as f32 * SR / N as f32;
+            let off = (hz / f0 - (hz / f0).round()).abs() * f0 / (SR / N as f32);
+            let e = (re[k] * re[k] + im[k] * im[k]) as f64;
+            if off <= 4.0 {
+                clean += e
+            } else {
+                dirty += e
+            }
+        }
+        (10.0 * (dirty / (clean + dirty)).log10()) as f32
+    }
+
+    /// A new FM sound stays clean on high notes with a high ratio or index:
+    /// its voices are worked out at twice the rate. The factory sounds and
+    /// a saved one that says nothing stay at the sample rate.
+    #[test]
+    fn a_new_fm_sound_stays_clean_up_high() {
+        let held = |ratio: f32, index: f32, note: u8, oversample: bool| {
+            let mut fm = FmSynth::new(FmParams { ratio, index, mod_decay: 5.0, mod_sustain: 1.0, sustain: 1.0, oversample, ..Default::default() }, SR);
+            fm.note_on(note, 1.0, 96_000);
+            run(&mut |l, r| fm.render(l, r), 48_000).0
+        };
+        for (ratio, index, note) in [(2.0, 3.0, 96u8), (14.0, 1.2, 84), (4.0, 3.0, 96), (2.0, 5.0, 84), (5.0, 1.5, 96), (1.0, 1.8, 60)] {
+            let f0 = midi_to_freq(note);
+            let (old, new) = (held(ratio, index, note, false), held(ratio, index, note, true));
+            let (before, now) = (dirt(&old, f0), dirt(&new, f0));
+            let level = 10.0 * (energy(&new[24_000..]) / energy(&old[24_000..])).log10();
+            println!("ratio {ratio}, índice {index}, nota {note}: {before:.1} dB antes, {now:.1} ahora; nivel {level:+.2} dB");
+            assert!(now < before + 1.0 && (now < -40.0 || now < before - 15.0), "ratio {ratio}, index {index}, note {note}: {now} dB ({before} before)");
+        }
+        // Who has it.
+        assert!(FmParams::default().oversample);
+        assert!(FmParams::presets().iter().all(|(name, p)| p.oversample == (*name == "Init")));
+        let mut saved = serde_json::to_value(FmParams::default()).unwrap();
+        assert_eq!(saved.as_object_mut().unwrap().remove("oversample"), Some(true.into()));
+        assert!(!serde_json::from_value::<FmParams>(saved).unwrap().oversample);
+    }
+
     #[test]
     fn fm_feedback_stays_pitched() {
         // A2 at 48 kHz: 110 Hz, a cycle of 436.4 samples; five cycles are 2182.
         let lag = 2182;
         let repeats = |feedback: f32, feedback_smooth: bool| {
-            let params = FmParams { ratio: 1.0, index: 2.0, mod_decay: 5.0, mod_sustain: 1.0, sustain: 1.0, feedback, feedback_smooth, ..Default::default() };
+            // A sound with the old feedback was made before the voices were
+            // worked out at twice the rate, too.
+            let params = FmParams { ratio: 1.0, index: 2.0, mod_decay: 5.0, mod_sustain: 1.0, sustain: 1.0, feedback, feedback_smooth, oversample: feedback_smooth, ..Default::default() };
             let mut fm = FmSynth::new(params, SR);
             fm.note_on(45, 1.0, HELD);
             let (l, _) = run(&mut |l, r| fm.render(l, r), SR as usize);

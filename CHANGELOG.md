@@ -79,6 +79,12 @@ still in `0.x`, so any release may change things.
   10 kHz) and rings by itself from the same Res (95 %) all the way up. The
   factory sounds and the ones already in a project keep the Ladder they
   had; choosing Ladder again in the filter's list gives the new one.
+- FM Synth: a new FM sound stays clean on high notes with a high ratio or
+  index. Its voices are worked out at twice the sample rate, so what goes
+  over the top of the band is filtered out, not folded back as
+  out-of-tune dirt (20 to 30 dB less of it where it was worst). The
+  factory sounds and the FM Synths already in a project stay as they
+  were; the **Init** sound has the new one.
 - Super Saw: the saws of a new Super Saw sit at uneven distances, closer
   towards the middle, so a held note's beating no longer repeats in a
   loop (with four saws or more). The factory sounds and the Super Saws

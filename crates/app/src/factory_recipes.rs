@@ -271,7 +271,7 @@ fn metal(sound: Stereo, db: f32) -> Stereo {
 }
 
 fn fm(ratio: f32, index: f32, mod_decay: f32, feedback: f32, decay: f32) -> InstrumentKind {
-    InstrumentKind::Fm(FmParams { ratio, index, mod_decay, mod_sustain: 0.0, feedback, attack: 0.001, decay, sustain: 0.0, release: 0.05, gain: 0.5, feedback_smooth: false })
+    InstrumentKind::Fm(FmParams { ratio, index, mod_decay, mod_sustain: 0.0, feedback, attack: 0.001, decay, sustain: 0.0, release: 0.05, gain: 0.5, feedback_smooth: false, oversample: false })
 }
 
 // ---------------------------------------------------------------- the library

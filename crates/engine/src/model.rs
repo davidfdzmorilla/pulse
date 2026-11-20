@@ -1906,6 +1906,12 @@ pub struct FmParams {
     /// before this), it turns to noise above about a third of the way.
     #[serde(default, skip_serializing_if = "is_default")]
     pub feedback_smooth: bool,
+    /// Each voice is worked out at twice the sample rate and brought down
+    /// through a low-pass: the sidebands a high ratio or index throws over
+    /// the top of the band are filtered out, not folded back as dirt.
+    /// Without it (sounds made before this), at the sample rate.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub oversample: bool,
 }
 
 impl Default for FmParams {
@@ -1922,6 +1928,7 @@ impl Default for FmParams {
             release: 0.6,
             gain: 0.327,
             feedback_smooth: true,
+            oversample: true,
         }
     }
 }
@@ -1930,8 +1937,9 @@ impl FmParams {
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, FmParams)> {
         let base = FmParams::default();
-        // As they were made: with the feedback as it was (see `feedback_smooth`).
-        let old = FmParams { feedback_smooth: false, ..base };
+        // As they were made: with the feedback as it was (see
+        // `feedback_smooth`) and at the sample rate (see `oversample`).
+        let old = FmParams { feedback_smooth: false, oversample: false, ..base };
         vec![
             ("Init", base),
             ("Teclas · Piano eléctrico", FmParams { ratio: 1.0, index: 1.8, mod_decay: 0.8, mod_sustain: 0.1, feedback: 0.0, attack: 0.002, decay: 3.0, sustain: 0.0, release: 0.4, gain: 0.3, ..old }),

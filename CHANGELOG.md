@@ -67,6 +67,12 @@ still in `0.x`, so any release may change things.
   ate headroom). Drive, Output and Dry/Wet glide when turned instead of
   stepping. Those already in a project, in the templates, the chains and
   the factory sounds keep the sound they had.
+- Modular Synth: a new **Analog** module's saw and pulse and a new
+  **Distortion** module fold less back on high notes (5 to 10 dB less dirt;
+  quantize is as it was). Foldback and sine pushed very hard on a high
+  note also come out quieter: most of what they make there is over the top
+  of the band. The factory sounds and the modules already in a project
+  keep what they had; a module added from the list is a new one.
 - Wavetable Synth and Polychrome Synth: the warps of a new sound (**Sync**,
   **Bend+**, **Bend-**, **PWM**, **Mirror**) stay clean on high notes.
   Before, a warped wave folded back from the top of the band as a harsh,

@@ -7160,6 +7160,10 @@ pub struct Module {
     /// Curve Output: its level over time.
     #[serde(default = "Shape::falling")]
     pub curve: Shape,
+    /// Analog: the saw's and the pulse's steps fold less back on high notes.
+    /// Distortion: so does what it adds. Without it, a module made before this.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub clean: bool,
 }
 
 impl Module {
@@ -7173,11 +7177,12 @@ impl Module {
         extra: [0.0; MOD_EXTRA_SLOTS],
         alt: false,
         curve: Shape { points: [ShapePoint { time: 0.0, value: 0.0, bend: 0.0 }; SHAPE_POINTS], count: 0 },
+        clean: false,
     };
 
     /// A module of `kind` with every slot at its default.
     pub fn new(kind: ModuleKind) -> Self {
-        let mut module = Module { kind, flag: kind.is_output(), curve: Shape::falling(), ..Self::EMPTY };
+        let mut module = Module { kind, flag: kind.is_output(), curve: Shape::falling(), clean: true, ..Self::EMPTY };
         for i in 0..MOD_MODULE_SLOTS {
             if let Some(info) = module_slot(kind, i) {
                 *module.value_mut(i) = info.normalize(info.default);
@@ -8687,6 +8692,13 @@ impl ModularParams {
         p.lanes[0].fx[0] = delay(0.5, 0.2);
         p.gain = 0.35;
         list.push(("Aux · Realimentación", p));
+        // The factory sounds keep the modules they were made with (see
+        // [`Module::clean`]); «Init» is a new sound.
+        for (name, p) in &mut list {
+            if !name.starts_with("Init") {
+                p.modules.iter_mut().for_each(|m| m.clean = false);
+            }
+        }
         list
     }
 

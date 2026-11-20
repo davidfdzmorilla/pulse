@@ -78,6 +78,10 @@ still in `0.x`, so any release may change things.
   sound fold less back on high notes (6 to 10 dB less dirt), for a little
   less on top (under 2 dB over 8 kHz). The factory sounds and the ones
   already in a project keep the waves they had.
+- Polychrome Synth and Wavetable Synth: the filter's **Drive** of a new
+  sound folds less back on high notes (7 to 14 dB less dirt with a saw),
+  for a little less on top (under 2 dB over 8 kHz). The factory sounds and
+  the ones already in a project keep the Drive they had.
 - Acid Bass: the filter of a new Acid resonates on its cutoff all the way
   up a sweep. Before, the resonance went sharp as the cutoff rose (three
   semitones at 10 kHz) and, with an accent throwing the cutoff to the top,

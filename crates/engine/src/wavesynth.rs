@@ -124,11 +124,14 @@ pub(crate) struct FilterState {
     comb: Option<Box<[f32; COMB]>>,
     comb_pos: usize,
     formant: [Svf; 3],
+    /// The clean Drive's last input, and the area under the curve up to it.
+    driven: f64,
+    driven_area: f64,
 }
 
 impl FilterState {
     pub(crate) fn new() -> Self {
-        Self { svf: [Svf::default(); 2], ladder: [0.0; 4], comb: Some(Box::new([0.0; COMB])), comb_pos: 0, formant: [Svf::default(); 3] }
+        Self { svf: [Svf::default(); 2], ladder: [0.0; 4], comb: Some(Box::new([0.0; COMB])), comb_pos: 0, formant: [Svf::default(); 3], driven: 0.0, driven_area: std::f64::consts::LN_2 }
     }
 
     pub(crate) fn clear(&mut self) {
@@ -138,6 +141,7 @@ impl FilterState {
             comb.fill(0.0);
         }
         self.formant = [Svf::default(); 3];
+        (self.driven, self.driven_area) = (0.0, std::f64::consts::LN_2);
     }
 }
 
@@ -187,6 +191,7 @@ pub(crate) struct FilterCoefs {
     formants: [(f32, f32); 3],
     formant_k: f32,
     drive: f32,
+    drive_clean: bool,
     mix: f32,
 }
 
@@ -220,6 +225,7 @@ impl FilterCoefs {
             formants,
             formant_k: 0.6 - resonance * 0.55,
             drive,
+            drive_clean: false,
             mix,
         }
     }
@@ -232,6 +238,15 @@ impl FilterCoefs {
     /// by itself over a few hundred Hz.
     pub(crate) fn tuned(mut self, tuned: bool) -> Self {
         self.ladder_tuned = tuned;
+        self
+    }
+
+    /// The Drive without what it folds back: each sample is the curve's
+    /// mean between the last input and this one, not the curve at this one,
+    /// so a bright wave driven hard stays in tune on high notes. Without it,
+    /// the one made before.
+    pub(crate) fn clean_drive(mut self, clean: bool) -> Self {
+        self.drive_clean = clean;
         self
     }
 
@@ -256,7 +271,16 @@ impl FilterCoefs {
     }
 
     pub(crate) fn process(&self, s: &mut FilterState, x: f32) -> f32 {
-        let input = if self.drive > 0.0 {
+        let input = if self.drive > 0.0 && self.drive_clean {
+            let g = 1.0 + self.drive * 8.0;
+            let u = (x * g) as f64;
+            // ln(2 cosh u), the area under tanh.
+            let area = u.abs() + (-2.0 * u.abs()).exp().ln_1p();
+            let step = u - s.driven;
+            let mean = if step.abs() > 1e-5 { (area - s.driven_area) / step } else { (0.5 * (u + s.driven)).tanh() };
+            (s.driven, s.driven_area) = (u, area);
+            mean as f32 / g.tanh()
+        } else if self.drive > 0.0 {
             let g = 1.0 + self.drive * 8.0;
             (x * g).tanh() / g.tanh()
         } else {
@@ -1246,10 +1270,10 @@ impl WaveSynth {
         }
 
         let cutoff = m[FILTER] * self.bright * 2f32.powf((voice.note - 60.0) / 12.0 * m[FILTER + 4]);
-        let coefs = p.filter.on.then(|| FilterCoefs::new(p.filter.mode, cutoff, m[FILTER + 1], m[FILTER + 2], m[FILTER + 3], sr).tuned(p.filter.tuned));
+        let coefs = p.filter.on.then(|| FilterCoefs::new(p.filter.mode, cutoff, m[FILTER + 1], m[FILTER + 2], m[FILTER + 3], sr).tuned(p.filter.tuned).clean_drive(p.filter.clean_drive));
         let routes = p.filter.routes;
         let cutoff2 = m[WAVE_FILTER2] * self.bright * 2f32.powf((voice.note - 60.0) / 12.0 * m[WAVE_FILTER2 + 4]);
-        let coefs2 = p.filter2.on.then(|| FilterCoefs::new(p.filter2.mode, cutoff2, m[WAVE_FILTER2 + 1], m[WAVE_FILTER2 + 2], m[WAVE_FILTER2 + 3], sr).tuned(p.filter2.tuned));
+        let coefs2 = p.filter2.on.then(|| FilterCoefs::new(p.filter2.mode, cutoff2, m[WAVE_FILTER2 + 1], m[WAVE_FILTER2 + 2], m[WAVE_FILTER2 + 3], sr).tuned(p.filter2.tuned).clean_drive(p.filter2.clean_drive));
         let balance = m[WAVE_BALANCE].clamp(0.0, 1.0);
         let parallel = p.filter_parallel && coefs.is_some() && coefs2.is_some();
         if fresh {
@@ -2311,6 +2335,59 @@ mod polychrome_tests {
         }
         // The sine and the triangle have no step: they play as they did.
         assert_eq!(play(analog(0.2, true), 72, 4_800).0, play(analog(0.2, false), 72, 4_800).0);
+    }
+
+    /// A new sound's Drive folds less back on high notes: each sample is the
+    /// curve's mean since the last one. The factory sounds and a saved one
+    /// that says nothing keep the curve at each sample.
+    #[test]
+    fn a_new_sounds_drive_stays_clean_up_high() {
+        let driven = |mode: WaveFilter, drive: f32, clean: bool| {
+            let mut p = engine(OscKind::Analog);
+            p.osc[0].position = 2.0 / 3.0;
+            p.filter.on = true;
+            p.filter.mode = mode;
+            p.filter.cutoff = 18_000.0;
+            p.filter.resonance = 0.1;
+            p.filter.drive = drive;
+            p.filter.clean_drive = clean;
+            p
+        };
+        // How bright: what is over 8 kHz, against the whole.
+        let highs = |x: &[f32]| {
+            let (mut re, mut im) = (x[x.len() - 8192..].to_vec(), vec![0.0; 8192]);
+            fft(&mut re, &mut im);
+            let band = |from: usize, to: usize| (from..to).map(|k| re[k] * re[k] + im[k] * im[k]).sum::<f32>();
+            10.0 * (band(8000 * 8192 / 48_000, 4096) / band(1, 4096)).log10()
+        };
+        for (name, mode) in [("LP12", WaveFilter::Lp12), ("Ladder", WaveFilter::Ladder)] {
+            for drive in [0.25f32, 0.5, 1.0] {
+                for note in [48u8, 60, 72, 84, 96] {
+                    let f0 = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+                    let (old, new) = (play(driven(mode, drive, false), note, 48_000).0, play(driven(mode, drive, true), note, 48_000).0);
+                    let (before, now) = (dirt(&old, f0), dirt(&new, f0));
+                    let (level, top) = (20.0 * (rms(&new) / rms(&old)).log10(), highs(&new) - highs(&old));
+                    println!("{name}, drive {drive}, nota {note}: {before:.1} dB antes, {now:.1} ahora; nivel {level:+.2} dB; agudos {top:+.1} dB");
+                    assert!(now < before - 6.0 && now < -35.0, "{name}, drive {drive}, note {note}: {now} dB ({before} before)");
+                    // As loud, and a little less on top (the price of the mean).
+                    assert!(level.abs() < 0.3 && (-2.0..0.0).contains(&top), "{name}, drive {drive}, note {note}: {level} dB, {top} dB on top");
+                }
+            }
+        }
+        // With no Drive there is nothing to clean: it plays as it did.
+        assert_eq!(play(driven(WaveFilter::Lp12, 0.0, true), 72, 4_800).0, play(driven(WaveFilter::Lp12, 0.0, false), 72, 4_800).0);
+        // Who has it.
+        assert!(WaveParams::default().filter.clean_drive && WaveParams::polychrome().filter.clean_drive && WaveParams::polychrome().filter2.clean_drive);
+        for (name, p) in WaveParams::presets().into_iter().chain(WaveParams::polychrome_presets()) {
+            assert_eq!(p.filter.clean_drive, name == "Init", "{name}");
+            assert_eq!(p.filter2.clean_drive, name == "Init", "{name}");
+        }
+        let mut old = serde_json::to_value(WaveParams::polychrome()).unwrap();
+        old["filter"].as_object_mut().unwrap().remove("clean_drive");
+        let old: WaveParams = serde_json::from_value(old).unwrap();
+        assert!(!old.filter.clean_drive);
+        let again: WaveParams = serde_json::from_str(&serde_json::to_string(&WaveParams::polychrome()).unwrap()).unwrap();
+        assert!(again.filter.clean_drive);
     }
 
     /// A new sound's warps stay clean on high notes: read several times a

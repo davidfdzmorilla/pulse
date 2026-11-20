@@ -5090,6 +5090,11 @@ pub struct WaveFilterParams {
     /// stops ringing by itself up there.
     #[serde(default, skip_serializing_if = "is_default")]
     pub tuned: bool,
+    /// The Drive does not fold back what it adds over the top of the band.
+    /// Without it (a sound made before this), a bright wave driven hard
+    /// turns rough on high notes.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub clean_drive: bool,
 }
 
 /// Attack-hold-decay-sustain-release envelope; times in seconds.
@@ -5212,7 +5217,7 @@ impl Default for SeqParams {
 }
 
 fn default_filter2() -> WaveFilterParams {
-    WaveFilterParams { on: false, mode: WaveFilter::Hp12, routes: [true; 4], cutoff: 120.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0, tuned: true }
+    WaveFilterParams { on: false, mode: WaveFilter::Hp12, routes: [true; 4], cutoff: 120.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0, tuned: true, clean_drive: true }
 }
 
 fn default_random_rate() -> f32 {
@@ -5279,7 +5284,7 @@ impl Default for WaveParams {
             osc: [WaveOsc::default(), WaveOsc { on: false, ..WaveOsc::default() }],
             sub: WaveSub { on: false, wave: KickWave::Sine, octave: -1.0, level: 0.75, pan: 0.0 },
             noise: WaveNoise { on: false, level: 0.5, color: 20000.0, pan: 0.0 },
-            filter: WaveFilterParams { on: false, mode: WaveFilter::Lp12, routes: [true; 4], cutoff: 18000.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0, tuned: true },
+            filter: WaveFilterParams { on: false, mode: WaveFilter::Lp12, routes: [true; 4], cutoff: 18000.0, resonance: 0.1, drive: 0.0, mix: 1.0, key_track: 0.0, tuned: true, clean_drive: true },
             env: [env, mod_env, mod_env],
             lfo: [lfo; WAVE_LFOS],
             macros: [0.0; WAVE_MACROS],
@@ -5321,6 +5326,8 @@ impl WaveParams {
             if !name.starts_with("Init") {
                 p.filter.tuned = false;
                 p.filter2.tuned = false;
+                p.filter.clean_drive = false;
+                p.filter2.clean_drive = false;
                 p.osc[0].clean = false;
                 p.osc[1].clean = false;
             }

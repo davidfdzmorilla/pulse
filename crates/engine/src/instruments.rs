@@ -28,6 +28,34 @@ fn poly_blep(t: f32, dt: f32) -> f32 {
     }
 }
 
+/// What a step leaves around itself once its top is taken off, two samples
+/// either side of it (`x`, in samples from the step): a wider and smoother
+/// correction than [`poly_blep`]'s one sample, which folds far less back.
+fn step_residue(x: f32) -> f32 {
+    // The integral of a cubic B-spline up to `-|x|`.
+    let a = x.abs();
+    let below = if a >= 2.0 {
+        0.0
+    } else if a >= 1.0 {
+        (2.0 - a).powi(4) / 24.0
+    } else {
+        0.5 - 2.0 * a / 3.0 + a * a * a / 3.0 - a.powi(4) / 8.0
+    };
+    if x < 0.0 { below } else { -below }
+}
+
+/// A saw as [`saw`], its step corrected over four samples (see [`step_residue`]).
+pub(crate) fn saw_clean(phase: f32, inc: f32) -> f32 {
+    let mut out = 2.0 * phase - 1.0;
+    if phase < 2.0 * inc {
+        out -= 2.0 * step_residue(phase / inc);
+    }
+    if phase > 1.0 - 2.0 * inc {
+        out -= 2.0 * step_residue((phase - 1.0) / inc);
+    }
+    out
+}
+
 pub(crate) fn saw(phase: f32, inc: f32) -> f32 {
     2.0 * phase - 1.0 - poly_blep(phase, inc)
 }

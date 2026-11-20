@@ -4993,8 +4993,10 @@ pub struct WaveOsc {
     pub warp_amount: f32,
     /// Its warp (Sync, Bend, PWM, Mirror) is read several times a sample
     /// and from a table with the harmonics the warped wave has room for,
-    /// so it stays clean on high notes. Without it (a sound made before
-    /// this), one read a sample: harsher, dirty high up.
+    /// and the analog saw and pulse have their steps corrected over four
+    /// samples, so they stay clean on high notes. Without it (a sound made
+    /// before this), one read a sample and two samples: harsher, dirty
+    /// high up.
     #[serde(default, skip_serializing_if = "is_default")]
     pub clean: bool,
 }

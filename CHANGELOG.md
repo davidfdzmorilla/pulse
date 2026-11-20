@@ -74,6 +74,10 @@ still in `0.x`, so any release may change things.
   20 to 30 dB lower. The factory sounds and the ones already in a project
   keep the warp they had; choosing the warp again in its list gives the
   new one.
+- Polychrome Synth and Wavetable Synth: the analog saw and pulse of a new
+  sound fold less back on high notes (6 to 10 dB less dirt), for a little
+  less on top (under 2 dB over 8 kHz). The factory sounds and the ones
+  already in a project keep the waves they had.
 - Acid Bass: the filter of a new Acid resonates on its cutoff all the way
   up a sweep. Before, the resonance went sharp as the cutoff rose (three
   semitones at 10 kHz) and, with an accent throwing the cutoff to the top,

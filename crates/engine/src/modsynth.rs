@@ -24,7 +24,7 @@
 
 use crate::effects::{ProcessContext, Switched};
 use crate::model::Effect;
-use crate::instruments::{saw, Declick, Gate, Taken, Watch};
+use crate::instruments::{saw, saw_clean, Declick, Gate, Taken, Watch};
 use crate::engine::Controller;
 use crate::model::{
     chord_note, chord_size, module_slot, modulator_slot, mslot, slot, AudioParam, CurveInput, LfoMode, ModularParams, Modulator, ModuleKind, ModulatorKind,
@@ -88,7 +88,9 @@ fn wrap(x: f32) -> f32 {
 
 /// Band-limited analog waves: 0 saw, 1 pulse, 2 triangle, 3 sine.
 #[inline]
-fn analog(wave: u8, ph: f32, inc: f32, width: f32) -> f32 {
+fn analog(wave: u8, ph: f32, inc: f32, width: f32, clean: bool) -> f32 {
+    // A new module's steps are corrected over four samples, not two.
+    let saw = if clean { saw_clean } else { saw };
     match wave {
         0 => saw(wrap(ph + 0.5), inc),
         1 => (saw(ph, inc) - saw(wrap(ph + 1.0 - width), inc)) * 0.5 / (1.0 - width.min(1.0 - width)),
@@ -110,6 +112,36 @@ fn shape(kind: u8, x: f32, steps: f32) -> f32 {
         4 => x.clamp(-1.0, 1.0),
         _ => (x.clamp(-1.0, 1.0) * steps).round() / steps,
     }
+}
+
+/// The area under [`shape`]'s curve up to `x`, for the shapes that have one
+/// (all but quantize): what a clean Distortion takes its means from.
+fn shape_area(kind: u8, x: f64) -> f64 {
+    match kind {
+        // ln(2 cosh x).
+        0 => x.abs() + (-2.0 * x.abs()).exp().ln_1p(),
+        1 => (x * x.atan() - 0.5 * (x * x).ln_1p()) * std::f64::consts::FRAC_2_PI,
+        2 => {
+            let folded = (x + 1.0).rem_euclid(4.0);
+            if folded < 2.0 { 0.5 * (folded - 1.0) * (folded - 1.0) } else { 1.0 - 0.5 * (3.0 - folded) * (3.0 - folded) }
+        }
+        3 => -x.cos(),
+        _ => {
+            if x.abs() <= 1.0 { 0.5 * x * x } else { x.abs() - 0.5 }
+        }
+    }
+}
+
+/// [`shape`] without what it folds back from over the top of the band: the
+/// curve's mean between the last input and this one, not the curve at this
+/// one. `was` is the last input and the area up to it.
+fn shape_clean(kind: u8, x: f32, was: &mut (f64, f64)) -> f32 {
+    let x = x as f64;
+    let area = shape_area(kind, x);
+    let step = x - was.0;
+    let mean = if step.abs() > 1e-5 { ((area - was.1) / step) as f32 } else { shape(kind, (0.5 * (x + was.0)) as f32, 1.0) };
+    *was = (x, area);
+    mean
 }
 
 /// The nonlinear filter's saturation flavours: clean, warm, tape, diode, fuzz.
@@ -199,6 +231,10 @@ struct ModuleState {
     filter: [[[f32; 2]; 2]; 2],
     /// Nonlinear filter integrators, per channel.
     svf: [[f32; 2]; 2],
+    /// A clean Distortion's last input and the area up to it, per channel,
+    /// and the shape that area is of.
+    shaped: [(f64, f64); 2],
+    shaped_kind: u8,
     env: Env,
     /// Granular: progress to the next grain (spawns at 1), chord step, warm start pending.
     spawn: f32,
@@ -977,6 +1013,8 @@ impl ModSynth {
                 keyed: [[0.0; 2]; 2],
                 filter: [[[0.0; 2]; 2]; 2],
                 svf: [[0.0; 2]; 2],
+                shaped: [(0.0, 0.0); 2],
+                shaped_kind: u8::MAX,
                 env: Env::IDLE,
                 spawn: 1.0,
                 pick: 0,
@@ -1174,6 +1212,7 @@ impl ModSynth {
                 if !was_active {
                     state.filter = [[[0.0; 2]; 2]; 2];
                     state.svf = [[0.0; 2]; 2];
+                    (state.shaped, state.shaped_kind) = ([(0.0, 0.0); 2], u8::MAX);
                     state.pink = [[0.0; 7]; 2];
                     state.brown = [0.0; 2];
                     state.previous = [[0.0; 2]; 2];
@@ -1876,7 +1915,7 @@ impl ModSynth {
                                 ModuleKind::Analog => {
                                     // Hard sync: the wave restarts each time the note's own cycle does.
                                     let read = (state.phases[u] + phase).rem_euclid(1.0);
-                                    let value = analog(module.choice[0], read, (inc * b.sync).abs(), b.width);
+                                    let value = analog(module.choice[0], read, (inc * b.sync).abs(), b.width, module.clean);
                                     state.masters[u] += inc;
                                     state.phases[u] += inc * b.sync;
                                     if state.masters[u] >= 1.0 || state.masters[u] < 0.0 {
@@ -1959,8 +1998,17 @@ impl ModSynth {
                     }
                     ModuleKind::Distortion => {
                         let kind = module.choice[0];
-                        let dist = |x: f32, bias: f32| shape(kind, (x + bias) * b.drive, b.steps) - shape(kind, bias * b.drive, b.steps);
-                        let (dl, dr) = (dist(l, b.bias + b.spread), dist(r, b.bias - b.spread));
+                        let (dl, dr) = if module.clean && kind < 5 {
+                            if state.shaped_kind != kind {
+                                state.shaped.iter_mut().for_each(|was| was.1 = shape_area(kind, was.0));
+                                state.shaped_kind = kind;
+                            }
+                            let mut dist = |x: f32, bias: f32, ch: usize| shape_clean(kind, (x + bias) * b.drive, &mut state.shaped[ch]) - shape(kind, bias * b.drive, b.steps);
+                            (dist(l, b.bias + b.spread, 0), dist(r, b.bias - b.spread, 1))
+                        } else {
+                            let dist = |x: f32, bias: f32| shape(kind, (x + bias) * b.drive, b.steps) - shape(kind, bias * b.drive, b.steps);
+                            (dist(l, b.bias + b.spread), dist(r, b.bias - b.spread))
+                        };
                         l = (l + (dl - l) * b.mix) * ring;
                         r = (r + (dr - r) * b.mix) * ring;
                         voice.outputs[k] = (l + r) * 0.5;
@@ -2297,6 +2345,97 @@ mod tests {
             println!("{name}: {across:.4} across the new note, {within:.4} within the notes");
             assert!(within > 0.0 && across <= within * 1.5, "{name}: {across} {within}");
         }
+    }
+
+    /// What of a held note at `f0` is not one of its harmonics, in dB under
+    /// the whole: what folded back from over the top of the band.
+    fn dirt(signal: &[f32], f0: f32) -> f32 {
+        const N: usize = 32_768;
+        let window = |i: usize| 0.5 - 0.5 * (TAU * i as f32 / N as f32).cos();
+        let (mut re, mut im) = (signal[signal.len() - N..].iter().enumerate().map(|(i, v)| v * window(i)).collect::<Vec<_>>(), vec![0.0; N]);
+        crate::dsp::fft(&mut re, &mut im);
+        let (mut clean, mut dirty) = (0f64, 0f64);
+        for k in 8..N / 2 {
+            let hz = k as f32 * SR / N as f32;
+            let off = (hz / f0 - (hz / f0).round()).abs() * f0 / (SR / N as f32);
+            let e = (re[k] * re[k] + im[k] * im[k]) as f64;
+            if off <= 4.0 {
+                clean += e
+            } else {
+                dirty += e
+            }
+        }
+        (10.0 * (dirty / (clean + dirty)).log10()) as f32
+    }
+
+    /// A new Analog's saw and pulse and a new Distortion fold less back on
+    /// high notes; the factory sounds and a saved module that says nothing
+    /// keep what they had.
+    #[test]
+    fn a_new_modules_waves_and_distortion_stay_clean_up_high() {
+        let wave = |wave: u8, clean: bool| {
+            let mut m = Module::new(ModuleKind::Analog);
+            m.choice[0] = wave;
+            m.clean = clean;
+            m
+        };
+        let measure = |name: &str, make: &dyn Fn(bool) -> ModularParams, notes: &[u8]| -> Vec<(f32, f32, f32)> {
+            notes
+                .iter()
+                .map(|&note| {
+                    let f0 = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+                    let (old, new) = (play(make(false), &[note], 48_000).0, play(make(true), &[note], 48_000).0);
+                    let (before, now, level) = (dirt(&old, f0), dirt(&new, f0), 20.0 * (rms(&new[4800..]) / rms(&old[4800..])).log10());
+                    println!("{name}, nota {note}: {before:.1} dB antes, {now:.1} ahora; nivel {level:+.2} dB");
+                    (before, now, level)
+                })
+                .collect()
+        };
+        let notes = [48u8, 72, 84, 96];
+        for (name, w) in [("sierra", 0u8), ("pulso", 1)] {
+            for (note, (before, now, level)) in notes.iter().zip(measure(name, &|clean| stack(&[group(), wave(w, clean), output()]), &notes)) {
+                assert!(now < before - 4.0 && now < -37.0 && level.abs() < 0.5, "{name}, note {note}: {now} dB ({before} before), {level} dB");
+            }
+        }
+        let distorted = |kind: u8, drive: f32, clean: bool| {
+            let mut d = Module::new(ModuleKind::Distortion);
+            d.choice[0] = kind;
+            d.set(slot::DRIVE, drive);
+            d.clean = clean;
+            stack(&[group(), wave(0, true), d, output()])
+        };
+        // The curves that flatten out, on a saw: as loud, and cleaner.
+        for (name, kind) in [("overdrive", 0u8), ("saturate", 1), ("hard clip", 4)] {
+            for drive in [12.0f32, 30.0] {
+                for (note, (before, now, level)) in notes.iter().zip(measure(&format!("{name} {drive} dB"), &|clean| distorted(kind, drive, clean), &notes)) {
+                    assert!(now < before - 7.0 && level.abs() < 0.5, "{name} {drive} dB, note {note}: {now} dB ({before} before), {level} dB");
+                }
+            }
+        }
+        // The ones that fold: cleaner too (pushed hard on a high note, most of
+        // what they make is over the top of the band, and goes).
+        for (name, kind) in [("foldback", 2u8), ("sine", 3)] {
+            for (note, (before, now, level)) in notes.iter().zip(measure(&format!("{name} 12 dB"), &|clean| distorted(kind, 12.0, clean), &notes)) {
+                assert!(now < before - 5.0 && level.abs() < 0.5, "{name}, note {note}: {now} dB ({before} before), {level} dB");
+            }
+        }
+        // Quantize has no curve to take a mean of, and the sine and the
+        // triangle no step: they play as they did.
+        assert_eq!(play(distorted(5, 12.0, true), &[72], 4_800).0, play(distorted(5, 12.0, false), &[72], 4_800).0);
+        for w in [2u8, 3] {
+            assert_eq!(play(stack(&[group(), wave(w, true), output()]), &[72], 4_800).0, play(stack(&[group(), wave(w, false), output()]), &[72], 4_800).0);
+        }
+        // Who has it.
+        assert!(Module::new(ModuleKind::Analog).clean && ModularParams::default().modules[1].clean);
+        for (name, p) in ModularParams::presets() {
+            assert_eq!(p.modules.iter().any(|m| m.clean), name == "Init", "{name}");
+        }
+        let mut old = serde_json::to_value(Module::new(ModuleKind::Distortion)).unwrap();
+        old.as_object_mut().unwrap().remove("clean");
+        let old: Module = serde_json::from_value(old).unwrap();
+        assert!(!old.clean);
+        let again: Module = serde_json::from_str(&serde_json::to_string(&Module::new(ModuleKind::Distortion)).unwrap()).unwrap();
+        assert!(again.clean);
     }
 
     #[test]

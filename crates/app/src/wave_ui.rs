@@ -215,6 +215,8 @@ pub(crate) fn osc_panel(app: &PulseApp, ui: &mut egui::Ui, t: usize, o: usize, b
             if kind != osc.kind {
                 let mut p = base;
                 p.osc[o].kind = kind;
+                // An engine chosen now is the clean one (see `WaveOsc::clean`).
+                p.osc[o].clean = true;
                 set(actions, p);
             }
             if osc.kind == OscKind::Wavetable {

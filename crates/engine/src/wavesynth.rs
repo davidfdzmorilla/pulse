@@ -6,7 +6,7 @@
 //! and handed to the audio thread ready to play; rendering never allocates.
 
 use crate::effects::{ProcessContext, Switched};
-use crate::instruments::{saw, square, svf_g, Declick, Gate, Svf, Taken, Watch};
+use crate::instruments::{saw, saw_clean, square, svf_g, Declick, Gate, Svf, Taken, Watch};
 use crate::synth::HELD;
 use crate::model::{
     wave_is_target, ArpMode, SEQ_STEPS, WAVE_BALANCE, WAVE_FILTER2, WAVE_OSC_EXTRA, WAVE_RANDOM_RATE, KickWave, LfoMode, ModSource, OscKind, OscWarp, ParamInfo, WaveEnv, WaveFilter, WaveParams,
@@ -457,6 +457,8 @@ struct OscBlock {
     level: usize,
     /// The level a clean warp reads (see [`warp_stretch`]), if it has one.
     clean: Option<usize>,
+    /// The analog saw and pulse with their steps corrected over four samples.
+    smooth: bool,
     position: f32,
     warp: OscWarp,
     amount: f32,
@@ -1225,6 +1227,7 @@ impl WaveSynth {
                 incs,
                 gains,
                 level: Wavetable::level_for(top, sr),
+                smooth: osc.clean,
                 clean: warp_stretch(osc.warp, at(12)).filter(|_| osc.clean && at(12) > 0.0).map(|stretch| Wavetable::level_for(top * stretch, sr)),
                 position: at(0),
                 warp: osc.warp,
@@ -1387,6 +1390,7 @@ impl WaveSynth {
                             let ph = (phase + fm).rem_euclid(1.0);
                             let sine = (ph * TAU).sin();
                             let triangle = 1.0 - 4.0 * (((ph + 0.25) % 1.0) - 0.5).abs();
+                            let saw = if block.smooth { saw_clean } else { saw };
                             let saw_wave = saw((ph + 0.5) % 1.0, inc);
                             // A pulse of any width from two band-limited saws.
                             let pulse = (saw(ph, inc) - saw((ph + width) % 1.0, inc)) * 0.5 / (1.0 - width.min(1.0 - width));
@@ -2273,6 +2277,40 @@ mod polychrome_tests {
             }
         }
         (10.0 * (dirty / (clean + dirty)).log10()) as f32
+    }
+
+    /// A new sound's analog saw and pulse fold less back on high notes (their
+    /// steps are corrected over four samples, not two); the factory sounds
+    /// and a saved one that says nothing keep the two.
+    #[test]
+    fn a_new_sounds_analog_waves_stay_clean_up_high() {
+        let analog = |position: f32, clean: bool| {
+            let mut p = engine(OscKind::Analog);
+            p.osc[0].position = position;
+            p.osc[0].clean = clean;
+            p
+        };
+        // How bright: what is over 8 kHz, against the whole.
+        let highs = |x: &[f32]| {
+            let (mut re, mut im) = (x[x.len() - 8192..].to_vec(), vec![0.0; 8192]);
+            fft(&mut re, &mut im);
+            let band = |from: usize, to: usize| (from..to).map(|k| re[k] * re[k] + im[k] * im[k]).sum::<f32>();
+            10.0 * (band(8000 * 8192 / 48_000, 4096) / band(1, 4096)).log10()
+        };
+        for (name, position) in [("sierra", 2.0 / 3.0), ("pulso", 1.0)] {
+            for note in [48u8, 60, 84, 96] {
+                let f0 = 440.0 * 2f32.powf((note as f32 - 69.0) / 12.0);
+                let (old, new) = (play(analog(position, false), note, 48_000).0, play(analog(position, true), note, 48_000).0);
+                let (before, now) = (dirt(&old, f0), dirt(&new, f0));
+                let (level, top) = (20.0 * (rms(&new) / rms(&old)).log10(), highs(&new) - highs(&old));
+                println!("{name}, nota {note}: {before:.1} dB antes, {now:.1} ahora; nivel {level:+.2} dB; agudos {top:+.1} dB");
+                assert!(now < before - 4.0 && now < -36.0, "{name}, note {note}: {now} dB ({before} before)");
+                // As loud, and a little less on top (the price of the wider correction).
+                assert!(level.abs() < 0.5 && (-2.5..0.0).contains(&top), "{name}, note {note}: {level} dB, {top} dB on top");
+            }
+        }
+        // The sine and the triangle have no step: they play as they did.
+        assert_eq!(play(analog(0.2, true), 72, 4_800).0, play(analog(0.2, false), 72, 4_800).0);
     }
 
     /// A new sound's warps stay clean on high notes: read several times a

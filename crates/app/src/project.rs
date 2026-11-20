@@ -990,6 +990,7 @@ impl Project {
                 release: 0.8,
                 gain: 0.2,
                 feedback_smooth: false,
+                oversample: false,
                 ..Default::default()
             }),
         );

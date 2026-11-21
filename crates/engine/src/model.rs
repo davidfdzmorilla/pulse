@@ -2146,7 +2146,7 @@ impl KeysParams {
         vec![
             ("Piano · De cola", KeysParams { gain: 0.6, ..piano }),
             ("Piano · Brillante", KeysParams { tone: 0.85, hammer: 0.5, body: 0.35, width: 0.6, gain: 0.45, ..piano }),
-            ("Piano · Suave", KeysParams { tone: 0.22, dynamics: 0.9, hammer: 0.2, body: 0.65, release: 0.5, gain: 0.7, ..piano }),
+            ("Piano · Suave", KeysParams { tone: 0.22, dynamics: 0.9, hammer: 0.2, body: 0.65, release: 0.5, gain: 1.0, ..piano }),
             ("Piano · De pared", KeysParams { tone: 0.6, strings: 0.95, body: 0.75, length: 0.6, width: 0.3, gain: 0.7, ..piano }),
             ("Púas · Clásico", tines),
             ("Púas · Trémolo", KeysParams { tremolo: 0.6, tremolo_rate: 4.2, bell: 0.35, width: 0.7, gain: 0.4, ..tines }),
@@ -5770,7 +5770,7 @@ impl WaveParams {
         p.matrix[2] = slot(ModSource::SampleHold, 99, 0.3);
         p.env[0] = env(0.8, 1.0, 1.0, 1.8);
         p.fx[0] = reverb(0.9, 0.35);
-        p.gain = 0.55;
+        p.gain = 0.78;
         list.push(("Pad · Movimiento aleatorio", p));
 
         let mut p = init;
@@ -6123,7 +6123,7 @@ impl WaveParams {
         p.env[0] = env(1.2, 1.0, 1.0, 2.5);
         p.fx[0] = chorus;
         p.fx[1] = reverb(0.9, 0.4);
-        p.gain = 0.32;
+        p.gain = 0.45;
         list.push(("Pad · Cristal armónico", p));
 
         // Dark film pad: drifting saws low in a 24 dB filter that wanders at random.
@@ -6218,7 +6218,8 @@ impl WaveParams {
         p.matrix[1] = slot(ModSource::Lfo1, 32, 0.45);
         p.mono = true;
         p.gain = 0.45;
-                p.fx[0] = drive(6.0);
+        // As `drive(6.0)`, 3.5 dB lower: the level comes down after the saturation, not into it.
+        p.fx[0] = fx(Effect::Saturator(SaturatorParams { drive_db: 6.0, output_db: -6.5, ..SaturatorParams::old() }));
         list.push(("Bajo · Gruñido", p));
 
         let mut p = init;
@@ -6237,7 +6238,7 @@ impl WaveParams {
         p.mono = true;
         p.glide = 30.0;
         p.env[0] = env(0.003, 1.0, 1.0, 0.08);
-        p.gain = 0.7;
+        p.gain = 0.47;
         list.push(("Bajo · Sub", p));
 
         let mut p = init;
@@ -6249,7 +6250,7 @@ impl WaveParams {
         p.matrix[0] = slot(ModSource::Env2, 12, 0.5);
         p.sub = WaveSub { on: true, level: 0.5, ..init.sub };
         p.mono = true;
-        p.gain = 0.75;
+        p.gain = 0.5;
         list.push(("Bajo · FM metálico", p));
 
         let mut p = init;
@@ -8901,7 +8902,7 @@ impl ModularParams {
         p.modulators[..3].copy_from_slice(&[note, left, right]);
         p.lanes[0].fx[0] = delay(0.75, 0.3);
         p.lanes[0].fx[1] = reverb(0.85, 0.35);
-        p.gain = 0.1;
+        p.gain = 0.14;
         list.push(("Ruido · Silbidos al azar", p));
 
         // The global unison as a stack of fifths: root, fifth and ninth from every key.

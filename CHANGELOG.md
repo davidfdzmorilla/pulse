@@ -22,6 +22,9 @@ still in `0.x`, so any release may change things.
 
 ### Added
 
+- Delay, Reverb, Chorus, Phaser and Auto Filter: a **Presets** menu in each
+  one's header, 50 settings by use in all (vocals, synths, guitars, sweeps
+  in time, fully wet ones for a return…). The search finds them too.
 - Compressor, Limiter, Gate, Transient, De-esser and Ducker: a **Presets**
   menu in each one's header, 47 settings by use in all (vocals, drums,
   basses, the master, sidechain…). A preset keeps the Sidechain the device

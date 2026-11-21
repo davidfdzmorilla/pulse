@@ -2331,8 +2331,8 @@ mod tests {
     use super::*;
 
     /// Every effect's factory settings: named «Categoría · Nombre», each name
-    /// once, every knob inside its range. The dynamics ones, on a drum-like
-    /// loop: they neither silence it nor blow it up.
+    /// once, every knob inside its range. On a drum-like loop, none blows it
+    /// up, and the dynamics ones don't silence it either.
     #[test]
     fn every_effects_factory_settings_are_in_range_and_keep_the_level() {
         const SR: f32 = 48_000.0;
@@ -2361,7 +2361,10 @@ mod tests {
                 for (i, info) in preset.params().iter().enumerate() {
                     assert_eq!(info.clamp(preset.get(i)), preset.get(i), "{} · {name}: {}", effect.label(), info.name);
                 }
-                if !matches!(preset, Effect::Compressor(_) | Effect::Limiter(_) | Effect::Gate(_) | Effect::Transient(_) | Effect::DeEsser(_) | Effect::Ducker(_)) {
+                let dynamics = matches!(preset, Effect::Compressor(_) | Effect::Limiter(_) | Effect::Gate(_) | Effect::Transient(_) | Effect::DeEsser(_) | Effect::Ducker(_));
+                // A filter may leave little of a loop that is mostly lows.
+                let space = matches!(preset, Effect::Delay(_) | Effect::Reverb(_) | Effect::Chorus(_) | Effect::Phaser(_) | Effect::AutoFilter(_));
+                if !dynamics && !space {
                     continue;
                 }
                 count += 1;
@@ -2374,10 +2377,12 @@ mod tests {
                 let (level, peak) = (20.0 * (rms(&l) / rms(&dry)).log10(), l.iter().fold(0f32, |m, v| m.max(v.abs())));
                 println!("{} · {name}: {level:+.1} dB, pico {peak:.2}", effect.label());
                 assert!(l.iter().all(|v| v.is_finite()) && peak <= 2.0, "{} · {name}: peak {peak}", effect.label());
-                assert!((-14.0..=6.0).contains(&level), "{} · {name}: {level} dB", effect.label());
+                // A return's reverb is all wet and has no level of its own: the send sets it.
+                let most = if name.starts_with("Retorno") { 14.0 } else { 6.0 };
+                assert!((if dynamics { -14.0 } else { -40.0 }..=most).contains(&level), "{} · {name}: {level} dB", effect.label());
             }
         }
-        assert_eq!(count, 47);
+        assert_eq!(count, 47 + 50);
     }
 
     fn ctx() -> ProcessContext {

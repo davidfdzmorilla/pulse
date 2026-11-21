@@ -2410,6 +2410,8 @@ A low-pass, high-pass or band-pass filter, with a tempo-synced LFO that moves th
 - **Drive** saturates what goes into the filter.
 - With **Res** above 95 %, the filter rings on its own (self-oscillates) at its frequency: the whistle of acid sweeps. Its level stays bounded even if you push the cutoff all the way up or automate it in jumps.
 
+**Presets** has eleven settings: the **Sweep · …** ones move the cutoff in time (**Quarter-note wah**, **Eighth notes**, **Slow, four bars**) and **Basses · Eighth-note wobble** does the wobble; the **Mix · …** ones (**Cut lows**, **Cut highs**, **Telephone**) stay still; the **Transition · …** ones (**Closed filter**, **Highs only**) are for automating their **Freq** in a build; and **Creative · Acid sweep** and **Old radio**.
+
 #### Ducker
 
 Makes the track **pump**: it drops the volume and brings it back, in time.
@@ -2434,6 +2436,13 @@ Makes the track **pump**: it drops the volume and brings it back, in time.
 - **Phaser**: a swirling sweep, like a whirlpool.
 - **Delay**: echo with a synced time (from 1/16 to one bar), **Ping Pong** (bounces from side to side), feedback (how many repeats) and filter.
 - **Reverb**: room, with size, damping and width. With **Dense** (how a new one comes) the tail thickens at once and doesn't sound metallic; unticked it is Pulse's classic reverb, the one earlier projects, templates and factory sounds keep. Both last as long and sound as loud at the same knobs.
+
+All four have **Presets** by use:
+
+- **Chorus** (9): from **Synths · String ensemble** and **Guitars · 80s clean** to **Vocals · Double**, **Creative · Vibrato** and **Creative · Flanger**.
+- **Phaser** (8): **Guitars · Slow classic** and **Fast funk**, **Keys · Electric piano**, **Synths · Deep sweep**, **Drums · Swirling hats**…
+- **Delay** (11): **Vocals · Slapback** and **Quarter-note echo**, **Synths · Dotted eighth**, **Ambience · Dub**… and the **Return Track · …** ones, fully wet, for a return.
+- **Reverb** (11): **Vocals · Short room** and **Ballad**, **Drums · Room**, **Pads · Huge**, **Mix · Mono in the middle**… and the **Return Track · …** ones, fully wet too. They are of the dense reverb.
 
 +++ All parameters
 - Chorus: Rate 0.05–5 Hz, Depth, Delay 2–20 ms, Dry/Wet.

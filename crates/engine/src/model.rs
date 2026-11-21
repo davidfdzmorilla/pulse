@@ -2630,6 +2630,30 @@ impl Default for DelayParams {
     }
 }
 
+impl DelayParams {
+    /// Factory settings, «Categoría · Nombre». The «Retorno» ones are all
+    /// wet, for a return track.
+    pub fn presets() -> Vec<(&'static str, DelayParams)> {
+        let set = |time_beats, feedback, mix, ping_pong, filter_hz| DelayParams { time_beats, feedback, mix, ping_pong, filter_hz };
+        vec![
+            // One short repeat: the 50s vocal.
+            ("Voces · Slapback", set(0.25, 0.05, 0.2, false, 6000.0)),
+            ("Voces · Eco de negra", set(1.0, 0.3, 0.18, false, 4000.0)),
+            ("Voces · Corchea oscura", set(0.5, 0.55, 0.3, true, 2200.0)),
+            ("Sintes · Corchea con puntillo", set(0.75, 0.45, 0.3, true, 5000.0)),
+            ("Sintes · Ping-pong ancho", set(0.5, 0.5, 0.35, true, 8000.0)),
+            ("Guitarras · Negra con puntillo", set(1.5, 0.35, 0.25, false, 4500.0)),
+            ("Batería · Semicorcheas", set(0.25, 0.3, 0.15, true, 7000.0)),
+            // Long, dark repeats that pile up.
+            ("Ambiente · Dub", set(0.75, 0.75, 0.4, true, 1500.0)),
+            ("Ambiente · Ecos largos", set(2.0, 0.6, 0.3, true, 3000.0)),
+            ("Retorno · Corchea", set(0.5, 0.4, 1.0, true, 5000.0)),
+            ("Retorno · Corchea con puntillo", set(0.75, 0.45, 1.0, true, 4500.0)),
+        ]
+    }
+}
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ReverbParams {
     pub size: f32,
@@ -2653,6 +2677,30 @@ impl Default for ReverbParams {
         }
     }
 }
+
+impl ReverbParams {
+    /// Factory settings, «Categoría · Nombre», of the dense reverb. The
+    /// «Retorno» ones are all wet, for a return track.
+    pub fn presets() -> Vec<(&'static str, ReverbParams)> {
+        let d = ReverbParams::default();
+        let set = |size, damping, width, mix| ReverbParams { size, damping, width, mix, ..d };
+        vec![
+            ("Voces · Sala corta", set(0.35, 0.6, 0.8, 0.15)),
+            ("Voces · Balada", set(0.8, 0.45, 1.0, 0.2)),
+            ("Batería · Habitación", set(0.3, 0.5, 0.9, 0.15)),
+            ("Batería · Caja grande", set(0.65, 0.35, 1.0, 0.3)),
+            ("Sintes · Brillante", set(0.7, 0.15, 1.0, 0.25)),
+            ("Teclas · Sala cálida", set(0.55, 0.75, 0.9, 0.22)),
+            ("Pads · Inmenso", set(0.92, 0.4, 1.0, 0.22)),
+            ("Ambiente · Oscuro y lejano", set(0.8, 0.9, 1.0, 0.32)),
+            // No width: a reverb that stays behind a sound in the middle.
+            ("Mezcla · Mono al centro", set(0.4, 0.5, 0.0, 0.2)),
+            ("Retorno · Sala mediana", set(0.5, 0.5, 1.0, 1.0)),
+            ("Retorno · Sala grande", set(0.7, 0.45, 1.0, 1.0)),
+        ]
+    }
+}
+
 
 impl ReverbParams {
     /// A Reverb as they were before the dense one (see [`Self::dense`]):
@@ -2883,6 +2931,30 @@ impl Default for AutoFilterParams {
     }
 }
 
+impl AutoFilterParams {
+    /// Factory settings, «Categoría · Nombre». The «Mezcla» and «Transición»
+    /// ones stay still (no LFO): the second, to automate their Freq.
+    pub fn presets() -> Vec<(&'static str, AutoFilterParams)> {
+        use FilterMode::{BandPass, HighPass, LowPass};
+        let set = |mode, cutoff, resonance, lfo_beats, lfo_amount, drive_db, steep| AutoFilterParams { mode, cutoff, resonance, lfo_beats, lfo_amount, drive_db, steep };
+        vec![
+            ("Barrido · Wah de negras", set(BandPass, 900.0, 0.7, 1.0, 2.0, 0.0, false)),
+            ("Barrido · Corcheas", set(LowPass, 1500.0, 0.5, 0.5, 2.5, 0.0, false)),
+            ("Barrido · Lento de cuatro compases", set(LowPass, 1200.0, 0.4, 16.0, 3.0, 0.0, true)),
+            ("Bajos · Wobble de corcheas", set(LowPass, 500.0, 0.8, 0.5, 3.0, 6.0, true)),
+            ("Mezcla · Quitar graves", set(HighPass, 120.0, 0.1, 4.0, 0.0, 0.0, true)),
+            ("Mezcla · Quitar agudos", set(LowPass, 8000.0, 0.1, 4.0, 0.0, 0.0, true)),
+            ("Mezcla · Teléfono", set(BandPass, 1500.0, 0.3, 4.0, 0.0, 6.0, false)),
+            ("Transición · Filtro cerrado", set(LowPass, 250.0, 0.5, 4.0, 0.0, 0.0, true)),
+            ("Transición · Solo agudos", set(HighPass, 2000.0, 0.4, 4.0, 0.0, 0.0, true)),
+            // Past 95 % of Res it rings by itself: the acid whistle.
+            ("Creativo · Barrido ácido", set(LowPass, 400.0, 1.0, 1.0, 2.5, 12.0, true)),
+            ("Creativo · Radio vieja", set(BandPass, 1200.0, 0.5, 4.0, 0.0, 14.0, false)),
+        ]
+    }
+}
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct ChorusParams {
     pub rate: f32,
@@ -2896,6 +2968,27 @@ impl Default for ChorusParams {
         Self { rate: 0.6, depth: 0.5, delay_ms: 8.0, mix: 0.5 }
     }
 }
+
+impl ChorusParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, ChorusParams)> {
+        let set = |rate, depth, delay_ms, mix| ChorusParams { rate, depth, delay_ms, mix };
+        vec![
+            ("Sintes · Ensemble de cuerdas", set(0.9, 0.7, 6.0, 0.6)),
+            ("Sintes · Ancho sutil", set(0.3, 0.3, 12.0, 0.35)),
+            ("Guitarras · Limpia de los 80", set(0.8, 0.45, 7.0, 0.45)),
+            ("Bajos · Solo un poco", set(0.4, 0.25, 5.0, 0.25)),
+            ("Voces · Doblar", set(0.25, 0.2, 18.0, 0.4)),
+            ("Teclas · Piano eléctrico", set(1.2, 0.4, 6.0, 0.4)),
+            ("Pads · Lento y profundo", set(0.12, 0.9, 14.0, 0.55)),
+            // All wet: the pitch itself wavers.
+            ("Creativo · Vibrato", set(4.5, 0.6, 4.0, 1.0)),
+            // The shortest delay, swept slowly: a flanger's comb.
+            ("Creativo · Flanger", set(0.15, 0.9, 2.0, 0.5)),
+        ]
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PhaserParams {
@@ -2911,6 +3004,25 @@ impl Default for PhaserParams {
         Self { rate: 0.4, depth: 0.7, center: 800.0, feedback: 0.5, mix: 0.5 }
     }
 }
+
+impl PhaserParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, PhaserParams)> {
+        let set = |rate, depth, center, feedback, mix| PhaserParams { rate, depth, center, feedback, mix };
+        vec![
+            ("Guitarras · Clásico lento", set(0.3, 0.7, 700.0, 0.4, 0.5)),
+            ("Guitarras · Funk rápido", set(2.5, 0.6, 1000.0, 0.3, 0.5)),
+            ("Teclas · Piano eléctrico", set(0.5, 0.6, 900.0, 0.5, 0.45)),
+            ("Sintes · Barrido profundo", set(0.1, 1.0, 600.0, 0.8, 0.5)),
+            ("Pads · Movimiento suave", set(0.08, 0.5, 1200.0, 0.2, 0.35)),
+            ("Batería · Charles que giran", set(0.25, 0.8, 2500.0, 0.6, 0.4)),
+            ("Creativo · Resonante", set(0.6, 0.9, 500.0, 0.8, 0.5)),
+            // All wet and no feedback: the phase wavers, not the level.
+            ("Creativo · Vibrato", set(5.0, 0.4, 800.0, 0.0, 1.0)),
+        ]
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct BitcrusherParams {
@@ -3717,6 +3829,11 @@ impl Effect {
             Effect::Transient(_) => TransientParams::presets().into_iter().map(|(n, p)| (n, Effect::Transient(p))).collect(),
             Effect::DeEsser(_) => DeEsserParams::presets().into_iter().map(|(n, p)| (n, Effect::DeEsser(p))).collect(),
             Effect::Ducker(_) => DuckerParams::presets().into_iter().map(|(n, p)| (n, Effect::Ducker(p))).collect(),
+            Effect::Delay(_) => DelayParams::presets().into_iter().map(|(n, p)| (n, Effect::Delay(p))).collect(),
+            Effect::Reverb(_) => ReverbParams::presets().into_iter().map(|(n, p)| (n, Effect::Reverb(p))).collect(),
+            Effect::Chorus(_) => ChorusParams::presets().into_iter().map(|(n, p)| (n, Effect::Chorus(p))).collect(),
+            Effect::Phaser(_) => PhaserParams::presets().into_iter().map(|(n, p)| (n, Effect::Phaser(p))).collect(),
+            Effect::AutoFilter(_) => AutoFilterParams::presets().into_iter().map(|(n, p)| (n, Effect::AutoFilter(p))).collect(),
             Effect::Glue(_) => GlueParams::presets().into_iter().map(|(n, p)| (n, Effect::Glue(p))).collect(),
             Effect::Multiband(_) => MultibandParams::presets().into_iter().map(|(n, p)| (n, Effect::Multiband(p))).collect(),
             Effect::Convolution(_) => ConvolutionParams::presets().into_iter().map(|(n, p)| (n, Effect::Convolution(p))).collect(),

@@ -1070,6 +1070,41 @@ pub const EN: &[(&str, &str)] = &[
     ("Largo y profundo", "Long and deep"),
     ("Más pegada", "More punch"),
     ("Más sala", "More room"),
+    ("Ancho sutil", "Subtle width"),
+    ("Barrido profundo", "Deep sweep"),
+    ("Barrido ácido", "Acid sweep"),
+    ("Caja grande", "Big snare"),
+    ("Charles que giran", "Swirling hats"),
+    ("Clásico lento", "Slow classic"),
+    ("Corchea", "Eighth note"),
+    ("Corchea con puntillo", "Dotted eighth"),
+    ("Corchea oscura", "Dark eighth"),
+    ("Doblar", "Double"),
+    ("Eco de negra", "Quarter-note echo"),
+    ("Ecos largos", "Long echoes"),
+    ("Ensemble de cuerdas", "String ensemble"),
+    ("Filtro cerrado", "Closed filter"),
+    ("Funk rápido", "Fast funk"),
+    ("Inmenso", "Huge"),
+    ("Lento de cuatro compases", "Slow, four bars"),
+    ("Lento y profundo", "Slow and deep"),
+    ("Limpia de los 80", "80s clean"),
+    ("Mono al centro", "Mono in the middle"),
+    ("Movimiento suave", "Gentle motion"),
+    ("Negra con puntillo", "Dotted quarter"),
+    ("Oscuro y lejano", "Dark and distant"),
+    ("Ping-pong ancho", "Wide ping-pong"),
+    ("Quitar agudos", "Cut highs"),
+    ("Quitar graves", "Cut lows"),
+    ("Radio vieja", "Old radio"),
+    ("Sala corta", "Short room"),
+    ("Sala mediana", "Medium room"),
+    ("Semicorcheas", "Sixteenth notes"),
+    ("Solo agudos", "Highs only"),
+    ("Solo un poco", "Just a little"),
+    ("Teléfono", "Telephone"),
+    ("Wah de negras", "Quarter-note wah"),
+    ("Wobble de corcheas", "Eighth-note wobble"),
     ("Pad troceado", "Chopped pad"),
     ("Piano al fondo", "Piano in the back"),
     ("Picos fuera", "Peaks off"),
@@ -3014,7 +3049,7 @@ mod tests {
 
     /// Parts of Pulse's names that are the same in English: genres, synth
     /// words, «808».
-    const SAME_IN_ENGLISH: &[&str] = &["1/16", "1/2", "1/4", "1/8", "808", "Acid", "Afro House", "Ambient", "Analog", "Aux", "Blip", "Blues", "Boom", "Boom Bap", "Chill", "Clave", "Club", "Curve", "Deep", "Dembow", "Digital", "Drum & Bass", "Dubstep", "Electro", "Feedback", "FM", "French house", "Funk", "Future", "FX", "Gabber", "General", "Glide", "Gong", "Gospel", "Hard", "Harmonic", "Hip Hop", "House", "Industrial", "Init", "Jazz", "Kits", "Lead", "Lead PWM", "Lo-fi", "Lo-Fi", "Marimba", "Master", "Minimal", "Mod", "Natural", "Neo-soul", "Neuro", "Nonlinear", "OTT", "Pad", "Pad + Pluck", "Perc", "Piano", "Pluck", "Pop", "Progressive", "Psytrance", "Radio", "Reese", "Reggae", "Reverb", "Ride", "Rock", "Rumble", "Seq", "Shaker", "Shepard", "Shuffle", "Sidechain", "Slap", "Soul", "Squelch", "Stab FM", "Streaming", "Sub", "Supersaw", "Synthwave", "Tech House", "Techno", "Toms", "Trance", "Trap", "Tribal", "UK Garage", "Wavetable", "Wobble 1/8", "Yoi", "Zap"];
+    const SAME_IN_ENGLISH: &[&str] = &["1/16", "1/2", "1/4", "1/8", "808", "Acid", "Afro House", "Ambient", "Analog", "Aux", "Blip", "Blues", "Boom", "Boom Bap", "Chill", "Clave", "Club", "Curve", "Deep", "Dembow", "Digital", "Drum & Bass", "Dub", "Dubstep", "Electro", "Feedback", "Flanger", "FM", "French house", "Funk", "Future", "FX", "Gabber", "General", "Glide", "Gong", "Gospel", "Hard", "Harmonic", "Hip Hop", "House", "Industrial", "Init", "Jazz", "Kits", "Lead", "Lead PWM", "Lo-fi", "Lo-Fi", "Marimba", "Master", "Minimal", "Mod", "Natural", "Neo-soul", "Neuro", "Nonlinear", "OTT", "Pad", "Pad + Pluck", "Perc", "Piano", "Pluck", "Pop", "Progressive", "Psytrance", "Radio", "Reese", "Reggae", "Reverb", "Ride", "Rock", "Rumble", "Seq", "Shaker", "Shepard", "Shuffle", "Sidechain", "Slap", "Slapback", "Soul", "Squelch", "Stab FM", "Streaming", "Sub", "Supersaw", "Synthwave", "Tech House", "Techno", "Toms", "Trance", "Trap", "Tribal", "UK Garage", "Vibrato", "Wavetable", "Wobble 1/8", "Yoi", "Zap"];
 
     #[test]
     fn every_text_has_its_english_and_every_english_its_text() {

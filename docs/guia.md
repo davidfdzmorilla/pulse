@@ -2411,6 +2411,8 @@ Un filtro paso bajo, paso alto o paso banda, con un LFO sincronizado al tempo qu
 - **Drive** satura lo que entra al filtro.
 - Con **Res** por encima del 95 %, el filtro suena solo (auto-oscila) a su frecuencia: el silbido de los barridos ácidos. Su nivel se queda acotado aunque muevas el corte hasta arriba o lo automatices a saltos.
 
+**Presets** trae once ajustes: los **Barrido · …** mueven el corte al tempo (**Wah de negras**, **Corcheas**, **Lento de cuatro compases**) y **Bajos · Wobble de corcheas** hace el wobble; los **Mezcla · …** (**Quitar graves**, **Quitar agudos**, **Teléfono**) se quedan quietos; los **Transición · …** (**Filtro cerrado**, **Solo agudos**) están para automatizar su **Freq** en una subida; y **Creativo · Barrido ácido** y **Radio vieja**.
+
 #### Ducker
 
 Hace que la pista **bombee**: baja el volumen y vuelve, al ritmo.
@@ -2435,6 +2437,13 @@ Hace que la pista **bombee**: baja el volumen y vuelve, al ritmo.
 - **Phaser**: un barrido que da vueltas, como un remolino.
 - **Delay**: eco con tiempo sincronizado (de 1/16 a un compás), **Ping Pong** (rebota de un lado a otro), feedback (cuántas repeticiones) y filtro.
 - **Reverb**: sala, con tamaño, amortiguación y anchura. Con **Densa** (como viene una nueva) la cola se espesa enseguida y no suena metálica; sin marcar es la reverb clásica de Pulse, que es la que conservan los proyectos, las plantillas y los sonidos de fábrica anteriores. Las dos duran y suenan igual de fuerte con los mismos knobs.
+
+Los cuatro traen **Presets** por uso:
+
+- **Chorus** (9): de **Sintes · Ensemble de cuerdas** y **Guitarras · Limpia de los 80** a **Voces · Doblar**, **Creativo · Vibrato** y **Creativo · Flanger**.
+- **Phaser** (8): **Guitarras · Clásico lento** y **Funk rápido**, **Teclas · Piano eléctrico**, **Sintes · Barrido profundo**, **Batería · Charles que giran**…
+- **Delay** (11): **Voces · Slapback** y **Eco de negra**, **Sintes · Corchea con puntillo**, **Ambiente · Dub**… y los **Retorno · …**, con todo el sonido mojado, para un retorno.
+- **Reverb** (11): **Voces · Sala corta** y **Balada**, **Batería · Habitación**, **Pads · Inmenso**, **Mezcla · Mono al centro**… y los **Retorno · …**, también con todo mojado. Son de la reverb densa.
 
 +++ Todos los parámetros
 - Chorus: Rate 0,05–5 Hz, Depth, Delay 2–20 ms, Dry/Wet.

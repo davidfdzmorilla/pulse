@@ -77,6 +77,12 @@ still in `0.x`, so any release may change things.
   note also come out quieter: most of what they make there is over the top
   of the band. The factory sounds and the modules already in a project
   keep what they had; a module added from the list is a new one.
+- Factory sounds brought closer to the rest of their instrument: four
+  quiet ones are 3 dB louder (Polychrome «Pad · Cristal armónico» and
+  «Pad · Movimiento aleatorio», Pulse Keys «Piano · Suave», Modular
+  «Ruido · Silbidos al azar») and three Wavetable basses 3.5 dB quieter
+  («Bajo · Gruñido», «Bajo · Sub», «Bajo · FM metálico»). A sound already
+  in a project keeps the level it had.
 - Wavetable Synth and Polychrome Synth: the warps of a new sound (**Sync**,
   **Bend+**, **Bend-**, **PWM**, **Mirror**) stay clean on high notes.
   Before, a warped wave folded back from the top of the band as a harsh,

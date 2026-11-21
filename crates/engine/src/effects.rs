@@ -2330,6 +2330,56 @@ impl EffectProcessor {
 mod tests {
     use super::*;
 
+    /// Every effect's factory settings: named «Categoría · Nombre», each name
+    /// once, every knob inside its range. The dynamics ones, on a drum-like
+    /// loop: they neither silence it nor blow it up.
+    #[test]
+    fn every_effects_factory_settings_are_in_range_and_keep_the_level() {
+        const SR: f32 = 48_000.0;
+        // Two bars of hits at 120: a low thump, a noise burst on the off-beats.
+        let mut seed = 22_222u32;
+        let dry: Vec<f32> = (0..(SR as usize * 4))
+            .map(|i| {
+                let t = (i % 24_000) as f32 / SR;
+                seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                let noise = (seed >> 8) as f32 / (1u32 << 23) as f32 - 1.0;
+                let hit = if (i / 24_000) % 2 == 0 { (std::f32::consts::TAU * 60.0 * t).sin() * (-t * 9.0).exp() } else { noise * (-t * 25.0).exp() };
+                0.7 * hit + 0.02 * noise
+            })
+            .collect();
+        let rms = |x: &[f32]| (x.iter().map(|v| v * v).sum::<f32>() / x.len() as f32).sqrt();
+        let mut count = 0;
+        for effect in Effect::catalog() {
+            let presets = effect.factory_presets();
+            let mut names: Vec<&str> = presets.iter().map(|(n, _)| *n).collect();
+            names.sort();
+            names.dedup();
+            assert_eq!(names.len(), presets.len(), "{}: a name twice", effect.label());
+            for (name, preset) in presets {
+                assert_eq!(std::mem::discriminant(&preset), std::mem::discriminant(&effect), "{name}");
+                assert!(name.split_once(" · ").is_some_and(|(a, b)| !a.is_empty() && !b.is_empty()), "{name}");
+                for (i, info) in preset.params().iter().enumerate() {
+                    assert_eq!(info.clamp(preset.get(i)), preset.get(i), "{} · {name}: {}", effect.label(), info.name);
+                }
+                if !matches!(preset, Effect::Compressor(_) | Effect::Limiter(_) | Effect::Gate(_) | Effect::Transient(_) | Effect::DeEsser(_) | Effect::Ducker(_)) {
+                    continue;
+                }
+                count += 1;
+                let mut fx = EffectProcessor::new(&preset, SR);
+                let (mut l, mut r) = (dry.clone(), dry.clone());
+                for (block, (a, b)) in l.chunks_mut(256).zip(r.chunks_mut(256)).enumerate() {
+                    let ctx = ProcessContext { sample_rate: SR, tempo: 120.0, beat: (block * 256) as f64 * 2.0 / SR as f64, beats_per_sample: 2.0 / SR as f64, scale: 0, meter: Default::default() };
+                    fx.process(a, b, &ctx);
+                }
+                let (level, peak) = (20.0 * (rms(&l) / rms(&dry)).log10(), l.iter().fold(0f32, |m, v| m.max(v.abs())));
+                println!("{} · {name}: {level:+.1} dB, pico {peak:.2}", effect.label());
+                assert!(l.iter().all(|v| v.is_finite()) && peak <= 2.0, "{} · {name}: peak {peak}", effect.label());
+                assert!((-14.0..=6.0).contains(&level), "{} · {name}: {level} dB", effect.label());
+            }
+        }
+        assert_eq!(count, 47);
+    }
+
     fn ctx() -> ProcessContext {
         ProcessContext {
             sample_rate: 48_000.0,

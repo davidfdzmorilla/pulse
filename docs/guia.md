@@ -2310,6 +2310,8 @@ El **Compressor** baja lo que pasa del umbral, para que las partes fuertes y las
 
 El **Limiter** sube el volumen con **Gain** sin dejar que nada pase del techo (**Ceiling**). **Release** es lo que tarda en soltar.
 
+**Presets**, en la cabecera de cada uno, trae ajustes por uso. Del Compressor: **Voces · Voz principal**, **Rap pegado** y **Coros**; **Batería · Pegada (ataque lento)**, **Caja con cuerpo** y **Sala aplastada** (para una pista en paralelo); **Bajos · Bajo estable**, **Guitarras · Acústica suave**, **Mezcla · Solo acariciar** y **Sidechain · Dejar sitio**, pensado para elegir el bombo en su Sidechain. Del Limiter: **Master · Transparente**, **Streaming** y **Club fuerte**; **Pista · Red de seguridad** (sin ganancia, solo para lo que se pase), **Batería · Picos fuera** y **Bajos · Graves firmes**. Un preset mantiene el Sidechain que tuvieras elegido. Son puntos de partida: ajusta **Threshold** o **Gain** a lo fuerte que suene tu pista.
+
 Los dos tienen a la derecha un medidor **GR**: cuántos dB bajan el volumen en cada momento.
 
 +++ Todos los parámetros
@@ -2328,6 +2330,8 @@ Una **puerta de ruido**: deja pasar el sonido solo cuando supera el umbral, y lo
 - **Release**: lo que tarda en cerrarse del todo.
 - **Floor**: lo que deja pasar cerrada (−80 dB: nada; −20 dB: baja el fondo sin quitarlo).
 
+**Presets** trae ocho ajustes: **Batería · Golpe seco**, **Caja limpia** y **Toms**; **Voces · Entre frases**, que solo baja el fondo 20 dB; **Guitarras · Sin zumbido**; **Reverb · Cola cortada**, para el retorno de una reverb (la caja de los 80); **Creativo · Corte seco** y **Sidechain · Pad troceado**, para elegir en su Sidechain la pista que marca el ritmo. Ajusta **Threshold** a tu grabación.
+
 > Consejo: con **Sidechain**, se abre cuando suena otra pista, no la suya: un pad que corta al ritmo de los charles (el «trance gate»), o un bajo que solo suena cuando suena el bombo.
 
 #### Transient
@@ -2337,6 +2341,8 @@ Cambia el golpe y la cola de cada sonido, sin umbral, sea cual sea su volumen. U
 - **Attack**: por encima de 0 %, el principio de cada golpe suena más fuerte (una batería con más pegada); por debajo, más suave (redondea una caja o una guitarra muy picada).
 - **Sustain**: por encima de 0 %, lo que sigue al golpe dura más (más sala, más cuerpo); por debajo, se acorta (una batería más seca y apretada).
 - **Output**: el volumen al final.
+
+**Presets** trae ocho ajustes: **Batería · Más pegada**, **Golpe al frente**, **Seca y corta** y **Más sala**; **Bucles · Apretar el bucle**; **Guitarras · Púa marcada**; **Teclas · Piano al fondo** y **Mezcla · Suavizar golpes**. Los que suben el ataque bajan un poco **Output**, para que no suenen más fuerte.
 
 #### Tuner
 
@@ -2364,6 +2370,8 @@ Baja las eses y los silbidos de una voz («s», «ch», «z») cuando saltan, si
 - **Frequency**: desde dónde escucha y baja (2–16 kHz). Las eses de una voz grave suelen estar en 4–6 kHz; las de una aguda, en 6–9 kHz.
 - **Threshold**: a partir de qué nivel de esa parte aguda empieza a bajarla.
 - **Range**: lo más que la baja (hasta 24 dB). Unos 6–8 dB bastan; más, y la voz suena como si ceceara.
+
+**Presets** trae siete ajustes: **Voces · Suave**, **Voz aguda**, **Voz grave**, **Eses fuertes** y **Coros**; **Batería · Platos ásperos** y **Mezcla · Agudos duros**. Ajusta **Threshold** a lo fuerte que suene tu voz.
 
 > Consejo: ponlo después del compresor, porque comprimir sube las eses.
 
@@ -2411,6 +2419,8 @@ Hace que la pista **bombee**: baja el volumen y vuelve, al ritmo.
 - Con **Sidechain**, bombea con cada golpe de la pista elegida (normalmente el bombo): baja de golpe y vuelve. **Vuelve en** (el menú, 1/4 por defecto) es el tiempo de esa vuelta; el knob **Release** es qué parte de ese tiempo tarda en subir (100 %: todo).
 - **Threshold**: el golpe más flojo que lo hace bombear. Súbelo si bombea con cosas que no son el bombo.
 - **Solo graves** (activado por defecto): solo escucha por debajo de 600 Hz, así que bombea con el bombo y no con los charles o las palmas de la misma pista.
+
+**Presets** trae ocho ajustes: **Bombeo · Club**, **Suave**, **Largo y profundo**, **Solo el golpe**, **Corcheas**, **Blancas** y **Trémolo de semicorcheas**, y **Sidechain · Bajo que se aparta**. Mantienen el Sidechain que tuvieras elegido: sin él bombean al tempo; con él, con sus golpes.
 
 +++ Detalles
 - Vuelve en Release aunque la cola del bombo siga sonando, así que con bombos largos de 140–150 BPM también respira entre golpe y golpe.

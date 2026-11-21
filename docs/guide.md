@@ -2309,6 +2309,8 @@ The **Compressor** turns down whatever goes over the threshold, so loud and soft
 
 The **Limiter** raises the volume with **Gain** without letting anything go over the ceiling (**Ceiling**). **Release** is how long it takes to let go.
 
+**Presets**, in the header of each, has settings by use. For the Compressor: **Vocals · Lead Vocal**, **Upfront rap** and **Backing vocals**; **Drums · Punch (slow attack)**, **Snare with body** and **Squashed room** (for a parallel track); **Basses · Steady bass**, **Guitars · Soft acoustic**, **Mix · Just a touch** and **Sidechain · Make room**, meant for choosing the kick in its Sidechain. For the Limiter: **Master · Transparent**, **Streaming** and **Loud club**; **Track · Safety net** (no gain, only for what goes over), **Drums · Peaks off** and **Basses · Firm lows**. A preset keeps the Sidechain you had chosen. They are starting points: set **Threshold** or **Gain** to how loud your track is.
+
 Both have a **GR** meter on the right: how many dB they're turning the volume down at each moment.
 
 +++ All parameters
@@ -2327,6 +2329,8 @@ A **noise gate**: it only lets sound through when it goes over the threshold, an
 - **Release**: how long it takes to close fully.
 - **Floor**: what it lets through when closed (−80 dB: nothing; −20 dB: lowers the background without removing it).
 
+**Presets** has eight settings: **Drums · Dry hit**, **Clean snare** and **Toms**; **Vocals · Between phrases**, which only turns the background down 20 dB; **Guitars · No hum**; **Reverb · Gated tail**, for a reverb's return (the 80s snare); **Creative · Hard chop** and **Sidechain · Chopped pad**, for choosing in its Sidechain the track that sets the rhythm. Set **Threshold** to your recording.
+
 > Tip: with **Sidechain**, it opens when another track plays, not its own: a pad that chops in time with the hi-hats (the "trance gate"), or a bass that only plays when the kick does.
 
 #### Transient
@@ -2336,6 +2340,8 @@ Changes the hit and the tail of each sound, with no threshold, whatever its volu
 - **Attack**: above 0 %, the start of each hit is louder (punchier drums); below, softer (rounds off a snare or a very spiky guitar).
 - **Sustain**: above 0 %, what follows the hit lasts longer (more room, more body); below, it's shortened (tighter, drier drums).
 - **Output**: the volume at the end.
+
+**Presets** has eight settings: **Drums · More punch**, **Hit up front**, **Dry and short** and **More room**; **Loops · Tighten the loop**; **Guitars · Defined pick**; **Keys · Piano in the back** and **Mix · Soften hits**. The ones that raise the attack take a little off **Output**, so they don't sound louder.
 
 #### Tuner
 
@@ -2363,6 +2369,8 @@ Tames the s's and hiss in a voice ("s", "ch", "z") when they jump out, without d
 - **Frequency**: where it starts listening and turning down (2–16 kHz). A low voice's s's are usually at 4–6 kHz; a high voice's, at 6–9 kHz.
 - **Threshold**: the level of that high part at which it starts turning it down.
 - **Range**: the most it turns it down (up to 24 dB). About 6–8 dB is enough; more, and the voice sounds lispy.
+
+**Presets** has seven settings: **Vocals · Soft**, **High voice**, **Low voice**, **Strong esses** and **Backing vocals**; **Drums · Harsh cymbals** and **Mix · Harsh highs**. Set **Threshold** to how loud your voice is.
 
 > Tip: put it after the compressor, because compressing brings up the s's.
 
@@ -2410,6 +2418,8 @@ Makes the track **pump**: it drops the volume and brings it back, in time.
 - With **Sidechain**, it pumps with every hit of the chosen track (usually the kick): it drops sharply and comes back. **Returns in** (the menu, 1/4 by default) is the time of that return; the **Release** knob is how much of that time it spends rising (100 %: all of it).
 - **Threshold**: the softest hit that makes it pump. Raise it if it pumps on things that aren't the kick.
 - **Lows only** (on by default): it only listens below 600 Hz, so it pumps with the kick and not with the hi-hats or claps on the same track.
+
+**Presets** has eight settings: **Pump · Club**, **Soft**, **Long and deep**, **Just the hit**, **Eighth notes**, **Half notes** and **Sixteenth-note tremolo**, and **Sidechain · Bass that ducks**. They keep the Sidechain you had chosen: without one they pump to the tempo; with one, to its hits.
 
 +++ Details
 - It comes back within Release even if the kick's tail is still ringing, so with long kicks at 140–150 BPM it still breathes between hits.

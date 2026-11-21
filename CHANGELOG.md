@@ -22,6 +22,10 @@ still in `0.x`, so any release may change things.
 
 ### Added
 
+- Saturator, Bitcrusher, EQ Three, EQ Eight and Utility: a **Presets** menu
+  in each one's header, 49 settings in all (warmth and grit, DJ band
+  kills, starting EQ curves by source, stereo fixes…). With these, every
+  effect of Pulse has factory presets. The search finds them too.
 - Delay, Reverb, Chorus, Phaser and Auto Filter: a **Presets** menu in each
   one's header, 50 settings by use in all (vocals, synths, guitars, sweeps
   in time, fully wet ones for a return…). The search finds them too.

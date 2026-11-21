@@ -22,6 +22,10 @@ still in `0.x`, so any release may change things.
 
 ### Added
 
+- Compressor, Limiter, Gate, Transient, De-esser and Ducker: a **Presets**
+  menu in each one's header, 47 settings by use in all (vocals, drums,
+  basses, the master, sidechain…). A preset keeps the Sidechain the device
+  had. The search finds them too.
 - Reverb: a **Dense** switch, on in a new Reverb. Its tail thickens at
   once and has no metallic ring, and it lasts as long and sounds as loud
   as before at the same knobs. Those already in a project, the demo's and

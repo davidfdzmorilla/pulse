@@ -2404,6 +2404,31 @@ impl Default for CompressorParams {
 }
 
 impl CompressorParams {
+    /// Factory settings, «Categoría · Nombre». They keep the device's
+    /// sidechain (see `devices::effect_presets`).
+    pub fn presets() -> Vec<(&'static str, CompressorParams)> {
+        let d = CompressorParams::default();
+        let set = |threshold_db, ratio, attack_ms, release_ms, makeup_db| CompressorParams { threshold_db, ratio, attack_ms, release_ms, makeup_db, ..d };
+        vec![
+            ("Voces · Voz principal", set(-20.0, 3.0, 8.0, 120.0, 5.0)),
+            ("Voces · Rap pegado", set(-24.0, 6.0, 3.0, 80.0, 9.0)),
+            ("Voces · Coros", set(-22.0, 4.0, 15.0, 200.0, 6.0)),
+            // A slow attack lets the hit through and holds what follows.
+            ("Batería · Pegada (ataque lento)", set(-14.0, 4.0, 30.0, 80.0, 3.0)),
+            ("Batería · Caja con cuerpo", set(-18.0, 5.0, 12.0, 150.0, 5.0)),
+            // For a room or a parallel track: everything squashed and brought up.
+            ("Batería · Sala aplastada", set(-30.0, 10.0, 0.3, 60.0, 9.0)),
+            ("Bajos · Bajo estable", set(-20.0, 5.0, 20.0, 180.0, 5.0)),
+            ("Guitarras · Acústica suave", set(-22.0, 2.5, 25.0, 250.0, 4.0)),
+            ("Mezcla · Solo acariciar", set(-14.0, 1.5, 30.0, 300.0, 1.0)),
+            // With the kick's track in its Sidechain: out of the way on each hit.
+            ("Sidechain · Dejar sitio", set(-24.0, 4.0, 1.0, 150.0, 0.0)),
+        ]
+    }
+}
+
+
+impl CompressorParams {
     /// A Compressor as they were before the level detector (see
     /// [`Self::detector`]): what the factory sounds, chains and templates
     /// and the mix assistant's settings were made with.
@@ -2435,6 +2460,30 @@ impl Default for GateParams {
         Self { threshold_db: -40.0, return_db: 3.0, attack_ms: 0.5, hold_ms: 20.0, release_ms: 120.0, floor_db: -80.0, sidechain: None }
     }
 }
+
+impl GateParams {
+    /// Factory settings, «Categoría · Nombre». They keep the device's
+    /// sidechain (see `devices::effect_presets`).
+    pub fn presets() -> Vec<(&'static str, GateParams)> {
+        let d = GateParams::default();
+        let set = |threshold_db, return_db, attack_ms, hold_ms, release_ms, floor_db| GateParams { threshold_db, return_db, attack_ms, hold_ms, release_ms, floor_db, ..d };
+        vec![
+            ("Batería · Golpe seco", set(-30.0, 4.0, 0.05, 40.0, 80.0, -80.0)),
+            // The floor leaves some of the spill: a snare that doesn't sound cut out.
+            ("Batería · Caja limpia", set(-28.0, 4.0, 0.1, 60.0, 120.0, -40.0)),
+            ("Batería · Toms", set(-32.0, 6.0, 0.1, 120.0, 250.0, -60.0)),
+            // Only 20 dB down: the breaths and the room stay, quieter.
+            ("Voces · Entre frases", set(-45.0, 6.0, 2.0, 150.0, 300.0, -20.0)),
+            ("Guitarras · Sin zumbido", set(-50.0, 4.0, 1.0, 80.0, 200.0, -80.0)),
+            // On a reverb's return: the tail cut short, the 80s snare.
+            ("Reverb · Cola cortada", set(-26.0, 6.0, 0.1, 180.0, 40.0, -80.0)),
+            ("Creativo · Corte seco", set(-24.0, 2.0, 0.1, 0.0, 15.0, -80.0)),
+            // With a hat's or a pattern's track in its Sidechain: a pad chopped to its rhythm.
+            ("Sidechain · Pad troceado", set(-30.0, 2.0, 0.5, 10.0, 30.0, -80.0)),
+        ]
+    }
+}
+
 
 /// The notes a Tuner tunes to.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -2505,6 +2554,24 @@ impl Default for DeEsserParams {
     }
 }
 
+impl DeEsserParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, DeEsserParams)> {
+        let d = DeEsserParams::default();
+        let set = |freq_hz, threshold_db, range_db| DeEsserParams { freq_hz, threshold_db, range_db, ..d };
+        vec![
+            ("Voces · Suave", set(6500.0, -28.0, 4.0)),
+            ("Voces · Voz aguda", set(7500.0, -30.0, 8.0)),
+            ("Voces · Voz grave", set(5000.0, -30.0, 8.0)),
+            ("Voces · Eses fuertes", set(6000.0, -36.0, 14.0)),
+            ("Voces · Coros", set(6500.0, -32.0, 10.0)),
+            ("Batería · Platos ásperos", set(9000.0, -30.0, 6.0)),
+            ("Mezcla · Agudos duros", set(4000.0, -26.0, 4.0)),
+        ]
+    }
+}
+
+
 /// Makes the start of each hit stronger or softer, and its tail longer or shorter.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TransientParams {
@@ -2520,6 +2587,25 @@ impl Default for TransientParams {
         Self { attack: 0.0, sustain: 0.0, output_db: 0.0 }
     }
 }
+
+impl TransientParams {
+    /// Factory settings, «Categoría · Nombre». More attack is louder, so
+    /// those come with some output taken off.
+    pub fn presets() -> Vec<(&'static str, TransientParams)> {
+        let set = |attack, sustain, output_db| TransientParams { attack, sustain, output_db };
+        vec![
+            ("Batería · Más pegada", set(0.5, 0.0, -1.5)),
+            ("Batería · Golpe al frente", set(0.7, -0.2, -2.0)),
+            ("Batería · Seca y corta", set(0.2, -0.6, 0.0)),
+            ("Batería · Más sala", set(0.0, 0.5, -3.0)),
+            ("Bucles · Apretar el bucle", set(0.3, -0.4, 0.0)),
+            ("Guitarras · Púa marcada", set(0.4, 0.1, -1.0)),
+            ("Teclas · Piano al fondo", set(-0.4, 0.3, 0.0)),
+            ("Mezcla · Suavizar golpes", set(-0.5, 0.0, 1.0)),
+        ]
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct DelayParams {
@@ -2869,6 +2955,28 @@ impl Default for DuckerParams {
         Self { depth: 0.7, release: 0.6, rate_beats: 1.0, sidechain: None, threshold_db: ducker_threshold(), lows: true }
     }
 }
+
+impl DuckerParams {
+    /// Factory settings, «Categoría · Nombre». They keep the device's
+    /// sidechain (see `devices::effect_presets`): without one they pump to
+    /// the beat, with one to its hits.
+    pub fn presets() -> Vec<(&'static str, DuckerParams)> {
+        let d = DuckerParams::default();
+        let set = |depth, release, rate_beats| DuckerParams { depth, release, rate_beats, ..d };
+        vec![
+            ("Bombeo · Club", set(0.8, 0.5, 1.0)),
+            ("Bombeo · Suave", set(0.35, 0.6, 1.0)),
+            ("Bombeo · Largo y profundo", set(1.0, 0.9, 1.0)),
+            ("Bombeo · Solo el golpe", set(0.7, 0.25, 1.0)),
+            ("Bombeo · Corcheas", set(0.6, 0.6, 0.5)),
+            ("Bombeo · Blancas", set(0.7, 0.7, 2.0)),
+            ("Bombeo · Trémolo de semicorcheas", set(0.5, 0.5, 0.25)),
+            // With the kick's track in its Sidechain: the bass leaves it room and is back at once.
+            ("Sidechain · Bajo que se aparta", DuckerParams { threshold_db: -40.0, ..set(0.6, 0.4, 1.0) }),
+        ]
+    }
+}
+
 
 /// The three ratios of an SSL-style bus compressor.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -3361,6 +3469,24 @@ impl Default for LimiterParams {
     }
 }
 
+impl LimiterParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, LimiterParams)> {
+        let set = |gain_db, ceiling_db, release_ms| LimiterParams { gain_db, ceiling_db, release_ms };
+        vec![
+            ("Master · Transparente", set(3.0, -1.0, 200.0)),
+            ("Master · Streaming", set(6.0, -1.0, 120.0)),
+            ("Master · Club fuerte", set(9.0, -0.3, 60.0)),
+            // No gain: it only stops what would go over.
+            ("Pista · Red de seguridad", set(0.0, -1.0, 100.0)),
+            ("Batería · Picos fuera", set(4.0, -0.5, 40.0)),
+            // A long release: it doesn't follow each cycle of a low note.
+            ("Bajos · Graves firmes", set(4.0, -1.0, 300.0)),
+        ]
+    }
+}
+
+
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct UtilityParams {
     pub gain_db: f32,
@@ -3582,9 +3708,15 @@ impl Effect {
         ]
     }
 
-    /// Its factory settings, «Categoría · Nombre» (most effects have none).
+    /// Its factory settings, «Categoría · Nombre» (some effects have none).
     pub fn factory_presets(&self) -> Vec<(&'static str, Effect)> {
         match self {
+            Effect::Compressor(_) => CompressorParams::presets().into_iter().map(|(n, p)| (n, Effect::Compressor(p))).collect(),
+            Effect::Limiter(_) => LimiterParams::presets().into_iter().map(|(n, p)| (n, Effect::Limiter(p))).collect(),
+            Effect::Gate(_) => GateParams::presets().into_iter().map(|(n, p)| (n, Effect::Gate(p))).collect(),
+            Effect::Transient(_) => TransientParams::presets().into_iter().map(|(n, p)| (n, Effect::Transient(p))).collect(),
+            Effect::DeEsser(_) => DeEsserParams::presets().into_iter().map(|(n, p)| (n, Effect::DeEsser(p))).collect(),
+            Effect::Ducker(_) => DuckerParams::presets().into_iter().map(|(n, p)| (n, Effect::Ducker(p))).collect(),
             Effect::Glue(_) => GlueParams::presets().into_iter().map(|(n, p)| (n, Effect::Glue(p))).collect(),
             Effect::Multiband(_) => MultibandParams::presets().into_iter().map(|(n, p)| (n, Effect::Multiband(p))).collect(),
             Effect::Convolution(_) => ConvolutionParams::presets().into_iter().map(|(n, p)| (n, Effect::Convolution(p))).collect(),

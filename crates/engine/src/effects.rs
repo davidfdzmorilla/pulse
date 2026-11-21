@@ -2364,7 +2364,9 @@ mod tests {
                 let dynamics = matches!(preset, Effect::Compressor(_) | Effect::Limiter(_) | Effect::Gate(_) | Effect::Transient(_) | Effect::DeEsser(_) | Effect::Ducker(_));
                 // A filter may leave little of a loop that is mostly lows.
                 let space = matches!(preset, Effect::Delay(_) | Effect::Reverb(_) | Effect::Chorus(_) | Effect::Phaser(_) | Effect::AutoFilter(_));
-                if !dynamics && !space {
+                // So may an EQ; a Utility's gain is all its sound.
+                let colour = matches!(preset, Effect::Saturator(_) | Effect::Bitcrusher(_) | Effect::Eq3(_) | Effect::EqEight(_) | Effect::Utility(_));
+                if !dynamics && !space && !colour {
                     continue;
                 }
                 count += 1;
@@ -2378,11 +2380,11 @@ mod tests {
                 println!("{} · {name}: {level:+.1} dB, pico {peak:.2}", effect.label());
                 assert!(l.iter().all(|v| v.is_finite()) && peak <= 2.0, "{} · {name}: peak {peak}", effect.label());
                 // A return's reverb is all wet and has no level of its own: the send sets it.
-                let most = if name.starts_with("Retorno") { 14.0 } else { 6.0 };
+                let most = if name.starts_with("Retorno") { 14.0 } else if colour { 6.5 } else { 6.0 };
                 assert!((if dynamics { -14.0 } else { -40.0 }..=most).contains(&level), "{} · {name}: {level} dB", effect.label());
             }
         }
-        assert_eq!(count, 47 + 50);
+        assert_eq!(count, 47 + 50 + 49);
     }
 
     fn ctx() -> ProcessContext {

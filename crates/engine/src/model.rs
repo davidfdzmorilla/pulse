@@ -2274,6 +2274,27 @@ impl Default for Eq3Params {
 }
 
 impl Eq3Params {
+    /// Factory settings, «Categoría · Nombre», with the 24 dB bands of a new
+    /// EQ Three: the «DJ» ones take a band away whole.
+    pub fn presets() -> Vec<(&'static str, Eq3Params)> {
+        let d = Eq3Params::default();
+        let set = |low_db, mid_db, high_db| Eq3Params { low_db, mid_db, high_db, ..d };
+        vec![
+            ("DJ · Sin graves", set(-40.0, 0.0, 0.0)),
+            ("DJ · Sin medios", set(0.0, -40.0, 0.0)),
+            ("DJ · Sin agudos", set(0.0, 0.0, -40.0)),
+            ("DJ · Solo graves", set(0.0, -40.0, -40.0)),
+            ("Mezcla · Sonrisa", set(3.0, -3.0, 3.0)),
+            ("Mezcla · Más cuerpo", Eq3Params { low_freq: 200.0, ..set(3.0, 0.0, -1.0) }),
+            ("Mezcla · Más aire", Eq3Params { high_freq: 6000.0, ..set(0.0, 0.0, 4.0) }),
+            ("Mezcla · Limpiar graves", Eq3Params { low_freq: 120.0, ..set(-6.0, 0.0, 0.0) }),
+            ("Creativo · Radio pequeña", Eq3Params { low_freq: 400.0, high_freq: 3000.0, ..set(-40.0, 3.0, -40.0) }),
+        ]
+    }
+}
+
+
+impl Eq3Params {
     /// A new EQ Three with the gentle bands (see [`Self::steep`]): what the
     /// templates and the mix assistant's corrections were made with.
     pub fn gentle() -> Self {
@@ -2370,6 +2391,41 @@ impl Default for EqEightParams {
         }
     }
 }
+
+impl EqEightParams {
+    /// Factory settings, «Categoría · Nombre»: starting curves by source.
+    pub fn presets() -> Vec<(&'static str, EqEightParams)> {
+        use EqShape::{HighCut48, LowCut48};
+        // A new EQ with these bands on: (band, frequency, gain, Q).
+        let eq = |bands: &[(usize, f32, f32, f32)]| {
+            let mut p = EqEightParams::default();
+            for &(b, freq, gain_db, q) in bands {
+                p.bands[b] = EqBand { on: true, freq, gain_db, q, ..p.bands[b] };
+            }
+            p
+        };
+        // Band 0 is the low cut, 1 the low shelf, 2 to 5 bells, 6 the high shelf, 7 the high cut.
+        let cut = |freq: f32| (0, freq, 0.0, 0.71);
+        let mut phone = eq(&[cut(400.0), (4, 1500.0, 4.0, 0.8), (7, 3500.0, 0.0, 0.71)]);
+        (phone.bands[0].shape, phone.bands[7].shape) = (LowCut48, HighCut48);
+        vec![
+            ("Voces · Voz principal", eq(&[cut(90.0), (2, 250.0, -3.0, 1.0), (4, 3000.0, 2.5, 0.8), (6, 10_000.0, 3.0, 0.71)])),
+            ("Voces · Menos nasal", eq(&[cut(80.0), (3, 1000.0, -4.0, 1.4)])),
+            ("Batería · Golpe grave con clic", eq(&[(1, 60.0, 3.0, 0.71), (2, 350.0, -5.0, 1.2), (5, 4000.0, 4.0, 1.0)])),
+            ("Batería · Caja con cuerpo", eq(&[cut(100.0), (2, 200.0, 3.0, 1.0), (5, 5000.0, 3.0, 0.8)])),
+            ("Batería · Platos y aéreos", eq(&[cut(300.0), (6, 10_000.0, 3.0, 0.71)])),
+            ("Bajos · Definido", eq(&[cut(30.0), (2, 250.0, -3.0, 1.0), (3, 800.0, 3.0, 1.0)])),
+            ("Guitarras · Acústica", eq(&[cut(90.0), (2, 200.0, -3.0, 1.0), (6, 8000.0, 3.0, 0.71)])),
+            ("Guitarras · Eléctrica", eq(&[cut(100.0), (4, 3000.0, 2.0, 0.8), (7, 10_000.0, 0.0, 0.71)])),
+            ("Teclas · Piano claro", eq(&[cut(50.0), (2, 300.0, -2.0, 0.8), (5, 4000.0, 2.0, 0.8)])),
+            ("Sintes · Pad sin barro", eq(&[cut(150.0), (2, 400.0, -3.0, 0.8)])),
+            ("Mezcla · Limpiar subgraves", eq(&[cut(30.0)])),
+            ("Mezcla · Brillo de master", eq(&[cut(25.0), (2, 300.0, -1.0, 0.5), (6, 12_000.0, 1.5, 0.71)])),
+            ("Creativo · Teléfono", phone),
+        ]
+    }
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct CompressorParams {
@@ -2873,6 +2929,32 @@ impl Default for SaturatorParams {
 }
 
 impl SaturatorParams {
+    /// Factory settings, «Categoría · Nombre»: all at 4× and centred, as a
+    /// new Saturator. More drive comes with less output, to sound as loud.
+    pub fn presets() -> Vec<(&'static str, SaturatorParams)> {
+        use KickDrive::{Crush, Fold, Hard, Soft, Tube};
+        let d = SaturatorParams::default();
+        let set = |kind, drive_db, output_db, mix| SaturatorParams { kind, drive_db, output_db, mix, ..d };
+        vec![
+            ("Calidez · Cinta suave", set(Soft, 4.0, -2.0, 1.0)),
+            ("Calidez · Válvula", set(Tube, 8.0, -6.0, 1.0)),
+            ("Batería · Bus con cuerpo", set(Soft, 9.0, -5.0, 0.6)),
+            ("Batería · Golpe recortado", set(Hard, 8.0, -6.5, 1.0)),
+            // Harmonics over a low note: it is heard where the lows aren't.
+            ("Bajos · Que se oiga en el móvil", set(Tube, 12.0, -6.0, 0.5)),
+            ("Bajos · 808 sucio", set(Hard, 16.0, -9.0, 1.0)),
+            ("Voces · Presencia", set(Tube, 6.0, -3.0, 0.4)),
+            ("Sintes · Lead agresivo", set(Soft, 18.0, -10.0, 1.0)),
+            ("Sintes · Plegado metálico", set(Fold, 10.0, -7.0, 0.7)),
+            // Before a limiter: the peaks cut off, so it works less.
+            ("Master · Recortar picos", set(Hard, 3.0, -3.0, 1.0)),
+            ("Lo-fi · Aplastado", set(Crush, 14.0, -9.5, 1.0)),
+        ]
+    }
+}
+
+
+impl SaturatorParams {
     /// A Saturator as they were made before the 4× and the centred Tube
     /// were what a new one comes with: what the factory sounds, chains and
     /// templates were made with.
@@ -3037,6 +3119,25 @@ impl Default for BitcrusherParams {
         Self { bits: 8.0, downsample: 4.0, mix: 1.0 }
     }
 }
+
+impl BitcrusherParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, BitcrusherParams)> {
+        let set = |bits, downsample, mix| BitcrusherParams { bits, downsample, mix };
+        vec![
+            ("Lo-fi · Sampler de 12 bits", set(12.0, 2.0, 1.0)),
+            ("Lo-fi · Consola de 8 bits", set(8.0, 6.0, 1.0)),
+            ("Lo-fi · Polvo sutil", set(10.0, 3.0, 0.3)),
+            ("Batería · Caja crujiente", set(9.0, 5.0, 0.5)),
+            ("Batería · Charles digitales", set(14.0, 10.0, 0.6)),
+            ("Sintes · Videojuego", set(5.0, 12.0, 1.0)),
+            ("Creativo · Destrozado", set(3.0, 30.0, 1.0)),
+            // All its bits, few samples: only what folds back.
+            ("Creativo · Aliasing agudo", set(16.0, 20.0, 0.5)),
+        ]
+    }
+}
+
 
 /// Tempo-synced volume ducking, the "sidechain pump" without a sidechain.
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -3619,6 +3720,25 @@ impl Default for UtilityParams {
     }
 }
 
+impl UtilityParams {
+    /// Factory settings, «Categoría · Nombre».
+    pub fn presets() -> Vec<(&'static str, UtilityParams)> {
+        let d = UtilityParams::default();
+        vec![
+            ("Estéreo · Mono", UtilityParams { width: 0.0, ..d }),
+            ("Estéreo · Graves en mono", UtilityParams { bass_mono_hz: 120.0, ..d }),
+            ("Estéreo · Más ancho", UtilityParams { width: 1.4, bass_mono_hz: 120.0, ..d }),
+            ("Estéreo · Estrechar", UtilityParams { width: 0.5, ..d }),
+            // A track with one channel upside down: it vanishes in mono.
+            ("Estéreo · Arreglar fase invertida", UtilityParams { flip_right: true, ..d }),
+            ("Ganancia · −6 dB", UtilityParams { gain_db: -6.0, ..d }),
+            ("Ganancia · −12 dB", UtilityParams { gain_db: -12.0, ..d }),
+            ("Ganancia · +6 dB", UtilityParams { gain_db: 6.0, ..d }),
+        ]
+    }
+}
+
+
 /// A key, for the MIDI effects (pitch class of the tonic, 0 = C).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ScaleKey {
@@ -3820,7 +3940,7 @@ impl Effect {
         ]
     }
 
-    /// Its factory settings, «Categoría · Nombre» (some effects have none).
+    /// Its factory settings, «Categoría · Nombre» (a plugin has none).
     pub fn factory_presets(&self) -> Vec<(&'static str, Effect)> {
         match self {
             Effect::Compressor(_) => CompressorParams::presets().into_iter().map(|(n, p)| (n, Effect::Compressor(p))).collect(),
@@ -3834,6 +3954,11 @@ impl Effect {
             Effect::Chorus(_) => ChorusParams::presets().into_iter().map(|(n, p)| (n, Effect::Chorus(p))).collect(),
             Effect::Phaser(_) => PhaserParams::presets().into_iter().map(|(n, p)| (n, Effect::Phaser(p))).collect(),
             Effect::AutoFilter(_) => AutoFilterParams::presets().into_iter().map(|(n, p)| (n, Effect::AutoFilter(p))).collect(),
+            Effect::Eq3(_) => Eq3Params::presets().into_iter().map(|(n, p)| (n, Effect::Eq3(p))).collect(),
+            Effect::EqEight(_) => EqEightParams::presets().into_iter().map(|(n, p)| (n, Effect::EqEight(p))).collect(),
+            Effect::Saturator(_) => SaturatorParams::presets().into_iter().map(|(n, p)| (n, Effect::Saturator(p))).collect(),
+            Effect::Bitcrusher(_) => BitcrusherParams::presets().into_iter().map(|(n, p)| (n, Effect::Bitcrusher(p))).collect(),
+            Effect::Utility(_) => UtilityParams::presets().into_iter().map(|(n, p)| (n, Effect::Utility(p))).collect(),
             Effect::Glue(_) => GlueParams::presets().into_iter().map(|(n, p)| (n, Effect::Glue(p))).collect(),
             Effect::Multiband(_) => MultibandParams::presets().into_iter().map(|(n, p)| (n, Effect::Multiband(p))).collect(),
             Effect::Convolution(_) => ConvolutionParams::presets().into_iter().map(|(n, p)| (n, Effect::Convolution(p))).collect(),

@@ -2275,6 +2275,8 @@ If you click an instrument in the browser, it replaces the one on the selected M
 | **Transition** | Tape stop and start, repeats (stutter) and cuts in time, for section changes (see [[Tape stop, repeat and cut]]). |
 | **Utility** | Volume, stereo width, mono lows and phase fixes. |
 
+The **EQ Three** has nine **Presets**: the **DJ · …** ones take a whole band away (**No lows**, **No mids**, **No highs**, **Lows only**); the **Mix · …** ones touch up (**Smile**, **More body**, **More air**, **Clean up lows**); and **Creative · Small radio**.
+
 #### EQ Eight
 
 An eight-band equalizer, like Live's EQ Eight. The graph shows the curve (orange) over the live **spectrum** of what comes out of the EQ (gray): you see where the excess lows or the ringing frequency are.
@@ -2302,6 +2304,8 @@ The shapes:
 - It's not among the built-in effects of the Wavetable, the Polychrome or the Modular's lanes, which have at most six controls per effect.
 - A project with an EQ Eight doesn't open in an earlier Pulse: it asks you to update.
 +++
+
+**Presets** has thirteen starting curves by source: **Vocals · Lead Vocal** and **Less nasal**; **Drums · Low hit with click**, **Snare with body** and **Cymbals and overheads**; **Basses · Defined**; **Guitars · Acoustic** and **Electric**; **Keys · Clear piano**; **Synths · Pad without mud**; **Mix · Clean up sub lows** and **Master sheen**; and **Creative · Telephone**. Each one turns on only the bands it uses; move its dots to your recording.
 
 #### Compressor and Limiter
 
@@ -2393,6 +2397,8 @@ The **Saturator** has **Drive** (how hard it pushes), **Output** and five **type
 The **4×** button keeps heavy drive from dirtying the highs. A new Saturator comes with it on.
 
 The **Bitcrusher** reduces the **bits** and the sample rate (**Downsample**): the sound of old digital machines.
+
+Both have **Presets**. The Saturator, eleven: **Warmth · Soft tape** and **Valve**; **Drums · Bus with body** and **Clipped hit**; **Basses · Heard on a phone** and **Dirty 808**; **Vocals · Presence**; **Synths · Aggressive lead** and **Metallic fold**; **Master · Clip peaks**, for before a limiter; and **Lo-fi · Crushed**. All with 4×, and with less **Output** the more **Drive**, to sound as loud. The Bitcrusher, eight: from **Lo-fi · 12-bit sampler** and **Subtle dust** to **Synths · Video game** and **Creative · Destroyed**.
 
 +++ Details
 - **4×** works at four times the sample rate to avoid aliasing (the false highs that appear with heavy saturation). It uses a bit more CPU, under 1 % of a core per track, and adds 36 samples of latency.
@@ -2489,6 +2495,8 @@ Volume (**Gain**) and stereo width (**Width**: 0 % is mono, 200 % very wide), pl
 
 - **Bass Mono**: below that frequency, the sound is mono (0 Hz: off). Stereo lows, in a club or on a phone, get lost or boom differently; at 100–150 Hz they settle without changing what's above.
 - **Invert R**: flips the right channel. It fixes a track recorded with one channel reversed, which almost disappears in mono.
+
+**Presets** has eight settings: **Stereo · Mono**, **Mono lows**, **Wider**, **Narrow** and **Fix flipped phase**, and **Gain · −6 dB**, **−12 dB** and **+6 dB**.
 
 > Note: a project that uses Bass Mono or Invert R doesn't open in an earlier Pulse: it asks you to update.
 

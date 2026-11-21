@@ -2276,6 +2276,8 @@ Si haces clic en un instrumento del navegador, sustituye al de la pista MIDI sel
 | **Transición** | Parada y arranque de cinta, repeticiones (stutter) y cortes a tempo, para los cambios de sección (ver [[Parada de cinta, repetición y corte]]). |
 | **Utility** | Volumen, anchura estéreo, graves en mono y arreglar fase. |
 
+El **EQ Three** trae nueve **Presets**: los **DJ · …** quitan una banda entera (**Sin graves**, **Sin medios**, **Sin agudos**, **Solo graves**); los **Mezcla · …** retocan (**Sonrisa**, **Más cuerpo**, **Más aire**, **Limpiar graves**); y **Creativo · Radio pequeña**.
+
 #### EQ Eight
 
 Un ecualizador de ocho bandas, como el EQ Eight de Live. La gráfica muestra la curva (naranja) sobre el **espectro** de lo que sale del EQ (gris), en vivo: ves dónde están los graves que sobran o la frecuencia que pita.
@@ -2303,6 +2305,8 @@ Las formas:
 - No está entre los efectos internos del Wavetable, el Polychrome ni las líneas del Modular, que llevan seis controles por efecto como mucho.
 - Un proyecto con un EQ Eight no se abre en un Pulse anterior: pide actualizar.
 +++
+
+**Presets** trae trece curvas de partida por fuente: **Voces · Voz principal** y **Menos nasal**; **Batería · Golpe grave con clic**, **Caja con cuerpo** y **Platos y aéreos**; **Bajos · Definido**; **Guitarras · Acústica** y **Eléctrica**; **Teclas · Piano claro**; **Sintes · Pad sin barro**; **Mezcla · Limpiar subgraves** y **Brillo de master**; y **Creativo · Teléfono**. Cada una enciende solo las bandas que usa; mueve sus puntos a tu grabación.
 
 #### Compressor y Limiter
 
@@ -2394,6 +2398,8 @@ El **Saturator** tiene **Drive** (cuánto empuja), **Output** y cinco **tipos**:
 El botón **4×** hace que mucho drive no ensucie los agudos. Un Saturator nuevo viene con él puesto.
 
 El **Bitcrusher** reduce los **bits** y la frecuencia de muestreo (**Downsample**): el sonido de las máquinas digitales antiguas.
+
+Los dos traen **Presets**. El Saturator, once: **Calidez · Cinta suave** y **Válvula**; **Batería · Bus con cuerpo** y **Golpe recortado**; **Bajos · Que se oiga en el móvil** y **808 sucio**; **Voces · Presencia**; **Sintes · Lead agresivo** y **Plegado metálico**; **Master · Recortar picos**, para antes de un limitador; y **Lo-fi · Aplastado**. Todos con 4×, y con menos **Output** cuanto más **Drive**, para sonar igual de fuerte. El Bitcrusher, ocho: de **Lo-fi · Sampler de 12 bits** y **Polvo sutil** a **Sintes · Videojuego** y **Creativo · Destrozado**.
 
 +++ Detalles
 - **4×** trabaja a cuatro veces la frecuencia de muestreo para evitar el aliasing (los agudos falsos que aparecen al saturar mucho). Gasta algo más de CPU, menos de un 1 % de un núcleo por pista, y retrasa 36 muestras.
@@ -2490,6 +2496,8 @@ Volumen (**Gain**) y anchura estéreo (**Width**: 0 % es mono, 200 % muy abierto
 
 - **Bass Mono**: por debajo de esa frecuencia, el sonido va en mono (0 Hz: apagado). Los graves en estéreo, en un club o un móvil, se pierden o retumban distinto; con 100–150 Hz se asientan sin cambiar lo de arriba.
 - **Invertir R**: da la vuelta al canal derecho. Arregla una pista grabada con un canal al revés, que en mono casi desaparece.
+
+**Presets** trae ocho ajustes: **Estéreo · Mono**, **Graves en mono**, **Más ancho**, **Estrechar** y **Arreglar fase invertida**, y **Ganancia · −6 dB**, **−12 dB** y **+6 dB**.
 
 > Nota: un proyecto que use Bass Mono o Invertir R no se abre en un Pulse anterior: pide actualizar.
 

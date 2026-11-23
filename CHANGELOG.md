@@ -33,6 +33,14 @@ still in `0.x`, so any release may change things.
   menu in each one's header, 47 settings by use in all (vocals, drums,
   basses, the master, sidechain…). A preset keeps the Sidechain the device
   had. The search finds them too.
+- Super Saw: 15 more factory sounds (34 in all): hardstyle, anthem and
+  mono leads; silky, string and slow pads; future bass, epic trance and
+  deep house chords; two plucks, two basses, a saw organ and a riser.
+  They use the uneven saws of a new Super Saw.
+- Acid Bass: 15 more factory sounds (32 in all): seven more acid lines
+  (Chicago, tuned resonance, hard rave, dripping…), five basses (electro,
+  warm house, dub, offbeat trance, sub square), two leads and a bubbling
+  effect. They use the tuned filter of a new Acid Bass.
 - FM Synth: 21 more factory sounds (47 in all): electric and reed pianos,
   a clavi, a harpsichord and a celesta; a carillon, a kalimba, a koto and
   a nylon guitar; saw, wood and house basses; saw, digital clarinet

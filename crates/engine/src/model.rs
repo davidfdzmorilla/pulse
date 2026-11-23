@@ -1786,7 +1786,9 @@ impl SuperSawParams {
 
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, SuperSawParams)> {
-        let base = SuperSawParams::old();
+        // The first ones keep the even saws they were made with; the ones
+        // made since are on `new`: a new Super Saw's sound.
+        let (base, new) = (SuperSawParams::old(), SuperSawParams::default());
         // The filter envelope follows the amplitude envelope: with sustain 0 a note
         // closes its filter as it fades (plucks), a slow attack opens it (swells).
         let saws = |voices, detune, spread, gain| SuperSawParams { voices, detune, spread, gain, ..base };
@@ -1795,21 +1797,36 @@ impl SuperSawParams {
             ("Lead · Trance clásico", SuperSawParams { cutoff: 5000.0, resonance: 0.1, env_amount: 0.0, attack: 0.005, decay: 0.5, sustain: 0.85, release: 0.3, ..saws(7.0, 0.4, 0.8, 0.45) }),
             ("Lead · Estrecho", SuperSawParams { cutoff: 3500.0, resonance: 0.25, env_amount: 1.0, attack: 0.003, decay: 0.4, sustain: 0.7, release: 0.2, ..saws(5.0, 0.2, 0.3, 0.42) }),
             ("Lead · Rave desafinado", SuperSawParams { cutoff: 8000.0, resonance: 0.05, env_amount: 0.0, attack: 0.002, decay: 0.3, sustain: 0.9, release: 0.25, ..saws(7.0, 0.9, 1.0, 0.4) }),
+            ("Lead · Hardstyle", SuperSawParams { voices: 7.0, detune: 0.55, spread: 0.9, cutoff: 9000.0, resonance: 0.1, env_amount: 0.0, attack: 0.002, decay: 0.3, sustain: 0.9, release: 0.2, gain: 0.308, ..new }),
+            ("Lead · Himno", SuperSawParams { voices: 7.0, detune: 0.3, spread: 0.7, cutoff: 7000.0, resonance: 0.05, env_amount: 0.0, attack: 0.008, decay: 0.6, sustain: 0.85, release: 0.45, gain: 0.35, ..new }),
+            ("Lead · Mono cortante", SuperSawParams { voices: 3.0, detune: 0.12, spread: 0.2, cutoff: 5000.0, resonance: 0.3, env_amount: 1.5, attack: 0.002, decay: 0.25, sustain: 0.7, release: 0.12, gain: 0.424, ..new }),
             ("Pad · Ancho", SuperSawParams { cutoff: 2500.0, resonance: 0.05, env_amount: 0.0, attack: 1.2, decay: 1.0, sustain: 0.9, release: 2.0, ..saws(7.0, 0.3, 1.0, 0.45) }),
             ("Pad · Amanecer", SuperSawParams { cutoff: 350.0, resonance: 0.15, env_amount: 3.5, attack: 1.2, decay: 1.0, sustain: 1.0, release: 2.5, ..saws(7.0, 0.35, 0.9, 0.43) }),
             ("Pad · Oscuro", SuperSawParams { cutoff: 600.0, resonance: 0.3, env_amount: 0.0, attack: 0.8, decay: 1.0, sustain: 1.0, release: 2.0, ..saws(6.0, 0.15, 0.7, 0.4) }),
+            ("Pad · Sedoso", SuperSawParams { voices: 5.0, detune: 0.18, spread: 0.9, cutoff: 1800.0, resonance: 0.05, env_amount: 0.0, attack: 1.5, decay: 1.5, sustain: 0.9, release: 2.5, gain: 0.532, ..new }),
+            ("Pad · Cuerdas de sinte", SuperSawParams { voices: 7.0, detune: 0.25, spread: 0.8, cutoff: 3200.0, resonance: 0.1, env_amount: 0.5, attack: 0.35, decay: 0.8, sustain: 0.85, release: 0.9, gain: 0.31, ..new }),
+            ("Pad · Atmósfera lenta", SuperSawParams { voices: 7.0, detune: 0.6, spread: 1.0, cutoff: 900.0, resonance: 0.2, env_amount: 2.0, attack: 2.0, decay: 2.0, sustain: 1.0, release: 3.5, gain: 0.34, ..new }),
             ("Acordes · Progressive", SuperSawParams { cutoff: 1500.0, resonance: 0.1, env_amount: 1.5, attack: 0.002, decay: 0.35, sustain: 0.4, release: 0.3, ..saws(7.0, 0.3, 0.8, 0.45) }),
             ("Acordes · Stab de house", SuperSawParams { cutoff: 1200.0, resonance: 0.3, env_amount: 2.0, attack: 0.001, decay: 0.25, sustain: 0.2, release: 0.15, ..saws(5.0, 0.25, 0.6, 0.44) }),
             ("Acordes · Rave de los 90", SuperSawParams { cutoff: 2500.0, resonance: 0.2, env_amount: 1.0, attack: 0.001, decay: 0.3, sustain: 0.6, release: 0.2, ..saws(7.0, 0.6, 0.8, 0.38) }),
+            ("Acordes · Future bass", SuperSawParams { voices: 7.0, detune: 0.45, spread: 1.0, cutoff: 4000.0, resonance: 0.15, env_amount: 1.0, attack: 0.01, decay: 0.4, sustain: 0.8, release: 0.35, gain: 0.37, ..new }),
+            ("Acordes · Trance épico", SuperSawParams { voices: 7.0, detune: 0.4, spread: 0.9, cutoff: 3000.0, resonance: 0.1, env_amount: 1.2, attack: 0.003, decay: 0.5, sustain: 0.6, release: 0.5, gain: 0.394, ..new }),
+            ("Acordes · Deep house", SuperSawParams { voices: 4.0, detune: 0.15, spread: 0.5, cutoff: 800.0, resonance: 0.2, env_amount: 1.5, attack: 0.002, decay: 0.3, sustain: 0.3, release: 0.25, gain: 0.425, ..new }),
             ("Pluck · Trance", SuperSawParams { cutoff: 600.0, resonance: 0.25, env_amount: 3.0, attack: 0.001, decay: 0.25, sustain: 0.0, release: 0.25, ..saws(7.0, 0.35, 0.8, 0.48) }),
             ("Pluck · Corto y brillante", SuperSawParams { cutoff: 2000.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.16, sustain: 0.0, release: 0.1, ..saws(3.0, 0.2, 0.6, 0.465) }),
             ("Pluck · Largo", SuperSawParams { cutoff: 900.0, resonance: 0.15, env_amount: 2.5, attack: 0.001, decay: 0.8, sustain: 0.0, release: 0.5, ..saws(5.0, 0.3, 0.9, 0.33) }),
+            ("Pluck · Cristalino", SuperSawParams { voices: 5.0, detune: 0.25, spread: 0.8, cutoff: 3000.0, resonance: 0.1, env_amount: 2.0, attack: 0.001, decay: 0.3, sustain: 0.0, release: 0.3, gain: 0.373, ..new }),
+            ("Pluck · Techno melódico", SuperSawParams { voices: 3.0, detune: 0.1, spread: 0.5, cutoff: 500.0, resonance: 0.4, env_amount: 3.0, attack: 0.001, decay: 0.18, sustain: 0.0, release: 0.15, gain: 0.414, ..new }),
             ("Bajo · Sierra única", SuperSawParams { cutoff: 700.0, resonance: 0.3, env_amount: 1.5, attack: 0.001, decay: 0.3, sustain: 0.5, release: 0.08, ..saws(1.0, 0.0, 0.0, 0.52) }),
             ("Bajo · Progressive", SuperSawParams { cutoff: 400.0, resonance: 0.2, env_amount: 2.0, attack: 0.001, decay: 0.2, sustain: 0.5, release: 0.1, ..saws(3.0, 0.12, 0.2, 0.544) }),
             ("Bajo · Reese", SuperSawParams { cutoff: 500.0, resonance: 0.1, env_amount: 0.5, attack: 0.003, decay: 0.5, sustain: 1.0, release: 0.15, ..saws(2.0, 0.25, 0.0, 0.4) }),
             ("Bajo · Rebotado", SuperSawParams { cutoff: 250.0, resonance: 0.35, env_amount: 3.0, attack: 0.001, decay: 0.22, sustain: 0.0, release: 0.08, ..saws(2.0, 0.06, 0.0, 0.705) }),
+            ("Bajo · Ancho de trance", SuperSawParams { voices: 3.0, detune: 0.2, spread: 0.4, cutoff: 300.0, resonance: 0.25, env_amount: 2.5, attack: 0.001, decay: 0.25, sustain: 0.4, release: 0.1, gain: 0.453, ..new }),
+            ("Bajo · Sub con sierra", SuperSawParams { voices: 1.0, detune: 0.0, spread: 0.0, cutoff: 180.0, resonance: 0.1, env_amount: 1.0, attack: 0.002, decay: 0.3, sustain: 0.8, release: 0.1, gain: 0.667, ..new }),
             ("Textura · Enjambre", SuperSawParams { cutoff: 1800.0, resonance: 0.5, env_amount: 0.0, attack: 1.2, decay: 1.0, sustain: 1.0, release: 3.0, ..saws(7.0, 1.0, 1.0, 0.36) }),
+            ("Textura · Órgano de sierras", SuperSawParams { voices: 7.0, detune: 0.05, spread: 0.6, cutoff: 2500.0, resonance: 0.05, env_amount: 0.0, attack: 0.01, decay: 0.1, sustain: 1.0, release: 0.1, gain: 0.372, ..new }),
             ("FX · Barrido", SuperSawParams { cutoff: 150.0, resonance: 0.6, env_amount: 4.0, attack: 1.5, decay: 1.0, sustain: 1.0, release: 1.5, ..saws(7.0, 0.5, 1.0, 0.41) }),
+            ("FX · Subida", SuperSawParams { voices: 7.0, detune: 0.8, spread: 1.0, cutoff: 350.0, resonance: 0.35, env_amount: 4.0, attack: 1.2, decay: 1.0, sustain: 1.0, release: 0.3, gain: 0.33, ..new }),
         ]
     }
 }
@@ -1862,7 +1879,9 @@ impl AcidParams {
 
     /// Factory presets: (name as «Categoría · Nombre», settings).
     pub fn presets() -> Vec<(&'static str, AcidParams)> {
-        let base = AcidParams::old();
+        // The first ones keep the filter they were made with; the ones made
+        // since are on `new`: a new Acid Bass's sound.
+        let (base, new) = (AcidParams::old(), AcidParams::default());
         vec![
             ("Init", AcidParams::default()),
             ("Acid · Clásico", AcidParams { cutoff: 320.0, resonance: 0.8, env_mod: 0.6, decay: 0.35, accent: 0.7, glide_ms: 60.0, drive: 0.25, gain: 0.5, ..base }),
@@ -1873,14 +1892,29 @@ impl AcidParams {
             ("Acid · Burbuja", AcidParams { square: true, cutoff: 500.0, resonance: 0.95, env_mod: 0.4, decay: 0.12, accent: 0.5, glide_ms: 30.0, drive: 0.15, gain: 0.4, ..base }),
             ("Acid · Barrido lento", AcidParams { cutoff: 120.0, resonance: 0.88, env_mod: 0.8, decay: 1.5, accent: 0.5, glide_ms: 80.0, drive: 0.3, gain: 0.5, ..base }),
             ("Acid · Solo acentos", AcidParams { cutoff: 250.0, resonance: 0.85, env_mod: 0.25, decay: 0.3, accent: 1.0, glide_ms: 60.0, drive: 0.4, gain: 0.42, ..base }),
+            ("Acid · Chicago", AcidParams { square: false, cutoff: 280.0, resonance: 0.82, env_mod: 0.65, decay: 0.25, accent: 0.75, glide_ms: 70.0, drive: 0.15, gain: 0.495, ..new }),
+            ("Acid · Resonante afinado", AcidParams { square: false, cutoff: 350.0, resonance: 0.93, env_mod: 0.7, decay: 0.3, accent: 0.8, glide_ms: 60.0, drive: 0.2, gain: 0.449, ..new }),
+            ("Acid · Rave duro", AcidParams { square: false, cutoff: 200.0, resonance: 0.9, env_mod: 0.9, decay: 0.18, accent: 1.0, glide_ms: 45.0, drive: 0.6, gain: 0.29, ..new }),
+            ("Acid · Goteo", AcidParams { square: true, cutoff: 420.0, resonance: 0.9, env_mod: 0.5, decay: 0.1, accent: 0.7, glide_ms: 25.0, drive: 0.1, gain: 0.37, ..new }),
+            ("Acid · Abierto", AcidParams { square: false, cutoff: 1500.0, resonance: 0.7, env_mod: 0.3, decay: 0.4, accent: 0.6, glide_ms: 60.0, drive: 0.3, gain: 0.428, ..new }),
+            ("Acid · Distorsión total", AcidParams { square: true, cutoff: 300.0, resonance: 0.85, env_mod: 0.8, decay: 0.3, accent: 1.0, glide_ms: 60.0, drive: 1.0, gain: 0.152, ..new }),
+            ("Acid · Notas largas", AcidParams { square: false, cutoff: 250.0, resonance: 0.88, env_mod: 0.75, decay: 0.9, accent: 0.6, glide_ms: 150.0, drive: 0.25, gain: 0.464, ..new }),
             ("Bajo · Sub oscuro", AcidParams { cutoff: 80.0, resonance: 0.6, env_mod: 0.25, decay: 0.2, accent: 0.4, glide_ms: 40.0, drive: 0.2, gain: 0.8, ..base }),
             ("Bajo · Techno rodante", AcidParams { cutoff: 220.0, resonance: 0.55, env_mod: 0.45, decay: 0.15, accent: 0.5, glide_ms: 20.0, drive: 0.5, gain: 0.5, ..base }),
             ("Bajo · Minimal seco", AcidParams { square: true, cutoff: 350.0, resonance: 0.4, env_mod: 0.35, decay: 0.08, accent: 0.4, glide_ms: 5.0, drive: 0.1, gain: 0.5, ..base }),
             ("Bajo · Gordo saturado", AcidParams { cutoff: 600.0, resonance: 0.35, env_mod: 0.3, decay: 0.3, accent: 0.5, glide_ms: 30.0, drive: 0.8, gain: 0.32, ..base }),
             ("Bajo · Pulso hueco", AcidParams { square: true, cutoff: 700.0, resonance: 0.15, env_mod: 0.1, decay: 0.3, accent: 0.3, glide_ms: 30.0, drive: 0.1, gain: 0.42, ..base }),
+            ("Bajo · Electro", AcidParams { square: true, cutoff: 450.0, resonance: 0.5, env_mod: 0.5, decay: 0.12, accent: 0.6, glide_ms: 10.0, drive: 0.4, gain: 0.266, ..new }),
+            ("Bajo · House cálido", AcidParams { square: false, cutoff: 300.0, resonance: 0.3, env_mod: 0.35, decay: 0.25, accent: 0.4, glide_ms: 25.0, drive: 0.15, gain: 0.655, ..new }),
+            ("Bajo · Dub", AcidParams { square: false, cutoff: 110.0, resonance: 0.45, env_mod: 0.2, decay: 0.4, accent: 0.3, glide_ms: 90.0, drive: 0.1, gain: 0.859, ..new }),
+            ("Bajo · Trance a contratiempo", AcidParams { square: false, cutoff: 380.0, resonance: 0.5, env_mod: 0.55, decay: 0.14, accent: 0.5, glide_ms: 8.0, drive: 0.35, gain: 0.428, ..new }),
+            ("Bajo · Cuadrada sub", AcidParams { square: true, cutoff: 140.0, resonance: 0.3, env_mod: 0.2, decay: 0.3, accent: 0.3, glide_ms: 35.0, drive: 0.05, gain: 0.745, ..new }),
             ("Lead · Chillón", AcidParams { cutoff: 1200.0, resonance: 0.88, env_mod: 0.6, decay: 0.5, accent: 0.8, glide_ms: 80.0, drive: 0.7, gain: 0.32, ..base }),
             ("Lead · Silbido", AcidParams { square: true, cutoff: 900.0, resonance: 0.96, env_mod: 0.2, decay: 0.8, accent: 0.4, glide_ms: 120.0, drive: 0.1, gain: 0.5, ..base }),
+            ("Lead · Acid cantarín", AcidParams { square: false, cutoff: 800.0, resonance: 0.9, env_mod: 0.5, decay: 0.45, accent: 0.7, glide_ms: 140.0, drive: 0.3, gain: 0.425, ..new }),
+            ("Lead · Cuadrada con mordida", AcidParams { square: true, cutoff: 1500.0, resonance: 0.6, env_mod: 0.4, decay: 0.35, accent: 0.6, glide_ms: 60.0, drive: 0.6, gain: 0.178, ..new }),
             ("FX · Láser", AcidParams { cutoff: 60.0, resonance: 0.95, env_mod: 1.0, decay: 0.08, accent: 1.0, glide_ms: 400.0, drive: 0.5, gain: 0.4, ..base }),
+            ("FX · Burbujeo", AcidParams { square: true, cutoff: 150.0, resonance: 0.96, env_mod: 0.9, decay: 0.06, accent: 0.8, glide_ms: 15.0, drive: 0.2, gain: 0.432, ..new }),
         ]
     }
 }

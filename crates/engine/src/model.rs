@@ -9682,13 +9682,171 @@ impl ModularParams {
         p.lanes[0].fx[0] = delay(0.5, 0.2);
         p.gain = 0.35;
         list.push(("Aux · Realimentación", p));
-        // The factory sounds keep the modules they were made with (see
-        // [`Module::clean`]); «Init» is a new sound.
+        // The factory sounds up to here keep the modules they were made with
+        // (see [`Module::clean`]); «Init» is a new sound.
         for (name, p) in &mut list {
             if !name.starts_with("Init") {
                 p.modules.iter_mut().for_each(|m| m.clean = false);
             }
         }
+
+        // Made since: with a new module's clean waves and distortion, and the
+        // dense reverb.
+        let room = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let pulse = |settings: &[(usize, f32)]| module(K::Analog, settings, 1);
+        let triangle = |settings: &[(usize, f32)]| module(K::Analog, settings, 2);
+        // A quick falling envelope (a pluck's) or a slower one, onto one setting.
+        let pluck = |t: ModTarget| {
+            let mut m = Modulator::new(ModulatorKind::Envelope);
+            (m.a, m.b, m.c) = (0.0, 0.45, 0.0);
+            m.targets[0] = t;
+            m
+        };
+        let sweep = |t: ModTarget| {
+            let mut m = Modulator::new(ModulatorKind::Envelope);
+            (m.a, m.b, m.c) = (0.0, 0.55, 0.1);
+            m.targets[0] = t;
+            m
+        };
+        let wander = |hz: f32, t: ModTarget| {
+            let mut m = Modulator::new(ModulatorKind::Lfo);
+            m.a = lfo_rate(hz);
+            m.targets[0] = t;
+            m
+        };
+
+        let mut p = build(&[group, pulse(&[]), filter(0, 400.0, 1.5, true), out(0.002, 0.3, 0.6, 0.08)]);
+        p.modulators[0] = pluck(target(2, slot::CUTOFF, 0.35));
+        p.mono = true;
+        p.gain = 0.191;
+        list.push(("Bajo · Pulso con filtro", p));
+
+        let mut p = build(&[
+            group,
+            saw(&[(slot::UNISON, 2.0), (slot::DETUNE, 0.25)]),
+            saw(&[(slot::SEMI, -12.0), (slot::LEVEL, 0.6)]),
+            filter(0, 600.0, 0.8, true),
+            out(0.005, 0.5, 1.0, 0.15),
+        ]);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.gain = 0.383;
+        list.push(("Bajo · Reese de dos sierras", p));
+
+        let mut p = build(&[group, sine(&[]), module(K::Distortion, &[(slot::DRIVE, 14.0)], 2), filter(0, 1200.0, 0.7, false), out(0.002, 0.4, 0.5, 0.1)]);
+        p.modulators[0] = pluck(target(2, slot::DRIVE, 0.3));
+        p.mono = true;
+        p.gain = 0.765;
+        list.push(("Bajo · Seno plegado", p));
+
+        let mut gum = module(K::NonlinearFilter, &[(slot::CUTOFF, 300.0), (slot::Q, 6.0), (slot::NL_DRIVE, 12.0)], 0);
+        gum.choice[1] = 1;
+        let mut p = build(&[group, saw(&[]), gum, out(0.002, 0.3, 0.6, 0.08)]);
+        p.modulators[0] = pluck(target(2, slot::CUTOFF, 0.4));
+        p.mono = true;
+        p.gain = 0.966;
+        list.push(("Nonlinear · Bajo gomoso", p));
+
+        let mut p = build(&[group, pulse(&[(slot::B, 0.2)]), filter(0, 4000.0, 1.0, false), out(0.005, 0.3, 0.85, 0.2)]);
+        p.modulators[0] = wander(0.6, target(1, slot::B, 0.2));
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.lanes[0].fx[0] = delay(0.75, 0.2);
+        p.gain = 0.451;
+        list.push(("Lead · Pulso estrecho", p));
+
+        let mut p = build(&[
+            group,
+            saw(&[(slot::UNISON, 3.0), (slot::DETUNE, 0.15), (slot::PHASE_RANDOM, 180.0)]),
+            module(K::Distortion, &[(slot::DRIVE, 10.0), (slot::MIX, 0.7)], 0),
+            filter(0, 6000.0, 0.7, false),
+            out(0.005, 0.3, 0.85, 0.2),
+        ]);
+        p.lanes[0].fx[0] = delay(0.75, 0.2);
+        p.gain = 0.276;
+        list.push(("Lead · Sierra saturada", p));
+
+        let mut p = build(&[group, sine(&[]), out(0.005, 0.4, 0.8, 0.2), group, sine(&[(slot::HARMONIC, 3.0)])]);
+        let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[c].amount = 0.3;
+        p.mono = true;
+        p.glide = 30.0;
+        p.gain = 0.339;
+        list.push(("FM · Lead brillante", p));
+
+        let mut p = build(&[group, saw(&[(slot::UNISON, 5.0), (slot::DETUNE, 0.25), (slot::PHASE_RANDOM, 180.0)]), filter(0, 1800.0, 0.7, true), out(0.8, 1.0, 0.9, 1.8)]);
+        p.modulators[0] = wander(0.12, target(2, slot::CUTOFF, 0.2));
+        p.lanes[0].fx[0] = room(0.85, 0.35);
+        p.gain = 0.147;
+        list.push(("Unísono · Pad de sierras", p));
+
+        let mut p = build(&[group, triangle(&[(slot::UNISON, 4.0), (slot::DETUNE, 0.2), (slot::PHASE_RANDOM, 180.0)]), sine(&[(slot::SEMI, 12.0), (slot::LEVEL, 0.3)]), out(0.6, 1.0, 1.0, 1.5)]);
+        p.lanes[0].fx[0] = room(0.85, 0.35);
+        p.gain = 0.123;
+        list.push(("Unísono · Pad de triángulos", p));
+
+        let mut p = build(&[group, sine(&[]), out(0.7, 1.0, 1.0, 1.8), group, sine(&[(slot::HARMONIC, 1.5)])]);
+        let c = p.connect_audio(4, 1, AudioParam::Level).unwrap();
+        p.audio[c].amount = 0.6;
+        p.lanes[0].fx[0] = room(0.9, 0.4);
+        p.gain = 0.198;
+        list.push(("Anillo · Pad suave", p));
+
+        let mut p = build(&[group, pulse(&[(slot::UNISON, 6.0), (slot::DETUNE, 0.3), (slot::PHASE_RANDOM, 180.0), (slot::B, 0.4)]), filter(0, 3500.0, 0.7, false), out(0.01, 0.4, 0.85, 0.3)]);
+        p.lanes[0].fx[0] = room(0.5, 0.2);
+        p.gain = 0.186;
+        list.push(("Unísono · Pulsos anchos", p));
+
+        let mut p = build(&[group, saw(&[]), filter(0, 500.0, 2.0, true), out(0.001, 0.35, 0.0, 0.25)]);
+        p.modulators[0] = pluck(target(2, slot::CUTOFF, 0.45));
+        p.lanes[0].fx[0] = delay(0.75, 0.25);
+        p.gain = 0.349;
+        list.push(("Pluck · Sierra filtrada", p));
+
+        let mut p = build(&[group, pulse(&[]), filter(1, 900.0, 2.0, false), out(0.001, 0.3, 0.0, 0.2)]);
+        p.lanes[0].fx[0] = room(0.5, 0.2);
+        p.gain = 0.6;
+        list.push(("Pluck · Pulso de madera", p));
+
+        let mut p = build(&[group, sine(&[]), out(0.001, 1.2, 0.0, 0.6), group, sine(&[(slot::HARMONIC, 4.0)])]);
+        let c = p.connect_audio(4, 1, AudioParam::Phase).unwrap();
+        p.audio[c].amount = 0.3;
+        p.modulators[0] = pluck(ModTarget::new(MOD_AUDIO_AMOUNT + c, 0.25));
+        p.lanes[0].fx[0] = room(0.6, 0.2);
+        p.gain = 0.308;
+        list.push(("FM · Campanilla", p));
+
+        let mut p = build(&[group, sine(&[]), sine(&[(slot::HARMONIC, 2.0), (slot::LEVEL, 0.5)]), sine(&[(slot::HARMONIC, 3.0), (slot::LEVEL, 0.3)]), out(0.005, 0.1, 1.0, 0.08)]);
+        p.gain = 0.167;
+        list.push(("Capas · Órgano de tres senos", p));
+
+        let mut p = build(&[group, sine(&[]), out(0.001, 0.3, 0.0, 0.1)]);
+        p.modulators[0] = pluck(target(1, slot::SEMI, 0.5));
+        p.gain = 0.29;
+        list.push(("Perc · Golpe grave", p));
+
+        let mut p = build(&[group, module(K::Noise, &[(slot::LEVEL, 0.8)], 0), sine(&[(slot::LEVEL, 0.5)]), filter(2, 150.0, 0.7, false), out(0.001, 0.35, 0.0, 0.15)]);
+        p.gain = 0.293;
+        list.push(("Perc · Caja de ruido", p));
+
+        let mut p = build(&[group, module(K::Noise, &[], 0), filter(2, 7000.0, 1.0, true), out(0.001, 0.3, 0.0, 0.2)]);
+        p.gain = 0.32;
+        list.push(("Perc · Plato de ruido", p));
+
+        let mut p = build(&[group, module(K::Noise, &[(slot::SLOPE, -3.0)], 0), filter(0, 600.0, 1.0, false), out(1.0, 1.0, 1.0, 2.0)]);
+        p.modulators[0] = wander(0.1, target(2, slot::CUTOFF, 0.35));
+        p.lanes[0].fx[0] = room(0.9, 0.3);
+        p.gain = 0.124;
+        list.push(("Ruido · Oleaje", p));
+
+        let mut p = build(&[group, saw(&[]), filter(0, 3000.0, 1.5, false), out(0.001, 1.5, 0.0, 0.5)]);
+        p.modulators[0] = sweep(target(1, slot::SEMI, 0.5));
+        p.lanes[0].fx[0] = delay(0.5, 0.25);
+        p.lanes[0].fx[1] = room(0.8, 0.3);
+        p.gain = 0.357;
+        list.push(("Mod · Caída de tono", p));
         list
     }
 

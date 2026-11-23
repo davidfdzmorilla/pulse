@@ -33,6 +33,12 @@ still in `0.x`, so any release may change things.
   menu in each one's header, 47 settings by use in all (vocals, drums,
   basses, the master, sidechain…). A preset keeps the Sidechain the device
   had. The search finds them too.
+- FM Synth: 21 more factory sounds (47 in all): electric and reed pianos,
+  a clavi, a harpsichord and a celesta; a carillon, a kalimba, a koto and
+  a nylon guitar; saw, wood and house basses; saw, digital clarinet
+  and whistle leads; a trumpet and a soft brass section; string, warm and
+  glass pads, and a laser. They use the clean feedback and the
+  oversampling of a new FM Synth.
 - Reverb: a **Dense** switch, on in a new Reverb. Its tail thickens at
   once and has no metallic ring, and it lasts as long and sounds as loud
   as before at the same knobs. Those already in a project, the demo's and

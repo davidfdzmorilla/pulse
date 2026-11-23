@@ -1228,6 +1228,16 @@ pub fn render_drum_hit(params: DrumParams, pitch: u8, sample_rate: f32) -> (Vec<
 mod tests {
     use super::*;
 
+    /// The Super Saw's factory sounds made before its saws were spread
+    /// unevenly: they keep the even ones. «Init» and the ones made since
+    /// are a new Super Saw's.
+    const SUPERSAW_FIRST: [&str; 18] = ["Lead · Trance clásico", "Lead · Estrecho", "Lead · Rave desafinado", "Pad · Ancho", "Pad · Amanecer", "Pad · Oscuro", "Acordes · Progressive", "Acordes · Stab de house", "Acordes · Rave de los 90", "Pluck · Trance", "Pluck · Corto y brillante", "Pluck · Largo", "Bajo · Sierra única", "Bajo · Progressive", "Bajo · Reese", "Bajo · Rebotado", "Textura · Enjambre", "FX · Barrido"];
+
+    /// The Acid Bass's factory sounds made before its filter was tuned:
+    /// they keep the one they had. «Init» and the ones made since are a new
+    /// Acid Bass's.
+    const ACID_FIRST: [&str; 16] = ["Acid · Clásico", "Acid · Squelch", "Acid · Cuadrada hueca", "Acid · Gritón", "Acid · Glide largo", "Acid · Burbuja", "Acid · Barrido lento", "Acid · Solo acentos", "Bajo · Sub oscuro", "Bajo · Techno rodante", "Bajo · Minimal seco", "Bajo · Gordo saturado", "Bajo · Pulso hueco", "Lead · Chillón", "Lead · Silbido", "FX · Láser"];
+
     /// The FM Synth's factory sounds made before its feedback was smoothed
     /// and its voices oversampled: they keep the sound they had. «Init» and
     /// the ones made since are a new FM Synth's.
@@ -1444,7 +1454,7 @@ mod tests {
         // Who has it.
         assert!(SuperSawParams::default().uneven && !SuperSawParams::old().uneven);
         for (name, p) in SuperSawParams::presets() {
-            assert_eq!(p.uneven, name == "Init", "{name}");
+            assert_eq!(p.uneven, !SUPERSAW_FIRST.contains(&name), "{name}");
         }
         let mut old = serde_json::to_value(SuperSawParams::default()).unwrap();
         old.as_object_mut().unwrap().remove("uneven");
@@ -1559,7 +1569,7 @@ mod tests {
         // Who has it.
         assert!(AcidParams::default().tuned && !AcidParams::old().tuned);
         for (name, p) in AcidParams::presets() {
-            assert_eq!(p.tuned, name == "Init", "{name}");
+            assert_eq!(p.tuned, !ACID_FIRST.contains(&name), "{name}");
         }
         let mut old = serde_json::to_value(AcidParams::default()).unwrap();
         old.as_object_mut().unwrap().remove("tuned");

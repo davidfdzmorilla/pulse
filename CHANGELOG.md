@@ -33,6 +33,15 @@ still in `0.x`, so any release may change things.
   menu in each one's header, 47 settings by use in all (vocals, drums,
   basses, the master, sidechain…). A preset keeps the Sidechain the device
   had. The search finds them too.
+- Wavetable Synth: 25 more factory sounds (63 in all): five basses, five
+  leads (PWM, video game, folded, synced saw, vocal), five pads that move
+  through their tables, four plucks, three keys, a noise sweep and two
+  textures. Polychrome Synth: 25 more (59 in all): seven analog ones
+  (strings, pedal bass, pulse lead, theremin…), five harmonic ones
+  (church organ, glass bell, pan flute, clarinet, choir), four basses,
+  three leads, three pads, an analog tom and two effects. They use a new
+  synth's sound: the tuned Ladder, the clean warps, waves and Drive, and
+  the dense reverb.
 - Super Saw: 15 more factory sounds (34 in all): hardstyle, anthem and
   mono leads; silky, string and slow pads; future bass, epic trance and
   deep house chords; two plucks, two basses, a saw organ and a riser.

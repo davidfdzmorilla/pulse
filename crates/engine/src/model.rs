@@ -5748,9 +5748,15 @@ impl WaveParams {
         p
     }
 
+    /// The Wavetable's and the Polychrome's factory sounds made since their
+    /// Ladder was tuned and their warps, waves and Drive cleaned: with
+    /// «Init», the ones that have a new synth's sound.
+    #[cfg(test)]
+    pub(crate) const MADE_SINCE: [&str; 50] = ["Analog · Cuerdas lentas", "Analog · Bajo de pedal", "Analog · Lead de pulso", "Analog · Pluck de filtro", "Analog · Pad de quintas", "Analog · Stab de acordes", "Analog · Theremin", "Harmonic · Órgano de iglesia", "Harmonic · Campana de cristal", "Harmonic · Flauta de pan", "Harmonic · Clarinete", "Harmonic · Coro lejano", "Bajo · Goma", "Bajo · Disco de octavas", "Bajo · Zumbido grave", "Bajo · Cuadrado", "Lead · Sierra con cola", "Lead · Cuadrada suave", "Doble filtro · Lead vocal", "Pad · Nube analógica", "Pad · Vidrio frío", "Pad · Barrido de muesca", "Perc · Tom analógico", "FX · Caída de sirena", "FX · Radio rota", "Bajo · Pluck de garage", "Bajo · Ladder ácido", "Bajo · Notch rabioso", "Bajo · Donk", "Bajo · Formante hablador", "Lead · PWM clásico", "Lead · Videojuego", "Lead · Plegado", "Lead · Sierra con sync", "Lead · Vocal", "Pad · Barrido armónico", "Pad · Coro de vocales", "Pad · Órgano etéreo", "Pad · Peine espectral", "Pad · Cuerdas PWM", "Pluck · Campana FM", "Pluck · Escalones", "Pluck · Plegado corto", "Pluck · Arpa suave", "Teclas · Órgano de tabla", "Teclas · Piano digital", "Teclas · Clavi de tabla", "FX · Barrido de ruido", "Textura · Niebla espectral", "Textura · Metal que respira"];
+
     /// The factory sounds keep the Ladder and the warps they were made with
     /// (see [`WaveFilterParams::tuned`] and [`WaveOsc::clean`]); «Init» is a
-    /// new sound.
+    /// new sound, and so are the ones pushed after this is called.
     fn keep_ladders(list: &mut [(&'static str, WaveParams)]) {
         for (name, p) in list {
             if !name.starts_with("Init") {
@@ -6335,6 +6341,286 @@ impl WaveParams {
         p.gain = 0.95;
         list.push(("FX · Subida de ruido", p));
         Self::keep_ladders(&mut list);
+
+        // Made since: on a new Polychrome Synth's sound (its tuned Ladder,
+        // clean waves and Drive, the dense reverb).
+        let room = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let heat = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, ..SaturatorParams::default() }));
+        let pass = |mode, cutoff: f32, resonance: f32| WaveFilterParams { on: true, mode, cutoff, resonance, ..init.filter };
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 4.0, detune: 0.18, drift: 0.4, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, octave: 1.0, level: 0.35, unison: 2.0, detune: 0.12, ..analog(saw) };
+        p.filter = pass(WaveFilter::Lp24, 3000.0, 0.1);
+        p.env[0] = env(0.8, 0.8, 0.85, 1.4);
+        p.fx[0] = chorus;
+        p.fx[1] = room(0.7, 0.25);
+        p.gain = 0.366;
+        list.push(("Analog · Cuerdas lentas", p));
+
+        let mut p = init;
+        p.osc[0] = analog(saw);
+        p.osc[1] = WaveOsc { on: true, octave: -1.0, level: 0.6, ..analog(1.0) };
+        p.filter = pass(WaveFilter::Ladder, 350.0, 0.3);
+        p.env[0] = env(0.002, 0.4, 0.7, 0.1);
+        p.env[1] = env(0.002, 0.3, 0.2, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.45);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 30.0;
+        p.gain = 0.571;
+        list.push(("Analog · Bajo de pedal", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { warp_amount: 0.35, drift: 0.3, ..analog(1.0) };
+        p.filter = pass(WaveFilter::Ladder, 3500.0, 0.25);
+        p.lfo[0] = WaveLfo { rate: 0.6, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 12, 0.2);
+        p.env[0] = env(0.005, 0.3, 0.85, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 45.0;
+        p.fx[0] = delay(0.75, 0.2);
+        p.gain = 0.846;
+        list.push(("Analog · Lead de pulso", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.1, ..analog(saw) };
+        p.filter = pass(WaveFilter::Ladder, 400.0, 0.45);
+        p.env[0] = env(0.001, 0.4, 0.0, 0.3);
+        p.env[1] = env(0.001, 0.22, 0.0, 0.15);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.6);
+        p.fx[0] = delay(0.75, 0.2);
+        p.gain = 0.821;
+        list.push(("Analog · Pluck de filtro", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 3.0, detune: 0.15, drift: 0.3, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, semi: 7.0, level: 0.5, unison: 3.0, detune: 0.15, ..analog(saw) };
+        p.filter = pass(WaveFilter::Lp24, 1500.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 0.15, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.2);
+        p.env[0] = env(0.9, 1.0, 0.9, 1.8);
+        p.fx[0] = chorus;
+        p.fx[1] = room(0.8, 0.3);
+        p.gain = 0.316;
+        list.push(("Analog · Pad de quintas", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 4.0, detune: 0.2, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, level: 0.4, warp_amount: 0.2, ..analog(1.0) };
+        p.filter = pass(WaveFilter::Lp24, 1200.0, 0.2);
+        p.env[0] = env(0.001, 0.35, 0.3, 0.25);
+        p.env[1] = env(0.001, 0.3, 0.1, 0.2);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.55);
+        p.fx[0] = room(0.5, 0.2);
+        p.gain = 0.442;
+        list.push(("Analog · Stab de acordes", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { drift: 0.5, ..analog(0.0) };
+        p.filter.on = false;
+        p.lfo[0] = WaveLfo { rate: 5.5, rise: 0.5, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 3, 0.05);
+        p.env[0] = env(0.08, 0.2, 1.0, 0.3);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 180.0;
+        p.fx[0] = room(0.7, 0.3);
+        p.gain = 0.314;
+        list.push(("Analog · Theremin", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { level: 0.4, ..harmonic(16.0, -0.2, 0.0) };
+        p.osc[1] = WaveOsc { on: true, octave: 1.0, level: 0.2, ..harmonic(8.0, -0.5, 0.0) };
+        p.filter.on = false;
+        p.env[0] = env(0.02, 0.1, 1.0, 0.3);
+        p.fx[0] = room(0.85, 0.3);
+        p.gain = 0.198;
+        list.push(("Harmonic · Órgano de iglesia", p));
+
+        let mut p = init;
+        p.osc[0] = harmonic(40.0, 0.2, 0.8);
+        p.filter.on = false;
+        p.env[0] = env(0.001, 2.5, 0.0, 1.5);
+        p.env[1] = env(0.001, 0.8, 0.0, 0.5);
+        p.matrix[0] = slot(ModSource::Env2, 93, 0.4);
+        p.fx[0] = room(0.8, 0.3);
+        p.gain = 0.514;
+        list.push(("Harmonic · Campana de cristal", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { level: 0.5, ..harmonic(6.0, -0.5, 0.0) };
+        p.noise = WaveNoise { on: true, level: 0.12, color: 6000.0, ..init.noise };
+        p.filter.on = false;
+        p.lfo[0] = WaveLfo { rate: 5.0, rise: 0.4, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 3, 0.03);
+        p.env[0] = env(0.06, 0.2, 0.9, 0.25);
+        p.fx[0] = room(0.7, 0.25);
+        p.gain = 0.338;
+        list.push(("Harmonic · Flauta de pan", p));
+
+        let mut p = init;
+        p.osc[0] = harmonic(20.0, -0.3, -0.9);
+        p.filter = pass(WaveFilter::Lp12, 4000.0, 0.1);
+        p.env[0] = env(0.03, 0.2, 0.9, 0.15);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 20.0;
+        p.gain = 0.356;
+        list.push(("Harmonic · Clarinete", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 5.0, detune: 0.15, warp_amount: 0.6, ..harmonic(24.0, -0.2, 0.3) };
+        p.filter.on = false;
+        p.lfo[0] = WaveLfo { rate: 0.1, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.5);
+        p.env[0] = env(0.7, 1.0, 1.0, 2.2);
+        p.fx[0] = chorus;
+        p.fx[1] = room(0.9, 0.45);
+        p.gain = 0.17;
+        list.push(("Harmonic · Coro lejano", p));
+
+        let mut p = init;
+        p.osc[0] = analog(saw);
+        p.filter = pass(WaveFilter::Lp24, 180.0, 0.5);
+        p.env[0] = env(0.001, 0.3, 0.5, 0.08);
+        p.env[1] = env(0.001, 0.14, 0.0, 0.08);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.6);
+        p.mono = true;
+        p.gain = 0.914;
+        list.push(("Bajo · Goma", p));
+
+        let mut p = init;
+        p.osc[0] = analog(1.0);
+        p.osc[1] = WaveOsc { on: true, octave: 1.0, level: 0.4, ..analog(saw) };
+        p.filter = pass(WaveFilter::Ladder, 700.0, 0.2);
+        p.env[0] = env(0.001, 0.2, 0.5, 0.08);
+        p.env[1] = env(0.001, 0.2, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.35);
+        p.mono = true;
+        p.gain = 0.702;
+        list.push(("Bajo · Disco de octavas", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.3, drift: 0.5, width: 0.2, ..analog(saw) };
+        p.sub = WaveSub { on: true, level: 0.6, ..init.sub };
+        p.filter = WaveFilterParams { routes: [true, true, false, true], ..pass(WaveFilter::Lp12, 250.0, 0.1) };
+        p.mono = true;
+        p.legato = true;
+        p.glide = 50.0;
+        p.fx[0] = heat(6.0);
+        p.gain = 0.323;
+        list.push(("Bajo · Zumbido grave", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { warp_amount: 0.0, ..analog(1.0) };
+        p.filter = pass(WaveFilter::Lp24, 500.0, 0.2);
+        p.env[0] = env(0.001, 0.3, 0.6, 0.08);
+        p.env[1] = env(0.001, 0.2, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.4);
+        p.mono = true;
+        p.gain = 0.486;
+        list.push(("Bajo · Cuadrado", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 3.0, detune: 0.15, ..analog(saw) };
+        p.filter = pass(WaveFilter::Lp24, 6000.0, 0.15);
+        p.env[0] = env(0.005, 0.3, 0.85, 0.25);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 35.0;
+        p.fx[0] = delay(0.75, 0.3);
+        p.fx[1] = room(0.6, 0.2);
+        p.gain = 0.824;
+        list.push(("Lead · Sierra con cola", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { drift: 0.2, ..analog(1.0) };
+        p.filter = pass(WaveFilter::Lp12, 2200.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 5.5, rise: 0.4, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 3, 0.04);
+        p.env[0] = env(0.01, 0.3, 0.85, 0.2);
+        p.mono = true;
+        p.glide = 25.0;
+        p.gain = 0.332;
+        list.push(("Lead · Cuadrada suave", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 2.0, detune: 0.08, level: 1.0, ..analog(saw) };
+        p.filter = pass(WaveFilter::Bp12, 700.0, 0.4);
+        p.filter2 = WaveFilterParams { on: true, mode: WaveFilter::Bp12, cutoff: 1800.0, resonance: 0.4, ..p.filter2 };
+        p.filter_parallel = true;
+        p.lfo[0] = WaveLfo { rate: 0.3, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.3);
+        p.matrix[1] = slot(ModSource::Lfo1, 99, -0.3);
+        p.env[0] = env(0.01, 0.3, 0.9, 0.25);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 60.0;
+        p.gain = 0.789;
+        list.push(("Doble filtro · Lead vocal", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 6.0, detune: 0.3, drift: 0.6, ..analog(saw) };
+        p.filter = pass(WaveFilter::Lp12, 1200.0, 0.1);
+        p.random_rate = 0.6;
+        p.matrix[0] = slot(ModSource::Smooth, 32, 0.3);
+        p.env[0] = env(1.0, 1.0, 1.0, 3.0);
+        p.fx[0] = chorus;
+        p.fx[1] = room(0.9, 0.4);
+        p.gain = 0.25;
+        list.push(("Pad · Nube analógica", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 3.0, detune: 0.1, ..harmonic(48.0, 0.3, 0.5) };
+        p.filter = pass(WaveFilter::Hp12, 400.0, 0.1);
+        p.env[0] = env(0.7, 1.0, 1.0, 2.5);
+        p.fx[0] = room(0.9, 0.4);
+        p.gain = 0.292;
+        list.push(("Pad · Vidrio frío", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { unison: 4.0, detune: 0.18, ..analog(saw) };
+        p.osc[1] = WaveOsc { on: true, level: 0.4, warp_amount: 0.25, ..analog(1.0) };
+        p.filter = pass(WaveFilter::Notch, 900.0, 0.5);
+        p.lfo[0] = WaveLfo { rate: 0.06, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.6);
+        p.env[0] = env(0.8, 1.0, 1.0, 2.0);
+        p.fx[0] = chorus;
+        p.gain = 0.352;
+        list.push(("Pad · Barrido de muesca", p));
+
+        let mut p = init;
+        p.osc[0] = analog(0.0);
+        p.filter.on = false;
+        p.env[0] = env(0.001, 0.35, 0.0, 0.2);
+        p.env[1] = env(0.001, 0.08, 0.0, 0.05);
+        p.matrix[0] = slot(ModSource::Env2, 2, 0.5);
+        p.gain = 0.486;
+        list.push(("Perc · Tom analógico", p));
+
+        let mut p = init;
+        p.osc[0] = analog(saw);
+        p.filter = pass(WaveFilter::Ladder, 2000.0, 0.5);
+        p.env[0] = env(0.01, 2.5, 0.0, 1.0);
+        p.env[1] = env(0.001, 2.5, 0.0, 1.0);
+        p.matrix[0] = slot(ModSource::Env2, 2, 1.0);
+        p.fx[0] = delay(0.5, 0.25);
+        p.fx[1] = room(0.8, 0.3);
+        p.gain = 0.633;
+        list.push(("FX · Caída de sirena", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { level: 1.0, ..analog(1.0) };
+        p.filter = pass(WaveFilter::Bp12, 1500.0, 0.5);
+        p.random_rate = 9.0;
+        p.matrix[0] = slot(ModSource::SampleHold, 32, 0.6);
+        p.matrix[1] = slot(ModSource::SampleHold, 3, 0.3);
+        p.env[0] = env(0.01, 0.3, 1.0, 0.2);
+        p.fx[0] = heat(6.0);
+        p.gain = 1.0;
+        list.push(("FX · Radio rota", p));
         list
     }
 
@@ -6937,6 +7223,272 @@ impl WaveParams {
         p.fx[0] = reverb(0.9, 0.4);
         list.push(("FX · Viento", p));
         Self::keep_ladders(&mut list);
+
+        // Made since: on a new Wavetable Synth's sound (its tuned Ladder,
+        // clean warps and Drive, the dense reverb).
+        let room = |size: f32, mix: f32| fx(Effect::Reverb(ReverbParams { size, mix, ..ReverbParams::default() }));
+        let heat = |drive_db: f32| fx(Effect::Saturator(SaturatorParams { drive_db, output_db: -drive_db * 0.5, ..SaturatorParams::default() }));
+        let lowpass = |mode, cutoff: f32, resonance: f32| WaveFilterParams { on: true, mode, cutoff, resonance, ..init.filter };
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: 1.0, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.5, ..init.sub };
+        p.filter = lowpass(WaveFilter::Lp24, 300.0, 0.3);
+        p.env[0] = env(0.002, 0.3, 0.6, 0.08);
+        p.env[1] = env(0.001, 0.18, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.55);
+        p.mono = true;
+        p.gain = 0.461;
+        list.push(("Bajo · Pluck de garage", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { drive: 0.3, ..lowpass(WaveFilter::Ladder, 250.0, 0.75) };
+        p.env[0] = env(0.002, 0.4, 0.7, 0.08);
+        p.env[1] = env(0.001, 0.25, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.6);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 60.0;
+        p.gain = 0.631;
+        list.push(("Bajo · Ladder ácido", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 9, position: 0.5, unison: 2.0, detune: 0.1, width: 0.3, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.55, ..init.sub };
+        p.filter = WaveFilterParams { routes: [true, true, false, true], ..lowpass(WaveFilter::Notch, 800.0, 0.6) };
+        p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 0.25, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 32, 0.5);
+        p.matrix[1] = slot(ModSource::Lfo1, 0, 0.5);
+        p.mono = true;
+        p.fx[0] = heat(8.0);
+        p.gain = 0.328;
+        list.push(("Bajo · Notch rabioso", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 5, position: 0.1, level: 1.0, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp12, 1200.0, 0.1);
+        p.env[0] = env(0.001, 0.35, 0.0, 0.1);
+        p.env[1] = env(0.001, 0.12, 0.0, 0.08);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.7);
+        p.mono = true;
+        p.gain = 0.853;
+        list.push(("Bajo · Donk", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 3, position: 0.1, ..WaveOsc::default() };
+        p.sub = WaveSub { on: true, level: 0.5, ..init.sub };
+        p.filter = WaveFilterParams { routes: [true, true, false, true], ..lowpass(WaveFilter::Lp24, 1500.0, 0.2) };
+        p.lfo[0] = WaveLfo { shape: triangle, mode: LfoMode::Retrig, sync_beats: 1.0, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.8);
+        p.mono = true;
+        p.glide = 30.0;
+        p.gain = 0.527;
+        list.push(("Bajo · Formante hablador", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 1, position: 0.7, warp: OscWarp::Pwm, warp_amount: 0.5, unison: 2.0, detune: 0.1, level: 1.0, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp24, 5000.0, 0.15);
+        p.lfo[0] = WaveLfo { rate: 0.8, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 12, 0.3);
+        p.env[0] = env(0.005, 0.3, 0.85, 0.2);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 40.0;
+        p.fx[0] = delay(0.75, 0.2);
+        p.gain = 1.0;
+        list.push(("Lead · PWM clásico", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: 1.0, ..WaveOsc::default() };
+        p.env[0] = env(0.001, 0.1, 0.8, 0.05);
+        p.lfo[0] = WaveLfo { rate: 6.0, rise: 0.3, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 3, 0.05);
+        p.gain = 0.234;
+        list.push(("Lead · Videojuego", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 6, position: 0.2, unison: 3.0, detune: 0.12, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp12, 8000.0, 0.1);
+        p.env[0] = env(0.005, 0.4, 0.8, 0.25);
+        p.env[1] = env(0.005, 0.6, 0.3, 0.2);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.5);
+        p.fx[0] = delay(0.5, 0.2);
+        p.fx[1] = room(0.6, 0.2);
+        p.gain = 0.335;
+        list.push(("Lead · Plegado", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: saw, warp: OscWarp::Sync, warp_amount: 0.25, unison: 5.0, detune: 0.22, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp24, 12_000.0, 0.1);
+        p.env[0] = env(0.003, 0.3, 0.85, 0.2);
+        p.fx[0] = heat(6.0);
+        p.fx[1] = delay(0.75, 0.2);
+        p.gain = 0.383;
+        list.push(("Lead · Sierra con sync", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 3, position: 0.3, level: 1.0, unison: 2.0, detune: 0.08, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { mix: 0.5, ..lowpass(WaveFilter::Bp12, 1500.0, 0.3) };
+        p.lfo[0] = WaveLfo { rate: 0.35, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.5);
+        p.env[0] = env(0.02, 0.3, 0.9, 0.25);
+        p.mono = true;
+        p.legato = true;
+        p.glide = 80.0;
+        p.fx[0] = room(0.6, 0.25);
+        p.gain = 0.838;
+        list.push(("Lead · Vocal", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 2, position: 0.1, unison: 4.0, detune: 0.18, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp12, 6000.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 0.07, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.8);
+        p.env[0] = env(0.8, 1.0, 1.0, 2.5);
+        p.fx[0] = chorus;
+        p.fx[1] = room(0.85, 0.35);
+        p.gain = 0.339;
+        list.push(("Pad · Barrido armónico", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 3, position: 0.2, unison: 5.0, detune: 0.2, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { on: true, table: 3, position: 0.5, octave: 1.0, level: 0.3, ..WaveOsc::default() };
+        p.lfo[0] = WaveLfo { rate: 0.1, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.6);
+        p.env[0] = env(0.8, 1.0, 1.0, 2.0);
+        p.fx[0] = room(0.85, 0.35);
+        p.gain = 0.249;
+        list.push(("Pad · Coro de vocales", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 8, position: 0.2, unison: 3.0, detune: 0.1, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp12, 3000.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 0.05, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.5);
+        p.env[0] = env(0.5, 1.0, 1.0, 1.8);
+        p.fx[0] = chorus;
+        p.fx[1] = room(0.8, 0.35);
+        p.gain = 0.482;
+        list.push(("Pad · Órgano etéreo", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 10, position: 0.05, unison: 4.0, detune: 0.15, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Hp12, 250.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 0.04, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.9);
+        p.env[0] = env(1.0, 1.0, 1.0, 3.0);
+        p.fx[0] = room(0.9, 0.4);
+        p.gain = 0.269;
+        list.push(("Pad · Peine espectral", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 1, position: 0.6, warp: OscWarp::Pwm, warp_amount: 0.4, unison: 4.0, detune: 0.15, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp24, 3500.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 0.5, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 12, 0.25);
+        p.env[0] = env(0.35, 0.8, 0.85, 0.9);
+        p.fx[0] = chorus;
+        p.gain = 0.563;
+        list.push(("Pad · Cuerdas PWM", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 5, position: 0.1, ..WaveOsc::default() };
+        p.env[0] = env(0.001, 1.6, 0.0, 1.0);
+        p.env[1] = env(0.001, 0.5, 0.0, 0.4);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.5);
+        p.fx[0] = room(0.7, 0.25);
+        p.gain = 0.361;
+        list.push(("Pluck · Campana FM", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 7, position: 0.4, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp24, 500.0, 0.3);
+        p.env[0] = env(0.001, 0.35, 0.0, 0.25);
+        p.env[1] = env(0.001, 0.2, 0.0, 0.15);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.6);
+        p.fx[0] = delay(0.75, 0.25);
+        p.gain = 0.667;
+        list.push(("Pluck · Escalones", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 6, position: 0.05, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp12, 6000.0, 0.1);
+        p.env[0] = env(0.001, 0.3, 0.0, 0.2);
+        p.env[1] = env(0.001, 0.15, 0.0, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.6);
+        p.gain = 0.409;
+        list.push(("Pluck · Plegado corto", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { position: 1.0 / 3.0, ..WaveOsc::default() };
+        p.osc[1] = WaveOsc { on: true, position: 0.0, octave: 1.0, level: 0.3, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp12, 2000.0, 0.1);
+        p.env[0] = env(0.002, 1.2, 0.0, 0.8);
+        p.env[1] = env(0.001, 0.4, 0.0, 0.3);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.3);
+        p.fx[0] = room(0.7, 0.25);
+        p.gain = 0.425;
+        list.push(("Pluck · Arpa suave", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 8, position: 0.3, ..WaveOsc::default() };
+        p.env[0] = env(0.005, 0.1, 1.0, 0.08);
+        p.fx[0] = chorus;
+        p.gain = 0.887;
+        list.push(("Teclas · Órgano de tabla", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 2, position: 0.15, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { key_track: 0.5, ..lowpass(WaveFilter::Lp12, 5000.0, 0.1) };
+        p.env[0] = env(0.002, 2.5, 0.0, 0.6);
+        p.env[1] = env(0.001, 0.8, 0.0, 0.5);
+        p.matrix[0] = slot(ModSource::Env2, 0, 0.4);
+        p.matrix[1] = slot(ModSource::Velocity, 0, 0.2);
+        p.fx[0] = room(0.4, 0.15);
+        p.gain = 0.657;
+        list.push(("Teclas · Piano digital", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 1, position: 0.9, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp24, 900.0, 0.35);
+        p.env[0] = env(0.001, 0.9, 0.0, 0.1);
+        p.env[1] = env(0.001, 0.25, 0.1, 0.1);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.5);
+        p.gain = 0.755;
+        list.push(("Teclas · Clavi de tabla", p));
+
+        let mut p = init;
+        p.osc[0].on = false;
+        p.noise = WaveNoise { on: true, level: 0.8, ..init.noise };
+        p.filter = lowpass(WaveFilter::Bp12, 300.0, 0.5);
+        p.env[0] = env(0.001, 1.5, 0.0, 1.0);
+        p.env[1] = env(0.001, 1.5, 0.0, 1.0);
+        p.matrix[0] = slot(ModSource::Env2, 32, 0.7);
+        p.fx[0] = room(0.8, 0.3);
+        p.gain = 0.905;
+        list.push(("FX · Barrido de ruido", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 11, position: 0.1, unison: 3.0, detune: 0.2, ..WaveOsc::default() };
+        p.filter = lowpass(WaveFilter::Lp12, 2500.0, 0.1);
+        p.lfo[0] = WaveLfo { rate: 0.03, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 0, 0.8);
+        p.env[0] = env(1.0, 1.0, 1.0, 4.0);
+        p.fx[0] = room(0.9, 0.5);
+        p.gain = 0.68;
+        list.push(("Textura · Niebla espectral", p));
+
+        let mut p = init;
+        p.osc[0] = WaveOsc { table: 10, position: 0.3, warp: OscWarp::Mirror, warp_amount: 0.3, ..WaveOsc::default() };
+        p.filter = WaveFilterParams { mix: 0.6, ..lowpass(WaveFilter::Bp12, 1200.0, 0.4) };
+        p.lfo[0] = WaveLfo { rate: 0.1, shape: triangle, ..init.lfo[0] };
+        p.matrix[0] = slot(ModSource::Lfo1, 12, 0.4);
+        p.env[0] = env(1.5, 1.0, 1.0, 3.0);
+        p.fx[0] = delay(0.75, 0.25);
+        p.fx[1] = room(0.85, 0.35);
+        p.gain = 0.297;
+        list.push(("Textura · Metal que respira", p));
         list
     }
 

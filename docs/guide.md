@@ -1997,7 +1997,7 @@ A wavetable is a series of waveforms the oscillator moves through: as it moves t
 - **FX**: up to 6 built-in effects, saved with the preset.
 - **MATRIX**: 16 modulation routes (source, amount, destination).
 
-It comes with 38 factory presets by category: Bass, Lead, Pad, Pluck, Keys, Arpeggio and FX (see [[Presets]]). In several of them, **Macro 1** does the most useful thing for the sound: opens the filter, changes the vowel or sets the wobble depth.
+It comes with 63 factory presets by category: Bass, Lead, Pad, Pluck, Keys, Arpeggio, FX and Texture (see [[Presets]]). In several of them, **Macro 1** does the most useful thing for the sound: opens the filter, changes the vowel or sets the wobble depth.
 
 #### Your own wavetables
 
@@ -2021,7 +2021,7 @@ The same engine as Wavetable, on **SYNTH**, **SEQ**, **FX** and **MATRIX** pages
   - While you hold a key, it plays the steps transposed to it.
   - **Vary** changes notes at random within the scale.
 
-It comes with 34 factory presets by category: analog brass, strings and leads, basses, harmonic organs, bells and flutes, dual filters (vowels, crossovers and a plucked string), sequences, pads and effects (see [[Presets]]).
+It comes with 59 factory presets by category: analog brass, strings and leads, basses, harmonic organs, bells and flutes, dual filters (vowels, crossovers and a plucked string), sequences, pads and effects (see [[Presets]]).
 
 ### Glide and legato notes (the 808)
 

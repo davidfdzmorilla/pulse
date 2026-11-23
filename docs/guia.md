@@ -1998,7 +1998,7 @@ Una wavetable es una serie de formas de onda por la que el oscilador se desplaza
 - **FX**: hasta 6 efectos propios, que se guardan con el preset.
 - **MATRIX**: 16 rutas de modulación (fuente, cantidad, destino).
 
-Trae 38 presets de fábrica por categorías: Bajo, Lead, Pad, Pluck, Teclas, Arpegio y FX (ver [[Presets]]). En varios, la **Macro 1** hace lo más útil del sonido: abre el filtro, cambia la vocal o da la profundidad del wobble.
+Trae 63 presets de fábrica por categorías: Bajo, Lead, Pad, Pluck, Teclas, Arpegio, FX y Textura (ver [[Presets]]). En varios, la **Macro 1** hace lo más útil del sonido: abre el filtro, cambia la vocal o da la profundidad del wobble.
 
 #### Wavetables propias
 
@@ -2022,7 +2022,7 @@ El mismo motor que Wavetable, en páginas **SYNTH**, **SEQ**, **FX** y **MATRIX*
   - Mientras mantienes una tecla, toca los pasos transpuestos a ella.
   - **Variar** cambia notas al azar dentro de la escala.
 
-Trae 34 presets de fábrica por categorías: metales, cuerdas y leads analógicos, bajos, órganos, campanas y flautas armónicos, filtros dobles (vocales, cruces y una cuerda pulsada), secuencias, pads y efectos (ver [[Presets]]).
+Trae 59 presets de fábrica por categorías: metales, cuerdas y leads analógicos, bajos, órganos, campanas y flautas armónicos, filtros dobles (vocales, cruces y una cuerda pulsada), secuencias, pads y efectos (ver [[Presets]]).
 
 ### Glide y notas ligadas (el 808)
 

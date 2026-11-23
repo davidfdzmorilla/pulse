@@ -1227,6 +1227,11 @@ pub fn render_drum_hit(params: DrumParams, pitch: u8, sample_rate: f32) -> (Vec<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The FM Synth's factory sounds made before its feedback was smoothed
+    /// and its voices oversampled: they keep the sound they had. «Init» and
+    /// the ones made since are a new FM Synth's.
+    const FM_FIRST: [&str; 25] = ["Teclas · Piano eléctrico", "Teclas · Púa brillante", "Teclas · Funky percusivo", "Teclas · Órgano FM", "Teclas · Órgano saturado", "Campanas · Tubular", "Campanas · Iglesia", "Campanas · Cristal", "Campanas · Caja de música", "Pluck · Marimba", "Pluck · Vibráfono", "Pluck · Metálico", "Pluck · Arpegio digital", "Bajo · FM de los 80", "Bajo · Slap", "Bajo · Sub FM", "Bajo · Gruñido", "Lead · Feedback", "Lead · Flauta FM", "Metales · Stab FM", "Pad · Cristal lento", "Textura · Inarmónica", "Textura · Metal oxidado", "FX · Gong", "FX · Ruido digital"];
     use crate::model::DRUM_VOICES;
 
     const SR: f32 = 48_000.0;
@@ -1351,7 +1356,7 @@ mod tests {
         }
         // Who has it.
         assert!(FmParams::default().oversample);
-        assert!(FmParams::presets().iter().all(|(name, p)| p.oversample == (*name == "Init")));
+        assert!(FmParams::presets().iter().all(|(name, p)| p.oversample != FM_FIRST.contains(name)));
         let mut saved = serde_json::to_value(FmParams::default()).unwrap();
         assert_eq!(saved.as_object_mut().unwrap().remove("oversample"), Some(true.into()));
         assert!(!serde_json::from_value::<FmParams>(saved).unwrap().oversample);
@@ -1391,7 +1396,7 @@ mod tests {
         let mut saved = serde_json::to_value(FmParams::default()).unwrap();
         assert_eq!(saved.as_object_mut().unwrap().remove("feedback_smooth"), Some(true.into()));
         assert!(!serde_json::from_value::<FmParams>(saved).unwrap().feedback_smooth);
-        assert!(FmParams::presets().iter().all(|(name, p)| !p.feedback_smooth || *name == "Init"));
+        assert!(FmParams::presets().iter().all(|(name, p)| p.feedback_smooth != FM_FIRST.contains(name)));
     }
 
     #[test]

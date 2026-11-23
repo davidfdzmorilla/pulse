@@ -1775,7 +1775,7 @@ mod tests {
         // Who has it.
         assert!(WaveParams::default().filter.tuned && WaveParams::polychrome().filter.tuned);
         for (name, p) in WaveParams::presets().into_iter().chain(WaveParams::polychrome_presets()) {
-            assert_eq!(p.filter.tuned, name == "Init", "{name}");
+            assert_eq!(p.filter.tuned, name == "Init" || WaveParams::MADE_SINCE.contains(&name), "{name}");
         }
         let mut old = serde_json::to_value(WaveParams::polychrome()).unwrap();
         old["filter"].as_object_mut().unwrap().remove("tuned");
@@ -2379,8 +2379,8 @@ mod polychrome_tests {
         // Who has it.
         assert!(WaveParams::default().filter.clean_drive && WaveParams::polychrome().filter.clean_drive && WaveParams::polychrome().filter2.clean_drive);
         for (name, p) in WaveParams::presets().into_iter().chain(WaveParams::polychrome_presets()) {
-            assert_eq!(p.filter.clean_drive, name == "Init", "{name}");
-            assert_eq!(p.filter2.clean_drive, name == "Init", "{name}");
+            assert_eq!(p.filter.clean_drive, name == "Init" || WaveParams::MADE_SINCE.contains(&name), "{name}");
+            assert_eq!(p.filter2.clean_drive, name == "Init" || WaveParams::MADE_SINCE.contains(&name), "{name}");
         }
         let mut old = serde_json::to_value(WaveParams::polychrome()).unwrap();
         old["filter"].as_object_mut().unwrap().remove("clean_drive");
@@ -2423,7 +2423,8 @@ mod polychrome_tests {
         // Who has it.
         assert!(crate::model::WaveOsc::default().clean && WaveParams::default().osc[0].clean && WaveParams::polychrome().osc[1].clean);
         for (name, p) in WaveParams::presets().into_iter().chain(WaveParams::polychrome_presets()) {
-            assert_eq!((p.osc[0].clean, p.osc[1].clean), (name == "Init", name == "Init"), "{name}");
+            let new = name == "Init" || WaveParams::MADE_SINCE.contains(&name);
+            assert_eq!((p.osc[0].clean, p.osc[1].clean), (new, new), "{name}");
         }
         let mut old = serde_json::to_value(WaveParams::default()).unwrap();
         old["osc"][0].as_object_mut().unwrap().remove("clean");

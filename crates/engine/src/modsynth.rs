@@ -2427,8 +2427,9 @@ mod tests {
         }
         // Who has it.
         assert!(Module::new(ModuleKind::Analog).clean && ModularParams::default().modules[1].clean);
-        for (name, p) in ModularParams::presets() {
-            assert_eq!(p.modules.iter().any(|m| m.clean), name == "Init", "{name}");
+        // «Init» and the ones made since (after the first 41) are new sounds.
+        for (i, (name, p)) in ModularParams::presets().into_iter().enumerate() {
+            assert_eq!(p.modules.iter().any(|m| m.clean), i == 0 || i > 41, "{name}");
         }
         let mut old = serde_json::to_value(Module::new(ModuleKind::Distortion)).unwrap();
         old.as_object_mut().unwrap().remove("clean");

@@ -33,6 +33,10 @@ still in `0.x`, so any release may change things.
   menu in each one's header, 47 settings by use in all (vocals, drums,
   basses, the master, sidechain…). A preset keeps the Sidechain the device
   had. The search finds them too.
+- Modular Synth: 20 more factory sounds (62 in all): four basses, three
+  leads, four pads, two plucks, a small FM bell, a three-sine organ,
+  three percussions, a noise swell and a pitch drop. They are short
+  stacks to start from, with a new module's clean waves and distortion.
 - Wavetable Synth: 25 more factory sounds (63 in all): five basses, five
   leads (PWM, video game, folded, synced saw, vocal), five pads that move
   through their tables, four plucks, three keys, a noise sweep and two

@@ -187,6 +187,11 @@ still in `0.x`, so any release may change things.
   modulation is worked out 1500 times a second and those values jumped
   each time, which left a buzz some 40 dB under the note; now they move
   smoothly from one to the next.
+- Splitting a clip whose envelope ramps across the cut: each part keeps its
+  half of the ramp. The part before the cut stayed at the value the ramp
+  started from, so the level jumped at the cut; in a MIDI clip the part
+  after it ramped the wrong way when the envelope had a point at the
+  clip's end, and a looping one lost the ramp's first half.
 - Modular Synth and Super Saw: a sound with modulation (LFOs, envelopes,
   random, glide, the Super Saw's filter envelope) plays the same whatever
   the sound card's buffer size. Before, it could change with buffers that

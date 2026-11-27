@@ -16,18 +16,24 @@ pub const MIN_PART: f64 = 1.0 / 16.0;
 const MAX_PIECES: usize = 512;
 
 /// Envelope lanes turned round to start `d` beats into a loop of `length`, with a
-/// point at the new start so the value there stays.
+/// point at the new start and another at the end so the value there stays (a
+/// ramp across `d` is in two halves: one at the start, the other at the end).
 fn rotate_lanes(lanes: &[AutomationLane], d: f64, length: f64) -> Vec<AutomationLane> {
     lanes
         .iter()
         .map(|lane| {
-            let mut points: Vec<AutomationPoint> = lane.points.iter().map(|p| AutomationPoint { beat: (p.beat - d).rem_euclid(length), ..*p }).collect();
+            // With where each was: of two that land on the same beat (the loop's
+            // last point and its first), the later one comes first.
+            let mut points: Vec<(f64, AutomationPoint)> = lane.points.iter().map(|p| (p.beat, AutomationPoint { beat: (p.beat - d).rem_euclid(length), ..*p })).collect();
             if let Some(value) = lane.value_at(d) {
-                points.retain(|p| p.beat > 1e-9);
-                points.push(AutomationPoint { beat: 0.0, value, curve: lane.curve_at(d) });
+                points.retain(|(_, p)| p.beat > 1e-9);
+                points.push((d, AutomationPoint { beat: 0.0, value, curve: lane.curve_at(d) }));
+                if d > 1e-9 && lane.points.iter().any(|p| p.beat < d - 1e-9) {
+                    points.push((d, AutomationPoint { beat: length, value, curve: 0.0 }));
+                }
             }
-            points.sort_by(|a, b| a.beat.total_cmp(&b.beat));
-            AutomationLane { param: lane.param, points }
+            points.sort_by(|a, b| a.1.beat.total_cmp(&b.1.beat).then(b.0.total_cmp(&a.0)));
+            AutomationLane { param: lane.param, points: points.into_iter().map(|(_, p)| p).collect() }
         })
         .collect()
 }
@@ -97,6 +103,19 @@ pub fn split(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(Arrange
     Some((left, right))
 }
 
+/// Cuts envelope lanes to their first `length` beats, with a point at the cut
+/// so a ramp across it still gets to the value it had there.
+fn cut_lanes(lanes: &mut [AutomationLane], length: f64) {
+    for lane in lanes {
+        let at_cut = lane.points.iter().any(|p| p.beat > length + 1e-9).then(|| lane.value_at(length)).flatten();
+        lane.points.retain(|p| p.beat <= length + 1e-9);
+        match at_cut {
+            Some(value) if lane.points.last().is_none_or(|p| p.beat < length - 1e-9) => lane.points.push(AutomationPoint { beat: length, value, curve: 0.0 }),
+            _ => {}
+        }
+    }
+}
+
 /// Cuts a clip's content to its first `length` beats.
 fn trim(clip: &mut Clip, length: f64) {
     match clip {
@@ -105,15 +124,11 @@ fn trim(clip: &mut Clip, length: f64) {
             midi.controls = crate::expression::slice(&midi.controls, midi.length.max(MIN_PART), 0.0, length);
             midi.length = length;
             midi.notes.retain(|n| n.start < length);
-            for lane in &mut midi.envelopes {
-                lane.points.retain(|p| p.beat <= length);
-            }
+            cut_lanes(&mut midi.envelopes, length);
         }
         Clip::Audio(audio) => {
             audio.length = length;
-            for lane in &mut audio.envelopes {
-                lane.points.retain(|p| p.beat <= length);
-            }
+            cut_lanes(&mut audio.envelopes, length);
         }
     }
 }
@@ -491,6 +506,56 @@ mod tests {
         // Not inside: no split.
         assert!(split(&placed, 2.0, 120.0).is_none());
         assert!(split(&placed, 14.0, 120.0).is_none());
+    }
+
+    /// A clip envelope that ramps across the cut: each part keeps its half of
+    /// the ramp, so the level doesn't jump at the cut (before, the first part
+    /// stayed at the ramp's first value).
+    #[test]
+    fn an_envelope_ramp_across_the_cut_stays_in_both_parts() {
+        let lane = AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.2, curve: 0.0 }, AutomationPoint { beat: 16.0, value: 1.0, curve: 0.0 }] };
+        let audio = AudioClip { hard_start: false, fades: Default::default(),
+            name: "a".into(),
+            color: [0; 3],
+            sample: "/a.wav".into(),
+            length: 16.0,
+            offset: 0.0,
+            warp: WarpMode::Repitch,
+            original_bpm: 120.0,
+            warp_markers: Vec::new(),
+            key: None,
+            takes: Vec::new(),
+            gain_db: 0.0,
+            transpose: 0.0,
+            envelopes: vec![lane.clone()], muted: false,
+        };
+        let midi = MidiClip { name: "m".into(), length: 16.0, notes: Vec::new(), color: [0; 3], envelopes: vec![lane.clone()], groove: None, muted: false, controls: Vec::new() };
+        for clip in [Clip::Audio(audio), Clip::Midi(midi)] {
+            let (left, right) = split(&ArrangementClip { start: 4.0, length: 16.0, clip }, 12.0, 120.0).unwrap();
+            let lanes = |c: &Clip| match c {
+                Clip::Audio(a) => a.envelopes.clone(),
+                Clip::Midi(m) => m.envelopes.clone(),
+            };
+            let (l, r) = (&lanes(&left.clip)[0], &lanes(&right.clip)[0]);
+            for beat in [0.0, 3.0, 7.99] {
+                assert!((l.value_at(beat).unwrap() - lane.value_at(beat).unwrap()).abs() < 1e-3, "left at {beat}: {:?}", l.value_at(beat));
+                assert!((r.value_at(beat).unwrap() - lane.value_at(beat + 8.0).unwrap()).abs() < 1e-3, "right at {beat}: {:?}", r.value_at(beat));
+            }
+            assert!(l.points.iter().all(|p| p.beat <= 8.0), "{:?}", l.points);
+        }
+        // A looping MIDI clip is turned round: the ramp's second half first, then
+        // its first half, back to where it started.
+        let midi = MidiClip { name: "m".into(), length: 16.0, notes: Vec::new(), color: [0; 3], envelopes: vec![lane.clone()], groove: None, muted: false, controls: Vec::new() };
+        let (_, right) = split(&ArrangementClip { start: 4.0, length: 48.0, clip: Clip::Midi(midi) }, 12.0, 120.0).unwrap();
+        let Clip::Midi(turned) = &right.clip else { panic!() };
+        for beat in [0.0, 3.0, 7.99, 8.01, 12.0, 15.99] {
+            let (got, was) = (turned.envelopes[0].value_at(beat).unwrap(), lane.value_at((beat + 8.0) % 16.0).unwrap());
+            assert!((got - was).abs() < 1e-3, "turned round, at {beat}: {got} vs {was}");
+        }
+        // A lane that ends before the cut is left as it is.
+        let mut lanes = vec![lane.clone()];
+        cut_lanes(&mut lanes, 20.0);
+        assert_eq!(lanes[0], lane);
     }
 
     #[test]

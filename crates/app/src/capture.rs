@@ -8,6 +8,10 @@ use std::time::{Duration, Instant};
 /// Input kept while nothing is being recorded, so a take can start slightly in the past.
 const IDLE_SECONDS: usize = 4;
 
+/// How far before the frame recording began a take's start is still looked
+/// for, in input frames (the transport is read a callback or two apart).
+const RECORD_SLACK: u64 = 8192;
+
 /// How a recording that was going on when Pulse closed is named (see [`Safety`]).
 pub const UNFINISHED: &str = "Grabación sin terminar";
 
@@ -34,6 +38,10 @@ pub struct InputCapture {
     markers: Vec<Marker>,
     pub level: f32,
     safety: Option<Safety>,
+    /// Whether everything is being kept (recording), and the input frame it
+    /// began at: a take never starts in what was heard before that.
+    recording: bool,
+    record_from: u64,
 }
 
 impl InputCapture {
@@ -51,6 +59,8 @@ impl InputCapture {
             markers: Vec::new(),
             level: 0.0,
             safety: None,
+            recording: false,
+            record_from: 0,
         }
     }
 
@@ -86,6 +96,11 @@ impl InputCapture {
 
     /// Moves new input into the buffer. Unless `keep_all`, only the last few seconds are kept.
     pub fn pump(&mut self, keep_all: bool) {
+        if keep_all && !self.recording {
+            let got = (self.buffer.len() / self.handle.channels.max(1)) as u64;
+            self.record_from = (self.first_frame + got).saturating_sub(RECORD_SLACK);
+        }
+        self.recording = keep_all;
         while let Ok(marker) = self.handle.markers.pop() {
             self.markers.push(marker);
         }
@@ -179,7 +194,9 @@ impl InputCapture {
     /// Input frame captured when the transport was at `beat`, from input frame
     /// `after` on (a loop plays the same beats again on each pass).
     pub fn frame_at_beat_after(&self, beat: f64, after: u64) -> Option<u64> {
-        frame_at_beat(&self.markers, beat, after)
+        // Not in a pass over that beat from before recording (listening first,
+        // or the loop already going round), unless that is all there is.
+        frame_at_beat(&self.markers, beat, after.max(self.record_from)).or_else(|| frame_at_beat(&self.markers, beat, after))
     }
 
     /// Stereo copy of `frames` input frames from `start`; missing input is silence.
@@ -197,30 +214,34 @@ impl InputCapture {
     }
 }
 
-/// Input frame that was captured when the transport was at `beat`, interpolated
-/// between the markers around it (or extrapolated back from the first ones, for
-/// takes that start exactly when the transport does).
+/// Input frame that was captured when the transport was at `beat`, the first
+/// from frame `after` on: interpolated between the markers around it, or
+/// extrapolated back from markers just past it (a take that starts exactly when
+/// the transport does, or when the loop comes round).
 pub fn frame_at_beat(markers: &[Marker], beat: f64, after: u64) -> Option<u64> {
-    let mut first = None;
     for pair in markers.windows(2) {
         let (a, b) = (pair[0], pair[1]);
         if !(a.playing && b.playing && b.beat > a.beat && b.frame > a.frame && a.frame >= after) {
             continue;
         }
-        first.get_or_insert((a, b));
         if beat >= a.beat && beat <= b.beat {
             let t = (beat - a.beat) / (b.beat - a.beat);
             return Some(a.frame + (t * (b.frame - a.frame) as f64).round() as u64);
         }
-    }
-    let (a, b) = first?;
-    if beat < a.beat {
-        let frames_per_beat = (b.frame - a.frame) as f64 / (b.beat - a.beat);
-        let back = ((a.beat - beat) * frames_per_beat).round() as u64;
-        return Some(a.frame.saturating_sub(back));
+        if beat < a.beat {
+            let frames_per_beat = (b.frame - a.frame) as f64 / (b.beat - a.beat);
+            let back = ((a.beat - beat) * frames_per_beat).round() as u64;
+            // Only from close by: further back it is another pass's beat.
+            if back <= NEAR_CALLBACKS * (b.frame - a.frame) {
+                return Some(a.frame.saturating_sub(back));
+            }
+        }
     }
     None
 }
+
+/// How many input callbacks back a beat is still extrapolated to.
+const NEAR_CALLBACKS: u64 = 16;
 
 pub fn write_wav(path: &Path, left: &[f32], right: &[f32], sample_rate: f32) -> Result<(), String> {
     let spec = hound::WavSpec {
@@ -256,6 +277,23 @@ mod tests {
         assert_eq!(frame_at_beat(&markers, 1.99, 0), Some(760));
         // Beyond what has been captured.
         assert_eq!(frame_at_beat(&markers, 100.0, 0), None);
+        // Long before: that beat was never heard in this pass.
+        assert_eq!(frame_at_beat(&markers, 0.5, 0), None);
+    }
+
+    /// A beat heard twice (played, stopped and played again from the same
+    /// place): each pass has its frame, and the one before `after` is not it.
+    #[test]
+    fn a_beat_heard_twice_is_found_in_the_pass_asked_for() {
+        let pass = |from: u64| (0..50).map(move |i| marker(from + i * 512, 2.0 + i as f64 * 512.0 / 24_000.0));
+        let mut markers: Vec<Marker> = pass(0).collect();
+        markers.push(Marker { frame: 25_600, beat: 2.0, playing: false });
+        markers.extend(pass(26_112));
+        assert_eq!(frame_at_beat(&markers, 2.5, 0), Some(12_000));
+        assert_eq!(frame_at_beat(&markers, 2.5, 20_000), Some(38_112));
+        // The start of the second pass, looked for from a little before it ended
+        // the first: not extrapolated back from the first pass's last markers.
+        assert_eq!(frame_at_beat(&markers, 2.0, 24_000), Some(26_112));
     }
 
     #[test]

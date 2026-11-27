@@ -2157,6 +2157,38 @@ impl PulseApp {
         self.save_take(track, left, right, beats)
     }
 
+    /// Sends the playhead to `beat`. In the middle of a take over the
+    /// Arrangement, what was recorded so far stays where it was played and the
+    /// take goes on from there.
+    pub fn seek(&mut self, beat: f64) {
+        if let Some(state) = self.audio.state() {
+            if state.arrangement_recording.load(Ordering::Relaxed) {
+                self.recorder.jump(state.position(), beat);
+            }
+        }
+        self.audio.send(Command::SetPosition(beat));
+    }
+
+    /// The clips of an audio recording with no loop: one, or one for each
+    /// stretch between the times the playhead was moved.
+    fn stretch_takes(&mut self, track: usize, passes: &[(f64, f64)]) -> Vec<ArrangementClip> {
+        let mut clips = Vec::new();
+        let mut after = 0;
+        for &(from, to) in passes {
+            let beats = ((to - from) * 4.0).round() / 4.0;
+            if beats <= 0.0 {
+                continue;
+            }
+            let Some((left, right, rendered)) = self.take_audio(from, beats, after) else { continue };
+            // A stretch over beats already played is looked for after them.
+            after = rendered + self.take_frames(to - from) as u64;
+            if let Some(clip) = self.save_take(track, left, right, beats) {
+                clips.push(ArrangementClip { start: from, length: beats, clip: Clip::Audio(clip) });
+            }
+        }
+        clips
+    }
+
     /// The input played while `beats` from `start` were heard, from input frame
     /// `after` on, and the frame (before latency) where `start` was rendered.
     fn take_audio(&self, start: f64, beats: f64, after: u64) -> Option<(Vec<f32>, Vec<f32>, u64)> {
@@ -2468,9 +2500,7 @@ impl PulseApp {
                         });
                     }
                     // Nothing between the punch-in and the punch-out.
-                    let (Some(&(start, _)), Some(&(_, end))) = (passes.first(), passes.last()) else { continue };
-                    let beats = ((end - start) * 4.0).round() / 4.0;
-                    if passes.len() == 1 && beats <= 0.0 {
+                    if passes.is_empty() {
                         continue;
                     }
                     let tracks: Vec<usize> = (0..self.project.tracks.len())
@@ -2479,7 +2509,7 @@ impl PulseApp {
                     for track in tracks {
                         let clips = match looped {
                             Some(region) if passes.len() > 1 => self.loop_takes(track, &passes, region),
-                            _ => self.audio_take(track, start, beats).map(|clip| ArrangementClip { start, length: beats, clip: Clip::Audio(clip) }).into_iter().collect(),
+                            _ => self.stretch_takes(track, &passes),
                         };
                         let Some(last) = clips.last() else { continue };
                         let takes = match &last.clip {

@@ -1422,7 +1422,7 @@ fn handle_markers(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Response, 
         if ui.input(|i| i.pointer.primary_released()) {
             if !moved {
                 if let Some(marker) = app.project.markers.get(index) {
-                    app.audio.send(Command::SetPosition(marker.beat));
+                    app.seek(marker.beat);
                 }
             }
             app.project.markers.sort_by(|a, b| a.beat.total_cmp(&b.beat));
@@ -1480,7 +1480,7 @@ fn context_menu(app: &mut PulseApp, response: &egui::Response) {
                 ui.text_edit_singleline(&mut marker.name);
                 let beat = marker.beat;
                 if ui.button(tr("Ir aquí")).clicked() {
-                    app.audio.send(Command::SetPosition(beat));
+                    app.seek(beat);
                     ui.close();
                 }
                 if ui.button(tr("Eliminar marcador")).clicked() {
@@ -1822,7 +1822,7 @@ fn handle_pointer(
         app.arrangement.drag = if pos.y < rect.top() + LOOP_H {
             Some(Drag::Loop { anchor: unit.snap(beat) })
         } else if pos.y < lanes_top {
-            app.audio.send(Command::SetPosition(unit.snap(beat)));
+            app.seek(unit.snap(beat));
             // ⌘E cuts at the playhead again.
             app.arrangement.cut = None;
             Some(Drag::Scrub)
@@ -1946,7 +1946,7 @@ fn handle_pointer(
                 }
             }
             Some(Drag::Scrub) => {
-                app.audio.send(Command::SetPosition(unit.snap(beat)));
+                app.seek(unit.snap(beat));
             }
             Some(Drag::Fade { track, index, out }) => {
                 let Some(placed) = app.project.tracks[track].arrangement.get_mut(index) else { return };

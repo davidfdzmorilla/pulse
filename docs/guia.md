@@ -527,7 +527,7 @@ Graban las pistas **armadas**, las que tienen encendido el botón ● de su cabe
 Lo que queda grabado:
 
 - **MIDI**: un clip «Toma» que empieza donde empezaste y se redondea a compases enteros. Se le aplica **Rec Q**, la cuantización de grabación del transporte. El pitch bend, la rueda, el aftertouch y los demás controles que muevas quedan en el clip, bajo las notas. Ver [[Expresión: pitch bend, rueda y controles en el clip]].
-- **Audio**: un clip por cada pista de audio armada.
+- **Audio**: un clip por cada pista de audio armada. Si mueves el cursor a mitad de la toma, lo grabado hasta ahí se queda en su sitio y lo siguiente va a otro clip, donde pusiste el cursor.
 - **Automatización**: con **A** (Armar automatización) encendido en el transporte, también se graban los controles que muevas. Ver [[Automatización]].
 
 > Nota: lo nuevo se pone encima. Los clips que ya había no se borran ni se recortan.

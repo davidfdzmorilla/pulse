@@ -21,6 +21,8 @@ pub struct SessionTake {
     waited: u32,
     /// Transport position when the user stopped the take.
     pub stop_at: Option<f64>,
+    /// Transport position seen on the last frame while recording.
+    last_position: f64,
     notes: Vec<RecordedNote>,
     controls: Vec<(usize, RecordedControl)>,
 }
@@ -39,6 +41,9 @@ pub struct ArrangementTake {
     pass_start: f64,
     /// Past the punch-out: the engine has been told to stop recording.
     pub punched_out: bool,
+    /// Where the playhead has just been sent, until the transport gets there
+    /// (see [`Recorder::jump`]).
+    jumping: Option<(f64, u32)>,
 }
 
 /// A finished take, ready to become a clip.
@@ -63,6 +68,11 @@ fn bars(meter: &engine::meter::Meter, start: f64, length: f64) -> f64 {
     let end = meter.next_bar(start + length - 1e-9);
     (end - start).max(meter.add_bars(start, 1) - start)
 }
+
+/// After the playhead is sent somewhere, the transport is taken to be there
+/// when it is within these beats past it, or after these frames.
+const JUMP_REACH: f64 = 1.0;
+const JUMP_FRAMES: u32 = 30;
 
 /// How early, in beats, a note may come and still belong to a take.
 const EARLY: f64 = 0.125;
@@ -91,7 +101,7 @@ fn local_notes(notes: &[RecordedNote], start: f64, length: f64) -> Vec<Note> {
 impl Recorder {
     pub fn start_session(&mut self, track: usize, slot: usize) {
         self.session.retain(|t| t.track != track);
-        self.session.push(SessionTake { track, slot, start: None, seen: false, waited: 0, stop_at: None, notes: Vec::new(), controls: Vec::new() });
+        self.session.push(SessionTake { track, slot, start: None, seen: false, waited: 0, stop_at: None, last_position: 0.0, notes: Vec::new(), controls: Vec::new() });
     }
 
     pub fn stop_session(&mut self, track: usize, position: f64) {
@@ -101,7 +111,21 @@ impl Recorder {
     }
 
     pub fn start_arrangement(&mut self, start: f64) {
-        self.arrangement = Some(ArrangementTake { start, last_position: start, seen: false, notes: Vec::new(), controls: Vec::new(), passes: Vec::new(), pass_start: start, punched_out: false });
+        self.arrangement = Some(ArrangementTake { start, last_position: start, seen: false, notes: Vec::new(), controls: Vec::new(), passes: Vec::new(), pass_start: start, punched_out: false, jumping: None });
+    }
+
+    /// The playhead is sent from `from` to `to` in the middle of an arrangement
+    /// take: what was played so far is a stretch of its own, and the take goes
+    /// on from `to`.
+    pub fn jump(&mut self, from: f64, to: f64) {
+        let Some(take) = &mut self.arrangement else { return };
+        if !take.seen {
+            return;
+        }
+        take.passes.push((take.pass_start, from.max(take.pass_start)));
+        take.pass_start = to;
+        take.last_position = to;
+        take.jumping = Some((to, 0));
     }
 
     /// Distributes controllers moved while recording among the takes. Over the
@@ -146,6 +170,7 @@ impl Recorder {
             if recording == take.slot as i32 {
                 take.seen = true;
                 take.start = Some(status.record_start());
+                take.last_position = position;
                 return true;
             }
             if queued {
@@ -155,7 +180,10 @@ impl Recorder {
             match take.start {
                 Some(start) => {
                     let notes_end = take.notes.iter().map(|n| n.start + n.length).fold(start, f64::max);
-                    let end = take.stop_at.unwrap_or(position).max(notes_end);
+                    // Stopping the transport ends the take and takes the position
+                    // back to the start: the take reaches where it had got to.
+                    let stopped = if state.playing.load(Ordering::Relaxed) { position } else { take.last_position };
+                    let end = take.stop_at.unwrap_or(stopped).max(notes_end);
                     let length = bars(meter, start, end - start);
                     finished.push(Finished::Session {
                         track: take.track,
@@ -180,7 +208,19 @@ impl Recorder {
 
         let engine_recording = state.arrangement_recording.load(Ordering::Relaxed);
         if let Some(take) = &mut self.arrangement {
-            if engine_recording {
+            // Until the transport is where it was sent, its position says nothing.
+            let arriving = match &mut take.jumping {
+                Some((to, waited)) => {
+                    *waited += 1;
+                    !(position >= *to && position < *to + JUMP_REACH) && *waited < JUMP_FRAMES
+                }
+                None => false,
+            };
+            if !arriving {
+                take.jumping = None;
+            }
+            if engine_recording && arriving {
+            } else if engine_recording {
                 // Back at the loop's start: a pass is done.
                 if take.seen && position + 1e-6 < take.last_position {
                     let (loop_start, loop_end) = looped.unwrap_or((position, take.last_position));
@@ -478,6 +518,72 @@ mod tests {
         assert!(app.clip_automation.is_empty());
     }
 
+    /// Moving the playhead in the middle of an audio take: what was played
+    /// before stays where it was played, and what comes after is a clip of its
+    /// own where the playhead went (forwards or back).
+    #[test]
+    fn moving_the_playhead_while_recording_audio_starts_another_clip() {
+        use crate::midi_map::Transport;
+        use engine::model::Clip;
+        for to in [12.0, 0.0, 5.0] {
+            let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+            let (audio, mut engine) = crate::app::Audio::detached();
+            app.audio = audio;
+            for track in &mut app.project.tracks {
+                track.armed = false;
+                track.arrangement.clear();
+            }
+            app.project.tracks.push(crate::project::Track::new_audio("Voz", [0, 0, 0]));
+            let voice = app.project.tracks.len() - 1;
+            app.project.tracks[voice].monitor = crate::project::Monitor::Off;
+            app.project.tempo = 120.0;
+            app.project.loop_enabled = false;
+            app.sync_all();
+            app.sync_loop();
+            let (mut samples, mut markers, handle) = engine::detached_input(48_000.0, 1);
+            app.capture = Some(crate::capture::InputCapture::with_handle(None, handle));
+            app.project.tracks[voice].armed = true;
+            app.audio.send(engine::Command::SetArm { track: voice, armed: true });
+            app.audio.send(engine::Command::SetPosition(4.0));
+            // Each input sample is the time it was captured at.
+            let frame = std::cell::Cell::new(0u64);
+            let state = app.audio.state().unwrap();
+            let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+                let mut buffer = vec![0.0; 1024];
+                for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).round() as usize {
+                    let beat = state.position();
+                    let playing = state.playing.load(Ordering::Relaxed);
+                    engine.process(&mut buffer, 2);
+                    let _ = markers.push(engine::Marker { frame: frame.get(), beat, playing });
+                    for i in 0..512 {
+                        let _ = samples.push((frame.get() + i) as f32 / 48_000.0);
+                    }
+                    frame.set(frame.get() + 512);
+                    app.update_recording();
+                }
+            };
+            run(&mut app, 0.25);
+            let started = frame.get() as f32 / 48_000.0;
+            app.transport(Transport::Record);
+            run(&mut app, 2.0);
+            let moved = frame.get() as f32 / 48_000.0;
+            app.seek(to);
+            run(&mut app, 2.0);
+            app.transport(Transport::Record);
+            run(&mut app, 0.5);
+            let lane = app.project.tracks[voice].arrangement.clone();
+            assert_eq!(lane.iter().map(|c| (c.start, c.length)).collect::<Vec<_>>(), vec![(4.0, 2.0), (to, 2.0)], "to {to}: {:?}", app.status);
+            let mut first = |k: usize| {
+                let Clip::Audio(clip) = &lane[k].clip else { panic!() };
+                let take = app.samples.get(&clip.sample);
+                assert!((take.duration() - 1.0).abs() < 0.01, "{}", take.duration());
+                take.read(0.0).0
+            };
+            assert!((first(0) - started).abs() < 0.03, "to {to}: {} vs {started}", first(0));
+            assert!((first(1) - moved).abs() < 0.03, "to {to}: {} vs {moved}", first(1));
+        }
+    }
+
     /// Recording over the loop on a real engine, with an input fed by hand: every
     /// pass is a take of the loop, what came before it a clip of its own, and MIDI
     /// passes are overdubbed into one clip.
@@ -673,6 +779,57 @@ mod tests {
             pitches.sort_unstable();
             assert_eq!(pitches, if looping { vec![62, 64] } else { vec![62] });
         }
+    }
+
+    /// A Session audio take stopped with the transport (Space, ■) is as long as
+    /// what was recorded, not its first bar.
+    #[test]
+    fn a_session_audio_take_stopped_with_the_transport_is_whole() {
+        use engine::model::Clip;
+        let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+        let (audio, mut engine) = crate::app::Audio::detached();
+        app.audio = audio;
+        for track in &mut app.project.tracks {
+            track.armed = false;
+        }
+        app.project.tracks.push(crate::project::Track::new_audio("Voz", [0, 0, 0]));
+        let voice = app.project.tracks.len() - 1;
+        app.project.tracks[voice].monitor = crate::project::Monitor::Off;
+        app.project.tempo = 120.0;
+        app.sync_all();
+        let (mut samples, mut markers, handle) = engine::detached_input(48_000.0, 1);
+        app.capture = Some(crate::capture::InputCapture::with_handle(None, handle));
+        app.project.tracks[voice].armed = true;
+        app.audio.send(engine::Command::SetArm { track: voice, armed: true });
+        // Each input sample is the time it was captured at.
+        let state = app.audio.state().unwrap();
+        let mut frame = 0u64;
+        let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+            let mut buffer = vec![0.0; 1024];
+            for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).round() as usize {
+                let beat = state.position();
+                let playing = state.playing.load(Ordering::Relaxed);
+                engine.process(&mut buffer, 2);
+                let _ = markers.push(engine::Marker { frame, beat, playing });
+                for i in 0..512 {
+                    let _ = samples.push((frame + i) as f32 / 48_000.0);
+                }
+                frame += 512;
+                app.update_recording();
+            }
+        };
+        app.record_slot(voice, 0);
+        // Four bars and a bit, and Space.
+        run(&mut app, 16.5);
+        app.toggle_play();
+        run(&mut app, 1.0);
+        let Some(Clip::Audio(clip)) = &app.project.tracks[voice].clips[0] else { panic!("a recorded clip: {:?}", app.status) };
+        assert_eq!(clip.length, 20.0, "what was played, to the bar");
+        let take = app.samples.get(&clip.sample);
+        assert!((take.duration() - 10.0).abs() < 0.01, "{}", take.duration());
+        // What was played in the fourth bar is there, seven seconds after the first sample.
+        let (first, later) = (take.read(0.0).0, take.read(7.0 * 48_000.0).0);
+        assert!((later - first - 7.0).abs() < 0.001, "{first} {later}");
     }
 
     /// A take goes to the disk as it is recorded (so a crash doesn't lose it),

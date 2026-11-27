@@ -14,6 +14,7 @@ use crate::project::{Project, Track};
 use crate::theme::{self, ACCENT, TEXT, TEXT_DIM};
 use eframe::egui::{self, pos2, Align2, Color32, Rect, RichText};
 use engine::model::{ArrangementClip, Clip, MidiClip, Note};
+#[cfg(test)]
 use engine::Command;
 use serde::{Deserialize, Serialize};
 use stems::chord::{self, Chord, Quality};
@@ -735,7 +736,7 @@ pub(crate) fn handle(app: &mut PulseApp, ui: &egui::Ui, response: &egui::Respons
             let moved = app.chord_lane.grab.is_some_and(|g| g.moved);
             if !moved && !grab.edge {
                 if let Some(c) = app.project.chords.get(grab.index) {
-                    app.audio.send(Command::SetPosition(c.start));
+                    app.seek(c.start);
                 }
             }
             app.chord_lane.grab = None;

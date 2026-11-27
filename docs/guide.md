@@ -528,7 +528,7 @@ The **armed** tracks record: the ones with the ● button in their header turned
 What gets recorded:
 
 - **MIDI**: a "Toma" ("Take") clip that starts where you started and is rounded to whole bars. **Rec Q**, the transport's record quantization, is applied to it. The pitch bend, mod wheel, aftertouch and any other controls you move stay in the clip, under the notes. See [[Expression: pitch bend and controls]].
-- **Audio**: one clip per armed audio track.
+- **Audio**: one clip per armed audio track. If you move the playhead in the middle of the take, what was recorded so far stays where it is and what comes next goes to another clip, where you put the playhead.
 - **Automation**: with **A** (Automation Arm) on in the transport, the controls you move are recorded too. See [[Automation]].
 
 > Note: new material goes on top. Existing clips aren't deleted or trimmed.

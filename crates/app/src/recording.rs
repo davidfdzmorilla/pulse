@@ -927,4 +927,89 @@ mod tests {
         run(&mut app, 2.0 * length, true);
         crate::capture::write_wav(&dir.join("expresion-bend-rueda.wav"), &left, &right, 48_000.0).unwrap();
     }
+
+    /// A take holds what was played from Record on, not an earlier pass over
+    /// the same beats: listening to the stretch first and recording it right
+    /// after, or pressing Record with the loop already going round.
+    #[test]
+    fn a_take_is_not_cut_from_what_was_heard_before_record() {
+        use crate::midi_map::Transport;
+        use engine::model::Clip;
+        for looping in [false, true] {
+            let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+            let (audio, mut engine) = crate::app::Audio::detached();
+            app.audio = audio;
+            for track in &mut app.project.tracks {
+                track.armed = false;
+                track.arrangement.clear();
+            }
+            app.project.tracks.push(crate::project::Track::new_audio("Voz", [0, 0, 0]));
+            let voice = app.project.tracks.len() - 1;
+            app.project.tracks[voice].monitor = crate::project::Monitor::Off;
+            app.project.tempo = 120.0;
+            (app.project.loop_enabled, app.project.loop_start, app.project.loop_end) = (looping, 4.0, 8.0);
+            app.sync_all();
+            app.sync_loop();
+            let (mut samples, mut markers, handle) = engine::detached_input(48_000.0, 1);
+            app.capture = Some(crate::capture::InputCapture::with_handle(None, handle));
+            app.project.tracks[voice].armed = true;
+            app.audio.send(engine::Command::SetArm { track: voice, armed: true });
+            app.audio.send(engine::Command::SetPosition(4.0));
+            // Each input sample is the time it was captured at.
+            let frame = std::cell::Cell::new(0u64);
+            let state = app.audio.state().unwrap();
+            let mut run = |app: &mut crate::app::PulseApp, beats: f64| {
+                let mut buffer = vec![0.0; 1024];
+                for _ in 0..((beats * 0.5 * 48_000.0) / 512.0).round() as usize {
+                    let beat = state.position();
+                    let playing = state.playing.load(Ordering::Relaxed);
+                    engine.process(&mut buffer, 2);
+                    let _ = markers.push(engine::Marker { frame: frame.get(), beat, playing });
+                    for i in 0..512 {
+                        let _ = samples.push((frame.get() + i) as f32 / 48_000.0);
+                    }
+                    frame.set(frame.get() + 512);
+                    app.update_recording();
+                }
+            };
+            run(&mut app, 0.25);
+            app.toggle_play();
+            let now = |frame: &std::cell::Cell<u64>| frame.get() as f32 / 48_000.0;
+            let (pressed, expected) = if looping {
+                // A lap and a half of the loop, then Record in the middle of it.
+                run(&mut app, 6.0);
+                let pressed = now(&frame);
+                app.transport(Transport::Record);
+                run(&mut app, 10.0);
+                (pressed, 3)
+            } else {
+                // Two beats heard, stopped (back at the start), and recorded.
+                run(&mut app, 2.0);
+                app.toggle_play();
+                run(&mut app, 0.25);
+                let pressed = now(&frame);
+                app.transport(Transport::Record);
+                run(&mut app, 4.0);
+                (pressed, 0)
+            };
+            app.transport(Transport::Record);
+            run(&mut app, 0.5);
+            let lane = app.project.tracks[voice].arrangement.clone();
+            assert_eq!(lane.len(), 1, "looping {looping}: {:?}", app.status);
+            let Clip::Audio(clip) = &lane[0].clip else { panic!() };
+            assert_eq!(clip.takes.len(), expected, "looping {looping}");
+            let mut at = |path: &str, seconds: f64| app.samples.get(path).read(seconds * 48_000.0).0;
+            if looping {
+                // Pressed at beat 6 of the loop (1 s into its file); from there on each take
+                // holds its own lap, 2 s after the one before.
+                for (k, take) in clip.takes.iter().enumerate() {
+                    let expected = pressed + 2.0 * k as f32;
+                    assert!((at(take, 1.05) - (expected + 0.05)).abs() < 0.03, "take {k}: {} vs {expected}", at(take, 1.05));
+                }
+                assert_eq!(at(&clip.takes[0], 0.5), 0.0, "silent before Record was pressed");
+            } else {
+                assert!((at(&clip.sample, 0.0) - pressed).abs() < 0.03, "{} vs {pressed}", at(&clip.sample, 0.0));
+            }
+        }
+    }
 }

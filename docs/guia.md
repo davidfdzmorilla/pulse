@@ -879,6 +879,7 @@ Corta un clip en trozos, junta varios en uno o convierte lo que suena en un arch
 3. Para más trozos, repite: clic, {⌘E}, clic, {⌘E}…
 
 - Si no has hecho clic en el clip, {⌘E} corta por el cursor de reproducción (el que mueves en la regla).
+- Un clip de audio en bucle cortado a mitad de una vuelta queda en tres partes: lo de antes del corte, lo que quedaba de esa vuelta y el bucle desde la vuelta siguiente. Un clip de audio no puede empezar a mitad de su bucle.
 - **Dividir aquí** (clic derecho en el clip) corta donde hiciste clic.
 
 ### Trocear en partes iguales

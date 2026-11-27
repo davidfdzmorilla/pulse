@@ -182,6 +182,12 @@ still in `0.x`, so any release may change things.
 
 ### Fixed
 
+- Recording audio over the Arrangement: moving the playhead in the middle
+  of a take (a click on the ruler, a locator, a chord) keeps what was
+  played where it was played and goes on in another clip where the
+  playhead went. Before, everything played after the jump landed that many
+  beats early in one long clip, and jumping back to before the take's
+  start left an empty clip of negative length.
 - Wavetable Synth and Polychrome Synth: modulating a level, a pan, the
   position in the table, the warp, the filter or the master no longer buzzes. The
   modulation is worked out 1500 times a second and those values jumped

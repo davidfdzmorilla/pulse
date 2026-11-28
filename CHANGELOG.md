@@ -182,6 +182,12 @@ still in `0.x`, so any release may change things.
 
 ### Fixed
 
+- Recording audio with the tempo automated: the take stays on the beats it
+  was played on. It was cut and placed as if the song ran at the project's
+  base tempo, so it played early or late, more and more along the clip,
+  with its end cut off or silent (at 150 BPM over a base of 120, four
+  beats in it played what was sung a beat later). Where the tempo moves
+  during the take, the clip gets warp markers for it.
 - Recording audio over the Arrangement: moving the playhead in the middle
   of a take (a click on the ruler, a locator, a chord) keeps what was
   played where it was played and goes on in another clip where the

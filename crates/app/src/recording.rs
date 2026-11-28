@@ -1085,6 +1085,78 @@ mod tests {
         crate::capture::write_wav(&dir.join("expresion-bend-rueda.wav"), &left, &right, 48_000.0).unwrap();
     }
 
+    /// Recording audio with the tempo automated: the take is as long as its
+    /// beats took to play and stays on them (with the tempo moving on the way,
+    /// through warp markers). It was cut and placed at the project's base
+    /// tempo: played early or late, more and more, with its end cut or silent.
+    #[test]
+    fn an_audio_take_under_tempo_automation_stays_on_its_beats() {
+        use crate::midi_map::Transport;
+        use engine::model::{AutomationLane, AutomationPoint, Clip, Param};
+        let point = |beat: f64, value: f32| AutomationPoint { beat, value, curve: 0.0 };
+        for (points, seconds, moving) in [(vec![], 4.0, false), (vec![point(0.0, 150.0)], 3.2, false), (vec![point(4.0, 100.0), point(12.0, 160.0)], 60.0 * 8.0 / 60.0 * (1.6f64).ln(), true)] {
+            let mut app = crate::app::PulseApp::headless(crate::project::Project::demo());
+            let (audio, mut engine) = crate::app::Audio::detached();
+            app.audio = audio;
+            for track in &mut app.project.tracks {
+                track.armed = false;
+                track.arrangement.clear();
+            }
+            app.project.tracks.push(crate::project::Track::new_audio("Voz", [0, 0, 0]));
+            let voice = app.project.tracks.len() - 1;
+            app.project.tracks[voice].monitor = crate::project::Monitor::Off;
+            app.project.tempo = 120.0;
+            if !points.is_empty() {
+                app.project.master.automation = vec![AutomationLane { param: Param::Tempo, points }];
+            }
+            app.project.loop_enabled = false;
+            app.sync_all();
+            app.sync_loop();
+            let (mut samples, mut markers, handle) = engine::detached_input(48_000.0, 1);
+            app.capture = Some(crate::capture::InputCapture::with_handle(None, handle));
+            app.project.tracks[voice].armed = true;
+            app.audio.send(engine::Command::SetArm { track: voice, armed: true });
+            app.audio.send(engine::Command::SetPosition(4.0));
+            let frame = std::cell::Cell::new(0u64);
+            let state = app.audio.state().unwrap();
+            // Each input sample is the beat that was playing when it came in.
+            let mut run = |app: &mut crate::app::PulseApp, until: Option<f64>, seconds: f64| {
+                let mut buffer = vec![0.0; 1024];
+                for _ in 0..(seconds * 48_000.0 / 512.0).round() as usize {
+                    let beat = state.position();
+                    if until.is_some_and(|b| beat >= b) {
+                        break;
+                    }
+                    let playing = state.playing.load(Ordering::Relaxed);
+                    engine.process(&mut buffer, 2);
+                    let _ = markers.push(engine::Marker { frame: frame.get(), beat, playing });
+                    let next = state.position();
+                    for i in 0..512 {
+                        let _ = samples.push((beat + (next - beat) * i as f64 / 512.0) as f32);
+                    }
+                    frame.set(frame.get() + 512);
+                    app.update_recording();
+                }
+            };
+            run(&mut app, None, 0.25);
+            app.transport(Transport::Record);
+            run(&mut app, Some(12.0), 30.0);
+            app.transport(Transport::Record);
+            run(&mut app, None, 0.5);
+            let lane = app.project.tracks[voice].arrangement.clone();
+            assert_eq!(lane.len(), 1, "{:?}", app.status);
+            let Clip::Audio(clip) = &lane[0].clip else { panic!() };
+            assert_eq!((lane[0].start, lane[0].length), (4.0, 8.0));
+            let file = app.samples.get(&clip.sample);
+            assert!((file.duration() - seconds).abs() < 0.01, "{:.3} s, not {seconds:.3}", file.duration());
+            assert_eq!(!clip.warp_markers.is_empty(), moving);
+            for beat in [0.0, 1.0, 2.5, 4.0, 6.0, 7.5] {
+                let heard = file.read(clip.source_seconds(beat, 120.0) * 48_000.0).0 as f64;
+                assert!((heard - (4.0 + beat)).abs() < 0.03, "moving {moving}, {seconds:.1} s: {beat} beats in plays beat {heard:.3}");
+            }
+        }
+    }
+
     /// A take holds what was played from Record on, not an earlier pass over
     /// the same beats: listening to the stretch first and recording it right
     /// after, or pressing Record with the loop already going round.

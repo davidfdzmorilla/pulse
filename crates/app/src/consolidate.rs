@@ -272,7 +272,7 @@ mod tests {
 
     fn demo_clip(warp: WarpMode, length: f64, offset: f64) -> AudioClip {
         let song = crate::test_audio::demo_song();
-        AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             name: "demo".into(),
             color: [0; 3],
             sample: song.to_string_lossy().into_owned(),

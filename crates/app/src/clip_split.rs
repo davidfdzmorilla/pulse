@@ -513,7 +513,7 @@ mod tests {
 
     #[test]
     fn a_split_clip_keeps_its_fade_in_at_the_start_and_its_fade_out_at_the_end() {
-        let mut audio = engine::model::AudioClip { clean: true, hard_start: false, fades: engine::model::Fades::new(1.0, 2.0), name: "a".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        let mut audio = engine::model::AudioClip { aligned: true, clean: true, hard_start: false, fades: engine::model::Fades::new(1.0, 2.0), name: "a".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
         audio.length = 8.0;
         let placed = ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(audio) };
         let (left, right) = split(&placed, 4.0, 120.0).unwrap();
@@ -550,7 +550,7 @@ mod tests {
     #[test]
     fn an_envelope_ramp_across_the_cut_stays_in_both_parts() {
         let lane = AutomationLane { param: Param::Volume, points: vec![AutomationPoint { beat: 0.0, value: 0.2, curve: 0.0 }, AutomationPoint { beat: 16.0, value: 1.0, curve: 0.0 }] };
-        let audio = AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        let audio = AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             name: "a".into(),
             color: [0; 3],
             sample: "/a.wav".into(),
@@ -596,7 +596,7 @@ mod tests {
 
     #[test]
     fn an_audio_clip_split_starts_later_in_its_file() {
-        let audio = AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        let audio = AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             name: "a".into(),
             color: [0; 3],
             sample: "/a.wav".into(),
@@ -671,7 +671,7 @@ mod tests {
                 track.mixer.active = false;
             }
             let track = app.add_audio_track().unwrap();
-            let audio = AudioClip { clean: true, hard_start: false, fades: Default::default(),
+            let audio = AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
                 name: "demo".into(),
                 color: [0; 3],
                 sample: song.to_string_lossy().into_owned(),
@@ -723,7 +723,7 @@ mod tests {
                 track.mixer.active = false;
             }
             let track = app.add_audio_track().unwrap();
-            let audio = AudioClip { clean: true, hard_start: false, fades: Default::default(),
+            let audio = AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
                 name: "demo".into(),
                 color: [0; 3],
                 sample: song.to_string_lossy().into_owned(),
@@ -790,7 +790,7 @@ mod tests {
     /// the clip editor shows); a looping one keeps its loop.
     #[test]
     fn the_parts_of_a_clip_are_only_their_pieces() {
-        let audio = AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        let audio = AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             name: "a".into(),
             color: [0; 3],
             sample: "/a.wav".into(),

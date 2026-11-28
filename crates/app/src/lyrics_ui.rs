@@ -623,7 +623,7 @@ mod tests {
     use engine::model::{ArrangementClip, AudioClip, WarpMode};
 
     fn voice(path: &str) -> AudioClip {
-        AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0xd6, 0x5f, 0xb8], sample: path.into(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, warp_markers: Vec::new(), takes: Vec::new(), key: None, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), muted: false }
+        AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0xd6, 0x5f, 0xb8], sample: path.into(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, warp_markers: Vec::new(), takes: Vec::new(), key: None, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), muted: false }
     }
 
     /// Four seconds of a tone in a WAV file of its own (a folder to remove after).

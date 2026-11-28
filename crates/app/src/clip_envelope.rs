@@ -368,7 +368,7 @@ mod tests {
     fn audio_clips_show_their_envelopes_too() {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         let track = app.add_audio_track().unwrap();
-        let mut audio = engine::model::AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        let mut audio = engine::model::AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             name: "a".into(),
             color: [1, 2, 3],
             sample: "/no/such.wav".into(),
@@ -397,7 +397,7 @@ mod tests {
     fn an_audio_clips_lane_does_not_offer_velocities() {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         let track = app.add_audio_track().unwrap();
-        let audio = engine::model::AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        let audio = engine::model::AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             name: "a".into(),
             color: [1, 2, 3],
             sample: "/no/such.wav".into(),

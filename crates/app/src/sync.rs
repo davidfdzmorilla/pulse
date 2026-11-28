@@ -172,6 +172,7 @@ pub fn play_clip(clip: &Clip, samples: &mut SampleCache) -> PlayClip {
             if audio.warp == engine::model::WarpMode::Beats {
                 crate::slicing::find_onsets(&sample);
             }
+            engine::prepare_audio(audio, &sample);
             PlayClip::Audio(audio.clone(), sample)
         }
     }

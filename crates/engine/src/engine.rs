@@ -1371,10 +1371,20 @@ const GRAIN: f64 = 0.06;
 const MONITOR_SLACK: usize = 1024;
 const MONITOR_CUSHION: usize = 256;
 
+/// Has `sample` analysed for what `clip` needs of it to play (the cycles of its
+/// sound, for Stretch to line its grains up), once. Before the clip goes to the
+/// audio thread, which only reads it.
+pub fn prepare_audio(clip: &AudioClip, sample: &Sample) {
+    if clip.aligned && matches!(clip.warp, WarpMode::Stretch | WarpMode::Beats) {
+        sample.find_cycles();
+    }
+}
+
 /// What an audio clip sounds like over its first `beats` (looping), at `tempo`,
 /// as audio at `rate`: its warp, transposition and gain applied, as playback does
 /// (consolidating a clip into a file of its own).
 pub fn render_audio(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, rate: f32) -> (Vec<f32>, Vec<f32>) {
+    prepare_audio(clip, sample);
     let frames = (beats * 60.0 / tempo * rate as f64).round() as usize;
     let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
     let beats_per_sample = tempo / 60.0 / rate as f64;
@@ -1388,6 +1398,7 @@ pub fn render_audio(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, r
 /// turned round) cross-fades with its neighbours as before. The clip that plays
 /// it starts [`HANDLE_SECONDS`] into it.
 pub fn render_audio_handles(clip: &AudioClip, sample: &Sample, beats: f64, tempo: f64, rate: f32) -> (Vec<f32>, Vec<f32>) {
+    prepare_audio(clip, sample);
     let half = CROSSFADE * tempo / 60.0 / 2.0;
     let frames = ((beats + 2.0 * half) * 60.0 / tempo * rate as f64).round() as usize;
     let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
@@ -1405,6 +1416,7 @@ pub const HANDLE_SECONDS: f64 = CROSSFADE / 2.0;
 pub fn render_placed(placed: &PlacedClip, beat: f64, frames: usize, tempo: f64, rate: f32) -> (Vec<f32>, Vec<f32>) {
     let (mut left, mut right) = (vec![0.0; frames], vec![0.0; frames]);
     if let PlayClip::Audio(clip, sample) = &placed.clip {
+        prepare_audio(clip, sample);
         let beats_per_sample = tempo / 60.0 / rate as f64;
         render_audio_clip(clip, sample, placed.start, placed.end(), placed.joined, (0, frames), beat, beats_per_sample, tempo, None, &mut left, &mut right);
     }
@@ -1480,6 +1492,14 @@ fn render_audio_clip_edges(
     let read = |position: f64, step: f64| if clip.clean { sample.read_clean(position, step) } else { sample.read(position) };
     // Re-Pitch: where it read last, to know how fast it is going.
     let mut repitched: Option<f64> = None;
+    // Stretch, aligned: the file's cycles, how many it is into them where the
+    // lap starts, and where the last grains read from (lap, grain, seconds).
+    let cycles = if clip.aligned { sample.cycles.get().filter(|c| c.len() >= 2) } else { None };
+    let lap_cycle = cycles.map_or(0.0, |c| crate::sample::cycle_at(c, clip.file_seconds(first_beat) * rate));
+    let mut grains = [(f64::NAN, 0.0, 0.0); 2];
+    // With the tempo automated: the seconds into the lap at a 256th of a beat
+    // and at the next (lap, 256th, seconds, seconds).
+    let mut clock: Option<(f64, f64, f64, f64)> = None;
 
     for k in from..to {
         let b = beat + (k - from) as f64 * beats_per_sample;
@@ -1535,6 +1555,88 @@ fn render_audio_clip_edges(
             WarpMode::Beats if sample.onsets.get().is_some_and(|o| !o.is_empty()) => {
                 let onsets = sample.onsets.get().map_or(&[][..], |o| o.as_slice());
                 beats_read(clip, sample, onsets, first_beat, local, tempo, pitch, own_step * pitch)
+            }
+            WarpMode::Stretch | WarpMode::Beats if clip.aligned => {
+                // As below, with the grains a real 30 ms apart whatever the tempo
+                // does, each one starting on the cycle of the wave the one
+                // before has reached (so they add up instead of cancelling), and
+                // the first of a lap whole from its start (the clip's attack).
+                let turn = if crossing { 0.0 } else { ((b - origin - local) / clip.length).round() };
+                let lap = origin + turn * clip.length;
+                // With the tempo moving, the seconds into the lap: a straight
+                // line between one 256th of a beat and the next, so the block
+                // it is asked in doesn't count (the lane's values are coarse:
+                // read at the same beats, they come out the same).
+                let seconds_at = |lane: &AutomationLane, cell: f64| seconds_between(lane, lap, lap + cell / 256.0);
+                let t = match tempo_lane {
+                    None => local * 60.0 / tempo,
+                    Some(lane) => {
+                        let cell = (local * 256.0).floor();
+                        let (from, to) = match clock {
+                            Some((at, of, from, to)) if at == lap && of == cell => (from, to),
+                            _ => {
+                                let (from, to) = (seconds_at(lane, cell), seconds_at(lane, cell + 1.0));
+                                clock = Some((lap, cell, from, to));
+                                (from, to)
+                            }
+                        };
+                        from + (local * 256.0 - cell) * (to - from)
+                    }
+                };
+                let newest = (t / hop).floor();
+                let alone = newest == 0.0 && !(crossing && joined.0);
+                let (mut l, mut r) = (0.0, 0.0);
+                for grain in [newest, newest - 1.0] {
+                    if alone && grain < 0.0 {
+                        continue;
+                    }
+                    let since = t - grain * hop;
+                    // One grain and the next never share a slot.
+                    let slot = grain.rem_euclid(2.0) as usize;
+                    if grains[slot].0 != turn || grains[slot].1 != grain {
+                        // The clip's beat where the grain starts, and the tempo
+                        // there: with it moving, the beat that many seconds in,
+                        // along the same line.
+                        let (at, tempo) = match tempo_lane {
+                            None => (grain * hop * tempo / 60.0, tempo),
+                            Some(lane) => {
+                                let want = grain * hop;
+                                let mut cell = ((local - since * tempo / 60.0) * 256.0).floor();
+                                let (mut from, mut to) = (seconds_at(lane, cell), seconds_at(lane, cell + 1.0));
+                                for _ in 0..256 {
+                                    if want < from {
+                                        cell -= 1.0;
+                                        (from, to) = (seconds_at(lane, cell), from);
+                                    } else if want >= to {
+                                        cell += 1.0;
+                                        (from, to) = (to, seconds_at(lane, cell + 1.0));
+                                    } else {
+                                        break;
+                                    }
+                                }
+                                let at = (cell + (want - from) / (to - from).max(1e-12)) / 256.0;
+                                (at, (lane.value_at(lap + at).unwrap_or(tempo as f32) as f64).clamp(20.0, 999.0))
+                            }
+                        };
+                        let mut source = clip.file_seconds(first_beat + at);
+                        // Lined up only while the tempo has held since the lap
+                        // began: how far ahead the sound is can't be told otherwise.
+                        if let Some(cycles) = cycles.filter(|_| (grain * hop * tempo / 60.0 - at).abs() < 1e-6) {
+                            // Seconds of the file per second out, hereabouts.
+                            let speed = (clip.file_seconds(first_beat + at + 1e-3) - source) * 1e3 * tempo / 60.0;
+                            let cycle = crate::sample::cycle_at(cycles, source * rate);
+                            // The cycles played since the lap began against the file's.
+                            let ahead = (cycle - lap_cycle) * (pitch / speed.max(1e-6) - 1.0);
+                            source = crate::sample::cycle_frame(cycles, cycle + ahead - ahead.round()) / rate;
+                        }
+                        grains[slot] = (turn, grain, source);
+                    }
+                    let window = if alone { 1.0 } else { (0.5 - 0.5 * (std::f64::consts::TAU * since / GRAIN).cos()) as f32 };
+                    let (gl, gr) = read((grains[slot].2 + since * pitch) * rate, own_step * pitch);
+                    l += gl * window;
+                    r += gr * window;
+                }
+                (l, r)
             }
             WarpMode::Stretch | WarpMode::Beats => {
                 // Two overlapping Hann-windowed grains read the file at its own speed
@@ -5056,7 +5158,7 @@ mod tests {
     }
 
     fn audio_clip(warp: WarpMode) -> AudioClip {
-        AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             envelopes: Vec::new(),
             name: "sine".into(),
             color: [0, 0, 0],
@@ -5140,7 +5242,7 @@ mod tests {
         assert!((heard(false, 20_000.0, 0.5) + 8.4).abs() < 0.2, "before: {}", heard(false, 20_000.0, 0.5));
         // On the grid: the file itself.
         let file = tone(1_234.0, 48_000.0, 3.0);
-        let clip = AudioClip { clean: true, hard_start: true, length: 8.0, ..audio_clip(WarpMode::Off) };
+        let clip = AudioClip { aligned: true, clean: true, hard_start: true, length: 8.0, ..audio_clip(WarpMode::Off) };
         let (left, _) = render_audio(&clip, &file, 4.0, 120.0, 48_000.0);
         assert_eq!(left[..90_000], file.left[..90_000]);
         // Re-Pitch at twice its tempo: 15 kHz in the file would be 30 kHz, which a
@@ -5177,6 +5279,146 @@ mod tests {
                 let (l, _) = sample.read_clean(2_000.0 + k as f64 / 16.0, step);
                 assert!((l - 0.5).abs() < 1e-5, "step {step}: {l}");
             }
+        }
+    }
+
+    /// The level of `x` over each 10 ms, lowest against highest, in dB.
+    fn waver(x: &[f32]) -> f64 {
+        let levels: Vec<f64> = x.chunks(480).map(|c| (c.iter().map(|v| (*v as f64).powi(2)).sum::<f64>() / c.len() as f64).sqrt()).collect();
+        let (low, high) = levels.iter().fold((f64::MAX, 0.0f64), |(a, b), v| (a.min(*v), b.max(*v)));
+        20.0 * (low / high).max(1e-12).log10()
+    }
+
+    /// Stretch away from the file's tempo: a held note stays level, and is the
+    /// note of the file. A clip from before wavers, as it did (each grain
+    /// starts where the tempo puts it, in or out of step with the one before).
+    #[test]
+    fn stretch_holds_a_note_level() {
+        let file = tone(440.0, 48_000.0, 6.0);
+        let mut clip = audio_clip(WarpMode::Stretch);
+        clip.length = 8.0;
+        for tempo in [121.0, 124.55, 140.0, 90.0, 60.0, 200.0] {
+            let (left, _) = render_audio(&clip, &file, 4.0, tempo, 48_000.0);
+            let middle = &left[9_600..left.len() - 9_600];
+            assert!(waver(middle) > -0.5, "{tempo} BPM: {:.1} dB", waver(middle));
+            // The file's own wave, in step with it from the clip's start.
+            let off: f64 = middle.iter().zip(&file.left[9_600..]).map(|(a, b)| ((a - b) as f64).powi(2)).sum::<f64>() / middle.iter().map(|a| (*a as f64).powi(2)).sum::<f64>();
+            assert!(10.0 * off.log10() < -60.0, "{tempo} BPM: {:.1} dB off the file", 10.0 * off.log10());
+        }
+        // Transposed too.
+        let up = AudioClip { transpose: 3.0, ..clip.clone() };
+        let (left, _) = render_audio(&up, &file, 4.0, 120.0, 48_000.0);
+        assert!(waver(&left[9_600..left.len() - 9_600]) > -0.5);
+        assert!(level_at(&left[24_000..72_000], 440.0 * 2f64.powf(0.25), 48_000.0) > -0.2);
+        // At the file's tempo both are the file.
+        let before = AudioClip { aligned: false, ..clip.clone() };
+        let (now, then) = (render_audio(&clip, &file, 4.0, 120.0, 48_000.0).0, render_audio(&before, &file, 4.0, 120.0, 48_000.0).0);
+        let apart = now[9_600..].iter().zip(&then[9_600..]).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+        assert!(apart < 1e-4, "{apart}");
+        let (left, _) = render_audio(&before, &file, 4.0, 124.55, 48_000.0);
+        assert!(waver(&left[9_600..left.len() - 9_600]) < -6.0, "a clip from before: {:.1} dB", waver(&left[9_600..left.len() - 9_600]));
+    }
+
+    /// A chord (its notes share a longer cycle) and a note that glides stay
+    /// clean in Stretch too.
+    #[test]
+    fn stretch_keeps_a_chord_and_a_glide_clean() {
+        let notes = [220.0, 277.18, 329.63];
+        let tau = std::f64::consts::TAU;
+        let wave: Vec<f32> = (0..288_000).map(|i| notes.iter().map(|f| (i as f64 / 48_000.0 * f * tau).sin()).sum::<f64>() as f32 / 3.0).collect();
+        let chord = Sample::from_channels(wave.clone(), wave, 48_000.0);
+        let mut clip = audio_clip(WarpMode::Stretch);
+        clip.length = 8.0;
+        for (tempo, aligned, clean) in [(140.0, true, true), (90.0, true, true), (140.0, false, false)] {
+            let (left, _) = render_audio(&AudioClip { aligned, ..clip.clone() }, &chord, 4.0, tempo, 48_000.0);
+            let part = &left[24_000..72_000];
+            // The three notes hold what the file has of them (a third each).
+            let held = notes.iter().all(|f| (-1..=1).map(|d| level_at(part, f + d as f64, 48_000.0)).fold(f64::MIN, f64::max) > -9.54 - 1.0);
+            assert_eq!(held, clean, "{tempo} BPM, aligned {aligned}");
+        }
+        let wave: Vec<f32> = (0..288_000).map(|i| { let t = i as f64 / 48_000.0; (tau * (200.0 * t + 200.0 * t * t / 12.0)).sin() as f32 }).collect();
+        let glide = Sample::from_channels(wave.clone(), wave, 48_000.0);
+        for tempo in [124.55, 90.0, 200.0] {
+            let (left, _) = render_audio(&clip, &glide, 4.0, tempo, 48_000.0);
+            assert!(waver(&left[9_600..left.len() - 9_600]) > -1.5, "{tempo} BPM: {:.1} dB", waver(&left[9_600..left.len() - 9_600]));
+        }
+    }
+
+    /// A Stretch clip that starts on a hit plays the hit whole: its first grain
+    /// doesn't fade in. One from before fades in over a grain (30 ms).
+    #[test]
+    fn a_stretched_clip_starts_with_its_attack() {
+        let hit: Vec<f32> = (0..96_000).map(|i| { let t = i as f64 / 48_000.0; ((t * 60.0 * std::f64::consts::TAU).cos() * (-t * 20.0).exp()) as f32 }).collect();
+        let file = Sample::from_channels(hit.clone(), hit.clone(), 48_000.0);
+        let power = |x: &[f32]| x[..144].iter().map(|v| (*v as f64).powi(2)).sum::<f64>();
+        for (aligned, whole) in [(true, true), (false, false)] {
+            for tempo in [140.0, 100.0, 87.3] {
+                let clip = AudioClip { aligned, hard_start: true, length: 4.0, ..audio_clip(WarpMode::Stretch) };
+                let (left, _) = render_audio(&clip, &file, 4.0, tempo, 48_000.0);
+                let first = 10.0 * (power(&left) / power(&hit)).log10();
+                assert_eq!(first.abs() < 0.1, whole, "{tempo} BPM, aligned {aligned}: {first:.1} dB");
+                // And every lap of a loop does.
+                let clip = AudioClip { length: 1.0, ..clip };
+                let (left, _) = render_audio(&clip, &file, 4.0, tempo, 48_000.0);
+                let lap = (2.0 * 60.0 / tempo * 48_000.0f64).round() as usize;
+                let again = 10.0 * (power(&left[lap + 144..]) / power(&hit[144..])).log10();
+                assert_eq!(again.abs() < 1.0, whole, "{tempo} BPM, aligned {aligned}, third lap: {again:.1} dB");
+            }
+        }
+    }
+
+    /// Stretch sounds the same whatever the size of the blocks it is asked
+    /// for (the audio card's buffer), loop and all.
+    #[test]
+    fn stretch_does_not_depend_on_the_block_size() {
+        let wave: Vec<f32> = (0..144_000).map(|i| { let t = i as f64 / 48_000.0; ((t * 196.0 * std::f64::consts::TAU).sin() * 0.6 + (t * 1234.0 * std::f64::consts::TAU).sin() * 0.3) as f32 }).collect();
+        let file = Sample::from_channels(wave.clone(), wave, 48_000.0);
+        let clip = AudioClip { length: 3.0, transpose: -2.0, ..audio_clip(WarpMode::Stretch) };
+        prepare_audio(&clip, &file);
+        let per_sample = 133.0 / 60.0 / 48_000.0;
+        let render = |block: usize| {
+            let (mut l, mut r) = (vec![0.0; 96_000], vec![0.0; 96_000]);
+            let mut from = 0;
+            while from < l.len() {
+                let to = (from + block).min(l.len());
+                render_audio_clip(&clip, &file, 0.0, f64::INFINITY, (false, false), (from, to), from as f64 * per_sample, per_sample, 133.0, None, &mut l, &mut r);
+                from = to;
+            }
+            l
+        };
+        let whole = render(96_000);
+        for block in [1, 37, 64, 1000] {
+            let parts = render(block);
+            let most = whole.iter().zip(&parts).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
+            assert!(most < 1e-4, "blocks of {block}: {most}");
+        }
+    }
+
+    /// Stretch while the tempo automation ramps: the note stays in tune (the
+    /// grains are 30 real ms apart, whatever the tempo does). A clip from
+    /// before goes half a semitone sharp, as it did.
+    #[test]
+    fn stretch_stays_in_tune_while_the_tempo_ramps() {
+        let file = Arc::new(tone(1_000.0, 48_000.0, 60.0));
+        for (aligned, in_tune) in [(true, true), (false, false)] {
+            let mut renderer = crate::offline::OfflineRenderer::new(48_000.0);
+            let clip = AudioClip { aligned, length: 120.0, ..audio_clip(WarpMode::Stretch) };
+            prepare_audio(&clip, &file);
+            renderer.send(Command::SetTempo(120.0));
+            renderer.send(Command::SetArrangement { track: 0, clips: Box::new(vec![PlacedClip::new(0.0, 120.0, PlayClip::Audio(clip, file.clone()))]) });
+            let points = [(0.0, 120.0), (16.0, 120.0), (32.0, 140.0)].iter().map(|&(beat, value)| crate::model::AutomationPoint { beat, value, curve: 0.0 }).collect();
+            renderer.send(Command::SetAutomation { target: Target::Master, lanes: Box::new(vec![AutomationLane { param: Param::Tempo, points }]) });
+            renderer.send(Command::SetOutputLimit(false));
+            renderer.send(Command::Play);
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            while renderer.state.position() < 20.0 {
+                renderer.render(500, &mut l, &mut r);
+            }
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            renderer.render(192_000, &mut l, &mut r);
+            let cycles = l.windows(2).filter(|w| w[0] <= 0.0 && w[1] > 0.0).count() as f64 / 4.0;
+            let cents = 1200.0 * (cycles / 1_000.0).log2();
+            assert_eq!(cents.abs() < 10.0, in_tune, "aligned {aligned}: {cents:.0} cents");
         }
     }
 
@@ -6468,7 +6710,7 @@ mod tests {
         use crate::model::Fades;
         let rate = 48_000.0;
         let sample = Sample::from_channels(vec![0.5; 48_000 * 8], vec![0.5; 48_000 * 8], rate);
-        let mut clip = AudioClip { clean: true, hard_start: false, fades: Fades::new(1.0, 2.0), name: "c".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        let mut clip = AudioClip { aligned: true, clean: true, hard_start: false, fades: Fades::new(1.0, 2.0), name: "c".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
         // 120 BPM: a beat is 24 000 frames.
         let (left, _) = render_audio(&clip, &sample, 8.0, 120.0, rate);
         let at = |beat: f64| left[(beat * 24_000.0) as usize];

@@ -401,6 +401,12 @@ pub struct AudioClip {
     /// when its file is at another rate or it sits off the sample grid.
     #[serde(default, skip_serializing_if = "is_default")]
     pub clean: bool,
+    /// Stretch lines each grain up with the wave's cycle, keeps time under a
+    /// tempo that moves and plays the clip's first grain whole: every clip made
+    /// since. A clip from before plays as it did: a held note wavers, and its
+    /// start fades in over a grain.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub aligned: bool,
 }
 
 /// How long an audio clip takes to come in from silence at its start and to
@@ -11240,6 +11246,11 @@ mod tests {
         let saved = serde_json::to_string(&new).unwrap();
         assert!(saved.contains(r#""clean":true"#), "{saved}");
         assert!(serde_json::from_str::<super::AudioClip>(&saved).unwrap().clean);
+        // And Stretch's grains, lined up since.
+        assert!(!new.aligned && !saved.contains("aligned"));
+        let saved = serde_json::to_string(&super::AudioClip { aligned: true, ..new }).unwrap();
+        assert!(saved.contains(r#""aligned":true"#), "{saved}");
+        assert!(serde_json::from_str::<super::AudioClip>(&saved).unwrap().aligned);
     }
 
     #[test]
@@ -11258,7 +11269,7 @@ mod tests {
 
     #[test]
     fn warp_markers_map_beats_to_the_file_and_back() {
-        let mut clip = AudioClip { clean: true, hard_start: false, fades: Default::default(),
+        let mut clip = AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(),
             name: "x".into(),
             color: [0; 3],
             sample: "x.wav".into(),

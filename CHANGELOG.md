@@ -213,6 +213,16 @@ still in `0.x`, so any release may change things.
   18 kHz at full level, and half a sample off the grid took 8 dB off
   20 kHz. For the clips you make from now on (imported, recorded,
   consolidated); the ones already in a project sound as they did.
+- Audio clips in Stretch: a held note no longer wavers or turns rough when
+  the tempo is not the file's (each grain now starts on the cycle of the
+  wave the one before has reached, instead of wherever the tempo put it,
+  so they add up rather than cancel: the level of a 440 Hz note dipped up
+  to 10 dB thirty times a second, now 0.2 dB); a clip that starts on a hit
+  plays the hit whole instead of fading in over 30 ms (a Beats clip whose
+  hits haven't been found, too); and with the tempo automated the clip
+  stays in tune (it went up to half a semitone sharp on a ramp). For the
+  clips you make from now on; the ones already in a project sound as they
+  did. While the tempo is ramping, the grains are not lined up.
 - Modular Synth and Super Saw: a sound with modulation (LFOs, envelopes,
   random, glide, the Super Saw's filter envelope) plays the same whatever
   the sound card's buffer size. Before, it could change with buffers that

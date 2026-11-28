@@ -47,7 +47,7 @@ fn ramp() -> String {
 
 fn audio(sample: &str, length: f64, warp: WarpMode, fades: Fades) -> AudioClip {
     AudioClip {
-        clean: true, hard_start: false,
+        aligned: true, clean: true, hard_start: false,
         fades,
         name: "a".into(),
         color: [0; 3],

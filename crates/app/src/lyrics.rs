@@ -278,7 +278,7 @@ mod tests {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         app.project.tempo = 120.0;
         let t = app.add_audio_track().unwrap();
-        let audio = AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [1, 2, 3], sample: "/x/voz.wav".into(), length: 8.0, offset: 2.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, warp_markers: Vec::new(), takes: Vec::new(), key: None, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), muted: false };
+        let audio = AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [1, 2, 3], sample: "/x/voz.wav".into(), length: 8.0, offset: 2.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, warp_markers: Vec::new(), takes: Vec::new(), key: None, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), muted: false };
         app.project.tracks[t].arrangement.push(engine::model::ArrangementClip { start: 16.0, length: 8.0, clip: Clip::Audio(audio) });
         app.edit_lyrics("/x/voz.wav", |l| l.lines = vec![line(0.5, 1.0, "antes"), line(2.5, 4.0, "dentro uno"), line(5.0, 5.8, "dentro dos"), line(7.0, 8.0, "después")]);
         let clip = ClipRef::Arrangement { track: t, index: 0 };

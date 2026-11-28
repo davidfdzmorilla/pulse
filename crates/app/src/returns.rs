@@ -246,7 +246,7 @@ mod tests {
         assert_eq!(value["format"], 5, "an older Pulse asks to be updated");
         // Fades: 6 (a Pulse that reads 5 would play the clip without them).
         let mut faded = Project::demo();
-        let mut clip = engine::model::AudioClip { clean: true, hard_start: false, fades: engine::model::Fades::new(1.0, 0.0), name: "a".into(), color: [0; 3], sample: "a.wav".into(), length: 4.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        let mut clip = engine::model::AudioClip { aligned: true, clean: true, hard_start: false, fades: engine::model::Fades::new(1.0, 0.0), name: "a".into(), color: [0; 3], sample: "a.wav".into(), length: 4.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
         faded.tracks[0].arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 4.0, clip: Clip::Audio(clip.clone()) });
         assert_eq!(serde_json::from_str::<serde_json::Value>(&faded.to_json().unwrap()).unwrap()["format"], 6);
         clip.fades = engine::model::Fades::NONE;
@@ -309,7 +309,7 @@ mod tests {
         assert_eq!(Project::from_json(&bent.to_json().unwrap()).unwrap().tracks[0].clips[0], bent.tracks[0].clips[0]);
         // A clip split in the middle of a fade: each part a piece of its curve, 9.
         let mut cut = Project::demo();
-        let clip = engine::model::AudioClip { clean: true, hard_start: false, fades: engine::model::Fades::new(4.0, 0.0), name: "a".into(), color: [0; 3], sample: "a.wav".into(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        let clip = engine::model::AudioClip { aligned: true, clean: true, hard_start: false, fades: engine::model::Fades::new(4.0, 0.0), name: "a".into(), color: [0; 3], sample: "a.wav".into(), length: 8.0, offset: 0.0, warp: engine::model::WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
         let (left, right) = crate::clip_split::split(&engine::model::ArrangementClip { start: 0.0, length: 8.0, clip: Clip::Audio(clip) }, 2.0, 120.0).unwrap();
         cut.tracks[0].arrangement = vec![left, right];
         assert_eq!(format(&cut), 9);

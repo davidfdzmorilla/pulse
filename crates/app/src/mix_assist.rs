@@ -4107,7 +4107,7 @@ mod tests {
         let mut project = Project::empty();
         project.tempo = 120.0;
         let mut voice = Track::new_audio("Voz", [0; 3]);
-        voice.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        voice.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
         project.tracks = vec![voice];
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
@@ -4227,7 +4227,7 @@ mod tests {
         let clip = |name: &str, audio: Vec<f32>| {
             let path = dir.join(format!("espacio-{name}-{}.wav", std::process::id()));
             crate::export::write(&path, &audio, &audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
-            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
         };
         let mut project = Project::empty();
         project.tempo = 120.0;
@@ -4521,7 +4521,7 @@ mod tests {
         let clip = |name: &str, audio: Vec<f32>| {
             let path = dir.join(format!("antes-{name}-{}.wav", std::process::id()));
             crate::export::write(&path, &audio, &audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
-            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
         };
         let mut project = Project::empty();
         project.tempo = 120.0;
@@ -4658,7 +4658,7 @@ mod tests {
         let clip = |name: &str, audio: &[f32]| {
             let path = dir.join(format!("nivelar-{name}-{}.wav", std::process::id()));
             crate::export::write(&path, audio, audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
-            engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+            engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
         };
         let mut project = Project::empty();
         project.tempo = 120.0;
@@ -4744,7 +4744,7 @@ mod tests {
         let mut project = Project::empty();
         project.tempo = 120.0;
         let mut v = Track::new_audio("Voz", [0; 3]);
-        v.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        v.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
         project.tracks = vec![v];
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
@@ -4834,7 +4834,7 @@ mod tests {
         let mut project = Project::empty();
         project.tempo = 120.0;
         let mut v = Track::new_audio("Voz", [0; 3]);
-        v.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        v.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
         project.tracks = vec![v];
         let mut app = PulseApp::headless(project);
         let ctx = egui::Context::default();
@@ -4920,7 +4920,7 @@ mod tests {
         let mut project = Project::empty();
         project.tempo = 120.0;
         let mut t = Track::new_audio("Pad", [0; 3]);
-        t.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Pad".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        t.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 32.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: "Pad".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 32.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
         project.tracks = vec![t];
         project.markers = vec![SongMarker { beat: 0.0, name: "Estrofa".into() }, SongMarker { beat: 16.0, name: "Estribillo".into() }];
         let mut app = PulseApp::headless(project);
@@ -4996,7 +4996,7 @@ mod tests {
         let clip = |name: &str, left: &[f32], right: &[f32]| {
             let path = dir.join(format!("fase-{name}-{}.wav", std::process::id()));
             crate::export::write(&path, left, right, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
-            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
+            engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) }
         };
         let pad = wave(440.0, 0.2);
         let upside: Vec<f32> = pad.iter().map(|x| -x).collect();
@@ -5080,7 +5080,7 @@ mod tests {
             let path = dir.join(format!("mono-{name}-{}.wav", std::process::id()));
             crate::export::write(&path, audio, audio, rate as u32, crate::export::BitDepth::Float32, 1.0).unwrap();
             let mut track = Track::new_audio(name, [0; 3]);
-            track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+            track.arrangement.push(engine::model::ArrangementClip { start: 0.0, length: 16.0, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
             project.tracks.push(track);
         }
         let mut app = PulseApp::headless(project.clone());
@@ -5220,7 +5220,7 @@ mod tests {
         let path = dir.join(format!("club-voz-{}.wav", std::process::id()));
         export::write(&path, &voice, &voice, rate as u32, export::BitDepth::Float32, 1.0).unwrap();
         let mut sung = Track::new_audio("Voz", [0; 3]);
-        sung.arrangement.push(ArrangementClip { start: 0.0, length: beats, clip: Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: beats, offset: 0.0, warp: WarpMode::Off, original_bpm: tempo, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
+        sung.arrangement.push(ArrangementClip { start: 0.0, length: beats, clip: Clip::Audio(AudioClip { aligned: true, clean: true, hard_start: false, fades: Default::default(), name: "Voz".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: beats, offset: 0.0, warp: WarpMode::Off, original_bpm: tempo, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }) });
         let mut melody = Track::new("Voz · Melodía", [0; 3], InstrumentKind::Synth(Default::default()));
         melody.arrangement.push(midi("Voz · Melodía", (16..32).map(|p| note(p as f64 * 4.0, 3.0, pitches[p % 4], 0.8)).collect()));
         // A rough first mix: the kick down, the tonal tracks up.

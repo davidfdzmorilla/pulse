@@ -73,6 +73,89 @@ pub struct Sample {
     /// by the app before a clip in that mode plays it, once (the audio thread
     /// only reads it; until then the clip plays in Stretch).
     pub onsets: std::sync::OnceLock<Vec<f64>>,
+    /// Where each cycle of its sound starts (frames, in order; see [`cycles`]),
+    /// for the Stretch warp mode to line its grains up. Found off the audio
+    /// thread before a clip in that mode plays it, once; until then its grains
+    /// play where the tempo puts them.
+    pub cycles: std::sync::OnceLock<Vec<f64>>,
+}
+
+/// Looking for a sound's cycles: the rate it is looked at, the shortest and
+/// longest cycle (seconds), how alike two stretches must be to be cycles of one
+/// sound, and the cycle where nothing repeats.
+const CYCLE_RATE: f64 = 4000.0;
+const CYCLE_RANGE: (f64, f64) = (1.0 / 660.0, 1.0 / 40.0);
+const CYCLE_ALIKE: f32 = 0.5;
+const CYCLE_REST: f64 = 0.004;
+/// How far on the next cycle is measured, at least (seconds).
+const CYCLE_STRIDE: f64 = 0.008;
+
+/// Where each cycle of a sound starts, in frames from 0: each one as long as
+/// the lag at which the sound there most resembles itself (the shortest such
+/// lag: a period of its lowest note, mostly). Where nothing repeats (noise,
+/// silence), cycles of [`CYCLE_REST`].
+fn cycles(left: &[f32], right: &[f32], rate: f32) -> Vec<f64> {
+    let step = ((rate as f64 / CYCLE_RATE).round() as usize).max(1);
+    let low: Vec<f32> = left.chunks(step).zip(right.chunks(step)).map(|(l, r)| (l.iter().sum::<f32>() + r.iter().sum::<f32>()) / (2 * l.len()) as f32).collect();
+    let rate = rate as f64 / step as f64;
+    let (min, max) = (((CYCLE_RANGE.0 * rate).floor() as usize).max(2), (CYCLE_RANGE.1 * rate).ceil() as usize);
+    let rest = CYCLE_REST * rate;
+    let mut alike = vec![0f32; max + 2];
+    let (mut marks, mut at) = (vec![0.0], 0.0f64);
+    let mut cycle = rest;
+    while at < low.len() as f64 {
+        let a = at.round() as usize;
+        cycle = rest;
+        if a + 2 * max + 2 <= low.len() {
+            let base = &low[a..a + max];
+            let energy: f32 = base.iter().map(|x| x * x).sum();
+            let mut other: f32 = low[a + min - 1..a + min - 1 + max].iter().map(|x| x * x).sum();
+            for lag in min - 1..=max + 1 {
+                let dot: f32 = base.iter().zip(&low[a + lag..a + lag + max]).map(|(x, y)| x * y).sum();
+                alike[lag] = if energy * other > 1e-12 { dot / (energy * other).sqrt() } else { 0.0 };
+                other += low[a + lag + max].powi(2) - low[a + lag].powi(2);
+            }
+            let best = alike[min..=max].iter().copied().fold(0f32, f32::max);
+            // The shortest lag that is a peak nearly as good as the best one.
+            let peak = (min..=max).find(|&l| alike[l] >= CYCLE_ALIKE && alike[l] >= 0.9 * best && alike[l] >= alike[l - 1] && alike[l] >= alike[l + 1]);
+            // Between two lags, where the peak of the curve through them is.
+            let exact = |l: usize| {
+                let (before, here, after) = (alike[l - 1] as f64, alike[l] as f64, alike[l + 1] as f64);
+                let bend = before - 2.0 * here + after;
+                l as f64 + if bend < -1e-9 { (0.5 * (before - after) / bend).clamp(-0.5, 0.5) } else { 0.0 }
+            };
+            if let Some(l) = peak {
+                cycle = exact(l);
+                // Several cycles on it repeats too: measured over them, finer.
+                for count in 2..=max / l {
+                    let far = (cycle * count as f64).round() as usize;
+                    if far > max || alike[far] < 0.9 * best || alike[far] < alike[far - 1] || alike[far] < alike[far + 1] {
+                        break;
+                    }
+                    cycle = exact(far) / count as f64;
+                }
+            }
+        }
+        // Short cycles, a few at a time: they change no faster than long ones.
+        for _ in 0..((CYCLE_STRIDE * rate / cycle) as usize).max(1) {
+            at += cycle;
+            marks.push(at * step as f64);
+        }
+    }
+    marks.push((at + cycle) * step as f64);
+    marks
+}
+
+/// How many cycles into a file `frame` is, by its cycle starts (at least two),
+/// and the frame at a count of cycles (one undoes the other).
+pub(crate) fn cycle_at(marks: &[f64], frame: f64) -> f64 {
+    let i = marks.partition_point(|m| *m <= frame).clamp(1, marks.len() - 1);
+    (i - 1) as f64 + (frame - marks[i - 1]) / (marks[i] - marks[i - 1])
+}
+
+pub(crate) fn cycle_frame(marks: &[f64], cycle: f64) -> f64 {
+    let i = (cycle.floor().max(0.0) as usize + 1).clamp(1, marks.len() - 1);
+    marks[i - 1] + (cycle - (i - 1) as f64) * (marks[i] - marks[i - 1])
 }
 
 impl Sample {
@@ -91,7 +174,13 @@ impl Sample {
             sample_rate,
             peaks,
             onsets: std::sync::OnceLock::new(),
+            cycles: std::sync::OnceLock::new(),
         }
+    }
+
+    /// Finds its cycles (see [`Sample::cycles`]), once. Not for the audio thread.
+    pub fn find_cycles(&self) {
+        self.cycles.get_or_init(|| cycles(&self.left, &self.right, self.sample_rate));
     }
 
     /// Decodes WAV, AIFF, FLAC, MP3, OGG/Vorbis, AAC/ALAC (MP4) and CAF files.
@@ -270,6 +359,33 @@ pub fn guess_loop_bpm(duration: f64, prefer_bpm: f64) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The cycles of a sound: a note's are its period (a low one's too, a
+    /// chord's the one its notes share, two of a note too high to tell), and
+    /// they are counted back and forth without loss. Silence, noise and files too short to tell get even ones.
+    #[test]
+    fn the_cycles_of_a_sound_are_its_period() {
+        let tau = std::f64::consts::TAU;
+        for (rate, notes, period) in [(48_000.0, vec![440.0], 1.0 / 440.0), (44_100.0, vec![82.41], 1.0 / 82.41), (48_000.0, vec![220.0, 275.0, 330.0], 1.0 / 55.0), (96_000.0, vec![1_000.0], 2.0 / 1_000.0)] {
+            let wave: Vec<f32> = (0..(2.0 * rate) as usize).map(|i| notes.iter().enumerate().map(|(n, f)| (i as f64 / rate * f * tau + n as f64).sin()).sum::<f64>() as f32 * 0.3).collect();
+            let marks = cycles(&wave, &wave, rate as f32);
+            let inside: Vec<f64> = marks.windows(2).map(|w| (w[1] - w[0]) / rate).collect();
+            let steady = &inside[..inside.len() * 9 / 10];
+            assert!(steady.iter().all(|c| (c / period - 1.0).abs() < 0.002), "{notes:?}: {:?}", &steady[..4]);
+            for frame in [-500.0, 0.0, 1234.5, rate, 3.0 * rate] {
+                assert!((cycle_frame(&marks, cycle_at(&marks, frame)) - frame).abs() < 1e-6, "{frame}");
+            }
+        }
+        let mut seed = 1u32;
+        let noise: Vec<f32> = (0..48_000).map(|_| { seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223); (seed >> 8) as f32 / 8_388_608.0 - 1.0 }).collect();
+        for (wave, even) in [(vec![0.0; 48_000], true), (noise, false), (vec![0.3; 7], true), (Vec::new(), true)] {
+            let marks = cycles(&wave, &wave, 48_000.0);
+            assert!(marks.len() >= 2 && marks.windows(2).all(|w| w[1] - w[0] >= 48_000.0 / 660.0 - 13.0 && w[1] - w[0] <= 48_000.0 / 40.0 + 13.0), "{} frames", wave.len());
+            if even {
+                assert!(marks.windows(2).all(|w| (w[1] - w[0] - 48_000.0 * CYCLE_REST).abs() < 1e-6));
+            }
+        }
+    }
 
     fn write_wav(path: &Path, rate: u32, channels: u16, frames: &[i16]) {
         let data_len = (frames.len() * 2) as u32;

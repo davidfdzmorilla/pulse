@@ -25,7 +25,7 @@ fn busy(tracks: usize) -> Studio {
     let voice = app.add_audio_track().unwrap();
     app.project.tracks[voice].name = format!("Pista {}", voice + 1);
     let audio = AudioClip {
-        clean: true, hard_start: false,
+        aligned: true, clean: true, hard_start: false,
         fades: Default::default(),
         name: format!("Clip {}", voice + 1),
         color: app.project.tracks[voice].color,

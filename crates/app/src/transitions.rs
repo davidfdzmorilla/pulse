@@ -259,7 +259,7 @@ impl PulseApp {
         };
         let Some(track) = self.transitions_track() else { return };
         let clip = AudioClip {
-            hard_start: false,
+            clean: true, hard_start: false,
             fades: Default::default(),
             envelopes: Vec::new(),
             name,

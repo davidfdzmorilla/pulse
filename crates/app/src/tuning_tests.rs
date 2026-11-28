@@ -35,7 +35,7 @@ fn voice(dir: &std::path::Path) -> String {
 }
 
 fn clip(sample: &str) -> AudioClip {
-    AudioClip { hard_start: false, fades: Fades::new(0.0, 0.0), name: "voz".into(), color: [200, 80, 80], sample: sample.into(), length: 2.8, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }
+    AudioClip { clean: true, hard_start: false, fades: Fades::new(0.0, 0.0), name: "voz".into(), color: [200, 80, 80], sample: sample.into(), length: 2.8, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }
 }
 
 /// An app with a voice track: the clip, a copy of it later on, and another

@@ -1580,7 +1580,7 @@ mod tests {
         };
         let track = |name: &str, sample: String, late: bool| {
             let mut t = crate::project::Track::new_audio(name, [0; 3]);
-            let clip = AudioClip { hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample, length: 2.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+            let clip = AudioClip { clean: true, hard_start: false, fades: Default::default(), name: name.into(), color: [0; 3], sample, length: 2.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
             t.arrangement.push(ArrangementClip { start: 0.0, length: 2.0, clip: Clip::Audio(clip) });
             if late {
                 t.devices.push(Device::new(Effect::Limiter(LimiterParams { ceiling_db: 0.0, ..Default::default() })));

@@ -51,7 +51,7 @@ fn vowel_file(hz: f32, seconds: f32) -> String {
 }
 
 fn audio_clip(path: &str, beats: f64) -> AudioClip {
-    AudioClip { hard_start: false, fades: Fades::new(0.0, 0.0), name: "Voz".into(), color: [0; 3], sample: path.into(), length: beats, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }
+    AudioClip { clean: true, hard_start: false, fades: Fades::new(0.0, 0.0), name: "Voz".into(), color: [0; 3], sample: path.into(), length: beats, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }
 }
 
 /// A project at 120 BPM: a voice (track id 1) with `devices`, and a synth

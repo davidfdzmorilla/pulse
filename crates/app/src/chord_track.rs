@@ -1107,7 +1107,7 @@ mod tests {
 
     fn audio_clip(path: &str, beats: f64) -> engine::model::AudioClip {
         engine::model::AudioClip {
-            hard_start: false,
+            clean: true, hard_start: false,
             fades: Default::default(),
             name: "Piano".into(),
             color: [0; 3],

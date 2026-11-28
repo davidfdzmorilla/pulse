@@ -293,7 +293,7 @@ impl PulseApp {
         // them as they are. A song that changes tempo was rendered following it:
         // warp markers on every beat put each beat where it was rendered, and
         // Re-Pitch plays it as it is (at 1:1).
-        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>, warp: WarpMode| AudioClip { hard_start: false, fades: Default::default(),
+        let clip = |name: String, sample: String, length: f64, envelopes: Vec<AutomationLane>, warp: WarpMode| AudioClip { clean: true, hard_start: false, fades: Default::default(),
             name,
             color,
             sample,
@@ -441,7 +441,7 @@ mod tests {
         let mut project = Project::empty();
         project.tempo = 120.0;
         let mut track = crate::project::Track::new_audio("Clic", [0; 3]);
-        track.clips[0] = Some(Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Clic".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 2.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }));
+        track.clips[0] = Some(Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Clic".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 2.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }));
         track.devices.push(Device::new(Effect::Limiter(LimiterParams { ceiling_db: 0.0, ..Default::default() })));
         project.tracks = vec![track];
         let commands = crate::sync::project_commands(&project, &mut crate::sync::SampleCache::default(), 48_000.0, &HashSet::new());

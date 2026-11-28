@@ -611,7 +611,7 @@ mod tests {
         let mut app = PulseApp::headless(crate::project::Project::demo());
         app.project.tempo = 120.0;
         let t = app.add_audio_track().unwrap();
-        app.project.tracks[t].clips[0] = Some(Clip::Audio(AudioClip { hard_start: false, fades: Default::default(),
+        app.project.tracks[t].clips[0] = Some(Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(),
             name: "Break".into(),
             color: [1, 2, 3],
             sample: path.to_string_lossy().into_owned(),
@@ -664,7 +664,7 @@ mod tests {
         app.project.tempo = 120.0;
         app.project.key = Some(Key { tonic: 5, minor: true });
         let t = app.add_audio_track().unwrap();
-        app.project.tracks[t].clips[0] = Some(Clip::Audio(AudioClip { hard_start: false, fades: Default::default(),
+        app.project.tracks[t].clips[0] = Some(Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(),
             name: "Fam Mib Reb Do".into(), color: [180, 200, 40], sample: path.to_string_lossy().into_owned(), length: 16.0, offset: 0.0,
             warp: WarpMode::Repitch, original_bpm: 120.0, warp_markers: Vec::new(), takes: Vec::new(), key: None, gain_db: 0.0, transpose: 0.0,
             envelopes: Vec::new(), muted: false,

@@ -1475,6 +1475,11 @@ fn render_audio_clip_edges(
     // output sample's time per sample. (lap start beat, seconds there, frame)
     let mut unwarped: Option<(f64, f64, usize)> = None;
     let seconds_per_sample = beats_per_sample * 60.0 / tempo;
+    // Frames of the file per sample out, at the file's own speed.
+    let own_step = rate * seconds_per_sample;
+    let read = |position: f64, step: f64| if clip.clean { sample.read_clean(position, step) } else { sample.read(position) };
+    // Re-Pitch: where it read last, to know how fast it is going.
+    let mut repitched: Option<f64> = None;
 
     for k in from..to {
         let b = beat + (k - from) as f64 * beats_per_sample;
@@ -1516,12 +1521,20 @@ fn render_audio_clip_edges(
                         }
                     }
                 };
-                sample.read((clip.offset + seconds) * rate)
+                read((clip.offset + seconds) * rate, own_step)
             }
-            WarpMode::Repitch => sample.read(clip.file_seconds(first_beat + local) * rate),
+            WarpMode::Repitch => {
+                let position = clip.file_seconds(first_beat + local) * rate;
+                let usual = own_step * tempo / clip.original_bpm.max(1.0);
+                // From the sample before (warp markers change it along the file);
+                // across a jump (the loop coming round), the usual.
+                let step = repitched.map(|last| position - last).filter(|s| *s > 0.0 && *s < usual * 8.0 + 8.0).unwrap_or(usual);
+                repitched = Some(position);
+                read(position, step)
+            }
             WarpMode::Beats if sample.onsets.get().is_some_and(|o| !o.is_empty()) => {
                 let onsets = sample.onsets.get().map_or(&[][..], |o| o.as_slice());
-                beats_read(clip, sample, onsets, first_beat, local, tempo, pitch)
+                beats_read(clip, sample, onsets, first_beat, local, tempo, pitch, own_step * pitch)
             }
             WarpMode::Stretch | WarpMode::Beats => {
                 // Two overlapping Hann-windowed grains read the file at its own speed
@@ -1534,7 +1547,7 @@ fn render_audio_clip_edges(
                     let phase = (t - grain_start) / GRAIN;
                     let window = (0.5 - 0.5 * (std::f64::consts::TAU * phase).cos()) as f32;
                     let source = clip.file_seconds(first_beat + grain_start * tempo / 60.0) + (t - grain_start) * pitch;
-                    let (gl, gr) = sample.read(source * rate);
+                    let (gl, gr) = read(source * rate, own_step * pitch);
                     l += gl * window;
                     r += gr * window;
                 }
@@ -1555,7 +1568,8 @@ const SLICE_CROSS: f64 = 0.002;
 /// before where the tempo has the file, played from its hit at the file's speed
 /// (times `pitch`), fading out before the next hit's material; just after a hit,
 /// the slice before it fades under it.
-fn beats_read(clip: &AudioClip, sample: &Sample, onsets: &[f64], first_beat: f64, local: f64, tempo: f64, pitch: f64) -> (f32, f32) {
+#[allow(clippy::too_many_arguments)]
+fn beats_read(clip: &AudioClip, sample: &Sample, onsets: &[f64], first_beat: f64, local: f64, tempo: f64, pitch: f64, step: f64) -> (f32, f32) {
     let rate = sample.sample_rate as f64;
     let end = sample.duration();
     let at = clip.file_seconds(first_beat + local);
@@ -1566,7 +1580,11 @@ fn beats_read(clip: &AudioClip, sample: &Sample, onsets: &[f64], first_beat: f64
         let since = (local - (clip.file_beat(start) - first_beat)) * 60.0 / tempo;
         let source = start + since.max(0.0) * pitch;
         let fade = ((next - source) / SLICE_FADE).clamp(0.0, 1.0) as f32;
-        let (l, r) = if fade > 0.0 { sample.read(source * rate) } else { (0.0, 0.0) };
+        let (l, r) = match fade > 0.0 {
+            true if clip.clean => sample.read_clean(source * rate, step),
+            true => sample.read(source * rate),
+            false => (0.0, 0.0),
+        };
         (l * fade, r * fade, since)
     };
     let index = onsets.partition_point(|&o| o <= at).checked_sub(1);
@@ -5038,7 +5056,7 @@ mod tests {
     }
 
     fn audio_clip(warp: WarpMode) -> AudioClip {
-        AudioClip { hard_start: false, fades: Default::default(),
+        AudioClip { clean: true, hard_start: false, fades: Default::default(),
             envelopes: Vec::new(),
             name: "sine".into(),
             color: [0, 0, 0],
@@ -5052,6 +5070,113 @@ mod tests {
             key: None,
             gain_db: 0.0,
             transpose: 0.0, muted: false,
+        }
+    }
+
+    /// How loud `freq` is in `x` (a Hann-windowed bin), in dB.
+    fn level_at(x: &[f32], freq: f64, rate: f64) -> f64 {
+        let (mut re, mut im, mut all) = (0.0, 0.0, 0.0);
+        for (i, s) in x.iter().enumerate() {
+            let window = 0.5 - 0.5 * (std::f64::consts::TAU * i as f64 / x.len() as f64).cos();
+            let phase = std::f64::consts::TAU * freq * i as f64 / rate;
+            re += *s as f64 * window * phase.cos();
+            im += *s as f64 * window * phase.sin();
+            all += window;
+        }
+        20.0 * (2.0 * (re * re + im * im).sqrt() / all).max(1e-12).log10()
+    }
+
+    fn tone(freq: f64, rate: f64, seconds: f64) -> Sample {
+        let wave: Vec<f32> = (0..(seconds * rate) as usize).map(|i| (i as f64 * freq * std::f64::consts::TAU / rate).sin() as f32).collect();
+        Sample::from_channels(wave.clone(), wave, rate as f32)
+    }
+
+    /// A file at another sample rate than the session's: a clip made now keeps
+    /// its top end and adds no images of it. One from before plays as it did
+    /// (15 kHz a dB and a half down, an image 27 dB under a 10 kHz tone).
+    #[test]
+    fn a_file_at_another_rate_plays_clean() {
+        let clip = |clean: bool| AudioClip { clean, length: 4.0, ..audio_clip(WarpMode::Off) };
+        let heard = |clean: bool, freq: f64, file: f64, session: f64, at: f64| {
+            let (left, _) = render_audio(&clip(clean), &tone(freq, file, 3.0), 4.0, 120.0, session as f32);
+            level_at(&left[session as usize / 2..session as usize * 3 / 2], at, session)
+        };
+        // 44.1 kHz in a 48 kHz session: the tone, and its image (44.1 kHz less it,
+        // folded back from 48 kHz: 3.9 kHz above it).
+        for freq in [1_000.0, 10_000.0, 15_000.0, 18_000.0] {
+            let (tone, image) = (heard(true, freq, 44_100.0, 48_000.0, freq), heard(true, freq, 44_100.0, 48_000.0, freq + 3_900.0));
+            assert!(tone.abs() < 0.05, "{freq} Hz comes out at {tone} dB");
+            assert!(image < -80.0, "{freq} Hz leaves an image at {image} dB");
+        }
+        assert!(heard(true, 20_000.0, 44_100.0, 48_000.0, 20_000.0).abs() < 0.1);
+        // 96 kHz in a 48 kHz session: what is above 24 kHz doesn't fold down.
+        assert!(heard(true, 30_000.0, 96_000.0, 48_000.0, 18_000.0) < -80.0);
+        assert!(heard(true, 40_000.0, 96_000.0, 48_000.0, 8_000.0) < -80.0);
+        assert!(heard(true, 20_000.0, 96_000.0, 48_000.0, 20_000.0).abs() < 0.1);
+        // 48 kHz in a 44.1 kHz session.
+        assert!(heard(true, 15_000.0, 48_000.0, 44_100.0, 15_000.0).abs() < 0.05);
+        assert!(heard(true, 20_000.0, 48_000.0, 44_100.0, 20_000.0).abs() < 0.1);
+        // Before: as it was.
+        assert!((heard(false, 15_000.0, 44_100.0, 48_000.0, 15_000.0) + 1.65).abs() < 0.1);
+        assert!((heard(false, 10_000.0, 44_100.0, 48_000.0, 13_900.0) + 26.9).abs() < 0.5);
+        assert!(heard(false, 30_000.0, 96_000.0, 48_000.0, 18_000.0) > -1.0);
+    }
+
+    /// A clip that doesn't sit on the sample grid (at most tempos, a beat isn't
+    /// a whole number of samples) keeps its top end; on the grid, it is the
+    /// file sample for sample. Re-Pitch played faster doesn't fold its top down.
+    #[test]
+    fn a_clip_off_the_sample_grid_keeps_its_top_end() {
+        let heard = |clean: bool, freq: f64, offset: f64| {
+            let clip = AudioClip { clean, length: 4.0, offset: offset / 48_000.0, ..audio_clip(WarpMode::Off) };
+            let (left, _) = render_audio(&clip, &tone(freq, 48_000.0, 3.0), 4.0, 120.0, 48_000.0);
+            level_at(&left[24_000..72_000], freq, 48_000.0)
+        };
+        for freq in [10_000.0, 15_000.0, 20_000.0] {
+            for offset in [0.25, 0.5, 0.9] {
+                assert!(heard(true, freq, offset).abs() < 0.05, "{freq} Hz, {offset} of a sample off: {}", heard(true, freq, offset));
+            }
+        }
+        assert!((heard(false, 20_000.0, 0.5) + 8.4).abs() < 0.2, "before: {}", heard(false, 20_000.0, 0.5));
+        // On the grid: the file itself.
+        let file = tone(1_234.0, 48_000.0, 3.0);
+        let clip = AudioClip { clean: true, hard_start: true, length: 8.0, ..audio_clip(WarpMode::Off) };
+        let (left, _) = render_audio(&clip, &file, 4.0, 120.0, 48_000.0);
+        assert_eq!(left[..90_000], file.left[..90_000]);
+        // Re-Pitch at twice its tempo: 15 kHz in the file would be 30 kHz, which a
+        // clip from before folded down to 18 kHz at full level.
+        let folded = |clean: bool| {
+            let clip = AudioClip { clean, length: 16.0, ..audio_clip(WarpMode::Repitch) };
+            let (left, _) = render_audio(&clip, &tone(15_000.0, 48_000.0, 6.0), 8.0, 240.0, 48_000.0);
+            level_at(&left[24_000..72_000], 18_000.0, 48_000.0)
+        };
+        assert!(folded(true) < -80.0, "{}", folded(true));
+        assert!(folded(false) > -1.0, "{}", folded(false));
+    }
+
+    /// The band-limited read at the file's ends, and in a file shorter than its
+    /// kernel: silence outside, no reading out of bounds, a steady level kept.
+    #[test]
+    fn the_clean_read_is_safe_at_the_ends_of_a_file() {
+        for frames in [0usize, 1, 5, 200] {
+            let sample = Sample::from_channels(vec![0.5; frames], vec![-0.5; frames], 48_000.0);
+            for step in [0.5, 1.0, 1.7, 9.0] {
+                for k in -40..(frames as i32 * 4 + 40) {
+                    let (l, r) = sample.read_clean(k as f64 / 4.0, step);
+                    assert!(l.is_finite() && l.abs() <= 0.6 && (l + r).abs() < 1e-6, "{frames} frames, step {step}, at {k}: {l} {r}");
+                }
+            }
+            assert_eq!(sample.read_clean(-0.25, 1.0), (0.0, 0.0));
+            assert_eq!(sample.read_clean(frames as f64, 1.0), (0.0, 0.0));
+            assert_eq!(sample.read_clean(f64::NAN, 1.0), (0.0, 0.0));
+        }
+        // Well inside a long file, a steady level stays as it is at any fraction and speed.
+        let sample = Sample::from_channels(vec![0.5; 4_000], vec![0.5; 4_000], 48_000.0);
+        for step in [0.5, 1.0, 1.7, 3.0] {
+            for k in 0..16 {
+                let (l, _) = sample.read_clean(2_000.0 + k as f64 / 16.0, step);
+                assert!((l - 0.5).abs() < 1e-5, "step {step}: {l}");
+            }
         }
     }
 
@@ -6343,7 +6468,7 @@ mod tests {
         use crate::model::Fades;
         let rate = 48_000.0;
         let sample = Sample::from_channels(vec![0.5; 48_000 * 8], vec![0.5; 48_000 * 8], rate);
-        let mut clip = AudioClip { hard_start: false, fades: Fades::new(1.0, 2.0), name: "c".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+        let mut clip = AudioClip { clean: true, hard_start: false, fades: Fades::new(1.0, 2.0), name: "c".into(), color: [0; 3], sample: String::new(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
         // 120 BPM: a beat is 24 000 frames.
         let (left, _) = render_audio(&clip, &sample, 8.0, 120.0, rate);
         let at = |beat: f64| left[(beat * 24_000.0) as usize];

@@ -643,7 +643,7 @@ mod tests {
         stab.clips[3] = stab.clips[2].clone();
         let mut audio = Track::new_audio("6 Audio", [0; 3]);
         let tops = AudioClip {
-            hard_start: false,
+            clean: true, hard_start: false,
             fades: Default::default(),
             name: "Tops_150".into(),
             color: [0; 3],
@@ -911,7 +911,7 @@ mod tests {
     /// An audio clip in Off for the project's tempo, `beats` long.
     fn audio(name: &str, path: &str, beats: f64) -> engine::model::AudioClip {
         engine::model::AudioClip {
-            hard_start: false,
+            clean: true, hard_start: false,
             fades: Default::default(),
             name: name.into(),
             color: [0; 3],

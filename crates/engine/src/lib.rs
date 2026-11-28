@@ -46,6 +46,7 @@ pub use instruments::render_drum_hit;
 pub use kick::{amplitude as kick_amplitude, drive_at as kick_drive_at, effective as kick_effective, length_ms as kick_length_ms, pitch_offset as kick_pitch_offset, render_kick};
 pub use input::{detached_input, detached_input_with_voice, start_input, start_input_with, AudioInput, InputHandle, Marker, MonitorInput, VoiceInput};
 pub use offline::OfflineRenderer;
+pub use engine::seconds_between;
 pub use sample::{guess_loop_bpm, Sample, PEAK_BLOCK};
 pub use engine::{
     build_chain, copy_salt, render_audio_handles, HANDLE_SECONDS, Analyzer, ANALYZER_SAMPLES, link_neighbours, render_audio, render_placed, swing_offset, ChainSlot, Command, Engine, PreparedInstrument, LiveNote, Controller, PlacedClip, PlayClip, RecordedControl, RecordedNote, SharedState, Fault, Target, TrackStatus, MAX_CHAIN, MAX_TRACKS, NONE,

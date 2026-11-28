@@ -2154,7 +2154,7 @@ impl PulseApp {
     /// Cuts `beats` of input starting at `start` (transport beats) into a new audio clip.
     fn audio_take(&mut self, track: usize, start: f64, beats: f64) -> Option<AudioClip> {
         let (left, right, _) = self.take_audio(start, beats, 0)?;
-        self.save_take(track, left, right, beats)
+        self.save_take(track, left, right, start, beats)
     }
 
     /// Sends the playhead to `beat`. In the middle of a take over the
@@ -2181,8 +2181,8 @@ impl PulseApp {
             }
             let Some((left, right, rendered)) = self.take_audio(from, beats, after) else { continue };
             // A stretch over beats already played is looked for after them.
-            after = rendered + self.take_frames(to - from) as u64;
-            if let Some(clip) = self.save_take(track, left, right, beats) {
+            after = rendered + self.take_frames(from, to) as u64;
+            if let Some(clip) = self.save_take(track, left, right, from, beats) {
                 clips.push(ArrangementClip { start: from, length: beats, clip: Clip::Audio(clip) });
             }
         }
@@ -2199,18 +2199,48 @@ impl PulseApp {
         let latency = self.audio.state().map_or(0.0, |s| s.output_latency()) + capture.latency() + self.settings.record_offset_ms as f64 / 1000.0;
         let rendered = capture.frame_at_beat_after(start, after)?;
         let first = (rendered as i64 + (latency * rate as f64).round() as i64).max(0) as u64;
-        let (left, right) = capture.extract(first, self.take_frames(beats));
+        let (left, right) = capture.extract(first, self.take_frames(start, start + beats));
         Some((left, right, rendered))
     }
 
-    fn take_frames(&self, beats: f64) -> usize {
-        let rate = self.capture.as_ref().map_or(48_000.0, |c| c.sample_rate());
-        (beats * 60.0 / self.project.tempo * rate as f64).round() as usize
+    /// The tempo automation the song plays with, if any.
+    fn tempo_lane(&self) -> Option<&engine::model::AutomationLane> {
+        let lane = self.project.master.automation.iter().find(|l| l.param == Param::Tempo && !l.points.is_empty())?;
+        (!self.overridden.contains(&(Target::Master, Param::Tempo))).then_some(lane)
     }
 
-    /// Writes a take to the recordings folder and makes it a clip of `beats`.
-    fn save_take(&mut self, track: usize, left: Vec<f32>, right: Vec<f32>, beats: f64) -> Option<AudioClip> {
-        let tempo = self.project.tempo;
+    /// How long the beats `from..to` of the song take to play, in seconds.
+    fn take_seconds(&self, from: f64, to: f64) -> f64 {
+        match self.tempo_lane() {
+            Some(lane) => engine::seconds_between(lane, from, to),
+            None => (to - from) * 60.0 / self.project.tempo,
+        }
+    }
+
+    /// Input frames played while the beats `from..to` were heard.
+    fn take_frames(&self, from: f64, to: f64) -> usize {
+        let rate = self.capture.as_ref().map_or(48_000.0, |c| c.sample_rate());
+        (self.take_seconds(from, to) * rate as f64).round() as usize
+    }
+
+    /// The tempo a take over `beats` from `start` was played at, and, where
+    /// the tempo automation moved it on the way, the file's time at each beat
+    /// (its warp markers: the take stays on the beats it was played on).
+    fn take_tempo(&self, start: f64, beats: f64) -> (f64, Vec<engine::model::WarpMarker>) {
+        let whole = self.take_seconds(start, start + beats);
+        if self.tempo_lane().is_none() || whole <= 0.0 {
+            return (self.project.tempo, Vec::new());
+        }
+        let tempo = beats * 60.0 / whole;
+        let markers: Vec<_> = (0..=beats.ceil() as usize).map(|k| (k as f64).min(beats)).map(|beat| engine::model::WarpMarker { beat, seconds: self.take_seconds(start, start + beat) }).collect();
+        let steady = markers.iter().all(|m| (m.seconds - m.beat * 60.0 / tempo).abs() < 1e-5);
+        (tempo, if steady { Vec::new() } else { markers })
+    }
+
+    /// Writes a take to the recordings folder and makes it a clip of `beats`
+    /// (played from beat `start` of the song).
+    fn save_take(&mut self, track: usize, left: Vec<f32>, right: Vec<f32>, start: f64, beats: f64) -> Option<AudioClip> {
+        let (tempo, warp_markers) = self.take_tempo(start, beats);
         let rate = self.capture.as_ref()?.sample_rate();
         let dir = self.recordings_dir();
         if let Err(e) = std::fs::create_dir_all(&dir) {
@@ -2240,10 +2270,10 @@ impl PulseApp {
             sample: key,
             length: beats,
             offset: 0.0,
-            // Recorded at the project tempo; Stretch keeps the pitch if the tempo changes later.
+            // Recorded at the song's tempo; Stretch keeps the pitch if the tempo changes later.
             warp: WarpMode::Stretch,
             original_bpm: tempo,
-            warp_markers: Vec::new(),
+            warp_markers,
             key: None,
             takes: Vec::new(),
             gain_db: 0.0,
@@ -2276,12 +2306,12 @@ impl PulseApp {
             let Some((left, right, rendered)) = self.take_audio(from, to - from, after) else { continue };
             // The next pass is looked for from where this one ended (the markers
             // across the wrap don't count, so landing a block off is harmless).
-            after = rendered + self.take_frames(to - from) as u64;
+            after = rendered + self.take_frames(from, to) as u64;
             let mut skip = 0;
             if from < loop_start - 1e-6 {
-                skip = self.take_frames(loop_start - from).min(left.len());
+                skip = self.take_frames(from, loop_start).min(left.len());
                 let beats = loop_start - from;
-                if let Some(clip) = self.save_take(track, left[..skip].to_vec(), right[..skip].to_vec(), beats) {
+                if let Some(clip) = self.save_take(track, left[..skip].to_vec(), right[..skip].to_vec(), from, beats) {
                     clips.push(ArrangementClip { start: from, length: beats, clip: Clip::Audio(clip) });
                 }
             }
@@ -2290,13 +2320,13 @@ impl PulseApp {
             if to - begin < 0.5 {
                 continue;
             }
-            let frames = self.take_frames(loop_end - loop_start);
-            let offset = self.take_frames(begin - loop_start).min(frames);
+            let frames = self.take_frames(loop_start, loop_end);
+            let offset = self.take_frames(loop_start, begin).min(frames);
             let (mut l, mut r) = (vec![0.0; frames], vec![0.0; frames]);
             let n = (left.len() - skip).min(frames - offset);
             l[offset..offset + n].copy_from_slice(&left[skip..skip + n]);
             r[offset..offset + n].copy_from_slice(&right[skip..skip + n]);
-            if let Some(clip) = self.save_take(track, l, r, loop_end - loop_start) {
+            if let Some(clip) = self.save_take(track, l, r, loop_start, loop_end - loop_start) {
                 takes.push(clip);
             }
         }

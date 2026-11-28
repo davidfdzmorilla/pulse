@@ -11,6 +11,56 @@ use symphonia::core::meta::MetadataOptions;
 /// Frames summarised by each waveform peak.
 pub const PEAK_BLOCK: usize = 256;
 
+/// The band-limited kernel of [`Sample::read_clean`]: a sinc under a Kaiser
+/// window, [`SINC_HALF`] zero crossings to each side. Tabulated in rows: row
+/// `p` holds it at `p / SINC_STEPS` past each whole crossing (0, 1, 2…), so the
+/// taps of one read are one row (and the next, for the straight line between).
+const SINC_HALF: usize = 24;
+const SINC_STEPS: usize = 256;
+/// The most the kernel widens, for files read faster than their own speed.
+const SINC_WIDEN: f64 = 4.0;
+static SINC: std::sync::LazyLock<Vec<f32>> = std::sync::LazyLock::new(|| {
+    // Zeroth-order modified Bessel function, for the Kaiser window (beta 8:
+    // side lobes some 80 dB down).
+    let bessel = |x: f64| {
+        let (mut sum, mut term, mut k) = (1.0, 1.0, 1.0);
+        while term > 1e-12 * sum {
+            term *= (x / (2.0 * k)) * (x / (2.0 * k));
+            sum += term;
+            k += 1.0;
+        }
+        sum
+    };
+    let beta = 8.0;
+    let mut rows = Vec::with_capacity((SINC_STEPS + 1) * SINC_HALF);
+    for row in 0..=SINC_STEPS {
+        for tap in 0..SINC_HALF {
+            let x = tap as f64 + row as f64 / SINC_STEPS as f64;
+            let across = x / SINC_HALF as f64;
+            let sinc = if x < 1e-9 { 1.0 } else { (std::f64::consts::PI * x).sin() / (std::f64::consts::PI * x) };
+            rows.push(if across >= 1.0 { 0.0 } else { (sinc * bessel(beta * (1.0 - across * across).sqrt()) / bessel(beta)) as f32 });
+        }
+    }
+    rows
+});
+
+/// The kernel `x` zero crossings from its middle (0 from [`SINC_HALF`] on).
+fn sinc_at(table: &[f32], x: f32) -> f32 {
+    let tap = x as usize;
+    if tap >= SINC_HALF {
+        return 0.0;
+    }
+    let along = (x - tap as f32) * SINC_STEPS as f32;
+    let row = (along as usize).min(SINC_STEPS - 1);
+    let (a, b) = (table[row * SINC_HALF + tap], table[(row + 1) * SINC_HALF + tap]);
+    a + (b - a) * (along - row as f32)
+}
+
+/// Builds the kernel's table, so the audio thread only ever reads it.
+pub fn warm_up() {
+    std::sync::LazyLock::force(&SINC);
+}
+
 /// A decoded, stereo audio file at its original sample rate.
 #[derive(Debug, Default)]
 pub struct Sample {
@@ -27,6 +77,7 @@ pub struct Sample {
 
 impl Sample {
     pub fn from_channels(left: Vec<f32>, right: Vec<f32>, sample_rate: f32) -> Self {
+        warm_up();
         let peaks = left
             .chunks(PEAK_BLOCK)
             .zip(right.chunks(PEAK_BLOCK))
@@ -136,6 +187,68 @@ impl Sample {
             ((c3 * t + c2) * t + c1) * t + y1
         };
         (hermite(&self.left), hermite(&self.right))
+    }
+
+    /// Reads at a fractional frame position, band-limited: `step` is how many
+    /// frames of the file go by per sample read. No images from the file's own
+    /// sample rate and no loss at the top whatever the fraction (a file at
+    /// another rate, or a clip off the sample grid); read faster than its own
+    /// speed, what would fold back is filtered out first. On a whole frame at
+    /// its own speed or slower, the frame itself. Silence outside.
+    pub fn read_clean(&self, position: f64, step: f64) -> (f32, f32) {
+        if position < 0.0 || !position.is_finite() {
+            return (0.0, 0.0);
+        }
+        let frames = self.frames();
+        let whole = position.floor();
+        if whole >= frames as f64 {
+            return (0.0, 0.0);
+        }
+        let i = whole as isize;
+        let frac = position - whole;
+        // A hair over its own speed (rounding) is its own speed.
+        let cutoff = if step > 1.0001 { (1.0 / step).max(1.0 / SINC_WIDEN) } else { 1.0 };
+        if cutoff == 1.0 && frac == 0.0 {
+            return (self.left[i as usize], self.right[i as usize]);
+        }
+        let table = &SINC[..];
+        let (mut l, mut r, mut total) = (0f32, 0f32, 0f32);
+        let (before, after) = (i + 1 - SINC_HALF as isize, i + SINC_HALF as isize);
+        if cutoff == 1.0 && before >= 0 && (after as usize) < frames {
+            // At its own speed or slower, away from the file's ends: the taps
+            // before the position are one row of the table, the ones after another.
+            let mut side = |weights: (&[f32], &[f32]), t: f32, left: &[f32], right: &[f32], back: bool| {
+                for tap in 0..SINC_HALF {
+                    let weight = weights.0[tap] + (weights.1[tap] - weights.0[tap]) * t;
+                    let k = if back { SINC_HALF - 1 - tap } else { tap };
+                    total += weight;
+                    l += left[k] * weight;
+                    r += right[k] * weight;
+                }
+            };
+            let rows = |distance: f64| {
+                let along = distance * SINC_STEPS as f64;
+                let row = (along as usize).min(SINC_STEPS - 1);
+                ((&table[row * SINC_HALF..(row + 1) * SINC_HALF], &table[(row + 1) * SINC_HALF..(row + 2) * SINC_HALF]), (along - row as f64) as f32)
+            };
+            let (start, middle, end) = (before as usize, i as usize + 1, after as usize + 1);
+            let (weights, t) = rows(frac);
+            side(weights, t, &self.left[start..middle], &self.right[start..middle], true);
+            let (weights, t) = rows(1.0 - frac);
+            side(weights, t, &self.left[middle..end], &self.right[middle..end], false);
+        } else {
+            let reach = (SINC_HALF as f64 / cutoff).ceil() as isize;
+            for k in (i - reach + 1)..=(i + reach) {
+                let weight = sinc_at(table, ((k as f64 - position).abs() * cutoff) as f32);
+                total += weight;
+                if k >= 0 && (k as usize) < frames {
+                    l += self.left[k as usize] * weight;
+                    r += self.right[k as usize] * weight;
+                }
+            }
+        }
+        // By the kernel's own sum: steady level comes out as it is.
+        if total > 0.0 { (l / total, r / total) } else { (0.0, 0.0) }
     }
 }
 

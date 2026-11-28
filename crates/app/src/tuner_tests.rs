@@ -30,7 +30,7 @@ fn project(scale: TunerScale) -> Project {
     let mut p = Project::empty();
     let mut t = Track::new_audio("Voz", [0; 3]);
     t.id = 1;
-    let clip = AudioClip { hard_start: false, fades: Fades::new(0.0, 0.0), name: "voz".into(), color: [0; 3], sample: voice(), length: 12.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
+    let clip = AudioClip { clean: true, hard_start: false, fades: Fades::new(0.0, 0.0), name: "voz".into(), color: [0; 3], sample: voice(), length: 12.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false };
     t.arrangement = vec![ArrangementClip { start: 0.0, length: 12.0, clip: Clip::Audio(clip) }];
     t.devices.push(Device::new(Effect::Tuner(TunerParams { speed_ms: 0.0, scale, ..Default::default() })));
     p.tracks = vec![t];

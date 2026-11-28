@@ -396,6 +396,11 @@ pub struct AudioClip {
     /// Its fade-in and fade-out (see [`Fades`]).
     #[serde(default, skip_serializing_if = "is_default")]
     pub fades: Fades,
+    /// Its file is read band-limited (see `Sample::read_clean`): every clip made
+    /// since. A clip from before plays as it did: its top end a little lower
+    /// when its file is at another rate or it sits off the sample grid.
+    #[serde(default, skip_serializing_if = "is_default")]
+    pub clean: bool,
 }
 
 /// How long an audio clip takes to come in from silence at its start and to
@@ -11223,6 +11228,20 @@ pub const MODULAR_PARAMS: [ParamInfo; MOD_PARAM_COUNT] = [
 
 #[cfg(test)]
 mod tests {
+    /// An audio clip saved before the band-limited read plays as it did; one
+    /// made since says so in the project.
+    #[test]
+    fn audio_clips_saved_before_the_clean_read_keep_their_sound() {
+        let old = r#"{"name":"a","color":[0,0,0],"sample":"a.wav","length":4.0,"offset":0.0,"warp":"Off","original_bpm":120.0,"gain_db":0.0,"transpose":0.0}"#;
+        let clip: super::AudioClip = serde_json::from_str(old).unwrap();
+        assert!(!clip.clean);
+        assert!(!serde_json::to_string(&clip).unwrap().contains("clean"), "and is saved as it was");
+        let new = super::AudioClip { clean: true, ..clip };
+        let saved = serde_json::to_string(&new).unwrap();
+        assert!(saved.contains(r#""clean":true"#), "{saved}");
+        assert!(serde_json::from_str::<super::AudioClip>(&saved).unwrap().clean);
+    }
+
     #[test]
     fn a_drum_machine_from_when_it_had_eight_sounds_opens_with_sixteen() {
         let old = r#"{"tune":[1,2,3,4,5,6,7,8],"decay":[2,2,2,2,2,2,2,2],"level":[0.5,0.5,0.5,0.5,0.5,0.5,0.5,0.5],"model":"Tr909"}"#;
@@ -11239,7 +11258,7 @@ mod tests {
 
     #[test]
     fn warp_markers_map_beats_to_the_file_and_back() {
-        let mut clip = AudioClip { hard_start: false, fades: Default::default(),
+        let mut clip = AudioClip { clean: true, hard_start: false, fades: Default::default(),
             name: "x".into(),
             color: [0; 3],
             sample: "x.wav".into(),

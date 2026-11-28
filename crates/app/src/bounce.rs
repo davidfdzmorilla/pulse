@@ -248,7 +248,7 @@ impl PulseApp {
             crate::export::write(&path, &r.audio.0, &r.audio.1, rate as u32, crate::export::BitDepth::Float32, 1.0)?;
             let seconds = r.audio.0.len() as f64 / rate as f64;
             let mut audio = AudioClip {
-                hard_start: true,
+                clean: true, hard_start: true,
                 fades: Default::default(),
                 name: format!("{name} ({label})"),
                 color,

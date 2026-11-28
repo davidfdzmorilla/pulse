@@ -195,7 +195,7 @@ mod tests {
         let mut project = crate::project::Project::empty();
         project.tempo = 120.0;
         let mut track = crate::project::Track::new_audio("Loop", [0; 3]);
-        track.clips[0] = Some(Clip::Audio(AudioClip { hard_start: false, fades: Default::default(), name: "Break".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }));
+        track.clips[0] = Some(Clip::Audio(AudioClip { clean: true, hard_start: false, fades: Default::default(), name: "Break".into(), color: [0; 3], sample: path.to_string_lossy().into_owned(), length: 8.0, offset: 0.0, warp: WarpMode::Off, original_bpm: 120.0, gain_db: 0.0, transpose: 0.0, envelopes: Vec::new(), warp_markers: Vec::new(), takes: Vec::new(), key: None, muted: false }));
         project.tracks = vec![track];
         let mut app = PulseApp::headless(project);
         app.take_groove(ClipRef::Session { track: 0, slot: 0 });

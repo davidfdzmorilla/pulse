@@ -534,7 +534,7 @@ mod tests {
     use super::*;
 
     fn clip() -> AudioClip {
-        AudioClip { hard_start: false, fades: Default::default(),
+        AudioClip { clean: true, hard_start: false, fades: Default::default(),
             name: "x".into(),
             color: [0; 3],
             sample: "/x.wav".into(),

@@ -203,6 +203,16 @@ still in `0.x`, so any release may change things.
   started from, so the level jumped at the cut; in a MIDI clip the part
   after it ramped the wrong way when the envelope had a point at the
   clip's end, and a looping one lost the ramp's first half.
+- Audio clips: a file at another sample rate than the session's (44.1 kHz
+  in a 48 kHz session, 96 kHz in a 48 kHz one) keeps its top end and no
+  longer adds images or folds what is above the session's range back into
+  it; a clip that doesn't sit on the sample grid (at most tempos other than
+  120) no longer loses treble either, and neither does Re-Pitch played
+  faster. Before, 15 kHz came out 1.7 dB down from a 44.1 kHz file with an
+  image 27 dB under a 10 kHz tone, 30 kHz in a 96 kHz file came out at
+  18 kHz at full level, and half a sample off the grid took 8 dB off
+  20 kHz. For the clips you make from now on (imported, recorded,
+  consolidated); the ones already in a project sound as they did.
 - Modular Synth and Super Saw: a sound with modulation (LFOs, envelopes,
   random, glide, the Super Saw's filter envelope) plays the same whatever
   the sound card's buffer size. Before, it could change with buffers that

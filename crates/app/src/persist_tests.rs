@@ -59,7 +59,7 @@ fn lane(param: Param, pts: &[(f64, f32, f32)]) -> AutomationLane {
 }
 
 fn audio_clip(path: &Path, length: f64, warp: WarpMode) -> AudioClip {
-    AudioClip { hard_start: false, fades: Default::default(),
+    AudioClip { clean: true, hard_start: false, fades: Default::default(),
         name: "audio".into(),
         color: PALETTE[4],
         sample: path.to_string_lossy().into_owned(),

@@ -356,7 +356,7 @@ pub fn tracks(voice: &Path) -> Result<(Project, f64), String> {
 
 fn audio_clip(name: &str, color: [u8; 3], sample: &Path, beats: f64, warp: WarpMode) -> Clip {
     Clip::Audio(AudioClip {
-        hard_start: false,
+        clean: true, hard_start: false,
         fades: Default::default(),
         name: name.into(),
         color,

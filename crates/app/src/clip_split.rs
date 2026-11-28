@@ -70,8 +70,36 @@ fn from(clip: &Clip, d: f64, tempo: f64) -> Clip {
     }
 }
 
+/// The parts of `placed` split at `beat` (timeline): the one before it and what
+/// follows, or None if `beat` isn't inside it. What follows is one clip, except
+/// for a looping audio clip cut in the middle of a lap: an audio clip can't start
+/// part of the way into its loop, so the rest of that lap is a clip of its own
+/// and the loop goes on in another from the next lap.
+pub fn split_parts(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(ArrangementClip, Vec<ArrangementClip>)> {
+    let (left, right) = split(placed, beat, tempo)?;
+    let Clip::Audio(whole) = &placed.clip else { return Some((left, vec![right])) };
+    let lap = whole.length.max(MIN_PART);
+    let into = (beat - placed.start).rem_euclid(lap);
+    if placed.length <= lap + 1e-9 || into < 1e-9 || lap - into < 1e-9 {
+        return Some((left, vec![right]));
+    }
+    let lap_end = beat + lap - into;
+    let mut rest_of_lap = right.clone();
+    rest_of_lap.length = lap_end.min(placed.end()) - beat;
+    trim(&mut rest_of_lap.clip, rest_of_lap.length);
+    if placed.end() <= lap_end + 1e-9 {
+        return Some((left, vec![rest_of_lap]));
+    }
+    let mut on = ArrangementClip { start: lap_end, length: placed.end() - lap_end, clip: placed.clip.clone() };
+    if let (Clip::Audio(a), Clip::Audio(b), Clip::Audio(r)) = (&mut rest_of_lap.clip, &mut on.clip, &right.clip) {
+        (a.fades, b.fades) = r.fades.split(right.length, rest_of_lap.length);
+    }
+    Some((left, vec![rest_of_lap, on]))
+}
+
 /// The two parts of `placed` split at `beat` (timeline), or None if `beat` isn't
-/// inside it.
+/// inside it. (A looping audio clip cut in the middle of a lap takes
+/// [`split_parts`]: its second part here only plays the end of its loop.)
 pub fn split(placed: &ArrangementClip, beat: f64, tempo: f64) -> Option<(ArrangementClip, ArrangementClip)> {
     if beat <= placed.start + MIN_PART || beat >= placed.end() - MIN_PART {
         return None;
@@ -284,17 +312,19 @@ impl PulseApp {
         }
     }
 
-    /// Splits an arrangement clip at `beat`; both parts end up selected.
+    /// Splits an arrangement clip at `beat`; its parts end up selected (what
+    /// follows the cut goes to the end of the lane).
     pub fn split_clip_at(&mut self, track: usize, index: usize, beat: f64) -> bool {
         let tempo = self.project.tempo;
         let Some(placed) = self.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) else { return false };
-        let Some((left, right)) = split(placed, beat, tempo) else { return false };
+        let Some((left, following)) = split_parts(placed, beat, tempo) else { return false };
         let lane = &mut self.project.tracks[track].arrangement;
         lane[index] = left;
-        lane.push(right);
-        let right = lane.len() - 1;
+        let first = lane.len();
+        lane.extend(following);
+        let parts = std::iter::once(index).chain(first..lane.len()).map(|index| ClipRef::Arrangement { track, index }).collect();
         self.sync_arrangement(track);
-        self.set_clip_selection(vec![ClipRef::Arrangement { track, index }, ClipRef::Arrangement { track, index: right }]);
+        self.set_clip_selection(parts);
         true
     }
 
@@ -315,8 +345,9 @@ impl PulseApp {
             let Some(placed) = self.project.tracks.get(track).and_then(|t| t.arrangement.get(index)) else { continue };
             let (start, end) = (placed.start, placed.end());
             pieces.push(ClipRef::Arrangement { track, index });
-            // Each cut leaves the rest at the end of the lane: cut that next.
-            let mut rest = index;
+            // Each cut leaves what follows at the end of the lane: the next one
+            // falls in one of those pieces.
+            let mut mine = vec![index];
             let mut cuts = Vec::new();
             if every >= 4.0 - 1e-9 {
                 let bars = (every / 4.0).round().max(1.0) as i64;
@@ -336,9 +367,14 @@ impl PulseApp {
                 if pieces.len() >= MAX_PIECES {
                     break;
                 }
-                if self.split_clip_at(track, rest, at) {
-                    rest = self.project.tracks[track].arrangement.len() - 1;
-                    pieces.push(ClipRef::Arrangement { track, index: rest });
+                let lane = &self.project.tracks[track].arrangement;
+                let Some(&piece) = mine.iter().find(|&&i| lane[i].start < at && at < lane[i].end()) else { continue };
+                let before = lane.len();
+                if self.split_clip_at(track, piece, at) {
+                    for new in before..self.project.tracks[track].arrangement.len() {
+                        mine.push(new);
+                        pieces.push(ClipRef::Arrangement { track, index: new });
+                    }
                 }
             }
         }
@@ -606,6 +642,83 @@ mod tests {
         let worst = whole.iter().zip(&split).map(|(a, b)| (a - b).abs()).fold(0f32, f32::max);
         assert!(whole.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.1, "the song plays");
         assert!(worst < 1e-3, "they match, also at the cut: {worst}");
+    }
+
+    /// A looping audio clip cut in the middle of a lap goes on sounding the
+    /// same: the rest of that lap and then its loop (before, the part after the
+    /// cut looped only the end of the loop). Cut on every beat too.
+    #[test]
+    fn a_looping_audio_clip_split_inside_a_lap_sounds_the_same() {
+        let song = crate::test_audio::demo_song();
+        let rate = 48_000.0;
+        // A loop of 4 beats laid out over 12, from beat 4.
+        let render = |cut: &dyn Fn(&mut PulseApp, usize)| {
+            let mut app = PulseApp::headless(crate::project::Project::empty());
+            for track in &mut app.project.tracks {
+                track.mixer.active = false;
+            }
+            let track = app.add_audio_track().unwrap();
+            let audio = AudioClip { hard_start: false, fades: Default::default(),
+                name: "demo".into(),
+                color: [0; 3],
+                sample: song.to_string_lossy().into_owned(),
+                length: 4.0,
+                offset: 0.0,
+                warp: WarpMode::Repitch,
+                original_bpm: 120.0,
+                warp_markers: Vec::new(),
+                key: None,
+                takes: Vec::new(),
+                gain_db: 0.0,
+                transpose: 0.0,
+                envelopes: Vec::new(), muted: false,
+            };
+            app.project.tracks[track].arrangement.push(ArrangementClip { start: 4.0, length: 12.0, clip: Clip::Audio(audio) });
+            cut(&mut app, track);
+            let mut lane: Vec<(f64, f64)> = app.project.tracks[track].arrangement.iter().map(|c| (c.start, c.length)).collect();
+            lane.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let mut renderer = engine::OfflineRenderer::new(rate);
+            let mut samples = crate::sync::SampleCache::default();
+            for command in crate::sync::project_commands(&app.project, &mut samples, rate, &Default::default()) {
+                renderer.send(command);
+            }
+            renderer.send(engine::Command::Play);
+            let (mut l, mut r) = (Vec::new(), Vec::new());
+            renderer.render((18.0 * 0.5 * rate as f64) as usize, &mut l, &mut r);
+            (l, lane)
+        };
+        let (whole, _) = render(&|_, _| {});
+        assert!(whole.iter().map(|s| s.abs()).fold(0f32, f32::max) > 0.1, "the song plays");
+        // Away from the cuts and from where the loop comes round: the parts fade
+        // out and in at a cut as the laps of the loop do, and two parts that meet
+        // where the loop comes round cross-fade there (a few ms either side).
+        let apart = |split: &[f32], cuts: &[f64]| {
+            let near = |i: usize| cuts.iter().chain(&[8.0, 12.0]).any(|c| (i as f64 - c * 0.5 * rate as f64).abs() < 0.006 * rate as f64);
+            whole.iter().zip(split).enumerate().filter(|&(i, _)| !near(i)).map(|(_, (a, b))| (a - b).abs()).fold(0f32, f32::max)
+        };
+        for at in [10.0, 9.5, 7.25] {
+            let (split, lane) = render(&|app, track| assert!(app.split_clip_at(track, 0, at)));
+            let lap_end = 4.0 + ((at - 4.0) / 4.0f64).ceil() * 4.0;
+            assert_eq!(lane, vec![(4.0, at - 4.0), (at, lap_end - at), (lap_end, 16.0 - lap_end)], "cut at {at}");
+            let worst = apart(&split, &[at]);
+            assert!(worst < 1e-3, "cut at {at}: {worst}");
+            // No click there either: no step between samples bigger than the song's own.
+            let step = |x: &[f32]| x.windows(2).map(|w| (w[1] - w[0]).abs()).fold(0f32, f32::max);
+            assert!(step(&split) <= step(&whole) * 1.05, "cut at {at}: {} vs {}", step(&split), step(&whole));
+        }
+        // In the last lap there is no loop to go on: two parts.
+        let (split, lane) = render(&|app, track| assert!(app.split_clip_at(track, 0, 14.0)));
+        assert_eq!(lane, vec![(4.0, 10.0), (14.0, 2.0)]);
+        assert!(apart(&split, &[14.0]) < 1e-3);
+        // «Trocear» on every beat: twelve pieces.
+        let (split, lane) = render(&|app, track| {
+            app.set_clip_selection(vec![ClipRef::Arrangement { track, index: 0 }]);
+            app.slice_selected(1.0);
+        });
+        assert_eq!(lane, (4..16).map(|b| (b as f64, 1.0)).collect::<Vec<_>>());
+        let cuts: Vec<f64> = (5..16).map(|b| b as f64).collect();
+        let worst = apart(&split, &cuts);
+        assert!(worst < 1e-3, "sliced: {worst}");
     }
 
     /// A clip that doesn't loop splits into two that are only their pieces (what

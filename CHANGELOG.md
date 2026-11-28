@@ -188,6 +188,11 @@ still in `0.x`, so any release may change things.
   playhead went. Before, everything played after the jump landed that many
   beats early in one long clip, and jumping back to before the take's
   start left an empty clip of negative length.
+- Splitting a looping audio clip in the middle of a lap (⌘E, Slice, turning
+  a stretch into audio, or recording the Session onto the Arrangement) keeps
+  what it played. The part after the cut repeated only the end of the loop
+  from there on. Now the rest of that lap is a clip of its own and the loop
+  goes on in another from the next lap.
 - Wavetable Synth and Polychrome Synth: modulating a level, a pan, the
   position in the table, the warp, the filter or the master no longer buzzes. The
   modulation is worked out 1500 times a second and those values jumped

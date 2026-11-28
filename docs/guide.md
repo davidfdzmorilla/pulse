@@ -880,6 +880,7 @@ Cut a clip into pieces, merge several into one, or turn what plays into a new au
 3. For more pieces, repeat: click, {⌘E}, click, {⌘E}…
 
 - If you haven't clicked the clip, {⌘E} cuts at the playhead (the one you move in the ruler).
+- A looping audio clip cut in the middle of a lap is left in three parts: what came before the cut, the rest of that lap, and the loop from the next lap on. An audio clip can't start part of the way into its loop.
 - **Split here** (right-click the clip) cuts where you clicked.
 
 ### Slicing into equal parts

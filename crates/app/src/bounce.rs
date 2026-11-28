@@ -62,8 +62,11 @@ const EDGE: f64 = 1e-6;
 fn cut(lane: &mut Vec<ArrangementClip>, beat: f64, tempo: f64) {
     let mut out = Vec::with_capacity(lane.len() + 1);
     for placed in lane.drain(..) {
-        match crate::clip_split::split(&placed, beat, tempo) {
-            Some((left, right)) => out.extend([left, right]),
+        match crate::clip_split::split_parts(&placed, beat, tempo) {
+            Some((left, following)) => {
+                out.push(left);
+                out.extend(following);
+            }
             None => out.push(placed),
         }
     }

@@ -4,7 +4,7 @@
 //! the beat they started (or recording did) to the one they stopped.
 
 use crate::app::{ClipRef, PulseApp};
-use crate::clip_split::{split, MIN_PART};
+use crate::clip_split::{split, split_parts, MIN_PART};
 use engine::model::{ArrangementClip, Clip};
 use engine::{SharedState, NONE};
 use std::collections::HashMap;
@@ -62,20 +62,23 @@ fn clear(lane: &mut Vec<ArrangementClip>, from: f64, to: f64, tempo: f64) {
         if let Some((before, _)) = split(&clip, from, tempo) {
             kept.push(before);
         }
-        if let Some((_, after)) = split(&clip, to, tempo) {
-            kept.push(after);
+        if let Some((_, after)) = split_parts(&clip, to, tempo) {
+            kept.extend(after);
         }
     }
     *lane = kept;
 }
 
 /// The part of a session clip launched at `launch` that played from `from` to
-/// `to`, as an arrangement clip: it goes on where the clip was (its loop too).
-fn placed(clip: &Clip, launch: f64, from: f64, to: f64, tempo: f64) -> Option<ArrangementClip> {
+/// `to`, as arrangement clips: it goes on where the clip was (its loop too). One
+/// clip, or two for an audio clip caught in the middle of a lap (see
+/// [`split_parts`]).
+fn placed(clip: &Clip, launch: f64, from: f64, to: f64, tempo: f64) -> Vec<ArrangementClip> {
     let whole = ArrangementClip { start: launch, length: to - launch, clip: clip.clone() };
-    let mut part = if from - launch > MIN_PART { split(&whole, from, tempo)?.1 } else { whole };
-    part.length = to - part.start;
-    (part.length > MIN_PART).then_some(part)
+    if to - from.max(launch) <= MIN_PART {
+        return Vec::new();
+    }
+    if from - launch > MIN_PART { split_parts(&whole, from, tempo).map_or(Vec::new(), |(_, following)| following) } else { vec![whole] }
 }
 
 impl PulseApp {
@@ -136,14 +139,15 @@ impl PulseApp {
         for p in capture.played {
             let from = punch_in.map_or(p.from, |i| p.from.max(i));
             let to = punch_out.map_or(p.to, |o| p.to.min(o));
-            let Some(clip) = (to > from).then(|| placed(&p.clip, p.launch, from, to, tempo)).flatten() else { continue };
+            let clips = if to > from { placed(&p.clip, p.launch, from, to, tempo) } else { Vec::new() };
+            let (Some(first), Some(end)) = (clips.first().map(|c| c.start), clips.last().map(|c| c.end())) else { continue };
             let Some(lane) = self.project.tracks.get_mut(p.track).map(|t| &mut t.arrangement) else { continue };
             // Looping, every pass plays the same: once is enough.
-            if lane.contains(&clip) {
+            if clips.iter().all(|clip| lane.contains(clip)) {
                 continue;
             }
-            clear(lane, clip.start, clip.end(), tempo);
-            lane.push(clip);
+            clear(lane, first, end, tempo);
+            lane.extend(clips);
             last = Some(ClipRef::Arrangement { track: p.track, index: lane.len() - 1 });
             touched.push(p.track);
         }
@@ -185,14 +189,14 @@ mod tests {
     #[test]
     fn a_session_clip_goes_on_where_it_was() {
         // Launched at 8, recorded from 10 to 20: it starts half way through its loop.
-        let part = placed(&clip(), 8.0, 10.0, 20.0, 120.0).unwrap();
+        let part = placed(&clip(), 8.0, 10.0, 20.0, 120.0).pop().unwrap();
         assert_eq!((part.start, part.length), (10.0, 10.0));
         let Clip::Midi(midi) = &part.clip else { panic!() };
         let mut notes: Vec<(f64, u8)> = midi.notes.iter().map(|n| (n.start, n.pitch)).collect();
         notes.sort_by(|a, b| a.0.total_cmp(&b.0));
         assert_eq!(notes, vec![(0.0, 64), (2.0, 60)]);
         // From its launch: as it is.
-        let whole = placed(&clip(), 8.0, 8.0, 16.0, 120.0).unwrap();
+        let whole = placed(&clip(), 8.0, 8.0, 16.0, 120.0).pop().unwrap();
         assert_eq!((whole.start, whole.length, whole.clip), (8.0, 8.0, clip()));
     }
 
